@@ -28,7 +28,14 @@ The world box is therefore 1.25 x 1.25 x 2.65 standing and 1.25 x 1.25 x 1.0
 crouched, feet at the box bottom, matching `PlayerTuning`. `maxStepHeight`
 (+0x2AC) defaults to 1.0 and is not quartered.
 
-Eye heights 2.4/0.85, gravity 20, jet thrust 35, horizontal
+v20 `Player::step` (0x5A9FD0) gathers static polygons in the box at the move's
+destination extended upward by `maxStepHeight`. It picks the highest vertex
+below `maxStepHeight` that has no other vertex within the player's own height
+above it. Only the player's height must fit above the step, not
+`maxStepHeight` of extra headroom. The motor mirrors this in `v20_step`.
+Rapier's controller autostep required a full 1.0 above the head, so players
+stopped at plates and bricks beneath ceilings that v20 players walk under.
+Eye heights 2.4/0.85, gravity 20, ground snap 0.2, jet thrust 35, horizontal
 jet thrust 48, jet rise cap 25 and forward cap 33 are explicit adaptation
 assumptions. The original
 script's resistance limits inform the caps but do not prove the new equations.
@@ -49,88 +56,14 @@ shapes extending beyond the placement footprint. Visibility and raycast toggles
 do not override collision. Original tilt/vertical offsets, smoothing and dynamic
 actor/vehicle camera obstruction have not yet been integrated.
 
-## Collision: v20 `updatePos`, not a physics solver
-
-v20 players never touch a physics solver. Since 2026-09-27 the motor
-(`crates/motor/src/torque.rs`) ports v20's own player collision, read from a
-read-only disassembly of `blocklandv20.exe` and checked against the TGE
-`player.cc`/`extrudedPolyList.cc` sources. It replaced Rapier's
-`KinematicCharacterController`, which treated the 74.5 degree face of a
-"72 degree" ramp as ground, so slide builds stood players still.
-
-**How the motor queries the world.** Once per tick `torque::Soup::gather`
-asks Rapier's query pipeline for every non-sensor collider (except the
-player's own body) in a box around the player sized for this tick's
-possible travel, a step and the contact slab. It turns their shapes into
-world polygons: cuboid faces, convex-hull faces (all brick collision),
-trimesh and heightfield triangles, compound parts; rounded shapes fall back
-to their bounding box. Polygons are stored relative to the player's feet so
-sub-millimetre sweeps keep full float precision far from the origin, and
-sorted by collider tag (brick id) so client and server agree on ties. Rapier
-still owns the bodies; the motor only reads collider shapes and poses. The
-kinematic player body is still targeted each tick so other bodies see it.
-
-**updateMove (0x5AE2A0).** Gravity always applies. `findContact` (0x5AA570)
-takes the flattest polygon in a slab 0.013 (`sTractionDistance`) under the
-feet: a run surface when within `runSurfaceAngle` (70), a jump surface
-within `jumpSurfaceAngle` (80). On a run surface the part of gravity into
-it is cancelled (plus a 0.002 lift, zeroed below Blockland's 0.0021 so level
-ground rests exactly), the move is turned parallel to the surface (not while
-jetting), and the run force (`runForce / mass` per tick) steers toward it.
-Anything steeper is not a run surface, so gravity slides the player down it;
-air control (not while jetting or swimming) applies instead.
-
-**updatePos (0x5B0714).** The axis-aligned box is swept through the polygons
-(`ExtrudedPolyList`): each box face leading the move is extruded, each
-polygon facing the move is clipped to it, and the first contact stops the
-move. The collision normal is always the hit polygon's own plane, never a
-separating axis, so the hidden top of one ramp under the next never reads as
-ground. Of simultaneous hits, the one most parallel to the box face wins. The
-box backs off, may step (below), then loses the velocity into the plane plus
-`sNormalElasticity` 0.01. On the second hit the velocity is re-aimed along
-the crease between the two planes at full speed: this is what carries a
-Blockhead wedged in a slide lane (two 72 degree ramps facing each other,
-narrower than the box) down the lane, turning each drop into lane speed.
-Five hits in one tick give up and stop dead, as in v20.
-
-**Step (0x5A9FD0).** Only from a run surface, when the hit is low enough
-(below `maxStepHeight * scale`), off a wall (|normal.y| < 0.05) or a walkable
-slope, and never off terrain: the highest static vertex at the destination
-under the remaining `maxStepHeight` with none of the others within the
-player's own height above it. Only the player's height must be clear, so
-players step onto plates and bricks under ceilings they fit beneath, and
-walk onto low ramps by stepping onto their vertices as in v20.
-
-**120 Hz against Torque's 32 ms tick.** Per-tick epsilons are rescaled so
-behaviour per second matches: the 0.002/0.0021 rest values and the 0.01
-back-off after each hit scale by 120 Hz / 31.25 Hz (unscaled, a rider
-grinding along a lane loses 3.84 times the distance per second and stalls).
-`EqualEpsilon` is kept as the same absolute distance, so it is smaller for a
-face to lead a move and larger as a fraction for two hits to tie. All hits
-within the tie count (Torque's running comparison made near-ties depend on
-polygon order), and polygons reaching less than 1e-5 into a face's swept
-volume are misses, so float noise cannot turn a brick end face whose edge
-runs under the box corner along a slope into a head-on stop. Elasticity is a
-speed and is unscaled.
-
-**Evidence.** `crates/sim/tests/slides.rs` runs on the v20 Slate save
-"Mr.Block's Slides" (ignored by default; needs converted content):
-`no_72_degree_ramp_face_holds_a_player` drops a player on 524 ramp faces and
-none holds it (before: every one did);
-`slide_lanes_carry_a_player_down_hands_free` pushes a rider gently downhill
-into each of 893 lane segments: 889 reach the end of their leg, the median
-rider falls 46 units at a top speed of 25, and one ride goes from the top
-of the 545-unit tower to the ground. The four remaining stop at one spot
-where riders drop down a shaft at over 20 u/s and land a hair inside the next
-lane's first ramp.
-
-```powershell
-cargo test --release -p bri-sim --test slides -- --ignored --nocapture
-```
-
-Not yet ported: canJump's refusal right after a ceiling hit (v20 0x8A2) and
-v20's hard-landing recover state. Both need new `PlayerState` fields and so a
-protocol bump.
+During testing, applying tiny downward gravity steps while already grounded could
+gradually sink the controller into its floor. Grounded motion now holds zero
+vertical speed and lets the controller determine continued support. Airborne
+gravity starts when support is lost. The final collision shape remains a box;
+brief capsule/rounded-box experiments did not resolve the underlying update issue
+and were discarded. A 2,400-tick regression verifies stable idle height and one
+touch-entry event. Contact callbacks and near-surface contact checks together
+allow touch events while stationary without firing them every tick.
 
 ## Session authority
 

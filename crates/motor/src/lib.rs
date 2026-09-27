@@ -2,4 +2,3 @@
 //! rowboats, cannons, turrets): one kinematic box moved by `PlayerData` constants.
 pub mod player;
 pub mod player_types;
-pub mod torque;
