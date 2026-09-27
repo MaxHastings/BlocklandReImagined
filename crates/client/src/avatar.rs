@@ -420,6 +420,16 @@ impl HeldToolPose {
     }
 }
 
+/// `Player::updateLookAnimation`: the arm thread follows the head pitch over
+/// the arm range, then Blockland clamps it to the seated look limits.
+fn look_position(pitch: f32, limits: Option<[f32; 2]>) -> f32 {
+    let position = (0.5 - pitch / std::f32::consts::PI).clamp(0.0, 1.0);
+    match limits {
+        Some([down, up]) if down <= up => position.clamp(down, up),
+        _ => position,
+    }
+}
+
 /// An active original avatar-thread animation. `started_at` is in the same
 /// monotonic seconds domain passed to `pose_with_animation`.
 #[derive(Clone, Debug, PartialEq)]
@@ -432,6 +442,10 @@ pub struct ActionAnimation {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AvatarAnimationInput {
     pub held_tool_pose: HeldToolPose,
+    /// A seated rider's `setLookLimits(up, down)`: the arm `look` thread
+    /// position, 0 looking straight up to 1 straight down, stays inside
+    /// `[down, up]`. The view itself is not limited.
+    pub look_limits: Option<[f32; 2]>,
     /// Current thread-2 action from the authoritative animation cue stream.
     /// Clear this on the corresponding vanilla stop/root cue or image switch.
     pub action: Option<ActionAnimation>,
@@ -698,7 +712,7 @@ impl AvatarMesh {
         let look = assets.rig.sequence("look").context("Missing look clip")?;
         layers.push(Layer {
             animation: look,
-            time: (0.5 - player.pitch / std::f32::consts::PI).clamp(0.0, 1.0) * look.duration,
+            time: look_position(player.pitch, animation_input.look_limits) * look.duration,
             weight: 1.0,
         });
         // `Player::updateLookAnimation`: free look turns only the head,
@@ -1260,6 +1274,15 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn seated_look_limits_bound_the_arms_not_the_view() {
+        // The Jeep's `setLookLimits(0.65, 0.45)`.
+        let limits = Some([0.45, 0.65]);
+        assert_eq!(super::look_position(0.0, limits), 0.5);
+        assert_eq!(super::look_position(1.2, limits), 0.45);
+        assert_eq!(super::look_position(-1.2, limits), 0.65);
+        assert!((super::look_position(-1.2, None) - (0.5 + 1.2 / std::f32::consts::PI)).abs() < 1e-6);
+    }
     #[test]
     #[ignore = "requires original native avatar package"]
     fn free_look_turns_only_the_head_toward_the_camera() -> Result<()> {

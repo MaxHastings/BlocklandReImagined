@@ -1136,10 +1136,17 @@ impl App {
         };
         self.ui.apply(UiUpdate::NetGraph(Some(text)));
     }
-    fn local_mounted(&self) -> bool {
+    /// Seated where v20's `armor::onTrigger` fires the mount's gun instead
+    /// of tools: the Tank turret and the pirate cannon.
+    fn local_weapon_seat(&self) -> bool {
         self.network_view()
-            .and_then(|v| v.vitals.get(&v.owner))
-            .is_some_and(|v| v.mounted.is_some())
+            .and_then(|v| {
+                let (vehicle, seat) = v.vitals.get(&v.owner)?.mounted?;
+                let info = v.vehicles.get(&vehicle)?;
+                let d = self.vehicle_assets.definition(&info.definition)?;
+                Some(d.seats.get(usize::from(seat))?.weapon)
+            })
+            .unwrap_or(false)
     }
     /// Steer whatever the server says this client controls. A granted free
     /// camera starts at the player's smoothed eye (`dropCameraAtPlayer`).
@@ -3136,22 +3143,17 @@ impl PlatformApp for App {
                     self.motion.server_tick(),
                     driven,
                 );
-                // The view rides along: it turns with the vehicle, follows a
-                // mouse-steered one, and stays put on a mount facing the look.
+                // The view rides along: it faces the seat, follows a
+                // mouse-steered vehicle, turns with the hull for a gunner, and
+                // stays put on a mount facing the look.
                 let riding = mounted.and_then(|(vehicle, seat)| {
                     let info = view.vehicles.get(&vehicle)?;
                     let d = self.vehicle_assets.definition(&info.definition)?;
                     let frame = self.vehicles.frame(vehicle)?;
-                    // The Tank's gunner seat resets the limits (`setLookLimits(1, 0)`).
-                    let role = d.seat_role(usize::from(seat));
-                    if !(role == SeatRole::Gunner && d.attachment_mount.is_some()) {
-                        let [down, up] = d.look_limits;
-                        let bottom = -std::f32::consts::FRAC_PI_2;
-                        self.controls.limit_pitch(
-                            bottom + down * std::f32::consts::PI,
-                            bottom + up * std::f32::consts::PI,
-                        );
-                    }
+                    let seat_yaw = self
+                        .vehicles
+                        .seat(&self.vehicle_assets, info, usize::from(seat))
+                        .map(|(_, yaw)| yaw);
                     let dt = elapsed.as_secs_f32().min(0.1);
                     self.chase_lag -=
                         (self.chase_lag * d.camera.decay + frame.velocity * d.camera.lag) * dt;
@@ -3168,10 +3170,17 @@ impl PlatformApp for App {
                         d.seat_role(usize::from(seat)),
                         forward.x.atan2(-forward.z),
                         forward.y.clamp(-1.0, 1.0).asin(),
+                        seat_yaw,
                     ))
                 });
+                if !matches!(
+                    riding,
+                    Some((SeatRole::Passenger | SeatRole::StrafeDriver, ..))
+                ) {
+                    self.controls.set_seat_yaw(None);
+                }
                 match riding {
-                    Some((SeatRole::MouseDriver, heading, pitch)) => {
+                    Some((SeatRole::MouseDriver, heading, pitch, _)) => {
                         self.controls.set_vehicle_view(Some((heading, pitch)));
                         self.mount_heading = Some(heading);
                     }
@@ -3184,7 +3193,16 @@ impl PlatformApp for App {
                         self.mount_heading = None;
                         self.chase_lag = Vec3::ZERO;
                     }
-                    Some((_, heading, _)) => {
+                    // Passengers and the Jeep's driver sit fixed in the seat:
+                    // the mouse only tilts their view (`Player::processTick`
+                    // takes the mount transform; the driver's yaw goes to the
+                    // vehicle, which ignores it when the keys steer).
+                    Some((SeatRole::Passenger | SeatRole::StrafeDriver, heading, _, seat_yaw)) => {
+                        self.controls.set_vehicle_view(None);
+                        self.controls.set_seat_yaw(seat_yaw.or(Some(heading)));
+                        self.mount_heading = Some(heading);
+                    }
+                    Some((SeatRole::Gunner, heading, ..)) => {
                         self.controls.set_vehicle_view(None);
                         if let Some(previous) = self.mount_heading {
                             let turn = (heading - previous + std::f32::consts::PI)
@@ -3231,15 +3249,11 @@ impl PlatformApp for App {
                             .vehicles
                             .frame(vehicle)
                             .map_or(Vec3::ZERO, |f| f.velocity);
-                        // Whoever controls the vehicle faces the seat.
-                        let locked = self
-                            .vehicle_assets
-                            .definition(&info.definition)
-                            .is_some_and(|d| d.seat_role(usize::from(seat)) != SeatRole::Passenger);
+                        // Every rider faces the seat.
                         self.motion.override_presented(
                             *owner,
                             feet,
-                            locked.then_some(yaw),
+                            Some(yaw),
                             velocity,
                             *owner == view.owner,
                         );
@@ -3407,7 +3421,27 @@ impl PlatformApp for App {
                     ready_hands.push((0, true));
                 }
                 let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
+                // `Armor::onMount` applies the mount's look limits; the Tank's
+                // gunner rides TankTurretPlayer, so it takes that datablock's.
+                let look_limits = view
+                    .vitals
+                    .get(owner)
+                    .and_then(|v| v.mounted)
+                    .and_then(|(vehicle, seat)| {
+                        let info = view.vehicles.get(&vehicle)?;
+                        let d = self.vehicle_assets.definition(&info.definition)?;
+                        if d.seat_role(usize::from(seat)) == SeatRole::Gunner
+                            && d.attachment_mount.is_some()
+                        {
+                            return self
+                                .vehicle_assets
+                                .definition("v20.vehicle.tankturretplayer")
+                                .map(|t| t.look_limits);
+                        }
+                        Some(d.look_limits)
+                    });
                 let input = crate::avatar::AvatarAnimationInput {
+                    look_limits,
                     held_tool_pose: if dead {
                         crate::avatar::HeldToolPose::None
                     } else {
@@ -3657,13 +3691,14 @@ impl PlatformApp for App {
                 }
                 continue;
             }
-            if self.local_mounted()
+            if self.local_weapon_seat()
                 && let UiAction::Game(GameAction::Held {
                     control: HeldControl::Fire,
                     down,
                 }) = action
             {
-                // Seated fire drives the vehicle weapon (tank, cannon).
+                // A gunner's fire drives the vehicle weapon (tank, cannon);
+                // every other rider uses their tools as on foot.
                 if let Err(error) =
                     self.command(id, Command::WeaponTrigger { down }, action.clone())
                 {

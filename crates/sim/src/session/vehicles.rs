@@ -29,7 +29,8 @@ pub(super) struct Vehicles {
     next_id: u64,
     mounted: BTreeMap<OwnerId, Mount>,
     last_dismount: BTreeMap<OwnerId, u64>,
-    jump_held: BTreeMap<OwnerId, bool>,
+    /// Jet held last input: a new press leaves the vehicle.
+    jet_held: BTreeMap<OwnerId, bool>,
     fire_held: BTreeMap<OwnerId, bool>,
     /// Look angles last fed to the vehicle, for mouse steering deltas.
     last_look: BTreeMap<OwnerId, (f32, f32)>,
@@ -103,7 +104,19 @@ impl Vehicles {
         let mount = self.mounted.get(&owner)?;
         Some(self.world.as_ref()?.definition_of(mount.vehicle)?.family)
     }
-    /// Seated players' fire button drives the vehicle weapon, not items.
+    /// Seated where fire shoots the mount's gun instead of tools
+    /// (`armor::onTrigger` for TankTurretPlayer and CannonTurret).
+    pub(super) fn weapon_seat(&self, owner: OwnerId) -> bool {
+        let Some(mount) = self.mounted.get(&owner) else {
+            return false;
+        };
+        self.world
+            .as_ref()
+            .and_then(|w| w.definition_of(mount.vehicle))
+            .and_then(|d| d.seats.get(mount.seat))
+            .is_some_and(|s| s.weapon)
+    }
+    /// A gunner's fire button drives the vehicle weapon, not items.
     pub(super) fn set_fire(&mut self, owner: OwnerId, down: bool) {
         self.fire_held.insert(owner, down);
     }
@@ -492,9 +505,11 @@ impl Session {
     }
     /// Mounted players drive instead of walking, as their seat allows: the
     /// strafe keys or the mouse steer, a player-type mount faces where its
-    /// rider looks, and a gunner aims relative to the hull. Jump leaves the
-    /// vehicle (`Armor::onTrigger` while mounted), except on the horse, where
-    /// jump jumps and crouch dismounts.
+    /// rider looks, and a gunner aims relative to the hull. v20's
+    /// `Player::processTick` hands the rider fire, jet and pitch and the
+    /// vehicle everything else minus crouch: jet leaves (`doDismount`, "get
+    /// out of the Jeep by pressing Jet"), and jump brakes a wheeled vehicle
+    /// (`mBraking = trigger[2]`) or jumps the horse.
     pub(super) fn vehicle_input(&mut self, owner: OwnerId, input: MoveInput) -> Result<()> {
         let Some(mount) = self.vehicles.mounted.get(&owner).cloned() else {
             return Ok(());
@@ -504,8 +519,8 @@ impl Session {
         };
         let was_held = self
             .vehicles
-            .jump_held
-            .insert(owner, input.jump)
+            .jet_held
+            .insert(owner, input.jet)
             .unwrap_or(true);
         let (last_yaw, last_pitch) = self
             .vehicles
@@ -520,12 +535,7 @@ impl Session {
             return Ok(());
         };
         let horse = d.family == veh::Family::Horse;
-        let leave = if horse {
-            input.crouch
-        } else {
-            input.jump && !was_held
-        };
-        if leave {
+        if input.jet && !was_held {
             let _ = world.dismount(
                 &self.simulation.physics,
                 veh::OwnerId(owner),
@@ -542,9 +552,7 @@ impl Session {
             .unwrap_or(false);
         let mut controls = veh::Controls {
             throttle: input.forward,
-            brake: input.crouch && !horse,
-            jet: input.jet,
-            vertical: if input.jet { 1.0 } else { 0.0 },
+            brake: input.jump && !horse,
             fire,
             ..Default::default()
         };
@@ -1025,7 +1033,7 @@ impl Session {
                         let _ = self.weapons.trigger(ActorId(owner), false);
                         self.weapon_triggers.remove(&owner);
                         self.vehicles.mounted.insert(owner, Mount { vehicle, seat });
-                        self.vehicles.jump_held.insert(owner, true);
+                        self.vehicles.jet_held.insert(owner, true);
                         self.vehicles
                             .last_look
                             .insert(owner, (peer.input.yaw, peer.input.pitch));
@@ -1038,6 +1046,11 @@ impl Session {
                             },
                             feet,
                         );
+                    }
+                    // The Tank and cannon packages put tools away on boarding
+                    // a gun seat (`ServerCmdUnUseTool`).
+                    if self.vehicles.weapon_seat(owner) {
+                        let _ = self.equip_tool(owner, None);
                     }
                 }
                 Intent::Dismounted {
@@ -1203,21 +1216,14 @@ impl Session {
         };
         let snapshot = world.snapshot(&self.simulation.physics);
         for v in snapshot.vehicles {
-            let Some(d) = world.definition(&v.definition) else {
-                continue;
-            };
             for seat in &v.seats {
                 let Some(o) = seat.occupant else { continue };
                 let Some(peer) = self.peers.get_mut(&o.owner.0) else {
                     continue;
                 };
-                // Whoever controls the vehicle sits fixed in the seat;
-                // passengers turn freely (`mRot.z` relative to the mount).
-                let yaw = if d.seat_role(seat.index) == SeatRole::Passenger {
-                    peer.input.yaw
-                } else {
-                    heading(seat.transform.rotation)
-                };
+                // Every rider sits fixed in the seat: a mounted player takes
+                // the mount transform, whatever its own yaw.
+                let yaw = heading(seat.transform.rotation);
                 peer.player.place(
                     &mut self.simulation.physics,
                     Vec3::from(seat.transform.position),

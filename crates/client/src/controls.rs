@@ -33,6 +33,10 @@ pub struct Controls {
     /// the mouse only steers. `yaw`/`pitch` then carry the raw mouse turn,
     /// pitch wrapping every half turn, for the server's steering deltas.
     vehicle_view: Option<(f32, f32)>,
+    /// Seated: the body sits fixed on its mount (`Player::processTick`
+    /// takes the mount transform), so the view faces the seat and the
+    /// mouse only tilts it; free look still turns the head.
+    seat_yaw: Option<f32>,
 }
 /// The client's half of a replicated camera [`ControlObject`]: look and move
 /// keys steer it instead of the body.
@@ -113,6 +117,8 @@ impl Controls {
         } else if self.vehicle_view.is_some() {
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = wrap_half(self.pitch + pitch);
+        } else if self.seat_yaw.is_some() {
+            self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else {
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
@@ -129,11 +135,12 @@ impl Controls {
         }
         self.vehicle_view = view;
     }
-    /// `setLookLimits` while seated: keep the look pitch in `[low, high]`.
-    pub fn limit_pitch(&mut self, low: f32, high: f32) {
-        if self.vehicle_view.is_none() && low <= high {
-            self.pitch = self.pitch.clamp(low, high);
+    /// Face the seat, or stop. Leaving keeps facing where the seat faced.
+    pub fn set_seat_yaw(&mut self, yaw: Option<f32>) {
+        if let Some(yaw) = yaw.filter(|y| y.is_finite()) {
+            self.yaw = wrap(yaw);
         }
+        self.seat_yaw = yaw.filter(|y| y.is_finite());
     }
     /// Turn the view with the vehicle it rides.
     pub fn carry_yaw(&mut self, turn: f32) {

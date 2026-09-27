@@ -991,11 +991,15 @@ impl Session {
                 self.drop_tool(owner, slot, direction)?;
                 Ok(Reply::Accepted)
             }
-            // Skiers keep their hands: the ski item stops skiing.
-            Command::WeaponTrigger { down }
-                if self.vehicles.is_mounted(owner)
-                    && self.vehicles.mounted_family(owner) != Some(bri_vehicles::Family::Skis) =>
-            {
+            // Riders fire their own tools (`Player::processTick` hands fire
+            // to the rider), except in a gun seat, where fire shoots the
+            // mount's gun and puts tools away.
+            Command::WeaponTrigger { down } if self.vehicles.weapon_seat(owner) => {
+                // An image mid-fire stays up, as `unmountImage` waits on
+                // `allowImageChange`.
+                if down {
+                    let _ = self.equip_tool(owner, None);
+                }
                 self.vehicles.set_fire(owner, down);
                 Ok(Reply::Accepted)
             }

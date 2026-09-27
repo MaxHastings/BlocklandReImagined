@@ -109,12 +109,23 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
         .unwrap()
         .0;
     assert!(Vec3::from(rider.feet).distance(after) < 4.0);
-    // Jump leaves the vehicle.
+    // Jump only brakes; jet leaves the vehicle ("get out of the Jeep by
+    // pressing Jet").
     feed(&mut s, MoveInput::default(), 120)?;
     feed(
         &mut s,
         MoveInput {
             jump: true,
+            ..Default::default()
+        },
+        2,
+    )?;
+    feed(&mut s, MoveInput::default(), 10)?;
+    assert!(s.mounted(owner).is_some(), "jump brakes, it does not dismount");
+    feed(
+        &mut s,
+        MoveInput {
+            jet: true,
             ..Default::default()
         },
         2,
@@ -318,7 +329,7 @@ fn walking_into_a_vehicle_does_not_board_it_but_jumping_on_does() -> anyhow::Res
 
 #[test]
 #[ignore = "requires the converted native vehicle and brick packs"]
-fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_crouch() -> anyhow::Result<()> {
+fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_jet() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (mut s, owner) = session_with(&root, "v20.vehicle.horsearmor")?;
     let mut p = Feeder { owner, sequence: 0 };
@@ -382,13 +393,13 @@ fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_crouch() -> anyhow::Res
     p.feed(
         &mut s,
         MoveInput {
-            crouch: true,
+            jet: true,
             yaw: look,
             ..Default::default()
         },
         3,
     )?;
-    assert_eq!(s.mounted(owner), None, "crouch dismounts the horse");
+    assert_eq!(s.mounted(owner), None, "jet dismounts the horse");
     Ok(())
 }
 
@@ -469,6 +480,76 @@ fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
     assert!(
         s.vehicle_infos().iter().all(|v| v.id != vehicle),
         "empty skis vanish"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native vehicle, weapon and brick packs"]
+fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun() -> anyhow::Result<()> {
+    use bri_sim::session::ActionAim;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session_with(&root, "v20.vehicle.tankvehicle")?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(0), "driver seat");
+    // Mouse yaw does not turn a seated body.
+    let hull = pose_heading(s.vehicle_poses()[0].rotation);
+    p.feed(
+        &mut s,
+        MoveInput {
+            yaw: hull + 1.0,
+            ..Default::default()
+        },
+        10,
+    )?;
+    let rider = |s: &Session| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap()
+            .0
+    };
+    let facing = rider(&s).yaw;
+    let turn = (facing - hull + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    assert!(turn.abs() < 0.2, "rider faces the seat: {facing} vs {hull}");
+    // The driver fires a held gun.
+    let slot = s.give_item(owner, "v20.weapon.gunitem")?;
+    s.equip_tool(owner, Some(slot))?;
+    p.feed(&mut s, MoveInput::default(), 40)?;
+    let aim = Some(ActionAim {
+        yaw: hull,
+        pitch: 0.2,
+    });
+    s.command_with_aim(owner, 50, Command::WeaponTrigger { down: true }, aim)?;
+    s.command_with_aim(owner, 51, Command::WeaponTrigger { down: false }, aim)?;
+    p.feed(&mut s, MoveInput::default(), 1)?;
+    assert!(
+        s.weapon_view()
+            .projectiles
+            .iter()
+            .any(|p| p.source.0 == owner),
+        "a seated driver shoots their gun"
+    );
+    // The gunner's fire puts the gun away and shoots the turret.
+    p.feed(&mut s, MoveInput::default(), 60)?;
+    s.switch_seat(owner, 1)?;
+    s.switch_seat(owner, 1)?;
+    assert_eq!(s.mounted(owner).map(|m| m.1), Some(2), "gunner seat");
+    s.equip_tool(owner, Some(slot))?;
+    p.feed(&mut s, MoveInput::default(), 40)?;
+    s.command_with_aim(owner, 52, Command::WeaponTrigger { down: true }, aim)?;
+    p.feed(&mut s, MoveInput::default(), 2)?;
+    s.command_with_aim(owner, 53, Command::WeaponTrigger { down: false }, aim)?;
+    p.feed(&mut s, MoveInput::default(), 2)?;
+    assert!(
+        s.weapon_view()
+            .images
+            .get(&owner)
+            .is_none_or(|images| images.is_empty()),
+        "the gunner's tool is put away"
     );
     Ok(())
 }

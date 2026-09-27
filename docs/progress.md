@@ -1889,6 +1889,19 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   printer failure; one unrelated rehost "Connection changed while reading
   the build" timeout seen once).
 
+- 2026-09-27 Seats, field of view and dismount (Max's reports). From
+  blocklandv20.exe: the FOV is horizontal, so the 90 degree default had been
+  rendered about 121 degrees across on 16:9 (the dizzy turning, on foot and
+  in vehicles); fixed at the projection. `setLookLimits` clamps only the arm
+  look thread (0x5a53b0), not the view; `Player::processTick` (0x5b2cad)
+  gives a mounted rider fire, jet and pitch, so every rider uses tools (the
+  Tank turret and cannon packages excepted), and jet dismounts (0x5b03d8,
+  Tutorial "press Jet") while jump brakes wheeled vehicles. Every rider,
+  passengers too, faces the seat; the mouse only tilts the view. v20 has no
+  dismount sound. Evidence: `docs/audits/vehicles.md` rows 1, 25, 31-34;
+  `cargo test -p bri-sim --test vehicles -- --ignored` and
+  `cargo test -p bri-client --lib`.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

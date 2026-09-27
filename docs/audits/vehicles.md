@@ -34,7 +34,7 @@ belongs to another thread by coordinator decision; **Open** is not done.
 
 | # | Area | v20 behavior | What we had | Status |
 |---|------|--------------|-------------|--------|
-| 1 | Seat facing | `Armor::onMount` gives the driver's control to the vehicle and pins the body to the seat (`setTransform("0 0 0 0 0 1 0")`); passengers keep control and turn relative to the seat (`mRot.z` under the mount transform) | The local driver's body followed the camera, so it spun in the seat | Fixed |
+| 1 | Seat facing | Every mounted player takes the mount node's transform, so the body and first-person yaw stay fixed to the seat for drivers and passengers alike; the mouse only tilts the view, and free look turns the head within `maxFreelookAngle` | The local driver's body followed the camera, so it spun in the seat; later passengers could still turn in their seat | Fixed (2026-09-27 correction: passengers are locked too, per Maxwell's v20 check) |
 | 2 | View while riding | The vehicle camera sits behind the vehicle and turns with it | The camera stayed at its world yaw while the vehicle turned | Fixed: the view carries the vehicle's turn; mouse-steered vehicles are followed |
 | 3 | Tank gunner aim | The gunner controls the TankTurretPlayer: its yaw is relative to the hull and follows the mouse; barrel pitch limited by `minLookAngle -1.5708` / `maxLookAngle 0.5` | Aim yaw was the absolute camera yaw with the wrong sign, so the turret swung the opposite way and drifted as the hull turned; no pitch limit | Fixed |
 | 4 | Tank Turret on its own | `TankTurretPlayer` has `uiName "Tank Turret"` and `rideable`, so it is in the wrench vehicle list | Filtered out of the list | Fixed |
@@ -58,7 +58,11 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 22 | Horse animation | Run, back, side, jump, root DSQ threads | Server emits them; the client draws the horse's rest pose | Handed off |
 | 23 | Horse Ray | Turns a player into a rideable horse others can board | Event dropped | Handed off |
 | 24 | Barrel pitch visual | Turret and cannon barrels tilt with the gunner's look | Aim pitch was replicated but no node was posed | Fixed: the authored `look` clip poses the barrel |
-| 25 | Mounted look limits | `setLookLimits(lookUpLimit, lookDownLimit)` while seated | Not applied | Fixed: pitch kept inside the limits, read as fractions of the look range from down (0) to up (1), since `setLookLimits(1, 0)` is the unlimited reset; the Tank gunner seat stays unlimited |
+| 25 | Mounted look limits | `setLookLimits(up, down)` stores two fractions in [0, 1] (Player +0x898/+0x89c, down clamped to at most up). `Player::updateLookAnimation` (0x5a53b0) clamps only the arm `look` thread position, `(mHead.x + pi/2) / pi`, to `[down, up]`; the view pitch keeps the full `minLookAngle`/`maxLookAngle` range | First pass clamped the camera pitch to the band, so riders could barely look up or down | Fixed: the arms' look pose is clamped, the view is free; the Tank gunner takes TankTurretPlayer's limits |
+| 31 | Tools while seated | `Player::processTick` (0x5b2cad) splits a mounted controller's move: the rider keeps fire (trigger 0), jet (trigger 4) and pitch; the vehicle gets the rest minus fire, crouch and jet. Passengers keep full control of themselves. So every rider uses tools; only the Tank turret and pirate cannon packages turn fire into the gun and `ServerCmdUnUseTool` | Seated fire always went to the vehicle weapon, so tools did nothing | Fixed |
+| 32 | Leaving and braking | The rider's jet calls `doDismount` (0x5b03d8; the Tutorial says "get out of the Jeep by pressing Jet"); jump reaches the vehicle, where WheeledVehicle brakes on trigger 2 and the horse jumps; crouch reaches neither | Jump left the vehicle, crouch braked, crouch left the horse, jet reached vehicles | Fixed |
+| 33 | Dismount sound | `Armor::onMount` plays `playerMountSound`; `doDismount` and `onUnMount` play nothing, and v20 ships no dismount sound file | Silent | Matches v20 |
+| 34 | Field of view | Torque's FOV is horizontal (`GuiTSCtrl::processCameraQuery`) | The renderer used 90 degrees as the vertical FOV, about 121 degrees across on 16:9, which swam when turning | Fixed |
 | 26 | Vehicle camera detail | `cameraMaxDist`, `cameraOffset`, `cameraTilt`, `cameraLag` | Only `cameraMaxDist` | Fixed: pivot height, tilt and lag from vehicles-pack-011 |
 | 27 | Whiteout on ski crash | `setWhiteout(time/7000)` | Not drawn | Fixed: white flash of time/7 when a tumble starts, fading one unit per second (the fade rate is inferred) |
 | 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Accepted adaptation, feel for Maxwell's playtest |
@@ -69,9 +73,10 @@ belongs to another thread by coordinator decision; **Open** is not done.
 
 **Seat roles.** `Definition::seat_role` classifies every seat as Passenger,
 StrafeDriver, MouseDriver, Actor (rider of a player-type mount) or Gunner.
-The server maps input by role, the rider's body faces the seat for every role
-but Passenger, and the client camera follows the same role. Nothing in the
-network protocol changed.
+The server maps input by role, every rider's body faces the seat, and the
+client camera follows the role: Passenger and StrafeDriver views face the seat,
+MouseDriver views follow the vehicle, a Gunner's view turns with the hull, and
+an Actor's mount follows the look. Nothing in the network protocol changed.
 
 **Mouse steering.** For a MouseDriver seat the client keeps sending the raw
 mouse turn in `MoveInput.yaw/pitch` (pitch wraps every half turn instead of
@@ -102,4 +107,7 @@ weapons-pack-007.
   hull, the Tank Turret on the spawn list, skis on and off, and the jeep
   drive and respawn test, and the bot-brick test (a minigame vehicle reset
   leaves bots alone, as v20's `resetVehicles` predates bots).
+- `seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun`:
+  a seated driver stays facing the seat against mouse yaw and shoots a held
+  gun; the gunner's fire puts the gun away.
 - None of this replaces Maxwell's interactive playtest of feel.
