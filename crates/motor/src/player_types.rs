@@ -90,6 +90,13 @@ impl PlayerType {
             _ => 100.0,
         }
     }
+    /// The largest `maxDamage` of any datablock.
+    pub fn highest_max_health() -> f32 {
+        Self::ALL
+            .into_iter()
+            .map(Self::max_health)
+            .fold(0.0, f32::max)
+    }
     /// `rideable`: other players may mount it.
     pub fn rideable(self) -> bool {
         self == Self::Horse

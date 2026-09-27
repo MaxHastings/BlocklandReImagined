@@ -64,7 +64,8 @@ fn validate_vitals(
         vitals.len() <= 64
             && vitals.keys().all(|id| names.contains_key(id))
             && vitals.values().all(|v| v.health.is_finite()
-                && (0.0..=bri_sim::session::MAX_HEALTH).contains(&v.health)),
+                && (0.0..=bri_sim::player_types::PlayerType::highest_max_health())
+                    .contains(&v.health)),
         "Invalid player vitals"
     );
     Ok(())

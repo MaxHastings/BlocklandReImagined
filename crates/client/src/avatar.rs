@@ -120,11 +120,19 @@ impl AvatarAssets {
                 &crate::items::checked_read(&root, &clips.path, &clips.sha256, 8 << 20)?,
             )?;
             // Each alias names one authored `.dsq`, holding its one sequence.
-            let clip = set
+            let mut clip = set
                 .animations
                 .into_iter()
                 .next()
                 .with_context(|| format!("Empty horse clip {alias}"))?;
+            // horse.dts fills the Blockhead's arm, head and action sequences
+            // with copies of `h_root.dsq`: they must pose nothing, layered
+            // like the Blockhead's own sequence of that name.
+            if !clip.name.eq_ignore_ascii_case(alias) {
+                clip.nodes.clear();
+                clip.objects.clear();
+                clip.additive = self.rig.sequence(alias).is_some_and(|b| b.additive);
+            }
             sequences.insert(alias.to_ascii_lowercase(), clip);
         }
         let mut images = BTreeMap::new();

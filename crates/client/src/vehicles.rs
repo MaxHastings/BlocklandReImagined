@@ -312,6 +312,10 @@ impl ClientVehicles {
             else {
                 continue;
             };
+            // Horses are animated with the horse rig instead.
+            if d.family == bri_vehicles::Family::Horse {
+                continue;
+            }
             let tint = info
                 .color
                 .and_then(|c| palette.get(usize::from(c)))

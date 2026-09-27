@@ -287,6 +287,9 @@ impl Predictor {
                 < NOISE * 10.0
             && predicted.grounded == corrected.grounded
             && predicted.crouched == corrected.crouched
+            // A new datablock or scale always takes the authoritative body.
+            && predicted.datablock == corrected.datablock
+            && predicted.scale == corrected.scale
         {
             self.player.restore(&mut self.world.physics, predicted)?;
             return Ok(Some(Vec3::ZERO));

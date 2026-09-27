@@ -282,6 +282,9 @@ pub struct App {
     ghost_uploaded: u64,
     avatar_assets: Arc<crate::avatar::AvatarAssets>,
     avatars: BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+    /// Horses spawned at vehicle bricks: `HorseArmor` bots, animated like
+    /// horse players.
+    mount_meshes: BTreeMap<u64, crate::avatar::AvatarMesh>,
     avatar_actions: BTreeMap<u64, crate::avatar::ActionAnimation>,
     /// Thread-3 builder and chat animations by player.
     avatar_gestures: BTreeMap<u64, crate::avatar::ActionAnimation>,
@@ -866,6 +869,7 @@ impl App {
             ghost_uploaded: u64::MAX,
             avatar_assets,
             avatars: BTreeMap::new(),
+            mount_meshes: BTreeMap::new(),
             avatar_actions: BTreeMap::new(),
             avatar_gestures: BTreeMap::new(),
             avatar_action_images: BTreeMap::new(),
@@ -962,6 +966,7 @@ impl App {
         self.world_items.reset();
         self.attempt.take();
         self.avatars.clear();
+        self.mount_meshes.clear();
         self.avatar_actions.clear();
         self.avatar_gestures.clear();
         self.avatar_action_images.clear();
@@ -1026,6 +1031,74 @@ impl App {
             frame.position + Vec3::Y * camera.offset + lag,
             camera.tilt,
         ))
+    }
+    /// Pose each spawned horse with the horse rig from its interpolated
+    /// frame: body in the brick's colour, dead ones in `death1`.
+    fn pose_mounts(
+        mount_meshes: &mut BTreeMap<u64, crate::avatar::AvatarMesh>,
+        avatar_assets: &crate::avatar::AvatarAssets,
+        vehicle_assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        animation_time: f64,
+        view: &network::View,
+    ) -> Result<()> {
+        let horses: Vec<_> = view
+            .vehicles
+            .values()
+            .filter(|info| {
+                vehicle_assets
+                    .definition(&info.definition)
+                    .is_some_and(|d| d.family == bri_vehicles::Family::Horse)
+            })
+            .cloned()
+            .collect();
+        mount_meshes
+            .retain(|id, _| horses.iter().any(|h| h.id == *id));
+        for info in horses {
+            let Some(frame) = vehicles.frame(info.id).cloned() else {
+                continue;
+            };
+            let mut appearance = avatar_assets.package.defaults.clone();
+            let color = info
+                .color
+                .and_then(|c| view.world.palette.get(usize::from(c)))
+                .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0]);
+            appearance.colors.insert("chest".into(), color);
+            if mount_meshes
+                .get(&info.id)
+                .is_none_or(|m| m.appearance != appearance)
+            {
+                let mesh = avatar_assets.horse_mesh(appearance)?;
+                mount_meshes.insert(info.id, mesh);
+            }
+            let forward = frame.rotation * Vec3::NEG_Z;
+            let state = bri_sim::player::PlayerState {
+                owner: 1,
+                feet: frame.position.to_array(),
+                velocity: frame.velocity.to_array(),
+                yaw: forward.x.atan2(-forward.z),
+                pitch: 0.0,
+                head_yaw: 0.0,
+                grounded: frame.velocity.y.abs() < 0.5,
+                crouched: false,
+                jetting: false,
+                jump: Default::default(),
+                datablock: bri_sim::player_types::PlayerType::Horse,
+                scale: 1.0,
+                energy: 0.0,
+            };
+            let input = crate::avatar::AvatarAnimationInput {
+                dead: info.destroyed,
+                ..Default::default()
+            };
+            mount_meshes.get_mut(&info.id).unwrap().pose_with_animation(
+                &avatar_assets,
+                &state,
+                animation_time,
+                &input,
+            )?;
+        }
+        Ok(())
     }
     fn update_net_graph(&mut self) {
         let Some((since, frames)) = self.net_graph.as_mut() else {
@@ -3118,6 +3191,14 @@ impl PlatformApp for App {
                 }
                 self.vehicles
                     .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
+                Self::pose_mounts(
+                    &mut self.mount_meshes,
+                    &self.avatar_assets,
+                    &self.vehicle_assets,
+                    &self.vehicles,
+                    self.animation_time,
+                    view,
+                )?;
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
                 for (owner, images) in &view.weapons.images {
@@ -4308,6 +4389,9 @@ impl PlatformApp for App {
                 avatar.upload(renderer, frame.device, frame.queue)?;
             }
         }
+        for mesh in self.mount_meshes.values_mut() {
+            mesh.upload(renderer, frame.device, frame.queue)?;
+        }
         self.world_items
             .upload(renderer, frame.device, frame.queue)?;
         crate::vehicles::ClientVehicles::upload(
@@ -4504,6 +4588,7 @@ impl PlatformApp for App {
                 scenes.push(gpu);
             }
         }
+        scenes.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
         let mut item_draws = self.world_items.draws();
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
