@@ -68,7 +68,7 @@ pub fn brick_water(brick: &Placed, definition: &Definition) -> Option<bri_conten
         repeat_period: None,
         liquid_type: "Water".into(),
         density: 1.0,
-        viscosity: 15.0,
+        viscosity: 40.0,
         surface: image(),
         shore: image(),
         reflection: None,
@@ -82,6 +82,19 @@ pub fn brick_water(brick: &Placed, definition: &Definition) -> Option<bri_conten
         reflection_intensity: 0.0,
         parallax: 0.0,
         warnings: vec![],
+        current: match definition.mesh.id.as_str() {
+            // River and rapids zones push along the brick's forward vector
+            // with 1000 and 3000 force on the 90-mass player.
+            id if id.ends_with("8x river.blb") => {
+                (brick.transform().transform_vector3(glam::Vec3::NEG_Z) * (1000.0 / 90.0))
+                    .to_array()
+            }
+            id if id.ends_with("8x rapids.blb") => {
+                (brick.transform().transform_vector3(glam::Vec3::NEG_Z) * (3000.0 / 90.0))
+                    .to_array()
+            }
+            _ => [0.0; 3],
+        },
     })
 }
 #[derive(Default, Clone)]

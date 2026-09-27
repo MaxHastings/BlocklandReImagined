@@ -29,6 +29,10 @@ pub struct Water {
     pub reflection_intensity: f32,
     pub parallax: f32,
     pub warnings: Vec<String>,
+    /// Current pushing swimmers along, as an acceleration in native units/s²
+    /// (a `PhysicalZone` applied force over the player's mass). Map water has none.
+    #[serde(default)]
+    pub current: [f32; 3],
 }
 impl Water {
     pub fn validate(&self) -> Result<()> {
@@ -186,6 +190,7 @@ mod tests {
             reflection_intensity: 0.,
             parallax: 0.5,
             warnings: vec![],
+            current: [0.0; 3],
         };
         w.validate().unwrap();
         assert_eq!(w.coverage([0., 8., 0.], 2.), 0.5);

@@ -105,6 +105,7 @@ fn water_depth_mask_and_time_motion_use_one_upload() -> Result<()> {
         reflection_intensity: 0.,
         parallax: 0.5,
         warnings: vec![],
+        current: [0.0; 3],
     };
     let mut data = SceneData::default();
     data.images.push(SceneImage {

@@ -496,6 +496,7 @@ impl Player {
             velocity += aim * increase;
         }
         if let Some((water, coverage)) = liquid {
+            velocity += Vec3::from(water.current) * coverage * dt;
             let buoyancy = water.density / t.density * coverage;
             if buoyancy > 1.0 || velocity.length_squared() > 0.0 || !was_grounded {
                 velocity.y += buoyancy * t.gravity * dt;

@@ -153,6 +153,7 @@ pub fn convert(
             reflection_intensity,
             parallax: number(p, "surfaceparallax", 0.5)?,
             warnings,
+            current: [0.0; 3],
         };
         w.validate()?;
         waters.push(w);

@@ -43,6 +43,7 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         reflection_intensity: 0.,
         parallax: 0.,
         warnings: vec![],
+        current: [0.0; 3],
     };
     water.validate().unwrap();
     let mut world = scene();
