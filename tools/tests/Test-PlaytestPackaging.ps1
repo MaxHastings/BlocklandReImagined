@@ -13,7 +13,7 @@ try {
     Copy-Item (Join-Path $repo 'crates/client/src/content.rs') (Join-Path $fixture 'crates/client/src/content.rs')
     Copy-Item (Join-Path $repo 'docs/PLAYTEST.md') (Join-Path $fixture 'docs/PLAYTEST.md')
     Copy-Item (Join-Path $repo 'docs/KNOWN-ISSUES.md') (Join-Path $fixture 'docs/KNOWN-ISSUES.md')
-    $fields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','vehicles')
+    $fields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','vehicles','events')
     $override = [ordered]@{ schema_version = 1 }
     foreach ($field in $fields) {
         $override[$field] = "fixture-$field"
@@ -21,7 +21,6 @@ try {
         [IO.Directory]::CreateDirectory($packageDir) | Out-Null
         [IO.File]::WriteAllText((Join-Path $packageDir 'asset.bin'), "fixture-$field")
     }
-    $override.terrain_region = @(0,0,1,1)
     [IO.File]::WriteAllText((Join-Path $fixture 'content/client-content.json'), (ConvertTo-Json $override -Depth 4))
     $exe = Join-Path $fixture 'bin/bri-client.exe'
     [IO.File]::WriteAllBytes($exe, [byte[]](0x4d,0x5a,0x01,0x02))

@@ -355,7 +355,8 @@ fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
         let tile = image::RgbaImage::from_raw(256, 256, bytes).unwrap();
         image::imageops::replace(&mut gallery, &tile, i as i64 * 256, 0);
     }
-    let out = root.join("docs/research/brick-fx");
+    // Regenerated evidence goes to target/; docs/research keeps the reviewed copy.
+    let out = root.join("target/test-artifacts/brick-fx");
     std::fs::create_dir_all(&out)?;
     gallery.save(out.join("sentinel-candidates.png"))?;
     std::fs::write(
@@ -452,7 +453,8 @@ fn native_original_brick_fx_prints_phase_and_paint_offscreen() -> Result<()> {
         0.,
     )?;
     assert_ne!(a, b);
-    let out = root.join("docs/research/brick-fx");
+    // Regenerated evidence goes to target/; docs/research keeps the reviewed copy.
+    let out = root.join("target/test-artifacts/brick-fx");
     std::fs::create_dir_all(&out)?;
     let mut gallery = image::RgbaImage::new(256 * 7, 512);
     for (i, bytes) in images.iter().enumerate() {

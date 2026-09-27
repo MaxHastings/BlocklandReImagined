@@ -16,7 +16,7 @@ if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $ExecutablePath = Join-Path
 if ([string]::IsNullOrWhiteSpace($DestinationRoot)) { $DestinationRoot = Join-Path $RepoRoot 'dist' }
 $ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
 $DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
-$script:PackFields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','vehicles')
+$script:PackFields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','vehicles','events')
 
 function Get-PackageFiles([string]$Path) {
     $all = @(Get-ChildItem -LiteralPath $Path -Force -Recurse)
@@ -37,9 +37,6 @@ function Get-SourceDefaults([string]$Root) {
         if (-not $match.Success) { throw "Cannot safely parse ContentConfig::default for '$field'; update packager with the runtime change." }
         $values[$field] = $match.Groups[1].Value
     }
-    $terrain = [regex]::Match($source, '(?m)^\s*terrain_region:\s*\[\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\],')
-    if (-not $terrain.Success) { throw 'Cannot safely parse ContentConfig::default terrain_region.' }
-    $values.terrain_region = @([int]$terrain.Groups[1].Value,[int]$terrain.Groups[2].Value,[int]$terrain.Groups[3].Value,[int]$terrain.Groups[4].Value)
     return $values
 }
 
@@ -52,7 +49,7 @@ function Get-EffectiveContentConfig([string]$Root) {
         if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'content/client-content.json must not be a symbolic link.' }
         if ($info.Length -gt 1048576) { throw 'content/client-content.json exceeds 1 MiB.' }
         $override = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-        $allowed = @('schema_version') + $script:PackFields + @('terrain_region')
+        $allowed = @('schema_version') + $script:PackFields
         foreach ($property in $override.PSObject.Properties) {
             if ($property.Name -notin $allowed) { throw "Unknown ContentConfig field '$($property.Name)' would make the client reject the package." }
         }
@@ -62,10 +59,7 @@ function Get-EffectiveContentConfig([string]$Root) {
             $property = $override.PSObject.Properties[$field]
             if ($null -ne $property) { $defaults[$field] = [string]$property.Value }
         }
-        $terrainProperty = $override.PSObject.Properties['terrain_region']
-        if ($null -ne $terrainProperty) { $defaults.terrain_region = @($terrainProperty.Value | ForEach-Object { [int]$_ }) }
     }
-    if (@($defaults.terrain_region).Count -ne 4) { throw 'ContentConfig terrain_region must have four integers.' }
     foreach ($field in $script:PackFields) {
         $name = [string]$defaults[$field]
         if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('\') -or $name.Contains(':') -or
@@ -194,7 +188,6 @@ try {
     }
     $effective = [ordered]@{ schema_version = 1 }
     foreach ($field in $script:PackFields) { $effective[$field] = $config[$field] }
-    $effective.terrain_region = @($config.terrain_region)
     $configJson = ConvertTo-Json -InputObject $effective -Depth 5
     [IO.File]::WriteAllText((Join-Path $packagedContent 'client-content.json'), $configJson + "`n", [Text.UTF8Encoding]::new($false))
     $entries = Get-ManifestEntries $releasePath
