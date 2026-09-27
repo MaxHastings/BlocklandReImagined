@@ -2482,6 +2482,19 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   bri-client-sandbox` (25 tests; the 4 ignored GPU tests passed on llvmpipe with
   `--ignored`), `cargo test -p bri-client --lib client_code` (4 tests),
   clippy `-D warnings`. Next: re-measure on the PC.
+## 2026-09-28 Ramp slides: v20 player collision
+
+- player collision is now v20's own `updatePos`/`findContact`/`step`
+  (`crates/motor/src/torque.rs`, from the exe at 0x5B0714/0x5AA570/0x5A9FD0),
+  replacing Rapier's character controller, which stood players still on the
+  74.5 degree face of every "72 degree" ramp. Gravity always applies; slopes
+  past runSurfaceAngle slide; the crease rule carries riders down V lanes.
+  Per-tick epsilons are rescaled for 120 Hz (docs/player-simulation.md).
+  Evidence on "Mr.Block's Slides": 524/524 ramp faces release the player;
+  889/893 lane rides reach the end of their leg, one from the tower top to
+  the ground (`cargo test --release -p bri-sim --test slides -- --ignored`).
+  Open: canJump's post-ceiling-hit refusal and the hard-landing recover
+  state need new PlayerState fields (protocol bump).
 
 ## 2026-09-28 Stress Lab: gameplay from packages (protocol 32)
 
