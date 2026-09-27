@@ -1,6 +1,6 @@
 //! Player graphics options. Each reads v20's own option pref where v20 had
 //! one, so the authored Graphics options drive the modern renderer.
-use bri_render::scene::TextureFiltering;
+use bri_render::{scene::TextureFiltering, shadow::ShadowSettings};
 use bri_ui::{api::Settings, prefs::Prefs};
 use std::collections::BTreeMap;
 
@@ -13,6 +13,18 @@ pub struct Graphics {
     /// World pass samples per pixel: 4 (MSAA) or 1. WebGPU guarantees 4x
     /// for the swapchain formats and depth.
     pub samples: u32,
+    /// Sun shadows from v20's Shadow Quality radios (`$pref::ShadowQuality`,
+    /// 0 Best .. 4 Minimum, v20 default 0). Minimum turns them off.
+    pub shadows: Option<ShadowSettings>,
+}
+pub fn shadow_settings(level: i64) -> Option<ShadowSettings> {
+    match level {
+        ..=0 => Some(ShadowSettings::BEST),
+        1 => Some(ShadowSettings::HIGH),
+        2 => Some(ShadowSettings::MEDIUM),
+        3 => Some(ShadowSettings::LOW),
+        _ => None,
+    }
 }
 impl Graphics {
     pub fn from_settings(settings: &Settings) -> Self {
@@ -34,6 +46,7 @@ impl Graphics {
             } else {
                 1
             },
+            shadows: shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0)),
         }
     }
 }
@@ -55,6 +68,12 @@ mod tests {
         assert_eq!(graphics(&[]).filtering, TextureFiltering::default());
         assert_eq!(graphics(&[]).samples, 4);
         assert_eq!(graphics(&[(ANTI_ALIASING, "0")]).samples, 1);
+        assert_eq!(graphics(&[]).shadows, Some(ShadowSettings::BEST));
+        assert_eq!(
+            graphics(&[("$pref::ShadowQuality", "3")]).shadows,
+            Some(ShadowSettings::LOW)
+        );
+        assert_eq!(graphics(&[("$pref::ShadowQuality", "4")]).shadows, None);
         let chosen = graphics(&[
             ("$pref::OpenGL::textureTrilinear", "0"),
             ("$pref::OpenGL::useGLNearest", "1"),

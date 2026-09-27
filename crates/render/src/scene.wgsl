@@ -43,6 +43,59 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 @group(0) @binding(3) var clamped:sampler;
 @group(0) @binding(4) var tiled_exact:sampler;
 @group(0) @binding(5) var clamped_exact:sampler;
+// Cascaded sun shadows of bricks, players and models (see shadow.rs); one
+// layer per cascade. forward_count.w==0 disables them.
+struct Shadows {
+    matrices:array<mat4x4<f32>,4>, splits:vec4<f32>, texels:vec4<f32>,
+    forward_count:vec4<f32>, params:vec4<f32>,
+};
+@group(0) @binding(6) var shadow_map:texture_depth_2d_array;
+@group(0) @binding(7) var shadow_sampler:sampler_comparison;
+@group(0) @binding(8) var<uniform> shadows:Shadows;
+struct ShadowCoord { uv:vec2<f32>, depth:f32, cascade:i32, strength:f32 };
+fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
+    var out:ShadowCoord;
+    out.cascade=-1;
+    let count=i32(shadows.forward_count.w);
+    let view_depth=dot(position-camera.eye.xyz,shadows.forward_count.xyz);
+    for(var i=0;i<count;i+=1) {
+        if view_depth<shadows.splits[i] {out.cascade=i;break;}
+    }
+    if out.cascade<0 {return out;}
+    // Offset along the normal by the cascade's texel size against acne.
+    let n=normal/max(length(normal),0.0001);
+    let clip=shadows.matrices[out.cascade]*vec4<f32>(position+n*shadows.texels[out.cascade]*1.5,1.0);
+    out.uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
+    out.depth=clip.z;
+    // Fade out over the last tenth of the shadow distance.
+    let last=shadows.splits[count-1];
+    out.strength=clamp((last-view_depth)/(last*0.1),0.0,1.0);
+    return out;
+}
+// 3x3 percentage-closer filter; 1 is fully lit.
+fn shadow_lit(c:ShadowCoord)->f32 {
+    if c.cascade<0 {return 1.0;}
+    let layer=c.cascade;
+    let texel=1.0/shadows.params.y;
+    var lit=0.0;
+    for(var y=-1;y<=1;y+=1) {
+        for(var x=-1;x<=1;x+=1) {
+            lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,c.uv+vec2<f32>(f32(x),f32(y))*texel,layer,c.depth);
+        }
+    }
+    return mix(1.0,lit/9.0,c.strength);
+}
+// Sun light reaching a vertex-lit surface past bricks, players and models.
+fn sun_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
+    return shadow_lit(shadow_coord(position,normal));
+}
+// Lightmaps already hold the map's own sun shadow. A caster darkens them to
+// at most the ambient level, so baked shadow is never darkened twice.
+fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    let c=shadow_coord(position,normal);
+    if c.cascade<0 {return lightmap;}
+    return mix(min(lightmap,camera.ambient.rgb),lightmap,shadow_lit(c));
+}
 @group(1) @binding(15) var<uniform> material:array<vec4<f32>,4>;
 // Brick FX IDs come from recovered v20 output registrations. Numerical visual
 // parameters below are explicit native approximations, not recovered engine code.
@@ -183,7 +236,8 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
             +display_color(textureSample(layer6,tiled,v.uv).rgb)*b.b
             +display_color(textureSample(layer7,tiled,v.uv).rgb)*b.a;
         let light_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(lightmap));
-        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(textureSample(lightmap,tiled_exact,light_uv).rgb+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
+        let terrain_light=shadowed_lightmap(textureSample(lightmap,tiled_exact,light_uv).rgb,v.world_position,v.normal);
+        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_light+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
     let albedo=textureSample(layer0,tiled,v.uv);
@@ -208,7 +262,12 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     if material[0].x==2.0 || material[0].x==3.0 {
         let normal=v.normal/max(length(v.normal),0.0001);
         let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
-        illumination=camera.ambient.rgb+camera.sun_color.rgb*max(dot(normal,-direction),0.0);
+        let facing=max(dot(normal,-direction),0.0);
+        var sun=0.0;
+        if facing>0.0 {sun=facing*sun_visibility(v.world_position,normal);}
+        illumination=camera.ambient.rgb+camera.sun_color.rgb*sun;
+    } else {
+        illumination=shadowed_lightmap(illumination,v.world_position,v.normal);
     }
     illumination+=point_illumination(v.world_position,v.normal);
     if fx.x==3u {illumination=max(illumination,vec3<f32>(1.));}

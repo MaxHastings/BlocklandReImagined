@@ -3999,7 +3999,12 @@ impl PlatformApp for App {
         self.avatar_preview = Some(crate::avatar::Preview::new(device));
         self.preview_dirty = self.preview_request.is_some();
         let samples = self.graphics.samples;
-        self.renderer = Some(SceneRenderer::with_samples(device, format, samples));
+        self.renderer = Some(SceneRenderer::with_settings(
+            device,
+            format,
+            samples,
+            self.graphics.shadows,
+        ));
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
         let weather_limits = bri_weather::WeatherLimits::default();
@@ -4060,13 +4065,13 @@ impl PlatformApp for App {
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
-        // Anti-aliasing changes every world pipeline and attachment; a map
-        // change needs renderers built for the new map.
+        // Anti-aliasing and shadow quality rebuild world pipelines and maps;
+        // a map change needs renderers built for the new map.
         if std::mem::take(&mut self.gpu_restart)
-            || self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.samples() != self.graphics.samples)
+            || self.renderer.as_ref().is_some_and(|r| {
+                r.samples() != self.graphics.samples
+                    || r.shadow_settings() != self.graphics.shadows
+            })
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }
@@ -4266,8 +4271,11 @@ impl PlatformApp for App {
                 frame.size,
             ));
         }
+        // With shadows the first-person body is posed too: it casts a
+        // shadow without being drawn.
+        let casts = renderer.shadow_settings().is_some();
         for (owner, avatar) in &mut self.avatars {
-            if (*owner != view.owner || third_person) && !hidden.contains(owner) {
+            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
                 avatar.upload(renderer, frame.device, frame.queue)?;
             }
         }
@@ -4477,6 +4485,33 @@ impl PlatformApp for App {
             item_draws.push((scene, instances));
         }
         item_draws.extend(self.debris_models.draws());
+        {
+            use bri_render::scene::ShadowCasters;
+            // Bricks, players and models cast; the map's own shadows are
+            // baked (see bri_render::shadow).
+            let mut bodies: Vec<&GpuScene> = self.gpu_chunks.values().collect();
+            bodies.extend(
+                self.avatars
+                    .iter()
+                    .filter(|(owner, _)| !hidden.contains(owner))
+                    .filter_map(|(_, avatar)| avatar.gpu.as_ref()),
+            );
+            let mut models = self.world_items.draws();
+            models.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
+            if let Some((scene, instances)) = &self.shell_gpu
+                && self.weapon_shells.active_count() > 0
+            {
+                models.push((scene, instances));
+            }
+            models.extend(self.debris_models.draws());
+            renderer.render_shadows(
+                frame.encoder,
+                ShadowCasters {
+                    scenes: &bodies,
+                    instances: &models,
+                },
+            );
+        }
         renderer.render_with_instances(
             frame.encoder,
             world_target,

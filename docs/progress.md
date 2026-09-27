@@ -1849,6 +1849,24 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   spray_paint_render, vehicle_render and world_items pass. `app_flow`'s
   wrench step times out on main before these changes too.
 
+- 2026-09-27 Sun shadows (`bri_render::shadow`). v20 had no sun shadows on
+  bricks or players, so these are designed for this game: 1-4 stabilized
+  cascades (texel-snapped spheres), 3x3 PCF, fade over the last tenth of
+  the distance, driven by v20's `$pref::ShadowQuality` radios (0 Best: 4 x
+  2048 to 320 units; 1 High; 2 Medium; 3 Low; 4 Minimum = off; v20
+  default 0). Only bricks, players (including the unseen first-person body),
+  vehicles, items, shells and debris cast. A first version also let map
+  interiors cast; Cottage (Bedroom) and Town (Kitchen) renders showed that
+  darkens nearly every indoor build, because v20 sun-lit bricks even
+  indoors, so map geometry no longer casts. Lightmapped interiors and
+  terrain darken to at most the mission ambient, so baked shadows are never
+  darkened twice; baked lighting is otherwise pixel-identical. Opaque
+  batches draw per chunk without rebinding. Golden Gate 1080p MSAA: Best
+  adds ~1.2 ms p50 (casters ~1.2 ms), Low ~0.4 ms. Evidence: probe
+  `quality_variants` PNGs and `artifacts/native-client-weather/slopes.png`
+  (first-person body shadow on Slopes terrain); client GPU tests brick_fx,
+  foliage_scene, world_items, vehicle_render and app_flow weather pass.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

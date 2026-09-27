@@ -599,6 +599,8 @@ fn gpu_frames(
             center + Vec3::new(extent * 0.6, extent * 0.4, extent * 0.6),
             center,
         ),
+        // Inside the shadow distance, looking down across the build.
+        ("near", center + Vec3::new(40.0, 25.0, 40.0), center),
     ];
     let mut out = serde_json::Map::new();
     for &(name, eye, look) in &views {
@@ -723,8 +725,14 @@ fn quality_variants(
     );
     let resolved_view = resolved.create_view(&Default::default());
     let mut out = serde_json::Map::new();
-    for (variant, samples) in [("no-msaa", 1), ("msaa4", 4)] {
-        let mut renderer = SceneRenderer::with_samples(device, format, samples);
+    use bri_render::shadow::ShadowSettings;
+    for (variant, samples, shadows) in [
+        ("no-msaa", 1, None),
+        ("msaa4", 4, None),
+        ("msaa4-shadows-low", 4, Some(ShadowSettings::LOW)),
+        ("msaa4-shadows-best", 4, Some(ShadowSettings::BEST)),
+    ] {
+        let mut renderer = SceneRenderer::with_settings(device, format, samples, shadows);
         let gpu_map = renderer.upload(device, queue, map)?;
         let gpu_palette = renderer.upload(device, queue, &palette.scene)?;
         let gpu_world = chunks
@@ -755,6 +763,13 @@ fn quality_variants(
             for i in 0..40 {
                 let t = Instant::now();
                 let mut encoder = device.create_command_encoder(&Default::default());
+                renderer.render_shadows(
+                    &mut encoder,
+                    bri_render::scene::ShadowCasters {
+                        scenes: &scenes[1..],
+                        instances: &[],
+                    },
+                );
                 renderer.render(
                     &mut encoder,
                     multisampled.as_ref().unwrap_or(&resolved_view),
@@ -798,7 +813,30 @@ fn quality_variants(
                 height,
                 image::ColorType::Rgba8,
             )?;
-            results.insert(name.into(), percentiles(&mut frames));
+            let mut stats = percentiles(&mut frames);
+            if shadows.is_some() {
+                // The caster passes alone, to separate them from receiver cost.
+                let mut casters = Vec::new();
+                for _ in 0..20 {
+                    let t = Instant::now();
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    renderer.render_shadows(
+                        &mut encoder,
+                        bri_render::scene::ShadowCasters {
+                            scenes: &scenes[1..],
+                            instances: &[],
+                        },
+                    );
+                    queue.submit([encoder.finish()]);
+                    device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: None,
+                    })?;
+                    casters.push(ms(t.elapsed()));
+                }
+                stats["shadow_casters_only"] = percentiles(&mut casters);
+            }
+            results.insert(name.into(), stats);
         }
         out.insert(variant.into(), results.into());
     }

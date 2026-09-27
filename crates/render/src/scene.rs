@@ -2,7 +2,7 @@
 //! the swapchain/offscreen attachment, encoder and submission, so UI passes can
 //! follow this pass without another adapter/device or scene re-upload.
 use anyhow::{Context, Result, ensure};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 use std::ops::Range;
 use wgpu::util::DeviceExt;
 
@@ -644,7 +644,8 @@ pub struct GpuScene {
     indices: wgpu::Buffer,
     materials: Vec<wgpu::BindGroup>,
     batches: Vec<MeshBatch>,
-    material_modes: Vec<(usize, bool, bool)>, // opaque/alpha/additive, double sided, background
+    /// Opaque/alpha/additive, double sided, background, alpha-masked.
+    material_modes: Vec<(usize, bool, bool, bool)>,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
     bounds: Option<(Vec3, Vec3)>,
     pub vertex_count: usize,
@@ -929,6 +930,25 @@ impl TextureFiltering {
         }
     }
 }
+const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
+    wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32x2,4=>Float32x4];
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
+    wgpu::vertex_attr_array![5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4];
+/// Scene vertices plus per-instance model matrix and tint.
+fn vertex_layouts() -> [Option<wgpu::VertexBufferLayout<'static>>; 2] {
+    [
+        Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SceneVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &VERTEX_ATTRIBUTES,
+        }),
+        Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<InstanceRecord>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &INSTANCE_ATTRIBUTES,
+        }),
+    ]
+}
 fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -945,6 +965,7 @@ fn camera_group(
     camera: &wgpu::Buffer,
     lights: &wgpu::Buffer,
     filtering: TextureFiltering,
+    shadows: &crate::shadow::ShadowMaps,
 ) -> wgpu::BindGroup {
     let filtered = |address_mode| {
         let filter = if filtering.sharp {
@@ -999,11 +1020,32 @@ fn camera_group(
             resource: wgpu::BindingResource::Sampler(sampler),
         });
     }
+    entries.extend([
+        wgpu::BindGroupEntry {
+            binding: 6,
+            resource: wgpu::BindingResource::TextureView(&shadows.array_view),
+        },
+        wgpu::BindGroupEntry {
+            binding: 7,
+            resource: wgpu::BindingResource::Sampler(&shadows.comparison),
+        },
+        wgpu::BindGroupEntry {
+            binding: 8,
+            resource: shadows.receiver.as_entire_binding(),
+        },
+    ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
         layout,
         entries: &entries,
     })
+}
+
+/// Scenes and instanced model groups that cast sun shadows.
+#[derive(Clone, Copy, Default)]
+pub struct ShadowCasters<'a> {
+    pub scenes: &'a [&'a GpuScene],
+    pub instances: &'a [(&'a GpuScene, &'a GpuInstances)],
 }
 
 pub const MAX_POINT_LIGHTS: usize = 256;
@@ -1025,6 +1067,7 @@ pub struct SceneRenderer {
     pipelines: Vec<wgpu::RenderPipeline>,
     filtering: TextureFiltering,
     samples: u32,
+    shadows: crate::shadow::ShadowMaps,
     eye: Vec3,
     frustum: Option<[glam::Vec4; 6]>,
 }
@@ -1039,6 +1082,16 @@ impl SceneRenderer {
         device: &wgpu::Device,
         color_format: wgpu::TextureFormat,
         samples: u32,
+    ) -> Self {
+        Self::with_settings(device, color_format, samples, None)
+    }
+    /// As `with_samples`, with cascaded sun shadows (None disables them).
+    /// Call `render_shadows` before the world pass each frame.
+    pub fn with_settings(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        samples: u32,
+        shadows: Option<crate::shadow::ShadowSettings>,
     ) -> Self {
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene camera"),
@@ -1067,6 +1120,32 @@ impl SceneRenderer {
                 sampler_entry(3),
                 sampler_entry(4),
                 sampler_entry(5),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let mut entries = vec![];
@@ -1132,20 +1211,55 @@ impl SceneRenderer {
                     }),
                 };
                 for double_sided in [false, true] {
-                    pipelines.push(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label:Some("persistent scene"),layout:Some(&layout),
-                vertex:wgpu::VertexState {module:&shader,entry_point:Some("vs_main"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout {
-                    array_stride:std::mem::size_of::<SceneVertex>() as u64,step_mode:wgpu::VertexStepMode::Vertex,
-                    attributes:&wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32x2,4=>Float32x4],
-                }),Some(wgpu::VertexBufferLayout {
-                    array_stride:std::mem::size_of::<InstanceRecord>() as u64,step_mode:wgpu::VertexStepMode::Instance,
-                    attributes:&wgpu::vertex_attr_array![5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4],
-                })]},
-                primitive:wgpu::PrimitiveState {cull_mode:if double_sided {None} else {Some(wgpu::Face::Back)},..Default::default()},
-                depth_stencil:Some(wgpu::DepthStencilState {format:DEPTH_FORMAT,depth_write_enabled:Some(blend==0 && !background),depth_compare:Some(wgpu::CompareFunction::LessEqual),stencil:Default::default(),bias:Default::default()}),
-                multisample:wgpu::MultisampleState {count:samples,..Default::default()},fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants: &[ ("OUTPUT_ENCODED", if color_format.is_srgb() {0.0} else {1.0}) ],..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:blend_state,write_mask:wgpu::ColorWrites::ALL})]}),
-                multiview_mask:None,cache:None,
-            }));
+                    pipelines.push(device.create_render_pipeline(
+                        &wgpu::RenderPipelineDescriptor {
+                            label: Some("persistent scene"),
+                            layout: Some(&layout),
+                            vertex: wgpu::VertexState {
+                                module: &shader,
+                                entry_point: Some("vs_main"),
+                                compilation_options: Default::default(),
+                                buffers: &vertex_layouts(),
+                            },
+                            primitive: wgpu::PrimitiveState {
+                                cull_mode: if double_sided {
+                                    None
+                                } else {
+                                    Some(wgpu::Face::Back)
+                                },
+                                ..Default::default()
+                            },
+                            depth_stencil: Some(wgpu::DepthStencilState {
+                                format: DEPTH_FORMAT,
+                                depth_write_enabled: Some(blend == 0 && !background),
+                                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                                stencil: Default::default(),
+                                bias: Default::default(),
+                            }),
+                            multisample: wgpu::MultisampleState {
+                                count: samples,
+                                ..Default::default()
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: &shader,
+                                entry_point: Some("fs_main"),
+                                compilation_options: wgpu::PipelineCompilationOptions {
+                                    constants: &[(
+                                        "OUTPUT_ENCODED",
+                                        if color_format.is_srgb() { 0.0 } else { 1.0 },
+                                    )],
+                                    ..Default::default()
+                                },
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format: color_format,
+                                    blend: blend_state,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                            }),
+                            multiview_mask: None,
+                            cache: None,
+                        },
+                    ));
                 }
             }
         }
@@ -1160,12 +1274,15 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let filtering = TextureFiltering::default();
+        let shadows =
+            crate::shadow::ShadowMaps::new(device, shadows, &material_layout, &vertex_layouts());
         let camera_group = camera_group(
             device,
             &camera_layout,
             &camera_buffer,
             &light_buffer,
             filtering,
+            &shadows,
         );
         Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1181,6 +1298,7 @@ impl SceneRenderer {
             pipelines,
             filtering,
             samples,
+            shadows,
             eye: Vec3::ZERO,
             frustum: None,
         }
@@ -1334,6 +1452,7 @@ impl SceneRenderer {
                         },
                         m.double_sided,
                         matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
+                        matches!(m.alpha, AlphaMode::Mask(_)),
                     )
                 })
                 .collect(),
@@ -1431,6 +1550,9 @@ impl SceneRenderer {
     pub fn samples(&self) -> u32 {
         self.samples
     }
+    pub fn shadow_settings(&self) -> Option<crate::shadow::ShadowSettings> {
+        self.shadows.settings
+    }
     pub fn filtering(&self) -> TextureFiltering {
         self.filtering
     }
@@ -1445,6 +1567,7 @@ impl SceneRenderer {
                 &self.camera_buffer,
                 &self.light_buffer,
                 filtering,
+                &self.shadows,
             );
         }
     }
@@ -1452,9 +1575,14 @@ impl SceneRenderer {
     /// single submission would intentionally use the latest camera everywhere.
     pub fn update_camera(&mut self, queue: &wgpu::Queue, camera: &Camera) {
         self.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
-        self.frustum = Some(frustum_planes(Mat4::from_cols_array(
-            &camera.view_projection,
-        )));
+        let view_projection = Mat4::from_cols_array(&camera.view_projection);
+        self.frustum = Some(frustum_planes(view_projection));
+        self.shadows.update(
+            queue,
+            view_projection,
+            self.eye,
+            Vec4::from(camera.sun_direction).truncate(),
+        );
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(camera));
     }
     /// Validate before writing, including an empty update to clear the previous frame.
@@ -1484,6 +1612,94 @@ impl SceneRenderer {
             queue.write_buffer(&self.light_buffer, 16, bytemuck::cast_slice(lights));
         }
         Ok(())
+    }
+    /// Render sun shadow casters (bricks, players, vehicles, items; never map
+    /// interiors or terrain, see `crate::shadow`) for the camera last passed
+    /// to `update_camera`. Only opaque and alpha-masked, non-background
+    /// materials cast. Without shadows this records nothing.
+    pub fn render_shadows(&self, encoder: &mut wgpu::CommandEncoder, casters: ShadowCasters<'_>) {
+        let cascades = &self.shadows.cascades;
+        {
+            for (index, cascade) in cascades.iter().enumerate() {
+                let planes = frustum_planes(cascade.view_projection);
+                let layer = index;
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("sun shadow cascade"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.shadows.layer_views[layer],
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_bind_group(
+                    0,
+                    &self.shadows.caster_group,
+                    &[crate::shadow::ShadowMaps::caster_offset(index)],
+                );
+                let mut draw = |scene: &GpuScene, buffer: &wgpu::Buffer, range: Range<u32>| {
+                    if let Some(bounds) = scene.bounds
+                        && !aabb_visible(&planes, bounds)
+                    {
+                        return;
+                    }
+                    pass.set_vertex_buffer(0, scene.vertices.slice(..));
+                    pass.set_vertex_buffer(1, buffer.slice(..));
+                    pass.set_index_buffer(scene.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    // Adjacent opaque batches (a chunk's coalesced materials)
+                    // share one draw; masked batches bind their material.
+                    let mut run: Option<Range<u32>> = None;
+                    let flush = |pass: &mut wgpu::RenderPass<'_>, run: &mut Option<Range<u32>>| {
+                        if let Some(indices) = run.take() {
+                            pass.set_pipeline(&self.shadows.pipelines[0]);
+                            pass.draw_indexed(indices, 0, range.clone());
+                        }
+                    };
+                    for batch in &scene.batches {
+                        let (blend, _, background, masked) = scene.material_modes[batch.material];
+                        if blend != 0 || background {
+                            continue;
+                        }
+                        if masked {
+                            flush(&mut pass, &mut run);
+                            pass.set_pipeline(&self.shadows.pipelines[1]);
+                            pass.set_bind_group(1, &scene.materials[batch.material], &[]);
+                            pass.draw_indexed(batch.indices.clone(), 0, range.clone());
+                        } else if let Some(indices) =
+                            run.as_mut().filter(|r| r.end == batch.indices.start)
+                        {
+                            indices.end = batch.indices.end;
+                        } else {
+                            flush(&mut pass, &mut run);
+                            run = Some(batch.indices.clone());
+                        }
+                    }
+                    flush(&mut pass, &mut run);
+                };
+                for &scene in casters.scenes {
+                    draw(scene, &self.identity_instance, 0..1);
+                }
+                for &(scene, instances) in casters.instances {
+                    // Fading copies stop casting once they turn translucent.
+                    let solid = instances.transforms.iter().all(|t| t.tint[3] == 1.);
+                    if !instances.is_empty() && solid {
+                        draw(scene, &instances.buffer, 0..instances.len() as u32);
+                    } else {
+                        for (i, transform) in instances.transforms.iter().enumerate() {
+                            if transform.tint[3] == 1. {
+                                draw(scene, &instances.buffer, i as u32..i as u32 + 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     /// Clear starts a world frame; None loads existing color/depth for another
     /// scene pass. Native UI can render afterward with color LoadOp::Load.
@@ -1626,7 +1842,7 @@ impl SceneRenderer {
         pass.set_bind_group(0, &self.camera_group, &[]);
         for draw in order {
             let (scene, batch) = (draw.scene, draw.batch);
-            let (_, double_sided, background) = scene.material_modes[batch.material];
+            let (_, double_sided, background, _) = scene.material_modes[batch.material];
             pass.set_pipeline(
                 &self.pipelines
                     [usize::from(background) * 6 + draw.blend * 2 + usize::from(double_sided)],
