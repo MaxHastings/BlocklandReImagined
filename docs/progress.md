@@ -1658,6 +1658,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
 - Work is now split across parallel sessions (terrain, effects/audio, UI,
   jetting, tools and held items, vehicles, brick debris). This session remains
   the integrator for packaging, docs and the release build.
+- Control objects (a1 playtest report: the F7 camera turned the body and Spy
+  did nothing). Each peer now has one replicated `ControlObject` (Player,
+  Camera, Spy(target) or Corpse) in `sim/src/session/control.rs`, modelled
+  on Torque's `setControlObject`. The step feeds the walking or seated body
+  only while it is in control, so the free camera, spy orbit and death
+  camera leave it still and unturned. Spy uses v20's `Corpse` orbit (8 units)
+  and clicking returns to the body. F7 and Spy go through the admin authority,
+  and F8 drops the player at the camera. Z free look now turns only the head:
+  a replicated `head_yaw` drives the original `headside` pose, clamped to
+  `maxFreelookAngle` = 3. F zoom eases in and out. Tests: `session` (camera,
+  spy and corpse control) and client `controls`/`avatar`.
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
