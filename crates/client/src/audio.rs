@@ -20,6 +20,12 @@ pub struct ClientAudio {
     prefs: Prefs,
     /// Music-brick loops keyed by brick: (loop id, position, voice).
     music: BTreeMap<u64, (String, [f32; 3], SoundHandle)>,
+    /// Projectile `sound` loops keyed by projectile id.
+    projectiles: BTreeSet<u64>,
+}
+/// Attached-sound entity keys for projectiles, apart from other entities.
+fn projectile_entity(id: u64) -> EntityKey {
+    EntityKey(id | 1 << 63)
 }
 
 impl ClientAudio {
@@ -81,6 +87,7 @@ impl ClientAudio {
             requested: BTreeMap::new(),
             prefs: Prefs::default(),
             music: BTreeMap::new(),
+            projectiles: BTreeSet::new(),
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -178,6 +185,19 @@ impl ClientAudio {
             CueKind::WrenchHit => "tool.wrench.hit",
             CueKind::Pain { cry: true, .. } => "player.pain_cry",
             CueKind::Death { .. } => "player.death_cry",
+            // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20,
+            // `exitSplashSoundVelocity` 5.
+            CueKind::Water {
+                entered: true,
+                speed,
+                ..
+            } => match *speed {
+                s if s >= 20.0 => "player.water.impact_hard",
+                s if s >= 10.0 => "player.water.impact_medium",
+                _ => "player.water.impact_easy",
+            },
+            CueKind::Water { speed, .. } if *speed > 5.0 => "player.water.exit",
+            CueKind::Water { .. } => return,
             // Emote, spawn and corpse sounds belong to their explosions.
             CueKind::Pain { .. }
             | CueKind::Burn { .. }
@@ -231,8 +251,45 @@ impl ClientAudio {
             }
         }
     }
+    /// `ProjectileData.sound`: a loop that flies with each projectile and
+    /// stops when it explodes or expires.
+    pub fn sync_projectiles(&mut self, projectiles: &[bri_weapons::Projectile], pack: &bri_weapons::Pack) {
+        let live: BTreeSet<u64> = projectiles.iter().map(|p| p.id).collect();
+        for id in self.projectiles.difference(&live).copied().collect::<Vec<_>>() {
+            self.projectiles.remove(&id);
+            let result = self.runtime.despawn(projectile_entity(id));
+            self.record(result);
+        }
+        for p in projectiles {
+            let position = p.position.to_array();
+            if self.projectiles.contains(&p.id) {
+                let result = self.runtime.update_entity(projectile_entity(p.id), position);
+                self.record(result);
+                continue;
+            }
+            let Some(sound) = pack
+                .projectiles
+                .get(&p.definition)
+                .map(|d| d.sound.as_str())
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            if self.projectiles.len() >= 64 {
+                break;
+            }
+            self.projectiles.insert(p.id);
+            let placement = Placement::Attached {
+                entity: projectile_entity(p.id),
+                position,
+            };
+            let result = self.runtime.play(sound, placement).map(|_| ());
+            self.record(result);
+        }
+    }
     pub fn clear(&mut self) {
         self.music.clear();
+        self.projectiles.clear();
         self.pending.clear();
         let result = self.runtime.stop_all();
         self.record(result);

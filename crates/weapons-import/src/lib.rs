@@ -43,6 +43,10 @@ fn vec<const N: usize>(s: &str, default: [f32; N]) -> [f32; N] {
 fn axis(v: [f32; 3]) -> [f32; 3] {
     [v[0], v[2], -v[1]]
 }
+/// A Torque (x, y, z) scale on native (x, up, forward) axes.
+fn axis_scale(v: [f32; 3]) -> [f32; 3] {
+    [v[0], v[2], v[1]]
+}
 fn resource(d: &Definition, key: &str) -> String {
     let p = field(d, key);
     if p.starts_with("./") {
@@ -240,6 +244,32 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             ExplosionInfo {
                 name: d.name.clone(),
                 sound: field(d, "soundProfile"),
+                // Engine defaults: freq 10, amp 1, duration 1.5 s, radius 10, falloff 10.
+                shake: flag(d, "shakeCamera", false).then(|| CameraShake {
+                    frequency: vec(&field(d, "camShakeFreq"), [10.0; 3]),
+                    amplitude: vec(&field(d, "camShakeAmp"), [1.0; 3]),
+                    seconds: num(d, "camShakeDuration", 1.5),
+                    radius: num(d, "camShakeRadius", 10.0),
+                    falloff: num(d, "camShakeFalloff", 10.0),
+                }),
+                shape: resource(d, "explosionShape"),
+                seconds: num(d, "lifetimeMS", 1000.0) / 1000.0,
+                play_speed: num(d, "playSpeed", 1.0),
+                face_viewer: flag(d, "faceViewer", false),
+                scale: axis_scale(vec(&field(d, "explosionScale"), [1.0; 3])),
+                // Engine defaults: sizes 1, times 0 then 1.
+                sizes: (0..4)
+                    .filter_map(|i| {
+                        let size = field(d, &format!("sizes[{i}]"));
+                        let time = field(d, &format!("times[{i}]"));
+                        (!size.is_empty() || !time.is_empty()).then(|| {
+                            (
+                                axis_scale(vec(&size, [1.0; 3])),
+                                time.parse().unwrap_or(if i == 0 { 0.0 } else { 1.0 }),
+                            )
+                        })
+                    })
+                    .collect(),
             },
         );
     }
@@ -586,6 +616,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
         .values()
         .map(|i| i.model.clone())
         .chain(pack.projectiles.values().map(|p| p.model.clone()))
+        .chain(pack.explosions.values().map(|e| e.shape.clone()))
         .filter(|p| !p.is_empty())
         .collect();
     let mut texture_references: Vec<(String, String)> = pack

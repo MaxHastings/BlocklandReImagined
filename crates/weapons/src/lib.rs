@@ -223,6 +223,27 @@ pub struct ExplosionInfo {
     pub name: String,
     /// Original `soundProfile`, empty when silent.
     pub sound: String,
+    /// `shakeCamera` with its `camShake*` fields.
+    pub shake: Option<CameraShake>,
+    /// `explosionShape` model (converted like projectile models), or empty.
+    pub shape: String,
+    /// `lifetimeMS` in seconds.
+    pub seconds: f32,
+    pub play_speed: f32,
+    pub face_viewer: bool,
+    /// `explosionScale` times `sizes[i]` at `times[i]` of the lifetime.
+    pub scale: [f32; 3],
+    pub sizes: Vec<([f32; 3], f32)>,
+}
+/// Torque `CameraShake`: per-axis sine offsets in the camera frame
+/// (x right, y forward, z up) fading as `1 / (1 + t * falloff)^2`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraShake {
+    pub frequency: [f32; 3],
+    pub amplitude: [f32; 3],
+    pub seconds: f32,
+    pub radius: f32,
+    pub falloff: f32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pack {
@@ -290,7 +311,20 @@ impl Pack {
             ensure!(
                 key == &e.name.to_ascii_lowercase()
                     && e.sound.len() <= 128
-                    && !e.sound.chars().any(char::is_control),
+                    && !e.sound.chars().any(char::is_control)
+                    && [e.seconds, e.play_speed]
+                        .into_iter()
+                        .chain(e.scale)
+                        .chain(e.sizes.iter().flat_map(|(s, t)| s.iter().copied().chain([*t])))
+                        .all(|v| v.is_finite() && (0.0..=1000.0).contains(&v))
+                    && e.sizes.len() <= 4
+                    && e.shake.is_none_or(|s| {
+                        s.frequency
+                            .into_iter()
+                            .chain(s.amplitude)
+                            .chain([s.seconds, s.radius, s.falloff])
+                            .all(|v| v.is_finite() && (0.0..=1000.0).contains(&v))
+                    }),
                 "Invalid explosion {key}"
             );
         }

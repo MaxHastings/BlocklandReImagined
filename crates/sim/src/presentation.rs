@@ -45,6 +45,13 @@ pub enum CueKind {
     Death {
         actor: u64,
     },
+    /// A player's feet crossed a water surface at this speed: the entry
+    /// splash and `impactWater*` sound, or the `exitingWater` sound.
+    Water {
+        actor: u64,
+        entered: bool,
+        speed: f32,
+    },
     /// `Player::burn`: `PlayerBurnImage` flames for this long.
     Burn {
         actor: u64,
@@ -61,10 +68,12 @@ pub enum CueKind {
         vehicle: u64,
         sound: String,
     },
-    /// Vehicle emitter (burning, splash).
+    /// Vehicle emitter or image (burning, splash, weapon smoke, fuse);
+    /// inactive unmounts a lasting image such as the cannon fuse.
     VehicleEffect {
         vehicle: u64,
         effect: String,
+        active: bool,
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,6 +141,10 @@ impl Cue {
                 *actor > 0 && level.is_finite() && (0.0..=1e6).contains(level),
                 "Invalid pain cue"
             ),
+            CueKind::Water { actor, speed, .. } => ensure!(
+                *actor > 0 && speed.is_finite() && (0.0..=10000.0).contains(speed),
+                "Invalid water cue"
+            ),
             CueKind::Burn { actor, seconds } => ensure!(
                 *actor > 0 && seconds.is_finite() && (0.0..=300.).contains(seconds),
                 "Invalid burn cue"
@@ -140,6 +153,7 @@ impl Cue {
             | CueKind::VehicleEffect {
                 vehicle,
                 effect: name,
+                ..
             } => ensure!(
                 *vehicle > 0 && !name.is_empty() && text(name),
                 "Invalid vehicle cue"

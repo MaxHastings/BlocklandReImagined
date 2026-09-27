@@ -34,6 +34,20 @@ pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub const EMOTES: [&str; 5] = ["alarm", "confusion", "love", "hate", "sit"];
 pub use tools::{InspectMode, ToolAction, ToolCatalog, UNDO_PLANT_LIMIT};
 
+/// The surface height of water covering any part of this player's body.
+fn water_surface(waters: &[bri_content::water::Water], state: &crate::player::PlayerState) -> Option<f32> {
+    let tuning = crate::player::PlayerTuning::default();
+    let height = if state.crouched {
+        tuning.crouch_height
+    } else {
+        tuning.stand_height
+    };
+    waters
+        .iter()
+        .find(|w| w.coverage(state.feet, height) > 0.0)
+        .map(|w| w.max[1])
+}
+
 /// Queued inputs above which the server simulates extra ticks to catch up.
 const INPUT_TARGET: usize = 6;
 /// Bound on buffered inputs (half a second at the 120 Hz input rate).
@@ -1029,9 +1043,26 @@ impl Session {
                         ..Default::default()
                     }
                 };
-                let motion =
-                    peer.player
-                        .step_in_water(&mut self.simulation.physics, input, &liquids)?;
+                let wet_before = water_surface(&liquids, peer.player.state());
+                let motion = peer.player.step_in_water(
+                    &mut self.simulation.physics,
+                    input,
+                    &liquids,
+                )?;
+                let state = peer.player.state();
+                let wet = water_surface(&liquids, state);
+                if let Some(surface) = wet.or(wet_before).filter(|_| wet.is_some() != wet_before.is_some()) {
+                    let speed = Vec3::from(state.velocity).length();
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::Water {
+                            actor: owner,
+                            entered: wet.is_some(),
+                            speed: speed.min(10000.0),
+                        },
+                        [state.feet[0], surface, state.feet[2]],
+                    );
+                }
                 if peer.combat.alive {
                     touches.extend(motion.touched.into_iter().map(|brick| (owner, brick)));
                     impacts.push((owner, motion.impact));

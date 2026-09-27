@@ -620,12 +620,13 @@ impl Session {
                     id,
                     active,
                 } => {
-                    if active && let Some(position) = self.vehicle_position(vehicle) {
+                    if let Some(position) = self.vehicle_position(vehicle) {
                         self.cues.emit(
                             tick,
                             crate::presentation::CueKind::VehicleEffect {
                                 vehicle: vehicle.0,
                                 effect: id,
+                                active,
                             },
                             position,
                         );

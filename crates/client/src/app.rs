@@ -102,6 +102,8 @@ pub struct App {
     renderer: Option<SceneRenderer>,
     effects: crate::effects::WorldEffects,
     weapon_effects: crate::weapon_effects::WeaponEffects,
+    actor_effects: crate::actor_effects::ActorEffects,
+    explosion_shapes: crate::explosion_shapes::ExplosionShapes,
     weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
     weapon_cue_drops: u64,
     weapon_light_deferred: usize,
@@ -171,6 +173,8 @@ impl App {
             self.combat.sitting.insert(*actor);
         }
         self.audio.cue(&cue);
+        self.actor_effects.cue(&cue);
+        self.explosion_shapes.cue(&cue);
         if matches!(
             cue.kind,
             bri_sim::presentation::CueKind::WeaponEffect { .. }
@@ -184,11 +188,73 @@ impl App {
             }
         }
     }
+    /// Head images, jets and vehicle fire follow this frame's presented bodies.
+    #[allow(clippy::too_many_arguments)]
+    fn update_actor_effects(
+        actor_effects: &mut crate::actor_effects::ActorEffects,
+        assets: &crate::avatar::AvatarAssets,
+        avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+        vehicles: &crate::vehicles::ClientVehicles,
+        vehicle_assets: &crate::vehicles::VehicleAssets,
+        view: &network::View,
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        elapsed: f32,
+    ) -> Result<()> {
+        let body = |id: u64| {
+            vehicles
+                .frame(id)
+                .map(|f| glam::Mat4::from_rotation_translation(f.rotation, f.position))
+        };
+        let jets: Vec<_> = presented
+            .iter()
+            .filter(|(owner, player)| {
+                player.jetting
+                    && view
+                        .vitals
+                        .get(owner)
+                        .is_some_and(|v| v.alive && v.mounted.is_none())
+            })
+            .filter_map(|(owner, player)| {
+                let avatar = avatars.get(owner)?;
+                let feet = [
+                    avatar.world_node(assets, "RFoot")?,
+                    avatar.world_node(assets, "LFoot")?,
+                ];
+                Some((*owner, feet, Vec3::from(player.velocity)))
+            })
+            .collect();
+        let burning: Vec<_> = view
+            .vehicles
+            .values()
+            .filter(|info| info.destroyed)
+            .filter_map(|info| Some((info.id, body(info.id)?)))
+            .collect();
+        let pose = |anchor| match anchor {
+            crate::actor_effects::Anchor::Actor { actor, mount } => avatars
+                .get(&actor)?
+                .world_node(assets, &format!("Mount{mount}")),
+            crate::actor_effects::Anchor::Vehicle { vehicle } => body(vehicle),
+            crate::actor_effects::Anchor::Muzzle { vehicle } => {
+                let info = view.vehicles.get(&vehicle)?;
+                let weapon = vehicle_assets.definition(&info.definition)?.weapon.as_ref()?;
+                let frame = vehicles.frame(vehicle)?;
+                Some(crate::actor_effects::muzzle(
+                    frame.position,
+                    frame.rotation,
+                    frame.turret_aim,
+                    weapon,
+                ))
+            }
+        };
+        actor_effects.advance(elapsed, pose, &jets, &burning)
+    }
     fn reset_weapon_effect_session(&mut self, session: RequestId, checkpoint_cursor: u64) {
         if self.weapon_effect_session == Some(session) {
             return;
         }
         self.weapon_effects.reset(checkpoint_cursor);
+        self.actor_effects.reset(checkpoint_cursor);
+        self.explosion_shapes.reset(checkpoint_cursor);
         self.weapon_cues
             .retain(|(cue, _)| cue.id > checkpoint_cursor);
         self.weapon_animation_cues
@@ -440,9 +506,17 @@ impl App {
         let foliage = crate::foliage::ClientFoliage::load(&content.paths.foliage)?;
         let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
         let effects = crate::effects::WorldEffects::new(effects_pack.clone(), Default::default())?;
+        let weapon_pack = Arc::new(content.weapons.pack.clone());
+        let explosion_shapes =
+            crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
+        let actor_effects = crate::actor_effects::ActorEffects::new(
+            effects_pack.clone(),
+            weapon_pack.clone(),
+            Default::default(),
+        )?;
         let weapon_effects = crate::weapon_effects::WeaponEffects::new(
             effects_pack,
-            Arc::new(content.weapons.pack.clone()),
+            weapon_pack,
             Default::default(),
         )?;
         let material_path = content.paths.brick_materials.join("brick-materials.json");
@@ -557,6 +631,8 @@ impl App {
             renderer: None,
             effects,
             weapon_effects,
+            actor_effects,
+            explosion_shapes,
             weapon_cues: VecDeque::new(),
             weapon_cue_drops: 0,
             weapon_light_deferred: 0,
@@ -654,6 +730,8 @@ impl App {
         self.audio.clear();
         self.effects.clear();
         self.weapon_effects.reset(0);
+        self.actor_effects.reset(0);
+        self.explosion_shapes.reset(0);
         self.weapon_cues.clear();
         self.weapon_animation_cues.clear();
         self.weapon_animation_drops = 0;
@@ -2197,15 +2275,17 @@ fn translucent_ghost(scene: &mut SceneData) {
 
 fn combine_effect_frames(
     mut world: bri_fx_runtime::FrameEffects,
-    weapon: bri_fx_runtime::FrameEffects,
+    others: [bri_fx_runtime::FrameEffects; 2],
     eye: Vec3,
 ) -> (bri_fx_runtime::FrameEffects, usize) {
-    world.particles.extend(weapon.particles);
+    for other in others {
+        world.particles.extend(other.particles);
+        world.lights.extend(other.lights);
+    }
     world.particles.sort_by(|a, b| {
         eye.distance_squared(b.position)
             .total_cmp(&eye.distance_squared(a.position))
     });
-    world.lights.extend(weapon.lights);
     world.lights.sort_by(|a, b| {
         eye.distance_squared(a.position)
             .total_cmp(&eye.distance_squared(b.position))
@@ -2495,6 +2575,19 @@ impl PlatformApp for App {
                 &view.weapons,
                 elapsed.as_secs_f32(),
             )?;
+            Self::update_actor_effects(
+                &mut self.actor_effects,
+                &self.avatar_assets,
+                &self.avatars,
+                &self.vehicles,
+                &self.vehicle_assets,
+                view,
+                presented,
+                elapsed.as_secs_f32(),
+            )?;
+            self.explosion_shapes.advance(elapsed.as_secs_f32());
+            self.audio
+                .sync_projectiles(&view.weapons.projectiles, &self.content.weapons.pack);
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
@@ -3005,6 +3098,7 @@ impl PlatformApp for App {
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
+        self.explosion_shapes.gpu_stopped();
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
         }
@@ -3044,6 +3138,7 @@ impl PlatformApp for App {
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
+        self.explosion_shapes.gpu_stopped();
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
         }
@@ -3175,6 +3270,8 @@ impl PlatformApp for App {
             frame.device,
             frame.queue,
         )?;
+        self.explosion_shapes
+            .upload(renderer, frame.device, frame.queue)?;
         let (yaw, pitch) = self.controls.view_angles();
         let pitch = pitch.clamp(-1.56, 1.56);
         let forward = Vec3::new(
@@ -3197,6 +3294,15 @@ impl PlatformApp for App {
         } else {
             eye
         };
+        // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
+        let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
+        let forward = if shake == Vec3::ZERO {
+            forward
+        } else {
+            let yaw = yaw + shake.z.clamp(-0.3, 0.3);
+            let pitch = (pitch + shake.x.clamp(-0.3, 0.3)).clamp(-1.56, 1.56);
+            Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
+        };
         let mut camera = Camera::perspective(
             eye.to_array(),
             (eye + forward).to_array(),
@@ -3217,8 +3323,9 @@ impl PlatformApp for App {
         };
         let world_frame = self.effects.world.snapshot(&effects_camera);
         let weapon_frame = self.weapon_effects.world().snapshot(&effects_camera);
+        let actor_frame = self.actor_effects.world().snapshot(&effects_camera);
         let (effects_frame, deferred_lights) =
-            combine_effect_frames(world_frame, weapon_frame, eye);
+            combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -3298,6 +3405,7 @@ impl PlatformApp for App {
         let mut item_draws = self.world_items.draws();
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
+        item_draws.extend(self.explosion_shapes.draws());
         renderer.render_with_instances(
             frame.encoder,
             frame.target,
@@ -3793,7 +3901,12 @@ mod tests {
             particles: vec![particle(-1., 7)],
             lights: vec![light(9000, 1.)],
         };
-        let (combined, deferred) = super::combine_effect_frames(world, weapon, Vec3::ZERO);
+        let actor = bri_fx_runtime::FrameEffects {
+            particles: vec![],
+            lights: vec![],
+        };
+        let (combined, deferred) =
+            super::combine_effect_frames(world, [weapon, actor], Vec3::ZERO);
         assert_eq!(combined.particles[0].texture, 2);
         assert_eq!(combined.particles[1].texture, 7);
         assert_eq!(combined.lights.len(), bri_render::scene::MAX_POINT_LIGHTS);
