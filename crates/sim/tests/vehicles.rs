@@ -140,9 +140,7 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
 #[test]
 #[ignore = "requires the converted native vehicle, weapon and brick packs"]
 fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Result<()> {
-    use bri_sim::session::{
-        ActionAim, InspectMode, MiniGameRequest, ToolCatalog, WrenchProperties,
-    };
+    use bri_sim::session::{InspectMode, MiniGameRequest, Notice, ToolCatalog, WrenchProperties};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
@@ -169,15 +167,16 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 6.0)])?;
     let human = s.join("Human".into(), Vec3::new(0.0, 0.05, 6.0), true)?;
     let mut sequence = 0;
-    let mut idle = |s: &mut Session, ticks: usize| -> anyhow::Result<()> {
+    let mut look = MoveInput::default();
+    let mut idle = |s: &mut Session, ticks: usize, look: MoveInput| -> anyhow::Result<()> {
         for _ in 0..ticks {
             sequence += 1;
-            s.movement(human, sequence, MoveInput::default())?;
+            s.movement(human, sequence, look)?;
             s.step()?;
         }
         Ok(())
     };
-    idle(&mut s, 60)?;
+    idle(&mut s, 60, look)?;
     let brick_center = Vec3::new(0.0, height * 0.5, 0.0);
     let bri_sim::session::Reply::Planted(brick) = s.command(
         human,
@@ -192,24 +191,21 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     else {
         anyhow::bail!("spawn brick not planted")
     };
+    // Look at the brick and swing the wrench to open it.
     s.equip_tool(human, Some(1))?;
     let eye = Vec3::new(0.0, 2.4, 6.0);
     let d = (brick_center - eye).normalize();
-    let aim = ActionAim {
-        yaw: d.x.atan2(-d.z),
-        pitch: d.y.asin(),
-    };
-    s.command_with_aim(
+    look.yaw = d.x.atan2(-d.z);
+    look.pitch = d.y.asin();
+    idle(&mut s, 2, look)?;
+    s.command(human, 2, Command::WeaponTrigger { down: true })?;
+    idle(&mut s, 8, look)?;
+    assert!(s.take_private_notices().iter().any(|(to, notice)| *to == human
+        && matches!(notice, Notice::Inspected { mode: InspectMode::Wrench, brick_id, .. } if *brick_id == brick)));
+    s.command(human, 3, Command::WeaponTrigger { down: false })?;
+    s.command(
         human,
-        2,
-        Command::Tool(ToolAction::Inspect {
-            mode: InspectMode::Wrench,
-        }),
-        Some(aim),
-    )?;
-    s.command_with_aim(
-        human,
-        3,
+        4,
         Command::Tool(ToolAction::SetWrench {
             brick,
             properties: WrenchProperties {
@@ -220,9 +216,8 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
                 ..Default::default()
             },
         }),
-        Some(aim),
     )?;
-    idle(&mut s, 30)?;
+    idle(&mut s, 30, look)?;
     let bot = *s
         .names()
         .keys()
@@ -230,12 +225,12 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
         .expect("bot spawned from its brick");
     assert!(s.vehicle_infos().is_empty(), "bots are not vehicles");
     // Outside minigames the bot is harmless.
-    idle(&mut s, 600)?;
+    idle(&mut s, 600, look)?;
     assert_eq!(s.vitals()[&human].health, 100.0);
     // Inside the owner's minigame, the bot joins, arms itself and attacks.
     s.command(
         human,
-        4,
+        5,
         Command::MiniGame(MiniGameRequest::Create {
             color: 0,
             settings: Default::default(),
@@ -243,7 +238,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     )?;
     let mut hurt = false;
     for _ in 0..20 {
-        idle(&mut s, 120)?;
+        idle(&mut s, 120, look)?;
         let v = &s.vitals()[&human];
         if v.health < 100.0 || !v.alive {
             hurt = true;

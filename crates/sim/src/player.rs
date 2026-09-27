@@ -282,6 +282,7 @@ impl Player {
             ColliderBuilder::new(shape).user_data((1_u128 << 64) | u128::from(owner)),
         );
         physics.detect_collisions(&(), &());
+        requeue_new_body(physics, body);
         Ok(Self {
             state: PlayerState {
                 owner,
@@ -326,6 +327,7 @@ impl Player {
             contacts: BTreeSet::new(),
         };
         player.restore(physics, state)?;
+        requeue_new_body(physics, body);
         Ok(player)
     }
     pub fn state(&self) -> &PlayerState {
@@ -868,4 +870,13 @@ fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> V
         }
     }
     move_vec.normalize_or_zero()
+}
+
+/// Rapier's collision-only pipeline (`detect_collisions`) consumes a new
+/// body's pending changes without an island manager, so a body inserted
+/// mid-session (a bot joining during a step) never entered an island and
+/// tripped Rapier's island consistency check. Marking it modified again lets
+/// the next physics step file it into an island.
+fn requeue_new_body(physics: &mut PhysicsWorld, body: RigidBodyHandle) {
+    let _ = physics.bodies.get_mut(body);
 }
