@@ -69,6 +69,32 @@ fn resource(d: &Definition, key: &str) -> String {
         p
     }
 }
+/// Image `rotation` as Euler degrees: `eulerToMatrix("x y z")`, or a literal
+/// `"ax ay az degrees"` about one principal axis, whose Torque matrix equals
+/// the Euler rotation of that angle on that axis. Empty is no rotation.
+fn source_rotation(value: &str) -> Option<[f32; 3]> {
+    if value.is_empty() {
+        return Some([0.0; 3]);
+    }
+    if let Some(euler) = value.split('"').nth(1) {
+        return Some(vec(euler, [0.0; 3]));
+    }
+    let v: Vec<f32> = value
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let [x, y, z, degrees] = v[..] else {
+        return None;
+    };
+    let axis = [x, y, z];
+    let principal = axis.iter().position(|a| (a.abs() - 1.0).abs() < 1e-6)?;
+    (axis.iter().filter(|a| **a != 0.0).count() == 1).then(|| {
+        let mut euler = [0.0; 3];
+        euler[principal] = degrees * axis[principal].signum();
+        euler
+    })
+}
 /// Removes comments while respecting quoted strings; retains newlines for evidence.
 fn uncomment(s: &str) -> String {
     let mut out = String::new();
@@ -395,8 +421,11 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 .push(format!("{} missing {p}; image excluded", d.name));
             continue;
         }
-        let rotation = field(d, "rotation");
-        let rot = rotation.split('"').nth(1).unwrap_or("");
+        let rotation = source_rotation(&field(d, "rotation"));
+        if rotation.is_none() {
+            pack.diagnostics
+                .push(format!("{} rotation is not a literal Euler or axis rotation", d.name));
+        }
         let id = native_id("image", &d.name);
         pack.images.insert(
             id.clone(),
@@ -408,7 +437,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 mount_point: num(d, "mountPoint", 0.0) as u32,
                 offset: axis(vec(&field(d, "offset"), [0.0; 3])),
                 eye_offset: axis(vec(&field(d, "eyeOffset"), [0.0; 3])),
-                source_rotation_degrees: vec(rot, [0.0; 3]),
+                source_rotation_degrees: rotation.unwrap_or([0.0; 3]),
                 correct_muzzle: flag(d, "correctMuzzleVector", false),
                 melee: flag(d, "melee", false),
                 color: vec(&field(d, "colorShiftColor"), [1.0; 4]),
@@ -464,8 +493,10 @@ fn check_output(root: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 /// Core datablocks presented by native hosts without an add-on referencing
-/// them: emote/pain/burn images and the spawn/death projectiles.
-const CORE_PRESENTATION: [&str; 7] = [
+/// them: emote/pain/burn images, the spawn/death projectiles and the player's
+/// water splash (converted to an effect by the weapon effects importer).
+const CORE_PRESENTATION: [&str; 8] = [
+    "PlayerSplash",
     "clockProjectile",
     "PainLowImage",
     "PainMidImage",
@@ -771,6 +802,14 @@ AddDamageType(\"Radius\", '<bitmap:base/client/ui/ci/bomb> %1', '%2 <bitmap:base
             t[1].message("%2", Some("Killer")),
             "Killer <bitmap:base/client/ui/ci/splat> %2"
         );
+    }
+    #[test]
+    fn rotations_accept_euler_and_principal_axis_literals() {
+        assert_eq!(source_rotation(""), Some([0.0; 3]));
+        assert_eq!(source_rotation("eulerToMatrix( \"0 35 90\" )"), Some([0.0, 35.0, 90.0]));
+        assert_eq!(source_rotation("1 0 0 -90"), Some([-90.0, 0.0, 0.0]));
+        assert_eq!(source_rotation("0 0 -1 180"), Some([0.0, 0.0, -180.0]));
+        assert_eq!(source_rotation("1 1 0 45"), None);
     }
     #[test]
     fn cycles_reject() {

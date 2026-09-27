@@ -85,6 +85,78 @@ fn native(d: &bri_weapons::Definition) -> Declaration {
             .collect(),
     }
 }
+/// `SplashData` as a finite emitter of ring particles: every `1/ejectionFreq`
+/// seconds for `lifetimeMS`, `numSegments` bubbles leave `startRadius` at
+/// `ejectionAngle` with `velocity` and `acceleration`, living `ringLifetime`
+/// with the splash's colors. The engine draws each ring as a textured band;
+/// the band width here is the spacing between rings, velocity / ejectionFreq.
+fn splash(d: &Declaration) -> Result<[Declaration; 2]> {
+    let segments = number(d, "numsegments", 10.)?;
+    let frequency = number(d, "ejectionfreq", 5.)?;
+    let velocity = number(d, "velocity", 5.)?;
+    ensure!(
+        segments >= 1. && frequency > 0. && velocity >= 0.,
+        "Invalid splash rings"
+    );
+    let band = (velocity / frequency).to_string();
+    let ring = format!("{}Ring", d.name);
+    let text = |key: &str, default: &str| {
+        d.fields
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| default.to_owned())
+    };
+    let mut particle = BTreeMap::from([
+        ("texturename".into(), text("texture", "")),
+        (
+            "lifetimems".into(),
+            (number(d, "ringlifetime", 1.)? * 1000.).to_string(),
+        ),
+        ("constantacceleration".into(), text("acceleration", "0")),
+        ("dragcoefficient".into(), "0".into()),
+        ("gravitycoefficient".into(), "0".into()),
+        ("windcoefficient".into(), "0".into()),
+        ("inheritedvelfactor".into(), "0".into()),
+    ]);
+    for i in 0..4 {
+        for key in ["colors", "times"] {
+            if let Some(v) = d.fields.get(&format!("{key}[{i}]")) {
+                particle.insert(format!("{key}[{i}]"), v.clone());
+            }
+        }
+        particle.insert(format!("sizes[{i}]"), band.clone());
+    }
+    let emitter = BTreeMap::from([
+        (
+            "ejectionperiodms".into(),
+            (1000. / (frequency * segments)).to_string(),
+        ),
+        ("periodvariancems".into(), "0".into()),
+        ("ejectionvelocity".into(), velocity.to_string()),
+        ("velocityvariance".into(), "0".into()),
+        ("ejectionoffset".into(), text("startradius", "0")),
+        ("thetamin".into(), text("ejectionangle", "45")),
+        ("thetamax".into(), text("ejectionangle", "45")),
+        ("phireferencevel".into(), "0".into()),
+        ("phivariance".into(), "360".into()),
+        ("lifetimems".into(), text("lifetimems", "1000")),
+        ("particles".into(), ring.clone()),
+    ]);
+    Ok([
+        Declaration {
+            name: ring,
+            class: "particledata".into(),
+            source: d.source.clone(),
+            fields: particle,
+        },
+        Declaration {
+            name: d.name.clone(),
+            class: "particleemitterdata".into(),
+            source: d.source.clone(),
+            fields: emitter,
+        },
+    ])
+}
 fn number(d: &Declaration, key: &str, default: f32) -> Result<f32> {
     let v = d
         .fields
@@ -160,7 +232,12 @@ fn main() -> Result<()> {
         );
         files.insert(t.file.clone(), read(&args[1].join(&t.file))?);
     }
-    let declarations: Vec<_> = weapons.definitions.iter().map(native).collect();
+    let mut declarations: Vec<_> = weapons.definitions.iter().map(native).collect();
+    let mut added_splashes = Vec::new();
+    for d in declarations.clone().iter().filter(|d| d.class == "splashdata") {
+        added_splashes.push(effects::id("emitter", &d.name));
+        declarations.extend(splash(d)?);
+    }
     let nodes: BTreeMap<_, _> = declarations
         .iter()
         .filter(|d| d.class == "particleemitternodedata")
@@ -362,7 +439,7 @@ fn main() -> Result<()> {
         serde_json::to_vec_pretty(&manifest)?,
     )?;
     let proof = serde_json::json!({"original":original,"weapons_sha256":digest(&weapon_bytes),"sources":sources,
-        "added_particles":added_particles,"added_emitters":added_emitters,"added_composites":added_composites,
+        "added_particles":added_particles,"added_emitters":added_emitters,"added_composites":added_composites,"added_splashes":added_splashes,
         "conversion_diagnostics":notes,"base_pack":args[1],"base_library_sha256":pack.manifest.library_sha256});
     fs::write(
         output.join("weapon-source-proof.json"),
