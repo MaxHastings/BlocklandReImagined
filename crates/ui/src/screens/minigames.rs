@@ -136,7 +136,12 @@ impl MiniGameScreen {
                 self.selected_game=core.minigames.retain_game_target(old).or_else(||games.first().map(|g|g.id));
                 if let Some(n)=self.view.id("JMG_List"){
                     self.game_ids=games.iter().map(|g|g.id).collect();
-                    self.view.nodes[n].state.items=games.iter().enumerate().map(|(i,g)|(format!("{}\t{}\t{}\t{}",g.title,g.owner_name,g.member_count,if g.invite_only{"Invite only"}else{"Public"}),i as i64)).collect();
+                    // `MiniGameSO::getLine` in the game's colour: creator, BL_ID, title, invite-only.
+                    self.view.nodes[n].state.items=games.iter().enumerate().map(|(i,g)|{
+                        let color=char::from_u32(crate::text::COLOR_CODE_BASE+u32::from(g.color.min(9))).unwrap_or(' ');
+                        let bl_id=core.players.iter().find(|p|p.id==g.owner.0).and_then(|p|p.bl_id).map(|id|id.to_string()).unwrap_or_default();
+                        (format!("{color}{}\t{bl_id}\t{}\t{}",g.owner_name,g.title,u8::from(g.invite_only)),i as i64)
+                    }).collect();
                     self.view.select(n,self.selected_game.and_then(|id|self.game_ids.iter().position(|g|*g==id)).map(|i|i as i64));
                 }
                 let selected=games.iter().find(|g|Some(g.id)==self.selected_game);
