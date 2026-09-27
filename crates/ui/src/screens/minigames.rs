@@ -19,6 +19,8 @@ impl MiniGameScreen {
         };
         let mut s = Self { id, kind, view: layout_view(core, layout), selected_game: None, game_ids: vec![],
             draft: core.minigames.rules_draft(), types: vec![], items: vec![], loaded_revision: None, request: None };
+        // The End blocker greys End out, so it must draw over the button.
+        if let Some(n) = s.view.id("CMG_EndBlocker") { s.view.push_to_back(n); }
         s.refresh(core);
         s
     }
@@ -91,8 +93,9 @@ impl MiniGameScreen {
         if let Some(n)=self.view.id("CMG_EndBlocker"){self.view.set_visible(n,!owns);}
         let can_save=if mode_edit {core.minigames.can(crate::models::minigames::Operation::Configure)} else {core.minigames.can(crate::models::minigames::Operation::Create)};
         self.set_active("CreateMiniGameGui.clickCreate();",can_save&&self.request.is_none());
-        self.set_active("CreateMiniGameGui.clickReset();",core.minigames.can(crate::models::minigames::Operation::Reset)&&self.request.is_none());
-        self.set_active("CreateMiniGameGui.clickEnd();",core.minigames.can(crate::models::minigames::Operation::End)&&self.request.is_none());
+        // Reset and End only act on a running mini-game you own ($RunningMiniGame).
+        self.set_active("CreateMiniGameGui.clickReset();",mode_edit&&core.minigames.can(crate::models::minigames::Operation::Reset)&&self.request.is_none());
+        self.set_active("CreateMiniGameGui.clickEnd();",mode_edit&&core.minigames.can(crate::models::minigames::Operation::End)&&self.request.is_none());
     }
     fn read_rules(&self) -> Result<MiniGameRules,String> {
         let val=|key:&str|self.variable(key).map(|n|self.view.edit_text(n)).unwrap_or_default();
@@ -188,6 +191,11 @@ impl Screen for MiniGameScreen {
         if self.request!=Some(id)||!matches!(kind,Some(Pending::MiniGame(_))){return false;}
         self.request=None;
         core.minigames.status=result.as_ref().map_or_else(|e|e.clone(),|_|"Mini-game request completed.".into());
+        // clientCmdCreateMiniGameSuccess and clickReset close the editor.
+        if matches!(self.kind,Kind::Rules)&&result.is_ok(){core.pop(self.id);return true;}
+        if let (Kind::Rules,Err(e))=(self.kind,result){core.message_ok("Mini-Game Creation Failure",&format!("Mini-Game Creation Failed.  Reason:
+
+{e}"));}
         self.refresh(core); true
     }
     fn on_key(&mut self,key:Key,_:Modifiers,core:&mut Core)->bool{
@@ -239,10 +247,10 @@ impl Screen for MiniGameScreen {
                         self.request=request;self.refresh(core);
                     }
                 },
-                "createminigamegui.clickreset();"=>if let Some(game)=core.minigames.active_game{
-                    core.message_yes_no("Reset Mini-Game?","Reset the mini-game and restore its spawn bricks?",Callback::MiniGame{game,operation:MiniGameOperation::Reset});
+                "createminigamegui.clickreset();"=>if let Some(game)=core.minigames.active_game.filter(|_|core.minigames.owns_active_game){
+                    self.request=core.minigame_request(MiniGameOperation::Reset,UiAction::ResetMiniGame{game});
                 },
-                "createminigamegui.clickend();"=>if let Some(game)=core.minigames.active_game{
+                "createminigamegui.clickend();"=>if let Some(game)=core.minigames.active_game.filter(|_|core.minigames.owns_active_game){
                     core.message_yes_no("End Mini-Game?","Are you sure you want to end the mini-game?",Callback::MiniGame{game,operation:MiniGameOperation::End});
                 },
                 "createminigamegui.clickcolorlist();"=>self.refresh(core),

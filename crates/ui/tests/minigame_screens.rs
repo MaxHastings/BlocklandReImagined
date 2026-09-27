@@ -109,3 +109,44 @@ fn invitation_acceptance_keeps_stable_game_identity(){
     assert_eq!(ui.drain_actions().pop().unwrap().1,UiAction::AcceptMiniGameInvite{game:invite.game});
     assert_eq!(ui.core.minigames.invitations[0].owner_display_id,"LAN");
 }
+
+#[test]
+fn editor_offers_reset_and_end_only_when_running_and_closes_after_acting() {
+    let mut ui = test_ui();
+    ui.apply(UiUpdate::MiniGames(game_state()));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    let active = |ui: &Ui, command: &str| {
+        let v = ui.screen(ScreenId::MiniGameSettings).unwrap().view();
+        v.node(v.by_command(command).unwrap()).state.active
+    };
+    assert!(active(&ui, "CreateMiniGameGui.clickCreate();"));
+    assert!(!active(&ui, "CreateMiniGameGui.clickReset();"), "nothing to reset yet");
+    assert!(!active(&ui, "CreateMiniGameGui.clickEnd();"), "nothing to end yet");
+    click(&mut ui, ScreenId::MiniGameSettings, "CreateMiniGameGui.clickCreate();");
+    let (id, _) = ui
+        .drain_actions()
+        .into_iter()
+        .find(|(_, a)| matches!(a, UiAction::CreateMiniGame { .. }))
+        .unwrap();
+    ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+    assert!(!ui.is_open(ScreenId::MiniGameSettings), "creating closes the editor");
+
+    let mut running = game_state();
+    running.active_game = Some(MiniGameId(42));
+    running.owns_active_game = true;
+    running.revision = 2;
+    ui.apply(UiUpdate::MiniGames(running));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    assert!(active(&ui, "CreateMiniGameGui.clickReset();"));
+    assert!(active(&ui, "CreateMiniGameGui.clickEnd();"));
+    click(&mut ui, ScreenId::MiniGameSettings, "CreateMiniGameGui.clickReset();");
+    let (id, _) = ui
+        .drain_actions()
+        .into_iter()
+        .find(|(_, a)| matches!(a, UiAction::ResetMiniGame { .. }))
+        .expect("v20 resets without a confirmation");
+    ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+    assert!(!ui.is_open(ScreenId::MiniGameSettings), "resetting closes the editor");
+}

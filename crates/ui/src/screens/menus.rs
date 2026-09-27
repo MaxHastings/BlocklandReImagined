@@ -672,6 +672,10 @@ impl MessageScreen {
                     MiniGameOperation::IgnoreInvite => UiAction::RejectMiniGameInvite { game: *game, ignore_owner: true },
                     _ => return,
                 };
+                // CreateMiniGameGui::end closes the editor with the request.
+                if *operation == MiniGameOperation::End {
+                    core.pop(ScreenId::MiniGameSettings);
+                }
                 core.minigame_request(*operation, action);
             }
         }
