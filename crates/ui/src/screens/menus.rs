@@ -89,6 +89,14 @@ impl NativeScreen {
                 s.view.focus = s.view.id("NMH_Type");
             }
             ScreenId::ManualJoin => s.view.focus = s.view.id("MJ_txtIP"),
+            // escapeMenu::onWake: plain buttons unless $Pref::Gui::ColorEscapeMenu.
+            ScreenId::EscapeMenu if !core.prefs.bool_or("$Pref::Gui::ColorEscapeMenu", true) => {
+                for n in s.view.walk().collect::<Vec<_>>() {
+                    if s.view.node(n).ctrl.name.as_deref().is_some_and(|m| m.starts_with("EM_")) {
+                        s.view.state(n).tint = Some(crate::geom::WHITE);
+                    }
+                }
+            }
             ScreenId::Connecting | ScreenId::Loading | ScreenId::EscapeMenu | ScreenId::Play => {}
             _ => {
                 s.set("MBOKFrame", "Interface under construction");

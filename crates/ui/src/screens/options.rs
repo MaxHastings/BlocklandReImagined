@@ -32,6 +32,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::HUD::HideBrickBox",
     "$pref::Hud::RecolorBrickIcons",
     "$pref::Gui::ShowBrickSlotNumbers",
+    "$Pref::Gui::ColorEscapeMenu",
     "$pref::Input::FastFirstThirdPerson",
     "$pref::Input::UseSuperShiftSmartToggle",
     "$pref::Input::UseSuperShiftToggle",

@@ -204,17 +204,18 @@ impl Avatar {
             );
             c.command = Some("Avatar_Orbit();".into());
             let orbit = self.view.add(parent, named(c, "Avatar_Orbit"));
-            let status = self.view.add(
-                parent,
-                named(
-                    text(
-                        "GuiTextProfile",
-                        Rect::new(r.position[0] + 25, r.position[1] + 175, 210, 38),
-                        "Avatar preview unavailable",
-                    ),
-                    "Avatar_PreviewStatus",
+            let mut status = text(
+                "GuiMLTextProfile",
+                Rect::new(
+                    r.position[0],
+                    r.position[1] + r.extent[1] / 2 - 9,
+                    r.extent[0],
+                    18,
                 ),
+                "<just:center>Avatar preview unavailable",
             );
+            status.class = "GuiMLTextCtrl".into();
+            let status = self.view.add(parent, named(status, "Avatar_PreviewStatus"));
             // Preserve the authored overlap: the rightmost color buttons sit
             // above the left edge of the preview's rectangle.
             let siblings = &mut self.view.nodes[parent].children;

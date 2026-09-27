@@ -173,6 +173,10 @@ fn main() -> Result<()> {
             Ok(())
         };
         render(&ui, "main-menu", &mut renderer, &mut report)?;
+        ui.core.push(ScreenId::JoinServer);
+        ui.update(0);
+        render(&ui, "join-server", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
         ui.apply(UiUpdate::Maps(vec![MapInfo {
             id: "bedroom".into(),
             name: "Bedroom".into(),
@@ -259,6 +263,10 @@ fn main() -> Result<()> {
         ui.core.run_command("useTools", true);
         ui.update(120);
         render(&ui, "hud-tools", &mut renderer, &mut report)?;
+        ui.core.push(ScreenId::EscapeMenu);
+        ui.update(0);
+        render(&ui, "escape-menu", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
         ui.core.push(ScreenId::BrickSelector);
         ui.update(0);
         render(&ui, "brick-selector", &mut renderer, &mut report)?;

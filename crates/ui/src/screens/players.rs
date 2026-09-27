@@ -32,34 +32,17 @@ impl Players {
             {
                 s.view.set_active(n, false);
             }
-            if s.view
-                .node(n)
-                .ctrl
-                .name
-                .as_deref()
-                .is_some_and(|name| name.ends_with("Blocker") || name == "NPL_TrustWindow")
+            // Trust and ignore have no host behaviour yet: their original
+            // blockers grey them out, as v20 does for unavailable actions.
+            let name = s.view.node(n).ctrl.name.clone().unwrap_or_default();
+            if (name.starts_with("NPL_Trust") && name.ends_with("Blocker"))
+                || name == "NPL_UnIgnoreBlocker"
             {
+                s.view.set_visible(n, true);
+            } else if name == "NPL_TrustWindow" {
                 s.view.set_visible(n, false);
             }
         }
-        let parent = window(&s.view).unwrap_or(s.view.root);
-        s.view.nodes[parent].ctrl.extent[1] = 366;
-        let mut note = text(
-            "GuiMLTextProfile",
-            Rect::new(12, 332, 465, 30),
-            "Trust, minigame and ignore actions await host support. Trust shown is informational.",
-        );
-        note.name = Some("NativePlayerStatus".into());
-        note.class = "GuiMLTextCtrl".into();
-        s.view.add(parent, note);
-        let mut admin = ctrl(
-            "GuiButtonCtrl",
-            "GuiButtonProfile",
-            Rect::new(389, 32, 92, 25),
-        );
-        admin.text = Some("Admin Menu".into());
-        admin.command = Some("native.players.admin".into());
-        s.view.add(parent, admin);
         s.refresh(core);
         s
     }
@@ -206,9 +189,6 @@ impl Screen for Players {
         let cmd = command_of(&self.view, ev.node).to_ascii_lowercase();
         match cmd.as_str() {
             "canvas.popdialog(newplayerlistgui);" => core.pop(self.id()),
-            "native.players.admin" => {
-                core.request(UiAction::OpenAdmin);
-            }
             "newplayerlistgui.clicklist();" => self.refresh(core),
             "newplayerlistgui.clickminigameinvite();" => {
                 if core.minigames.can(crate::models::minigames::Operation::Invite)
@@ -318,15 +298,6 @@ mod tests {
             &mut ui.core,
         );
         assert!(ui.drain_actions().is_empty());
-        let admin = s.view.by_command("native.players.admin").unwrap();
-        s.on_event(
-            &ViewEvent {
-                node: admin,
-                kind: EventKind::Click,
-            },
-            &mut ui.core,
-        );
-        assert!(matches!(ui.drain_actions()[0].1, UiAction::OpenAdmin));
         ui.core.players.retain(|p| p.id != u64::MAX);
         s.on_update(&mut ui.core);
         assert_eq!(s.view.selected(n), None);
