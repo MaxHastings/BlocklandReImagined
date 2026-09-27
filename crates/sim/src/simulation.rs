@@ -392,42 +392,96 @@ impl Simulation {
                 normal: Vec3::from(hit.normal.to_array()),
                 distance: hit.time_of_impact,
             });
-        let end = origin + direction * max_distance;
-        let low = origin.min(end) - Vec3::splat(0.01);
-        let high = origin.max(end) + Vec3::splat(0.01);
-        let min = std::array::from_fn(|a| (low[a] / grid::CELL[a]).floor() as i32);
-        let max: [i32; 3] = std::array::from_fn(|a| (high[a] / grid::CELL[a]).ceil() as i32);
-        let bounds = Bounds {
-            min,
-            size: std::array::from_fn(|a| (max[a] - min[a]).max(1)),
-        };
-        for id in self.index.query(bounds) {
-            let brick = &self.state().bricks[&id];
-            if !all_bricks && !brick.raycast {
-                continue;
+        // Walk the index buckets along the ray, nearest first, and stop once
+        // the nearest hit lies before the bucket just searched. A brick's
+        // collision stays within its grid bounds, so no later bucket can hold
+        // a closer hit. Long sight lines through large builds stay cheap.
+        let mut tested = std::collections::HashSet::new();
+        for (bucket, exit) in
+            grid::ray_buckets(origin.to_array(), direction.to_array(), max_distance)
+        {
+            for id in self.index.bucket(bucket) {
+                if !tested.insert(id) {
+                    continue;
+                }
+                self.ray_brick(
+                    id,
+                    origin,
+                    direction,
+                    max_distance,
+                    all_bricks,
+                    &mut nearest,
+                )?;
             }
-            let d = self.definitions.get(brick)?;
-            let inverse = brick.transform().inverse();
-            let o = inverse.transform_point3(origin);
-            let dir = inverse.transform_vector3(direction);
-            if let Some((distance, normal)) = bri_physics::content::raycast(
-                &d.collision,
-                Vector::from_array(o.to_array()),
-                Vector::from_array(dir.to_array()),
-                max_distance,
-            ) && nearest.as_ref().is_none_or(|hit| distance < hit.distance)
+            if nearest
+                .as_ref()
+                .is_some_and(|hit| hit.distance <= exit - 0.02)
             {
-                nearest = Some(Hit {
-                    brick: Some(id),
-                    position: origin + direction * distance,
-                    normal: brick
-                        .transform()
-                        .transform_vector3(Vec3::from(normal.to_array())),
-                    distance,
-                });
+                break;
             }
         }
         Ok(nearest)
+    }
+    fn ray_brick(
+        &self,
+        id: BrickId,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f32,
+        all_bricks: bool,
+        nearest: &mut Option<Hit>,
+    ) -> Result<()> {
+        let brick = &self.state().bricks[&id];
+        if !all_bricks && !brick.raycast {
+            return Ok(());
+        }
+        // Cheap slab test against the padded grid bounds first.
+        let bounds = self.index.bounds(id);
+        let low = Vec3::from_array(std::array::from_fn(|a| {
+            bounds.min[a] as f32 * grid::CELL[a]
+        })) - 0.01;
+        let high = Vec3::from_array(std::array::from_fn(|a| {
+            bounds.max()[a] as f32 * grid::CELL[a]
+        })) + 0.01;
+        let (mut enter, mut leave) = (0.0f32, max_distance);
+        for a in 0..3 {
+            if direction[a] == 0.0 {
+                if origin[a] < low[a] || origin[a] > high[a] {
+                    return Ok(());
+                }
+            } else {
+                let (t0, t1) = (
+                    (low[a] - origin[a]) / direction[a],
+                    (high[a] - origin[a]) / direction[a],
+                );
+                enter = enter.max(t0.min(t1));
+                leave = leave.min(t0.max(t1));
+            }
+        }
+        if enter > leave || nearest.as_ref().is_some_and(|hit| enter > hit.distance) {
+            return Ok(());
+        }
+        let d = self.definitions.get(brick)?;
+        let inverse = brick.transform().inverse();
+        let o = inverse.transform_point3(origin);
+        let dir = inverse.transform_vector3(direction);
+        if let Some((distance, normal)) = bri_physics::content::raycast(
+            &d.collision,
+            Vector::from_array(o.to_array()),
+            Vector::from_array(dir.to_array()),
+            max_distance,
+        ) && nearest.as_ref().is_none_or(|hit| distance < hit.distance)
+        {
+            *nearest = Some(Hit {
+                brick: Some(id),
+                position: origin + direction * distance,
+                normal: brick
+                    .transform()
+                    .transform_vector3(Vec3::from(normal.to_array())),
+                distance,
+            });
+        }
+        Ok(())
     }
 }
 fn validate_placement(

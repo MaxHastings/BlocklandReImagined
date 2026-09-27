@@ -275,3 +275,87 @@ fn authored_hull_below_grid_is_allowed_only_at_the_map_floor() {
     sim.physics.detect_collisions(&(), &());
     assert!(sim.plant(&builder, brick(0.1)).is_err());
 }
+
+#[test]
+fn long_targeting_rays_match_a_brute_force_search_of_every_brick() {
+    // A dense 60 x 60 unit build with a few bricks that do not raycast.
+    let mut w = world();
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut random = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 33) as i32
+    };
+    for id in 1..=3000u64 {
+        let mut b = brick(0.1 + (random() % 40) as f32 * 0.2);
+        b.position[0] = 0.5 + (random() % 60 - 30) as f32;
+        b.position[2] = 0.25 + (random() % 120 - 60) as f32 * 0.5;
+        b.raycast = id % 7 != 0;
+        w.bricks.insert(id, b);
+    }
+    w.next_brick_id = 3001;
+    let sim = Simulation::new(w, definitions(), vec![floor()]).unwrap();
+    let defs = definitions();
+    let mut hits = 0;
+    for i in 0..2000 {
+        let origin = Vec3::new(
+            (random() % 100 - 50) as f32 + 0.37,
+            (random() % 40) as f32 * 0.25 + 0.13,
+            (random() % 100 - 50) as f32 - 0.21,
+        );
+        let direction = Vec3::new(
+            (random() % 200 - 100) as f32,
+            (random() % 200 - 100) as f32,
+            (random() % 200 - 100) as f32,
+        )
+        .try_normalize()
+        .unwrap_or(Vec3::X);
+        let all = i % 2 == 0;
+        let hit = if all {
+            sim.target_bricks_always(origin, direction, 149.0)
+        } else {
+            sim.target(origin, direction, 149.0)
+        }
+        .unwrap();
+        let mut brute: Option<(u64, f32)> = None;
+        for (id, b) in &sim.state().bricks {
+            if !all && !b.raycast {
+                continue;
+            }
+            let inverse = b.transform().inverse();
+            if let Some((d, _)) = bri_physics::content::raycast(
+                &defs.get(b).unwrap().collision,
+                Vector::from_array(inverse.transform_point3(origin).to_array()),
+                Vector::from_array(inverse.transform_vector3(direction).to_array()),
+                149.0,
+            ) && brute.is_none_or(|(_, best)| d < best)
+            {
+                brute = Some((*id, d));
+            }
+        }
+        match (hit, brute) {
+            (Some(hit), Some((id, d))) if hit.brick.is_some() => {
+                hits += 1;
+                assert!(
+                    (hit.distance - d).abs() < 1e-4,
+                    "ray {i}: {} vs {d}",
+                    hit.distance
+                );
+                assert!(hit.brick == Some(id) || (hit.distance - d).abs() < 1e-5);
+            }
+            (Some(hit), brute) => {
+                assert!(
+                    hit.brick.is_none(),
+                    "ray {i}: brick hit without a brute-force hit"
+                );
+                assert!(
+                    brute.is_none_or(|(_, d)| d >= hit.distance - 1e-4),
+                    "ray {i}: missed a closer brick"
+                );
+            }
+            (None, brute) => assert!(brute.is_none(), "ray {i}: missed brick {brute:?}"),
+        }
+    }
+    assert!(hits > 200, "only {hits} rays hit bricks");
+}

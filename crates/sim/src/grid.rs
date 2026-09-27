@@ -116,11 +116,44 @@ fn keys(bounds: Bounds) -> impl Iterator<Item = (i32, i32, i32)> {
         (min[1]..=max[1]).flat_map(move |y| (min[2]..=max[2]).map(move |z| (x, y, z)))
     })
 }
+/// Bucket edge in grid cells (eight native units on every axis).
+const BUCKET: [i32; 3] = [16, 40, 16];
 fn bucket_span(bounds: Bounds) -> ([i32; 3], [i32; 3]) {
-    let step = [16, 40, 16];
-    let min: [i32; 3] = std::array::from_fn(|a| bounds.min[a].div_euclid(step[a]));
-    let max: [i32; 3] = std::array::from_fn(|a| (bounds.max()[a] - 1).div_euclid(step[a]));
+    let min: [i32; 3] = std::array::from_fn(|a| bounds.min[a].div_euclid(BUCKET[a]));
+    let max: [i32; 3] = std::array::from_fn(|a| (bounds.max()[a] - 1).div_euclid(BUCKET[a]));
     (min, max)
+}
+/// Buckets pierced by a ray, nearest first, each with the ray distance at which
+/// the ray leaves it (3D DDA). `direction` must be normalized.
+pub fn ray_buckets(
+    origin: [f32; 3],
+    direction: [f32; 3],
+    max_distance: f32,
+) -> Vec<((i32, i32, i32), f32)> {
+    let size: [f32; 3] = std::array::from_fn(|a| CELL[a] * BUCKET[a] as f32);
+    let mut bucket: [i32; 3] = std::array::from_fn(|a| (origin[a] / size[a]).floor() as i32);
+    let step: [i32; 3] = std::array::from_fn(|a| direction[a].signum() as i32);
+    let mut next: [f32; 3] = std::array::from_fn(|a| {
+        if direction[a] > 0.0 {
+            ((bucket[a] + 1) as f32 * size[a] - origin[a]) / direction[a]
+        } else if direction[a] < 0.0 {
+            (bucket[a] as f32 * size[a] - origin[a]) / direction[a]
+        } else {
+            f32::INFINITY
+        }
+    });
+    let delta: [f32; 3] = std::array::from_fn(|a| size[a] / direction[a].abs());
+    let mut out = Vec::new();
+    loop {
+        let axis = (0..3).min_by(|a, b| next[*a].total_cmp(&next[*b])).unwrap();
+        let exit = next[axis];
+        out.push(((bucket[0], bucket[1], bucket[2]), exit.min(max_distance)));
+        if exit >= max_distance || exit.is_nan() {
+            return out;
+        }
+        bucket[axis] += step[axis];
+        next[axis] += delta[axis];
+    }
 }
 #[derive(Default)]
 pub struct Index {
@@ -180,6 +213,10 @@ impl Index {
     }
     pub fn bounds(&self, id: BrickId) -> Bounds {
         self.bounds[&id]
+    }
+    /// Bricks registered in one bucket from [`ray_buckets`].
+    pub fn bucket(&self, key: (i32, i32, i32)) -> impl Iterator<Item = BrickId> + '_ {
+        self.buckets.get(&key).into_iter().flatten().copied()
     }
 }
 
