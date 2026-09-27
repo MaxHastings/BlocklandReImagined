@@ -97,6 +97,8 @@ pub enum Notice {
         owner_name: String,
         title: String,
     },
+    /// Movement the player may use now; the client predicts with the same mask.
+    Abilities(super::Abilities),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
