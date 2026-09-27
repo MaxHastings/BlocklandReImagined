@@ -249,6 +249,7 @@ pub struct Core {
     repeater: Repeater,
     held: BTreeMap<HeldInput, String>,
     held_controls: BTreeSet<HeldControl>,
+    pub console: screens::console::ConsoleState,
 }
 
 impl Core {
@@ -350,6 +351,7 @@ impl Core {
         self.save_files.clear();
         self.save_maps.clear();
         self.pending.clear();
+        self.console.reset_session();
     }
     pub fn request_pending(&mut self, a: UiAction, kind: Pending) -> RequestId {
         let id = self.request(a);
@@ -638,6 +640,7 @@ impl Core {
             }
             "togglesupershift" => self.toggle_super_shift(down),
             _ if !down => {}
+            "toggleconsole" => self.toggle_console(),
             "escapemenu.toggle();" => self.escape_toggle(),
             "togglefirstperson" => {
                 let fast = self
@@ -749,12 +752,8 @@ impl Core {
                     self.hud.direct_select_inv(i, &bsd_key, &mut o);
                     self.apply_outbox(o);
                 } else {
-                    // Console, help and debug render modes are excluded from the
-                    // alpha (no script console); they are recognised but inert.
-                    return matches!(
-                        other,
-                        "toggleconsole" | "contexthelp();" | "cycledebugrendermode"
-                    );
+                    // Context help and debug render modes are recognised but inert.
+                    return matches!(other, "contexthelp();" | "cycledebugrendermode");
                 }
             }
         }
@@ -841,6 +840,9 @@ pub struct Ui {
     wheel_rest: f32,
     sounds: Vec<UiSound>,
     dropped_sounds: u64,
+    /// A global bind consumed the last key press; drop the character it
+    /// types (the `~` that opened the console must not appear in it).
+    swallow_char: bool,
 }
 
 impl Ui {
@@ -954,6 +956,7 @@ impl Ui {
             repeater: Repeater::new(first, rep),
             held: BTreeMap::new(),
             held_controls: BTreeSet::new(),
+            console: Default::default(),
         };
         core.hud.prefs = core.hud_prefs();
         let content = screens::make(ScreenId::MainMenu, &mut core);
@@ -967,6 +970,7 @@ impl Ui {
             wheel_rest: 0.0,
             sounds: Vec::new(),
             dropped_sounds: 0,
+            swallow_char: false,
         };
         if ui.core.settings.binds.is_none() {
             ui.core.push(ScreenId::DefaultControls);
@@ -975,6 +979,12 @@ impl Ui {
         ui.flush();
         ui.relayout();
         ui
+    }
+
+    /// Commands the host runs itself (arriving as `UiAction::Console`), so
+    /// the console lists, describes and completes them.
+    pub fn set_console_commands(&mut self, commands: Vec<bri_console::CommandInfo>) {
+        self.core.console.host_commands = commands;
     }
 
     pub fn config(&self) -> UiConfig {
@@ -1100,9 +1110,14 @@ impl Ui {
                     std::mem::replace(&mut self.content, screens::make(id, &mut self.core));
                 old.on_sleep(&mut self.core);
                 // v20 pops every dialog when the content changes except
-                // those the new content pushes itself.
-                for mut d in self.dialogs.drain(..) {
-                    d.on_sleep(&mut self.core);
+                // those the new content pushes itself. The console sits on
+                // its own canvas layer (pushDialog(ConsoleDlg, 99)) and stays.
+                for mut d in std::mem::take(&mut self.dialogs) {
+                    if d.id() == ScreenId::Console {
+                        self.dialogs.push(d);
+                    } else {
+                        d.on_sleep(&mut self.core);
+                    }
                 }
                 self.content.layout(w, h, &mut self.core);
                 self.content.on_wake(&mut self.core);
@@ -1636,6 +1651,7 @@ impl Ui {
                     self.flush();
                 }
             }
+            InputEvent::Char(_) if std::mem::take(&mut self.swallow_char) => {}
             InputEvent::Char(ch) => {
                 let t = self.dialogs.len().checked_sub(1);
                 let mut out = Vec::new();
@@ -1662,6 +1678,7 @@ impl Ui {
 
     fn key_down(&mut self, key: Key, mods: Modifiers, repeat: bool) {
         self.mods = mods;
+        self.swallow_char = false;
         // 1. Global action map (console, fullscreen, help).
         if !repeat
             && let Some(cmd) = self
@@ -1671,6 +1688,7 @@ impl Ui {
                 .map(str::to_string)
         {
             self.core.run_command(&cmd, true);
+            self.swallow_char = true;
             self.flush();
             return;
         }

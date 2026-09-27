@@ -575,6 +575,11 @@ pub enum UiAction {
         map: Option<String>,
     },
     OpenAdmin,
+    /// A console statement for a command the host registered with
+    /// `Ui::set_console_commands`. Output goes to `bri_console`'s log.
+    Console {
+        line: String,
+    },
     // ---- vanilla mini-games. The host resolves the caller from the authenticated session.
     RequestMiniGameList,
     CreateMiniGame { color: u8, rules: MiniGameRules },

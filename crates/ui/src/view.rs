@@ -421,6 +421,12 @@ impl View {
         self.layout_children(root, (authored.w, authored.h), Rect::new(0, 0, w, h));
     }
 
+    /// Lay out again for the current canvas (after content changed size).
+    pub fn relayout(&mut self) {
+        let (w, h) = self.canvas;
+        self.layout(w, h);
+    }
+
     fn layout_children(&mut self, id: NodeId, old_parent: (i32, i32), parent_rect: Rect) {
         let is_scroll = self.nodes[id].ctrl.class == "GuiScrollCtrl";
         let scroll_y = self.nodes[id].state.scroll_y;
@@ -445,6 +451,12 @@ impl View {
             // the authored extent are clipped away and cannot be reached.
             if self.nodes[k].ctrl.class == "GuiTextListCtrl" {
                 abs.h = abs.h.max(self.list_height(k));
+            }
+            // GuiConsole sizes itself to its log: one row per line, at least
+            // as wide as the scroll area it sits in.
+            if self.nodes[k].ctrl.class == "GuiConsole" {
+                abs.h = self.list_height(k);
+                abs.w = abs.w.max(parent_rect.w - a.x);
             }
             self.nodes[k].rect = abs;
             self.layout_children(k, (a.w, a.h), abs);
@@ -818,17 +830,32 @@ impl View {
                         t
                     };
                     let inner = Rect::new(r.x + s.text_offset[0] + 2, r.y, r.w - 4, r.h);
+                    let font = Self::font_id(pack, s).and_then(|f| Font::get(pack, f));
+                    let before: String = shown.chars().take(n.state.cursor).collect();
+                    // Like GuiTextEditCtrl, text slides left once the caret
+                    // passes the right edge, so long input stays editable.
+                    let scroll = match &font {
+                        Some(f) if n.ctrl.class == "GuiTextEditCtrl" => {
+                            (f.width(&before) - (inner.w - 2)).max(0)
+                        }
+                        _ => 0,
+                    };
                     if n.ctrl.class == "GuiMLTextEditCtrl" {
                         self.draw_ml(pack, dl, id, inner.offset(0, 2), &shown);
+                    } else if scroll > 0 {
+                        if dl.push_clip(inner) {
+                            let moved = Rect::new(inner.x - scroll, inner.y, inner.w + scroll, inner.h);
+                            self.draw_text_in(pack, dl, id, moved, &shown, Some(Justify::Left), None);
+                            dl.pop_clip();
+                        }
                     } else {
                         self.draw_text_in(pack, dl, id, inner, &shown, Some(Justify::Left), None);
                     }
                     if self.focus == Some(id)
                         && (self.time_ms / 500).is_multiple_of(2)
-                        && let Some(f) = s.font.as_deref().and_then(|f| Font::get(pack, f))
+                        && let Some(f) = font
                     {
-                        let before: String = shown.chars().take(n.state.cursor).collect();
-                        let cx = inner.x + f.width(&before);
+                        let cx = inner.x - scroll + f.width(&before);
                         let lh = f.line_height();
                         dl.fill(
                             Rect::new(cx, r.y + (r.h - lh) / 2, 1, lh),
@@ -893,6 +920,7 @@ impl View {
             }
             "GuiScrollCtrl" => self.draw_scroll(pack, dl, id),
             "GuiTextListCtrl" => self.draw_list(pack, dl, id),
+            "GuiConsole" => self.draw_console(pack, dl, id),
             "GuiSliderCtrl" => {
                 let (lo, hi) = self.range(id);
                 let v = self.num(id);
@@ -1139,7 +1167,7 @@ impl View {
             .iter()
             .map(|&k| {
                 let c = &self.nodes[k];
-                if c.ctrl.class == "GuiTextListCtrl" {
+                if matches!(c.ctrl.class.as_str(), "GuiTextListCtrl" | "GuiConsole") {
                     c.ctrl.position[1] + self.list_height(k)
                 } else {
                     c.ctrl.position[1] + c.rect.h
@@ -1241,8 +1269,13 @@ impl View {
     /// scrolling and hit tests agree with drawing.
     pub fn measure(&mut self, pack: &Pack) {
         for id in 0..self.nodes.len() {
-            if self.nodes[id].ctrl.class == "GuiTextListCtrl" {
-                self.nodes[id].state.row_height = self.list_row_height(pack, id);
+            match self.nodes[id].ctrl.class.as_str() {
+                "GuiTextListCtrl" => self.nodes[id].state.row_height = self.list_row_height(pack, id),
+                // GuiConsole cells are exactly one font line tall.
+                "GuiConsole" => {
+                    self.nodes[id].state.row_height = self.line_height(pack, id).max(1);
+                }
+                _ => {}
             }
         }
     }
@@ -1295,6 +1328,31 @@ impl View {
                     dl.pop_clip();
                 }
             }
+        }
+    }
+
+    /// GuiConsole rows: item ids are log levels (0 normal, 1 warning,
+    /// 2 error) drawn in the profile's normal, HL and NA font colours, 3px
+    /// in. Only rows inside the scroll area are drawn.
+    fn draw_console(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let n = &self.nodes[id];
+        let Some(style) = self.style(pack, id) else {
+            return;
+        };
+        let r = n.rect;
+        let rh = n.state.row_height.max(1);
+        let visible = n.parent.map_or(r, |p| self.nodes[p].rect);
+        let first = ((visible.y - r.y) / rh).max(0) as usize;
+        let last = ((visible.bottom() - r.y) / rh + 1).max(0) as usize;
+        let black = geom::BLACK;
+        for (i, (text, level)) in n.state.items.iter().enumerate().take(last).skip(first) {
+            let color = match level {
+                1 => style.font_color_hl,
+                2 => style.font_color_na,
+                _ => style.font_color,
+            };
+            let row = Rect::new(r.x + 3, r.y + i as i32 * rh, r.w - 3, rh);
+            self.draw_text_in(pack, dl, id, row, text, Some(Justify::Left), Some(color.unwrap_or(black)));
         }
     }
 

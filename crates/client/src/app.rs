@@ -304,6 +304,7 @@ pub struct App {
     tumble: Option<u64>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     net_graph: Option<(std::time::Instant, u32)>,
+    frame_stats: crate::console::FrameStats,
     /// LAN listings from the last discovery query: address -> certificate.
     lan_hosts: BTreeMap<String, Vec<u8>>,
     lan_query: Option<mpsc::Receiver<Vec<(SocketAddr, bri_net::discovery::Beacon)>>>,
@@ -606,6 +607,9 @@ impl App {
     pub fn weather_diagnostics(&self) -> bri_weather::WeatherDiagnostics {
         self.weather.world.diagnostics()
     }
+    pub fn frame_stats(&self) -> &crate::console::FrameStats {
+        &self.frame_stats
+    }
     pub fn audio_stats(&self) -> bri_audio::AudioStats {
         self.audio.stats()
     }
@@ -785,6 +789,7 @@ impl App {
             },
             saved,
         );
+        ui.set_console_commands(crate::console::commands());
         ui.apply(UiUpdate::Maps(content.maps.clone()));
         let backgrounds = content
             .ui_pack
@@ -885,6 +890,7 @@ impl App {
             tumble: None,
             music_world: None,
             net_graph: None,
+            frame_stats: Default::default(),
             lan_hosts: BTreeMap::new(),
             lan_query: None,
             macro_recording: None,
@@ -3092,6 +3098,7 @@ impl PlatformApp for App {
         &mut self.ui
     }
     fn tick(&mut self, elapsed: Duration) -> Result<()> {
+        self.frame_stats.push(elapsed);
         let mut listener = bri_audio::Listener::default();
         // `setTimeScale` slows or speeds the whole game, not the interface.
         let scale = self
@@ -4175,6 +4182,15 @@ impl PlatformApp for App {
                         querying: true,
                     });
                     Ok(())
+                }
+                UiAction::Console { ref line } => {
+                    let mut out = bri_console::Output::default();
+                    let unknown = crate::console::registry().exec(self, line, &mut out);
+                    out.flush();
+                    match unknown.first() {
+                        Some(line) => Err(anyhow::anyhow!("Unknown console command: {line}")),
+                        None => Ok(()),
+                    }
                 }
                 _ => Err(anyhow::anyhow!(
                     "This feature is not connected to native gameplay yet. It remains required before the alpha handoff."

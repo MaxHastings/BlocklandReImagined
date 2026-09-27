@@ -152,7 +152,7 @@ impl Graphics {
             // A saved preference can outlive the GPU/monitor it was applied on.
             // Interactive changes still reject unsupported modes explicitly.
             present_mode: present_mode(vsync, &caps.present_modes).unwrap_or_else(|error| {
-                eprintln!("Saved display mode unavailable: {error}; starting with VSync.");
+                bri_console::warn(format!("Saved display mode unavailable: {error}; starting with VSync."));
                 wgpu::PresentMode::Fifo
             }),
             desired_maximum_frame_latency: 2,

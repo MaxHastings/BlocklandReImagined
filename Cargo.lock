@@ -324,6 +324,7 @@ dependencies = [
  "anyhow",
  "bri-admin",
  "bri-audio",
+ "bri-console",
  "bri-content",
  "bri-events",
  "bri-foliage",
@@ -350,6 +351,10 @@ dependencies = [
  "wgpu",
  "winit",
 ]
+
+[[package]]
+name = "bri-console"
+version = "0.1.0"
 
 [[package]]
 name = "bri-content"
@@ -567,6 +572,7 @@ name = "bri-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bytemuck",
  "image",
  "pollster",

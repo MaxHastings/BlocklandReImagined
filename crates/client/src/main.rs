@@ -66,7 +66,7 @@ fn main() -> Result<()> {
     // Library/headless callers use App::load, which always selects silent output.
     let app = App::load_with_audio(&content, &state, (1280, 720), bri_audio::OutputKind::Device)?;
     for warning in app.audio_warnings() {
-        eprintln!("{warning}");
+        bri_console::warn(warning);
     }
     let display = bri_client::settings::startup_display(&app.ui.settings());
     platform::run(PlatformConfig {

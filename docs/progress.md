@@ -2262,3 +2262,27 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   partial build loads that report missing definitions instead of refusing the
   whole build. The earlier save-format fix request was withdrawn in favour of
   this review.
+
+- 2026-09-27 The `~` console is back (v20 `ConsoleDlg`). The authored window,
+  GuiConsole log (Lucida Console 12; normal, grey warning and red error
+  colours) and entry line come from the UI pack; `~` toggles it with v20's
+  100 ms debounce, it shows the cursor, keeps gameplay binds off while open
+  and survives content changes (its own canvas layer, like
+  `pushDialog(ConsoleDlg, 99)`). Entry echoes `==>line`, keeps 20 lines of
+  history (Up/Down), pages the log (PgUp/PgDn), completes names, cvars,
+  `$pref::` keys, players and maps (Tab), and closes on Escape. No script VM:
+  a new `bri-console` crate holds a process-wide log (mirrored to stderr) and
+  a typed command/cvar registry any layer can register into. Cvars are typed
+  views of `$pref::` values that persist through SaveSettings; `$pref::X =
+  value` and `name(args);` work for v20 habits. Commands: help, cvars, prefs,
+  echo, cls, quit, connect, disconnect, say, players, maps, netgraph,
+  screenshot, admin, adminlogin, kick, ban, clearbricks, changemap, and any
+  chat `/command`; the client app adds `stats` (frame, network, world, audio,
+  effects) and `version` (build, protocol, content packages). Shared-state
+  commands send the existing admin/chat/join requests, so host trust checks
+  apply unchanged; passwords are redacted from the echo and never enter
+  history. Also fixed for every text field: the caret now draws with the
+  fallback profile font, and long input scrolls to keep the caret visible.
+  Evidence: `cargo test -p bri-console`, `cargo test -p bri-ui --test
+  console`, `cargo test -p bri-ui`, `cargo test -p bri-client --lib console`,
+  `ui_runtime_probe` console renders at 1024x768, 1920x1080 and 2x.

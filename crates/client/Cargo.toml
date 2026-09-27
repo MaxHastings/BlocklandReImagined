@@ -21,6 +21,7 @@ bri-identity = { path = "../identity" }
 bri-net = { path = "../net" }
 bri-render = { path = "../render" }
 bri-ui = { path = "../ui" }
+bri-console = { path = "../console" }
 bri-physics = { path = "../physics" }
 bri-fx-runtime = { path = "../fx-runtime" }
 bri-audio = { path = "../audio", features = ["cpal-output"] }

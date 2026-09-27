@@ -69,6 +69,22 @@ impl Prefs {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
+    /// Every known name (stock defaults and user overrides), as first spelled.
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: BTreeMap<&String, &String> = BTreeMap::new();
+        for (n, (k, _)) in self.defaults.iter().chain(&self.values) {
+            keys.entry(n).or_insert(k);
+        }
+        keys.into_values().cloned().collect()
+    }
+    /// The stock spelling of a pref name, if it has one.
+    pub fn canonical(&self, key: &str) -> Option<&str> {
+        let n = norm(key);
+        self.defaults
+            .get(&n)
+            .or_else(|| self.values.get(&n))
+            .map(|(k, _)| k.as_str())
+    }
     pub fn reset(&mut self, key: &str) {
         self.values.remove(&norm(key));
     }
@@ -87,5 +103,8 @@ mod tests {
         assert!(!p.bool_or("$pref::HUD::HideBrickBox", true));
         assert_eq!(p.overrides().len(), 1);
         assert_eq!(p.f32_or("$missing", 0.5), 0.5);
+        p.set("$pref::Other::Thing", "x");
+        assert_eq!(p.keys(), ["$pref::HUD::HideBrickBox", "$pref::Other::Thing"]);
+        assert_eq!(p.canonical("$PREF::hud::hidebrickbox"), Some("$pref::HUD::HideBrickBox"));
     }
 }

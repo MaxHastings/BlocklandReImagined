@@ -173,6 +173,25 @@ fn main() -> Result<()> {
             Ok(())
         };
         render(&ui, "main-menu", &mut renderer, &mut report)?;
+        // `~` console over the main menu: echo, help, a warning and an error.
+        ui.core.toggle_console();
+        ui.update(0);
+        bri_console::warn("Example warning line");
+        bri_console::error("Example error line");
+        for line in ["help", "volume"] {
+            for c in line.chars() {
+                ui.handle_input(InputEvent::Char(c));
+            }
+            key(&mut ui, Key::Return);
+        }
+        for c in "conn".chars() {
+            ui.handle_input(InputEvent::Char(c));
+        }
+        ui.update(16);
+        ensure!(ui.top_id() == ScreenId::Console, "console must open");
+        render(&ui, "console", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
+        ui.update(200);
         ui.core.push(ScreenId::JoinServer);
         ui.apply(UiUpdate::LanServers {
             servers: vec![ServerInfo {

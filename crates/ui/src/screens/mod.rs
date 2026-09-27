@@ -4,6 +4,7 @@
 
 pub mod admin;
 pub mod avatar;
+pub mod console;
 pub mod menus;
 pub mod minigames;
 pub mod options;
@@ -60,6 +61,8 @@ pub enum ScreenId {
     LoadBricks,
     MessageBox,
     About,
+    /// v20 `ConsoleDlg` (`~`).
+    Console,
 }
 
 pub trait Screen {
@@ -146,6 +149,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),
         ScreenId::Avatar => return Box::new(avatar::Avatar::new(core)),
         ScreenId::Play => return Box::new(play::Play::new(core)),
+        ScreenId::Console => return Box::new(console::Console::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),
