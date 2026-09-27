@@ -1021,7 +1021,20 @@ impl App {
         vehicles: &crate::vehicles::ClientVehicles,
         lag: Vec3,
         view: &network::View,
+        local: &bri_sim::player::PlayerState,
     ) -> Option<(f32, Vec3, f32)> {
+        // A `HorseArmor` player uses its datablock's camera fields
+        // (cameraMaxDist, cameraVerticalOffset above the feet, cameraTilt).
+        if local.datablock == bri_sim::player_types::PlayerType::Horse
+            && view.vitals.get(&view.owner).is_none_or(|v| v.mounted.is_none())
+        {
+            let camera = &assets.definition("v20.vehicle.horsearmor")?.camera;
+            return Some((
+                camera.max_dist.clamp(1.0, 40.0),
+                Vec3::from(local.feet) + Vec3::Y * camera.offset + lag,
+                camera.tilt,
+            ));
+        }
         let (vehicle, _) = view.vitals.get(&view.owner)?.mounted?;
         let info = view.vehicles.get(&vehicle)?;
         let camera = &assets.definition(&info.definition)?.camera;
@@ -3409,7 +3422,13 @@ impl PlatformApp for App {
                 .unwrap_or_else(|| local.eye(&local.tuning()));
             let chase = third_person
             .then(|| {
-                Self::chase_camera(&self.vehicle_assets, &self.vehicles, self.chase_lag, view)
+                Self::chase_camera(
+                    &self.vehicle_assets,
+                    &self.vehicles,
+                    self.chase_lag,
+                    view,
+                    local,
+                )
             })
             .flatten();
             let eye = camera_eye(
@@ -4444,7 +4463,13 @@ impl PlatformApp for App {
             .unwrap_or_else(|| local.eye(&local.tuning()));
         let chase = third_person
             .then(|| {
-                Self::chase_camera(&self.vehicle_assets, &self.vehicles, self.chase_lag, view)
+                Self::chase_camera(
+                    &self.vehicle_assets,
+                    &self.vehicles,
+                    self.chase_lag,
+                    view,
+                    local,
+                )
             })
             .flatten();
         let eye = camera_eye(
