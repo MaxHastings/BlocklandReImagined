@@ -99,9 +99,7 @@ impl TrustList {
         }
         self.lines.retain(|l| l.level > 0);
         let bytes = serde_json::to_vec_pretty(&self.lines)?;
-        let temp = self.path.with_extension("json.tmp");
-        std::fs::write(&temp, bytes).context("Could not save the trust list")?;
-        std::fs::rename(&temp, &self.path).context("Could not save the trust list")?;
+        bri_files::replace(&self.path, &bytes).context("Could not save the trust list")?;
         Ok(())
     }
 }

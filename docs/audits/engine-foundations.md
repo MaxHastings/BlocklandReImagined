@@ -32,7 +32,7 @@ Risk = likelihood x blast radius. "Fixed" items landed with this audit.
 | 9 | Net | Wire format was JSON everywhere, datagrams included, with each path's own ad-hoc parsing and size checks. `MAX_DATAGRAM` (1,200) exceeded what a minimum-MTU QUIC path can carry, and pose datagrams had no size check at all: a grown `PlayerState` would silently vanish. | Medium | Fixed |
 | 10 | Replication | Every world-changing delta deep-clones the whole replica world on the network worker (Golden Gate: 12 to 21 ms per edit, linear in bricks; ~0.5 s at the 1 M brick cap). The same worker sends movement, so building on a big map delays input. | Medium | Open |
 | 11 | Replication | The join/map-change checkpoint is one monolithic frame built and encoded on the authority loop (Golden Gate: ~70 ms encode; the infrastructure audit measured a ~360 ms stall). Worlds above ~128 MB of encoded state cannot be joined at all. | Medium | Open |
-| 12 | Files | Four different "atomic" write implementations (settings, saves, trust list, admin store) and two plain writes of security state: the host certificate and key pair (torn write: host cannot start, or its identity changes and every friend's pin breaks) and the joined-server pin list. | Medium | Open |
+| 12 | Files | Four different "atomic" write implementations (settings, saves, trust list, admin store) and two plain writes of security state: the host certificate and key pair (torn write: host cannot start, or its identity changes and every friend's pin breaks) and the joined-server pin list. | Medium | Fixed: `bri-files` (temp file, fsync, rename or no-clobber link, Unix directory fsync) now writes settings, saves, trust and pin lists, identities, admin state and the host certificate, which is one file |
 | 13 | Net | `Session::adopt` failing during Change Map still stops the host (`?`): the old session is moved in and lost on error. Its only failure is an invariant (a fresh map has no players), so this is latent. | Low | Open |
 | 14 | Net | Request body budget: one peer may reserve up to 64 MB of the shared 128 MB and trickle the body for 10 s, delaying other players' large requests (build loads). | Low | Open |
 | 15 | Client | `network::publish` clones every replicated map (names, avatars, poses, chat, vehicles) on each pose datagram (up to 64 players x 40 Hz) and the UI clones the View every frame. | Low | Open |
@@ -105,8 +105,7 @@ while no device exists.
 2. Item 11: stream the checkpoint as world chunks after a small Welcome, built
    from a persistent-map snapshot off the authority loop. Removes both the
    join stall and the world-size ceiling.
-3. Item 12: one `atomic_write` (temp file, fsync, rename, directory fsync) in
-   a shared crate; store the host certificate and key as one file.
+3. Item 12: done (`crates/files`).
 4. Item 9 follow-up: a compact wire form for bricks (ids and packed
    position/rotation/color instead of named fields) would cut checkpoint bytes
    several-fold; do it together with item 2.

@@ -2,12 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use bri_ui::api::Settings;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    path::Path,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{fs::File, io::Read, path::Path};
 const LIMIT: u64 = 2 * 1024 * 1024;
 
 /// Only native user overrides select the launch mode. Imported v20 monitor
@@ -72,31 +67,9 @@ pub fn save(path: &Path, settings: &Settings) -> Result<()> {
         settings: settings.clone(),
     })?;
     ensure!(bytes.len() as u64 <= LIMIT, "Settings exceed size limit");
-    let parent = path
-        .parent()
+    path.parent()
         .context("Settings file needs a parent directory")?;
-    std::fs::create_dir_all(parent)?;
-    static SERIAL: AtomicU64 = AtomicU64::new(0);
-    let staging = parent.join(format!(
-        ".settings-{}-{}.tmp",
-        std::process::id(),
-        SERIAL.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&staging)?;
-    let result = (|| -> Result<()> {
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        Ok(())
-    })();
-    drop(file);
-    let result = result.and_then(|()| std::fs::rename(&staging, path).map_err(Into::into));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&staging);
-    }
-    result
+    Ok(bri_files::replace(path, &bytes)?)
 }
 #[cfg(test)]
 mod tests {

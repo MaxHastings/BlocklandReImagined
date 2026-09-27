@@ -36,24 +36,59 @@ impl HostCertificate {
             key: cert.signing_key.serialize_der(),
         })
     }
-    /// Load `host-certificate.der` / `host-key.der` from a private state
-    /// directory, creating them on first use.
+    /// Load `host-identity.bin` (certificate and key in one file, so a crash
+    /// can never pair a certificate with the wrong key) from a private state
+    /// directory, creating it on first use. A damaged file is reported, not
+    /// replaced: a new certificate would break every friend's saved pin.
     pub fn load_or_create(dir: &std::path::Path) -> Result<Self> {
-        let cert_path = dir.join("host-certificate.der");
-        let key_path = dir.join("host-key.der");
-        if let (Ok(der), Ok(key)) = (std::fs::read(&cert_path), std::fs::read(&key_path))
-            && !der.is_empty()
-            && der.len() <= 16384
-            && !key.is_empty()
-            && key.len() <= 16384
-        {
-            return Ok(Self { der, key });
+        let path = dir.join("host-identity.bin");
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                return Self::decode(&bytes).with_context(|| {
+                    format!(
+                        "The host certificate file {} is damaged; move it aside to create a new one                          (friends will then need to trust this host again)",
+                        path.display()
+                    )
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("Could not read the host certificate"),
         }
         let identity = Self::generate()?;
-        std::fs::create_dir_all(dir)?;
-        std::fs::write(&key_path, &identity.key)?;
-        std::fs::write(&cert_path, &identity.der)?;
+        bri_files::create_new_private(&path, &identity.encode())
+            .context("Could not save the host certificate")?;
         Ok(identity)
+    }
+    const MAGIC: &[u8; 8] = b"BRIHOST1";
+    fn encode(&self) -> Vec<u8> {
+        let mut out = Self::MAGIC.to_vec();
+        for part in [&self.der, &self.key] {
+            out.extend((part.len() as u32).to_le_bytes());
+            out.extend(part.iter());
+        }
+        out
+    }
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        let rest = bytes
+            .strip_prefix(Self::MAGIC.as_slice())
+            .context("Not a host certificate file")?;
+        let mut parts = Vec::new();
+        let mut rest = rest;
+        for _ in 0..2 {
+            ensure!(rest.len() >= 4, "Truncated host certificate file");
+            let (length, tail) = rest.split_at(4);
+            let length = u32::from_le_bytes(length.try_into()?) as usize;
+            ensure!(
+                (1..=16384).contains(&length) && tail.len() >= length,
+                "Invalid host certificate length"
+            );
+            parts.push(tail[..length].to_vec());
+            rest = &tail[length..];
+        }
+        ensure!(rest.is_empty(), "Trailing bytes in host certificate file");
+        let key = parts.pop().unwrap();
+        let der = parts.pop().unwrap();
+        Ok(Self { der, key })
     }
 }
 pub struct ServerHandle {
@@ -752,6 +787,22 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_certificate_is_one_file_kept_across_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = HostCertificate::load_or_create(dir.path()).unwrap();
+        let again = HostCertificate::load_or_create(dir.path()).unwrap();
+        assert_eq!((first.der.clone(), first.key.clone()), (again.der, again.key));
+        assert!(dir.path().join("host-identity.bin").is_file());
+        // A damaged file is reported and left in place, never silently replaced.
+        let path = dir.path().join("host-identity.bin");
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.truncate(bytes.len() - 3);
+        std::fs::write(&path, &bytes).unwrap();
+        let error = HostCertificate::load_or_create(dir.path()).err().unwrap();
+        assert!(format!("{error:#}").contains("damaged"), "{error:#}");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
     fn ticket(owner: OwnerId) -> Ticket {
         Ticket {
             owner,

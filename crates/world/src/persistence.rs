@@ -1,10 +1,6 @@
 use crate::World;
 use anyhow::{Result, ensure};
-use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    path::Path,
-};
+use std::{fs::File, io::Read, path::Path};
 pub const MAX_SAVE_BYTES: u64 = 512 * 1024 * 1024;
 pub fn decode(bytes: &[u8]) -> Result<World> {
     ensure!(
@@ -34,9 +30,8 @@ pub fn load_startup(path: &Path) -> Result<World> {
         Err(_) => Ok(crate::build::decode(&bytes)?.world),
     }
 }
-/// Flush a staging file, then publish a new revision with an atomic no-clobber
-/// hard link. The destination is never visible with partial contents. Requires
-/// a filesystem with hard-link support; failure leaves existing saves intact.
+/// Publish a new world file crash-safely and without overwriting (see
+/// `bri_files::create_new`); failure leaves existing saves intact.
 pub fn save_new(path: &Path, world: &World) -> Result<()> {
     world.validate()?;
     let bytes = serde_json::to_vec(world)?;
@@ -44,30 +39,7 @@ pub fn save_new(path: &Path, world: &World) -> Result<()> {
         bytes.len() as u64 <= MAX_SAVE_BYTES,
         "Oversized native world"
     );
-    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let (staging, mut file) = loop {
-        let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let staging = parent.join(format!(".bri-save-{}-{serial}.tmp", std::process::id()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staging)
-        {
-            Ok(file) => break (staging, file),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e.into()),
-        }
-    };
-    let result = (|| -> Result<()> {
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        Ok(())
-    })();
-    drop(file);
-    let published = result.and_then(|_| std::fs::hard_link(&staging, path).map_err(Into::into));
-    let _ = std::fs::remove_file(&staging);
-    published
+    Ok(bri_files::create_new(path, &bytes)?)
 }
 
 #[cfg(test)]

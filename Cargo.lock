@@ -327,6 +327,7 @@ dependencies = [
  "bri-console",
  "bri-content",
  "bri-events",
+ "bri-files",
  "bri-foliage",
  "bri-fx-runtime",
  "bri-identity",
@@ -394,6 +395,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-files"
+version = "0.1.0"
+
+[[package]]
 name = "bri-foliage"
 version = "0.1.0"
 dependencies = [
@@ -457,6 +462,7 @@ name = "bri-identity"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-files",
  "ring",
  "tempfile",
  "windows-sys 0.61.2",
@@ -490,6 +496,7 @@ dependencies = [
  "bri-admin",
  "bri-content",
  "bri-events",
+ "bri-files",
  "bri-identity",
  "bri-minigames",
  "bri-physics",
@@ -682,6 +689,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-events",
+ "bri-files",
  "glam 0.33.10",
  "serde",
  "serde_json",

@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-files.workspace = true
 anyhow.workspace = true
 ring = "0.17.14"
 

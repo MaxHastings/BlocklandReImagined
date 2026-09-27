@@ -1736,7 +1736,7 @@ impl App {
                     .unwrap_or_default();
                 if pins.len() < 1024 {
                     pins.insert(address.to_string(), pin);
-                    std::fs::write(&pins_file, serde_json::to_vec_pretty(&pins)?)?;
+                    bri_files::replace(&pins_file, &serde_json::to_vec_pretty(&pins)?)?;
                 }
                 Ok(())
             })

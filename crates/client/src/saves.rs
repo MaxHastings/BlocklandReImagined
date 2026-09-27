@@ -6,8 +6,8 @@ use bri_world::build::{MAX_BUILD_BYTES, SavedBuild};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs::{File, OpenOptions},
-    io::{Read, Write},
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -275,45 +275,29 @@ impl Store {
                 "Unsafe existing save"
             );
         }
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let staging = directory.join(format!(".save-{}-{stamp}.tmp", std::process::id()));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staging)?;
-        let result = (|| -> Result<()> {
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            Ok(())
-        })();
-        drop(file);
-        let result = result.and_then(|()| {
-            if exists {
-                let history = directory.join(".history");
-                std::fs::create_dir_all(&history)?;
-                ensure!(
-                    history.canonicalize()?.starts_with(&root),
-                    "Save history escapes storage"
-                );
-                std::fs::hard_link(
-                    &path,
-                    history.join(format!(
-                        "{stamp}-{:x}.world.json",
-                        Sha256::digest(name.as_bytes())
-                    )),
-                )?;
-                std::fs::rename(&staging, &path)?;
-            } else {
-                std::fs::hard_link(&staging, &path)?;
-            }
-            Ok(())
-        });
-        if staging.exists() {
-            let _ = std::fs::remove_file(staging);
+        if exists {
+            // Keep the overwritten save in history before replacing it.
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos();
+            let history = directory.join(".history");
+            std::fs::create_dir_all(&history)?;
+            ensure!(
+                history.canonicalize()?.starts_with(&root),
+                "Save history escapes storage"
+            );
+            std::fs::hard_link(
+                &path,
+                history.join(format!(
+                    "{stamp}-{:x}.world.json",
+                    Sha256::digest(name.as_bytes())
+                )),
+            )?;
+            bri_files::replace(&path, &bytes)?;
+        } else {
+            bri_files::create_new(&path, &bytes)?;
         }
-        result
+        Ok(())
     }
 }
 
