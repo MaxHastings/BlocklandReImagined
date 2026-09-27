@@ -109,6 +109,41 @@ fn alpha(image: &SceneImage) -> AlphaMode {
         AlphaMode::Opaque
     }
 }
+/// Per-axis `(offset, scale)` mapping a surface's lightmap coordinates onto the
+/// centers of the texels it owns in its shared lightmap sheet: those whose
+/// centers lie strictly inside the surface's lightmap footprint. Mission
+/// lightmaps pack neighbouring surfaces edge to edge, and a footprint often
+/// reaches the center of the next surface's first texel, so bilinear filtering
+/// pulled that texel into polygon edges: bright seams across dark floors. The
+/// remap is affine, so planar interpolation is kept.
+fn lightmap_inset(
+    vertices: &[bri_content::interior::Vertex],
+    sheet: &SceneImage,
+    lit: bool,
+) -> [(f32, f32); 2] {
+    std::array::from_fn(|a| {
+        let size = [sheet.width, sheet.height][a] as f32;
+        let (low, high) = vertices.iter().fold((f32::MAX, f32::MIN), |(lo, hi), v| {
+            (lo.min(v.lightmap_uv[a]), hi.max(v.lightmap_uv[a]))
+        });
+        if !lit || high.partial_cmp(&low) != Some(std::cmp::Ordering::Greater) {
+            return (0.0, 1.0);
+        }
+        let (low, high) = (low * size, high * size);
+        // First/last texel whose center (k + 0.5) is inside, with float slack.
+        let first = (low - 0.5 + 0.001).floor() + 1.0;
+        let last = (high - 0.5 - 0.001).ceil() - 1.0;
+        let (inner_low, inner_high) = if last >= first {
+            (low.max(first + 0.5), high.min(last + 0.5))
+        } else {
+            let center = ((low + high) * 0.5).floor() + 0.5;
+            (center, center)
+        };
+        let scale = (inner_high - inner_low) / (high - low);
+        // u' * size = inner_low + (u * size - low) * scale
+        ((inner_low - low * scale) / size, scale)
+    })
+}
 fn centroid(vertices: &[SceneVertex], indices: &[u32]) -> [f32; 3] {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
@@ -530,6 +565,11 @@ fn load_interior(
         let lightmap = surface.lightmap.map_or(0, |i| lightmaps[i]);
         let group = groups.entry((diffuse, lightmap)).or_default();
         let base = u32::try_from(out.vertices.len()).context("Too many scene vertices")?;
+        let inset = lightmap_inset(
+            &surface.vertices,
+            &out.images[lightmap],
+            surface.lightmap.is_some(),
+        );
         for vertex in &surface.vertices {
             out.vertices.push(SceneVertex {
                 position: placement
@@ -540,7 +580,9 @@ fn load_interior(
                     .normalize_or_zero()
                     .to_array(),
                 uv: vertex.uv,
-                lightmap_uv: vertex.lightmap_uv,
+                lightmap_uv: std::array::from_fn(|a| {
+                    inset[a].0 + vertex.lightmap_uv[a] * inset[a].1
+                }),
                 color: [1.0; 4],
             });
         }
@@ -691,4 +733,45 @@ fn load_terrain(
         "Terrain {id} streams full-detail tiles around the camera; distance LOD is not yet implemented"
     ));
     TerrainScene::build(field, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn vertex(u: f32, v: f32) -> bri_content::interior::Vertex {
+        bri_content::interior::Vertex {
+            position: [0.0; 3],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0; 2],
+            lightmap_uv: [u / 256.0, v / 256.0],
+        }
+    }
+    #[test]
+    fn lightmap_footprints_sample_only_texels_centered_inside_them() {
+        let sheet = SceneImage {
+            label: "sheet".into(),
+            width: 256,
+            height: 256,
+            rgba: vec![],
+            srgb: false,
+        };
+        // Bedroom Dark floor: rows 9..23 are its own, row 24 is the next surface.
+        let inset = lightmap_inset(&[vertex(9.0, 9.0), vertex(159.5, 24.5)], &sheet, true);
+        let map = |a: usize, t: f32| (inset[a].0 + t / 256.0 * inset[a].1) * 256.0;
+        assert!((map(1, 9.0) - 9.5).abs() < 1e-3);
+        assert!((map(1, 24.5) - 23.5).abs() < 1e-3);
+        assert!((map(0, 159.5) - 158.5).abs() < 1e-3);
+        // Quarter-texel edges keep every texel whose center is inside.
+        let inset = lightmap_inset(&[vertex(4.25, 0.0), vertex(8.75, 1.0)], &sheet, true);
+        let map = |t: f32| (inset[0].0 + t / 256.0 * inset[0].1) * 256.0;
+        assert!((map(4.25) - 4.5).abs() < 1e-3 && (map(8.75) - 8.5).abs() < 1e-3);
+        // A sliver narrower than a texel samples one texel center.
+        let inset = lightmap_inset(&[vertex(3.1, 0.0), vertex(3.4, 1.0)], &sheet, true);
+        assert_eq!(inset[0], (3.5 / 256.0, 0.0));
+        // Unlit surfaces keep their coordinates.
+        assert_eq!(
+            lightmap_inset(&[vertex(1.0, 1.0)], &sheet, false),
+            [(0.0, 1.0); 2]
+        );
+    }
 }
