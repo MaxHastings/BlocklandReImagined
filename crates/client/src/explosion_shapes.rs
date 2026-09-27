@@ -80,6 +80,7 @@ impl ExplosionShapes {
                 &shape,
                 &refs,
                 [1.0; 4],
+                false,
                 Mat4::IDENTITY,
                 &pose,
             )?;

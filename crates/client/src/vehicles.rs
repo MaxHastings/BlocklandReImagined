@@ -108,8 +108,15 @@ impl VehicleAssets {
                 .collect();
             let refs: Vec<&SceneImage> = images.iter().collect();
             let pose = bri_content::animation::sample(&shape, None, 0.0)?;
-            let data =
-                native_shape_scene(&asset.path, &shape, &refs, [1.0; 4], Mat4::IDENTITY, &pose)?;
+            let data = native_shape_scene(
+                &asset.path,
+                &shape,
+                &refs,
+                [1.0; 4],
+                false,
+                Mat4::IDENTITY,
+                &pose,
+            )?;
             models.insert(
                 asset.path.clone(),
                 Model {
@@ -135,8 +142,15 @@ impl VehicleAssets {
                     let time = look.duration * step as f32 / (LOOK_STEPS - 1) as f32;
                     let pose = bri_content::animation::sample(&shape, Some(look), time)?;
                     let key = format!("{}#look{step}", asset.path);
-                    let data =
-                        native_shape_scene(&key, &shape, &refs, [1.0; 4], Mat4::IDENTITY, &pose)?;
+                    let data = native_shape_scene(
+                        &key,
+                        &shape,
+                        &refs,
+                        [1.0; 4],
+                        false,
+                        Mat4::IDENTITY,
+                        &pose,
+                    )?;
                     models.insert(
                         key.clone(),
                         Model {

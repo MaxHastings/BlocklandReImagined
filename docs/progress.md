@@ -2088,3 +2088,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   bricks never chain-kill). `ToolAction::UndoPlant` is now `UndoBrick`, so the
   protocol version moved to 23. Evidence: `cargo test -p bri-sim` including
   `undo_reverts_paint_and_print_then_breaks_the_plant`.
+- 2026-09-27 Held translucent spray cans draw their clear body. v20
+  `setSprayCanColor` gives a colour with alpha <= 0.99 (and `jelloSprayCanImage`)
+  `transspraycan.dts` with `colorShiftColor` alpha clamped to at least 10/255,
+  mounted like `blueSprayCanImage` (mountPoint 0, same eyeOffset). That model
+  flags only its `blank` body translucent; blank.png is white with alpha 0, so
+  the body is the node colour at the colour's alpha. The item renderer drew
+  that material as texture x colour with texture alpha, i.e. invisible, leaving
+  only the rim and cap. `native_shape_scene` now takes `node_color`: for
+  item/image colour shift, translucent materials use the overlay combine at the
+  colour's alpha and opaque materials stay solid (vehicles and explosion shapes
+  pass false and are unchanged). Solid trim over a clear body is inferred from
+  the model's per-material flags, not the disassembly. Evidence: `cargo test -p
+  bri-client --test item_rendering` (renders
+  `artifacts/spray-paint/held-spray-cans.png`) and `--lib items`.

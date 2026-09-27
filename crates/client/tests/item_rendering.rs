@@ -222,6 +222,15 @@ fn frame(
     scenes: &[&GpuScene],
     camera: &Camera,
 ) -> Result<Vec<u8>> {
+    frame_on(gpu, renderer, scenes, camera, wgpu::Color::BLACK)
+}
+fn frame_on(
+    gpu: &Headless,
+    renderer: &mut SceneRenderer,
+    scenes: &[&GpuScene],
+    camera: &Camera,
+    clear: wgpu::Color,
+) -> Result<Vec<u8>> {
     let size = wgpu::Extent3d {
         width: 256,
         height: 256,
@@ -245,7 +254,7 @@ fn frame(
         &target.create_view(&Default::default()),
         &depth.create_view(&Default::default()),
         scenes,
-        Some(wgpu::Color::BLACK),
+        Some(clear),
     );
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("items readback"),
@@ -503,5 +512,61 @@ fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
             &serde_json::json!({"schema_version":1,"adapter":gpu.adapter_info.name,"pack":"item-presentation-pack-009","single_upload_pose_update":true,"records":records,"not_original_parity_acceptance":true}),
         )?,
     )?;
+    Ok(())
+}
+
+/// v20 `setSprayCanColor`: a translucent palette colour (and the Jello FX can)
+/// holds `transspraycan.dts`, whose `blank` body shows the colour at its alpha.
+#[test]
+fn translucent_spray_cans_show_a_clear_colored_body() -> Result<()> {
+    let assets = assets()?;
+    let gpu = Headless::new()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let out = root().join("artifacts/spray-paint");
+    std::fs::create_dir_all(&out)?;
+    let solid = "base/data/shapes/spraycan.dts";
+    let clear = "base/data/shapes/transspraycan.dts";
+    let background = wgpu::Color {
+        r: 0.35,
+        g: 0.55,
+        b: 0.35,
+        a: 1.,
+    };
+    let cans = [
+        (solid, [0.0, 0.2, 0.9, 1.]),
+        (clear, [0.0, 0.2, 0.9, 0.5]),
+        (clear, [0.9, 0.1, 0.1, 0.5]),
+        (clear, [1.0, 1.0, 1.0, 0.25]),
+        (clear, [0.5, 0.0, 0.0, 0.7]),
+        (clear, [1.0, 1.0, 0.0, 10. / 255.]),
+    ];
+    let mut gallery = image::RgbaImage::new(256 * cans.len() as u32, 256);
+    let mut coverage = vec![];
+    for (i, (model, tint)) in cans.into_iter().enumerate() {
+        let scene = assets.model_scene(model, tint, Mat4::IDENTITY, None, 0.)?;
+        let uploaded = renderer.upload(&gpu.device, &gpu.queue, &scene)?;
+        let view = camera(&assets.model_scene(solid, [1.; 4], Mat4::IDENTITY, None, 0.)?);
+        let pixels = frame_on(&gpu, &mut renderer, &[&uploaded], &view, background)?;
+        let empty = frame_on(&gpu, &mut renderer, &[], &view, background)?;
+        coverage.push(
+            pixels
+                .chunks_exact(4)
+                .zip(empty.chunks_exact(4))
+                .filter(|(a, b)| a[..3] != b[..3])
+                .count(),
+        );
+        let tile = image::RgbaImage::from_raw(256, 256, pixels).unwrap();
+        image::imageops::replace(&mut gallery, &tile, 256 * i as i64, 0);
+    }
+    gallery.save(out.join("held-spray-cans.png"))?;
+    // The clear body still covers the can's silhouette (it once drew nothing,
+    // leaving only the rim and cap), even at the 10/255 alpha floor.
+    for (i, &c) in coverage.iter().enumerate().skip(1) {
+        ensure!(
+            c * 10 >= coverage[0] * 9,
+            "Clear can {i} lost its body: {c} of {} pixels",
+            coverage[0]
+        );
+    }
     Ok(())
 }

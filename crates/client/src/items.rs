@@ -171,11 +171,18 @@ fn valid_tint(tint: [f32; 4]) -> bool {
 }
 /// One native DTS-derived shape as a posed scene. Opaque materials act as
 /// paint overlays (texture alpha over the tint), matching colorShift models.
+///
+/// `node_color` marks the tint as a v20 node colour (item/image colour shift).
+/// Translucent materials then show the colour under the texture at the
+/// colour's alpha, and opaque materials stay solid: `transspraycan.dts` flags
+/// only its `blank` body translucent, so a clear colour gives a clear body
+/// behind a solid label, rim and cap ridge.
 pub fn native_shape_scene(
     model: &str,
     shape: &Shape,
     textures: &[&SceneImage],
     tint: [f32; 4],
+    node_color: bool,
     transform: Mat4,
     pose: &Pose,
 ) -> Result<SceneData> {
@@ -202,7 +209,7 @@ pub fn native_shape_scene(
         let mut bindings = Vec::new();
         let mut image_bindings = BTreeMap::new();
         for (source, texture) in shape.materials.iter().zip(textures) {
-            let overlay = source.blend == "opaque";
+            let overlay = source.blend == "opaque" || (node_color && source.blend == "alpha");
             let key = (texture.label.clone(), overlay);
             let image = *image_bindings.entry(key).or_insert_with(|| {
                 let mut image = (*texture).clone();
@@ -224,7 +231,7 @@ pub fn native_shape_scene(
                 };
             }
             material.alpha = match source.blend.as_str() {
-                "opaque" if tint[3] >= 1. => AlphaMode::Opaque,
+                "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
                 "opaque" | "alpha" => AlphaMode::Blend,
                 "additive" => AlphaMode::Additive,
                 other => anyhow::bail!("Unsupported item blend {other}"),
@@ -549,7 +556,7 @@ impl ItemAssets {
             .iter()
             .map(|id| &self.textures[id])
             .collect();
-        native_shape_scene(model, shape, &textures, tint, transform, &pose)
+        native_shape_scene(model, shape, &textures, tint, true, transform, &pose)
     }
     pub fn item_scene(&self, id: &str, transform: Mat4) -> Result<SceneData> {
         let item = self
@@ -756,6 +763,32 @@ mod bounds_tests {
             differing > 0,
             "Fixture must expose authored-box versus visible-mesh differences"
         );
+        Ok(())
+    }
+    #[test]
+    fn translucent_spray_can_keeps_a_clear_colored_body_and_solid_trim() -> Result<()> {
+        let root = root();
+        let assets = ItemAssets::load(
+            &root.join("content/item-presentation-pack-009"),
+            &root.join("content/weapons-pack-008"),
+        )?;
+        let model = "base/data/shapes/transspraycan.dts";
+        let scene = assets.model_scene(model, [0.2, 0.4, 1., 0.5], Mat4::IDENTITY, None, 0.)?;
+        let material = |name: &str| {
+            scene
+                .materials
+                .iter()
+                .find(|m| m.name == format!("item/{model}/{name}"))
+                .unwrap()
+        };
+        // Only `blank` is authored translucent: the colour shows under its
+        // clear texture at the colour's alpha, and the trim stays solid.
+        let body = material("blank");
+        assert_eq!(body.kind, MaterialKind::BrickOverlay);
+        assert_eq!(body.alpha, AlphaMode::Blend);
+        for trim in ["spraycanLabel", "whiteCheck", "megaPhoneRidge"] {
+            assert_eq!(material(trim).alpha, AlphaMode::Opaque, "{trim}");
+        }
         Ok(())
     }
     #[test]
