@@ -126,7 +126,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--repo', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[3])
     parser.add_argument('--original', type=pathlib.Path, default=pathlib.Path(r'E:\Downloads\B4v21Launcher\versions\Blockland v20'))
-    parser.add_argument('--output', default='content/item-presentation-pack-003')
+    parser.add_argument('--output', default='content/item-presentation-pack-006')
+    parser.add_argument('--weapons', default='content/weapons-pack-005')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     if args.self_test:
@@ -136,11 +137,9 @@ def main():
     out = (repo / args.output).resolve()
     if out.exists() or not out.is_relative_to(repo / 'content') or out.is_relative_to(args.original.resolve()):
         raise ValueError('Fresh workspace content output required')
-    weapons_root = repo / 'content/weapons-pack-003'
+    weapons_root = repo / args.weapons
     weapon_bytes = read(weapons_root / 'weapons.json', 32 * 1024 * 1024)
     pack = json.loads(weapon_bytes)
-    native_root = repo / 'content/maps-pass-006'
-    records = json.loads(read(native_root / 'manifest.json'))['records']
     ui_root = repo / 'content/ui-pack-003'
     ui = json.loads(read(ui_root / 'ui-pack.json'))
     avatar_root = repo / 'content/avatar-pack-001'
@@ -245,6 +244,10 @@ def main():
                 return float(numerator) / float(denominator)
             return float(token)
         result = [number(v) for v in value.replace('SPC', ' ').split()]
+        # The glow can authors an overbright shift ("3 3 3 2.0"); colour
+        # shifting saturates at white, so clamp such literals to [0, 1].
+        if len(result) == 4 and all(0 <= v <= 4 for v in result):
+            result = [min(v, 1.0) for v in result]
         if len(result) != 4 or not all(0 <= v <= 1 for v in result):
             raise ValueError(f'Unsupported tint literal {value}')
         return result
@@ -267,30 +270,6 @@ def main():
         values = fields(projectile['name'])
         manifest['projectiles'][projectile['id']] = dict(model=projectile['model'].lower() or None, tint=tint(values))
 
-    # Narrow literal extraction, offline only; not a general Torque reader/VM.
-    def core(name, cls):
-        match = re.search(r'datablock\s+' + cls + r'\(' + name + r'\)\s*\{(.*?)\n\};', script, re.S | re.I)
-        if match is None:
-            raise ValueError(f'Missing core definition {name}')
-        values = {key.lower(): value.strip().strip('"') for key, value in re.findall(r'^\s*(\w+)\s*=\s*([^;]+);', match[1], re.M)}
-        evidence = dict(path='.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs', sha256=digest(script_bytes), line=script[:match.start()].count('\n') + 1)
-        return values, evidence
-
-    for item_name, image_name in [('hammerItem', 'hammerImage'), ('wrenchItem', 'wrenchImage'), ('printGun', 'printGunImage'), ('WandItem', 'WandImage')]:
-        item, evidence = core(item_name, 'ItemData')
-        image, image_evidence = core(image_name, 'ShapeBaseImageData')
-        source_path = item['shapefile'].replace('~/', 'base/')
-        record = next(r for r in records if r.get('virtual_path', '').lower() == source_path.lower())
-        model_key = model(source_path, native_root / record['output'], record['source_sha256'])
-        image_id = 'v20.image.' + image_name.lower()
-        item_id = 'v20.weapon.' + item_name.lower()
-        manifest['items'][item_id] = dict(model=model_key, image=image_id, tint=tint(item), icon=texture(item['iconname']), evidence=evidence)
-        def vector(key):
-            x, y, z = map(float, image.get(key, '0 0 0').split())
-            return [x, z, -y]
-        manifest['images'][image_id] = dict(model=model_key, mount_point=int(image.get('mountpoint', '0')),
-            offset=vector('offset'), eye_offset=vector('eyeoffset'), source_rotation_degrees=[0., 0., 0.],
-            eye_rotation_degrees=[0., 0., 0.], tint=tint(image), evidence=image_evidence)
     if sum(v['width'] * v['height'] * 4 for v in manifest['textures'].values()) > 256 * 1024 * 1024:
         raise ValueError('Aggregate texture budget')
     if sum(map(len, files.values())) > 256 * 1024 * 1024:

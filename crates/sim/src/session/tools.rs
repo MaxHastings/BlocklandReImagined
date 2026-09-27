@@ -1,7 +1,9 @@
-//! Native editing authority. No client positions, identities or arbitrary
-//! source records cross this boundary. Minigame permissions,
-//! spray projectile flight and audiovisual effects remain separate adapters.
+//! Stock building tools. The hammer, wrench, printer, wands and spray cans
+//! are v20 images run by the weapon state machine; their `onFire` scripts
+//! land here as server raycasts from the swinger's eye. No client positions,
+//! identities or arbitrary source records cross this boundary.
 use super::*;
+use bri_weapons::{ActorId, TargetId};
 use bri_world::{Action, Event};
 
 /// Original game.cs constructs New_QueueSO(512). This queue currently records
@@ -24,16 +26,7 @@ pub enum InspectMode {
     deny_unknown_fields
 )]
 pub enum ToolAction {
-    Hammer,
-    Paint {
-        color: u8,
-    },
-    ColorEffect {
-        effect: u8,
-    },
-    ShapeEffect {
-        effect: u8,
-    },
+    /// Open the events dialog over the brick the wrench last hit.
     Inspect {
         mode: InspectMode,
     },
@@ -242,6 +235,71 @@ pub(super) struct Inspection {
     wrench_original: Option<Brick>,
 }
 
+/// `serverCmdUseSprayCan` mounts `color<N>SprayCanImage`, which
+/// `setSprayCanColor` derives from this can for every palette colour. The
+/// native image keeps the palette index instead of a derived datablock.
+pub const SPRAY_CAN_IMAGE: &str = "v20.image.bluespraycanimage";
+/// `serverCmdUseFXCan` index order.
+pub const FX_CAN_IMAGES: [&str; 9] = [
+    "v20.image.flatspraycanimage",
+    "v20.image.pearlspraycanimage",
+    "v20.image.chromespraycanimage",
+    "v20.image.glowspraycanimage",
+    "v20.image.blinkspraycanimage",
+    "v20.image.swirlspraycanimage",
+    "v20.image.rainbowspraycanimage",
+    "v20.image.stablespraycanimage",
+    "v20.image.jellospraycanimage",
+];
+/// `serverCmdWand`.
+pub const WAND_IMAGE: &str = "v20.image.wandimage";
+/// `serverCmdMagicWand` (the admin Destructo Wand).
+pub const ADMIN_WAND_IMAGE: &str = "v20.image.adminwandimage";
+
+/// Brick edit a paint projectile applies on contact (`paintProjectile::onCollision`
+/// and the FX cans' `<fx>PaintProjectile::onCollision`).
+fn paint_edit(definition: &str, paint: Option<u8>) -> Option<Edit> {
+    let name = definition.strip_prefix("v20.projectile.")?;
+    let color_effects = ["flat", "pearl", "chrome", "glow", "blink", "swirl", "rainbow"];
+    if let Some(index) = color_effects
+        .iter()
+        .position(|fx| name.strip_suffix("paintprojectile") == Some(fx))
+    {
+        return Some(Edit::Action(Action::ColorEffect(index as u8)));
+    }
+    match name {
+        "stablepaintprojectile" => Some(Edit::ShapeEffect(0)),
+        "jellopaintprojectile" => Some(Edit::ShapeEffect(1)),
+        "bluepaintprojectile" => paint.map(|color| Edit::Action(Action::Color(color))),
+        _ => None,
+    }
+}
+
+fn copy_actor(actor: &Actor) -> Actor {
+    Actor {
+        owner: actor.owner,
+        administrator: actor.administrator,
+    }
+}
+
+/// `containerRayCast` type masks used by the stock tools.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// Hammer and wands: interiors, bricks, players and vehicles, then
+    /// terrain only when nothing else was hit.
+    Melee,
+    /// Wrench: interiors, terrain and bricks.
+    Wrench,
+    /// Printer: bricks.
+    Bricks,
+}
+#[derive(Clone, Copy, Debug)]
+struct ToolHit {
+    target: TargetId,
+    position: Vec3,
+    normal: Vec3,
+}
+
 impl Session {
     /// Catalog installation is an atomic local-server decision. Existing world
     /// source references may remain unresolved; new assignments may not.
@@ -253,29 +311,530 @@ impl Session {
         }
         Ok(())
     }
-    pub(super) fn tool_action(
+
+    /// Trusted host edit with a player's own brick authority, for scripted
+    /// setup. Network players change bricks only through their tools.
+    pub fn edit_brick(&mut self, owner: OwnerId, id: BrickId, edit: Edit) -> Result<()> {
+        let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
+        let brick = self.simulation.state().bricks.get(&id).context("Unknown brick")?;
+        self.tool_catalog.validate_edit(brick, &edit)?;
+        self.item_spawners
+            .validate_edit(self.simulation.state(), id, &edit)?;
+        self.simulation.edit(&actor, id, edit)?;
+        self.dirty.insert(id);
+        Ok(())
+    }
+
+    /// `serverCmdUseSprayCan` / `serverCmdUseFXCan`: put a can in the right
+    /// hand. Like v20 this deselects the tool slot and drops a held ball.
+    pub(super) fn use_spray_can(
         &mut self,
         owner: OwnerId,
-        action: ToolAction,
-        direction: glam::Vec3,
-    ) -> Result<Reply> {
+        image: &str,
+        paint: Option<u8>,
+    ) -> Result<()> {
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        ensure!(peer.combat.alive, "Dead players cannot paint");
+        if let Some(color) = paint {
+            ensure!(
+                usize::from(color) < self.simulation.state().palette.len(),
+                "Color outside world palette"
+            );
+        }
+        ensure!(
+            !matches!(
+                self.minigames
+                    .can_build(peer.combat.player, bri_minigames::BuildAction::Paint),
+                Ok(bri_minigames::Decision::Deny(_))
+            ),
+            "Painting is disabled in this mini-game"
+        );
+        self.hold_image(owner, image, paint)
+    }
+
+    /// `serverCmdMagicWand`: administrators get the Destructo Wand.
+    pub(super) fn use_admin_wand(&mut self, owner: OwnerId) -> Result<()> {
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        ensure!(
+            peer.actor.administrator,
+            "Only administrators can use the Destructo Wand"
+        );
+        ensure!(peer.combat.alive, "You are dead");
+        self.hold_image(owner, ADMIN_WAND_IMAGE, None)
+    }
+
+    /// `serverCmdWand`: the player wand, unless a minigame disables it.
+    /// Gameplay rules that further restrict it (the tutorial's
+    /// `canUseWand`) belong here.
+    pub fn use_wand(&mut self, owner: OwnerId) -> Result<()> {
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        ensure!(peer.combat.alive, "You are dead");
+        ensure!(
+            !matches!(
+                self.minigames
+                    .can_build(peer.combat.player, bri_minigames::BuildAction::Wand),
+                Ok(bri_minigames::Decision::Deny(_))
+            ),
+            "The wand is disabled in this mini-game"
+        );
+        self.hold_image(owner, WAND_IMAGE, None)
+    }
+
+    fn hold_image(&mut self, owner: OwnerId, image: &str, paint: Option<u8>) -> Result<()> {
+        self.weapons.drop_ball(ActorId(owner))?;
+        self.weapons.mount_image(ActorId(owner), image, paint)?;
+        self.weapon_triggers.remove(&owner);
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            peer.inspection = None;
+        }
+        Ok(())
+    }
+
+    /// The `onFire` of a host tool image (hammer, wrench, printer, wands),
+    /// from the image state machine at the moment the swing lands. A swing
+    /// that hits nothing is not an error: the animation already played.
+    pub(super) fn tool_fire(&mut self, owner: OwnerId, image: &str) -> Result<()> {
+        let Some(actor) = self.weapons.actor(ActorId(owner)) else {
+            return Ok(());
+        };
+        let start = actor.frame.eye;
+        let dir = actor.frame.direction.normalize_or_zero();
+        let scale = actor.frame.scale;
+        if dir == Vec3::ZERO || !self.peers.contains_key(&owner) {
+            return Ok(());
+        }
+        let melee_range = if dir.y < -0.9 { 5.5 } else { 5.0 } * scale;
+        match image.strip_prefix("v20.image.").unwrap_or(image) {
+            "hammerimage" => {
+                let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
+                    return Ok(());
+                };
+                self.tool_explosion(
+                    owner,
+                    "hammerExplosion",
+                    hit.position - dir * 0.25,
+                    Some(hit.normal),
+                    scale,
+                );
+                self.tool_sound("hammerHitSound", hit.position);
+                match hit.target {
+                    TargetId::Brick(id) => {
+                        if self.trusted_brick_edit(owner, id) {
+                            self.kill_brick(owner, id, hit.position, dir)?;
+                        }
+                    }
+                    TargetId::Actor(target) => {
+                        if self.can_damage_player(owner, target.0, false) {
+                            self.damage_player(
+                                target.0,
+                                10.0,
+                                combat::DamageKind::Weapon {
+                                    name: "$DamageType::HammerDirect".into(),
+                                    direct: true,
+                                },
+                                Some(owner),
+                            )?;
+                        }
+                    }
+                    TargetId::Vehicle(vehicle) => {
+                        self.hammer_vehicle(owner, vehicle, hit.position, dir)
+                    }
+                    TargetId::Map(_) => {}
+                }
+            }
+            "wandimage" => {
+                let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
+                    return Ok(());
+                };
+                self.tool_explosion(
+                    owner,
+                    "wandExplosion",
+                    hit.position - dir * 0.25,
+                    Some(hit.normal),
+                    scale,
+                );
+                self.tool_sound("wandHitSound", hit.position);
+                match hit.target {
+                    TargetId::Brick(id) => {
+                        if self.trusted_brick_edit(owner, id) {
+                            self.kill_brick(owner, id, hit.position, dir)?;
+                        }
+                    }
+                    TargetId::Actor(target) => {
+                        let administrator = self.peers[&owner].actor.administrator;
+                        if self.can_damage_player(owner, target.0, false) || administrator {
+                            self.set_player_velocity(target.0, Vec3::new(0.0, 15.0, 0.0));
+                        } else {
+                            let name = self
+                                .peers
+                                .get(&target.0)
+                                .map_or_else(String::new, |p| p.name.clone());
+                            self.center_print(
+                                owner,
+                                format!("{name} does not trust you enough to do that."),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "adminwandimage" => {
+                if !self.peers[&owner].actor.administrator {
+                    return Ok(());
+                }
+                let Some(hit) = self.tool_ray(owner, start, dir, 500.0 * scale, Reach::Melee)?
+                else {
+                    return Ok(());
+                };
+                self.tool_explosion(
+                    owner,
+                    "AdminWandExplosion",
+                    hit.position - dir * 0.25,
+                    Some(hit.normal),
+                    scale,
+                );
+                self.tool_sound("wandHitSound", hit.position);
+                match hit.target {
+                    TargetId::Brick(id) => self.kill_brick(owner, id, hit.position, dir)?,
+                    TargetId::Actor(target) => {
+                        let velocity = (dir + Vec3::Y).normalize() * 20.0;
+                        self.set_player_velocity(target.0, velocity);
+                    }
+                    _ => {}
+                }
+            }
+            "wrenchimage" => {
+                let Some(hit) = self.tool_ray(owner, start, dir, 10.0 * scale, Reach::Wrench)?
+                else {
+                    return Ok(());
+                };
+                self.tool_explosion(
+                    owner,
+                    "wrenchExplosion",
+                    hit.position - dir * 0.25,
+                    None,
+                    scale,
+                );
+                let TargetId::Brick(id) = hit.target else {
+                    self.tool_sound("wrenchMissSound", hit.position);
+                    return Ok(());
+                };
+                if !self.trusted_brick_edit(owner, id) {
+                    self.tool_sound("wrenchMissSound", hit.position);
+                    return Ok(());
+                }
+                self.open_inspection(owner, id, InspectMode::Wrench);
+                self.tool_sound("wrenchHitSound", hit.position);
+            }
+            "printgunimage" => {
+                let Some(ToolHit {
+                    target: TargetId::Brick(id),
+                    ..
+                }) = self.tool_ray(owner, start, dir, 10.0, Reach::Bricks)?
+                else {
+                    return Ok(());
+                };
+                let brick = &self.simulation.state().bricks[&id];
+                if self.tool_catalog.print_aspect(brick).is_err() {
+                    return Ok(());
+                }
+                if self.trusted_brick_edit(owner, id) {
+                    self.open_inspection(owner, id, InspectMode::Printer);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// `paintProjectile::onCollision` for bricks: recolour, or apply a colour
+    /// or shape effect for the FX cans. Players and vehicles are not painted.
+    pub(super) fn paint_contact(&mut self, contact: &bri_weapons::ProjectileContact) -> Result<()> {
+        let (TargetId::Brick(id), Some(edit)) = (
+            contact.target,
+            paint_edit(&contact.definition, contact.paint),
+        ) else {
+            return Ok(());
+        };
+        let owner = contact.source.0;
+        let Some(brick) = self.simulation.state().bricks.get(&id) else {
+            return Ok(());
+        };
+        let unchanged = match &edit {
+            Edit::Action(Action::Color(color)) => brick.color == *color,
+            Edit::Action(Action::ColorEffect(effect)) => brick.color_effect == *effect,
+            Edit::ShapeEffect(effect) => brick.shape_effect == *effect,
+            _ => false,
+        };
+        if unchanged || !self.trusted_brick_edit(owner, id) {
+            return Ok(());
+        }
+        let actor = copy_actor(&self.peers[&owner].actor);
+        self.simulation.edit(&actor, id, edit)?;
+        self.dirty.insert(id);
+        Ok(())
+    }
+
+    /// `getTrustLevel` for brick tools: a builder may edit their own bricks
+    /// and administrators may edit any. Refusals show v20's centre print.
+    fn trusted_brick_edit(&mut self, owner: OwnerId, id: BrickId) -> bool {
+        let Some(brick) = self.simulation.state().bricks.get(&id) else {
+            return false;
+        };
+        let brick_owner = brick.owner;
+        let Some(peer) = self.peers.get(&owner) else {
+            return false;
+        };
+        let allowed = peer.actor.administrator || (owner != 0 && brick_owner == owner);
+        if !allowed {
+            let group = self.brick_group_name(brick_owner);
+            self.center_print(
+                owner,
+                format!("{group} does not trust you enough to do that."),
+            );
+        }
+        allowed
+    }
+    fn brick_group_name(&self, owner: OwnerId) -> String {
+        if let Some(peer) = self.peers.get(&owner) {
+            peer.name.clone()
+        } else if let Some((name, ..)) = self.departed.get(&owner) {
+            name.clone()
+        } else if owner == 0 {
+            "Public".into()
+        } else {
+            format!("BL_ID: {owner}")
+        }
+    }
+    fn center_print(&mut self, owner: OwnerId, text: String) {
+        self.notify(owner, Notice::Center { text, seconds: 1.0 });
+    }
+
+    /// The one path by which a tool destroys a brick (`killBrick`). The hit
+    /// point and swing direction are for the brick destruction effect.
+    fn kill_brick(
+        &mut self,
+        owner: OwnerId,
+        id: BrickId,
+        _hit_position: Vec3,
+        _direction: Vec3,
+    ) -> Result<()> {
+        let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
+        let position = self.simulation.state().bricks[&id].position;
+        self.simulation.remove(&actor, id)?;
+        self.dirty.insert(id);
+        for peer in self.peers.values_mut() {
+            if peer.inspection.as_ref().is_some_and(|i| i.id == id) {
+                peer.inspection = None;
+            }
+        }
+        self.cues.emit(
+            self.simulation.state().tick,
+            crate::presentation::CueKind::Break,
+            position,
+        );
+        Ok(())
+    }
+
+    /// `hammerImage::onHitObject` for vehicles: flip it with an impulse of
+    /// five times its mass along the swing, tilted 45 degrees up, unless the
+    /// swinger rides it or may not touch it.
+    fn hammer_vehicle(&mut self, owner: OwnerId, vehicle: u64, position: Vec3, dir: Vec3) {
+        if self.mounted(owner).map(|(v, _)| v) == Some(vehicle) {
+            return;
+        }
+        let Some((vehicle_owner, mass)) = self.vehicle_owner_and_mass(vehicle) else {
+            return;
+        };
+        let flip = match self.vehicle_damage_decision(owner, vehicle) {
+            Some(allowed) => allowed,
+            // Outside minigames the owner's trust decides: their own vehicle,
+            // an administrator, or a vehicle nobody present owns.
+            None => {
+                vehicle_owner == owner
+                    || self.peers[&owner].actor.administrator
+                    || !self.peers.contains_key(&vehicle_owner)
+            }
+        };
+        if flip {
+            let impulse = (dir + Vec3::Y).normalize() * mass * 5.0;
+            self.push_vehicle(vehicle, position, impulse);
+        }
+    }
+
+    /// `setVelocity` on a player (the wands' launch).
+    fn set_player_velocity(&mut self, target: OwnerId, velocity: Vec3) {
+        if let Some(peer) = self.peers.get_mut(&target)
+            && peer.combat.alive
+        {
+            let current = Vec3::from(peer.player.state().velocity);
+            peer.player.push(velocity - current);
+        }
+    }
+
+    /// `openWrenchDlg` / `openPrintSelectorDlg`: remember the brick for the
+    /// dialog's later commands and tell only this player to open it.
+    fn open_inspection(&mut self, owner: OwnerId, id: BrickId, mode: InspectMode) {
+        let brick = self.simulation.state().bricks[&id].clone();
+        let Some(peer) = self.peers.get_mut(&owner) else {
+            return;
+        };
+        peer.inspection = Some(Inspection {
+            id,
+            mode,
+            original: brick.clone(),
+            wrench_original: (mode == InspectMode::Wrench).then(|| brick.clone()),
+        });
+        self.notify(
+            owner,
+            Notice::Inspected {
+                brick_id: id,
+                brick: Box::new(brick),
+                mode,
+            },
+        );
+    }
+
+    /// The tool projectile's explosion (`hammerProjectile` and friends are
+    /// spawned at the hit and explode on their first tick).
+    fn tool_explosion(
+        &mut self,
+        owner: OwnerId,
+        definition: &str,
+        position: Vec3,
+        direction: Option<Vec3>,
+        scale: f32,
+    ) {
+        self.cues.emit(
+            self.simulation.state().tick,
+            crate::presentation::CueKind::WeaponEffect {
+                source: TargetId::Actor(ActorId(owner)),
+                definition: definition.into(),
+                node: String::new(),
+                seconds: 0.0,
+                image: None,
+                hand: None,
+                direction: direction.map(|d| d.to_array()),
+                scale,
+            },
+            position.to_array(),
+        );
+    }
+    /// `ServerPlay3D`.
+    fn tool_sound(&mut self, profile: &str, position: Vec3) {
+        self.cues.emit(
+            self.simulation.state().tick,
+            crate::presentation::CueKind::WeaponSound {
+                profile: profile.into(),
+            },
+            position.to_array(),
+        );
+    }
+
+    /// Nearest hit for a stock tool ray; never the swinger's own body or the
+    /// vehicle they ride.
+    fn tool_ray(
+        &self,
+        owner: OwnerId,
+        start: Vec3,
+        dir: Vec3,
+        range: f32,
+        reach: Reach,
+    ) -> Result<Option<ToolHit>> {
+        use rapier3d::prelude::*;
+        let mut best: Option<(f32, ToolHit)> = None;
+        let consider = |best: &mut Option<(f32, ToolHit)>, distance: f32, hit: ToolHit| {
+            if best.is_none_or(|(d, _)| distance < d) {
+                *best = Some((distance, hit));
+            }
+        };
+        if let Some(hit) = self.simulation.target_bricks_always(start, dir, range)?
+            && (reach != Reach::Bricks || hit.brick.is_some())
+        {
+            consider(
+                &mut best,
+                hit.distance,
+                ToolHit {
+                    target: hit.brick.map_or(TargetId::Map(0), TargetId::Brick),
+                    position: hit.position,
+                    normal: hit.normal,
+                },
+            );
+        }
+        if reach == Reach::Melee {
+            let own = (1u128 << 64) | u128::from(owner);
+            let riding = self
+                .mounted(owner)
+                .map(|(v, _)| vehicles::VEHICLE_TAG | u128::from(v));
+            let predicate = |_: ColliderHandle, c: &Collider| {
+                let kind = c.user_data >> 64;
+                (kind == 1 || kind == 2) && c.user_data != own && Some(c.user_data) != riding
+            };
+            let ray = Ray::new(
+                Vector::from_array(start.to_array()),
+                Vector::from_array(dir.to_array()),
+            );
+            if let Some((handle, hit)) = self
+                .simulation
+                .physics
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .exclude_sensors()
+                        .predicate(&predicate),
+                )
+                .cast_ray_and_get_normal(&ray, range, true)
+            {
+                let tag = self.simulation.physics.colliders[handle].user_data;
+                let target = if tag >> 64 == 1 {
+                    TargetId::Actor(ActorId(tag as u64))
+                } else {
+                    TargetId::Vehicle(tag as u64)
+                };
+                consider(
+                    &mut best,
+                    hit.time_of_impact,
+                    ToolHit {
+                        target,
+                        position: start + dir * hit.time_of_impact,
+                        normal: Vec3::from_array(hit.normal.to_array()),
+                    },
+                );
+            }
+        }
+        let terrain = match reach {
+            Reach::Wrench => true,
+            Reach::Melee => best.is_none(),
+            Reach::Bricks => false,
+        };
+        if terrain && let Some((distance, normal)) = self.simulation.terrain_ray(start, dir, range)
+        {
+            consider(
+                &mut best,
+                distance,
+                ToolHit {
+                    target: TargetId::Map(0),
+                    position: start + dir * distance,
+                    normal,
+                },
+            );
+        }
+        Ok(best.map(|(_, hit)| hit))
+    }
+
+    /// Dialog commands act on the brick the wrench or printer last hit
+    /// (`%client.wrenchBrick` / `%client.printBrick`), wherever the player
+    /// has moved since.
+    pub(super) fn tool_action(&mut self, owner: OwnerId, action: ToolAction) -> Result<Reply> {
         let required = match &action {
             ToolAction::UndoPlant => None,
-            ToolAction::Hammer => Some(Some(bri_weapons::CORE_TOOLS[0])),
-            ToolAction::Inspect {
-                mode: InspectMode::Printer,
-            }
-            | ToolAction::SetPrint { .. } => Some(Some(bri_weapons::CORE_TOOLS[2])),
+            ToolAction::SetPrint { .. } => Some(bri_weapons::CORE_TOOLS[2]),
             ToolAction::Inspect { .. }
             | ToolAction::SetWrench { .. }
             | ToolAction::SetEvents { .. }
-            | ToolAction::RespawnVehicle { .. } => Some(Some(bri_weapons::CORE_TOOLS[1])),
-            ToolAction::Paint { .. }
-            | ToolAction::ColorEffect { .. }
-            | ToolAction::ShapeEffect { .. } => Some(None),
+            | ToolAction::RespawnVehicle { .. } => Some(bri_weapons::CORE_TOOLS[1]),
         };
         if let Some(required) = required {
-            inventory::require_equipment(&self.weapons, owner, required)?;
+            inventory::require_equipment(&self.weapons, owner, Some(required))?;
         }
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         if action == ToolAction::UndoPlant {
@@ -295,90 +854,49 @@ impl Session {
             }
             return Ok(Reply::Undone(None));
         }
-        let range = match action {
-            ToolAction::Hammer => {
-                if direction.y < -0.9 {
-                    5.5
-                } else {
-                    5.0
-                }
-            }
-            // Bounded initial targeting adapter: original spray projectile is
-            // 20 units/s for 400ms; FX uses 525ms. This is not flight simulation.
-            ToolAction::Paint { .. } => 8.0,
-            ToolAction::ColorEffect { .. } | ToolAction::ShapeEffect { .. } => 10.5,
-            _ => 10.0,
+        let id = peer
+            .inspection
+            .as_ref()
+            .map(|i| i.id)
+            .context("Hit a brick with the tool first")?;
+        let Some(brick) = self.simulation.state().bricks.get(&id) else {
+            peer.inspection = None;
+            anyhow::bail!("Brick no longer exists");
         };
-        let id = self
-            .simulation
-            .target_bricks_always(peer.player.eye(), direction, range)?
-            .and_then(|hit| hit.brick)
-            .context("Tool target is out of reach or obstructed")?;
-        let brick = &self.simulation.state().bricks[&id];
         ensure!(
             peer.actor.administrator || (owner != 0 && brick.owner == owner),
             "Brick edit denied"
         );
         if let ToolAction::Inspect { mode } = action {
-            if mode == InspectMode::Printer {
-                self.tool_catalog.print_aspect(brick)?;
-            }
+            // The events dialog opens from the wrench dialog of the same brick.
+            ensure!(
+                mode == InspectMode::Events,
+                "Swing the tool at a brick to inspect it"
+            );
+            let wrench_original = peer
+                .inspection
+                .as_ref()
+                .and_then(|i| i.wrench_original.clone())
+                .context("Open the wrench dialog first")?;
             peer.inspection = Some(Inspection {
                 id,
                 mode,
                 original: brick.clone(),
-                wrench_original: if mode == InspectMode::Wrench {
-                    Some(brick.clone())
-                } else if mode == InspectMode::Events {
-                    peer.inspection
-                        .as_ref()
-                        .filter(|previous| previous.id == id)
-                        .and_then(|previous| previous.wrench_original.clone())
-                } else {
-                    None
-                },
+                wrench_original: Some(wrench_original),
             });
-            let reply = Reply::Inspected {
+            return Ok(Reply::Inspected {
                 brick_id: id,
                 brick: Box::new(brick.clone()),
                 mode,
-            };
-            if mode == InspectMode::Wrench {
-                self.cues.emit(
-                    self.simulation.state().tick,
-                    crate::presentation::CueKind::WrenchHit,
-                    brick.position,
-                );
-            }
-            return Ok(reply);
+            });
         }
         if let ToolAction::RespawnVehicle { brick: expected } = action {
-            ensure!(id == expected, "Vehicle spawn brick is out of reach");
+            ensure!(id == expected, "Vehicle spawn brick is no longer inspected");
             peer.inspection = None;
             self.respawn_vehicle_brick(id)?;
             return Ok(Reply::Accepted);
         }
-        if action == ToolAction::Hammer {
-            let position = brick.position;
-            self.simulation.remove(&peer.actor, id)?;
-            peer.inspection = None;
-            self.dirty.insert(id);
-            self.cues.emit(
-                self.simulation.state().tick,
-                crate::presentation::CueKind::HammerHit,
-                position,
-            );
-            self.cues.emit(
-                self.simulation.state().tick,
-                crate::presentation::CueKind::Break,
-                position,
-            );
-            return Ok(Reply::Accepted);
-        }
-        let (edit, dialog) = match action {
-            ToolAction::Paint { color } => (Edit::Action(Action::Color(color)), None),
-            ToolAction::ColorEffect { effect } => (Edit::Action(Action::ColorEffect(effect)), None),
-            ToolAction::ShapeEffect { effect } => (Edit::ShapeEffect(effect), None),
+        let (edit, expected, mode) = match action {
             ToolAction::SetPrint {
                 brick: expected,
                 print,
@@ -386,51 +904,40 @@ impl Session {
                 self.tool_catalog.print_aspect(brick)?;
                 (
                     Edit::Print(print.map(ContentRef::Resolved)),
-                    Some((expected, InspectMode::Printer)),
+                    expected,
+                    InspectMode::Printer,
                 )
             }
             ToolAction::SetWrench {
                 brick: expected,
                 properties,
-            } => (
-                Edit::Properties(properties),
-                Some((expected, InspectMode::Wrench)),
-            ),
+            } => (Edit::Properties(properties), expected, InspectMode::Wrench),
             ToolAction::SetEvents {
                 brick: expected,
                 events,
-            } => (Edit::Events(events), Some((expected, InspectMode::Events))),
+            } => (Edit::Events(events), expected, InspectMode::Events),
             _ => unreachable!(),
         };
-        if let Some((expected, mode)) = dialog {
-            ensure!(
-                id == expected,
-                "Inspected brick is out of reach or obstructed"
-            );
-            let inspection = peer
-                .inspection
-                .as_ref()
-                .context("Inspect the brick before editing")?;
-            ensure!(
-                inspection.id == id
-                    && (inspection.mode == mode
-                        || (mode == InspectMode::Wrench
-                            && inspection.mode == InspectMode::Events
-                            && inspection.wrench_original.is_some())),
-                "Inspection does not match this edit"
-            );
-            ensure!(
-                (if mode == InspectMode::Wrench {
-                    inspection
-                        .wrench_original
-                        .as_ref()
-                        .unwrap_or(&inspection.original)
-                } else {
-                    &inspection.original
-                }) == brick,
-                "Brick changed since inspection; inspect it again"
-            );
-        }
+        ensure!(id == expected, "Inspected brick changed; hit it again");
+        let inspection = peer.inspection.as_ref().unwrap();
+        ensure!(
+            inspection.mode == mode
+                || (mode == InspectMode::Wrench
+                    && inspection.mode == InspectMode::Events
+                    && inspection.wrench_original.is_some()),
+            "Inspection does not match this edit"
+        );
+        ensure!(
+            (if mode == InspectMode::Wrench {
+                inspection
+                    .wrench_original
+                    .as_ref()
+                    .unwrap_or(&inspection.original)
+            } else {
+                &inspection.original
+            }) == brick,
+            "Brick changed since inspection; inspect it again"
+        );
         self.tool_catalog.validate_edit(brick, &edit)?;
         self.item_spawners
             .validate_edit(self.simulation.state(), id, &edit)?;

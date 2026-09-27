@@ -53,7 +53,7 @@ fn load() -> Pack {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/weapons-pack-003/weapons.json")
+                .join("../../content/weapons-pack-005/weapons.json")
         });
     Pack::from_json(&std::fs::read(path).expect("Run documented importer first")).unwrap()
 }
@@ -824,6 +824,7 @@ fn projectile_event_bounce_and_redirect_preserve_source_limits() {
         velocity: Vec3::NEG_Z * 90.0,
         normal: Vec3::Z,
         scale: 1.0,
+        paint: None,
     };
     assert_eq!(
         redirected_velocity(&impact, ContactResponse::Bounce(2.0)).unwrap(),

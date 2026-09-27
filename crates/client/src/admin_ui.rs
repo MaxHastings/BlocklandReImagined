@@ -51,6 +51,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::Unban => ui::AdminFeature::Unban,
                 Capability::ClearBricks => ui::AdminFeature::ClearBricks,
                 Capability::AdminPassword => ui::AdminFeature::AdminPassword,
+                Capability::DestructoWand => ui::AdminFeature::Wand,
             })
             .collect(),
         players: snapshot
@@ -110,6 +111,7 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
             Action::ClearBrickGroup { group: *group },
         ),
         ui::AdminAction::ClearAllBricks => (Capability::ClearBricks, Action::ClearAllBricks),
+        ui::AdminAction::Wand => (Capability::DestructoWand, Action::DestructoWand),
         ui::AdminAction::SetPassword {
             slot: ui::AdminPasswordSlot::Admin,
             password,

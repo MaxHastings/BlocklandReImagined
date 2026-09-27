@@ -13,7 +13,7 @@ use bri_sim::{
     ghost,
     grid::{self, Bounds, Index},
     player::{PlayerState, PlayerTuning},
-    session::{Command, InspectMode, ToolAction, ToolInventory},
+    session::{Command, ToolAction, ToolInventory},
     simulation::Hit,
 };
 use bri_ui::api::{GameAction, HeldControl, IconRef, ToolInfo, UiAction, UiUpdate};
@@ -59,6 +59,9 @@ pub struct Building {
     pending_equipment: BTreeMap<u64, (Option<usize>, Equipment)>,
     active_tool: Option<usize>,
     weapon_fire_down: bool,
+    /// The server shows an image in this player's right hand (for example
+    /// a ball picked up without a tool slot), so fire goes to its trigger.
+    held_image: bool,
     fire_request: u64,
     tool_catalog_installed: bool,
     latest_equipment_request: u64,
@@ -101,6 +104,7 @@ impl Building {
             pending_equipment: BTreeMap::new(),
             active_tool: None,
             weapon_fire_down: false,
+            held_image: false,
             fire_request: 0,
             tool_catalog_installed: false,
             latest_equipment_request: 0,
@@ -323,6 +327,10 @@ impl Building {
     }
     pub fn equipment(&self) -> &Equipment {
         &self.equipment
+    }
+    /// Replicated right-hand image for the local player.
+    pub fn set_held_image(&mut self, held: bool) {
+        self.held_image = held;
     }
 
     pub fn initial_updates(&self) -> Vec<UiUpdate> {
@@ -780,7 +788,8 @@ impl Building {
                 );
                 self.paint = *color as u8;
                 self.equipment = Equipment::Paint(self.paint);
-                out.commands.push(Command::EquipTool { slot: None });
+                self.active_tool = None;
+                out.commands.push(Command::UseSprayCan { color: self.paint });
                 if let Some(ghost) = &mut self.ghost {
                     ghost.color = self.paint;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
@@ -793,7 +802,8 @@ impl Building {
                     8 => Equipment::ShapeEffect(1),
                     _ => anyhow::bail!("Unknown FX can"),
                 };
-                out.commands.push(Command::EquipTool { slot: None });
+                self.active_tool = None;
+                out.commands.push(Command::UseFxCan { fx: *fx as u8 });
             }
             UiAction::Game(GameAction::Held {
                 control: HeldControl::Fire,
@@ -802,7 +812,7 @@ impl Building {
                 if !*down && self.weapon_fire_down {
                     self.weapon_fire_down = false;
                     out.commands.push(Command::WeaponTrigger { down: false });
-                } else if *down && matches!(self.equipment, Equipment::Weapon(_)) {
+                } else if *down && (self.held_image || image_equipment(&self.equipment)) {
                     if !self.weapon_fire_down {
                         self.weapon_fire_down = true;
                         out.commands.push(Command::WeaponTrigger { down: true });
@@ -976,29 +986,18 @@ impl Building {
                 self.ghost_generation = self.ghost_generation.wrapping_add(1);
                 return Ok(());
             }
-            Equipment::Hammer => Command::Tool(ToolAction::Hammer),
-            Equipment::Wrench => Command::Tool(ToolAction::Inspect {
-                mode: InspectMode::Wrench,
-            }),
-            Equipment::Printer => Command::Tool(ToolAction::Inspect {
-                mode: InspectMode::Printer,
-            }),
-            Equipment::Wand => {
-                anyhow::bail!("Wand destruction is not connected to native gameplay yet")
-            }
-            Equipment::Weapon(_) => Command::WeaponTrigger { down: true },
-            Equipment::Paint(color) => Command::Tool(ToolAction::Paint { color: *color }),
-            Equipment::ColorEffect(effect) => {
-                Command::Tool(ToolAction::ColorEffect { effect: *effect })
-            }
-            Equipment::ShapeEffect(effect) => {
-                Command::Tool(ToolAction::ShapeEffect { effect: *effect })
-            }
-            Equipment::None => Command::Activate,
+            // Everything else is an image the server's state machine swings.
+            _ => Command::Activate,
         };
         out.commands.push(command);
         Ok(())
     }
+}
+
+/// Equipment whose fire button drives a mounted v20 image (tools, weapons,
+/// spray cans) rather than placing a brick or activating.
+fn image_equipment(equipment: &Equipment) -> bool {
+    !matches!(equipment, Equipment::None | Equipment::Brick(_))
 }
 
 fn tool_equipment(equipment: &Equipment) -> bool {

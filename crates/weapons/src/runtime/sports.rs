@@ -241,6 +241,13 @@ impl WeaponsWorld {
         }
         Ok(held)
     }
+    /// Whether the right hand holds a sports ball image.
+    pub fn holds_ball(&self, id: ActorId) -> bool {
+        self.image_state(id, 0)
+            .and_then(|(image, _)| image.projectile.as_ref())
+            .and_then(|p| self.pack.projectiles.get(p))
+            .is_some_and(|p| p.sport_image.is_some())
+    }
     /// Source Player::dropBall for death/tool/brick/spray switching. Call before retiring actor.
     pub fn drop_ball(&mut self, id: ActorId) -> Result<Option<u64>> {
         ensure!(

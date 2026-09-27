@@ -446,7 +446,7 @@ fn actual_native_weapon_bindings_and_effects() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let pack = EffectsPack::load(root.join("content/effects-runtime-pack-002"))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-003/weapons.json"),
+        root.join("content/weapons-pack-005/weapons.json"),
     )?)?);
     let mut fx = WeaponEffects::new(pack, weapons.clone(), EffectsLimits::default())?;
     fx.cues(

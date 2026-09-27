@@ -18,6 +18,7 @@ pub enum AdminCapability {
     Unban,
     ClearBricks,
     AdminPassword,
+    DestructoWand,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +189,7 @@ impl AdminRuntime {
         .collect();
         if role.is_admin() {
             supported.insert(AdminCapability::Unban);
+            supported.insert(AdminCapability::DestructoWand);
             if rows.iter().any(|row| {
                 row.durable_identity_available
                     && !row.is_owner
@@ -234,6 +236,7 @@ impl AdminRuntime {
                 | Action::ClearAllBricks
                 | Action::ClearBrickGroup { .. }
                 | Action::RequestBrickGroups
+                | Action::DestructoWand
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
                 | Action::HostSetPassword {
@@ -357,6 +360,9 @@ impl AdminRuntime {
                                 session.dirty.insert(brick);
                             }
                             changed = true;
+                        }
+                        GameplayCommand::DestructoWand => {
+                            session.use_admin_wand(actor_owner)?;
                         }
                         other => {
                             anyhow::bail!("Administration action is not implemented: {other:?}")

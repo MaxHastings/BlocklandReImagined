@@ -64,8 +64,16 @@ pub(super) fn core_runtime() -> WeaponsWorld {
 impl Session {
     /// Trusted host entry point; network callers go through sequenced commands.
     /// Switching equipment revokes any dialog capability granted by a prior hit.
+    /// v20's sports package: using a tool drops a held ball, while putting
+    /// tools away (`serverCmdUnUseTool`) keeps it in hand.
     pub fn equip_tool(&mut self, owner: OwnerId, slot: Option<usize>) -> Result<()> {
         ensure!(self.peers.contains_key(&owner), "Unknown connection");
+        if slot.is_none() && self.weapons.holds_ball(ActorId(owner)) {
+            return Ok(());
+        }
+        if slot.is_some() {
+            self.weapons.drop_ball(ActorId(owner))?;
+        }
         let previous = self
             .weapons
             .actor(ActorId(owner))
@@ -175,13 +183,4 @@ pub(super) fn require_equipment(
         .and_then(Option::as_deref);
     ensure!(selected == expected, "Required tool is not equipped");
     Ok(())
-}
-
-pub(super) fn edit_equipment(edit: &Edit) -> Option<&'static str> {
-    match edit {
-        Edit::Print(_) => Some(CORE_TOOLS[2]),
-        Edit::Action(bri_world::Action::Color(_) | bri_world::Action::ColorEffect(_))
-        | Edit::ShapeEffect(_) => None,
-        _ => Some(CORE_TOOLS[1]),
-    }
 }

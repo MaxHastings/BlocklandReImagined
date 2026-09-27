@@ -20,6 +20,9 @@ pub struct ClientAudio {
     prefs: Prefs,
     /// Music-brick loops keyed by brick: (loop id, position, voice).
     music: BTreeMap<u64, (String, [f32; 3], SoundHandle)>,
+    /// Looping image state sounds (spray hiss, push broom) keyed by
+    /// (player, hand); they play only while that state lasts.
+    image_loops: BTreeMap<(u64, u8), (String, SoundHandle)>,
 }
 
 impl ClientAudio {
@@ -81,6 +84,7 @@ impl ClientAudio {
             requested: BTreeMap::new(),
             prefs: Prefs::default(),
             music: BTreeMap::new(),
+            image_loops: BTreeMap::new(),
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -168,7 +172,11 @@ impl ClientAudio {
             | CueKind::WeaponAnimation { .. }
             | CueKind::WeaponShell { .. } => return,
             CueKind::WeaponSound { profile } => {
-                self.profile(profile, Placement::World(cue.position));
+                // A looping state sound belongs to the state, not to its
+                // entry; `sync_image_loops` owns it.
+                if !self.is_looping(profile) {
+                    self.profile(profile, Placement::World(cue.position));
+                }
                 return;
             }
             CueKind::Jump => "player.jump",
@@ -229,8 +237,46 @@ impl ClientAudio {
             }
         }
     }
+    pub fn is_looping(&self, profile: &str) -> bool {
+        self.runtime
+            .bank()
+            .resolve(profile)
+            .is_ok_and(|asset| asset.playback.looping)
+    }
+    /// Keep one loop per mounted image whose current state has a looping
+    /// sound, following its player, and stop it when the state ends.
+    pub fn sync_image_loops(&mut self, wanted: &BTreeMap<(u64, u8), (String, [f32; 3])>) {
+        let stale: Vec<_> = self
+            .image_loops
+            .iter()
+            .filter(|(key, (sound, _))| wanted.get(key).is_none_or(|(want, _)| want != sound))
+            .map(|(key, _)| *key)
+            .collect();
+        for key in stale {
+            if let Some((_, handle)) = self.image_loops.remove(&key) {
+                let result = self.runtime.stop_with_fade(handle, 0.05);
+                self.record(result);
+            }
+        }
+        for (key, (sound, position)) in wanted {
+            if let Some((_, handle)) = self.image_loops.get(key) {
+                let result = self
+                    .runtime
+                    .set_source_position(*handle, *position);
+                self.record(result);
+            } else if self.image_loops.len() < 64 {
+                match self.runtime.play(sound, Placement::World(*position)) {
+                    Ok(handle) => {
+                        self.image_loops.insert(*key, (sound.clone(), handle));
+                    }
+                    Err(error) => self.record(Err(error)),
+                }
+            }
+        }
+    }
     pub fn clear(&mut self) {
         self.music.clear();
+        self.image_loops.clear();
         self.pending.clear();
         let result = self.runtime.stop_all();
         self.record(result);

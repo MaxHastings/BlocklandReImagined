@@ -9,6 +9,9 @@ pub struct MountedImage {
     pub image: String,
     pub state: String,
     pub hand: u8,
+    /// Palette index tinting a colour spray can.
+    #[serde(default)]
+    pub paint: Option<u8>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +107,7 @@ impl Session {
                                     image: image.id.clone(),
                                     state: state.name.clone(),
                                     hand,
+                                    paint: self.weapons.image_paint(ActorId(*owner), hand),
                                 })
                         })
                         .collect();
@@ -254,8 +258,9 @@ impl Session {
                     }
                     self.notices.push_back(format!("Weapon runtime: {message}"));
                 }
+                WeaponEvent::ToolFire { actor, image, .. } => self.tool_fire(actor.0, &image)?,
                 WeaponEvent::Contact { impact } if matches!(impact.target, TargetId::Brick(_)) => {
-                    self.note_weapon_gap("projectile brick event hook", 1)
+                    self.paint_contact(&impact)?;
                 }
                 WeaponEvent::Contact { .. } => {}
                 WeaponEvent::Effect {

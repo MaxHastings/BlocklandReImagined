@@ -376,6 +376,33 @@ impl Session {
             Decision::Allow | Decision::OutsideMinigames
         )
     }
+    /// `miniGameCanDamage` for a vehicle: the minigame's answer, or `None`
+    /// when neither side is in a minigame and trust decides instead.
+    pub(super) fn vehicle_damage_decision(&self, source: OwnerId, vehicle: u64) -> Option<bool> {
+        let (owner, _) = self.vehicle_owner_and_mass(vehicle)?;
+        let peer = self.peers.get(&source)?;
+        let source = self.minigames.projectile_source(peer.combat.player).ok()?;
+        let target = mg::Target::Object {
+            kind: mg::ObjectKind::Vehicle,
+            owner: Some(mg::AccountId(owner)),
+            membership: mg::Membership::Owner,
+            spawn_brick: true,
+        };
+        match self.minigames.can_damage(source, target) {
+            Decision::OutsideMinigames => None,
+            decision => Some(decision == Decision::Allow),
+        }
+    }
+    /// Owner and datablock mass of a live vehicle.
+    pub(super) fn vehicle_owner_and_mass(&self, vehicle: u64) -> Option<(OwnerId, f32)> {
+        let world = self.vehicles.world.as_ref()?;
+        let v = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .find(|v| v.id.0 == vehicle && !v.destroyed)?;
+        Some((v.owner.0, world.definition(&v.definition)?.mass))
+    }
     pub(super) fn damage_vehicle(&mut self, vehicle: u64, amount: f32, by: OwnerId) -> Result<()> {
         if let Some(world) = &mut self.vehicles.world {
             world.damage(

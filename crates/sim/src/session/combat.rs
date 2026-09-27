@@ -81,6 +81,12 @@ pub enum Notice {
     Bottom { text: String, seconds: f32 },
     /// Invitation from a minigame owner, answered with Accept/Reject.
     Invite { game: u64, owner_name: String, title: String },
+    /// `openWrenchDlg` / `openPrintSelectorDlg` after a wrench or printer hit.
+    Inspected {
+        brick_id: bri_world::BrickId,
+        brick: Box<bri_world::Brick>,
+        mode: super::InspectMode,
+    },
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -253,7 +259,7 @@ impl Session {
     pub fn take_private_notices(&mut self) -> Vec<(OwnerId, Notice)> {
         self.private_notices.drain(..).collect()
     }
-    fn notify(&mut self, owner: OwnerId, notice: Notice) {
+    pub(super) fn notify(&mut self, owner: OwnerId, notice: Notice) {
         if self.private_notices.len() == MAX_NOTICES {
             self.private_notices.pop_front();
         }

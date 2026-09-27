@@ -15,6 +15,17 @@ pub const CORE_TOOLS: [&str; 4] = [
     "v20.weapon.printgun",
     "v20.weapon.wanditem",
 ];
+/// Images whose v20 `onFire` is a script that raycasts and acts on the hit
+/// object (`hammerImage::onFire`, `wrenchImage::onFire`, ...) instead of
+/// calling `Parent::onFire`. The runtime reports [`Event::ToolFire`] and the
+/// host performs the hit; no projectile is launched.
+pub const HOST_TOOL_IMAGES: [&str; 5] = [
+    "hammerimage",
+    "wrenchimage",
+    "printgunimage",
+    "wandimage",
+    "adminwandimage",
+];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ActorId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -123,6 +134,9 @@ pub struct ProjectileContact {
     pub velocity: Vec3,
     pub normal: Vec3,
     pub scale: f32,
+    /// Palette index of a colour spray can's paint projectile.
+    #[serde(default)]
+    pub paint: Option<u8>,
 }
 #[derive(Debug, Clone, Copy)]
 pub enum ContactResponse {
@@ -158,6 +172,12 @@ pub enum Event {
     },
     Unmounted {
         actor: ActorId,
+        hand: u8,
+    },
+    /// A [`HOST_TOOL_IMAGES`] image entered its `onFire` state.
+    ToolFire {
+        actor: ActorId,
+        image: String,
         hand: u8,
     },
     ImageState {
@@ -320,6 +340,9 @@ pub struct Projectile {
     pub stuck: bool,
     pub origin: Vec3,
     pub was_thrown: bool,
+    /// Palette index of a colour spray can's paint (`colorID`).
+    #[serde(default)]
+    pub paint: Option<u8>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Drop {
@@ -346,6 +369,9 @@ struct Equipped {
     entered: bool,
     trigger: bool,
     hand: u8,
+    /// Palette index for the derived colour spray can image.
+    #[serde(default)]
+    paint: Option<u8>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Actor {
@@ -386,6 +412,15 @@ impl WeaponsWorld {
         let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
         let image = self.pack.images.get(&equipped.image)?;
         Some((image, image.states.get(equipped.state)?))
+    }
+    /// Palette index carried by a mounted colour spray can.
+    pub fn image_paint(&self, id: ActorId, hand: u8) -> Option<u8> {
+        self.actors
+            .get(&id)?
+            .images
+            .get(hand as usize)?
+            .as_ref()?
+            .paint
     }
     pub fn actor(&self, id: ActorId) -> Option<&Actor> {
         self.actors.get(&id)
@@ -529,6 +564,35 @@ impl WeaponsWorld {
         self.actors.insert(id, a);
         Ok(())
     }
+    /// `Player::mountImage` for an image that is not an inventory item: spray
+    /// cans (`serverCmdUseSprayCan`/`UseFXCan`) and the admin wand. Like
+    /// those commands it deselects the tool slot. `paint` binds the colour
+    /// can's palette index, the native form of `color<N>SprayCanImage`.
+    pub fn mount_image(&mut self, id: ActorId, image: &str, paint: Option<u8>) -> Result<()> {
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        ensure!(self.pack.images.contains_key(image), "Unknown image");
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        for e in a.images.iter().flatten() {
+            ensure!(
+                self.pack.images[&e.image]
+                    .states
+                    .get(e.state)
+                    .is_none_or(|s| s.allow_change),
+                "Image state prevents equip"
+            );
+        }
+        let mut a = self.actors.remove(&id).unwrap();
+        self.unmount(id, &mut a);
+        self.mount(id, &mut a, image, 0);
+        if let Some(e) = &mut a.images[0] {
+            e.paint = paint;
+        }
+        self.actors.insert(id, a);
+        Ok(())
+    }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
             a.images[hand as usize] = Some(Equipped {
@@ -538,6 +602,7 @@ impl WeaponsWorld {
                 entered: false,
                 trigger: false,
                 hand,
+                paint: None,
             });
             if image.to_ascii_lowercase().contains("basketballshoot") {
                 self.events.push(Event::SportMovement {
@@ -717,6 +782,7 @@ impl WeaponsWorld {
                 stuck: false,
                 origin: position,
                 was_thrown: false,
+                paint: None,
             },
         );
         self.events.push(Event::Spawned {
@@ -813,9 +879,17 @@ impl WeaponsWorld {
         }
         for _ in 0..16 {
             let state = &image.states[e.state];
+            // A zero-timeout state that times out into itself (the wands'
+            // sparkling Ready) restarts its emitter once the emission ends
+            // rather than spinning; trigger transitions stay immediate.
+            let self_loop = state.ticks == 0 && state.timeout == Some(e.state);
             if !e.entered {
                 e.entered = true;
-                e.remaining = state.ticks;
+                e.remaining = if self_loop {
+                    ((state.emitter_seconds * TICK_HZ as f32).ceil() as u32).max(1)
+                } else {
+                    state.ticks
+                };
                 self.events.push(Event::ImageState {
                     actor: id,
                     image: image.id.clone(),
@@ -867,7 +941,7 @@ impl WeaponsWorld {
                     return false;
                 }
             }
-            if e.remaining > 0 && state.wait {
+            if e.remaining > 0 && state.wait && !self_loop {
                 return true;
             }
             let next = if !a.ammo { state.no_ammo } else { state.ammo }
@@ -880,6 +954,10 @@ impl WeaponsWorld {
             let Some(next) = next else {
                 return true;
             };
+            if self_loop && next == e.state {
+                e.entered = false;
+                return true;
+            }
             e.state = next;
             e.entered = false;
         }
@@ -920,7 +998,11 @@ impl WeaponsWorld {
             "onprefire" => {
                 if name.contains("key") {
                     self.animation(id, "shiftLeft");
-                } else if name.contains("sword") {
+                } else if name == "wrenchimage" {
+                    self.animation(id, "wrench");
+                } else if name.contains("sword")
+                    || matches!(name.as_str(), "hammerimage" | "wandimage" | "adminwandimage")
+                {
                     self.animation(id, "armattack");
                 }
             }
@@ -930,6 +1012,14 @@ impl WeaponsWorld {
                 }
             }
             "onfire" => {
+                if HOST_TOOL_IMAGES.contains(&name.as_str()) {
+                    self.events.push(Event::ToolFire {
+                        actor: id,
+                        image: image.id.clone(),
+                        hand: e.hand,
+                    });
+                    return true;
+                }
                 if name == "skiweaponimage" {
                     match a.frame.mount {
                         Mount::Other => self.events.push(Event::Diagnostic {
@@ -1116,10 +1206,9 @@ impl WeaponsWorld {
                     });
                     return true;
                 }
-                if name.contains("football")
-                    && let Some(p) = self.projectiles.get_mut(&(self.next_id - 1))
-                {
-                    p.was_thrown = true;
+                if let Some(p) = self.projectiles.get_mut(&(self.next_id - 1)) {
+                    p.was_thrown = name.contains("football");
+                    p.paint = e.paint;
                 }
                 if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearThrow");
@@ -1194,6 +1283,7 @@ impl WeaponsWorld {
                 velocity: p.velocity,
                 normal,
                 scale: p.scale,
+                paint: p.paint,
             };
             self.events.push(Event::Contact {
                 impact: contact.clone(),
