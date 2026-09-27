@@ -196,7 +196,7 @@ not mean every corresponding feature is bound into gameplay.
 
 Opus did NOT deliver a finished CDLOD renderer or runtime streaming integration.
 It delivered `content/src/terrain_field.rs`, converter terrain changes and
-terrain_bundle tooling, `physics/src/terrain.rs`, and `content/map-bundle-015`.
+map_bundle terrain placement, `physics/src/terrain.rs`, and `content/map-bundle-015`.
 Data handles height queries, holes, repetition metadata; physics has streamed
 heightfield primitives. Those modules are preserved, but App/scene/render/sim/
 server wiring and final renders/performance evidence were not delivered.

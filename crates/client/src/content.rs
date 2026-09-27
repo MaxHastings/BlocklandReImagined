@@ -71,7 +71,7 @@ impl Default for ContentConfig {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            map_bundle: "map-bundle-015".into(),
+            map_bundle: "map-bundle-016".into(),
             brick_catalog: "stock-catalog-004".into(),
             geometry: "maps-pass-003".into(),
             effects: "effects-pass-004".into(),
