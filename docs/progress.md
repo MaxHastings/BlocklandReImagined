@@ -2102,3 +2102,15 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   the model's per-material flags, not the disassembly. Evidence: `cargo test -p
   bri-client --test item_rendering` (renders
   `artifacts/spray-paint/held-spray-cans.png`) and `--lib items`.
+- 2026-09-27 Field of view. The reference v20 install (B4v21 patch) has an
+  `SliderFOV` in Advanced Graphics Options below Anisotropy, range 70-140,
+  whole degrees, writing `$pref::Player::defaultFov` (default 90); stock v20
+  only had the pref. Options now shows that row, and the camera uses the pref
+  in first and third person through main's horizontal-to-vertical conversion.
+  Zoom now starts from the saved `$Pref::player::CurrentFOV` (v20 default 10,
+  previously a hard-coded 45), wheel steps of 5 within 5-85 glide instead of
+  snapping, and mouse look scales by current FOV / 90 as in v20. Our renderer
+  honours the full 140, where Torque clamped at the datablock's 120. The FOV
+  applies on Done, not while dragging. Evidence: `cargo test -p bri-ui --lib
+  options`, `cargo test -p bri-client --lib controls`, offscreen
+  `authored_options_save_players_offscreen` (options-AdvGraphics.png).
