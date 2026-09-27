@@ -211,28 +211,24 @@ fn horse_run_jump_and_collision() {
 }
 #[test]
 fn flight_and_water_families() {
-    for name in ["magiccarpetvehicle", "flyingwheeledjeepvehicle"] {
-        let (mut v, mut w) = setup();
-        spawn(&mut v, &mut w, name, 5.);
-        mount(&mut v, &w, 0);
-        if name == "flyingwheeledjeepvehicle" {
-            v.set_energy(VehicleId(1), 100.).unwrap();
-        }
-        v.set_controls(
-            OwnerId(10),
-            OccupantId(20),
-            Controls {
-                throttle: 0.5,
-                vertical: 1.,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        step(&mut v, &mut w, 120, None);
-        let p = v.snapshot(&w).vehicles[0].transform.position;
-        println!("flight {name} {p:?}");
-        assert!(p[1] > 1. && p[2] < -1.);
-    }
+    // The Flying Wheeled Jeep has no jet lift in v20; see tests/flying_jeep.rs.
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "magiccarpetvehicle", 5.);
+    mount(&mut v, &w, 0);
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(20),
+        Controls {
+            throttle: 0.5,
+            vertical: 1.,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 120, None);
+    let p = v.snapshot(&w).vehicles[0].transform.position;
+    println!("flight magiccarpetvehicle {p:?}");
+    assert!(p[1] > 1. && p[2] < -1.);
     let (mut v, mut w) = setup();
     spawn(&mut v, &mut w, "rowboatarmor", 3.);
     mount(&mut v, &w, 0);

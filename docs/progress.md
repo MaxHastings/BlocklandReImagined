@@ -2212,3 +2212,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   resolution. Evidence: `cargo test -p bri-ui -p bri-client` (content-backed
   tests need `content/`), `ui_gallery` MainMenuGui at 1920x1080, a 20 s
   windowed startup. Needs Max's playtest: Alt+Tab, restore, Alt+Enter, Apply.
+
+
+- 2026-09-27 Flying Wheeled Jeep flies like v20. Decoded Blockland's flying
+  forces on `WheeledVehicle` from blocklandv20.exe (`updateForces` 0x5746a0,
+  `updateMove` 0x570be0, move split in `Player::processTick` 0x5b2cad) and
+  replaced the invented model: thrust below `maxForwardVel`, lift of 100 ×
+  nose speed capped at 4000, control surfaces and torques scaled by the
+  stall bite, squared mouse steering, v20's throttle-dependent steering
+  return, `rotationalDrag` + `drag`, a 200 speed cap and no jets. Details in
+  `docs/audits/vehicles.md`. Evidence: `cargo test -p bri-vehicles` (new
+  `tests/flying_jeep.rs`), `cargo clippy -p bri-vehicles --tests`. Open, not
+  changed (shared with the jeep, tank and skis): v20 applies
+  `rotationalDrag` + `drag` damping, quadratic wheel steering and the same
+  steering return to every WheeledVehicle.

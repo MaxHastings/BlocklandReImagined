@@ -57,6 +57,59 @@ const SKI_WRECK_SPEED: f32 = 20.;
 /// Steering Auto-Return (on by default in v20): released mouse steering
 /// halves every quarter second.
 const STEERING_RETURN_PER_TICK: f32 = 0.977_15;
+/// Blockland's flying forces on `WheeledVehicle` (blocklandv20.exe
+/// `WheeledVehicle::updateForces` 0x5746a0, fields registered at 0x5703ea).
+/// The pack keeps these fields only in `authored`, so they are read there.
+struct WheeledFlight {
+    max_forward: f32,
+    max_reverse: f32,
+    horizontal_surface: f32,
+    vertical_surface: f32,
+    stall: f32,
+    /// `steeringUseAutoReturn` (default on), `steeringAutoReturnRate` (0.9)
+    /// and `steeringAutoReturnMaxSpeed` (10), from the data constructor.
+    auto_return: Option<(f32, f32)>,
+}
+/// v20 caps the flying lift at 4000 whatever the datablock says (0x575382).
+const WHEELED_LIFT_CAP: f32 = 4000.;
+/// v20 rescales a wheeled vehicle faster than 200 to 199 (0x575bd5).
+const WHEELED_SPEED_CAP: f32 = 200.;
+impl WheeledFlight {
+    fn of(d: &Definition) -> Self {
+        let number = |key: &str, default: f32| {
+            d.authored
+                .get(key)
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .unwrap_or(default)
+        };
+        let auto_return = !d
+            .authored
+            .get("steeringuseautoreturn")
+            .is_some_and(|v| matches!(v.trim(), "0" | "false"));
+        Self {
+            max_forward: number("maxforwardvel", 0.),
+            max_reverse: number("maxreversevel", 0.),
+            horizontal_surface: number("horizontalsurfaceforce", 0.),
+            vertical_surface: number("verticalsurfaceforce", 0.),
+            stall: number("stallspeed", 0.),
+            auto_return: auto_return.then(|| {
+                (
+                    number("steeringautoreturnrate", 0.9),
+                    number("steeringautoreturnmaxspeed", 10.),
+                )
+            }),
+        }
+    }
+    /// How much the control surfaces bite: none below `stallSpeed`, full at
+    /// `stallSpeed + maxForwardVel`.
+    fn bite(&self, speed: f32) -> f32 {
+        if self.max_forward > 0. {
+            ((speed - self.stall) / self.max_forward).clamp(0., 1.)
+        } else {
+            0.
+        }
+    }
+}
 impl Controls {
     fn validate(self) -> Result<Self> {
         ensure!(
@@ -1055,9 +1108,22 @@ impl VehiclesWorld {
                     let damping = f.auto_input_damping.powf(25. / 96.);
                     steering.iter_mut().for_each(|x| *x *= damping);
                 }
-                for (axis, turn) in steering.iter_mut().zip(c.look_delta) {
-                    if turn == 0. {
-                        *axis *= STEERING_RETURN_PER_TICK;
+                if d.family == Family::FlyingWheeled {
+                    // WheeledVehicle::updateMove (0x570c4a): on a move with no
+                    // mouse turn, both axes return by rate × throttle share.
+                    if let Some((rate, max)) = WheeledFlight::of(d).auto_return
+                        && c.look_delta[0] == 0.
+                        && max > 0.
+                    {
+                        let share = c.throttle.abs().min(max) / max;
+                        let keep = (1. - rate * share).max(0.).powf(25. / 96.);
+                        steering.iter_mut().for_each(|x| *x *= keep);
+                    }
+                } else {
+                    for (axis, turn) in steering.iter_mut().zip(c.look_delta) {
+                        if turn == 0. {
+                            *axis *= STEERING_RETURN_PER_TICK;
+                        }
                     }
                 }
                 v.mouse_steering = steering;
@@ -1159,22 +1225,45 @@ impl VehiclesWorld {
                             v.steering = target;
                         }
                         if d.family == Family::FlyingWheeled {
-                            let force = if c.throttle >= 0. {
-                                d.thrust
-                            } else {
-                                d.reverse_thrust
-                            };
-                            b.add_force(
-                                forward * (force * c.throttle * (1. - speed.abs() / 40.).max(0.))
-                                    + up * (d.lift * speed.abs())
-                                    + Vec3::Y * (if v.jetting { d.energy.jet_force } else { 0. }),
-                                true,
-                            );
+                            let f = WheeledFlight::of(d);
+                            // Speed along the nose, either way (0x575208).
+                            let speed = speed.abs();
+                            let mut force = Vec3::ZERO;
+                            // Stock Torque jets push along the nose; v20 never
+                            // passes a rider's jet or crouch to a vehicle.
+                            if v.jetting {
+                                force += forward * d.energy.jet_force;
+                            }
+                            // Thrust only below the speed limit for its way.
+                            if c.throttle > 0. && speed < f.max_forward {
+                                force += forward * (c.throttle * d.thrust);
+                            } else if c.throttle < 0. && speed < f.max_reverse {
+                                force += forward * (c.throttle * d.reverse_thrust);
+                            }
+                            // Lift along the roof, truncated to a whole number
+                            // and capped whatever the pitch or stall.
+                            force += up * (d.lift * speed).trunc().clamp(0., WHEELED_LIFT_CAP);
+                            let bite = f.bite(speed);
+                            // Squared mouse steering over maxSteeringAngle;
+                            // a positive pitch (mouse up with v20's default
+                            // vehicle mouse invert) dips the nose.
+                            let (yaw, pitch) = (steer * steer.abs(), pitch * pitch.abs());
                             b.add_torque(
-                                -up * (steer * d.yaw_force) - right * (pitch * d.pitch_force)
-                                    + forward * (roll * d.roll_force),
+                                (-right * (pitch * d.pitch_force) - up * (yaw * d.yaw_force)
+                                    + forward * (roll * d.roll_force))
+                                    * bite,
                                 true,
                             );
+                            // Wings: sideways and roof-wise air is resisted
+                            // with the square of speed once above stall.
+                            let air = velocity.length() * bite;
+                            force -= right * (right.dot(velocity) * air * f.horizontal_surface)
+                                + up * (up.dot(velocity) * air * f.vertical_surface);
+                            b.add_force(force, true);
+                            if velocity.length() > WHEELED_SPEED_CAP {
+                                let capped = velocity.normalize() * (WHEELED_SPEED_CAP - 1.);
+                                b.set_linvel(capped, true);
+                            }
                         }
                     }
                     Family::Flying => {
@@ -1753,12 +1842,19 @@ fn prepare_spawn(
     } else {
         0.
     })
-    .linear_damping(if d.family == Family::Flying {
-        0.
-    } else {
-        d.drag * 0.05
+    .linear_damping(match d.family {
+        Family::Flying => 0.,
+        // WheeledVehicle::updateForces: container drag (the datablock's
+        // `drag`) on momentum, and `rotationalDrag` plus that drag on
+        // angular momentum.
+        Family::FlyingWheeled => d.drag / d.mass.max(0.01),
+        _ => d.drag * 0.05,
     })
-    .angular_damping(d.angular_drag)
+    .angular_damping(if d.family == Family::FlyingWheeled {
+        d.angular_drag + d.drag
+    } else {
+        d.angular_drag
+    })
     .ccd_enabled(true);
     if d.is_actor() {
         builder = builder.can_sleep(false);

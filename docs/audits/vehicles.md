@@ -66,7 +66,7 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 26 | Vehicle camera detail | `cameraMaxDist`, `cameraOffset`, `cameraTilt`, `cameraLag` | Only `cameraMaxDist` | Fixed: pivot height, tilt and lag from vehicles-pack-011 |
 | 27 | Whiteout on ski crash | `setWhiteout(time/7000)` | Not drawn | Fixed: white flash of time/7 when a tumble starts, fading one unit per second (the fade rate is inferred) |
 | 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Accepted adaptation, feel for Maxwell's playtest |
-| 29 | Flying Wheeled lift and surfaces | Blockland engine code | Approximation with the authored thrust, lift and torques | Accepted adaptation |
+| 29 | Flying Wheeled lift and surfaces | Blockland code in `WheeledVehicle::updateForces`, decoded from blocklandv20.exe (see below) | Invented model: lift grew without limit, jets pushed straight up, surfaces and stall ignored | Fixed |
 | 30 | HoverVehicle | No v20 content uses it | Not implemented | Not needed |
 
 ## How the fixes work
@@ -89,6 +89,40 @@ vehicle mouse invert, moving the mouse up dips the nose.
 the datablock's speeds, run force, jump, step height, slope limit, drag and
 buoyancy. Impulses change their velocity by impulse / mass, like
 `Player::applyImpulse`.
+
+**Flying Wheeled Jeep.** It is a `WheeledVehicle`; Blockland added flying
+forces to `WheeledVehicle::updateForces` (blocklandv20.exe 0x5746a0, fields
+registered at 0x5703ea). Each tick, after the stock tire and jet forces:
+
+- `speed` is the size of the velocity along the nose, forward or back.
+- Thrust: `forwardThrust` × throttle while throttling forward below
+  `maxForwardVel`, or `reverseThrust` × throttle backward below
+  `maxReverseVel`, along the nose.
+- Lift: `lift` × speed along the roof, truncated to a whole number and capped
+  at 4000 (hard-coded). The jeep weighs 200 × 20, so it flies level at 40.
+- Bite: `clamp((speed - stallSpeed) / maxForwardVel, 0, 1)`. Pitch, yaw and
+  roll torques (`pitchForce`, `yawForce`, `rollForce`) and both surface forces
+  scale with it, so below `stallSpeed` the controls do nothing.
+- Pitch and yaw use the squared mouse steering over `maxSteeringAngle`; roll
+  uses the strafe keys unsquared. Mouse up (with the default
+  `$Pref::Input::VehicleMouseInvert = 1`) dips the nose.
+- Surfaces: minus the sideways and roof-wise velocity components × |velocity|
+  × `horizontalSurfaceForce` / `verticalSurfaceForce` × bite. This is what
+  makes a raised nose climb.
+- Drag: angular momentum × (`rotationalDrag` + `drag`), velocity × `drag`;
+  speed over 200 is cut to 199.
+- Steering return (`WheeledVehicle::updateMove` 0x570be0, defaults from the
+  data constructor): on a move with no mouse yaw, both steering axes are
+  multiplied by 1 - 0.9 × min(|throttle|, 10) / 10. Holding a climb or turn
+  therefore takes continuous mouse motion while the throttle is held, and
+  steering does not return with the throttle released.
+- No jets: `Player::processTick` (0x5b2cad) clears the rider's jet and crouch
+  triggers before the vehicle sees the move, so `jetForce` never applies.
+  Space brakes (trigger 2). The datablock sets no engine or jet sound.
+
+The pack carries these fields only in `authored`, which the runtime reads.
+`tests/flying_jeep.rs` covers takeoff at 40, climbing on mouse down, level
+flight, turning and rolling right, stall and landing on the wheels.
 
 **Data.** vehicles-pack-011 (schema 5) adds the chase camera and seated look
 limits on top of vehicles-pack-010 (schema 4), which added `strafe_steering`, `look_pitch`
