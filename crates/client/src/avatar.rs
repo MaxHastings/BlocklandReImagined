@@ -20,6 +20,8 @@ pub struct AvatarAssets {
     pub rig: Rig,
     images: BTreeMap<String, SceneImage>,
     detail: usize,
+    /// `HorseArmor`'s horse.dts and sequences, for players of that datablock.
+    horse: Option<Box<AvatarAssets>>,
 }
 impl AvatarAssets {
     pub fn load(root: &Path) -> Result<Self> {
@@ -83,7 +85,147 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            horse: None,
         })
+    }
+    /// Load `HorseArmor`'s shape, sequence aliases and paint textures from
+    /// the vehicle pack, so a player of that datablock draws as a horse.
+    pub fn load_horse(&mut self, vehicles: &Path) -> Result<()> {
+        const HORSE: &str = "v20.vehicle.horsearmor";
+        let root = vehicles.canonicalize()?;
+        let pack = bri_vehicles::Pack::load(root.join("vehicles.json"))?;
+        let definition = pack
+            .definitions
+            .iter()
+            .find(|d| d.id == HORSE)
+            .context("Vehicle pack has no HorseArmor")?;
+        let asset = |path: &str| {
+            pack.assets
+                .iter()
+                .find(|a| a.path == path)
+                .with_context(|| format!("Undeclared vehicle asset {path}"))
+        };
+        let model = asset(&definition.model)?;
+        let shape: bri_content::shape::Shape = serde_json::from_slice(
+            &crate::items::checked_read(&root, &model.path, &model.sha256, 32 << 20)?,
+        )?;
+        shape.validate()?;
+        let mut sequences = BTreeMap::new();
+        for (key, clips) in &pack.animation_aliases {
+            let Some(alias) = key.strip_prefix(&format!("{HORSE}::")) else {
+                continue;
+            };
+            let clips = asset(clips)?;
+            let set: bri_content::shape::ClipSet = serde_json::from_slice(
+                &crate::items::checked_read(&root, &clips.path, &clips.sha256, 8 << 20)?,
+            )?;
+            // Each alias names one authored `.dsq`, holding its one sequence.
+            let clip = set
+                .animations
+                .into_iter()
+                .next()
+                .with_context(|| format!("Empty horse clip {alias}"))?;
+            sequences.insert(alias.to_ascii_lowercase(), clip);
+        }
+        let mut images = BTreeMap::new();
+        for material in &shape.materials {
+            let name = material.name.to_ascii_lowercase();
+            let texture = pack
+                .assets
+                .iter()
+                .filter(|a| a.kind == "texture")
+                .find(|a| {
+                    a.virtual_path
+                        .to_ascii_lowercase()
+                        .ends_with(&format!("/{name}.png"))
+                })
+                .with_context(|| format!("Missing horse texture {name}"))?;
+            let bytes = crate::items::checked_read(&root, &texture.path, &texture.sha256, 16 << 20)?;
+            let pixels = image::load_from_memory(&bytes)?.to_rgba8();
+            images.insert(
+                name.clone(),
+                SceneImage {
+                    label: format!("horse/{name}"),
+                    width: pixels.width(),
+                    height: pixels.height(),
+                    rgba: pixels.into_raw(),
+                    srgb: false,
+                },
+            );
+        }
+        let detail = shape
+            .details
+            .iter()
+            .position(|d| !d.collision)
+            .context("Horse has no visible detail")?;
+        let rig = Rig {
+            schema_version: self.rig.schema_version,
+            id: HORSE.into(),
+            shape,
+            sequences,
+            sources: Vec::new(),
+            omissions: Vec::new(),
+        };
+        for needed in ["root", "run", "back", "side", "crouch", "look", "headside"] {
+            ensure!(rig.sequence(needed).is_some(), "Horse lacks {needed}");
+        }
+        self.horse = Some(Box::new(Self {
+            package: self.package.clone(),
+            rig,
+            images,
+            detail,
+            horse: None,
+        }));
+        Ok(())
+    }
+    /// A player of `HorseArmor`: `ApplyBodyColors` paints the body with the
+    /// chest colour and the head black; the ski nodes stay hidden.
+    pub fn horse_mesh(&self, appearance: Appearance) -> Result<AvatarMesh> {
+        let horse = self.horse.as_deref().context("Horse model is not loaded")?;
+        let chest = appearance
+            .colors
+            .get("chest")
+            .copied()
+            .unwrap_or([1.0; 4]);
+        let outfit = Outfit {
+            nodes: [("body".into(), chest), ("head".into(), [0.0, 0.0, 0.0, 1.0])].into(),
+            face: String::new(),
+            decal: String::new(),
+            head_up: false,
+        };
+        let mut data = SceneData {
+            name: "Horse".into(),
+            ..Default::default()
+        };
+        let mut materials = Vec::new();
+        for source in &horse.rig.shape.materials {
+            let name = source.name.to_ascii_lowercase();
+            let image = data.images.len();
+            data.images.push(horse.images[&name].clone());
+            materials.push(data.materials.len());
+            data.materials
+                .push(Material::brick_overlay(format!("horse/{name}"), image));
+        }
+        let translucent_materials: Vec<_> = materials
+            .iter()
+            .map(|index| {
+                let mut material = data.materials[*index].clone();
+                material.alpha = AlphaMode::Blend;
+                let index = data.materials.len();
+                data.materials.push(material);
+                index
+            })
+            .collect();
+        let mut mesh = self.mesh_from(appearance, data, outfit, materials, translucent_materials);
+        mesh.horse = true;
+        Ok(mesh)
+    }
+    /// The rig and textures this mesh draws with.
+    fn for_mesh(&self, mesh: &AvatarMesh) -> &AvatarAssets {
+        match (&self.horse, mesh.horse) {
+            (Some(horse), true) => horse,
+            _ => self,
+        }
     }
     pub fn from_prefs(&self, prefs: &AvatarPrefs) -> Result<Appearance> {
         let mut appearance = self.package.defaults.clone();
@@ -167,7 +309,18 @@ impl AvatarAssets {
                 index
             })
             .collect();
-        Ok(AvatarMesh {
+        Ok(self.mesh_from(appearance, data, outfit, materials, translucent_materials))
+    }
+    fn mesh_from(
+        &self,
+        appearance: Appearance,
+        data: SceneData,
+        outfit: Outfit,
+        materials: Vec<usize>,
+        translucent_materials: Vec<usize>,
+    ) -> AvatarMesh {
+        AvatarMesh {
+            horse: false,
             appearance,
             data,
             gpu: None,
@@ -183,7 +336,7 @@ impl AvatarAssets {
             crouch: CrouchThread::default(),
             posed_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
-        })
+        }
     }
 }
 
@@ -204,6 +357,8 @@ impl AvatarMesh {
 }
 
 pub struct AvatarMesh {
+    /// Drawn with the `HorseArmor` rig instead of the Blockhead.
+    pub horse: bool,
     posed_nodes: Vec<Mat4>,
     model_transform: Mat4,
     pub appearance: Appearance,
@@ -367,6 +522,7 @@ impl AvatarMesh {
         self.model_transform
     }
     pub fn world_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
+        let assets = assets.for_mesh(self);
         let index = assets
             .rig
             .shape
@@ -409,6 +565,7 @@ impl AvatarMesh {
         time: f64,
         animation_input: &AvatarAnimationInput,
     ) -> Result<()> {
+        let assets = assets.for_mesh(self);
         ensure!(
             time.is_finite()
                 && [&animation_input.action, &animation_input.gesture]
@@ -614,7 +771,9 @@ impl AvatarMesh {
         player: &PlayerState,
         pose: bri_content::animation::Pose,
     ) -> Result<()> {
-        let model_transform = Mat4::from_rotation_translation(
+        // `setScale` scales the whole shape about the feet.
+        let model_transform = Mat4::from_scale_rotation_translation(
+            Vec3::splat(player.scale),
             Quat::from_rotation_y(-player.yaw),
             Vec3::from(player.feet),
         );
