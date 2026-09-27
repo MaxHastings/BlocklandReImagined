@@ -64,6 +64,7 @@ pub struct ContentConfig {
     pub item_presentation: String,
     pub vehicles: String,
     pub events: String,
+    pub tutorial: String,
 }
 impl Default for ContentConfig {
     fn default() -> Self {
@@ -85,6 +86,7 @@ impl Default for ContentConfig {
             item_presentation: "item-presentation-pack-008".into(),
             vehicles: "vehicles-pack-009".into(),
             events: "events-pack-002".into(),
+            tutorial: "tutorial-pack-001".into(),
         }
     }
 }
@@ -110,6 +112,7 @@ pub struct ContentPaths {
     pub item_presentation: PathBuf,
     pub vehicles: PathBuf,
     pub events: PathBuf,
+    pub tutorial: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +137,8 @@ pub struct LoadedMap {
     pub query_colliders: Vec<rapier3d::prelude::ColliderBuilder>,
     /// Exact terrain placements for client collision streaming and queries.
     pub terrain: Vec<std::sync::Arc<bri_content::terrain_field::TerrainField>>,
+    /// The Tutorial map's lesson zones and brick layouts.
+    pub tutorial: Option<bri_sim::tutorial::TutorialMap>,
 }
 
 pub struct ClientContent {
@@ -309,6 +314,7 @@ impl ContentPaths {
             item_presentation: package(&config.item_presentation)?,
             vehicles: package(&config.vehicles)?,
             events: package(&config.events)?,
+            tutorial: package(&config.tutorial)?,
             root,
         })
     }
@@ -356,7 +362,7 @@ impl ContentPaths {
             bri_world::World::new(entry.name.clone(), map_id.into(), palette)
         };
         let weapons = bri_net::content_identity::WeaponContent::load(&self.weapons)?;
-        let unresolved_items = weapons.resolve_world_items(&mut world)?;
+        let mut unresolved_items = weapons.resolve_world_items(&mut world)?;
         let definitions = Definitions::load(&self.brick_catalog, &self.geometry)
             .context("Loading native brick definitions")?;
         let native =
@@ -386,6 +392,20 @@ impl ContentPaths {
         let spawn_points =
             bri_sim::spawn::candidates(&simulation.physics, &native.scene, &Default::default())?;
         let spawn = spawn_points[0].to_array();
+        let tutorial = if map_id == bri_sim::tutorial::MAP_ID {
+            let (index, mut part1, mut part2) = bri_sim::tutorial::load_pack(&self.tutorial)
+                .context("Loading the tutorial pack")?;
+            unresolved_items += weapons.resolve_world_items(&mut part1)?;
+            unresolved_items += weapons.resolve_world_items(&mut part2)?;
+            Some(bri_sim::tutorial::TutorialMap::new(
+                &native.scene,
+                index,
+                part1,
+                part2,
+            )?)
+        } else {
+            None
+        };
         let mut pending_objects = native.pending_objects;
         if unresolved_items > 0 {
             pending_objects.push(format!(
@@ -400,6 +420,7 @@ impl ContentPaths {
             pending_objects,
             query_colliders,
             terrain,
+            tutorial,
         })
     }
 }

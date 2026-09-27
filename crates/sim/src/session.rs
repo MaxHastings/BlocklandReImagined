@@ -21,6 +21,8 @@ mod events;
 mod admin_world;
 mod inventory;
 mod special;
+mod tutorial;
+pub use tutorial::{Abilities, BrickHand};
 mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{VehicleInfo, VehiclePose};
@@ -155,6 +157,8 @@ pub enum Command {
     },
     /// `setControlObject(player)`: leave the admin free or spy camera.
     ControlPlayer,
+    /// The client's brick inventory state, which only it knows.
+    BrickHand(BrickHand),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatLine {
@@ -245,11 +249,14 @@ struct Peer {
     combat: combat::Combat,
     special: special::Progress,
     control: ControlObject,
+    tutorial: tutorial::Progress,
 }
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
     highlights: BTreeMap<OwnerId, admin_world::Highlight>,
+    /// Installed only on the Tutorial map.
+    tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
     vehicles: vehicles::Vehicles,
     minigames: bri_minigames::MinigamesWorld,
@@ -308,6 +315,7 @@ impl Session {
             events: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
+            tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
             minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
@@ -474,6 +482,7 @@ impl Session {
                 combat,
                 special: Default::default(),
                 control: ControlObject::Player,
+                tutorial: Default::default(),
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -588,6 +597,7 @@ impl Session {
                 combat,
                 special: Default::default(),
                 control: ControlObject::Player,
+                tutorial: Default::default(),
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -703,6 +713,7 @@ impl Session {
         {
             self.validate_event_rows(rows)?;
         }
+        self.tutorial_check(&command)?;
         let tick = self.simulation.state().tick;
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         ensure!(sequence > peer.last_sequence, "Stale/replayed command");
@@ -843,6 +854,10 @@ impl Session {
             }
             Command::TreasureStatus => {
                 self.treasure_status(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::BrickHand(hand) => {
+                self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
             }
             Command::SwitchSeat(step) => {
@@ -1018,7 +1033,7 @@ impl Session {
                     peer.last_input_tick = tick;
                     // Corpses fall and camera operators stand, ignoring controls.
                     peer.input = peer.body_input(input);
-                    peer.input
+                    peer.tutorial.abilities().apply(peer.input)
                 } else {
                     MoveInput {
                         yaw: peer.input.yaw,
@@ -1071,6 +1086,7 @@ impl Session {
         self.step_combat(impacts)?;
         self.step_specials()?;
         self.step_highlights()?;
+        self.step_tutorial()?;
         let changed = self.dirty.clone();
         self.step_events(&changed)?;
         Ok(())

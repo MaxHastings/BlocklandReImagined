@@ -83,7 +83,14 @@ struct PendingAction {
     inspection: Option<InspectMode>,
     dialog_request: bool,
 }
+/// Request ID for unsolicited state reports; their replies are not awaited.
+const REPORT_REQUEST: RequestId = RequestId::MAX;
+
 pub struct App {
+    /// Movement the server's map rules currently allow (the Tutorial's lessons).
+    abilities: bri_sim::session::Abilities,
+    /// Last brick inventory state reported to the server.
+    brick_hand: Option<bri_sim::session::BrickHand>,
     pub(crate) item_assets: Arc<crate::items::ItemAssets>,
     item_ui: crate::item_ui::ItemUi,
     world_items: crate::world_items::WorldItems,
@@ -622,6 +629,8 @@ impl App {
                 .enable_all()
                 .build()?,
             attempt: None,
+            abilities: Default::default(),
+            brick_hand: None,
             cpu_scene: None,
             cpu_terrain: Vec::new(),
             renderer: None,
@@ -726,6 +735,8 @@ impl App {
         Ok(())
     }
     fn disconnect(&mut self) {
+        self.abilities = Default::default();
+        self.brick_hand = None;
         self.foliage.clear();
         self.weather.clear();
         self.audio.clear();
@@ -1157,6 +1168,9 @@ impl App {
             session.set_vehicle_pack(vehicle_pack)?;
             session.set_event_catalog(event_catalog, event_sounds)?;
             session.set_spawn_points(loaded.spawn_points.clone())?;
+            if let Some(tutorial) = loaded.tutorial {
+                session.set_tutorial(tutorial)?;
+            }
             let mut host = server::start_with_admin_store_and_limit(
                 session,
                 ServerOptions {
@@ -1859,16 +1873,20 @@ impl App {
                         },
                         bri_sim::session::Notice::Center { text, seconds } => {
                             UiUpdate::CenterPrint {
-                                text: server_markup(&text),
+                                text: print_markup(&self.ui.core.binds, &text),
                                 seconds,
                             }
                         }
                         bri_sim::session::Notice::Bottom { text, seconds } => {
                             UiUpdate::BottomPrint {
-                                text: server_markup(&text),
+                                text: print_markup(&self.ui.core.binds, &text),
                                 seconds,
                                 hide_bar: false,
                             }
+                        }
+                        bri_sim::session::Notice::Abilities(abilities) => {
+                            self.abilities = abilities;
+                            continue;
                         }
                         bri_sim::session::Notice::Invite {
                             game,
@@ -1951,6 +1969,23 @@ impl App {
                     self.disconnect();
                     return Ok(());
                 }
+            }
+        }
+        if a.entered
+            && let Some(building) = &self.building
+        {
+            let hand = bri_sim::session::BrickHand {
+                stocked: building.inventory().iter().any(Option::is_some),
+                equipped: matches!(building.equipment(), crate::building::Equipment::Brick(_)),
+                ghost: building.ghost().is_some(),
+            };
+            // A full request queue leaves the report pending for the next frame.
+            if self.brick_hand != Some(hand)
+                && a.worker
+                    .request(REPORT_REQUEST, Command::BrickHand(hand))
+                    .is_ok()
+            {
+                self.brick_hand = Some(hand);
             }
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view)
@@ -2248,6 +2283,55 @@ fn plain_chat(text: &str) -> String {
         })
         .collect()
 }
+/// Center and bottom prints are server markup on several lines. `<key:cmd>`
+/// names the player's own binding for a command, as the Tutorial's
+/// `bindNameFix` does.
+fn print_markup(binds: &bri_ui::binds::BindMap, text: &str) -> String {
+    let mut resolved = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<key:") {
+        resolved.push_str(&rest[..start]);
+        let after = &rest[start + 5..];
+        match after.find('>') {
+            Some(end) if end <= 64 => {
+                resolved.push_str(&key_name(binds, &after[..end]));
+                rest = &after[end + 1..];
+            }
+            _ => {
+                resolved.push_str("<key:");
+                rest = after;
+            }
+        }
+    }
+    resolved.push_str(rest);
+    resolved
+        .split('\n')
+        .map(server_markup)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+/// `bindNameFix`: mouse buttons and a few keys get readable names, single
+/// letters are upper case.
+fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
+    use bri_ui::api::BindInput;
+    use bri_ui::input::MouseButton;
+    match binds.binding_of(command) {
+        Some(BindInput::Mouse(MouseButton::Left)) => "left mouse button".into(),
+        Some(BindInput::Mouse(MouseButton::Right)) => "right mouse button".into(),
+        Some(BindInput::Mouse(MouseButton::Middle)) => "middle mouse button".into(),
+        Some(BindInput::Key(chord)) => match chord.key.torque_name().as_str() {
+            "space" => "spacebar".into(),
+            "lshift" => "left shift".into(),
+            "rshift" => "right shift".into(),
+            "lalt" => "left alt".into(),
+            "ralt" => "right alt".into(),
+            key if key.chars().count() == 1 => key.to_ascii_uppercase(),
+            key => key.into(),
+        },
+        Some(_) => binds.display(command),
+        None => "(unbound)".into(),
+    }
+}
 /// Server-authored text keeps vanilla color escapes and `<bitmap:...>` icons
 /// (base UI and add-on death icons), but no other markup or control characters.
 fn server_markup(text: &str) -> String {
@@ -2417,7 +2501,7 @@ impl PlatformApp for App {
         self.controls.advance_zoom(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             let input = if alive {
-                self.controls.movement()
+                self.abilities.apply(self.controls.movement())
             } else {
                 // Corpses ignore controls; keep aim so the server agrees.
                 bri_sim::player::MoveInput {

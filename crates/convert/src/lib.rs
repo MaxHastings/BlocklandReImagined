@@ -15,6 +15,7 @@ pub mod lighting;
 pub mod mission;
 pub mod shape;
 pub mod terrain;
+pub mod tutorial;
 pub mod water;
 
 use anyhow::{Result, bail, ensure};

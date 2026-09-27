@@ -105,6 +105,8 @@ pub enum Notice {
         brick: Box<bri_world::Brick>,
         mode: super::InspectMode,
     },
+    /// Movement the player may use now; the client predicts with the same mask.
+    Abilities(super::Abilities),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

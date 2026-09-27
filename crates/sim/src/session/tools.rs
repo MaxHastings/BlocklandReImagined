@@ -404,7 +404,8 @@ impl Session {
                 self.tool_sound("hammerHitSound", hit.position);
                 match hit.target {
                     TargetId::Brick(id) => {
-                        if self.trusted_brick_edit(owner, id) {
+                        // Tutorial `noBreak` bricks survive tools.
+                        if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
                             self.tool_kill_brick(owner, id, hit.position, dir)?;
                         }
                     }
@@ -441,7 +442,8 @@ impl Session {
                 self.tool_sound("wandHitSound", hit.position);
                 match hit.target {
                     TargetId::Brick(id) => {
-                        if self.trusted_brick_edit(owner, id) {
+                        // Tutorial `noBreak` bricks survive tools.
+                        if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
                             self.tool_kill_brick(owner, id, hit.position, dir)?;
                         }
                     }
