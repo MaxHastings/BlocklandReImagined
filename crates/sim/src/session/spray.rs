@@ -120,6 +120,15 @@ impl Session {
         temp.clear_tick = tick + (seconds.clamp(0.0, 300.0) * 120.0).ceil() as u64;
     }
 
+    /// `Player::clearBurn`: a burn's black ends early; paint is left alone.
+    pub(super) fn clear_burn(&mut self, owner: OwnerId) {
+        if let Some(peer) = self.peers.get_mut(&owner)
+            && peer.temp_color.as_ref().is_some_and(|t| t.no_decal)
+        {
+            peer.temp_color = None;
+        }
+    }
+
     pub(super) fn step_temp_colors(&mut self) {
         let tick = self.simulation.state().tick;
         for (&owner, peer) in &mut self.peers {

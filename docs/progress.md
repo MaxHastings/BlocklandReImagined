@@ -1902,3 +1902,27 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   v20 (duplicate minigame loadouts no longer break respawn), and the
   Client > PlaySound event output is a private 2D `Notice::Sound`. Saves
   store fake-dead bricks as they will respawn.
+
+- 2026-09-27 held items, balls and item physics (Gameplay leftovers group).
+  Balls: `passBallCheck` catching (same minigame or both outside, alive, empty
+  hands), walking into rolling/resting ball projectiles, football/soccer
+  `onRest` items that mount on touch, `armor::onDisabled` drops the ball, the
+  minigame StartBall (a ball in loadout slot 0), `weaponSwitchSound` on every
+  pickup and `CatchFootballMessage` prints plus the in-memory record. Cause of
+  "the ball is not in my hand": basketballImage mounts on Mount8, which the
+  player shape lacks; Torque then uses the player transform, and the client
+  now does the same for every missing mount node. Script-driven arm threads
+  (`playThread(1, armReady*)`) raise both arms for LeftHandedGunImage (the
+  "left gun points down" report) and pose the balls. Dropped items fall and
+  rest on their authored box (Rapier cuboid cast, terrain by lowest corner)
+  instead of their origin. Gun casings (weapon-debris-pack-003) are finally
+  simulated and drawn. The player light shines from Mount1 (left hand; Max's
+  recollection, closed-engine attach point not verified). Wrench `BurnPlayer`
+  and `ClearBurn` apply flames and the spray thread's burn colours;
+  `onToolBreak` runs before the hammer/wand kill. Akimbo timing was checked
+  against the scripts: press fires the right gun, release fires the left (0.09 s
+  fire, 0.01 s smoke), matching v20. Evidence: `cargo test -p bri-sim --test
+  sports --test items --test tools -- --include-ignored`; offscreen App probe
+  `cargo test -p bri-client --test held_items_render --release -- --ignored`
+  (frames in `artifacts/held-items/`). Open: player types, setPlayerScale,
+  Horse Ray, pickup/drop GUI sound (one protocol bump).

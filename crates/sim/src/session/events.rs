@@ -814,8 +814,14 @@ impl EventHost<'_> {
             PlayerOp::DataBlock(_) => {}
             // `Player::BurnPlayer`/`clearBurn`: PlayerBurnImage flames for the
             // given seconds; clearing ends them at once.
-            PlayerOp::Burn { seconds } => self.burn(owner, *seconds as f32),
-            PlayerOp::ClearBurn => self.burn(owner, 0.0),
+            PlayerOp::Burn { seconds } => {
+                self.burn(owner, *seconds as f32);
+                self.session.burn_player(owner, *seconds as f32);
+            }
+            PlayerOp::ClearBurn => {
+                self.burn(owner, 0.0);
+                self.session.clear_burn(owner);
+            }
             PlayerOp::Scale(_) => {
                 return Ok(Apply::Rejected(
                     "player scaling is not available yet".into(),
