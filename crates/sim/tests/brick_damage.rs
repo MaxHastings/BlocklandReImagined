@@ -233,6 +233,28 @@ fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn() {
             );
             assert!(thrown.contains(&id), "no debris for {id}");
         }
+        // Saving now keeps the fake-dead bricks as they will respawn.
+        let shooter = s.names().into_keys().next().unwrap();
+        let Reply::Saved(build) = s
+            .command(
+                shooter,
+                7,
+                Command::SaveBuild {
+                    events: true,
+                    ownership: true,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("expected a saved build")
+        };
+        assert!(
+            build
+                .world
+                .bricks
+                .values()
+                .all(|b| b.visible && b.colliding && b.raycast)
+        );
         // The minigame's brick respawn time brings them back.
         let mut back = false;
         for _ in 0..(120 * 60) {

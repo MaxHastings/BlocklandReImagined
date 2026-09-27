@@ -874,14 +874,24 @@ impl Session {
                 self.equip_tool(owner, slot)?;
                 Ok(Reply::Accepted)
             }
-            Command::SaveBuild { events, ownership } => Ok(Reply::Saved(Box::new(
-                bri_world::build::SavedBuild::capture(
-                    self.simulation.state(),
+            Command::SaveBuild { events, ownership } => {
+                // A blown-up brick is only fake-dead; v20 saves it as it will
+                // respawn, not hidden.
+                let mut world = self.simulation.state().clone();
+                for id in self.events.respawns.keys() {
+                    if let Some(b) = world.bricks.get_mut(id) {
+                        b.visible = true;
+                        b.raycast = true;
+                        b.colliding = true;
+                    }
+                }
+                Ok(Reply::Saved(Box::new(bri_world::build::SavedBuild::capture(
+                    &world,
                     self.ownership_scope.clone(),
                     events,
                     ownership,
-                )?,
-            ))),
+                )?)))
+            }
             Command::LoadBuild { build, ownership } => {
                 let plan = bri_world::build::LoadPlan::prepare(
                     self.simulation.state(),

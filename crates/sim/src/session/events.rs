@@ -668,8 +668,11 @@ impl EventHost<'_> {
             BrickOp::RespawnVehicle | BrickOp::RecoverVehicle => {
                 self.session.respawn_vehicle_brick(brick)?
             }
+            // `fxDTSBrick::playSound` is silent while the brick is fake-dead.
             BrickOp::PlaySound(sound) => {
-                if let Some(profile) = sound.clone() {
+                if let Some(profile) = sound.clone()
+                    && !self.session.events.respawns.contains_key(&brick)
+                {
                     self.session.cues.emit(
                         tick,
                         crate::presentation::CueKind::WeaponSound { profile },

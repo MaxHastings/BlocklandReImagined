@@ -30,6 +30,12 @@ Ranked by what a player would hit first.
   noted, not fatal. (`crates/sim/src/session/combat.rs`)
 - **Event-driven minigame reset was silent.** `MiniGame > Reset` from a brick
   now sends "*name* reset the mini-game" like the owner's Reset button.
+- **Saving during a blast hid bricks forever.** A fake-killed brick is marked
+  invisible and non-colliding until it respawns, and Save Bricks wrote those
+  flags. Saves now store fake-dead bricks as they will respawn.
+  (`crates/sim/src/session.rs`)
+- **Brick PlaySound played on fake-dead bricks.** v20 returns while the brick
+  is fake-dead; ours now does too.
 
 ## Still open, highest first
 
@@ -89,8 +95,10 @@ Ranked by what a player would hit first.
 12. **Recently-F8'd players are not protected.** v20 skips projectile
     collisions and explosions for 3 s, and item pickups for 5 s, after a
     minigame player uses the drop-at-camera key (`lastF8Time`). Minor.
-13. **Brick PlaySound plays on fake-dead bricks.** v20 returns when
-    `getFakeDeadTime() > 120`. Minor.
+13. **Respawn resets event visibility.** `respawn_brick` sets rendering,
+    ray casting and colliding all true, so a brick an event had hidden
+    reappears after a blast. v20 keeps fake death separate from those flags.
+    Minor.
 14. **Missing v20 dialogs**, not verified in depth: `TrustInviteGui`,
     `JoinServerPassGui`, `LoadBricksColorGui` and `saveBricksWarningGui` have
     no native screen.
