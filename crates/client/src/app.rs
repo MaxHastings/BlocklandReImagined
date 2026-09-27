@@ -1092,7 +1092,7 @@ impl App {
                 ..Default::default()
             };
             mount_meshes.get_mut(&info.id).unwrap().pose_with_animation(
-                &avatar_assets,
+                avatar_assets,
                 &state,
                 animation_time,
                 &input,
