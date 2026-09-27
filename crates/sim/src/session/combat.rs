@@ -598,7 +598,16 @@ impl Session {
 
     /// Minigame team chat (`serverCmdTeamMessageSent`).
     pub(super) fn team_chat(&mut self, owner: OwnerId, name: &str, text: &str) -> Result<()> {
-        let game = self.game_of(owner).context("You are not in a mini-game")?;
+        let Some(game) = self.game_of(owner) else {
+            self.notify(
+                owner,
+                Notice::Chat(format!(
+                    "{}Team chat disabled - You are not in a mini-game.",
+                    color_code(5)
+                )),
+            );
+            return Ok(());
+        };
         // Private-use escapes are color codes; strip any the sender typed.
         let clean: String = text
             .chars()
@@ -613,7 +622,14 @@ impl Session {
         self.chat_game(
             Some(game),
             None,
-            format!("{}{name}{}: {clean}", color_code(7), color_code(4)),
+            // `'\c7%1\c3%2\c7%3\c4: %4'`: clan prefix, name, clan suffix.
+            format!(
+                "{}{}{name}{}{}: {clean}",
+                color_code(7),
+                color_code(3),
+                color_code(7),
+                color_code(4)
+            ),
         );
         Ok(())
     }

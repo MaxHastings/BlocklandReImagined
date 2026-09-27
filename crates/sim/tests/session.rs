@@ -1178,8 +1178,9 @@ fn chat_talks_on_thread_three_for_fifty_ms_per_character() {
     assert!(talk(&mut s).is_empty());
     s.step().unwrap();
     assert_eq!(talk(&mut s), ["root"]);
-    // `serverCmdTeamMessageSent` talks before it looks for a team.
-    assert!(s.command(a, 2, Command::TeamChat("hi".into())).is_err());
+    // `serverCmdTeamMessageSent` talks before it looks for a team; outside a
+    // mini-game it only tells the sender team chat is disabled.
+    s.command(a, 2, Command::TeamChat("hi".into())).unwrap();
     assert_eq!(talk(&mut s), ["talk"]);
     for _ in 0..13 {
         s.step().unwrap();
@@ -1506,4 +1507,103 @@ fn drop_player_at_camera_lands_at_the_camera_like_v20() {
     s.command(admin, 7, Command::DropPlayerAtCamera(None)).unwrap();
     assert!(s.is_alive(admin));
     assert_eq!(s.vitals()[&admin].control, ControlObject::Player);
+}
+
+#[test]
+fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
+    use bri_admin::{Action, BanDuration, ConnectionId, Principal, Request};
+    use bri_sim::{presentation::CueKind, session::Notice};
+
+    let mut s = session();
+    let host = s
+        .join_verified("Host".into(), Vec3::Y, true, Some(Principal([1; 32])))
+        .unwrap();
+    let bob = s
+        .join_verified("Bob".into(), Vec3::new(4., 1., 0.), false, Some(Principal([2; 32])))
+        .unwrap();
+    let chat = |n: &[(u64, Notice)], to: u64| -> Vec<String> {
+        n.iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Chat(text) if *o == to => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let joined = s.take_private_notices();
+    assert_eq!(
+        chat(&joined, host),
+        [
+            "\u{E002}Welcome to Blockland Host.",
+            "\u{E002}Host has become Super Admin (Host)",
+            "\u{E001}Bob connected.",
+            "\u{E001}Bob spawned.",
+        ]
+    );
+    assert_eq!(chat(&joined, bob), ["\u{E002}Welcome to Blockland Bob."]);
+
+    // `chatMessageTeam` outside a mini-game.
+    s.command(bob, 1, Command::TeamChat("hi".into())).unwrap();
+    assert_eq!(
+        chat(&s.take_private_notices(), bob),
+        ["\u{E005}Team chat disabled - You are not in a mini-game."]
+    );
+
+    // `Player::emote`: /bsd's explosion plays at the m.dts eye node.
+    s.take_cues();
+    s.command(bob, 2, Command::Emote("bsd".into())).unwrap();
+    s.command(bob, 3, Command::Emote("hug".into())).unwrap();
+    let cues = s.take_cues();
+    let bsd = cues
+        .iter()
+        .find(|c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if definition == "BSDExplosion"))
+        .expect("BSD explosion cue");
+    let feet = s.snapshot().players.iter().find(|p| p.owner == bob).unwrap().feet;
+    assert!((bsd.position[1] - feet[1] - 2.156).abs() < 1e-4);
+    assert!(cues
+        .iter()
+        .any(|c| matches!(&c.kind, CueKind::Emote { actor, name } if *actor == bob && name == "hug")));
+
+    let connection = |s: &Session, name: &str| {
+        ConnectionId(
+            s.admin_state(host)
+                .unwrap()
+                .players
+                .into_iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .connection,
+        )
+    };
+    let target = connection(&s, "Bob");
+    s.command(host, 1, Command::Admin(Request::new(Action::Kick { target })))
+        .unwrap();
+    assert_eq!(
+        chat(&s.take_private_notices(), host),
+        ["\u{E003}Host\u{E002} kicked \u{E003}Bob"]
+    );
+    s.disconnect(bob).unwrap();
+    s.take_private_notices();
+
+    let cat = s
+        .join_verified("Cat".into(), Vec3::new(8., 1., 0.), false, Some(Principal([3; 32])))
+        .unwrap();
+    s.take_private_notices();
+    let target = connection(&s, "Cat");
+    s.command_with_aim_and_admin_persistence(
+        host,
+        2,
+        Command::Admin(Request::new(Action::Ban {
+            target,
+            duration: BanDuration::Minutes(5),
+            reason: "griefing".into(),
+        })),
+        None,
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(
+        chat(&s.take_private_notices(), host),
+        ["\u{E003}Host\u{E002} banned \u{E003}Cat\u{E002} (ID: 03030303) for 5 minutes - \u{E002}\"griefing\""]
+    );
+    let _ = cat;
 }

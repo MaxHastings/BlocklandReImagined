@@ -528,3 +528,18 @@ fn teleports_sparkle_briefly_and_camera_orbs_follow_the_stream() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn image_emitters_eject_along_the_image_forward_axis() {
+    // `ShapeBase::updateImageState` emits along column 1 (source +Y): a
+    // head-slot emote sprays forward (native -Z), and HateImage's
+    // `rotation = "1 0 0 -90"` turns its steam upward.
+    let axis = |image: &Image| {
+        let m = bri_client::actor_effects::image_emitter(Mat4::IDENTITY, image);
+        m.transform_vector3(Vec3::Y)
+    };
+    let (_, mut love) = image("LoveImage", Vec::new());
+    assert!(axis(&love).abs_diff_eq(Vec3::NEG_Z, 1e-5));
+    love.source_rotation_degrees = [-90., 0., 0.];
+    assert!(axis(&love).abs_diff_eq(Vec3::Y, 1e-5));
+}

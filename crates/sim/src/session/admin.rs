@@ -351,6 +351,40 @@ impl AdminRuntime {
             self.authority.permission(origin, &request.action)?;
             anyhow::bail!("Join password is not connected to transport admission");
         }
+        // v20's `MsgAdminForce` lines need names and the ban terms before
+        // the request is consumed.
+        let actor_name = session
+            .peers
+            .get(&owner)
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let prior_role = self.authority.role(id);
+        let ban_line = match &request.action {
+            Action::Ban {
+                target,
+                duration,
+                reason,
+            } => self
+                .connection_to_owner
+                .get(target)
+                .and_then(|victim| session.peers.get(victim))
+                .map(|victim| {
+                    let label: String = victim
+                        .principal
+                        .map(|p| p.0[..4].iter().map(|b| format!("{b:02x}")).collect())
+                        .unwrap_or_default();
+                    let (a, v) = (&actor_name, &victim.name);
+                    match duration {
+                        bri_admin::BanDuration::Forever => format!(
+                            "\u{E003}{a}\u{E002} permanently banned \u{E003}{v}\u{E002} (ID: {label}) - \u{E002}\"{reason}\""
+                        ),
+                        bri_admin::BanDuration::Minutes(m) => format!(
+                            "\u{E003}{a}\u{E002} banned \u{E003}{v}\u{E002} (ID: {label}) for {m} minutes - \u{E002}\"{reason}\""
+                        ),
+                    }
+                }),
+            _ => None,
+        };
         let passwords = &self.passwords;
         let mut candidate = self.authority.clone();
         let effects = candidate.handle(origin, request, now, |attempt| {
@@ -378,10 +412,21 @@ impl AdminRuntime {
         let mut disconnects = Vec::new();
         let mut disconnect_messages = BTreeMap::new();
         let mut changed = false;
+        if let Some(line) = ban_line {
+            session.admin_announce(line);
+        }
         for effect in effects {
             match effect {
                 Effect::Disconnect { target, reason } => {
                     if let Some(owner) = self.connection_to_owner.get(&target).copied() {
+                        // `serverCmdKick` (the LAN form: no BL_ID to show).
+                        if reason == bri_admin::DisconnectReason::Kicked {
+                            let name = session.peers.get(&owner).map(|p| p.name.clone());
+                            session.admin_announce(format!(
+                                "\u{E003}{actor_name}\u{E002} kicked \u{E003}{}",
+                                name.unwrap_or_default()
+                            ));
+                        }
                         disconnects.push(owner);
                         disconnect_messages.insert(
                             owner,
@@ -394,6 +439,19 @@ impl AdminRuntime {
                         .connection_to_owner
                         .get(&target)
                         .context("Administration role target is no longer connected")?;
+                    // `serverCmdSAD`: announced only when the level rises.
+                    if target == id && prior_role != Some(role) {
+                        let how = match role {
+                            bri_admin::Role::SuperAdmin => Some("Super Admin (Password)"),
+                            bri_admin::Role::Admin => Some("Admin (Password)"),
+                            _ => None,
+                        };
+                        if let Some(how) = how {
+                            session.admin_announce(format!(
+                                "\u{E002}{actor_name} has become {how}"
+                            ));
+                        }
+                    }
                     session.set_role(target_owner, role.is_admin())?;
                     changed = true;
                 }
@@ -405,7 +463,15 @@ impl AdminRuntime {
                     }
                     changed = true;
                 }
-                Effect::LoginRejected { attempts, .. } => {
+                Effect::LoginRejected {
+                    attempts,
+                    disconnect,
+                } => {
+                    if disconnect {
+                        session.admin_announce(format!(
+                            "\u{E003}{actor_name}\u{E002} failed to guess the admin password."
+                        ));
+                    }
                     data = AdminData::LoginRejected { attempts };
                 }
                 Effect::Gameplay { actor, command } => {

@@ -683,7 +683,13 @@ impl View {
         let Some(font) = Font::get(pack, fid) else {
             return;
         };
-        let color = style.font_color.unwrap_or(geom::BLACK);
+        // A runtime tint stands in for a profile whose `fontColor` Torque
+        // aliases to a later `fontColors[0]` (see `play::chat_base_color`).
+        let color = self.nodes[id]
+            .state
+            .tint
+            .or(style.font_color)
+            .unwrap_or(geom::BLACK);
         let mut y = r.y;
         for line in text::layout_ml(&font, text, r.w, Justify::Left) {
             let runs = text::ml_runs(&line.text);

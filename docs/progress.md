@@ -3122,3 +3122,38 @@ real integrated GPU; needs a weaker PC.
   `-p bri-client --lib building::`, `-p bri-sim` (all targets, content linked),
   `--test stock_saves_native -- --ignored` now re-plants every stock brick
   resting on a map floor (within half a plate) with no Buried/Float refusal.
+- 2026-09-27 Chat colours, emotes and slash commands. The chat HUD drew every
+  line from a `\c6` (white) prefix and player lines as plain "name: text".
+  Now player chat is v20's `'\c7%1\c3%2\c7%3\c6: %4'` (yellow name, white
+  text) and team chat `'\c7%1\c3%2\c7%3\c4: %4'` (the name was grey). Each
+  chat line starts in `BlockChatTextProfile`'s base colour, which is Torque's
+  `fontColors[0]` "255 0 64" because `fontColor` is that same field and the
+  profile assigns it last. The UI importer loses that assignment order, so
+  the chat node carries the colour as a runtime tint. Uncoloured server lines
+  such as death messages are therefore red-pink, as in v20. Colour codes
+  before a death icon were being stripped; they now survive. Added the missing
+  lines: `\c2Welcome to Blockland %1.`, `\c1%1 spawned.`, `\c2%1 has become
+  Super Admin (Host)`, Admin/Super Admin (Auto), and (Password),
+  `\c3%1\c2 failed to guess the admin password.`, kick in the LAN form (no
+  BL_ID), ban and permanent ban (with an 8-hex principal prefix standing in
+  for the BL_ID), and `\c5Team chat disabled - You are not in a mini-game.`
+  Settled the chat line spacing question: `GuiMLTextCtrl` registers
+  `lineSpacing` but its layout never reads it. `emitNewLine` advances by the
+  font height only (read in Torque3D's guiMLTextCtrl.cpp, which shares the
+  TGE lineage; this is inferred for v20, not checked against the
+  disassembly). Our layout already matches, so `lineSpacing = 12` stays unused.
+  Emotes: v20 has `/alarm /love /hate /confusion /wtf` (Emote_* add-ons) and
+  `/bsd /hug /zombie /sit` (base scripts). Added `/bsd` (BSDExplosion at the
+  eye point), `/wtf` (= confusion) and `/hug` `/zombie`
+  (`playThread(1, armReadyBoth)`, drawn with the existing armReadyBoth clip
+  until the held-arm pose changes or the player dies). `Player::emote` spawns
+  at `getEyePoint()`, which is m.dts's Eye node at 2.156 above the feet. We
+  had used the 2.4 camera-eye assumption, so the alarm "!" sat 0.24 too high.
+  Head-slot image emitters ejected along the mount's up axis. v20
+  (`ShapeBase::updateImageState`) ejects along the image's +Y column after
+  its `rotation`. Love, confusion and pain now spray forward around the face,
+  and HateImage's `rotation = "1 0 0 -90"` (already in weapons-pack-008)
+  sends its steam upward. Evidence: `cargo test -p bri-sim --test session
+  join_admin_team_chat_and_emote_lines_use_v20_colors`, `cargo test -p
+  bri-client --lib chat_lines_carry_v20_colors`, `cargo test -p bri-client
+  --test actor_effects`.

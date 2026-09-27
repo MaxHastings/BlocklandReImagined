@@ -636,8 +636,7 @@ impl ActorEffects {
         }
         let mut gone = Vec::new();
         for (slot, p) in &mut self.images {
-            let transform = pose(p.anchor)
-                .map(|m| source(m * Mat4::from_translation(Vec3::from(p.image.offset))));
+            let transform = pose(p.anchor).map(|m| source(image_emitter(m, &p.image)));
             // Burning ends at `clearBurn`; an emote ends when its emitters do.
             let cleared = p.until.is_some() && p.finished;
             p.sources.retain(|s| self.world.is_active(s.handle));
@@ -876,6 +875,19 @@ fn sync_sources<K: Ord + Copy>(
         }
     }
     Ok(())
+}
+
+/// `ShapeBase::updateImageState` emits an image's state emitters along
+/// column 1 of the image transform (the image's source +Y, native -Z) from
+/// mount * offset * rotation. A head-slot emote therefore sprays forward,
+/// and HateImage's `rotation = "1 0 0 -90"` turns its steam upward.
+pub fn image_emitter(mount: Mat4, image: &bri_weapons::Image) -> Mat4 {
+    mount
+        * Mat4::from_rotation_translation(
+            crate::items::source_euler(image.source_rotation_degrees),
+            Vec3::from(image.offset),
+        )
+        * Mat4::from_quat(Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z))
 }
 
 /// A world matrix as an emitter transform: its origin and orientation, whose

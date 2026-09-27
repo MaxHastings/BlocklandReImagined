@@ -46,9 +46,22 @@ fn chat_text(core: &Core) -> String {
     core.chat
         .visible(core.time_ms)
         .iter()
-        .map(|l| format!("\u{E006}{}", l.text))
+        .map(|l| l.text.as_str())
         .collect::<Vec<_>>()
         .join("\n")
+}
+/// Each chat line, and each run after a line wrap or a death icon, starts in
+/// `BlockChatTextProfile`'s base colour, like every `GuiMLTextCtrl` atom
+/// (`drawAtomText` resets the modulation to the style colour). Torque's
+/// `fontColor` is the same field as `fontColors[0]`, and the profile sets
+/// `fontColors[0] = "255 0 64"` after `fontColor = "0 0 0"`, so uncoloured
+/// server lines (death messages) and `\cr` show in that red.
+fn chat_base_color(core: &Core) -> Option<Rgba> {
+    core.pack
+        .data
+        .styles
+        .get(&chat_profile(core))
+        .and_then(|s| s.font_colors.first().copied().flatten())
 }
 /// `newChatText` spans the screen width and, like Torque's ML text, grows
 /// to the height of its reflowed lines.
@@ -100,10 +113,10 @@ fn title_bar(v: &mut View, r: Rect, label: &str) {
     fill(v, Rect::new(r.x + 10, r.y, r.w - 20, 18), [0, 0, 128, 128]);
     named_text(v, "HUDBrickNameProfile", r, label);
 }
-fn markup(v: &mut View, r: Rect, label: &str, style: &str) {
+fn markup(v: &mut View, r: Rect, label: &str, style: &str) -> NodeId {
     let mut c = text(style, r, label);
     c.class = "GuiMLTextCtrl".into();
-    v.add(v.root, c);
+    v.add(v.root, c)
 }
 
 /// Rebuilt in a bounded temporary view: no detached controls accumulate as
@@ -380,7 +393,8 @@ fn hud(core: &Core) -> View {
     }
     let chat = chat_text(core);
     let rect = chat_rect(core, &chat);
-    markup(&mut v, rect, &chat, &chat_profile(core));
+    let node = markup(&mut v, rect, &chat, &chat_profile(core));
+    v.nodes[node].state.tint = chat_base_color(core);
     if core.chat.scrolled_up() {
         named_text(
             &mut v,

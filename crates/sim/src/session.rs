@@ -51,8 +51,14 @@ pub use combat::{
     DEATH_PROJECTILE, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
-/// Stock emotes (`Emote_*` add-ons plus the built-in sit animation).
-pub const EMOTES: [&str; 5] = ["alarm", "confusion", "love", "hate", "sit"];
+/// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
+/// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
+/// the same `playThread(1, armReadyBoth)`).
+pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love", "sit"];
+/// Height of m.dts's `Eye` node above the feet in the root pose
+/// (avatar-rig-001), where `Player::emote` spawns its projectiles
+/// (`%player.getEyePoint()`).
+const V20_EYE_NODE: f32 = 2.156;
 pub use tools::{InspectMode, ToolAction, ToolCatalog};
 pub use undo::UNDO_QUEUE_SIZE;
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
@@ -800,24 +806,51 @@ impl Session {
         self.departed.remove(&owner);
         self.enter_world(owner)?;
         if !is_bot {
-            self.announce(owner, "connected.", "ClientJoinSound");
+            self.greet(owner, &name, role, trusted_host);
         }
         self.refresh_trust();
         self.packages_joined(owner);
         Ok(owner)
+    }
+    /// `GameConnection::startLoad` and `spawnPlayer`'s first spawn: the
+    /// default `$Pref::Server::WelcomeMessage` to the joiner, "connected."
+    /// and "spawned." to everyone else, then the auto-admin line to all.
+    fn greet(&mut self, owner: OwnerId, name: &str, role: bri_admin::Role, host: bool) {
+        self.notify(
+            owner,
+            Notice::Chat(format!("\u{E002}Welcome to Blockland {name}.")),
+        );
+        self.announce(owner, "connected.", "ClientJoinSound");
+        for other in self.human_peers_except(owner) {
+            self.notify(other, Notice::Chat(format!("\u{E001}{name} spawned.")));
+        }
+        let how = match (role, host) {
+            (bri_admin::Role::SuperAdmin, true) => "Super Admin (Host)",
+            (bri_admin::Role::SuperAdmin, false) => "Super Admin (Auto)",
+            (bri_admin::Role::Admin, _) => "Admin (Auto)",
+            _ => return,
+        };
+        self.admin_announce(format!("\u{E002}{name} has become {how}"));
+    }
+    fn human_peers_except(&self, owner: OwnerId) -> Vec<OwnerId> {
+        self.peers
+            .keys()
+            .copied()
+            .filter(|o| *o != owner && !self.bots.is_bot(*o))
+            .collect()
+    }
+    /// `MessageAll('MsgAdminForce', ...)`: a server line for everyone.
+    pub(super) fn admin_announce(&mut self, text: String) {
+        for other in self.human_peers_except(0) {
+            self.notify(other, Notice::Chat(text.clone()));
+        }
     }
     /// `MsgClientJoin` / `onDrop` lines and sounds for everyone else.
     fn announce(&mut self, owner: OwnerId, what: &str, sound: &str) {
         let Some(name) = self.peers.get(&owner).map(|p| p.name.clone()) else {
             return;
         };
-        let others: Vec<OwnerId> = self
-            .peers
-            .keys()
-            .copied()
-            .filter(|o| *o != owner && !self.bots.is_bot(*o))
-            .collect();
-        for other in others {
+        for other in self.human_peers_except(owner) {
             self.notify(other, Notice::Chat(format!("\u{E001}{name} {what}")));
             self.notify(other, Notice::Sound(sound.into()));
         }
@@ -1246,16 +1279,40 @@ impl Session {
                     peer.sitting = true;
                 }
                 let feet = peer.player.state().feet;
-                // `serverCmdAlarm`: the emote is an AlarmProjectile at the eye.
-                if name == "alarm" {
-                    let eye = peer.player.eye();
-                    let _ = self.weapons.spawn(
-                        "v20.projectile.alarmprojectile",
-                        bri_weapons::ActorId(owner),
-                        eye,
-                        Vec3::Y,
-                        1.0,
-                    );
+                let eye = if peer.player.state().crouched {
+                    peer.player.eye()
+                } else {
+                    Vec3::from(feet) + Vec3::Y * V20_EYE_NODE
+                };
+                match name.as_str() {
+                    // `serverCmdAlarm`: an AlarmProjectile at the eye point,
+                    // `initialVelocity = "0 0 1"`, exploding on death.
+                    "alarm" => {
+                        let _ = self.weapons.spawn(
+                            "v20.projectile.alarmprojectile",
+                            bri_weapons::ActorId(owner),
+                            eye,
+                            Vec3::Y,
+                            1.0,
+                        );
+                    }
+                    // `serverCmdBSD`: BSDProjectile (lifetime 10 ms) explodes
+                    // where it spawns, so its BSDExplosion plays at the eye.
+                    "bsd" => self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponEffect {
+                            source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(owner)),
+                            definition: "BSDExplosion".into(),
+                            node: String::new(),
+                            seconds: 0.0,
+                            image: None,
+                            hand: None,
+                            direction: None,
+                            scale: 1.0,
+                        },
+                        eye.to_array(),
+                    ),
+                    _ => {}
                 }
                 self.cues.emit(
                     tick,

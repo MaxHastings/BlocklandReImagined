@@ -572,6 +572,13 @@ impl App {
                 self.weapon_animation_drops = self.weapon_animation_drops.saturating_add(1);
             }
         }
+        // Sitting is replicated state (`Vitals::sitting`); `/hug` is a pose
+        // only the cue starts.
+        if let bri_sim::presentation::CueKind::Emote { actor, name } = &cue.kind
+            && name == "hug"
+        {
+            self.combat.hugging.insert(*actor, None);
+        }
         self.audio.cue(&cue);
         // The engine explosion operation looks like v20's rocket blast.
         let cue = match &cue.kind {
@@ -3455,7 +3462,7 @@ impl App {
                     let text = if line.owner == 0 {
                         server_markup(&line.text)
                     } else {
-                        format!("{}: {}", plain_chat(&line.name), plain_chat(&line.text))
+                        player_chat(&line.name, &line.text)
                     };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
@@ -3491,7 +3498,7 @@ impl App {
             {
                 while let Ok(notice) = router.try_recv() {
                     for (text, confirm) in self.host_notice(notice) {
-                        self.ui.apply_session(a.id, UiUpdate::Chat { text: plain_chat(&text) });
+                        self.ui.apply_session(a.id, UiUpdate::Chat { text: format!("\u{E006}{}", plain_chat(&text)) });
                         if let Some(update) = confirm {
                             self.ui.apply_session(a.id, update);
                         }
@@ -3704,6 +3711,16 @@ fn download_question(total: u64) -> bri_ui::api::Question {
         on_no: Some(Box::new(UiAction::CancelConnect)),
     }
 }
+/// `serverCmdMessageSent`: `'\c7%1\c3%2\c7%3\c6: %4'` with the clan
+/// prefix, name and clan suffix (no clan tags yet), so the name is yellow
+/// and the message white.
+fn player_chat(name: &str, text: &str) -> String {
+    format!(
+        "\u{E007}\u{E003}{}\u{E007}\u{E006}: {}",
+        plain_chat(name),
+        plain_chat(text)
+    )
+}
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -3766,10 +3783,21 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
 /// Server-authored text keeps vanilla color escapes and `<bitmap:...>` icons
 /// (base UI and add-on death icons), but no other markup or control characters.
 fn server_markup(text: &str) -> String {
+    // Colour escapes survive on both sides of an icon; other markup does not.
+    let escape = |text: &str| -> String {
+        text.chars()
+            .filter(|c| !c.is_control())
+            .map(|c| match c {
+                '<' => '‹',
+                '>' => '›',
+                _ => c,
+            })
+            .collect()
+    };
     let mut out = String::new();
     let mut rest = text;
     while let Some(start) = rest.find("<bitmap:") {
-        out.push_str(&plain_chat(&rest[..start]));
+        out.push_str(&escape(&rest[..start]));
         let after = &rest[start..];
         match after.find('>') {
             Some(end)
@@ -3784,22 +3812,12 @@ fn server_markup(text: &str) -> String {
                 rest = &after[end + 1..];
             }
             _ => {
-                out.push_str(&plain_chat(&after[..8]));
+                out.push_str(&escape(&after[..8]));
                 rest = &after[8..];
             }
         }
     }
-    out.push_str(
-        &rest
-            .chars()
-            .filter(|c| !c.is_control())
-            .map(|c| match c {
-                '<' => '‹',
-                '>' => '›',
-                _ => c,
-            })
-            .collect::<String>(),
-    );
+    out.push_str(&escape(rest));
     out
 }
 
@@ -3811,12 +3829,32 @@ struct CombatPresentation {
     countdown: Option<u64>,
     died_at: std::collections::BTreeMap<bri_world::OwnerId, std::time::Instant>,
     lights: std::collections::BTreeMap<bri_world::OwnerId, bool>,
+    /// `/hug` and `/zombie`: `playThread(1, armReadyBoth)` holds until the
+    /// arms change again (`Player::updateArm`, `fixArms`, unequip), kept
+    /// with the held pose it replaced (`None` until the next frame sees it).
+    hugging: std::collections::BTreeMap<bri_world::OwnerId, Option<crate::avatar::HeldToolPose>>,
     minigame_revision: u64,
     minigame_state: Option<MiniGameUiState>,
     /// Energy bar fraction last shown, in hundredths.
     energy: Option<u8>,
 }
 impl CombatPresentation {
+    fn hug_pose(
+        &mut self,
+        owner: bri_world::OwnerId,
+        held: crate::avatar::HeldToolPose,
+    ) -> crate::avatar::HeldToolPose {
+        match self.hugging.get_mut(&owner) {
+            Some(replaced @ None) => *replaced = Some(held),
+            Some(Some(replaced)) if *replaced == held => {}
+            Some(Some(_)) => {
+                self.hugging.remove(&owner);
+                return held;
+            }
+            None => return held,
+        }
+        crate::avatar::HeldToolPose::Both
+    }
     /// Corpses disappear after `$CorpseTimeoutValue` (5 s).
     fn hidden_bodies(
         &self,
@@ -4418,13 +4456,15 @@ impl PlatformApp for App {
                         }
                         Some(d.look_limits)
                     });
+                let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.rider_rotations.get(owner).copied(),
                     held_tool_pose: if dead {
+                        self.combat.hugging.remove(owner);
                         crate::avatar::HeldToolPose::None
                     } else {
-                        crate::avatar::HeldToolPose::from_mounted_images(ready_hands)
+                        self.combat.hug_pose(*owner, held)
                     },
                     action: self.avatar_actions.get(owner).cloned().filter(|_| !dead),
                     gesture: self.avatar_gestures.get(owner).cloned().filter(|_| !dead),
@@ -5126,7 +5166,11 @@ impl PlatformApp for App {
                         "clearcheckpoint" => Some(Command::ClearCheckpoint),
                         "treasurestatus" => Some(Command::TreasureStatus),
                         "wand" => Some(Command::Wand),
-                        "sit" | "love" | "hate" | "alarm" | "confusion" => {
+                        // `serverCmdWtf` and `serverCmdZombie` repeat
+                        // `/confusion` and `/hug`.
+                        "wtf" => Some(Command::Emote("confusion".into())),
+                        "zombie" => Some(Command::Emote("hug".into())),
+                        "sit" | "love" | "hate" | "alarm" | "confusion" | "bsd" | "hug" => {
                             Some(Command::Emote(name.to_ascii_lowercase()))
                         }
                         // Every other slash command goes to the host, which
@@ -6607,6 +6651,19 @@ image: "v20.image.gunimage".into(),
         assert_eq!(
             super::plain_chat("<color:ff0000>A\u{e003}B\u{e00b}C\u{e00c}\n"),
             "‹color:ff0000›ABC"
+        );
+    }
+    #[test]
+    fn chat_lines_carry_v20_colors() {
+        // `'\c7%1\c3%2\c7%3\c6: %4'`: the name is yellow, the text white.
+        assert_eq!(
+            super::player_chat("Max", "hi \u{e003}<b>"),
+            "\u{e007}\u{e003}Max\u{e007}\u{e006}: hi ‹b›"
+        );
+        // Colour escapes survive on both sides of a death icon.
+        assert_eq!(
+            super::server_markup("\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"),
+            "\u{e003}Max<bitmap:base/client/ui/ci/skull>\u{e000}!"
         );
     }
 }
