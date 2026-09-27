@@ -14,6 +14,7 @@ fn player() -> PlayerState {
         velocity: [0.0; 3],
         yaw: 0.0,
         pitch: 0.0,
+        head_yaw: 0.0,
         grounded: true,
         crouched: false,
         jetting: false,

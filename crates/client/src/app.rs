@@ -2352,6 +2352,7 @@ impl PlatformApp for App {
         let alive = self.local_alive();
         self.follow_control();
         self.controls.fly(elapsed.as_secs_f32());
+        self.controls.advance_zoom(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             let input = if alive {
                 self.controls.movement()
@@ -2373,8 +2374,9 @@ impl PlatformApp for App {
             if let Some(view) = &a.view {
                 let mounted = view.vitals.get(&view.owner).and_then(|v| v.mounted);
                 self.motion.set_mounted(mounted.is_some());
+                let head_yaw = self.controls.movement().head_yaw;
                 self.motion
-                    .present(view, self.controls.yaw, self.controls.pitch);
+                    .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
                 let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
                 self.vehicles.update(
                     &view.vehicles,

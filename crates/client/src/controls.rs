@@ -1,6 +1,6 @@
 //! Client intentions and view angles; authoritative simulation owns positions.
 use bri_sim::{
-    player::{MoveInput, PlayerState, PlayerTuning},
+    player::{MAX_FREELOOK, MoveInput, PlayerState, PlayerTuning},
     session::ControlObject,
 };
 use bri_ui::api::{GameAction, HeldControl};
@@ -15,10 +15,12 @@ pub struct Controls {
     held: BTreeSet<HeldControl>,
     pub yaw: f32,
     pub pitch: f32,
+    /// Held free look turns the head, not the body (`mHead.z`).
     free_yaw: f32,
-    free_pitch: f32,
     pub third_person: bool,
     zoom_fov: Option<f32>,
+    /// Eased zoom progress: 0 at the normal FOV, 1 fully zoomed.
+    zoom: f32,
     /// The admin camera in control, if any. The body's `yaw`/`pitch` stay
     /// where they were left while it is active.
     observer: Option<Observer>,
@@ -39,6 +41,9 @@ pub enum ObserverMode {
     /// after death.
     Orbit(OwnerId),
 }
+/// Zoom eases toward its target at this exponential rate (95% in 0.3 s),
+/// in place of the engine's timed `setFov` transition.
+const ZOOM_RATE: f32 = 10.0;
 /// Observer cameras stop just short of straight up or down.
 const OBSERVER_PITCH: f32 = FRAC_PI_2 - 0.01;
 fn wrap(a: f32) -> f32 {
@@ -51,7 +56,6 @@ impl Controls {
     pub fn release(&mut self) {
         self.held.clear();
         self.free_yaw = 0.0;
-        self.free_pitch = 0.0;
     }
     /// Returns true only for locally handled control actions.
     pub fn action(&mut self, action: &GameAction) -> bool {
@@ -64,7 +68,6 @@ impl Controls {
                 }
                 if control == HeldControl::FreeLook && !down {
                     self.free_yaw = 0.0;
-                    self.free_pitch = 0.0;
                 }
             }
             GameAction::Look { yaw, pitch } => {
@@ -88,9 +91,10 @@ impl Controls {
             observer.yaw = wrap(observer.yaw + yaw);
             observer.pitch = (observer.pitch + pitch).clamp(-OBSERVER_PITCH, OBSERVER_PITCH);
         } else if self.held(HeldControl::FreeLook) {
-            self.free_yaw = wrap(self.free_yaw + yaw);
-            self.free_pitch =
-                (self.free_pitch + pitch).clamp(-FRAC_PI_2 - self.pitch, FRAC_PI_2 - self.pitch);
+            // Only the turn is free; pitch still tilts the body's look
+            // (`Player::updateMove` always adds pitch to `mHead.x`).
+            self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
+            self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else {
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
@@ -125,7 +129,6 @@ impl Controls {
         } else {
             let (yaw, pitch) = self.view_angles();
             self.free_yaw = 0.0;
-            self.free_pitch = 0.0;
             self.observer = Some(Observer {
                 mode,
                 yaw,
@@ -216,6 +219,7 @@ impl Controls {
             right: self.axis(HeldControl::Right, HeldControl::Left) * walk,
             yaw: self.yaw,
             pitch: self.pitch,
+            head_yaw: self.free_yaw,
             jump: self.held(HeldControl::Jump),
             crouch: self.held(HeldControl::Crouch),
             jet: self.held(HeldControl::Jet),
@@ -223,7 +227,7 @@ impl Controls {
     }
     /// The body's head and eye direction, including held free-look.
     pub fn view_angles(&self) -> (f32, f32) {
-        (wrap(self.yaw + self.free_yaw), self.pitch + self.free_pitch)
+        (wrap(self.yaw + self.free_yaw), self.pitch)
     }
     /// Where the rendered camera looks: the observer's own angles while a
     /// camera has control.
@@ -231,14 +235,29 @@ impl Controls {
         self.observer
             .map_or_else(|| self.view_angles(), |o| (o.yaw, o.pitch))
     }
+    /// Ease the zoom toward whether Zoom is held; frame-rate independent.
+    pub fn advance_zoom(&mut self, seconds: f32) {
+        if !seconds.is_finite() {
+            return;
+        }
+        let target = f32::from(u8::from(self.held(HeldControl::Zoom)));
+        let step = 1.0 - (-ZOOM_RATE * seconds.clamp(0.0, 0.25)).exp();
+        self.zoom += (target - self.zoom) * step;
+        if (target - self.zoom).abs() < 1e-3 {
+            self.zoom = target;
+        }
+    }
+    /// The current FOV, between `normal` and the zoom FOV as zoom eases in.
+    /// Look sensitivity follows it through the transition.
     pub fn fov(&self, normal: f32) -> f32 {
-        if self.held(HeldControl::Zoom) {
-            self.zoom_fov.unwrap_or(45.0)
-        } else if normal.is_finite() {
+        let normal = if normal.is_finite() {
             normal.clamp(5.0, 140.0)
         } else {
             90.0
-        }
+        };
+        let zoomed = self.zoom_fov.unwrap_or(45.0);
+        let t = self.zoom * self.zoom * (3.0 - 2.0 * self.zoom);
+        normal + (zoomed - normal) * t
     }
 }
 #[cfg(test)]
@@ -274,11 +293,32 @@ mod tests {
         });
         assert_eq!(c.movement().yaw, 0.5);
         assert_ne!(c.view_angles().0, c.yaw);
+        // The head carries the free turn to everyone; pitch stays the body's.
+        assert_eq!(c.movement().head_yaw, 1.0);
+        assert!((c.movement().pitch + 0.4).abs() < 1e-6);
+        for _ in 0..10 {
+            c.action(&GameAction::Look {
+                yaw: 1.0,
+                pitch: 0.0,
+            });
+        }
+        assert_eq!(c.movement().head_yaw, MAX_FREELOOK);
         held(&mut c, HeldControl::FreeLook, false);
+        assert_eq!(c.movement().head_yaw, 0.0);
         assert_eq!(c.view_angles(), (c.yaw, c.pitch));
         held(&mut c, HeldControl::Zoom, true);
+        assert_eq!(c.fov(90.0), 90.0, "zoom eases in rather than snapping");
+        c.advance_zoom(0.05);
+        let partial = c.fov(90.0);
+        assert!(partial < 90.0 && partial > 45.0, "{partial}");
+        for _ in 0..60 {
+            c.advance_zoom(1.0 / 60.0);
+        }
         assert_eq!(c.fov(90.0), 45.0);
         held(&mut c, HeldControl::Zoom, false);
+        for _ in 0..4 {
+            c.advance_zoom(0.25);
+        }
         assert_eq!(c.fov(90.0), 90.0);
     }
     #[test]
@@ -346,6 +386,7 @@ mod tests {
             velocity: [0.0; 3],
             yaw: 0.0,
             pitch: 0.0,
+            head_yaw: 0.0,
             grounded: true,
             crouched: false,
             jetting: false,

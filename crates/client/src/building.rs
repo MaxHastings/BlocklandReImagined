@@ -1182,6 +1182,7 @@ mod tests {
             velocity: [0.0; 3],
             yaw: 0.0,
             pitch: -std::f32::consts::FRAC_PI_2,
+            head_yaw: 0.0,
             grounded: false,
             crouched: false,
             jetting: false,

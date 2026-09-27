@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 
 /// Original engine tick; v20 per-tick constants are converted with it.
 const TORQUE_TICK: f32 = 0.032;
+/// `PlayerStandardArmor.maxFreelookAngle`: how far free look turns the head.
+pub const MAX_FREELOOK: f32 = 3.0;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveInput {
@@ -19,6 +21,9 @@ pub struct MoveInput {
     pub right: f32,
     pub yaw: f32,
     pub pitch: f32,
+    /// Free-look head turn relative to the body (`mHead.z`).
+    #[serde(default)]
+    pub head_yaw: f32,
     pub jump: bool,
     pub crouch: bool,
     pub jet: bool,
@@ -39,6 +44,10 @@ impl MoveInput {
                 && self.pitch.abs() <= std::f32::consts::FRAC_PI_2,
             "Invalid look angles"
         );
+        ensure!(
+            self.head_yaw.is_finite() && self.head_yaw.abs() <= MAX_FREELOOK,
+            "Invalid head turn"
+        );
         Ok(())
     }
 }
@@ -49,6 +58,9 @@ pub struct PlayerState {
     pub velocity: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,
+    /// Free-look head turn relative to `yaw`; drives the `headside` pose.
+    #[serde(default)]
+    pub head_yaw: f32,
     pub grounded: bool,
     pub crouched: bool,
     pub jetting: bool,
@@ -276,6 +288,7 @@ impl Player {
                 velocity: [0.0; 3],
                 yaw: 0.0,
                 pitch: 0.0,
+                head_yaw: 0.0,
                 grounded: false,
                 crouched: false,
                 jetting: false,
@@ -454,6 +467,7 @@ impl Player {
         }
         self.state.yaw = input.yaw;
         self.state.pitch = input.pitch;
+        self.state.head_yaw = input.head_yaw;
         self.state.jetting = input.jet;
         let forward = Vec3::new(input.yaw.sin(), 0.0, -input.yaw.cos());
         let right = Vec3::new(input.yaw.cos(), 0.0, input.yaw.sin());
