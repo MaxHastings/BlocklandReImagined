@@ -1,7 +1,7 @@
 //! Persistent world-space rendering on the caller's device. The caller owns
 //! the swapchain/offscreen attachment, encoder and submission, so UI passes can
 //! follow this pass without another adapter/device or scene re-upload.
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Vec3};
 use std::ops::Range;
 use wgpu::util::DeviceExt;
@@ -783,6 +783,31 @@ impl GpuScene {
             batch.center = *center;
         }
         Ok(())
+    }
+}
+
+impl GpuScene {
+    /// A view drawing only `batch`, sharing this scene's GPU buffers, textures
+    /// and bind groups. Lets one uploaded mesh set carry independently
+    /// instanced parts (terrain tiles) without duplicating GPU resources.
+    pub fn batch_view(&self, batch: usize) -> Result<GpuScene> {
+        let selected = self
+            .batches
+            .get(batch)
+            .context("Scene batch view out of range")?
+            .clone();
+        Ok(GpuScene {
+            material_descriptors: self.material_descriptors.clone(),
+            image_signatures: self.image_signatures.clone(),
+            vertices: self.vertices.clone(),
+            indices: self.indices.clone(),
+            materials: self.materials.clone(),
+            batches: vec![selected],
+            material_modes: self.material_modes.clone(),
+            vertex_count: self.vertex_count,
+            index_count: self.index_count,
+            image_count: self.image_count,
+        })
     }
 }
 

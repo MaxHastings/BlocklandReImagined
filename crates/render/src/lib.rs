@@ -2,6 +2,7 @@ pub mod environment_scene;
 pub mod scene;
 pub mod scene_loader;
 pub mod shape_scene;
+pub mod terrain_scene;
 pub mod textured;
 pub mod water_scene;
 use anyhow::{Result, ensure};
