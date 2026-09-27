@@ -150,24 +150,9 @@ impl Client {
         progress: Progress,
     ) -> Result<Self> {
         progress.begin(Stage::Connecting, Unit::Steps, None);
-        let mut roots = quinn::rustls::RootCertStore::empty();
-        roots.add(certificate.to_vec().into())?;
-        let mut config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))?;
-        config.transport_config(Arc::new(transport()));
-        let ip = if address.is_ipv4() {
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-        } else {
-            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
-        };
-        let mut endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
-        endpoint.set_default_client_config(config);
-        let connection = tokio::time::timeout(
-            Duration::from_secs(10),
-            endpoint.connect(address, "blockland.local")?,
-        )
-        .await??;
+        let (endpoint, connection) = open(address, certificate).await?;
         let (mut send, mut receive) = connection.open_bi().await?;
-        codec::write_small_request(&mut send, &JoinBegin { version: VERSION }).await?;
+        codec::write_small_request(&mut send, &JoinBegin::join()).await?;
         let challenge = match codec::decode::<Message>(
             &tokio::time::timeout(
                 Duration::from_secs(10),
@@ -482,6 +467,29 @@ impl Client {
     pub fn close(&self) {
         self.connection.close(0_u32.into(), b"Client disconnect");
     }
+}
+/// A QUIC connection to the host whose certificate is `certificate`.
+pub(crate) async fn open(
+    address: SocketAddr,
+    certificate: &[u8],
+) -> Result<(quinn::Endpoint, quinn::Connection)> {
+    let mut roots = quinn::rustls::RootCertStore::empty();
+    roots.add(certificate.to_vec().into())?;
+    let mut config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))?;
+    config.transport_config(Arc::new(transport()));
+    let ip = if address.is_ipv4() {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    } else {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    };
+    let mut endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
+    endpoint.set_default_client_config(config);
+    let connection = tokio::time::timeout(
+        Duration::from_secs(10),
+        endpoint.connect(address, "blockland.local")?,
+    )
+    .await??;
+    Ok((endpoint, connection))
 }
 impl Drop for Client {
     fn drop(&mut self) {

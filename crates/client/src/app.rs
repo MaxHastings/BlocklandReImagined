@@ -1562,6 +1562,7 @@ impl App {
                     },
                     map_loader: Some(map_loader),
                     autosave: None,
+                    packages: None,
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),

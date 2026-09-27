@@ -28,6 +28,8 @@ pub enum Stage {
     StartingServer,
     /// Opening the connection: QUIC, certificate check, identity handshake.
     Connecting,
+    /// Fetching the server's packages this client lacks into its cache.
+    DownloadingPackages,
     /// Joined; the host is preparing the world to send.
     WaitingForServer,
     /// Receiving the world checkpoint.
@@ -83,6 +85,7 @@ impl Snapshot {
             Stage::LoadingMap => "LOADING MAP",
             Stage::StartingServer => "STARTING SERVER",
             Stage::Connecting => "CONNECTING",
+            Stage::DownloadingPackages => "DOWNLOADING PACKAGES",
             Stage::WaitingForServer => "WAITING FOR SERVER",
             Stage::ReceivingWorld => "RECEIVING WORLD",
             Stage::BuildingBricks => "BUILDING BRICKS",
@@ -112,7 +115,7 @@ fn grouped(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);

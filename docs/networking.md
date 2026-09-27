@@ -66,6 +66,10 @@ The runtime dependency graph contains no Torque readers.
 - Limits:64 peers, bounded channels, 64 KiB Hello, 16 MiB compressed frames,
   128 MiB decoded frames and bounded zstd window. These are working limits, not
   proven maximum-load capacity.
+- Protocol 26: a connection's `JoinBegin` names its purpose. `Download`
+  connections fetch packages before a join (see
+  `docs/architecture/packages.md`, "Distribution") and hold their own
+  admission slot: 16 in total, 2 per address.
 - Admission is budgeted per origin, so no one source can exhaust a pool that
   other players need (stress campaign W1, `docs/stress-lab/weakness-ledger.md`):
   - Connections that have not joined yet are bounded to 64 in total and 8 per

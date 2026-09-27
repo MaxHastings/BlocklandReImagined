@@ -5,7 +5,7 @@ use bri_sim::{
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-pub const VERSION: u32 = 25;
+pub const VERSION: u32 = 26;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -43,6 +43,49 @@ pub struct IdentityProof {
 #[serde(deny_unknown_fields)]
 pub struct JoinBegin {
     pub version: u32,
+    pub purpose: Purpose,
+}
+/// What a new connection is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Purpose {
+    /// Identity challenge, Hello, then the game.
+    #[default]
+    Join,
+    /// Fetch packages this client lacks; no identity, no game state.
+    Download,
+}
+impl JoinBegin {
+    pub fn join() -> Self {
+        Self {
+            version: VERSION,
+            purpose: Purpose::Join,
+        }
+    }
+}
+/// Largest object range one download request may ask for.
+pub const MAX_OBJECT_CHUNK: u32 = 1024 * 1024;
+/// Requests of a download connection (`Purpose::Download`), answered in
+/// order with one [`DownloadReply`] each.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum DownloadRequest {
+    /// The shared and client packages the server loads.
+    Environment,
+    /// The file listing of one offered package, by package hash.
+    Listing { hash: String },
+    /// Bytes of one file of an offered package, by file hash.
+    Object {
+        sha256: String,
+        offset: u64,
+        length: u32,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadReply {
+    Environment(Vec<bri_package::environment::PackageRef>),
+    Listing(Box<bri_package::sync::Listing>),
+    Object(#[serde(with = "serde_bytes")] Vec<u8>),
+    Refused(String),
 }
 impl Hello {
     pub fn validate_bounds(&self) -> anyhow::Result<()> {

@@ -1,0 +1,616 @@
+//! Package distribution. A server lists a package's files; a client fetches
+//! the files it lacks by content hash into a cache and installs the package
+//! only after every byte and the package hash check out. Data only: a server
+//! never sends native code, and nothing downloaded is executed.
+//!
+//! The cache is content addressed at two levels: files are stored once by
+//! SHA-256 (`objects/`), so an asset two packages share downloads once, and
+//! installed packages are directories named by package hash (`packages/`).
+use crate::environment::{MAX_PACKAGE_FILES, PackageRef, hash_dir, is_hash};
+use anyhow::{Context, Result, bail, ensure};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeSet,
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+
+pub const LISTING_SCHEMA: u32 = 1;
+/// Largest single file a server may send.
+pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+/// Largest package a server may send.
+pub const MAX_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Longest relative file path, leaving room under Windows' 260-character
+/// limit for the cache directory.
+pub const MAX_PATH: usize = 160;
+/// File types that are native code or that Windows runs when opened. A
+/// package that contains one is refused outright, whatever it is named.
+pub const CODE_EXTENSIONS: &[&str] = &[
+    "exe", "dll", "sys", "drv", "ocx", "cpl", "scr", "com", "msi", "msp", "so", "dylib", "bat",
+    "cmd", "ps1", "psm1", "psd1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "lnk", "url",
+    "reg", "jar", "sh", "app", "pif", "appx", "msix",
+];
+/// Device names Windows resolves in any directory, with any extension.
+const WINDOWS_DEVICES: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9", "conin$",
+    "conout$",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileEntry {
+    /// Relative path with forward slashes.
+    pub path: String,
+    pub size: u64,
+    /// SHA-256 of the file's bytes: the object it is stored and fetched as.
+    pub sha256: String,
+}
+
+/// Every file of one package. Its entries determine the package hash, so a
+/// client checks the listing against the hash it was promised before it
+/// fetches a single file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Listing {
+    pub schema_version: u32,
+    pub package: PackageRef,
+    /// Sorted by path.
+    pub files: Vec<FileEntry>,
+}
+
+/// Why a path cannot be part of a downloadable package, or None.
+pub fn path_problem(path: &str) -> Option<String> {
+    if path.is_empty() || path.len() > MAX_PATH {
+        return Some(format!("path must be 1-{MAX_PATH} bytes"));
+    }
+    if path
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+    {
+        return Some("path has a character Windows forbids or a control character".into());
+    }
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Some("path must be relative, without empty, `.` or `..` parts".into());
+        }
+        if segment.ends_with([' ', '.']) {
+            return Some("a path part may not end in a space or dot".into());
+        }
+        let stem = segment.split('.').next().unwrap_or_default();
+        if WINDOWS_DEVICES.contains(&stem.to_ascii_lowercase().as_str()) {
+            return Some(format!("`{segment}` is a Windows device name"));
+        }
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if let Some((_, extension)) = name.rsplit_once('.')
+        && CODE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+    {
+        return Some(format!(
+            "`.{extension}` files are code; servers send data, never code"
+        ));
+    }
+    None
+}
+
+/// The package hash of a set of files, by the same rule as
+/// [`hash_dir`](crate::environment::hash_dir).
+pub fn package_hash(files: &[FileEntry]) -> Result<String> {
+    let mut total = Sha256::new();
+    for file in files {
+        total.update(file.path.as_bytes());
+        total.update([0]);
+        total.update(file.size.to_le_bytes());
+        total.update(unhex(&file.sha256)?);
+    }
+    Ok(hex(&total.finalize()))
+}
+
+impl Listing {
+    /// List `dir`, which must be the package `package` describes.
+    pub fn of(dir: &Path, package: &PackageRef) -> Result<Self> {
+        let mut files = Vec::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(current) = pending.pop() {
+            for entry in fs::read_dir(&current)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                let path = entry.path();
+                ensure!(!kind.is_symlink(), "Packages may not contain links");
+                if kind.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(dir)?
+                    .to_str()
+                    .context("Package file names must be UTF-8")?
+                    .replace('\\', "/");
+                let (sha256, size) = hash_file(&path)?;
+                files.push(FileEntry {
+                    path: relative,
+                    size,
+                    sha256,
+                });
+                ensure!(
+                    files.len() <= MAX_PACKAGE_FILES,
+                    "Package has more than {MAX_PACKAGE_FILES} files"
+                );
+            }
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        let listing = Self {
+            schema_version: LISTING_SCHEMA,
+            package: package.clone(),
+            files,
+        };
+        listing
+            .validate(package)
+            .with_context(|| format!("Package `{}` cannot be sent to clients", package.id))?;
+        Ok(listing)
+    }
+
+    /// Everything a client checks before fetching: the listing is for the
+    /// package it asked for, every path is safe to create on Windows, no
+    /// file is code, sizes are within budget and add up, and the entries
+    /// hash to the promised package hash.
+    pub fn validate(&self, expected: &PackageRef) -> Result<()> {
+        ensure!(
+            self.schema_version == LISTING_SCHEMA,
+            "Unsupported listing schema"
+        );
+        ensure!(
+            &self.package == expected,
+            "Listing is for {}, not {}",
+            self.package,
+            expected
+        );
+        ensure!(
+            self.files.len() <= MAX_PACKAGE_FILES,
+            "Package has more than {MAX_PACKAGE_FILES} files"
+        );
+        let mut folded = BTreeSet::new();
+        let mut total = 0_u64;
+        for (index, file) in self.files.iter().enumerate() {
+            if let Some(problem) = path_problem(&file.path) {
+                bail!("{}: {problem}", file.path);
+            }
+            ensure!(is_hash(&file.sha256), "{}: invalid file hash", file.path);
+            ensure!(
+                file.size <= MAX_FILE_BYTES,
+                "{}: file exceeds {MAX_FILE_BYTES} bytes",
+                file.path
+            );
+            if index > 0 {
+                ensure!(
+                    self.files[index - 1].path < file.path,
+                    "Listing is not in strict path order"
+                );
+            }
+            // Windows paths are case-insensitive: two entries that differ
+            // only by case would overwrite each other.
+            ensure!(
+                folded.insert(file.path.to_lowercase()),
+                "{}: another file has the same name ignoring case",
+                file.path
+            );
+            total = total
+                .checked_add(file.size)
+                .context("Package size overflows")?;
+        }
+        // A file may not also be a directory of another file.
+        for file in &self.files {
+            let lower = file.path.to_lowercase();
+            let mut prefix = String::new();
+            for segment in lower
+                .split('/')
+                .rev()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .iter()
+                .rev()
+            {
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(segment);
+                ensure!(
+                    !folded.contains(&prefix),
+                    "{}: `{prefix}` is both a file and a directory",
+                    file.path
+                );
+            }
+        }
+        ensure!(
+            total <= MAX_PACKAGE_BYTES,
+            "Package exceeds {MAX_PACKAGE_BYTES} bytes"
+        );
+        ensure!(
+            total == expected.size,
+            "Listing size does not match the package"
+        );
+        ensure!(
+            package_hash(&self.files)? == expected.hash,
+            "Listing does not hash to the package it claims to be"
+        );
+        Ok(())
+    }
+}
+
+/// A client's download cache (see the module docs).
+pub struct Cache {
+    root: PathBuf,
+}
+
+impl Cache {
+    pub fn open(root: &Path) -> Result<Self> {
+        for dir in ["objects", "packages", "incoming"] {
+            fs::create_dir_all(root.join(dir)).with_context(|| {
+                format!("Could not create the package cache {}", root.display())
+            })?;
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+        })
+    }
+
+    fn object(&self, sha256: &str) -> PathBuf {
+        self.root.join("objects").join(sha256)
+    }
+
+    fn package_dir(&self, package: &PackageRef) -> PathBuf {
+        self.root.join("packages").join(&package.hash)
+    }
+
+    /// The installed directory for `package`, if this cache holds it.
+    /// Installation is atomic, so a directory that exists is complete.
+    pub fn installed(&self, package: &PackageRef) -> Option<PathBuf> {
+        is_hash(&package.hash)
+            .then(|| self.package_dir(package))
+            .filter(|dir| dir.is_dir())
+    }
+
+    /// Files of `listing` the cache does not hold yet, each object once.
+    pub fn missing<'a>(&self, listing: &'a Listing) -> Vec<&'a FileEntry> {
+        let mut seen = BTreeSet::new();
+        listing
+            .files
+            .iter()
+            .filter(|f| seen.insert(&f.sha256) && !self.object(&f.sha256).is_file())
+            .collect()
+    }
+
+    /// Start receiving the object `file` names. Nothing is visible in the
+    /// cache until [`ObjectWriter::finish`] has checked size and hash.
+    pub fn receive(&self, file: &FileEntry) -> Result<ObjectWriter> {
+        ensure!(is_hash(&file.sha256), "Invalid object hash");
+        ensure!(file.size <= MAX_FILE_BYTES, "Object exceeds budget");
+        let partial = self.root.join("incoming").join(format!(
+            "{}.{}.partial",
+            file.sha256,
+            std::process::id()
+        ));
+        Ok(ObjectWriter {
+            target: self.object(&file.sha256),
+            file: fs::File::create(&partial)?,
+            partial,
+            expected: file.clone(),
+            hasher: Sha256::new(),
+            written: 0,
+        })
+    }
+
+    /// Materialize a package whose objects are all present, verify the
+    /// result against the package hash, then publish it atomically.
+    pub fn install(&self, listing: &Listing) -> Result<PathBuf> {
+        listing.validate(&listing.package)?;
+        let target = self.package_dir(&listing.package);
+        if target.is_dir() {
+            return Ok(target);
+        }
+        let staging = self.root.join("incoming").join(format!(
+            "{}.{}.package",
+            listing.package.hash,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&staging);
+        let result = (|| {
+            for file in &listing.files {
+                let destination = staging.join(&file.path);
+                if let Some(parent) = destination.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let source = self.object(&file.sha256);
+                ensure!(source.is_file(), "{}: object not downloaded", file.path);
+                fs::copy(&source, &destination)
+                    .with_context(|| format!("{}: could not install", file.path))?;
+            }
+            fs::create_dir_all(&staging)?;
+            // Independent check with the loader's own hash: whatever the
+            // cache held, only the promised package is published.
+            let (hash, size) = hash_dir(&staging)?;
+            ensure!(
+                hash == listing.package.hash && size == listing.package.size,
+                "Installed files do not match package {}",
+                listing.package
+            );
+            fs::rename(&staging, &target)?;
+            Ok(target.clone())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&staging);
+        }
+        result
+    }
+}
+
+/// One object being received. Dropping it without `finish` discards it.
+pub struct ObjectWriter {
+    target: PathBuf,
+    partial: PathBuf,
+    file: fs::File,
+    expected: FileEntry,
+    hasher: Sha256,
+    written: u64,
+}
+
+impl ObjectWriter {
+    pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        let written = self.written + bytes.len() as u64;
+        ensure!(
+            written <= self.expected.size,
+            "{}: more bytes than the listing promised",
+            self.expected.path
+        );
+        self.file.write_all(bytes)?;
+        self.hasher.update(bytes);
+        self.written = written;
+        Ok(())
+    }
+    pub fn written(&self) -> u64 {
+        self.written
+    }
+    pub fn remaining(&self) -> u64 {
+        self.expected.size - self.written
+    }
+    pub fn finish(mut self) -> Result<()> {
+        ensure!(
+            self.written == self.expected.size,
+            "{}: download ended early",
+            self.expected.path
+        );
+        let hash = hex(&std::mem::take(&mut self.hasher).finalize());
+        ensure!(
+            hash == self.expected.sha256,
+            "{}: downloaded bytes do not match their hash",
+            self.expected.path
+        );
+        self.file.sync_all()?;
+        match fs::rename(&self.partial, &self.target) {
+            Ok(()) => Ok(()),
+            // Another download of the same object won the race: same bytes.
+            Err(_) if self.target.is_file() => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+impl Drop for ObjectWriter {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.partial);
+    }
+}
+
+/// Read `length` bytes of `file` from `offset`, for serving an object.
+pub fn read_range(path: &Path, offset: u64, length: usize) -> Result<Vec<u8>> {
+    use std::io::Seek;
+    let mut file = fs::File::open(path)?;
+    file.seek(std::io::SeekFrom::Start(offset))?;
+    let mut bytes = vec![0; length];
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn hash_file(path: &Path) -> Result<(String, u64)> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 16];
+    let mut length = 0_u64;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        length += read as u64;
+    }
+    Ok((hex(&hasher.finalize()), length))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Result<[u8; 32]> {
+    ensure!(is_hash(text), "Invalid hash");
+    let mut out = [0; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[2 * i..2 * i + 2], 16)?;
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packages::Side;
+
+    fn package_in(dir: &Path, files: &[(&str, &[u8])]) -> PackageRef {
+        for (path, bytes) in files {
+            let path = dir.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let (hash, size) = hash_dir(dir).unwrap();
+        PackageRef {
+            id: "creeper".into(),
+            version: "1.0.0".into(),
+            side: Side::Shared,
+            hash,
+            size,
+        }
+    }
+
+    fn fetch_all(cache: &Cache, source: &Path, listing: &Listing) {
+        for file in cache.missing(listing) {
+            let mut writer = cache.receive(file).unwrap();
+            writer
+                .write(&fs::read(source.join(&file.path)).unwrap())
+                .unwrap();
+            writer.finish().unwrap();
+        }
+    }
+
+    #[test]
+    fn listing_hash_matches_the_loader_and_install_round_trips() {
+        let server = tempdir("server");
+        let package = package_in(
+            &server,
+            &[
+                ("package.json", b"{}"),
+                ("models/creeper.glb", b"mesh"),
+                ("sounds/hiss.wav", b"hiss"),
+            ],
+        );
+        let listing = Listing::of(&server, &package).unwrap();
+        assert_eq!(package_hash(&listing.files).unwrap(), package.hash);
+        let cache_root = tempdir("cache");
+        let cache = Cache::open(&cache_root).unwrap();
+        assert!(cache.installed(&package).is_none());
+        assert_eq!(cache.missing(&listing).len(), 3);
+        fetch_all(&cache, &server, &listing);
+        assert!(cache.missing(&listing).is_empty(), "objects are reused");
+        let installed = cache.install(&listing).unwrap();
+        assert_eq!(hash_dir(&installed).unwrap().0, package.hash);
+        assert_eq!(cache.installed(&package), Some(installed));
+        let _ = fs::remove_dir_all(server);
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn corrupt_short_and_long_downloads_never_reach_the_cache() {
+        let server = tempdir("server-bad");
+        let package = package_in(&server, &[("a.json", b"real")]);
+        let listing = Listing::of(&server, &package).unwrap();
+        let cache_root = tempdir("cache-bad");
+        let cache = Cache::open(&cache_root).unwrap();
+        let file = &listing.files[0];
+        let mut corrupt = cache.receive(file).unwrap();
+        corrupt.write(b"fake").unwrap();
+        assert!(
+            corrupt
+                .finish()
+                .unwrap_err()
+                .to_string()
+                .contains("do not match")
+        );
+        let mut short = cache.receive(file).unwrap();
+        short.write(b"re").unwrap();
+        assert!(
+            short
+                .finish()
+                .unwrap_err()
+                .to_string()
+                .contains("ended early")
+        );
+        let mut long = cache.receive(file).unwrap();
+        assert!(long.write(b"really").is_err());
+        drop(long);
+        // An interrupted download leaves nothing behind.
+        let interrupted = cache.receive(file).unwrap();
+        drop(interrupted);
+        assert_eq!(cache.missing(&listing).len(), 1);
+        assert_eq!(
+            fs::read_dir(cache_root.join("incoming")).unwrap().count(),
+            0
+        );
+        assert!(cache.install(&listing).is_err());
+        let _ = fs::remove_dir_all(server);
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn hostile_listings_are_refused_before_any_fetch() {
+        let server = tempdir("server-hostile");
+        let package = package_in(&server, &[("a.json", b"1"), ("b.json", b"2")]);
+        let good = Listing::of(&server, &package).unwrap();
+        let entry = |path: &str| FileEntry {
+            path: path.into(),
+            size: 1,
+            sha256: "00".repeat(32),
+        };
+        for path in [
+            "../evil.json",
+            "/abs.json",
+            "C:/x.json",
+            "a\\b.json",
+            "dir/./x.json",
+            "trailing.",
+            "nul.json",
+            "COM1",
+            "run.exe",
+            "lib.DLL",
+            "script.ps1",
+            "tool.bat",
+            "x\u{0}.json",
+            "",
+        ] {
+            assert!(path_problem(path).is_some(), "{path:?} accepted");
+        }
+        assert!(path_problem("models/creeper.glb").is_none());
+        // Every tampering changes the hash or breaks a rule.
+        let mut renamed = good.clone();
+        renamed.files[0].path = "A.json".into();
+        assert!(renamed.validate(&package).is_err());
+        let mut case_twins = good.clone();
+        case_twins.files[1] = FileEntry {
+            path: "a.jsoN".into(),
+            ..case_twins.files[1].clone()
+        };
+        assert!(case_twins.validate(&package).is_err());
+        let mut code = good.clone();
+        code.files.push(entry("z.exe"));
+        assert!(
+            code.validate(&package)
+                .unwrap_err()
+                .to_string()
+                .contains("code")
+        );
+        let mut swapped = good.clone();
+        swapped.package.id = "zombies".into();
+        assert!(swapped.validate(&package).is_err());
+        let mut bomb = good.clone();
+        bomb.files[0].size = MAX_FILE_BYTES + 1;
+        assert!(bomb.validate(&package).is_err());
+        let mut file_and_dir = good.clone();
+        file_and_dir.files.push(entry("b.json/inner.json"));
+        assert!(file_and_dir.validate(&package).is_err());
+        good.validate(&package).unwrap();
+        let _ = fs::remove_dir_all(server);
+    }
+
+    fn tempdir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bri-sync-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+}

@@ -30,6 +30,8 @@ pub struct ServerOptions {
     /// Periodic durable checkpoints of the authoritative world, so a crash
     /// loses at most one interval. None keeps state only in memory.
     pub autosave: Option<Autosave>,
+    /// Packages clients may download before joining. None offers nothing.
+    pub packages: Option<Arc<crate::packages::PackageShelf>>,
 }
 /// The host hands a snapshot of its world to `save` every `every`, on a
 /// blocking thread and never two at once, and once more when the host loop
@@ -244,13 +246,15 @@ impl Drop for RouterPorts {
         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
     }
 }
+/// Encoded frames of a transfer, or why encoding failed; `None` until done.
+type EncodedFrames = watch::Receiver<Option<Result<Arc<[Vec<u8>]>, String>>>;
 /// One entry in a peer's ordered reliable stream.
 #[derive(Clone)]
 enum Frame {
     Ready(Arc<Vec<u8>>),
     /// Frames still being encoded on a blocking thread (a world transfer).
     /// The writer waits for them in place, so later frames stay behind them.
-    Pending(watch::Receiver<Option<Result<Arc<[Vec<u8>]>, String>>>),
+    Pending(EncodedFrames),
 }
 /// Encode a world transfer off the authority loop. Every peer given the
 /// returned frame writes the transfer at that point in its stream.
@@ -435,6 +439,7 @@ fn start_configured(
         task,
     })
 }
+#[allow(clippy::too_many_arguments)]
 async fn connection_task(
     connection: Connection,
     events: mpsc::Sender<Event>,
@@ -443,6 +448,7 @@ async fn connection_task(
     deadline: tokio::time::Instant,
     server_fingerprint: [u8; 32],
     require_identity: bool,
+    downloads: (Option<Arc<crate::packages::PackageShelf>>, HandshakeGate),
 ) -> Result<()> {
     // The whole pre-join exchange shares one deadline, so a peer cannot hold
     // its handshake slot for a timeout per step.
@@ -452,6 +458,25 @@ async fn connection_task(
     if begin.version != VERSION {
         codec::write_frame(&mut send, &codec::encode(&Message::Rejected("Incompatible protocol version".into()))?).await?;
         send.finish()?;
+        return Ok(());
+    }
+    if begin.purpose == Purpose::Download {
+        let (shelf, gate) = downloads;
+        let refusal = match (shelf, gate.admit(connection.remote_address().ip())) {
+            (None, _) => "This server does not offer package downloads",
+            (Some(_), None) => "Too many package downloads; try again shortly",
+            (Some(shelf), Some(slot)) => {
+                // A download holds its own slot, not a joining one.
+                drop(handshake);
+                let _slot = slot;
+                crate::packages::serve(shelf, &mut send, &mut receive).await?;
+                let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+                return Ok(());
+            }
+        };
+        codec::write_frame(&mut send, &codec::encode(&Message::Rejected(refusal.into()))?).await?;
+        send.finish()?;
+        let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
         return Ok(());
     }
     let mut nonce = [0; 32];
@@ -612,11 +637,22 @@ const MAX_HANDSHAKES: usize = 64;
 /// Connections still joining from one address. Enough for a LAN party behind
 /// one router joining at once, too few for one source to fill the host.
 const MAX_HANDSHAKES_PER_ADDRESS: usize = 8;
-/// Pre-join admission: a global and a per-address bound on connections that
-/// have not joined yet. Joined players are bounded by the player limit.
-#[derive(Clone, Default)]
+/// Package download connections, in total and from one address.
+const MAX_DOWNLOADS: usize = 16;
+const MAX_DOWNLOADS_PER_ADDRESS: usize = 2;
+/// A global and a per-address bound on one kind of connection: those that
+/// have not joined yet, or package downloads. Joined players are bounded by
+/// the player limit.
+#[derive(Clone)]
 struct HandshakeGate {
     pending: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
+    total_limit: usize,
+    address_limit: usize,
+}
+impl Default for HandshakeGate {
+    fn default() -> Self {
+        Self::new(MAX_HANDSHAKES, MAX_HANDSHAKES_PER_ADDRESS)
+    }
 }
 /// One pending connection's share of the gate, returned when dropped.
 struct HandshakeSlot {
@@ -624,11 +660,21 @@ struct HandshakeSlot {
     address: IpAddr,
 }
 impl HandshakeGate {
+    fn new(total_limit: usize, address_limit: usize) -> Self {
+        Self {
+            pending: Arc::default(),
+            total_limit,
+            address_limit,
+        }
+    }
     fn admit(&self, address: IpAddr) -> Option<HandshakeSlot> {
         let mut pending = self.pending.lock().ok()?;
         let total: usize = pending.values().sum();
         let from = pending.entry(address).or_default();
-        if total >= MAX_HANDSHAKES || *from >= MAX_HANDSHAKES_PER_ADDRESS {
+        if total >= self.total_limit || *from >= self.address_limit {
+            if *from == 0 {
+                pending.remove(&address);
+            }
             return None;
         }
         *from += 1;
@@ -751,6 +797,8 @@ async fn run(
 ) -> Result<ServerReport> {
     let (events, mut incoming) = mpsc::channel(256);
     let handshakes = HandshakeGate::default();
+    let downloads = HandshakeGate::new(MAX_DOWNLOADS, MAX_DOWNLOADS_PER_ADDRESS);
+    let shelf = options.packages.clone();
     let bulk_budget = Arc::new(Semaphore::new(codec::BULK_REQUEST_BUDGET));
     let mut tasks = tokio::task::JoinSet::new();
     let mut peers = BTreeMap::<OwnerId, Peer>::new();
@@ -796,7 +844,7 @@ async fn run(
                 // Retry round trip) before it may hold a pending slot, so
                 // spoofed addresses cannot fill the per-address bounds.
                 if !accepted.remote_address_validated() && accepted.may_retry() && handshakes.total()>=MAX_HANDSHAKES/2 {let _=accepted.retry();}
-                else if let Some(slot)=handshakes.admit(accepted.remote_address().ip()){let events=events.clone();let bulk_budget=bulk_budget.clone();tasks.spawn(async move{let deadline=tokio::time::Instant::now()+HANDSHAKE_DEADLINE;if let Ok(Ok(connection))=tokio::time::timeout_at(deadline,accepted).await {let _=connection_task(connection,events,bulk_budget,slot,deadline,server_fingerprint,require_identity).await;}});}
+                else if let Some(slot)=handshakes.admit(accepted.remote_address().ip()){let events=events.clone();let bulk_budget=bulk_budget.clone();let downloads=(shelf.clone(),downloads.clone());tasks.spawn(async move{let deadline=tokio::time::Instant::now()+HANDSHAKE_DEADLINE;if let Ok(Ok(connection))=tokio::time::timeout_at(deadline,accepted).await {let _=connection_task(connection,events,bulk_budget,slot,deadline,server_fingerprint,require_identity,downloads).await;}});}
                 else{accepted.refuse();}
             }
         },

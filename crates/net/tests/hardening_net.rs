@@ -106,6 +106,7 @@ fn options() -> ServerOptions {
         certificate: None,
         map_loader: None,
         autosave: None,
+        packages: None,
     }
 }
 
@@ -157,7 +158,7 @@ async fn raw_challenge(
     let endpoint = raw_endpoint(certificate, "127.0.0.1:0").await?;
     let connection = endpoint.connect(address, "blockland.local")?.await?;
     let (mut send, mut receive) = connection.open_bi().await?;
-    codec::write_small_request(&mut send, &JoinBegin { version: begin }).await?;
+    codec::write_small_request(&mut send, &JoinBegin { version: begin, purpose: bri_net::protocol::Purpose::Join }).await?;
     let first =
         codec::decode::<Message>(&codec::read_frame(&mut receive, codec::MAX_FRAME).await?)?;
     let nonce = match &first {

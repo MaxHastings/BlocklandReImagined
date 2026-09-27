@@ -541,6 +541,7 @@ fn options() -> ServerOptions {
         certificate: None,
         map_loader: None,
         autosave: None,
+        packages: None,
     }
 }
 
@@ -1530,7 +1531,7 @@ async fn raw_identity_challenge(
     endpoint.set_default_client_config(config);
     let connection = endpoint.connect(address, "blockland.local")?.await?;
     let (mut send, mut receive) = connection.open_bi().await?;
-    bri_net::codec::write_small_request(&mut send, &JoinBegin { version: VERSION }).await?;
+    bri_net::codec::write_small_request(&mut send, &JoinBegin::join()).await?;
     let challenge = bri_net::codec::decode::<Message>(
         &bri_net::codec::read_frame(&mut receive, bri_net::codec::MAX_FRAME).await?,
     )?;

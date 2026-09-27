@@ -98,9 +98,51 @@ download cache, in `docs/modding/package-format.md`. They build on this crate:
 the same id grammar, versions, diagnostics and `PackageRef`/`Mismatch` shapes.
 Base packages carry no `package.json`; `packages.json` describes them.
 
+## Distribution: clients fetch what they lack
+
+Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
+(transport). Tests: `cargo test -p bri-package sync` and
+`cargo test -p bri-net --test package_sync`.
+
+- **Listing.** A server lists each package it offers: every file's relative
+  path, size and SHA-256, in path order. The entries hash to the package hash
+  by the same rule as `hash_dir`, so a client checks a listing against the
+  hash the server's environment promised before fetching anything.
+- **What is offered.** Only `shared` and `client` packages of the server's
+  environment (`PackageShelf`). `server` packages and any file outside an
+  offered package cannot be requested: objects are served by hash, and only
+  hashes of offered files resolve.
+- **Data, never code.** A listing is refused, on both sides, if any path is
+  unsafe to create on Windows (absolute, `..`, `\`, `:`, device names like
+  `nul` or `com1`, trailing dot or space, names that differ only by case, a
+  file that is also a directory) or if any file type is code Windows could
+  run (`CODE_EXTENSIONS`: `.exe .dll .bat .ps1 .js .lnk ...`). A server cannot
+  even build a shelf containing one.
+- **Budgets.** 256 MiB per file, 2 GiB per package, 65,536 files per
+  package, and 4 GiB per fetch on the client (`MAX_FETCH_BYTES`), so a
+  hostile server cannot fill a disk with valid packages. Download connections
+  are bounded to 16 in total and 2 per address, and close after 15 s idle.
+- **Cache.** `objects/<sha256>` holds each file once, so an asset two packages
+  share downloads once. A file becomes visible only after its size and hash
+  check out; an interrupted or corrupt download leaves nothing behind, and a
+  retry fetches only what is still missing. A package is installed by copying
+  its objects into a staging directory, re-hashing it with `hash_dir`, and
+  renaming it to `packages/<package hash>`, so an installed directory is
+  always complete and is exactly the package the server loaded.
+- **Protocol.** A download is its own connection: `JoinBegin { purpose:
+  Download }`, then `DownloadRequest::{Environment, Listing, Object}` answered
+  in order (object ranges up to 1 MiB). No identity or game state is involved.
+  `bri_net::packages::fetch_missing` does the whole fetch and reports bytes
+  under `Stage::DownloadingPackages`.
+
 ## Not built yet
 
-Dependency resolution, downloading missing packages, and archives are the mod
-platform lane's. Content inside the base packages still uses older id
-spellings (`v20/brick/...`, `v20.weapon....`) until those packs are
-regenerated under the grammar above; see the audit.
+- Hosts and clients do not call this yet: `bri-server` passes
+  `packages: None` until it loads through `packages.json`, and the client
+  does not call `fetch_missing` on a join mismatch. That wiring belongs with
+  loading through `packages.json`.
+- The cache is never evicted or size-limited as a whole.
+- Per-package `package.json` manifests, dependency resolution and archives.
+- Content inside the base packages still uses older id spellings
+  (`v20/brick/...`, `v20.weapon....`) until those packs are regenerated under
+  the grammar above; see the audit.

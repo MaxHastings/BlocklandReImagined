@@ -86,6 +86,7 @@ fn options() -> ServerOptions {
         certificate: None,
         map_loader: None,
         autosave: None,
+        packages: None,
     }
 }
 
@@ -114,7 +115,7 @@ async fn raw_join(server: &server::ServerHandle, name: &str) -> Result<RawPeer> 
     let endpoint = endpoint(&server.certificate)?;
     let connection = endpoint.connect(server.address, "blockland.local")?.await?;
     let (mut send, mut receive) = connection.open_bi().await?;
-    codec::write_small_request(&mut send, &JoinBegin { version: VERSION }).await?;
+    codec::write_small_request(&mut send, &JoinBegin::join()).await?;
     let Message::Challenge { .. } =
         codec::decode(&codec::read_frame(&mut receive, codec::MAX_FRAME).await?)?
     else {
