@@ -52,6 +52,7 @@ fn prediction_matches_server_under_delay_loss_and_redundancy() {
     let mut to_server: VecDeque<(u64, u64, Vec<MoveInput>)> = VecDeque::new();
     let mut to_client = VecDeque::new();
     let mut worst = 0.0_f32;
+    let mut acknowledged = false;
     for tick in 1..=600_u64 {
         // Like the real client, keep sending (idle) inputs every tick.
         if tick <= 581 {
@@ -76,8 +77,14 @@ fn prediction_matches_server_under_delay_loss_and_redundancy() {
         }
         while to_client.front().is_some_and(|(due, _, _, _)| *due <= tick) {
             let (_, server_tick, ack, state) = to_client.pop_front().unwrap();
+            let first = !acknowledged;
             if let Some(offset) = prediction.reconcile(server_tick, ack, state).unwrap() {
-                worst = worst.max(offset.length());
+                // Before any input arrives the server idles the player (it may
+                // fall); the first acknowledgement absorbs that difference.
+                if !first {
+                    worst = worst.max(offset.length());
+                }
+                acknowledged |= ack > 0;
             }
         }
     }

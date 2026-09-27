@@ -555,21 +555,47 @@ impl View {
         let color = style.font_color.unwrap_or(geom::BLACK);
         let mut y = r.y;
         for line in text::layout_ml(&font, text, r.w, Justify::Left) {
-            let x = match line.justify {
+            let runs = text::ml_runs(&line.text);
+            let bitmap_width: i32 = runs
+                .iter()
+                .filter(|(bitmap, _)| *bitmap)
+                .filter_map(|(_, id)| pack.image_size(id))
+                .map(|(w, _)| w as i32)
+                .sum();
+            let width = line.width + bitmap_width;
+            let mut x = match line.justify {
                 Justify::Left => r.x,
-                Justify::Center => r.x + (r.w - line.width) / 2,
-                Justify::Right => r.right() - line.width,
+                Justify::Center => r.x + (r.w - width) / 2,
+                Justify::Right => r.right() - width,
             };
-            font.draw_outlined(
-                dl,
-                x as f32,
-                y as f32,
-                &line.text,
-                color,
-                style.font_outline,
-                &style.font_colors,
-            );
-            y += font.line_height();
+            let mut height = font.line_height();
+            for (bitmap, run) in runs {
+                if bitmap {
+                    if let Some((w, h)) = pack.image_size(run) {
+                        dl.image(
+                            TexKey::Image(run.to_string()),
+                            [0.0, 0.0, w as f32, h as f32],
+                            [x as f32, y as f32, w as f32, h as f32],
+                            geom::WHITE,
+                            crate::draw::Filter::Linear,
+                        );
+                        x += w as i32;
+                        height = height.max(h as i32);
+                    }
+                } else {
+                    font.draw_outlined(
+                        dl,
+                        x as f32,
+                        y as f32,
+                        run,
+                        color,
+                        style.font_outline,
+                        &style.font_colors,
+                    );
+                    x += font.width(run);
+                }
+            }
+            y += height;
         }
     }
 

@@ -173,6 +173,11 @@ impl ClientAudio {
             CueKind::Break => "brick.break",
             CueKind::HammerHit => "tool.hammer.hit",
             CueKind::WrenchHit => "tool.wrench.hit",
+            CueKind::Pain { .. } => "player.pain_cry",
+            CueKind::Death { .. } => "player.death_cry",
+            CueKind::Spawn { .. } => "player.spawn",
+            CueKind::Emote { name, .. } if name == "alarm" => "emote.alarm",
+            CueKind::Emote { .. } => return,
         };
         self.trigger(key, Placement::World(cue.position));
     }

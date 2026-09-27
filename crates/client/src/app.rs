@@ -131,6 +131,7 @@ pub struct App {
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
     motion: crate::motion::Motion,
+    combat: CombatPresentation,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
 }
@@ -148,6 +149,11 @@ impl App {
             } else {
                 self.weapon_animation_drops = self.weapon_animation_drops.saturating_add(1);
             }
+        }
+        if let bri_sim::presentation::CueKind::Emote { actor, name } = &cue.kind
+            && name == "sit"
+        {
+            self.combat.sitting.insert(*actor);
         }
         self.audio.cue(&cue);
         if matches!(
@@ -390,6 +396,12 @@ impl App {
                 .is_some_and(|source| Arc::ptr_eq(source, &view.world))
         })
     }
+    /// Presented (predicted and interpolated) local state and camera eye.
+    pub fn local_motion(&self) -> Option<(bri_sim::player::PlayerState, Option<Vec3>)> {
+        let view = self.network_view()?;
+        let state = self.motion.presented().get(&view.owner)?.clone();
+        Some((state, self.motion.local_eye()))
+    }
     pub fn network_view(&self) -> Option<&network::View> {
         self.attempt
             .as_ref()
@@ -532,6 +544,7 @@ impl App {
             preview_request: None,
             preview_dirty: false,
             motion: Default::default(),
+            combat: Default::default(),
         })
     }
     fn answer(&mut self, id: RequestId, result: Result<()>) {
@@ -619,6 +632,122 @@ impl App {
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
         self.motion.reset();
+        self.combat = Default::default();
+    }
+    /// The authoritative local player is alive (or not yet known).
+    fn local_alive(&self) -> bool {
+        self.network_view()
+            .and_then(|v| v.vitals.get(&v.owner))
+            .is_none_or(|v| v.alive)
+    }
+    /// Dead players watch their corpse from the orbit camera.
+    fn third_person_view(&self) -> bool {
+        self.controls.third_person || !self.local_alive()
+    }
+    /// Death prompts, damage flash, light sounds, sit state and the
+    /// Mini-Games dialog state, all derived from replicated vitals.
+    fn update_combat_presentation(&mut self) {
+        let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
+            return;
+        };
+        let session = a.id;
+        let Some(view) = a.view.as_ref() else {
+            return;
+        };
+        let c = &mut self.combat;
+        let mut updates = Vec::new();
+        for (owner, vitals) in &view.vitals {
+            if !vitals.alive {
+                c.died_at
+                    .entry(*owner)
+                    .or_insert_with(std::time::Instant::now);
+                c.sitting.remove(owner);
+            } else {
+                c.died_at.remove(owner);
+            }
+            let previous = c.lights.insert(*owner, vitals.light);
+            if previous.is_some_and(|old| old != vitals.light)
+                && let Some(pose) = view.poses.get(owner)
+            {
+                self.audio.trigger(
+                    if vitals.light {
+                        "player.light_on"
+                    } else {
+                        "player.light_off"
+                    },
+                    bri_audio::Placement::World(pose.player.feet),
+                );
+            }
+            if let Some(pose) = view.poses.get(owner)
+                && glam::Vec3::from(pose.player.velocity).length() > 0.5
+            {
+                c.sitting.remove(owner);
+            }
+        }
+        c.died_at.retain(|owner, _| view.vitals.contains_key(owner));
+        c.lights.retain(|owner, _| view.vitals.contains_key(owner));
+        if let Some(local) = view.vitals.get(&view.owner) {
+            if local.alive {
+                if c.alive == Some(false) {
+                    updates.push(UiUpdate::ClearPrints);
+                }
+                if local.health < c.health && c.alive == Some(true) {
+                    // Armor::onDamage: flash += delta / maxDamage * 2.
+                    updates.push(UiUpdate::DamageFlash(
+                        (c.health - local.health) / bri_sim::session::MAX_HEALTH * 2.0,
+                    ));
+                }
+                c.countdown = None;
+            } else {
+                if c.alive == Some(true) {
+                    updates.push(UiUpdate::DamageFlash(0.75));
+                }
+                // handleYourDeath / respawnCountDownTick.
+                let remaining = local.respawn_tick.saturating_sub(view.tick).div_ceil(120);
+                if c.countdown != Some(remaining) {
+                    c.countdown = Some(remaining);
+                    updates.push(UiUpdate::CenterPrint {
+                        text: match remaining {
+                            0 => "\u{E005}Click to respawn.".into(),
+                            1 => "\u{E005}Respawning in 1 second...".into(),
+                            n => format!("\u{E005}Respawning in {n} seconds..."),
+                        },
+                        seconds: if remaining == 0 { 300.0 } else { 2.0 },
+                    });
+                }
+            }
+            c.alive = Some(local.alive);
+            c.health = local.health;
+        }
+        let state = crate::minigame_ui::state(
+            view.owner,
+            &view.minigames,
+            &view.vitals,
+            &view.names,
+            &self.content.weapons.item_choices,
+            c.minigame_revision,
+        );
+        let changed = c.minigame_state.as_ref().is_none_or(|old| {
+            MiniGameUiState {
+                revision: 0,
+                ..old.clone()
+            } != MiniGameUiState {
+                revision: 0,
+                ..state.clone()
+            }
+        });
+        if changed {
+            c.minigame_revision += 1;
+            let state = MiniGameUiState {
+                revision: c.minigame_revision,
+                ..state
+            };
+            c.minigame_state = Some(state.clone());
+            updates.push(UiUpdate::MiniGames(state));
+        }
+        for update in updates {
+            self.ui.apply_session(session, update);
+        }
     }
     fn player_name(&self) -> String {
         let name = self.ui.settings().avatar.lan_name;
@@ -1211,11 +1340,18 @@ impl App {
         &mut self,
         attempt: &Attempt,
         request: RequestId,
-        result: std::result::Result<Reply, String>,
+        result: std::result::Result<Reply, bri_sim::session::Rejection>,
     ) {
         let Some(pending) = self.pending_actions.remove(&request) else {
             return;
         };
+        // Placement failures use the original HUD plant-error icon and sound,
+        // never a modal dialog.
+        let plant_failure = match &result {
+            Err(rejection) => rejection.plant,
+            Ok(_) => None,
+        };
+        let result = result.map_err(|rejection| rejection.message);
         if pending.dialog_request && pending.dialog_epoch != self.dialog_epoch {
             return;
         }
@@ -1322,6 +1458,34 @@ impl App {
             }
             Ok(())
         });
+        let result = match plant_failure {
+            Some(failure) => {
+                use bri_sim::simulation::PlantFailure as F;
+                let icon = match failure {
+                    F::Overlap => Some(PlantError::Overlap),
+                    F::Float => Some(PlantError::Float),
+                    F::Buried => Some(PlantError::Buried),
+                    F::Stuck => Some(PlantError::Stuck),
+                    F::TooFar => Some(PlantError::TooFar),
+                    F::Forbidden => Some(PlantError::Forbidden),
+                    F::Limit => Some(PlantError::Limit),
+                    F::Unsupported => None,
+                };
+                match icon {
+                    Some(icon) => self.ui.apply_session(attempt.id, UiUpdate::PlantError(icon)),
+                    None => self.ui.apply_session(
+                        attempt.id,
+                        UiUpdate::BottomPrint {
+                            text: failure.to_string(),
+                            seconds: 3.0,
+                            hide_bar: false,
+                        },
+                    ),
+                };
+                Ok(())
+            }
+            None => result,
+        };
         self.ui.apply_session(
             attempt.id,
             UiUpdate::ActionResult {
@@ -1396,6 +1560,38 @@ impl App {
                     }
                 }
                 network::Event::Ready => a.ready = true,
+                network::Event::Notice(notice) => {
+                    let update = match notice {
+                        bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
+                            text: server_markup(&text),
+                        },
+                        bri_sim::session::Notice::Center { text, seconds } => {
+                            UiUpdate::CenterPrint {
+                                text: server_markup(&text),
+                                seconds,
+                            }
+                        }
+                        bri_sim::session::Notice::Bottom { text, seconds } => {
+                            UiUpdate::BottomPrint {
+                                text: server_markup(&text),
+                                seconds,
+                                hide_bar: false,
+                            }
+                        }
+                        bri_sim::session::Notice::Invite {
+                            game,
+                            owner_name,
+                            title,
+                        } => UiUpdate::MiniGameInvite(MiniGameInvitation {
+                            game: MiniGameId(game),
+                            title: plain_chat(&title),
+                            owner: MiniGamePlayerId(0),
+                            owner_name: plain_chat(&owner_name),
+                            owner_display_id: String::new(),
+                        }),
+                    };
+                    self.ui.apply_session(a.id, update);
+                }
                 network::Event::Reply { request, result } => {
                     self.accept_reply(&a, request, result);
                 }
@@ -1652,7 +1848,13 @@ impl App {
             }
             for line in &view.chat {
                 if line.id > a.last_chat {
-                    let text = format!("{}: {}", plain_chat(&line.name), plain_chat(&line.text));
+                    // Owner 0 lines are server-authored (death messages) and
+                    // may carry vanilla color escapes and death icons.
+                    let text = if line.owner == 0 {
+                        server_markup(&line.text)
+                    } else {
+                        format!("{}: {}", plain_chat(&line.name), plain_chat(&line.text))
+                    };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
                 }
@@ -1666,7 +1868,10 @@ impl App {
                         .map(|(&owner, name)| PlayerRow {
                             id: owner,
                             name: plain_chat(name),
-                            score: 0,
+                            score: view
+                                .vitals
+                                .get(&owner)
+                                .map_or(0, |v| v.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
                             admin: owner == view.owner && view.administrator,
                             super_admin: false,
                             bl_id: None,
@@ -1714,6 +1919,73 @@ fn plain_chat(text: &str) -> String {
         })
         .collect()
 }
+/// Server-authored text keeps vanilla color escapes and `<bitmap:...>` icons
+/// from the base UI, but no other markup or control characters.
+fn server_markup(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<bitmap:") {
+        out.push_str(&plain_chat(&rest[..start]));
+        let after = &rest[start..];
+        match after.find('>') {
+            Some(end)
+                if after[8..end]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
+                    && after[8..end].to_ascii_lowercase().starts_with("base/client/ui/") =>
+            {
+                out.push_str(&after[..=end].to_ascii_lowercase());
+                rest = &after[end + 1..];
+            }
+            _ => {
+                out.push_str(&plain_chat(&after[..8]));
+                rest = &after[8..];
+            }
+        }
+    }
+    out.push_str(
+        &rest
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(|c| match c {
+                '<' => '‹',
+                '>' => '›',
+                _ => c,
+            })
+            .collect::<String>(),
+    );
+    out
+}
+
+/// Client-side death, respawn and status presentation derived from vitals.
+#[derive(Default)]
+struct CombatPresentation {
+    alive: Option<bool>,
+    health: f32,
+    countdown: Option<u64>,
+    died_at: std::collections::BTreeMap<bri_world::OwnerId, std::time::Instant>,
+    lights: std::collections::BTreeMap<bri_world::OwnerId, bool>,
+    sitting: std::collections::BTreeSet<bri_world::OwnerId>,
+    minigame_revision: u64,
+    minigame_state: Option<MiniGameUiState>,
+}
+impl CombatPresentation {
+    /// Corpses disappear after `$CorpseTimeoutValue` (5 s).
+    fn hidden_bodies(
+        &self,
+        vitals: &std::collections::BTreeMap<bri_world::OwnerId, bri_sim::session::Vitals>,
+    ) -> std::collections::BTreeSet<bri_world::OwnerId> {
+        self.died_at
+            .iter()
+            .filter(|(owner, at)| {
+                vitals.get(owner).is_some_and(|v| !v.alive)
+                    && at.elapsed() >= Duration::from_secs(5)
+            })
+            .map(|(owner, _)| *owner)
+            .collect()
+    }
+}
+
 fn building_action(action: &UiAction) -> bool {
     matches!(
         action,
@@ -1792,10 +2064,21 @@ impl PlatformApp for App {
         self.controls.tick(elapsed.as_secs_f32());
         self.poll_network()?;
         self.poll_files();
+        let alive = self.local_alive();
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
+            let input = if alive {
+                self.controls.movement()
+            } else {
+                // Corpses ignore controls; keep aim so the server agrees.
+                bri_sim::player::MoveInput {
+                    yaw: self.controls.yaw,
+                    pitch: self.controls.pitch,
+                    ..Default::default()
+                }
+            };
             if let Some((newest, inputs)) = self.motion.advance(
                 elapsed.as_secs_f32(),
-                self.controls.movement(),
+                input,
                 bri_net::protocol::MOVEMENT_REDUNDANCY,
             )? {
                 a.worker.movement(newest, inputs)?;
@@ -1805,6 +2088,8 @@ impl PlatformApp for App {
                     .present(view, self.controls.yaw, self.controls.pitch);
             }
         }
+        self.update_combat_presentation();
+        let third_person = self.third_person_view();
         let weapon_checkpoint = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
             a.view
                 .as_ref()
@@ -1869,9 +2154,16 @@ impl PlatformApp for App {
                     // datablocks declare armReady=true. Wand remains unaudited.
                     ready_hands.push((0, bri_weapons::CORE_TOOLS[..3].contains(&item)));
                 }
+                let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
                 let input = crate::avatar::AvatarAnimationInput {
-                    held_tool_pose: crate::avatar::HeldToolPose::from_mounted_images(ready_hands),
-                    action: self.avatar_actions.get(owner).cloned(),
+                    held_tool_pose: if dead {
+                        crate::avatar::HeldToolPose::None
+                    } else {
+                        crate::avatar::HeldToolPose::from_mounted_images(ready_hands)
+                    },
+                    action: self.avatar_actions.get(owner).cloned().filter(|_| !dead),
+                    dead,
+                    sitting: !dead && self.combat.sitting.contains(owner),
                 };
                 self.avatars.get_mut(owner).unwrap().pose_with_animation(
                     &self.avatar_assets,
@@ -1893,7 +2185,7 @@ impl PlatformApp for App {
                 .motion
                 .local_eye()
                 .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
-            let eye = if self.controls.third_person {
+            let eye = if third_person {
                 building.camera_position(eye, forward, 8.)?
             } else {
                 eye
@@ -1912,7 +2204,7 @@ impl PlatformApp for App {
                     seconds: self.animation_time,
                     eye,
                     local_owner: Some(view.owner),
-                    first_person: !self.controls.third_person,
+                    first_person: !third_person,
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
@@ -1972,6 +2264,52 @@ impl PlatformApp for App {
         }
         let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
+            // Dead players click to respawn; other fire/tool input is ignored.
+            if !self.local_alive()
+                && matches!(
+                    action,
+                    UiAction::Game(GameAction::Held {
+                        control: HeldControl::Fire,
+                        ..
+                    })
+                )
+            {
+                if matches!(
+                    action,
+                    UiAction::Game(GameAction::Held { down: true, .. })
+                ) {
+                    let ready = self.network_view().is_some_and(|view| {
+                        view.vitals
+                            .get(&view.owner)
+                            .is_some_and(|v| view.tick >= v.respawn_tick)
+                    });
+                    if ready {
+                        if let Err(error) = self.command(id, Command::Respawn, action.clone()) {
+                            self.answer(id, Err(error));
+                        }
+                        continue;
+                    }
+                }
+                self.answer(id, Ok(()));
+                continue;
+            }
+            if crate::minigame_ui::is_minigame_action(&action) {
+                let result = crate::minigame_ui::command(&action).and_then(|command| {
+                    match command {
+                        Some(command) => self.command(id, command, action.clone()).map(|()| true),
+                        None => {
+                            self.combat.minigame_state = None; // force a refresh
+                            Ok(false)
+                        }
+                    }
+                });
+                match result {
+                    Ok(true) => {}
+                    Ok(false) => self.answer(id, Ok(())),
+                    Err(error) => self.answer(id, Err(error)),
+                }
+                continue;
+            }
             if matches!(action, UiAction::OpenAdmin | UiAction::Admin(_)) {
                 let admin_action = match action {
                     UiAction::Admin(action) => action,
@@ -2110,6 +2448,28 @@ impl PlatformApp for App {
                 UiAction::Game(GameAction::ToggleFullscreen) => {
                     platform.push(PlatformCommand::ToggleFullscreen);
                     continue;
+                }
+                UiAction::Game(GameAction::Suicide) => {
+                    let result = self.command(id, Command::Suicide, action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::Game(GameAction::UseLight) => {
+                    let result = self.command(id, Command::ToggleLight, action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::Game(GameAction::Emote { ref name }) => {
+                    let name = name.to_ascii_lowercase();
+                    let result = self.command(id, Command::Emote(name), action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
                 }
                 UiAction::Game(action) => {
                     if self.controls.action(&action) {
@@ -2276,6 +2636,15 @@ impl PlatformApp for App {
         let Some(local) = self.motion.presented().get(&view.owner) else {
             return Ok(false);
         };
+        let third_person = self.controls.third_person || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
+        let hidden = self.combat.hidden_bodies(&view.vitals);
+        let lights_on: Vec<Vec3> = view
+            .vitals
+            .iter()
+            .filter(|(_, v)| v.light && v.alive)
+            .filter_map(|(owner, _)| self.motion.presented().get(owner))
+            .map(|p| Vec3::from(p.feet) + Vec3::Y * 2.6 + p.forward() * 0.5)
+            .collect();
         let renderer = self
             .renderer
             .as_mut()
@@ -2329,7 +2698,7 @@ impl PlatformApp for App {
             ));
         }
         for (owner, avatar) in &mut self.avatars {
-            if *owner != view.owner || self.controls.third_person {
+            if (*owner != view.owner || third_person) && !hidden.contains(owner) {
                 avatar.upload(renderer, frame.device, frame.queue)?;
             }
         }
@@ -2346,7 +2715,7 @@ impl PlatformApp for App {
             .motion
             .local_eye()
             .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
-        let eye = if self.controls.third_person {
+        let eye = if third_person {
             self.building
                 .as_ref()
                 .context("Camera collision mirror missing")?
@@ -2393,14 +2762,22 @@ impl PlatformApp for App {
             fog_end.max(fog_start + 0.001),
         )?;
         self.weapon_light_deferred = deferred_lights;
-        let lights: Vec<_> = effects_frame
-            .lights
+        // `serverCmdLight` player lights first: they are always near the
+        // camera and must not be displaced by distant effect lights.
+        let mut lights: Vec<_> = lights_on
             .iter()
-            .map(|light| bri_render::scene::PointLight {
-                position_radius: light.position.extend(light.radius).to_array(),
-                color: light.color.extend(0.).to_array(),
+            .map(|position| bri_render::scene::PointLight {
+                position_radius: position.extend(12.0).to_array(),
+                color: [1.0, 1.0, 1.0, 0.0],
             })
             .collect();
+        lights.extend(effects_frame.lights.iter().map(|light| {
+            bri_render::scene::PointLight {
+                position_radius: light.position.extend(light.radius).to_array(),
+                color: light.color.extend(0.).to_array(),
+            }
+        }));
+        lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .effects_renderer
@@ -2431,7 +2808,8 @@ impl PlatformApp for App {
             scenes.push(ghost);
         }
         for (owner, avatar) in &self.avatars {
-            if (*owner != view.owner || self.controls.third_person)
+            if (*owner != view.owner || third_person)
+                && !hidden.contains(owner)
                 && let Some(gpu) = &avatar.gpu
             {
                 scenes.push(gpu);

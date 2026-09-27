@@ -1,0 +1,263 @@
+//! Replicated minigame state → the original Mini-Games dialogs, and dialog
+//! actions → authoritative minigame requests.
+use anyhow::{Result, ensure};
+use bri_minigames::Settings;
+use bri_sim::session::{Command, MiniGameRequest, MiniGameView, Vitals};
+use bri_ui::api::*;
+use bri_world::OwnerId;
+use std::collections::BTreeMap;
+
+/// `$MiniGameColorName[0..9]` with `$MiniGameColor` values.
+const COLORS: [(&str, [u8; 3]); 10] = [
+    ("Red", [255, 0, 0]),
+    ("Orange", [255, 128, 0]),
+    ("Yellow", [255, 255, 0]),
+    ("Green", [0, 255, 0]),
+    ("Dark Green", [0, 128, 0]),
+    ("Cyan", [0, 255, 255]),
+    ("Dark Cyan", [0, 128, 128]),
+    ("Blue", [0, 128, 255]),
+    ("Pink", [255, 128, 255]),
+    ("Black", [0, 0, 0]),
+];
+
+pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
+    ensure!(
+        (1..=30).contains(&rules.respawn_seconds)
+            && rules.vehicle_respawn_seconds <= 300
+            && (2..=300).contains(&rules.brick_respawn_seconds),
+        "Invalid mini-game timers"
+    );
+    Ok(Settings {
+        title: rules.title.clone(),
+        invite_only: rules.invite_only,
+        use_all_players_bricks: rules.use_all_players_bricks,
+        players_use_own_bricks: rules.players_use_own_bricks,
+        use_spawn_bricks: rules.use_spawn_bricks,
+        points_break_brick: rules.points_break_brick,
+        points_plant_brick: rules.points_plant_brick,
+        points_kill_player: rules.points_kill_player,
+        points_kill_self: rules.points_kill_self,
+        points_die: rules.points_die,
+        respawn_ms: rules.respawn_seconds * 1000,
+        vehicle_respawn_ms: rules.vehicle_respawn_seconds * 1000,
+        brick_respawn_ms: rules.brick_respawn_seconds * 1000,
+        falling_damage: rules.falling_damage,
+        weapon_damage: rules.weapon_damage,
+        self_damage: rules.self_damage,
+        vehicle_damage: rules.vehicle_damage,
+        brick_damage: rules.brick_damage,
+        enable_wand: rules.enable_wand,
+        enable_building: rules.enable_building,
+        enable_painting: rules.enable_painting,
+        player_type: rules.player_type.clone(),
+        loadout: rules.loadout.clone(),
+        lives: bri_minigames::Lives::Unlimited,
+    })
+}
+
+fn rules(settings: &Settings) -> MiniGameRules {
+    MiniGameRules {
+        title: settings.title.clone(),
+        invite_only: settings.invite_only,
+        use_all_players_bricks: settings.use_all_players_bricks,
+        players_use_own_bricks: settings.players_use_own_bricks,
+        use_spawn_bricks: settings.use_spawn_bricks,
+        points_break_brick: settings.points_break_brick,
+        points_plant_brick: settings.points_plant_brick,
+        points_kill_player: settings.points_kill_player,
+        points_kill_self: settings.points_kill_self,
+        points_die: settings.points_die,
+        respawn_seconds: settings.respawn_ms / 1000,
+        vehicle_respawn_seconds: settings.vehicle_respawn_ms / 1000,
+        brick_respawn_seconds: settings.brick_respawn_ms / 1000,
+        falling_damage: settings.falling_damage,
+        weapon_damage: settings.weapon_damage,
+        self_damage: settings.self_damage,
+        vehicle_damage: settings.vehicle_damage,
+        brick_damage: settings.brick_damage,
+        enable_wand: settings.enable_wand,
+        enable_building: settings.enable_building,
+        enable_painting: settings.enable_painting,
+        player_type: settings.player_type.clone(),
+        loadout: settings.loadout.clone(),
+    }
+}
+
+/// Build the dialog state for `local` from replicated listings.
+pub fn state(
+    local: OwnerId,
+    games: &[MiniGameView],
+    vitals: &BTreeMap<OwnerId, Vitals>,
+    names: &BTreeMap<OwnerId, String>,
+    items: &[(String, String)],
+    revision: u64,
+) -> MiniGameUiState {
+    let name = |owner: &OwnerId| names.get(owner).cloned().unwrap_or_default();
+    let mine = vitals.get(&local);
+    let active = mine.and_then(|v| v.minigame);
+    let active_view = active.and_then(|id| games.iter().find(|g| g.id == id));
+    let used: Vec<u8> = games.iter().map(|g| g.color).collect();
+    let invitations = mine
+        .and_then(|v| v.invite)
+        .and_then(|id| games.iter().find(|g| g.id == id))
+        .map(|g| MiniGameInvitation {
+            game: MiniGameId(g.id),
+            title: g.settings.title.clone(),
+            owner: MiniGamePlayerId(g.owner),
+            owner_name: name(&g.owner),
+            owner_display_id: g.owner.to_string(),
+        })
+        .into_iter()
+        .collect();
+    MiniGameUiState {
+        ready: true,
+        revision,
+        capabilities: MiniGameCapabilities {
+            list: true,
+            create: true,
+            configure: true,
+            join: true,
+            leave: true,
+            invite: true,
+            respond_invite: true,
+            remove_member: true,
+            reset: true,
+            respawn_all: true,
+            end: true,
+            scoreboard: true,
+        },
+        games: games
+            .iter()
+            .map(|g| MiniGameSummary {
+                id: MiniGameId(g.id),
+                title: g.settings.title.clone(),
+                owner: MiniGamePlayerId(g.owner),
+                owner_name: name(&g.owner),
+                color: g.color,
+                member_count: g.members.len() as u32,
+                invite_only: g.settings.invite_only,
+                rules: rules(&g.settings),
+            })
+            .collect(),
+        colors: COLORS
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !used.contains(&(*i as u8)))
+            .map(|(i, (name, rgb))| MiniGameColor {
+                index: i as u8,
+                name: (*name).into(),
+                rgb: *rgb,
+            })
+            .collect(),
+        active_game: active.map(MiniGameId),
+        owns_active_game: active_view.is_some_and(|g| g.owner == local),
+        local_player: Some(MiniGamePlayerId(local)),
+        members: names
+            .keys()
+            .map(|owner| MiniGameMemberRow {
+                id: MiniGamePlayerId(*owner),
+                name: name(owner),
+                score: vitals.get(owner).map_or(0, |v| v.score),
+                is_owner: active_view.is_some_and(|g| g.owner == *owner),
+                admin: false,
+                in_local_game: active_view.is_some_and(|g| g.members.contains(owner)),
+            })
+            .collect(),
+        invitations,
+        player_types: vec![MiniGameChoice {
+            id: bri_minigames::STANDARD_PLAYER.into(),
+            name: "Standard Player".into(),
+        }],
+        items: items
+            .iter()
+            .map(|(id, name)| MiniGameChoice {
+                id: id.clone(),
+                name: name.clone(),
+            })
+            .collect(),
+        status: String::new(),
+    }
+}
+
+/// Map a dialog request to a server command. `None` for local-only actions.
+pub fn command(action: &UiAction) -> Result<Option<Command>> {
+    let request = match action {
+        UiAction::RequestMiniGameList => return Ok(None),
+        UiAction::CreateMiniGame { color, rules } => MiniGameRequest::Create {
+            color: *color,
+            settings: settings(rules)?,
+        },
+        UiAction::ConfigureMiniGame { rules, .. } => MiniGameRequest::Configure {
+            settings: settings(rules)?,
+        },
+        UiAction::JoinMiniGame { game } => MiniGameRequest::Join { game: game.0 },
+        UiAction::LeaveMiniGame { .. } => MiniGameRequest::Leave,
+        UiAction::InviteMiniGame { target } => MiniGameRequest::Invite { target: target.0 },
+        UiAction::AcceptMiniGameInvite { game } => MiniGameRequest::Accept { game: game.0 },
+        UiAction::RejectMiniGameInvite { game, ignore_owner } => MiniGameRequest::Reject {
+            game: game.0,
+            ignore_owner: *ignore_owner,
+        },
+        UiAction::RemoveMiniGameMember { target } => MiniGameRequest::Kick { target: target.0 },
+        UiAction::ResetMiniGame { .. } => MiniGameRequest::Reset,
+        UiAction::RespawnMiniGameMembers { .. } => MiniGameRequest::RespawnAll,
+        UiAction::EndMiniGame { .. } => MiniGameRequest::End,
+        _ => anyhow::bail!("Not a mini-game action"),
+    };
+    Ok(Some(Command::MiniGame(request)))
+}
+
+pub fn is_minigame_action(action: &UiAction) -> bool {
+    matches!(
+        action,
+        UiAction::RequestMiniGameList
+            | UiAction::CreateMiniGame { .. }
+            | UiAction::ConfigureMiniGame { .. }
+            | UiAction::JoinMiniGame { .. }
+            | UiAction::LeaveMiniGame { .. }
+            | UiAction::InviteMiniGame { .. }
+            | UiAction::AcceptMiniGameInvite { .. }
+            | UiAction::RejectMiniGameInvite { .. }
+            | UiAction::RemoveMiniGameMember { .. }
+            | UiAction::ResetMiniGame { .. }
+            | UiAction::RespawnMiniGameMembers { .. }
+            | UiAction::EndMiniGame { .. }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rules_round_trip_and_color_availability() {
+        let rules_in = MiniGameRules {
+            respawn_seconds: 5,
+            ..Default::default()
+        };
+        let settings = settings(&rules_in).unwrap();
+        assert_eq!(settings.respawn_ms, 5000);
+        assert_eq!(rules(&settings), rules_in);
+        let view = MiniGameView {
+            id: 1,
+            owner: 2,
+            color: 3,
+            settings,
+            members: vec![2],
+        };
+        let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Guest".to_string())].into();
+        let state = state(3, &[view], &BTreeMap::new(), &names, &[], 1);
+        assert_eq!(state.colors.len(), 9);
+        assert!(state.colors.iter().all(|c| c.index != 3));
+        assert!(!state.owns_active_game);
+        assert_eq!(state.games[0].owner_name, "Host");
+        assert!(settings_invalid());
+    }
+    fn settings_invalid() -> bool {
+        settings(&MiniGameRules {
+            respawn_seconds: 0,
+            ..Default::default()
+        })
+        .is_err()
+    }
+}

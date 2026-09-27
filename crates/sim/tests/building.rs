@@ -248,11 +248,11 @@ fn planting_cannot_trap_a_dynamic_or_kinematic_entity() {
             reach: 50.0,
         };
         let before = sim.state().clone();
-        assert!(
+        assert_eq!(
             sim.plant(&builder, brick(0.1))
                 .unwrap_err()
-                .to_string()
-                .contains("embedded")
+                .downcast_ref::<bri_sim::simulation::PlantFailure>(),
+            Some(&bri_sim::simulation::PlantFailure::Stuck)
         );
         assert_eq!(*sim.state(), before);
         assert!(sim.target(Vec3::Y, Vec3::splat(f32::MAX), 10.0).is_err());

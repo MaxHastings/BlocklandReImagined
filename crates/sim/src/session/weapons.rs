@@ -189,13 +189,24 @@ impl Session {
                 self.weapons.trigger(actor, trigger.down)?;
             }
         }
+        // Player damage follows minigame policy; resolve it before the weapon
+        // world borrows the session mutably.
+        let mut hostile = BTreeSet::new();
+        for source in self.peers.keys() {
+            for target in self.peers.keys() {
+                if self.can_damage_player(*source, *target, false) {
+                    hostile.insert((*source, *target));
+                }
+            }
+        }
         let world = self.simulation.state();
         let affect = |source: ActorId, target| match target {
             TargetId::Brick(id) => world
                 .bricks
                 .get(&id)
                 .is_some_and(|b| b.owner == source.0 || b.owner == 0),
-            _ => false, // outside-minigame players have no damage permission
+            TargetId::Actor(target) => hostile.contains(&(source.0, target.0)),
+            _ => false,
         };
         let catch = |_: ActorId, _: ActorId| false; // pending minigame/sports host policy
         let mut query = crate::weapon_query::WeaponQuery {
@@ -299,6 +310,27 @@ impl Session {
                     );
                 }
                 WeaponEvent::BrickImpact { .. } => self.note_weapon_gap("brick weapon damage", 1),
+                WeaponEvent::Damage {
+                    source,
+                    target: TargetId::Actor(target),
+                    amount,
+                    kind,
+                    ..
+                } => {
+                    let lower = kind.to_ascii_lowercase();
+                    let direct = !lower.contains("radius") && !lower.contains("explosion");
+                    self.damage_player(
+                        target.0,
+                        amount,
+                        combat::DamageKind::Weapon { name: kind, direct },
+                        Some(source.0),
+                    )?;
+                }
+                WeaponEvent::Impulse {
+                    target: TargetId::Actor(target),
+                    impulse,
+                    ..
+                } => self.push_player(target.0, impulse),
                 WeaponEvent::SportMovement { locked: false, .. } => {}
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
             }

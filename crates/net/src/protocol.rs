@@ -161,6 +161,8 @@ pub struct Checkpoint {
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub chat: Vec<ChatLine>,
     pub poses: Vec<Pose>,
+    pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
+    pub minigames: Vec<bri_sim::session::MiniGameView>,
 }
 impl Checkpoint {
     pub fn from_session(session: &Session, cursor: u64) -> Self {
@@ -186,6 +188,8 @@ impl Checkpoint {
             avatars: session.avatars(),
             chat: session.chat(),
             poses: poses(session),
+            vitals: session.vitals(),
+            minigames: session.minigame_views(),
         }
     }
 }
@@ -214,6 +218,8 @@ pub struct Delta {
     pub avatars: Option<BTreeMap<OwnerId, bri_content::avatar::Appearance>>,
     pub palette: Option<Vec<[f32; 4]>>,
     pub chat: Vec<ChatLine>,
+    pub vitals: Option<BTreeMap<OwnerId, bri_sim::session::Vitals>>,
+    pub minigames: Option<Vec<bri_sim::session::MiniGameView>>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
@@ -228,9 +234,11 @@ pub enum Message {
     },
     Update(Delta),
     AdminSnapshot(bri_sim::session::AdminSnapshot),
+    /// Addressed to this client only (minigame chat, prints, invitations).
+    Notice(bri_sim::session::Notice),
     Reply {
         sequence: u64,
-        result: Result<Reply, String>,
+        result: Result<Reply, bri_sim::session::Rejection>,
     },
     Rejected(String),
 }

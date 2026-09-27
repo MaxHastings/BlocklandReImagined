@@ -74,6 +74,13 @@ fn hud(core: &Core) -> View {
         "GuiDefaultProfile",
         Rect::new(0, 0, w, h),
     ));
+    if core.damage_flash > 0.0 {
+        fill(
+            &mut v,
+            Rect::new(0, 0, w, h),
+            [255, 0, 0, (core.damage_flash * 255.0) as u8],
+        );
+    }
     if m.boxes_visible {
         let cell = (w / 10).clamp(1, 64);
         let width = cell * 10;

@@ -33,6 +33,8 @@ pub struct View {
     /// cursor advances as deltas arrive and must not be used to reset consumers.
     pub checkpoint_cue_cursor: u64,
     pub admin_snapshot: Option<bri_sim::session::AdminSnapshot>,
+    pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
+    pub minigames: Vec<bri_sim::session::MiniGameView>,
 }
 pub enum Event {
     Presentation {
@@ -40,9 +42,10 @@ pub enum Event {
         dropped: u64,
     },
     Ready,
+    Notice(bri_sim::session::Notice),
     Reply {
         request: u64,
-        result: std::result::Result<Reply, String>,
+        result: std::result::Result<Reply, bri_sim::session::Rejection>,
     },
     Failed(String),
 }
@@ -159,6 +162,8 @@ fn publish(
         tick: client.replica.tick,
         checkpoint_cue_cursor,
         admin_snapshot: client.admin_snapshot.clone(),
+        vitals: client.replica.vitals.clone(),
+        minigames: client.replica.minigames.clone(),
     }));
 }
 async fn run(
@@ -210,6 +215,7 @@ async fn run(
                     }
                     ClientEvent::Pose(_)=>publish(client,world.clone(),checkpoint_cue_cursor,view),
                     ClientEvent::AdminSnapshot(_)=>publish(client,world.clone(),checkpoint_cue_cursor,view),
+                    ClientEvent::Notice(notice)=>events.try_send(Event::Notice(notice)).context("UI notice queue is full or closed")?,
                 }
             }
         }

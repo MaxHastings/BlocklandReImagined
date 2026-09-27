@@ -17,6 +17,8 @@ use std::collections::{BTreeMap, VecDeque};
 /// Two seconds of unacknowledged input at 120 Hz. Older inputs are discarded;
 /// the next authoritative pose simply replays whatever history remains.
 pub const INPUT_HISTORY: usize = 240;
+/// Position difference (native units) treated as float noise, not error.
+const NOISE: f32 = 1e-3;
 
 #[derive(PartialEq)]
 struct Geometry {
@@ -172,7 +174,7 @@ impl Predictor {
         if ack < self.acknowledged {
             return Ok(None);
         }
-        let old = Vec3::from(self.player.state().feet);
+        let predicted = self.player.state().clone();
         self.player.restore(&mut self.world.physics, state)?;
         while self.pending.front().is_some_and(|(sequence, _)| *sequence <= ack) {
             self.pending.pop_front();
@@ -183,7 +185,19 @@ impl Predictor {
         }
         self.server_tick = Some(tick);
         self.acknowledged = ack;
-        Ok(Some(old - Vec3::from(self.player.state().feet)))
+        let corrected = self.player.state();
+        // The mirror is not bit-identical to the server world (collider order,
+        // other bodies), so replays can differ by float noise. Keep the local
+        // prediction through sub-millimeter differences rather than jittering.
+        if Vec3::from(predicted.feet).distance(Vec3::from(corrected.feet)) < NOISE
+            && Vec3::from(predicted.velocity).distance(Vec3::from(corrected.velocity)) < NOISE * 10.0
+            && predicted.grounded == corrected.grounded
+            && predicted.crouched == corrected.crouched
+        {
+            self.player.restore(&mut self.world.physics, predicted)?;
+            return Ok(Some(Vec3::ZERO));
+        }
+        Ok(Some(Vec3::from(predicted.feet) - Vec3::from(corrected.feet)))
     }
     /// Server-initiated relocation (respawn, teleport): discard in-flight inputs.
     pub fn teleport(&mut self, tick: u64, ack: u64, state: PlayerState) -> Result<()> {

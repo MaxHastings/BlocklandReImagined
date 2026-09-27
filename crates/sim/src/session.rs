@@ -12,6 +12,7 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod admin;
+mod combat;
 mod inventory;
 mod items;
 mod weapons;
@@ -21,7 +22,10 @@ pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
 };
 pub use bri_world::authority::WrenchProperties;
+pub use combat::{MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, Vitals};
 pub use inventory::{TOOL_SLOTS, ToolInventory};
+/// Stock emotes (`Emote_*` add-ons plus the built-in sit animation).
+pub const EMOTES: [&str; 5] = ["alarm", "confusion", "love", "hate", "sit"];
 pub use tools::{InspectMode, ToolAction, ToolCatalog, UNDO_PLANT_LIMIT};
 
 /// Queued inputs above which the server simulates extra ticks to catch up.
@@ -102,6 +106,14 @@ pub enum Command {
     },
     Activate,
     Chat(String),
+    /// `serverCmdSuicide`.
+    Suicide,
+    /// Click to respawn while dead.
+    Respawn,
+    /// `serverCmdLight`.
+    ToggleLight,
+    Emote(String),
+    MiniGame(MiniGameRequest),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatLine {
@@ -122,6 +134,36 @@ pub struct Snapshot {
     pub chat: Vec<ChatLine>,
     pub tools: BTreeMap<OwnerId, ToolInventory>,
 }
+/// A rejected command as sent to its client: a typed reason where the client
+/// has a specific presentation for it, plus the readable message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Rejection {
+    pub plant: Option<crate::simulation::PlantFailure>,
+    pub message: String,
+}
+impl Rejection {
+    pub fn from_error(error: &anyhow::Error) -> Self {
+        Self {
+            plant: error
+                .downcast_ref::<crate::simulation::PlantFailure>()
+                .copied(),
+            message: format!("{error:#}"),
+        }
+    }
+    pub fn message(message: impl Into<String>) -> Self {
+        Self {
+            plant: None,
+            message: message.into(),
+        }
+    }
+}
+impl std::fmt::Display for Rejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for Rejection {}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Reply {
     Accepted,
@@ -159,8 +201,14 @@ struct Peer {
     chats: u32,
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
+    combat: combat::Combat,
 }
 pub struct Session {
+    minigames: bri_minigames::MinigamesWorld,
+    spawn_points: Vec<Vec3>,
+    spawn_seed: u64,
+    private_notices: VecDeque<(OwnerId, Notice)>,
+    last_membership: BTreeMap<OwnerId, Option<bri_minigames::GameId>>,
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
     weapons: bri_weapons::WeaponsWorld,
@@ -198,6 +246,11 @@ impl Session {
         let mut weapons = inventory::core_runtime();
         weapons.tick = simulation.state().tick;
         Self {
+            minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
+            spawn_points: Vec::new(),
+            spawn_seed: 0x9E37_79B9_7F4A_7C15,
+            private_notices: VecDeque::new(),
+            last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
             weapon_triggers: BTreeMap::new(),
@@ -320,6 +373,15 @@ impl Session {
             self.admin_disconnect(owner);
             return Err(error);
         }
+        let combat = match self.combat_connect(owner, &name, role.is_admin()) {
+            Ok(combat) => combat,
+            Err(error) => {
+                self.weapons.remove_actor(bri_weapons::ActorId(owner));
+                player.despawn(&mut self.simulation.physics);
+                self.admin_disconnect(owner);
+                return Err(error);
+            }
+        };
         self.peers.insert(
             owner,
             Peer {
@@ -330,6 +392,7 @@ impl Session {
                 },
                 name: name.clone(),
                 principal,
+                combat,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -355,6 +418,8 @@ impl Session {
         self.departed
             .insert(owner, (peer.name, peer.actor.administrator, peer.avatar, peer.principal));
         peer.player.despawn(&mut self.simulation.physics);
+        self.combat_disconnect(peer.combat.player);
+        self.last_membership.remove(&owner);
         Ok(())
     }
     /// Call only after the transport authenticates its server-issued resume token.
@@ -408,6 +473,15 @@ impl Session {
             self.admin_disconnect(owner);
             return Err(error);
         }
+        let combat = match self.combat_connect(owner, &name, role.is_admin()) {
+            Ok(combat) => combat,
+            Err(error) => {
+                self.weapons.remove_actor(bri_weapons::ActorId(owner));
+                player.despawn(&mut self.simulation.physics);
+                self.admin_disconnect(owner);
+                return Err(error);
+            }
+        };
         self.peers.insert(
             owner,
             Peer {
@@ -418,6 +492,7 @@ impl Session {
                 },
                 name: name.clone(),
                 principal,
+                combat,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -571,10 +646,42 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::WeaponTrigger { down } => {
+                ensure!(!down || peer.combat.alive, "Dead players cannot fire");
                 self.weapon_trigger(owner, down, direction)?;
+                if down {
+                    self.note_shot(owner);
+                }
+                Ok(Reply::Accepted)
+            }
+            Command::Suicide => {
+                self.suicide(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::Respawn => {
+                self.request_respawn(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::ToggleLight => {
+                self.toggle_light(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::Emote(name) => {
+                ensure!(EMOTES.contains(&name.as_str()), "Unknown emote");
+                ensure!(peer.combat.alive, "Dead players cannot emote");
+                let feet = peer.player.state().feet;
+                self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::Emote { actor: owner, name },
+                    feet,
+                );
+                Ok(Reply::Accepted)
+            }
+            Command::MiniGame(request) => {
+                self.minigame_request(owner, request)?;
                 Ok(Reply::Accepted)
             }
             Command::EquipTool { slot } => {
+                ensure!(peer.combat.alive, "Dead players cannot use tools");
                 self.equip_tool(owner, slot)?;
                 Ok(Reply::Accepted)
             }
@@ -723,15 +830,20 @@ impl Session {
     pub fn step(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
         let mut touches = Vec::new();
-        for peer in self.peers.values_mut() {
+        let mut impacts = Vec::new();
+        for (&owner, peer) in self.peers.iter_mut() {
             peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
             // Normally consume one queued input. A backlog (client clock ahead,
             // or a burst after a network stall) is drained a little faster. An
-            // empty queue holds the player briefly to absorb jitter; a starved
-            // connection falls back to idle ticks so it cannot hang mid-air.
+            // empty queue holds the player briefly to absorb jitter; players
+            // who have not sent input yet, or whose connection starved, run
+            // idle ticks so they cannot hang mid-air.
             let runs = if peer.inputs.len() > INPUT_TARGET {
                 3
-            } else if !peer.inputs.is_empty() || tick - peer.last_input_tick > INPUT_STARVED {
+            } else if !peer.inputs.is_empty()
+                || peer.processed_move == 0
+                || tick - peer.last_input_tick > INPUT_STARVED
+            {
                 1
             } else {
                 0
@@ -744,7 +856,16 @@ impl Session {
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
                     peer.input = input;
-                    input
+                    if peer.combat.alive {
+                        input
+                    } else {
+                        // Corpses fall but ignore controls.
+                        MoveInput {
+                            yaw: peer.player.state().yaw,
+                            pitch: peer.player.state().pitch,
+                            ..Default::default()
+                        }
+                    }
                 } else {
                     MoveInput {
                         yaw: peer.input.yaw,
@@ -757,7 +878,10 @@ impl Session {
                     input,
                     &self.simulation.waters,
                 )?;
-                touches.extend(motion.touched);
+                if peer.combat.alive {
+                    touches.extend(motion.touched);
+                    impacts.push((owner, motion.impact));
+                }
                 if motion.jumped {
                     self.cues.emit(
                         tick,
@@ -781,6 +905,7 @@ impl Session {
         self.dirty.extend(self.simulation.step()?);
         self.step_weapons()?;
         self.step_items()?;
+        self.step_combat(impacts)?;
         Ok(())
     }
     pub fn snapshot(&self) -> Snapshot {

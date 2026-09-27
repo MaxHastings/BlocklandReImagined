@@ -80,6 +80,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 }
                 Event::Failed(e) => anyhow::bail!(e),
                 Event::Ready => anyhow::bail!("Duplicate ready"),
+                Event::Notice(_) => {}
                 Event::Presentation { cues, dropped } => {
                     assert!(cues.is_empty());
                     assert_eq!(dropped, 0);

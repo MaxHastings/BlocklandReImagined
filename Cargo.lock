@@ -310,6 +310,7 @@ dependencies = [
  "bri-foliage",
  "bri-fx-runtime",
  "bri-identity",
+ "bri-minigames",
  "bri-net",
  "bri-physics",
  "bri-render",
@@ -424,6 +425,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-minigames"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bri-net"
 version = "0.1.0"
 dependencies = [
@@ -484,6 +493,7 @@ dependencies = [
  "anyhow",
  "bri-admin",
  "bri-content",
+ "bri-minigames",
  "bri-physics",
  "bri-weapons",
  "bri-world",

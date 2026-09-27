@@ -63,8 +63,11 @@ fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<V
 fn save(path: &Path, data: &[u8]) -> Result<()> {
     image::save_buffer(path, data, SIZE.0, SIZE.1, image::ColorType::Rgba8)?; Ok(())
 }
+/// Pixels that differ perceptibly. The live predicted camera can move by
+/// float noise between frames, which shifts a few texels by one or two levels.
 fn changed_pixels(a: &[u8], b: &[u8]) -> usize {
-    a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(x,y)| x != y).count()
+    a.chunks_exact(4).zip(b.chunks_exact(4))
+        .filter(|(x,y)| x.iter().zip(y.iter()).any(|(p,q)| p.abs_diff(*q) > 8)).count()
 }
 fn write_diff(path: &Path, a: &[u8], b: &[u8]) -> Result<()> {
     let diff = a.chunks_exact(4).zip(b.chunks_exact(4)).flat_map(|(x,y)| {
@@ -90,6 +93,12 @@ fn native_core_tools_render_from_eye_and_original_mounts() -> Result<()> {
     pump(&mut app)?;
     until(&mut app, "Bedroom host/player", |a| matches!(a.ui.core.conn, ConnectionState::InGame { .. })
         && a.network_view().is_some_and(|v| v.poses.contains_key(&v.owner)))?;
+    // Spawn points sit above the floor; let the predicted player land before
+    // comparing static frames.
+    until(&mut app, "player landing", |a| a.local_motion().is_some_and(|(p, _)| {
+        p.grounded && glam::Vec3::from(p.velocity).length() < 0.001
+    }))?;
+    for _ in 0..30 { step(&mut app, Duration::from_millis(16))?; }
     let gpu = Headless::new().context("offscreen native held-item renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
@@ -126,8 +135,11 @@ fn native_core_tools_render_from_eye_and_original_mounts() -> Result<()> {
         until(&mut app, "tool deselection", |a| a.network_view().is_some_and(|v| v.tools[&v.owner].selected.is_none()))?;
         step(&mut app, Duration::from_millis(16))?;
         ensure!(app.world_item_stats().visible_instances == 0, "deselected core tool left a mounted instance");
-        ensure!(changed_pixels(&baseline, &capture(&mut app, &gpu, &mut renderer)?) < 20,
-            "deselection did not restore baseline first-person render");
+        let restored = capture(&mut app, &gpu, &mut renderer)?;
+        let residual = changed_pixels(&baseline, &restored);
+        save(&artifact.join(format!("none-{angle}-after.png")), &restored)?;
+        ensure!(residual < 20,
+            "deselection did not restore baseline first-person render ({residual} pixels differ at {angle})");
     }
 
     // Third-person view puts the local player back into the real App scene and

@@ -16,6 +16,32 @@ pub struct Replica {
     pub chat: VecDeque<bri_sim::session::ChatLine>,
     pub poses: BTreeMap<OwnerId, Pose>,
     history: BTreeMap<OwnerId, VecDeque<Pose>>,
+    pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
+    pub minigames: Vec<bri_sim::session::MiniGameView>,
+}
+fn validate_vitals(
+    vitals: &BTreeMap<OwnerId, bri_sim::session::Vitals>,
+    names: &BTreeMap<OwnerId, String>,
+) -> Result<()> {
+    ensure!(
+        vitals.len() <= 64
+            && vitals.keys().all(|id| names.contains_key(id))
+            && vitals.values().all(|v| v.health.is_finite()
+                && (0.0..=bri_sim::session::MAX_HEALTH).contains(&v.health)),
+        "Invalid player vitals"
+    );
+    Ok(())
+}
+fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {
+    ensure!(
+        games.len() <= 64
+            && games.iter().all(|g| g.members.len() <= 64
+                && g.color < 10
+                && g.settings.title.len() <= 256
+                && !g.settings.title.chars().any(char::is_control)),
+        "Invalid minigame listing"
+    );
+    Ok(())
 }
 impl Replica {
     pub fn new(checkpoint: Checkpoint) -> Result<Self> {
@@ -33,6 +59,8 @@ impl Replica {
         }
         validate_avatars(&checkpoint.avatars, &checkpoint.names)?;
         validate_tools(&checkpoint.tools, &checkpoint.names)?;
+        validate_vitals(&checkpoint.vitals, &checkpoint.names)?;
+        validate_minigames(&checkpoint.minigames)?;
         checkpoint.weapons.validate(&checkpoint.names)?;
         let mut out = Self {
             weapons: checkpoint.weapons,
@@ -48,6 +76,8 @@ impl Replica {
             chat: checkpoint.chat.into(),
             poses: BTreeMap::new(),
             history: BTreeMap::new(),
+            vitals: checkpoint.vitals,
+            minigames: checkpoint.minigames,
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -111,6 +141,12 @@ impl Replica {
             .as_ref()
             .unwrap_or(&self.weapons)
             .validate(delta.names.as_ref().unwrap_or(&self.names))?;
+        if let Some(vitals) = &delta.vitals {
+            validate_vitals(vitals, delta.names.as_ref().unwrap_or(&self.names))?;
+        }
+        if let Some(games) = &delta.minigames {
+            validate_minigames(games)?;
+        }
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -160,6 +196,13 @@ impl Replica {
         if let Some(weapons) = delta.weapons {
             self.weapons = weapons;
         }
+        if let Some(vitals) = delta.vitals {
+            self.vitals = vitals;
+        }
+        if let Some(games) = delta.minigames {
+            self.minigames = games;
+        }
+        self.vitals.retain(|id, _| self.names.contains_key(id));
         self.avatars.retain(|id, _| self.names.contains_key(id));
         for line in delta.chat {
             if self.chat.back().is_none_or(|p| p.id < line.id) {

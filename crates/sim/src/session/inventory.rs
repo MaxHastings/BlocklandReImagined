@@ -85,6 +85,7 @@ impl Session {
             self.peers.is_empty() && self.departed.is_empty(),
             "Cannot replace live item definitions"
         );
+        let catalog = super::combat::catalog(&pack);
         let mut weapons = WeaponsWorld::new(pack)?;
         ensure!(
             self.item_spawners
@@ -103,6 +104,7 @@ impl Session {
         );
         weapons.tick = self.simulation.state().tick;
         self.weapons = weapons;
+        self.minigames = super::combat::new_world(catalog);
         Ok(())
     }
 

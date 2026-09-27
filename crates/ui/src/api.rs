@@ -812,6 +812,8 @@ pub enum UiUpdate {
     },
     ClearPrints,
     PlantError(PlantError),
+    /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
+    DamageFlash(f32),
     Players {
         rows: Vec<PlayerRow>,
         server_name: String,

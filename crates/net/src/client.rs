@@ -26,9 +26,10 @@ pub enum ClientEvent {
     Pose(OwnerId),
     Reply {
         sequence: u64,
-        result: Result<Reply, String>,
+        result: Result<Reply, bri_sim::session::Rejection>,
     },
     AdminSnapshot(bri_sim::session::AdminSnapshot),
+    Notice(bri_sim::session::Notice),
 }
 pub struct Client {
     endpoint: quinn::Endpoint,
@@ -251,6 +252,7 @@ impl Client {
                     Ok(ClientEvent::Updated { world_changed })
                 }
                 Message::Reply { sequence, result } => Ok(ClientEvent::Reply { sequence, result }),
+                Message::Notice(notice) => Ok(ClientEvent::Notice(notice)),
                 Message::AdminSnapshot(snapshot) => {
                     self.administrator = snapshot.role.is_admin();
                     self.admin_snapshot = Some(snapshot.clone());

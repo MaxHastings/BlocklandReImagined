@@ -207,6 +207,8 @@ pub struct MotionEvents {
     pub jumped: bool,
     pub landed: bool,
     pub touched: Vec<BrickId>,
+    /// Velocity removed by collision this tick (Torque `onImpact` vector).
+    pub impact: Vec3,
 }
 impl Player {
     /// Feet are chosen by the server's map spawn service.
@@ -232,7 +234,9 @@ impl Player {
             "Player spawn is obstructed"
         );
         let (body, collider) = physics.insert(
-            RigidBodyBuilder::kinematic_position_based().pose(pose),
+            RigidBodyBuilder::kinematic_position_based()
+                .pose(pose)
+                .can_sleep(false),
             ColliderBuilder::new(shape).user_data((1_u128 << 64) | u128::from(owner)),
         );
         physics.detect_collisions(&(), &());
@@ -266,7 +270,9 @@ impl Player {
         ensure!(state.owner > 0, "Invalid player owner");
         let pose = tuning.pose(Vec3::from(state.feet), state.crouched);
         let (body, collider) = physics.insert(
-            RigidBodyBuilder::kinematic_position_based().pose(pose),
+            RigidBodyBuilder::kinematic_position_based()
+                .pose(pose)
+                .can_sleep(false),
             ColliderBuilder::new(tuning.shape(state.crouched))
                 .user_data((1_u128 << 64) | u128::from(state.owner)),
         );
@@ -317,17 +323,48 @@ impl Player {
         self.synchronize_pose(physics);
         Ok(())
     }
-    /// Prediction replay moves only this kinematic proxy, never other dynamics.
+    /// Target this kinematic body at the current state. Like the motor, only
+    /// the next kinematic pose is set: the physics step moves the body, which
+    /// keeps Rapier's island bookkeeping consistent across teleports.
     pub fn synchronize_pose(&self, physics: &mut PhysicsWorld) {
         let pose = self
             .tuning
             .pose(Vec3::from(self.state.feet), self.state.crouched);
-        physics.bodies[self.body].set_position(pose, true);
         physics.bodies[self.body].set_next_kinematic_position(pose);
-        physics.detect_collisions(&(), &());
     }
     pub fn eye(&self) -> Vec3 {
         self.state.eye(&self.tuning)
+    }
+    /// Corpses stop blocking players and weapons; respawn makes them solid.
+    pub fn set_solid(&self, physics: &mut PhysicsWorld, solid: bool) {
+        physics.colliders[self.collider].set_sensor(!solid);
+    }
+    /// Server relocation (spawn/respawn/teleport): clears motion state.
+    pub fn teleport(&mut self, physics: &mut PhysicsWorld, feet: Vec3, yaw: f32) -> Result<()> {
+        ensure!(
+            feet.is_finite() && feet.abs().max_element() <= 1_000_000.0 && yaw.is_finite(),
+            "Invalid teleport"
+        );
+        let mut state = self.state.clone();
+        state.feet = feet.to_array();
+        state.velocity = [0.0; 3];
+        state.yaw = yaw;
+        state.pitch = 0.0;
+        state.grounded = false;
+        state.crouched = false;
+        state.jetting = false;
+        state.jet_boost = 0.0;
+        self.restore(physics, state)
+    }
+    /// Add an impulse-derived velocity change (weapon knockback).
+    pub fn push(&mut self, delta: Vec3) {
+        if delta.is_finite() {
+            let v = (Vec3::from(self.state.velocity) + delta).clamp_length_max(200.0);
+            self.state.velocity = v.to_array();
+            if delta.y > 0.0 {
+                self.state.grounded = false;
+            }
+        }
     }
     /// A server tick in which this player's motor does not run (waiting for
     /// its next input). The kinematic body still receives its target pose so
@@ -489,6 +526,7 @@ impl Player {
                 normals.push(Vec3::from(c.hit.normal1.to_array()));
             },
         );
+        let before_collision = velocity;
         // Remove blocked velocity, avoiding accumulation against ceilings/walls.
         for normal in normals {
             let into = velocity.dot(normal);
@@ -533,6 +571,7 @@ impl Player {
             jumped,
             landed: !was_grounded && self.state.grounded,
             touched,
+            impact: before_collision - velocity,
         })
     }
     /// A swept sphere keeps the third-person camera in front of architecture.

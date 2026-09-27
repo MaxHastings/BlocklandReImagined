@@ -12,6 +12,38 @@ use rapier3d::prelude::*;
 use std::collections::BTreeMap;
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
+/// Why a brick could not be planted. Clients show the original plant-error
+/// icons for these rather than a generic rejection message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PlantFailure {
+    Overlap,
+    Float,
+    /// Embedded in map geometry.
+    Buried,
+    /// Embedded in a player, vehicle or other moving entity.
+    Stuck,
+    TooFar,
+    Forbidden,
+    Limit,
+    /// The brick needs a behavior adapter that does not exist yet.
+    Unsupported,
+}
+impl std::fmt::Display for PlantFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Overlap => "Brick overlaps another brick",
+            Self::Float => "Brick is floating: no stud connection or map support",
+            Self::Buried => "Brick is buried in the map",
+            Self::Stuck => "Brick is stuck in a player or object",
+            Self::TooFar => "Brick is too far away",
+            Self::Forbidden => "You do not have permission to build here",
+            Self::Limit => "Brick limit reached",
+            Self::Unsupported => "This special brick is not supported yet",
+        })
+    }
+}
+impl std::error::Error for PlantFailure {}
+
 pub struct Builder<'a> {
     pub actor: &'a Actor,
     pub position: Vec3,
@@ -111,6 +143,9 @@ impl Simulation {
         Ok(ids)
     }
     pub fn plant(&mut self, builder: &Builder<'_>, brick: Brick) -> Result<BrickId> {
+        if self.state().bricks.len() >= bri_world::MAX_BRICKS {
+            return Err(PlantFailure::Limit.into());
+        }
         let definition = self.definitions.get(&brick)?;
         let bounds = Bounds::new(&brick, &definition.mesh)?;
         let defs = &self.definitions;
@@ -276,36 +311,32 @@ fn validate_placement(
         "Invalid builder position/reach"
     );
     let definition = defs.get(brick)?;
-    ensure!(
-        !definition.requires_behavior_adapter,
-        "This brick requires a native behavior adapter"
-    );
+    if definition.requires_behavior_adapter {
+        return Err(PlantFailure::Unsupported.into());
+    }
     let bounds = Bounds::new(brick, &definition.mesh)?;
     let radius = *definition.mesh.footprint_studs.iter().max().unwrap() as f32 * 0.25;
-    ensure!(
-        builder.position.distance(Vec3::from(brick.position)) <= builder.reach + radius,
-        "Brick is too far away"
-    );
+    if builder.position.distance(Vec3::from(brick.position)) > builder.reach + radius {
+        return Err(PlantFailure::TooFar.into());
+    }
     let mut supported = false;
     for id in index.query(bounds.expanded(1)) {
         let existing = &world.bricks[&id];
         let other = defs.get(existing)?;
         let ob = index.bounds(id);
-        ensure!(
-            !grid::overlaps(
-                (brick, &definition.mesh, bounds),
-                (existing, &other.mesh, ob)
-            ),
-            "Brick overlaps authored occupied cells"
-        );
+        if grid::overlaps(
+            (brick, &definition.mesh, bounds),
+            (existing, &other.mesh, ob),
+        ) {
+            return Err(PlantFailure::Overlap.into());
+        }
         if grid::connected(
             (brick, &definition.mesh, bounds),
             (existing, &other.mesh, ob),
         ) {
-            ensure!(
-                may_build_on(builder.actor, existing),
-                "No build permission on supporting brick"
-            );
+            if !may_build_on(builder.actor, existing) {
+                return Err(PlantFailure::Forbidden.into());
+            }
             supported = true;
         }
     }
@@ -337,11 +368,14 @@ fn validate_placement(
             } else {
                 0.0
             };
-            ensure!(
-                contact.dist >= -0.002 - allowance,
-                "Brick is embedded in map geometry or an entity (penetration {})",
-                -contact.dist
-            );
+            if contact.dist < -0.002 - allowance {
+                return Err(if obstacle.user_data == MAP_TAG {
+                    PlantFailure::Buried
+                } else {
+                    PlantFailure::Stuck
+                }
+                .into());
+            }
         }
     }
     if !supported {
@@ -374,9 +408,8 @@ fn validate_placement(
             }
         }
     }
-    ensure!(
-        supported,
-        "Brick is floating: no stud connection or map support"
-    );
+    if !supported {
+        return Err(PlantFailure::Float.into());
+    }
     Ok(())
 }

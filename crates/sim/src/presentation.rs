@@ -34,6 +34,23 @@ pub enum CueKind {
         image: String,
         hand: u8,
     },
+    /// `Player::playPain` after more than 10 damage.
+    Pain {
+        actor: u64,
+    },
+    /// `Armor::onDisabled`: death cry and death animation.
+    Death {
+        actor: u64,
+    },
+    /// `spawnProjectile` burst where a player (re)spawns.
+    Spawn {
+        actor: u64,
+    },
+    /// Emote image above the head (alarm, love, hate, confusion) or sit.
+    Emote {
+        actor: u64,
+        name: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -94,6 +111,13 @@ impl Cue {
             CueKind::WeaponShell { actor, image, hand } => ensure!(
                 *actor > 0 && !image.is_empty() && text(image) && *hand < 2,
                 "Invalid shell cue"
+            ),
+            CueKind::Pain { actor } | CueKind::Death { actor } | CueKind::Spawn { actor } => {
+                ensure!(*actor > 0, "Invalid player cue")
+            }
+            CueKind::Emote { actor, name } => ensure!(
+                *actor > 0 && crate::session::EMOTES.contains(&name.as_str()),
+                "Invalid emote cue"
             ),
             _ => {}
         }

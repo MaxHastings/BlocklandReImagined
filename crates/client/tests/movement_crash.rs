@@ -87,6 +87,7 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
         let animation = AvatarAnimationInput {
             held_tool_pose: held_tool,
             action: None,
+            ..Default::default()
         };
         time += 1.0 / 60.0;
         sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &animation)?;
@@ -100,6 +101,7 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
     let jet_animation = AvatarAnimationInput {
         held_tool_pose: HeldToolPose::Both,
         action: None,
+        ..Default::default()
     };
     time += 1.0 / 60.0;
     sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &jet_animation)?;

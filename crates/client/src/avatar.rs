@@ -244,6 +244,10 @@ pub struct AvatarAnimationInput {
     /// Current thread-2 action from the authoritative animation cue stream.
     /// Clear this on the corresponding vanilla stop/root cue or image switch.
     pub action: Option<ActionAnimation>,
+    /// Dead bodies hold the original `death1` sequence.
+    pub dead: bool,
+    /// The `sit` emote holds the original sit sequence until the player moves.
+    pub sitting: bool,
 }
 
 pub fn locomotion(player: &PlayerState) -> &'static str {
@@ -334,7 +338,13 @@ impl AvatarMesh {
             .last_time
             .map_or(0.0, |last| (time - last).clamp(0.0, 0.25) as f32);
         self.last_time = Some(time);
-        let mode = locomotion(player);
+        let mode = if animation_input.dead {
+            "death1"
+        } else if animation_input.sitting {
+            "sit"
+        } else {
+            locomotion(player)
+        };
         if self.mode != mode {
             self.mode = mode;
             self.phase = 0.0;
@@ -751,6 +761,7 @@ mod tests {
                     sequence: "wrench".into(),
                     started_at: 0.0,
                 }),
+                ..Default::default()
             },
         )?;
         assert!(
@@ -784,6 +795,7 @@ mod tests {
                             sequence: "missing-original-clip".into(),
                             started_at: 0.0
                         }),
+                        ..Default::default()
                     },
                 )
                 .is_err()
@@ -811,6 +823,7 @@ mod tests {
             &AvatarAnimationInput {
                 held_tool_pose: HeldToolPose::Right,
                 action: None,
+                ..Default::default()
             },
         )?;
         assert_ne!(

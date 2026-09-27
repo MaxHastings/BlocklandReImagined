@@ -202,6 +202,8 @@ pub struct Core {
     pub center_print: Option<(String, Option<u64>)>,
     pub bottom_print: Option<(String, Option<u64>, bool)>,
     pub plant_error: Option<(PlantError, u64)>,
+    /// Current damage flash opacity (0..=0.75), fading over time.
+    pub damage_flash: f32,
     pub lagging: bool,
     pub shape_names: bool,
     pub super_shift: bool,
@@ -307,6 +309,7 @@ impl Core {
         self.center_print = None;
         self.bottom_print = None;
         self.plant_error = None;
+        self.damage_flash = 0.0;
         self.lagging = false;
         self.super_shift = false;
         self.zoom_on = false;
@@ -871,6 +874,7 @@ impl Ui {
             center_print: None,
             bottom_print: None,
             plant_error: None,
+            damage_flash: 0.0,
             lagging: false,
             shape_names: true,
             super_shift: false,
@@ -1131,7 +1135,14 @@ impl Ui {
                         .on_result(id, kind.as_ref(), &result, &mut self.core)
                     && let Err(reason) = result
                 {
-                    self.core.message_ok("Request Rejected", &reason);
+                    // During play a rejected action is a transient notice, like
+                    // v20's server bottom prints, not a modal that steals input.
+                    if self.core.in_game() && self.top_id() == ScreenId::Play {
+                        let until = self.core.time_ms + 3000;
+                        self.core.bottom_print = Some((reason, Some(until), false));
+                    } else {
+                        self.core.message_ok("Request Rejected", &reason);
+                    }
                 }
             }
             UiUpdate::Connection(state) => {
@@ -1239,6 +1250,11 @@ impl Ui {
                 c.bottom_print = None;
             }
             UiUpdate::PlantError(e) => c.plant_error = Some((e, c.time_ms + 800)),
+            UiUpdate::DamageFlash(amount) => {
+                if amount.is_finite() {
+                    c.damage_flash = (c.damage_flash + amount.max(0.0)).min(0.75);
+                }
+            }
             UiUpdate::Players {
                 rows,
                 server_name,
@@ -1626,6 +1642,7 @@ impl Ui {
     pub fn update(&mut self, dt_ms: u64) {
         let c = &mut self.core;
         c.time_ms = c.time_ms.saturating_add(dt_ms);
+        c.damage_flash = (c.damage_flash - dt_ms as f32 / 1000.0).max(0.0);
         let now = c.time_ms;
         for cmd in c.repeater.due(now) {
             let (super_mode, base) = match cmd.strip_prefix("super:") {

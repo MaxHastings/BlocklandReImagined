@@ -168,6 +168,30 @@ impl<'a> Font<'a> {
 }
 
 /// One laid-out line of rich text.
+/// Private-use delimiters around an inline `<bitmap:...>` image id.
+pub const BITMAP_START: char = '\u{F000}';
+pub const BITMAP_END: char = '\u{F001}';
+/// Split a laid-out ML line into text runs and inline bitmap ids.
+pub fn ml_runs(line: &str) -> Vec<(bool, &str)> {
+    let mut runs = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find(BITMAP_START) {
+        if start > 0 {
+            runs.push((false, &rest[..start]));
+        }
+        let after = &rest[start + BITMAP_START.len_utf8()..];
+        let Some(end) = after.find(BITMAP_END) else {
+            rest = after;
+            break;
+        };
+        runs.push((true, &after[..end]));
+        rest = &after[end + BITMAP_END.len_utf8()..];
+    }
+    if !rest.is_empty() {
+        runs.push((false, rest));
+    }
+    runs
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct MlLine {
     pub text: String,
@@ -202,6 +226,13 @@ pub fn layout_ml(font: &Font, src: &str, max_width: i32, default: Justify) -> Ve
                 || low == "linkcolor"
                 || low.starts_with("tab:");
             if known {
+                // Inline bitmaps (death icons) survive layout as a marked run
+                // that the ML renderer draws as an image.
+                if low.starts_with("bitmap:") {
+                    cur.push(BITMAP_START);
+                    cur.push_str(&tag["bitmap:".len()..]);
+                    cur.push(BITMAP_END);
+                }
                 if let Some(j) = low.strip_prefix("just:") {
                     just = match j {
                         "center" => Justify::Center,

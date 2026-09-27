@@ -340,6 +340,8 @@ async fn run(
     let mut tools = BTreeMap::new();
     let mut weapons = bri_sim::session::WeaponView::default();
     let mut palette = session.simulation().state().palette.clone();
+    let mut vitals = BTreeMap::new();
+    let mut minigames = Vec::new();
     let mut last_chat = 0;
     let mut joins = 0;
     let mut resumes = 0;
@@ -391,7 +393,7 @@ async fn run(
                     let old_admin_revision=session.admin_revision();
                     let result=session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")});
                     if result.is_err(){rejected+=1;}
-                    let bytes=match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|e.to_string())}) {Ok(bytes)=>bytes,Err(error)=>codec::encode(&Message::Reply{sequence:request.sequence,result:Err(format!("Could not transfer reply: {error}"))})?};
+                    let bytes=match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {Ok(bytes)=>bytes,Err(error)=>codec::encode(&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))})?};
                     let output=peer.out.clone();
                     let connection=peer.connection.clone();
                     if output.try_send(Arc::new(bytes)).is_err(){connection.close(1_u32.into(),b"Reliable backlog exceeded");}
@@ -424,11 +426,14 @@ async fn run(
                 let current_weapons=session.weapon_view();let changed_weapons=if weapons!=current_weapons{weapons=current_weapons;Some(weapons.clone())}else{None};
                 let current_palette=&session.simulation().state().palette;let changed_palette=if &palette!=current_palette{palette=current_palette.clone();Some(palette.clone())}else{None};
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
+                let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
+                let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues}))?);cursor=next;
+                let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames}))?);cursor=next;
                 for peer in peers.values(){if peer.out.try_send(bytes.clone()).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}
+                for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){let bytes=Arc::new(codec::encode(&Message::Notice(notice))?);if peer.out.try_send(bytes).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}}
             }
             }
         },

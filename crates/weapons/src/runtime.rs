@@ -468,6 +468,27 @@ impl WeaponsWorld {
         *place = Some(item.into());
         Ok(())
     }
+    /// Trusted respawn/loadout replacement: unmount held images, clear the
+    /// selection and install `items` slot for slot. In-flight projectiles keep
+    /// flying; they belong to the world, not the inventory.
+    pub fn set_inventory(&mut self, id: ActorId, items: &[Option<String>]) -> Result<()> {
+        let mut seen = std::collections::BTreeSet::new();
+        for item in items.iter().flatten() {
+            ensure!(
+                self.contains_item(item) && seen.insert(item),
+                "Unknown or duplicate loadout item"
+            );
+        }
+        let slots = self.actors.get(&id).context("Unknown actor")?.inventory.len();
+        ensure!(items.len() == slots, "Loadout slot count mismatch");
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        self.unmount(id, &mut a);
+        a.selected = None;
+        a.inventory = items.to_vec();
+        a.spawn_tick = self.tick;
+        self.actors.insert(id, a);
+        Ok(())
+    }
     pub fn contains_item(&self, item: &str) -> bool {
         self.pack.items.contains_key(item) || CORE_TOOLS.contains(&item)
     }

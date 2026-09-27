@@ -11,6 +11,7 @@ pub mod foliage;
 pub mod item_ui;
 pub mod items;
 pub mod materials;
+pub mod minigame_ui;
 pub mod motion;
 pub mod network;
 pub mod platform;
