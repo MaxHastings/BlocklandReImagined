@@ -16,6 +16,22 @@ packs, this is the fix. A `content/` folder copied from elsewhere is fine: its
 packs are kept and only the missing ones are built. Details and flags are in
 `docs/content-regeneration.md`.
 
+## Builds and disk
+Every worktree's `target/` grows to 10-200 GB, and dozens of parallel worktrees
+filled Maxwell's C: drive (1.5 TB of build output on 2026-09-27). Compile
+through sccache so worktrees share compiled dependencies: `bootstrap.py` uses it
+whenever `sccache` is on PATH, capped by `SCCACHE_CACHE_SIZE` (default 40G).
+Do not share one `CARGO_TARGET_DIR` between worktrees: cargo locks it for a
+whole build, so parallel threads would queue, and each worktree's
+`target/release/bri-client` would overwrite the others'.
+
+When a thread finishes, delete its worktree's build output (never the main
+checkout's, which packaging uses). `python tools/clean_targets.py` is a dry
+run listing each finished worktree's `target/` and its size; add `--apply` to
+delete, `--keep <folder>` to spare active worktrees. It skips folders a cargo
+build has locked or that changed in the last 30 minutes, and only ever deletes
+`target/` folders.
+
 ## Product contract
 Read `docs/alpha-contract.md` and `docs/progress.md` before substantial work.
 Maxwell's latest priority is the first core-building playtest; read

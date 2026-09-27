@@ -93,6 +93,22 @@ def check_prerequisites(need_dotnet):
     return problems
 
 
+def configure_build_cache():
+    """Compile through sccache when it is installed, so checkouts on one machine
+    share compiled dependencies instead of each building them cold."""
+    if os.environ.get('RUSTC_WRAPPER'):
+        print(f'Build cache: RUSTC_WRAPPER={os.environ["RUSTC_WRAPPER"]} (already set).')
+        return
+    sccache = shutil.which('sccache')
+    if not sccache:
+        print('Build cache: none. Optional: `cargo install sccache --locked` shares compiled '
+              'dependencies between checkouts (see AGENTS.md, "Builds and disk").')
+        return
+    os.environ['RUSTC_WRAPPER'] = sccache
+    os.environ.setdefault('SCCACHE_CACHE_SIZE', '40G')
+    print(f'Build cache: sccache, capped at {os.environ["SCCACHE_CACHE_SIZE"]}.')
+
+
 def remembered_v20(content):
     path = content / '_regeneration' / 'v20-path.txt'
     try:
@@ -131,6 +147,7 @@ def main():
             print(f'  - {name}:\n      {hint}')
         sys.exit(1)
     print('Toolchain OK.')
+    configure_build_cache()
     if args.prerequisites:
         return
     if v20 is None:
