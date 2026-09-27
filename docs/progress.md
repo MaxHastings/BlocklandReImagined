@@ -1962,3 +1962,13 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   switching tools did nothing. A click after a newer switch now always
   reaches the new image. The test also now expects the host's
   `wrenchHitSound` profile (the `WrenchHit` cue is no longer emitted).
+
+- 2026-09-27 Options graphics controls. The Advanced tab now shows v20's
+  Trilinear Filtering (default on), Use Sharp Filter and the Anisotropy slider
+  (0-1). The Graphics tab shows the Shadow Quality radios (0 = Best through
+  4 = Minimum, default Best) in their authored place, and a new Anti-Aliasing
+  checkbox (4x MSAA, default on; no v20 control) under Resolution. All save
+  on Done/Apply for the renderer's SaveSettings path. Row closing now keeps
+  controls in the same column apart, which fixes Fullscreen drawn over
+  Disable Vsync. Evidence: options unit tests and `ui_runtime_probe` renders
+  of all four tabs.

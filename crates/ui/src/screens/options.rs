@@ -16,11 +16,21 @@ const NO_VSYNC: &str = "$pref::Video::disableVerticalSync";
 const RESOLUTION: &str = "$pref::Video::resolution";
 pub const CHAT_SIZE: &str = "$Pref::Gui::ChatSize";
 pub const KEYBOARD_TURN_SPEED: &str = "$pref::Input::KeyboardTurnSpeed";
+const ANISOTROPY: &str = "$pref::OpenGL::anisotropy";
+const SHADOW_QUALITY: &str = "$pref::ShadowQuality";
+/// Not a v20 setting: 4x MSAA, on unless turned off.
+const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
+const SHADOW_RADIO: &str = "OPT_ShadowQuality";
+/// Checkboxes whose v20 default is on.
+const DEFAULT_ON: &[&str] = &["$pref::OpenGL::textureTrilinear", ANTI_ALIASING];
 /// Checkbox preferences the native game honours.
 const CHECKBOX_PREFS: &[&str] = &[
     FULLSCREEN,
     NO_VSYNC,
     "$pref::precipitationOn",
+    "$pref::OpenGL::textureTrilinear",
+    "$pref::OpenGL::useGLNearest",
+    ANTI_ALIASING,
     "$Pref::Audio::PlayMusic",
     "$Pref::Audio::MenuSounds",
     "$Pref::Audio::PlayBrickPlantSound",
@@ -53,6 +63,7 @@ const SUPPORTED_CONTROLS: &[&str] = &[
     "Opt_ChatLineTime",
     "Opt_MaxChatLines",
     "OptRemapList",
+    "SliderGraphicsAnisotropy",
 ];
 const CHAT_SIZE_RADIO: &str = "OPT_ChatSize";
 const VALUE_CLASSES: &[&str] = &[
@@ -121,6 +132,7 @@ fn supported(v: &View, n: NodeId) -> bool {
         .is_some_and(|var| CHECKBOX_PREFS.iter().any(|p| p.eq_ignore_ascii_case(var)))
         || SUPPORTED_CONTROLS.contains(&name)
         || name.starts_with(CHAT_SIZE_RADIO)
+        || name.starts_with(SHADOW_RADIO)
 }
 
 fn is_value(v: &View, n: NodeId) -> bool {
@@ -190,10 +202,10 @@ fn close_rows(v: &mut View, section: NodeId) -> i32 {
     let mut rows: Vec<i32> = body.iter().map(|&k| v.node(k).ctrl.position[1]).collect();
     rows.sort_unstable();
     rows.dedup();
-    let mut shifts = Vec::with_capacity(rows.len());
+    let mut row_shifts = Vec::with_capacity(rows.len());
     let mut shift = 0;
     for (i, &row) in rows.iter().enumerate() {
-        shifts.push((row, shift));
+        row_shifts.push((row, shift));
         let kept = body
             .iter()
             .any(|&k| v.node(k).ctrl.position[1] == row && v.node(k).state.visible);
@@ -201,17 +213,44 @@ fn close_rows(v: &mut View, section: NodeId) -> i32 {
             shift += next - row;
         }
     }
-    let mut bottom = 23;
-    for &k in &body {
-        if !v.node(k).state.visible {
-            continue;
-        }
-        let c = &mut v.nodes[k].ctrl;
-        c.position[1] -= shifts
+    let mut kept: Vec<NodeId> = body
+        .iter()
+        .copied()
+        .filter(|&k| v.node(k).state.visible)
+        .collect();
+    kept.sort_by_key(|&k| v.node(k).ctrl.position[1]);
+    // Closing rows never slides a control onto one above it in the same
+    // column (Fullscreen and Vsync, Precipitation and Trilinear): it stays
+    // at least the upper one's height below, a checkbox's being its 16-pixel
+    // row rather than its generous extent.
+    let mut placed: Vec<(NodeId, i32)> = Vec::with_capacity(kept.len());
+    for &k in &kept {
+        let c = &v.node(k).ctrl;
+        let y = c.position[1];
+        let mut new_y = y - row_shifts
             .iter()
-            .find(|(row, _)| *row == c.position[1])
+            .find(|(row, _)| *row == y)
             .map_or(0, |(_, s)| *s);
-        bottom = bottom.max(c.position[1] + c.extent[1]);
+        let (x, w) = (c.position[0], c.extent[0]);
+        for &(p, p_y) in &placed {
+            let pc = &v.node(p).ctrl;
+            let same_column = pc.position[0] < x + w && x < pc.position[0] + pc.extent[0];
+            if same_column && pc.position[1] < y {
+                let height = if pc.class == "GuiCheckBoxCtrl" {
+                    16
+                } else {
+                    pc.extent[1]
+                };
+                new_y = new_y.max(p_y + (y - pc.position[1]).min(height));
+            }
+        }
+        placed.push((k, new_y));
+    }
+    let mut bottom = 23;
+    for (k, y) in placed {
+        let c = &mut v.nodes[k].ctrl;
+        c.position[1] = y;
+        bottom = bottom.max(y + c.extent[1]);
     }
     bottom
 }
@@ -266,7 +305,8 @@ impl Options {
             if let Some(var) = s.view.node(n).ctrl.variable.clone()
                 && var.starts_with('$')
             {
-                s.view.set_bool(n, core.prefs.bool_or(&var, false));
+                let on = DEFAULT_ON.iter().any(|d| d.eq_ignore_ascii_case(&var));
+                s.view.set_bool(n, core.prefs.bool_or(&var, on));
             }
         }
         s.menu(
@@ -303,7 +343,12 @@ impl Options {
                     .set_text(n, core.prefs.i64_or(pref, fallback).to_string());
             }
         }
+        s.slider(
+            "SliderGraphicsAnisotropy",
+            core.prefs.f32_or(ANISOTROPY, 0.0).clamp(0.0, 1.0),
+        );
         s.set_chat_size(chat_size(&core.prefs));
+        s.set_shadow_quality(core.prefs.i64_or(SHADOW_QUALITY, 0));
         s.pane("Graphics");
         s.refresh_binds(core);
         s.smart_toggle();
@@ -339,23 +384,27 @@ impl Options {
                 bottoms.insert(n, close_rows(v, n));
             }
         }
-        // Graphics: the quality row is gone; its side fillers go with it and
-        // the two settings sections reach down to the footer strip.
-        if let Some(pane) = v.id("OptGraphicsPane") {
-            for k in v.node(pane).children.clone() {
-                let c = &v.node(k).ctrl;
-                if c.class == "GuiSwatchCtrl"
-                    && v.node(k).children.is_empty()
-                    && c.position[1] == 192
-                {
-                    v.set_visible(k, false);
-                }
-            }
-        }
-        for title in ["Display Settings", "Gui Settings"] {
-            if let Some(n) = find_section(v, title) {
-                v.nodes[n].ctrl.extent[1] = 322;
-            }
+        // Anti-aliasing has no v20 control; it joins Display Settings.
+        let vsync = v.walk().find(|&n| {
+            v.node(n)
+                .ctrl
+                .variable
+                .as_deref()
+                .is_some_and(|var| var.eq_ignore_ascii_case(NO_VSYNC))
+        });
+        let parent = vsync.and_then(|k| v.walk().find(|&n| v.node(n).children.contains(&k)));
+        if let (Some(vsync), Some(parent)) = (vsync, parent) {
+            let mut c = v.node(vsync).ctrl.clone();
+            c.name = Some("OptGraphicsAntiAliasingToggle".into());
+            c.variable = Some(ANTI_ALIASING.into());
+            c.text = Some("Anti-Aliasing".into());
+            // Under the resolution menu, left of Apply.
+            let menu = v.id("OptGraphicsResolutionMenu").map(|m| v.node(m).ctrl.clone());
+            let (x, y) = menu.map_or((60, 85), |m| (m.position[0] - 40, m.position[1] + m.extent[1] + 4));
+            c.position = [x, y];
+            c.extent = [110, 23];
+            c.command = None;
+            v.add(parent, c);
         }
         // Audio: Volume takes the driver section's place.
         if let Some(n) = find_section(v, "Volume") {
@@ -411,6 +460,14 @@ impl Options {
     fn slider(&mut self, name: &str, value: f32) {
         if let Some(n) = self.view.id(name) {
             self.view.set_num(n, value);
+        }
+    }
+    /// `optionsDlg::setShadowQuality`: 0 = Best through 4 = Minimum.
+    fn set_shadow_quality(&mut self, quality: i64) {
+        let quality = quality.clamp(0, 4);
+        self.draft.set(SHADOW_QUALITY, quality.to_string());
+        if let Some(n) = self.view.id(&format!("{SHADOW_RADIO}{quality}")) {
+            self.view.select_radio(n);
         }
     }
     fn set_chat_size(&mut self, size: i64) {
@@ -475,6 +532,7 @@ impl Options {
                 2.0,
             ),
             ("slider_KeyboardTurnSpeed", KEYBOARD_TURN_SPEED, 0.02, 1.0),
+            ("SliderGraphicsAnisotropy", ANISOTROPY, 0.0, 1.0),
         ] {
             if let Some(n) = self.view.id(name) {
                 let v = self.view.num(n);
@@ -706,6 +764,14 @@ impl Screen for Options {
             .and_then(|c| c.parse().ok())
         {
             self.set_chat_size(size);
+            return;
+        }
+        if let Some(quality) = cmd
+            .strip_prefix("optionsDlg.setShadowQuality(")
+            .and_then(|c| c.strip_suffix(");"))
+            .and_then(|c| c.parse().ok())
+        {
+            self.set_shadow_quality(quality);
             return;
         }
         match cmd.as_str() {
@@ -1022,6 +1088,31 @@ mod tests {
             ("GuiButtonCtrl", "clear", "", "optionsDlg.clearAllBinds();"),
             ("GuiRadioCtrl", "OPT_ChatSize2", "", "OPT_SetChatSize(2);"),
             ("GuiRadioCtrl", "OPT_ChatSize4", "", "OPT_SetChatSize(4);"),
+            (
+                "GuiCheckBoxCtrl",
+                "OptGraphicsTrilinearToggle",
+                "$pref::OpenGL::textureTrilinear",
+                "",
+            ),
+            (
+                "GuiCheckBoxCtrl",
+                "OptGraphicsTexturedFog",
+                "$pref::OpenGL::useGLNearest",
+                "",
+            ),
+            ("GuiSliderCtrl", "SliderGraphicsAnisotropy", "value", ""),
+            (
+                "GuiRadioCtrl",
+                "OPT_ShadowQuality0",
+                "",
+                "optionsDlg.setShadowQuality(0);",
+            ),
+            (
+                "GuiRadioCtrl",
+                "OPT_ShadowQuality3",
+                "",
+                "optionsDlg.setShadowQuality(3);",
+            ),
         ] {
             let mut c = ctrl(class, "GuiDefaultProfile", Rect::new(0, 0, 100, 20));
             c.name = Some(name.into());
@@ -1033,6 +1124,10 @@ mod tests {
             }
             if name == "done" {
                 c.accelerator = Some("escape".into());
+            }
+            // Authored radio sets sit in their own sections.
+            if name.starts_with(SHADOW_RADIO) {
+                c.group = Some(1);
             }
             layout.children.push(c);
         }
@@ -1295,6 +1390,33 @@ mod tests {
         assert_eq!(ui.core.prefs.get(CHAT_SIZE), None);
         click(&mut s, "done", &mut ui);
         assert_eq!(chat_size(&ui.core.prefs), 2);
+    }
+    #[test]
+    fn graphics_filters_shadows_and_anti_aliasing_save_on_done() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        assert!(
+            s.view.bool_value(s.view.id("OPT_ShadowQuality0").unwrap()),
+            "v20 default shadow quality is Best"
+        );
+        for pref in ["$pref::OpenGL::textureTrilinear", ANTI_ALIASING] {
+            let n = audio_node(&s, pref);
+            assert!(s.view.node(n).state.visible && s.view.bool_value(n), "{pref}");
+        }
+        let sharp = audio_node(&s, "$pref::OpenGL::useGLNearest");
+        assert!(s.view.node(sharp).state.visible && !s.view.bool_value(sharp));
+        toggle_audio(&mut s, &mut ui, ANTI_ALIASING, false);
+        toggle_audio(&mut s, &mut ui, "$pref::OpenGL::useGLNearest", true);
+        s.slider("SliderGraphicsAnisotropy", 0.5);
+        click(&mut s, "OPT_ShadowQuality3", &mut ui);
+        assert_eq!(ui.core.prefs.get(SHADOW_QUALITY), None);
+        click(&mut s, "done", &mut ui);
+        let p = &ui.core.prefs;
+        assert_eq!(p.i64_or(SHADOW_QUALITY, 0), 3);
+        assert!(!p.bool_or(ANTI_ALIASING, true));
+        assert!(p.bool_or("$pref::OpenGL::useGLNearest", false));
+        assert!(p.bool_or("$pref::OpenGL::textureTrilinear", false));
+        assert_eq!(p.f32_or(ANISOTROPY, 0.0), 0.5);
     }
     #[test]
     fn display_rejection_does_not_commit_then_success_retains_applied_boundary() {
