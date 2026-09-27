@@ -1695,6 +1695,18 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `dist/BlocklandReImagined-alpha-2026-09-27-a6`: `-VerifyPackage` 3236 files;
   `--check` passed.
 
+- 2026-09-27 Player step-up beneath ceilings (v20 clearance). Players stopped at
+  a plate or brick step under a ceiling that v20 players walk beneath. The
+  player box matched v20 (1.25 x 2.65, crouched 1.0, confirmed in the v20
+  executable's PlayerData offsets and the 0.25 box scale), and brick and
+  interior collision are exact boxes and hull faces as in Torque. The cause was
+  step-up: Rapier's autostep needs `step_height` (1.0) of room above the head,
+  while v20 `Player::step` only needs the player's own height above the new
+  step. `bri-sim::player::v20_step` now implements the v20 rule. New tests in
+  `crates/sim/tests/player.rs` cover a plate under a five-brick ceiling, a brick
+  step under 3.4, a crouched plate under 1.4, a one-plate-short ceiling that
+  still blocks, and jumping under a 2.8 lintel. `cargo test -p bri-sim` passed.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

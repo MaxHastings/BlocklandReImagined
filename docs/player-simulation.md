@@ -20,12 +20,24 @@ The recovered `PlayerStandardArmor` declaration in
 | Climb angle | 70 degrees | runSurfaceAngle |
 | Third-person maximum distance | 8 | cameraMaxDist |
 
-These values do not establish movement equivalence. The script bounding boxes
-multiply nominal dimensions by four, but the corresponding Blockland engine
-scaling has not been established from source. The current collision box uses
-nominal width1.25, standing height2.65 and crouched height1.0. Eye heights2.4/0.85,
-gravity20, step height0.6, ground snap0.2, jet thrust35, horizontal jet thrust48,
-jet rise cap25 and forward cap33 are explicit adaptation assumptions. The original
+These values do not establish movement equivalence. Dimensions are confirmed
+from `blocklandv20.exe` (read-only disassembly, 2026-09-27): PlayerData stores
+`boundingBox` at +0x374 and `crouchBoundingBox` at +0x380 unscaled, and
+`Player::step`/the collision box multiply them by the object scale and 0.25.
+The world box is therefore 1.25 x 1.25 x 2.65 standing and 1.25 x 1.25 x 1.0
+crouched, feet at the box bottom, matching `PlayerTuning`. `maxStepHeight`
+(+0x2AC) defaults to 1.0 and is not quartered.
+
+v20 `Player::step` (0x5A9FD0) gathers static polygons in the box at the move's
+destination extended upward by `maxStepHeight`. It picks the highest vertex
+below `maxStepHeight` that has no other vertex within the player's own height
+above it. Only the player's height must fit above the step, not
+`maxStepHeight` of extra headroom. The motor mirrors this in `v20_step`.
+Rapier's controller autostep required a full 1.0 above the head, so players
+stopped at plates and bricks beneath ceilings that v20 players walk under.
+Eye heights 2.4/0.85, gravity 20, ground snap 0.2, jet thrust 35, horizontal
+jet thrust 48, jet rise cap 25 and forward cap 33 are explicit adaptation
+assumptions. The original
 script's resistance limits inform the caps but do not prove the new equations.
 `PlayerTuning` keeps these assumptions together. Do not copy Blockland2's scaled
 render/collision constants: that prototype deliberately changed world scale and

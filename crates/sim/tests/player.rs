@@ -456,3 +456,82 @@ fn brick_staircases_and_ledges_are_climbed_without_jumping() {
     assert!((s.feet[1] - 0.2).abs() < 0.02, "{s:?}");
     assert!(s.velocity[2] < -6.5, "ledge braked the player: {s:?}");
 }
+
+/// A raised floor (`riser` tall) under a ceiling whose underside is `ceiling`
+/// above the ground, from z=-1 onward.
+fn low_room(w: &mut PhysicsWorld, riser: f32, ceiling: f32) {
+    if riser > 0.0 {
+        w.insert_collider(
+            ColliderBuilder::cuboid(3.0, riser * 0.5, 5.0).translation(Vector::new(
+                0.0,
+                riser * 0.5,
+                -6.0,
+            )),
+            None,
+        );
+    }
+    w.insert_collider(
+        ColliderBuilder::cuboid(3.0, 0.3, 5.0).translation(Vector::new(0.0, ceiling + 0.3, -6.0)),
+        None,
+    );
+    w.detect_collisions(&(), &());
+}
+#[test]
+fn v20_steps_need_only_player_height_beneath_ceilings() {
+    // v20 Player::step accepts a step when the player's own height (2.65, or
+    // 1.0 crouched) fits above it; it does not need maxStepHeight of headroom.
+    // A plate floor inside a five-brick room, a brick step under 4 bricks + 1
+    // plate + 1 brick, and a crouched plate under a 1.4 lintel all clear.
+    for (riser, ceiling, crouch) in [(0.2, 3.0, false), (0.6, 3.4, false), (0.2, 1.4, true)] {
+        let mut w = scene();
+        let mut p = spawn(&mut w);
+        low_room(&mut w, riser, ceiling);
+        let input = MoveInput {
+            forward: 1.0,
+            crouch,
+            ..Default::default()
+        };
+        step(&mut p, &mut w, input, 150);
+        let s = p.state();
+        assert!(
+            s.feet[2] < -3.0,
+            "{riser} step under {ceiling} stalled: {s:?}"
+        );
+        assert!((s.feet[1] - riser).abs() < 0.02 && s.grounded, "{s:?}");
+    }
+    // One plate less headroom than the player's height still blocks.
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    low_room(&mut w, 0.2, 2.8);
+    walk_forward(&mut p, &mut w, 150);
+    assert!(p.state().feet[2] > -1.0 && p.state().feet[1] < 0.01);
+}
+#[test]
+fn jumping_under_a_v20_lintel_bumps_the_head_and_keeps_walking() {
+    // A four-brick-and-two-plate opening (2.8) clears a standing 2.65 player.
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    low_room(&mut w, 0.0, 2.8);
+    walk_forward(&mut p, &mut w, 60);
+    assert!(p.state().feet[2] < -3.0, "{:?}", p.state());
+    let jump = MoveInput {
+        forward: 1.0,
+        jump: true,
+        ..Default::default()
+    };
+    assert!(p.step(&mut w, jump).unwrap().jumped);
+    w.step();
+    let mut peak = 0.0_f32;
+    for _ in 0..60 {
+        p.step(&mut w, jump).unwrap();
+        w.step();
+        peak = peak.max(p.state().feet[1]);
+    }
+    assert!(peak > 0.1 && peak < 0.16, "head passed the ceiling: {peak}");
+    assert!(
+        p.state().grounded && p.state().feet[1] < 0.01,
+        "{:?}",
+        p.state()
+    );
+    assert!(p.state().velocity[2] < -6.5, "{:?}", p.state());
+}

@@ -4,7 +4,7 @@ use bri_world::{BrickId, OwnerId};
 use glam::Vec3;
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::{
-    control::{CharacterAutostep, CharacterLength, KinematicCharacterController},
+    control::{CharacterLength, KinematicCharacterController},
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
@@ -126,7 +126,8 @@ impl Default for PlayerTuning {
         // Speeds, runForce/mass, air control, drag, jumpForce/mass, resistance
         // and runSurfaceAngle: recovered PlayerStandardArmor. Gravity, jet thrust,
         // jet lift and step height (maxStepHeight default): v20 engine constants.
-        // Dimensions, eyes and ground snap remain adaptation assumptions; see
+        // Box dimensions: the v20 datablock boxes at 0.25 engine scale. Eyes and
+        // ground snap remain adaptation assumptions; see
         // docs/player-simulation.md.
         Self {
             width: 1.25,
@@ -626,12 +627,8 @@ impl Player {
         let rising = velocity.y > surface_y.max(0.0);
         let controller = KinematicCharacterController {
             offset: CharacterLength::Absolute(0.005),
-            // Players step up ledges while walking, not in mid-air.
-            autostep: was_grounded.then_some(CharacterAutostep {
-                max_height: CharacterLength::Absolute(t.step_height),
-                min_width: CharacterLength::Absolute(0.1),
-                include_dynamic_bodies: false,
-            }),
+            // Steps are resolved below with v20's rule, not the controller's.
+            autostep: None,
             max_slope_climb_angle: t.slope_degrees.to_radians(),
             min_slope_slide_angle: t.slope_degrees.to_radians(),
             snap_to_ground: if !rising && !input.jet {
@@ -684,9 +681,41 @@ impl Player {
                 normals.push(Vec3::from(c.hit.normal1.to_array()));
             },
         );
+        let mut moved = Vec3::from(motion.translation.to_array());
+        let mut grounded = motion.grounded;
+        // Players step up ledges while walking, not in mid-air.
+        if was_grounded
+            && let Some(rise) = v20_step(
+                &physics.query_pipeline_with_filter(
+                    filter.predicate(&|_, c: &Collider| c.user_data >> 64 != 1),
+                ),
+                t,
+                &shape,
+                feet + moved,
+                Vec3::new(translation.x - moved.x, 0.0, translation.z - moved.z),
+            )
+        {
+            let lifted = feet + moved + Vec3::Y * rise;
+            let rest = controller.move_shape(
+                dt,
+                &query,
+                shape.as_ref(),
+                &t.pose(lifted, self.state.crouched),
+                Vector::new(translation.x - moved.x, 0.0, translation.z - moved.z),
+                |c| {
+                    let tag = physics.colliders[c.handle].user_data;
+                    if let Ok(id) = u64::try_from(tag)
+                        && id > 0
+                    {
+                        contacts.insert(id);
+                    }
+                },
+            );
+            moved += Vec3::Y * rise + Vec3::from(rest.translation.to_array());
+            grounded = true;
+        }
         let before_collision = velocity;
         let intended = velocity * dt;
-        let moved = Vec3::from(motion.translation.to_array());
         let climbed = moved.y > intended.y.max(0.0) + 0.01;
         // Remove blocked velocity, avoiding accumulation against ceilings/walls.
         for normal in normals {
@@ -714,11 +743,11 @@ impl Player {
         }
         // Like v20's run surface, support persists while jetting until thrust lifts
         // the player: jetting along the floor keeps ground friction.
-        self.state.grounded = motion.grounded && !rising && !jumped;
+        self.state.grounded = grounded && !rising && !jumped;
         if self.state.grounded {
             velocity.y = 0.0;
         }
-        self.state.feet = (feet + Vec3::from(motion.translation.to_array())).to_array();
+        self.state.feet = (feet + moved).to_array();
         self.state.velocity = velocity.to_array();
         // Grounded idle motion need not produce a sweep callback. Include nearby
         // solid contacts so on-touch is an entry event, not a movement event.
@@ -783,6 +812,49 @@ impl Player {
 /// momentum at or above the requested speed is never braked: steering within
 /// about 25 degrees of travel adds nothing, and wider steering pushes only
 /// between the travel and move directions.
+/// v20 `Player::step`: at the blocked move's destination, the highest surface
+/// below `step_height` that leaves the player's own height clear above it. Only
+/// that clearance is required, not `step_height` of extra headroom, so players
+/// step onto plates and bricks beneath ceilings that just clear their heads.
+fn v20_step(
+    query: &rapier3d::pipeline::QueryPipeline<'_>,
+    t: &PlayerTuning,
+    shape: &SharedShape,
+    feet: Vec3,
+    remaining: Vec3,
+) -> Option<f32> {
+    const SKIN: f32 = 0.005;
+    let direction = remaining.try_normalize()?;
+    // The controller stops short by its offset; reach just past the riser.
+    let target = feet + direction * remaining.length().max(4.0 * SKIN);
+    let half = t.width * 0.5;
+    let sole = SharedShape::cuboid(half, SKIN, half);
+    let (_, hit) = query.cast_shape(
+        &Pose::translation(target.x, feet.y + t.step_height + SKIN, target.z),
+        Vector::new(0.0, -1.0, 0.0),
+        sole.as_ref(),
+        ShapeCastOptions {
+            max_time_of_impact: t.step_height,
+            stop_at_penetration: true,
+            ..Default::default()
+        },
+    )?;
+    let rise = t.step_height - hit.time_of_impact + SKIN;
+    // Beneath the walkable floor offset, or a riser at least step_height tall.
+    if rise <= 2.0 * SKIN || hit.time_of_impact <= 0.0 {
+        return None;
+    }
+    let raised = Pose::translation(
+        target.x,
+        feet.y + rise + shape.compute_local_aabb().half_extents().y,
+        target.z,
+    );
+    query
+        .intersect_shape(raised, shape.as_ref())
+        .next()
+        .is_none()
+        .then_some(rise)
+}
 fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> Vec3 {
     let speed = horizontal.length();
     if speed > 0.0 && move_speed <= speed {
