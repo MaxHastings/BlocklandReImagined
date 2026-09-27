@@ -262,6 +262,18 @@ fn main() -> Result<()> {
         ui.apply(UiUpdate::PlantError(PlantError::Overlap));
         ui.update(16);
         render(&ui, "hud-super-shift", &mut renderer, &mut report)?;
+        ui.apply(UiUpdate::CenterPrint {
+            text: "\u{E005}Respawning in 3 seconds...\n\u{E003}Second line".into(),
+            seconds: 2.0,
+        });
+        ui.apply(UiUpdate::BottomPrint {
+            text: "\u{E006}Bottom print".into(),
+            seconds: 2.0,
+            hide_bar: false,
+        });
+        ui.update(16);
+        render(&ui, "hud-prints", &mut renderer, &mut report)?;
+        ui.apply(UiUpdate::ClearPrints);
         ui.core.run_command("toggleSuperShift", true);
         ui.core.run_command("toggleSuperShift", false);
         ui.core.run_command("useSprayCan", true);

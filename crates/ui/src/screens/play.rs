@@ -20,6 +20,17 @@ impl Play {
                 view.set_visible(n, false);
             }
         }
+        // Torque's ML text grows with its content; let multi-line prints use
+        // their dialog's full height.
+        for (dialog, text) in [
+            ("centerPrintDlg", "CenterPrintText"),
+            ("bottomPrintDlg", "BottomPrintText"),
+        ] {
+            if let (Some(d), Some(t)) = (view.id(dialog), view.id(text)) {
+                let h = view.node(d).ctrl.extent[1] - view.node(t).ctrl.position[1];
+                view.nodes[t].ctrl.extent[1] = h;
+            }
+        }
         Self { view }
     }
 }
@@ -260,27 +271,20 @@ fn hud(core: &Core) -> View {
             "BlockChatTextProfile",
         );
     }
-    if let Some((message, _)) = &core.center_print {
-        markup(
-            &mut v,
-            Rect::new(0, h / 3, w, h / 3),
-            message,
-            "HUDBrickNameProfile",
-        );
-    }
-    if let Some((message, _, hide_bar)) = &core.bottom_print {
-        if !hide_bar {
-            fill(&mut v, Rect::new(0, h - 80, w, 40), [0, 0, 0, 100]);
-        }
-        markup(
-            &mut v,
-            Rect::new(0, h - 80, w, 40),
-            message,
-            "HUDBrickNameProfile",
-        );
-    }
     v.layout(w, h);
     v
+}
+impl Play {
+    fn print(&mut self, dialog: &str, text: &str, message: Option<String>) {
+        if let Some(n) = self.view.id(dialog) {
+            self.view.set_visible(n, message.is_some());
+        }
+        if let (Some(n), Some(message)) = (self.view.id(text), message)
+            && self.view.text_of(n) != message
+        {
+            self.view.set_text(n, message);
+        }
+    }
 }
 impl Screen for Play {
     fn id(&self) -> ScreenId {
@@ -305,6 +309,28 @@ impl Screen for Play {
     fn on_update(&mut self, core: &mut Core) {
         if let Some(n) = self.view.id("LagIcon") {
             self.view.set_visible(n, core.lagging);
+        }
+        // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs.
+        let center = core.center_print.as_ref().map(|(text, _)| text);
+        self.print(
+            "centerPrintDlg",
+            "CenterPrintText",
+            center.map(|t| {
+                format!(
+                    "<just:center>{t}
+"
+                )
+            }),
+        );
+        let bottom = core.bottom_print.as_ref();
+        self.print(
+            "bottomPrintDlg",
+            "BottomPrintText",
+            bottom.map(|(t, ..)| t.clone()),
+        );
+        if let Some(n) = self.view.id("bottomPrintBar") {
+            self.view
+                .set_visible(n, bottom.is_some_and(|(_, _, hide)| !hide));
         }
         // handlePlantError: the small icons replace the large ones when
         // $pref::Video::useSmallPlantErrors is set.
