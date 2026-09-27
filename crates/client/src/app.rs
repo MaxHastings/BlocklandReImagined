@@ -95,6 +95,8 @@ struct Attempt {
     trust: BTreeMap<bri_world::OwnerId, bri_sim::session::PlayerTrust>,
     /// Loading the map the host changed to failed.
     map_failure: Option<mpsc::Receiver<String>>,
+    /// The loading screen covers a map change until the new map renders.
+    reloading: bool,
 }
 struct PendingAction {
     action: UiAction,
@@ -1458,6 +1460,7 @@ impl App {
             router: internet.then_some(router),
             trust: BTreeMap::new(),
             map_failure: None,
+            reloading: false,
         });
         Ok(())
     }
@@ -1621,6 +1624,7 @@ impl App {
             router: None,
             trust: BTreeMap::new(),
             map_failure: None,
+            reloading: false,
         });
         Ok(())
     }
@@ -2035,6 +2039,22 @@ impl App {
                     self.brick_debris.clear();
                     let (failed_tx, failed_rx) = mpsc::sync_channel(1);
                     a.map_failure = Some(failed_rx);
+                    // v20 shows the loading GUI while the new mission loads.
+                    a.reloading = true;
+                    self.ui.apply_session(
+                        a.id,
+                        UiUpdate::Connection(ConnectionState::Loading {
+                            map: map.clone(),
+                            preview: self
+                                .content
+                                .maps
+                                .iter()
+                                .find(|m| m.id == map)
+                                .map_or(IconRef::None, |m| m.preview.clone()),
+                            phase: LoadPhase::LoadingObjects,
+                            progress: 0.0,
+                        }),
+                    );
                     self.runtime.spawn(async move {
                         let prepared = async {
                             let permit = load_limit.acquire_owned().await?;
@@ -2414,6 +2434,26 @@ impl App {
                 receiver: receive,
                 abort: task.abort_handle(),
             });
+        }
+        if a.reloading
+            && let Some(view) = &a.view
+            && self.scene_map.as_deref() == Some(view.world.map_id.as_str())
+            && self
+                .world_source
+                .as_ref()
+                .is_some_and(|source| Arc::ptr_eq(source, &view.world))
+        {
+            a.reloading = false;
+            self.ui.apply_session(
+                a.id,
+                UiUpdate::Connection(ConnectionState::InGame {
+                    server_name: a.name.clone(),
+                    max_players: a.max_players,
+                    local: a.local,
+                    single_player: a.single,
+                    admin: view.administrator,
+                }),
+            );
         }
         if a.ready
             && !a.entered

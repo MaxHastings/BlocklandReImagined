@@ -335,12 +335,21 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
     request(&mut host, UiAction::Admin(AdminAction::ChangeMap { map: SLATE.into() }))?;
     until(
         &mut [&mut host, &mut guest],
+        "guest shows the loading screen",
+        Duration::from_secs(20),
+        |a| matches!(a[1].ui.core.conn, ConnectionState::Loading { .. }),
+    )?;
+    let frame = capture(&mut guest, &gpu, &mut ui_renderer)?;
+    save(&artifact.join("guest-loading-new-map.png"), &frame)?;
+    until(
+        &mut [&mut host, &mut guest],
         "both clients on Slate",
         Duration::from_secs(120),
         |a| {
             a.iter().all(|app| {
                 app.network_view().is_some_and(|v| v.world.map_id == SLATE)
                     && app.scene_map() == Some(SLATE)
+                    && in_game(app)
                     && app.world_render_ready()
                     && app.ui.core.players.len() == 2
             })
