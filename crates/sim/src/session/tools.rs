@@ -321,6 +321,9 @@ impl Session {
         image: &str,
         paint: Option<u8>,
     ) -> Result<()> {
+        if !self.tutorial_allows_spray(owner) {
+            return Ok(());
+        }
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(peer.combat.alive, "Dead players cannot paint");
         if let Some(color) = paint {
@@ -347,14 +350,19 @@ impl Session {
             peer.actor.administrator,
             "Only administrators can use the Destructo Wand"
         );
+        if !self.tutorial_allows_wand(owner) {
+            return Ok(());
+        }
         ensure!(peer.combat.alive, "You are dead");
         self.hold_image(owner, ADMIN_WAND_IMAGE, None)
     }
 
-    /// `serverCmdWand`: the player wand, unless a minigame disables it.
-    /// Gameplay rules that further restrict it (the tutorial's
-    /// `canUseWand`) belong here.
+    /// `serverCmdWand`: the player wand, unless a minigame disables it or
+    /// the tutorial keeps it for the wand room.
     pub fn use_wand(&mut self, owner: OwnerId) -> Result<()> {
+        if !self.tutorial_allows_wand(owner) {
+            return Ok(());
+        }
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(peer.combat.alive, "You are dead");
         ensure!(

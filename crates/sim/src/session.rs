@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod admin;
 mod bots;
+mod build_load;
 mod combat;
 mod control;
 pub use control::ControlObject;
@@ -160,6 +161,20 @@ pub enum Command {
     ControlPlayer,
     /// The client's brick inventory state, which only it knows.
     BrickHand(BrickHand),
+    /// `serverCmdWand` (`/wand`): hold the player wand.
+    Wand,
+    /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
+    /// being typed in, shown to everyone above the chat.
+    Talking(bool),
+}
+/// The v20 message type of a server chat line (`MessageAll('MsgUploadStart',
+/// ...)`), which clients answer with its GUI sound (`addMessageCallback`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageTag {
+    UploadStart,
+    UploadEnd,
+    ProcessComplete,
+    ClearBricks,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatLine {
@@ -168,6 +183,7 @@ pub struct ChatLine {
     pub name: String,
     pub text: String,
     pub tick: u64,
+    pub tag: Option<MessageTag>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -253,6 +269,8 @@ struct Peer {
     special: special::Progress,
     control: ControlObject,
     tutorial: tutorial::Progress,
+    /// `%client.isTalking`.
+    talking: bool,
 }
 pub struct Session {
     events: events::Events,
@@ -300,6 +318,8 @@ pub struct Session {
     /// v20 `$Server::LAN`: single-player and LAN hosts use the looser brick
     /// damage rules.
     lan_host: bool,
+    /// The save being loaded brick batch by brick batch.
+    loading: Option<Box<build_load::Loading>>,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -349,6 +369,7 @@ impl Session {
             admin: admin::AdminRuntime::default(),
             admin_disconnects: VecDeque::new(),
             lan_host: false,
+            loading: None,
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).
@@ -493,6 +514,7 @@ impl Session {
                 control: ControlObject::Player,
                 tutorial: Default::default(),
                 temp_color: None,
+                talking: false,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -609,6 +631,7 @@ impl Session {
                 control: ControlObject::Player,
                 tutorial: Default::default(),
                 temp_color: None,
+                talking: false,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -829,6 +852,7 @@ impl Session {
                         && !text.chars().any(char::is_control),
                     "Invalid chat message"
                 );
+                peer.talking = false;
                 let name = peer.name.clone();
                 self.team_chat(owner, &name, &text)?;
                 Ok(Reply::Accepted)
@@ -904,22 +928,16 @@ impl Session {
                 )?)))
             }
             Command::LoadBuild { build, ownership } => {
-                let plan = bri_world::build::LoadPlan::prepare(
-                    self.simulation.state(),
-                    *build,
-                    owner,
-                    ownership,
-                    self.ownership_scope.as_deref(),
-                    self.next_owner,
-                )?;
-                let next_owner = plan.next_owner;
-                self.item_spawners
-                    .validate_append(self.simulation.state(), plan.bricks())?;
-                let ids = self.simulation.load_build(&peer.actor, plan)?;
-                self.next_owner = next_owner;
-                let count = ids.len();
-                self.dirty.extend(ids);
-                Ok(Reply::Loaded { bricks: count })
+                let bricks = self.start_build_load(owner, *build, ownership)?;
+                Ok(Reply::Loaded { bricks })
+            }
+            Command::Wand => {
+                self.use_wand(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::Talking(talking) => {
+                peer.talking = talking;
+                Ok(Reply::Accepted)
             }
 
             Command::Avatar(appearance) => {
@@ -1007,12 +1025,14 @@ impl Session {
                     .next_chat
                     .checked_add(1)
                     .context("Chat IDs exhausted")?;
+                peer.talking = false;
                 self.chat.push_back(ChatLine {
                     id: self.next_chat,
                     owner,
                     name: peer.name.clone(),
                     text,
                     tick,
+                    tag: None,
                 });
                 self.next_chat = next;
                 if self.chat.len() > 100 {
@@ -1122,6 +1142,7 @@ impl Session {
         self.step_specials()?;
         self.step_highlights()?;
         self.step_tutorial()?;
+        self.step_build_load()?;
         let changed = self.dirty.clone();
         self.step_events(&changed)?;
         Ok(())

@@ -1078,6 +1078,8 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
         .await?,
         Reply::Loaded { bricks: 1 }
     );
+    // Loaded bricks are published on the next tick.
+    wait(&mut host, |c| c.replica.world.bricks.len() == 1).await?;
     let Reply::Saved(saved) = host
         .command(Command::SaveBuild {
             events: true,

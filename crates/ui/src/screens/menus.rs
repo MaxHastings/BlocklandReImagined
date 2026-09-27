@@ -86,7 +86,8 @@ impl NativeScreen {
             }
             ScreenId::About => s.set("aboutText", "Blockland ReImagined\nOriginal Blockland by Eric Hartman and contributors.\nNative engine rewrite — development build."),
             ScreenId::MessageInput(ch) => {
-                s.set("NMH_Channel", if ch == ChatChannel::Say { "SAY:" } else { "TEAM:" });
+                // newMessageHud::open: "\c0SAY:" or "\c1TEAM:".
+                s.set("NMH_Channel", if ch == ChatChannel::Say { "\u{E000}SAY:" } else { "\u{E001}TEAM:" });
                 let size = super::options::chat_size(&core.prefs);
                 for (name, style) in [("NMH_Type", "HUDChatTextEditSize"), ("NMH_Channel", "BlockChatChannelSize")] {
                     if let Some(n) = s.view.id(name) {
@@ -94,6 +95,7 @@ impl NativeScreen {
                     }
                 }
                 s.view.focus = s.view.id("NMH_Type");
+                s.place_chat_box(core);
             }
             ScreenId::ManualJoin => s.view.focus = s.view.id("MJ_txtIP"),
             // escapeMenu::onWake: plain buttons unless $Pref::Gui::ColorEscapeMenu.
@@ -112,6 +114,34 @@ impl NativeScreen {
         }
         s.refresh(core);
         s
+    }
+    /// `newMessageHud::updatePosition` and `updateTypePosition`: the box sits
+    /// right under the chat text, the typing field right after the channel
+    /// label, and the field's height follows its font (`autoSizeHeight`).
+    fn place_chat_box(&mut self, core: &Core) {
+        let (Some(bx), Some(channel), Some(field)) = (
+            self.view.id("NMH_Box"),
+            self.view.id("NMH_Channel"),
+            self.view.id("NMH_Type"),
+        ) else {
+            return;
+        };
+        let pack = &core.pack;
+        let h = self.view.line_height(pack, field) + 4;
+        let x = self.view.node(channel).ctrl.position[0] + self.view.pixel_width(pack, channel) + 2;
+        let y = super::play::chat_bottom(core);
+        let w = self.view.node(bx).ctrl.extent[0];
+        let placed = |c: &crate::schema::Control| (c.position, c.extent);
+        let before = (placed(&self.view.node(bx).ctrl), placed(&self.view.node(field).ctrl));
+        let nodes = &mut self.view.nodes;
+        nodes[bx].ctrl.position[1] = y;
+        nodes[bx].ctrl.extent[1] = h;
+        nodes[channel].ctrl.extent[1] = h;
+        nodes[field].ctrl.position = [x, 0];
+        nodes[field].ctrl.extent = [(w - x - 2).max(1), h];
+        if before != (placed(&self.view.node(bx).ctrl), placed(&self.view.node(field).ctrl)) {
+            self.view.layout(core.logical.0, core.logical.1);
+        }
     }
     fn set(&mut self, name: &str, text: &str) {
         if let Some(n) = self.view.id(name) {
@@ -453,9 +483,6 @@ impl Screen for NativeScreen {
         self.id != ScreenId::Play
     }
     fn on_wake(&mut self, core: &mut Core) {
-        if matches!(self.id, ScreenId::MessageInput(_)) {
-            core.request(UiAction::StartTyping);
-        }
         if self.id == ScreenId::ManualJoin {
             self.set("MJ_txtIP", core.prefs.str_or("$pref::Join::Address", ""));
         }
@@ -470,6 +497,12 @@ impl Screen for NativeScreen {
     }
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
+    }
+    fn tick(&mut self, _dt_ms: u64, core: &mut Core) {
+        // The box follows the chat as lines arrive and fade.
+        if matches!(self.id, ScreenId::MessageInput(_)) {
+            self.place_chat_box(core);
+        }
     }
     fn on_result(
         &mut self,
@@ -511,8 +544,17 @@ impl Screen for NativeScreen {
             return;
         }
         if ev.kind == EventKind::Changed {
-            if self.view.node(ev.node).ctrl.name.as_deref() == Some("SM_missionList") {
-                self.map_preview(core);
+            match self.view.node(ev.node).ctrl.name.as_deref() {
+                Some("SM_missionList") => self.map_preview(core),
+                // NMH_Type::type: the first typed character, unless it starts
+                // a slash command, shows this player as talking.
+                Some("NMH_Type") => {
+                    let text = self.edit("NMH_Type");
+                    if text.chars().count() == 1 && text != "/" {
+                        core.request(UiAction::StartTyping);
+                    }
+                }
+                _ => {}
             }
             return;
         }

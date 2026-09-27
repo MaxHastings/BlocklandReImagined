@@ -799,6 +799,8 @@ pub enum UiUpdate {
     Chat {
         text: String,
     },
+    /// Names typing in the chat box, in the order they started (`WhoTalkSO`).
+    Talking(Vec<String>),
     CenterPrint {
         text: String,
         seconds: f32,

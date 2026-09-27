@@ -484,6 +484,41 @@ impl View {
             })
     }
 
+    fn profile_font<'a>(pack: &'a Pack, profile: &str) -> Option<Font<'a>> {
+        let style = pack.data.styles.get(profile)?;
+        Font::get(pack, Self::font_id(pack, style)?)
+    }
+
+    /// Height a `GuiMLTextCtrl` of this profile reflows `text` to at
+    /// `width`, line by line as `draw_ml` lays it out.
+    pub fn ml_height(pack: &Pack, profile: &str, text: &str, width: i32) -> i32 {
+        let Some(font) = Self::profile_font(pack, profile) else {
+            return 0;
+        };
+        text::layout_ml(&font, text, width, Justify::Left)
+            .iter()
+            .map(|line| {
+                text::ml_runs(&line.text)
+                    .iter()
+                    .filter(|(bitmap, _)| *bitmap)
+                    .filter_map(|(_, id)| pack.image_size(id))
+                    .map(|(_, h)| h as i32)
+                    .fold(font.line_height(), i32::max)
+            })
+            .sum()
+    }
+
+    /// `getPixelWidth`: the width of a control's text in its profile font.
+    pub fn pixel_width(&self, pack: &Pack, id: NodeId) -> i32 {
+        Self::profile_font(pack, &self.nodes[id].ctrl.style)
+            .map_or(0, |font| font.width(&self.text_of(id)))
+    }
+
+    /// Line height of a control's profile font.
+    pub fn line_height(&self, pack: &Pack, id: NodeId) -> i32 {
+        Self::profile_font(pack, &self.nodes[id].ctrl.style).map_or(0, |font| font.line_height())
+    }
+
     fn draw_node(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
         let n = &self.nodes[id];
         if !n.state.visible {

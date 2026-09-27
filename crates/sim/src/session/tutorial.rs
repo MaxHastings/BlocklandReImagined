@@ -274,6 +274,21 @@ impl Session {
         Ok(())
     }
 
+    /// `servercmdWand` / `servercmdMagicWand` in `TutorialParentingPackage`:
+    /// until the tutorial is completed the wand only comes out in the wand
+    /// room. Elsewhere the command does nothing.
+    pub(super) fn tutorial_allows_wand(&self, owner: OwnerId) -> bool {
+        self.tutorial.as_deref().is_none_or(|t| t.completed)
+            || self.peers.get(&owner).is_some_and(|p| p.tutorial.can_wand)
+    }
+
+    /// `servercmdUseSprayCan` / `servercmdUseFXCan`: the cans only work
+    /// once this life has reached the spray room (`canUseSpray`).
+    pub(super) fn tutorial_allows_spray(&self, owner: OwnerId) -> bool {
+        self.tutorial.as_deref().is_none_or(|t| t.completed)
+            || self.peers.get(&owner).is_some_and(|p| p.tutorial.can_spray)
+    }
+
     /// Whether the tutorial keeps this brick from being broken.
     pub(super) fn tutorial_protects(&self, brick: BrickId) -> bool {
         let Some(tutorial) = self.tutorial.as_deref() else {

@@ -66,6 +66,8 @@ pub struct Vitals {
     pub mounted: Option<(u64, u8)>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
+    /// Typing in the chat box (`MsgStartTalking`).
+    pub talking: bool,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -261,6 +263,7 @@ impl Session {
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
                         control: peer.control,
+                        talking: peer.talking,
                     },
                 )
             })
@@ -295,6 +298,11 @@ impl Session {
     }
     /// Server-authored chat line (owner 0) visible to everyone.
     pub(super) fn system_chat(&mut self, text: String) {
+        self.system_message(None, text);
+    }
+    /// `MessageAll(tag, text)`: a server chat line whose v20 message type
+    /// clients answer with a sound.
+    pub(super) fn system_message(&mut self, tag: Option<MessageTag>, text: String) {
         let tick = self.simulation.state().tick;
         let Some(next) = self.next_chat.checked_add(1) else {
             return;
@@ -305,6 +313,7 @@ impl Session {
             name: String::new(),
             text,
             tick,
+            tag,
         });
         self.next_chat = next;
         if self.chat.len() > 100 {

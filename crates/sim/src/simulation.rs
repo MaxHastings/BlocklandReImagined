@@ -153,6 +153,14 @@ impl Simulation {
     pub fn state(&self) -> &World {
         self.authority.state()
     }
+    /// Check every brick of a load against the brick definitions before any
+    /// of it is published.
+    pub fn preflight_load(&self, plan: &bri_world::build::LoadPlan) -> Result<()> {
+        for brick in plan.bricks().values() {
+            Bounds::new(brick, &self.definitions.get(brick)?.mesh)?;
+        }
+        Ok(())
+    }
     pub fn load_build(
         &mut self,
         actor: &Actor,

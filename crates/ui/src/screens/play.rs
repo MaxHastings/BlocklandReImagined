@@ -34,6 +34,35 @@ impl Play {
         Self { view }
     }
 }
+/// `newChatText`'s authored position in NewChatHud.
+const CHAT_TOP_LEFT: (i32, i32) = (2, 20);
+fn chat_profile(core: &Core) -> String {
+    format!(
+        "BlockChatTextSize{}Profile",
+        super::options::chat_size(&core.prefs)
+    )
+}
+fn chat_text(core: &Core) -> String {
+    core.chat
+        .visible(core.time_ms)
+        .iter()
+        .map(|l| format!("\u{E006}{}", l.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+/// `newChatText` spans the screen width and, like Torque's ML text, grows
+/// to the height of its reflowed lines.
+fn chat_rect(core: &Core, chat: &str) -> Rect {
+    let (x, y) = CHAT_TOP_LEFT;
+    let w = (core.logical.0 - x).max(1);
+    let h = View::ml_height(&core.pack, &chat_profile(core), chat, w);
+    Rect::new(x, y, w, h)
+}
+/// Bottom of the chat text, where `newMessageHud::updatePosition` puts the
+/// typing box.
+pub fn chat_bottom(core: &Core) -> i32 {
+    chat_rect(core, &chat_text(core)).bottom()
+}
 fn named_text(v: &mut View, style: &str, rect: Rect, label: &str) {
     v.add(v.root, text(style, rect, label));
 }
@@ -245,23 +274,25 @@ fn hud(core: &Core) -> View {
             "You do not have permission to build here.",
         );
     }
-    // Original cached font + ML markup, with chat fade/page rules from ChatModel.
-    let chat = core
-        .chat
-        .visible(core.time_ms)
-        .iter()
-        .map(|l| format!("\u{E006}{}", l.text))
-        .collect::<Vec<_>>()
-        .join("\n");
-    markup(
-        &mut v,
-        Rect::new(4, 4, (w - 80).max(1), (h / 2).max(1)),
-        &chat,
-        &format!(
-            "BlockChatTextSize{}Profile",
-            super::options::chat_size(&core.prefs)
-        ),
-    );
+    // NewChatHud: original cached font + ML markup, with chat fade/page
+    // rules from ChatModel, and the "VVV" indicator on its last line while
+    // paged up (newChatHud_UpdateIndicatorPosition).
+    // chatWhosTalkingText above it: " name name" (WhoTalkSO::Display).
+    if !core.talking.is_empty() {
+        let names: String = core.talking.iter().map(|n| format!(" {n}")).collect();
+        named_text(&mut v, "MM_LeftProfile", Rect::new(-1, 0, w - 10, 18), &names);
+    }
+    let chat = chat_text(core);
+    let rect = chat_rect(core, &chat);
+    markup(&mut v, rect, &chat, &chat_profile(core));
+    if core.chat.scrolled_up() {
+        named_text(
+            &mut v,
+            "MM_LeftProfile",
+            Rect::new(4, rect.bottom() - 18, 27, 18),
+            "VVV",
+        );
+    }
     if let Some(text) = &core.net_graph {
         fill(&mut v, Rect::new(w - 220, 4, 216, 20), [0, 0, 0, 128]);
         markup(

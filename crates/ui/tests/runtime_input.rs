@@ -210,7 +210,8 @@ fn modal_open_releases_controls_and_repeat_before_typing() {
     down(&mut u, Key::Letter('t'));
     let a = actions(&mut u);
     assert!(a.contains(&held(HeldControl::Forward, false)));
-    assert!(a.contains(&UiAction::StartTyping));
+    // NMH_Type::type: talking starts with the first typed character.
+    assert!(!a.contains(&UiAction::StartTyping));
     assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
     u.update(500);
     down(&mut u, Key::Letter('w'));
@@ -219,6 +220,7 @@ fn modal_open_releases_controls_and_repeat_before_typing() {
     for ch in "hello".chars() {
         u.handle_input(InputEvent::Char(ch));
     }
+    assert_eq!(actions(&mut u), [UiAction::StartTyping]);
     down(&mut u, Key::Return);
     let a = actions(&mut u);
     assert!(a.contains(&UiAction::Chat {

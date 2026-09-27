@@ -12,6 +12,9 @@ use bri_world::{EventRow, EventTarget, EventValue, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
 fn session() -> Session {
+    session_on("test")
+}
+fn session_on(map_id: &str) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -50,7 +53,7 @@ fn session() -> Session {
     };
     Session::new(
         Simulation::new(
-            World::new("Session".into(), "test".into(), vec![[1.0; 4], [0.0; 4]]),
+            World::new("Session".into(), map_id.into(), vec![[1.0; 4], [0.0; 4]]),
             defs,
             vec![
                 ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
@@ -402,8 +405,10 @@ fn build_load_preflights_every_definition_and_preserves_existing_players() {
         s.command(host, 2, cmd(saved)).unwrap(),
         Reply::Loaded { bricks: 2 }
     );
+    assert_eq!(s.snapshot().players, before.players);
+    s.step().unwrap();
+    assert!(!s.build_loading(), "Small saves finish in one batch");
     let after = s.snapshot();
-    assert_eq!(after.players, before.players);
     assert_eq!(after.world.bricks.len(), 2);
     assert_eq!(after.world.bricks[&1].owner, 3);
     assert_eq!(after.world.bricks[&2].owner, 3);
@@ -776,4 +781,99 @@ fn death_hands_control_to_the_corpse_camera_until_respawn() {
     }
     s.command(owner, 3, Command::Respawn).unwrap();
     assert_eq!(s.vitals()[&owner].control, ControlObject::Player);
+}
+#[test]
+fn saves_stream_in_batches_with_v20_load_messages() {
+    use bri_sim::session::MessageTag;
+    use bri_world::{Brick, ContentRef, build::SavedBuild};
+    let mut s = session();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let mut world = World::new("Build".into(), "source".into(), vec![[0.2, 0.3, 0.4, 1.0]]);
+    for i in 0..60 {
+        world.bricks.insert(
+            i + 1,
+            Brick::new(
+                ContentRef::Resolved("plate".into()),
+                [0.5 + i as f32, 0.1, -3.25],
+                1,
+            ),
+        );
+    }
+    world.next_brick_id = 61;
+    let saved = SavedBuild::capture(&world, None, false, false).unwrap();
+    let cmd = || Command::LoadBuild {
+        build: Box::new(saved.clone()),
+        ownership: false,
+    };
+    assert_eq!(s.command(host, 1, cmd()).unwrap(), Reply::Loaded { bricks: 60 });
+    assert!(s.command(host, 2, cmd()).is_err(), "One load at a time");
+    let tags = |s: &Session| s.chat().iter().filter_map(|l| l.tag).collect::<Vec<_>>();
+    assert_eq!(tags(&s), [MessageTag::UploadStart]);
+    let mut counts = Vec::new();
+    while s.build_loading() {
+        s.step().unwrap();
+        counts.push(s.snapshot().world.bricks.len());
+        assert!(counts.len() < 1000);
+    }
+    counts.dedup();
+    assert_eq!(counts, [25, 50, 60], "Bricks arrive batch by batch");
+    assert_eq!(tags(&s), [MessageTag::UploadStart, MessageTag::ProcessComplete]);
+    let done = s.chat().last().unwrap().text.clone();
+    assert!(done.starts_with("60 / 60 bricks created in 0:00.2"), "{done}");
+}
+#[test]
+fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
+    use bri_sim::tutorial::{MAP_ID, TutorialMap, Zone, ZoneKind};
+    let zone = |kind, min: Vec3| Zone {
+        kind,
+        goal: String::new(),
+        bind: String::new(),
+        task: String::new(),
+        min,
+        max: min + Vec3::splat(4.0),
+    };
+    let tutorial = |at: Vec3| {
+        let mut s = session_on(MAP_ID);
+        let world = || World::new("Tutorial".into(), MAP_ID.into(), vec![[1.0; 4]]);
+        s.set_tutorial(TutorialMap {
+            zones: vec![zone(ZoneKind::Wand, at), zone(ZoneKind::Spray, at)],
+            look_target: Vec3::ZERO,
+            part1: world(),
+            part2: world(),
+            targets: vec![],
+            targets_end_ms: 0,
+        })
+        .unwrap();
+        let owner = s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
+        for _ in 0..12 {
+            s.step().unwrap();
+        }
+        (s, owner)
+    };
+    let held = |s: &Session, owner| {
+        s.weapon_view()
+            .images
+            .get(&owner)
+            .map(|i| i.iter().map(|m| m.image.clone()).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    // Outside the rooms `/wand` and the spray can do nothing, as in v20.
+    let (mut s, owner) = tutorial(Vec3::new(50.0, 0.0, 50.0));
+    s.command(owner, 1, Command::Wand).unwrap();
+    s.command(owner, 2, Command::UseSprayCan { color: 0 }).unwrap();
+    s.command(owner, 3, Command::UseFxCan { fx: 0 }).unwrap();
+    assert!(held(&s, owner).is_empty(), "{:?}", held(&s, owner));
+    // Inside them the request goes on to mount the image, which this
+    // content-free test session does not have.
+    let (mut s, owner) = tutorial(Vec3::new(-2.0, -1.0, -2.0));
+    for (sequence, command) in [
+        (1, Command::Wand),
+        (2, Command::UseSprayCan { color: 0 }),
+        (3, Command::UseFxCan { fx: 0 }),
+    ] {
+        let error = s.command(owner, sequence, command).unwrap_err();
+        assert!(error.to_string().contains("Unknown image"), "{error:#}");
+    }
 }

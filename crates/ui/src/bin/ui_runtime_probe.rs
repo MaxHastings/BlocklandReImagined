@@ -296,6 +296,41 @@ fn main() -> Result<()> {
         ui.core.run_command("useTools", true);
         ui.update(120);
         render(&ui, "hud-tools", &mut renderer, &mut report)?;
+        // A v20-shaped chat history: player chat, server messages and the
+        // save/load messages, then the Say and Team boxes, then a page up.
+        for text in [
+            "\u{E003}Blockhead\u{E006}: hello",
+            "\u{E003}Max\u{E000} cleared all bricks.",
+            "Loading bricks. Please wait.",
+            "412 / 412 bricks created in 3 seconds",
+            "\u{E001}Blockhead \u{E006}spawned the \u{E003}Jeep",
+            "\u{E003}Max\u{E006}: nice build",
+        ] {
+            ui.apply(UiUpdate::Chat { text: text.into() });
+        }
+        ui.apply(UiUpdate::Talking(vec!["Blockhead".into(), "Max".into()]));
+        ui.core.run_command("useTools", true);
+        ui.core.run_command("globalChat", true);
+        ui.update(16);
+        render(&ui, "hud-chat-say", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
+        ui.core.run_command("teamChat", true);
+        ui.update(16);
+        render(&ui, "hud-chat-team", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
+        ui.apply(UiUpdate::Talking(vec![]));
+        for i in 0..12 {
+            ui.apply(UiUpdate::Chat {
+                text: format!("\u{E003}Blockhead\u{E006}: line {i}"),
+            });
+        }
+        ui.core.run_command("pageUpNewChatHud", true);
+        ui.core.run_command("pageUpNewChatHud", true);
+        ui.update(16);
+        render(&ui, "hud-chat-scrolled", &mut renderer, &mut report)?;
+        for _ in 0..3 {
+            ui.core.run_command("pageDownNewChatHud", true);
+        }
         ui.core.push(ScreenId::MiniGameSettings);
         ui.update(0);
         render(&ui, "minigame-settings", &mut renderer, &mut report)?;

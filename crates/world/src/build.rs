@@ -113,6 +113,48 @@ impl LoadPlan {
     pub fn bricks(&self) -> &BTreeMap<BrickId, Brick> {
         &self.bricks
     }
+    /// The merged palette and the prepared bricks in save order, to publish
+    /// a few at a time with [`LoadPlan::batch`].
+    pub fn into_parts(self) -> (Vec<[f32; 4]>, Vec<Brick>) {
+        (self.palette, self.bricks.into_values().collect())
+    }
+    /// The next bricks of a prepared load against the world as it is now.
+    /// The world palette may only have been extended by this same load.
+    pub fn batch(
+        target: &World,
+        palette: &[[f32; 4]],
+        bricks: Vec<Brick>,
+        next_owner: OwnerId,
+    ) -> Result<Self> {
+        ensure!(
+            palette.starts_with(&target.palette),
+            "The colorset changed while loading"
+        );
+        ensure!(
+            target
+                .bricks
+                .len()
+                .checked_add(bricks.len())
+                .is_some_and(|n| n <= crate::MAX_BRICKS),
+            "Loaded build exceeds world brick limit"
+        );
+        let next_id = target
+            .next_brick_id
+            .checked_add(bricks.len() as u64)
+            .context("Brick IDs exhausted")?;
+        target
+            .revision
+            .checked_add(1)
+            .context("World revision exhausted")?;
+        Ok(Self {
+            base_revision: target.revision,
+            first_id: target.next_brick_id,
+            next_id,
+            palette: palette.to_vec(),
+            bricks: (target.next_brick_id..).zip(bricks).collect(),
+            next_owner,
+        })
+    }
     pub fn prepare(
         target: &World,
         build: SavedBuild,

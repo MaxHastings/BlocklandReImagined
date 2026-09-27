@@ -354,6 +354,14 @@ impl AdminRuntime {
                             let ids: Vec<_> =
                                 session.simulation.state().bricks.keys().copied().collect();
                             preflight_removal(session, ids.len())?;
+                            // `ServerCmdClearAllBricks`.
+                            if !ids.is_empty() {
+                                let name = session.peers[&actor_owner].name.clone();
+                                session.system_message(
+                                    Some(super::MessageTag::ClearBricks),
+                                    format!("\u{E003}{name}\u{E000} cleared all bricks."),
+                                );
+                            }
                             for brick in ids {
                                 session.simulation.remove(&session_actor, brick)?;
                                 session.dirty.insert(brick);
@@ -371,6 +379,21 @@ impl AdminRuntime {
                                 .collect();
                             ensure!(!ids.is_empty(), "Unknown brick group");
                             preflight_removal(session, ids.len())?;
+                            // `ServerCmdClearBrickGroup`: the LAN host's own
+                            // group is just "the bricks".
+                            let name = session.peers[&actor_owner].name.clone();
+                            let text = if group == actor_owner && session.lan_host {
+                                format!("\u{E003}{name}\u{E002} cleared the bricks")
+                            } else {
+                                let owner = brick_groups(session)
+                                    .into_iter()
+                                    .find(|g| g.id == group)
+                                    .map_or_else(String::new, |g| g.name);
+                                format!(
+                                    "\u{E003}{name}\u{E002} cleared \u{E003}{owner}\u{E002}'s bricks"
+                                )
+                            };
+                            session.system_message(Some(super::MessageTag::ClearBricks), text);
                             for brick in ids {
                                 session.simulation.remove(&session_actor, brick)?;
                                 session.dirty.insert(brick);

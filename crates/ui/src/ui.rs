@@ -204,6 +204,8 @@ pub struct Core {
     pub conn: ConnectionState,
     pub hud: HudModel,
     pub chat: ChatModel,
+    /// Who is typing, shown above the chat (`chatWhosTalkingText`).
+    pub talking: Vec<String>,
     pub selector: SelectorModel,
     pub wrench: WrenchState,
     pub players: Vec<PlayerRow>,
@@ -304,6 +306,7 @@ impl Core {
             self.chat.max_lines,
             self.chat.line_time_ms,
         );
+        self.talking.clear();
         self.selector.cart = [None; 10];
         self.selector.clicked_brick = None;
         self.selector.clicked_slot = None;
@@ -903,6 +906,7 @@ impl Ui {
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
+            talking: Vec::new(),
             selector,
             wrench: WrenchState::default(),
             players: Vec::new(),
@@ -1277,6 +1281,7 @@ impl Ui {
                 let now = c.time_ms;
                 c.chat.add(&text, now);
             }
+            UiUpdate::Talking(names) => c.talking = names,
             UiUpdate::CenterPrint { text, seconds } => c.center_print(&text, seconds),
             UiUpdate::BottomPrint {
                 text,

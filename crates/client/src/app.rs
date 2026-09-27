@@ -87,6 +87,8 @@ struct Attempt {
     entered: bool,
     view: Option<network::View>,
     last_chat: u64,
+    /// Players typing in the chat box, in the order they started.
+    talking: Vec<bri_world::OwnerId>,
     /// Internet hosts: router port-forwarding outcomes for the host player.
     router: Option<mpsc::Receiver<String>>,
 }
@@ -1271,6 +1273,7 @@ impl App {
             entered: false,
             view: None,
             last_chat: 0,
+            talking: Vec::new(),
             router: internet.then_some(router),
         });
         Ok(())
@@ -1481,6 +1484,7 @@ impl App {
             entered: false,
             view: None,
             last_chat: 0,
+            talking: Vec::new(),
             router: None,
         });
         Ok(())
@@ -2280,8 +2284,33 @@ impl App {
                     };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
+                    // addMessageCallback: the message type's GUI sound.
+                    if let Some(tag) = line.tag {
+                        use bri_sim::session::MessageTag;
+                        let key = match tag {
+                            MessageTag::UploadStart => "ui.upload_start",
+                            MessageTag::UploadEnd => "ui.upload_end",
+                            MessageTag::ProcessComplete => "ui.process_complete",
+                            MessageTag::ClearBricks => "ui.brick_clear",
+                        };
+                        self.audio.trigger(key, bri_audio::Placement::Listener);
+                    }
                 }
             }
+            // MsgStartTalking / MsgStopTalking keep WhoTalkSO's order.
+            let talking = &mut a.talking;
+            talking.retain(|o| view.vitals.get(o).is_some_and(|v| v.talking));
+            for (owner, vitals) in &view.vitals {
+                if vitals.talking && !talking.contains(owner) {
+                    talking.push(*owner);
+                }
+            }
+            let names = talking
+                .iter()
+                .filter_map(|o| view.names.get(o))
+                .map(|n| plain_chat(n))
+                .collect();
+            self.ui.apply_session(a.id, UiUpdate::Talking(names));
             if a.entered
                 && let Some(router) = &a.router
             {
@@ -3370,6 +3399,7 @@ impl PlatformApp for App {
                         "light" => Some(Command::ToggleLight),
                         "clearcheckpoint" => Some(Command::ClearCheckpoint),
                         "treasurestatus" => Some(Command::TreasureStatus),
+                        "wand" => Some(Command::Wand),
                         "sit" | "love" | "hate" | "alarm" | "confusion" => {
                             Some(Command::Emote(name.to_ascii_lowercase()))
                         }
@@ -3405,9 +3435,18 @@ impl PlatformApp for App {
                     }
                     result
                 }
-                UiAction::StartTyping
-                | UiAction::StopTyping
-                | UiAction::ClosePrintSelector
+                UiAction::StartTyping | UiAction::StopTyping => {
+                    if self.network_view().is_none() {
+                        continue;
+                    }
+                    let talking = matches!(action, UiAction::StartTyping);
+                    let result = self.command(id, Command::Talking(talking), action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::ClosePrintSelector
                 | UiAction::CancelWrench { .. } => Ok(()),
                 UiAction::SetAvatar(ref prefs) => {
                     let connected = self.network_view().is_some();
