@@ -180,7 +180,7 @@ impl VehiclesWorld {
             let mut spawn = v.spawn.clone();
             spawn.transform = v.transform.clone();
             let d = &self.catalog[&spawn.definition];
-            prepared.push(prepare_spawn(&spawn, d)?);
+            prepared.push(prepare_spawn(&spawn, d, world.gravity.length())?);
         }
         // No fallible operation remains below this point. Insertion/removal is
         // synchronous and no callbacks or physics step observe the intermediate set.

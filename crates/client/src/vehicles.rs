@@ -6,7 +6,7 @@ use anyhow::{Context, Result, ensure};
 use bri_content::shape::Shape;
 use bri_render::scene::{GpuInstances, GpuScene, SceneImage, SceneRenderer, SceneTransform};
 use bri_sim::session::{VehicleInfo, VehiclePose};
-use bri_vehicles::{Definition, Family, Pack};
+use bri_vehicles::{Definition, Family, Pack, schema::Wheel};
 use glam::{Mat4, Quat, Vec3};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -115,6 +115,16 @@ impl VehicleAssets {
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         self.pack.definitions.iter().find(|d| d.id == id)
     }
+}
+
+/// Chassis-local tire transform: the hub drops by the suspension extension,
+/// steering is positive to the right (clockwise from above), forward travel
+/// spins the tire's top toward -Z, and the authored tire is turned axle-out.
+pub fn wheel_transform(wheel: &Wheel, suspension: f32, spin: f32, steering: f32) -> Mat4 {
+    Mat4::from_translation(Vec3::from(wheel.position) - Vec3::Y * suspension)
+        * Mat4::from_rotation_y(-steering * wheel.steering)
+        * Mat4::from_rotation_x(-spin)
+        * Mat4::from_quat(Quat::from_array(wheel.model_rotation))
 }
 
 fn to_transform(position: Vec3, rotation: Quat) -> Mat4 {
@@ -259,17 +269,7 @@ impl ClientVehicles {
                     .copied()
                     .unwrap_or(wheel.rest_length);
                 let spin = frame.wheel_rotation.get(i).copied().unwrap_or(0.0);
-                let steer = frame.steering * wheel.steering;
-                let hub = Vec3::from(wheel.position) - Vec3::Y * suspension;
-                let local = Mat4::from_translation(hub)
-                    * Mat4::from_rotation_y(steer)
-                    * Mat4::from_rotation_x(-spin)
-                    // Right-side wheels face outward.
-                    * if wheel.position[0] < 0.0 {
-                        Mat4::from_rotation_y(std::f32::consts::PI)
-                    } else {
-                        Mat4::IDENTITY
-                    };
+                let local = wheel_transform(wheel, suspension, spin, frame.steering);
                 push(&wheel.model, body * local, [1.0; 4]);
             }
             if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount) {
@@ -396,6 +396,38 @@ mod tests {
             wheel_rotation: vec![0.0],
             turret_aim: [0.0; 2],
             jetting: false,
+        }
+    }
+    /// v20 tires are authored with the hub axis along Torque +Y (native -Z),
+    /// outer face first; mounted, they must roll along the chassis.
+    #[test]
+    fn tires_mount_axle_out_steer_right_and_roll_forward() {
+        let tire = |x: f32| Wheel {
+            position: [x, 0.4, -1.9],
+            radius: 0.75,
+            rest_length: 0.4,
+            spring: 6000.0,
+            damping: 800.0,
+            friction: 5.0,
+            steering: 1.0,
+            powered: false,
+            model: String::new(),
+            model_rotation: Quat::from_rotation_y(-x.signum() * std::f32::consts::FRAC_PI_2)
+                .to_array(),
+        };
+        for x in [-1.6, 1.6] {
+            let rest = wheel_transform(&tire(x), 0.3, 0.0, 0.0);
+            let outer = rest.transform_vector3(Vec3::NEG_Z);
+            assert!(
+                (outer - Vec3::X * x.signum()).length() < 1e-5,
+                "outer face {outer}"
+            );
+            assert!((rest.transform_point3(Vec3::ZERO) - Vec3::new(x, 0.1, -1.9)).length() < 1e-5);
+            let steered = wheel_transform(&tire(x), 0.3, 0.0, 0.5) * rest.inverse();
+            let heading = steered.transform_vector3(Vec3::NEG_Z);
+            assert!(heading.x > 0.4 && heading.z < 0.0, "steer right {heading}");
+            let rolled = wheel_transform(&tire(x), 0.3, 0.2, 0.0).transform_vector3(Vec3::Y);
+            assert!(rolled.z < -0.1, "forward spin must carry the top forward");
         }
     }
     #[test]

@@ -82,7 +82,7 @@ fn render(
 #[ignore = "requires the converted native vehicle pack and an offscreen GPU"]
 fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut assets = VehicleAssets::load(&root.join("content/vehicles-pack-007"))?;
+    let mut assets = VehicleAssets::load(&root.join("content/vehicles-pack-008"))?;
     let gpu = Headless::new().context("offscreen vehicle adapter")?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let out = root.join("artifacts/native-vehicles");

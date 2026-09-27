@@ -43,6 +43,41 @@ fn virtual_path(package: &str, path: &str) -> String {
         path.into()
     }
 }
+/// Authored Torque vector ("x y z") in native X-right, Y-up, -Z-forward axes.
+fn vector(b: &Block, key: &str) -> Option<Vec3> {
+    let v: Vec<f32> = field(b, key)
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    (v.len() == 3).then(|| native(Vec3::new(v[0], v[1], v[2])))
+}
+fn native(v: Vec3) -> Vec3 {
+    Vec3::new(v.x, v.z, -v.y)
+}
+/// Object-space bounds stored in a DTS v24 header, in Torque axes.
+fn dts_bounds(bytes: &[u8]) -> Result<(Vec3, Vec3)> {
+    let word = |i: usize| -> Result<[u8; 4]> {
+        Ok(bytes
+            .get(i * 4..i * 4 + 4)
+            .context("truncated DTS header")?
+            .try_into()?)
+    };
+    ensure!(
+        u32::from_le_bytes(word(0)?) & 0xff == 24,
+        "unsupported DTS version"
+    );
+    // Four file words, 17 counts, two smallest-detail words and one guard
+    // precede radius, tube radius, center and the bounds box.
+    let f = |i: usize| -> Result<f32> { Ok(f32::from_le_bytes(word(4 + 20 + i)?)) };
+    let min = Vec3::new(f(5)?, f(6)?, f(7)?);
+    let max = Vec3::new(f(8)?, f(9)?, f(10)?);
+    ensure!(
+        min.is_finite() && max.is_finite() && min.cmplt(max).all(),
+        "invalid DTS bounds"
+    );
+    Ok((min, max))
+}
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -290,6 +325,12 @@ fn main() -> Result<()> {
             .with_context(|| format!("unconverted required model {vp}"))?;
         let n = nodes(s);
         let (lo, hi) = bounds(s, &n);
+        let (shape_min, shape_max) =
+            dts_bounds(&files.get(&vp.to_lowercase()).context("source shape")?.1)?;
+        let inertia_box = match vector(b, "massBox").map(Vec3::abs) {
+            Some(size) if size.cmpgt(Vec3::ZERO).all() => size,
+            _ => native(shape_max - shape_min).abs(),
+        };
         let mut hulls = collision(s, &n);
         let mut adaptations = vec![];
         if hulls.is_empty() {
@@ -364,13 +405,18 @@ fn main() -> Result<()> {
                 .get(&wheel_vp.to_lowercase())
                 .context("wheel model")?
                 .0;
+            // WheeledVehicleTire::preload replaces the scripted radius with half
+            // the tire shape's height; the tire is built with its hub along +Y.
+            let (tire_min, tire_max) = dts_bounds(
+                &files
+                    .get(&wheel_vp.to_lowercase())
+                    .context("wheel source shape")?
+                    .1,
+            )?;
+            let position = find_node(s, &n, &format!("hub{i}"))?.position;
             wheels.push(Wheel {
-                position: find_node(s, &n, &format!("hub{i}"))?.position,
-                radius: number(
-                    tire,
-                    "radius",
-                    if family == Family::Skis { 0.5 } else { 1. },
-                ),
+                position,
+                radius: (tire_max.z - tire_min.z) / 2.,
                 rest_length: number(spring, "length", 0.4),
                 spring: number(spring, "force", 6000.),
                 damping: number(spring, "damping", 800.),
@@ -384,6 +430,14 @@ fn main() -> Result<()> {
                 },
                 powered: name == "TankVehicle" || (family != Family::Skis && i >= 2),
                 model: wheel_model.clone(),
+                // WheeledVehicle turns each tire a quarter turn about up so its
+                // +Y face points outward: clockwise (Torque's positive) on the right.
+                model_rotation: Quat::from_rotation_y(if position[0] > 0. {
+                    -std::f32::consts::FRAC_PI_2
+                } else {
+                    std::f32::consts::FRAC_PI_2
+                })
+                .to_array(),
             });
         }
         let mut attachment_model = None;
@@ -472,10 +526,10 @@ fn main() -> Result<()> {
             adaptations.push("Hidden Item_Skis dependency: script-forced mount0; simple dismount and transient lifecycle".into());
         }
         if family == Family::Skis {
-            adaptations.push("NothingTire has no explicit radius; native radius 0.5 is an engine-default adaptation requiring verification; powered traction disabled as authored friction/longitudinal force are zero".into());
+            adaptations.push("Powered traction disabled as authored NothingTire friction/longitudinal force are zero".into());
         }
         if !wheels.is_empty() {
-            adaptations.push("Torque tire/suspension coefficients mapped to Rapier ray suspension; exact Torque lateral relaxation is retained in evidence, not equivalent in Rapier".into());
+            adaptations.push("Torque tire/suspension coefficients mapped to Rapier ray suspension; exact Torque lateral relaxation is retained in evidence, not equivalent in Rapier. Inertia uses the massBox or shape-bounds box".into());
         }
         definitions.push(Definition {
             id: format!("v20.vehicle.{}", name.to_lowercase()),
@@ -515,6 +569,8 @@ fn main() -> Result<()> {
             bounds_min: lo.to_array(),
             bounds_max: hi.to_array(),
             mass: number(b, "mass", 90.),
+            mass_center: vector(b, "massCenter").unwrap_or(Vec3::ZERO).to_array(),
+            inertia_box: inertia_box.to_array(),
             density: number(b, "density", 1.),
             drag: number(b, "drag", 0.1),
             friction: number(b, "bodyFriction", 0.6),
@@ -593,7 +649,7 @@ fn main() -> Result<()> {
             }
         }
     }
-    let pack=Pack{schema_version:2,animation_aliases,definitions,assets,evidence:blocks.values().map(|b|b.evidence.clone()).collect(),unresolved:vec!["Exact original physics solver parity requires Maxwell playtest; native Rapier adaptation preserves authored inputs, not engine numerical equivalence".into(),"Native material asset index preserves all package textures; renderer must resolve material names against virtual paths, colorShift sentinels and default base textures".into(),"Horse external DSQ clips are included; host animation adapter must bind authored sequence aliases".into()]};
+    let pack=Pack{schema_version:SCHEMA_VERSION,animation_aliases,definitions,assets,evidence:blocks.values().map(|b|b.evidence.clone()).collect(),unresolved:vec!["Exact original physics solver parity requires Maxwell playtest; native Rapier adaptation preserves authored inputs, not engine numerical equivalence".into(),"Native material asset index preserves all package textures; renderer must resolve material names against virtual paths, colorShift sentinels and default base textures".into(),"Horse external DSQ clips are included; host animation adapter must bind authored sequence aliases".into()]};
     pack.validate()?;
     for (path, bytes) in pending {
         let dst = out.join(path);

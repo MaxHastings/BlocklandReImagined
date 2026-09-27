@@ -3,6 +3,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
+/// 3 adds tire model orientation, mass center and inertia box.
+pub const SCHEMA_VERSION: u32 = 3;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -64,7 +66,9 @@ pub struct Seat {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Wheel {
+    /// Hub node: the suspension's fully compressed mount point.
     pub position: [f32; 3],
+    /// Torque derives this from the tire shape's bounds, not the datablock field.
     pub radius: f32,
     pub rest_length: f32,
     pub spring: f32,
@@ -73,6 +77,9 @@ pub struct Wheel {
     pub steering: f32,
     pub powered: bool,
     pub model: String,
+    /// Turns the tire model, authored with its hub axis along forward, so the
+    /// axle lies along X with the tire's outer face pointing away from the chassis.
+    pub model_rotation: [f32; 4],
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Weapon {
@@ -129,6 +136,10 @@ pub struct Definition {
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
     pub mass: f32,
+    /// Authored `massCenter`, chassis-local.
+    pub mass_center: [f32; 3],
+    /// Box whose inertia the rigid body uses: `massBox`, else the shape bounds.
+    pub inertia_box: [f32; 3],
     pub density: f32,
     pub drag: f32,
     pub friction: f32,
@@ -181,7 +192,10 @@ impl Pack {
         Ok(pack)
     }
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema_version == 2, "unknown vehicle schema");
+        ensure!(
+            self.schema_version == SCHEMA_VERSION,
+            "unknown vehicle schema"
+        );
         ensure!(self.definitions.len() <= 128, "too many vehicles");
         ensure!(self.assets.len() <= 4096, "too many assets");
         let mut ids = std::collections::BTreeSet::new();
@@ -286,6 +300,11 @@ impl Pack {
                     .all(|v| v.is_finite()),
                 "invalid bounds"
             );
+            ensure!(
+                d.mass_center.iter().all(|v| v.is_finite())
+                    && d.inertia_box.iter().all(|v| v.is_finite() && *v > 0.),
+                "invalid mass properties"
+            );
             for wheel in &d.wheels {
                 ensure!(
                     wheel.position.iter().all(|v| v.is_finite())
@@ -294,7 +313,9 @@ impl Pack {
                             .all(|v| v.is_finite() && *v > 0.)
                         && wheel.friction.is_finite()
                         && wheel.friction >= 0.
-                        && wheel.steering.is_finite(),
+                        && wheel.steering.is_finite()
+                        && (glam::Quat::from_array(wheel.model_rotation).length() - 1.).abs()
+                            < 0.001,
                     "invalid wheel"
                 );
             }

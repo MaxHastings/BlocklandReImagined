@@ -4,7 +4,7 @@ use rapier3d::prelude::*;
 fn pack() -> Pack {
     Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-007/vehicles.json"
+        "/../../content/vehicles-pack-008/vehicles.json"
     ))
     .unwrap()
 }
@@ -62,7 +62,7 @@ fn native_catalog_assets_and_authored_values() {
     let p = pack();
     p.verify_assets(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-007"
+        "/../../content/vehicles-pack-008"
     ))
     .unwrap();
     assert_eq!(p.definitions.len(), 11);
@@ -844,4 +844,85 @@ fn scaled_turret_pose_and_angular_velocity_restore_to_shared_geometry() {
         .unwrap()
         .1;
     assert_eq!(rotation, other.position_wrt_parent().unwrap().rotation);
+}
+/// Every stock wheeled vehicle must rest upright on its tires, drive toward
+/// its nose on W without pitching over, and turn right on D.
+#[test]
+fn wheeled_vehicles_settle_upright_and_drive_forward() {
+    let wheeled: Vec<_> = pack()
+        .definitions
+        .into_iter()
+        .filter(|d| matches!(d.family, Family::Wheeled | Family::FlyingWheeled))
+        .collect();
+    assert_eq!(wheeled.len(), 3);
+    for d in wheeled {
+        let name = d.id.trim_start_matches("v20.vehicle.");
+        for wheel in &d.wheels {
+            let outer = glam::Quat::from_array(wheel.model_rotation) * Vec3::NEG_Z;
+            assert!(
+                (outer - Vec3::X * wheel.position[0].signum()).length() < 1e-4,
+                "{name} tire must face outward"
+            );
+        }
+        let (mut v, mut w) = setup();
+        spawn(&mut v, &mut w, name, 2.);
+        mount(&mut v, &w, 0);
+        step(&mut v, &mut w, 240, None);
+        let s = &v.snapshot(&w).vehicles[0];
+        let rotation = glam::Quat::from_array(s.transform.rotation);
+        assert!((rotation * Vec3::Y).y > 0.999, "{name} must settle upright");
+        for (wheel, extension) in d.wheels.iter().zip(&s.wheel_suspension) {
+            assert!(
+                *extension > 0.01 && *extension < wheel.rest_length - 0.01,
+                "{name} wheel must carry load, extension {extension}"
+            );
+            let hub = Vec3::from_array(s.transform.position)
+                + rotation * (Vec3::from_array(wheel.position) - Vec3::Y * *extension);
+            assert!(
+                (hub.y - wheel.radius).abs() < 0.05,
+                "{name} tire must touch the ground, bottom {}",
+                hub.y - wheel.radius
+            );
+        }
+        let start = Vec3::from_array(s.transform.position);
+        v.set_controls(
+            OwnerId(10),
+            OccupantId(20),
+            Controls {
+                throttle: 1.,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for _ in 0..36 {
+            step(&mut v, &mut w, 10, None);
+            let s = &v.snapshot(&w).vehicles[0];
+            let up = glam::Quat::from_array(s.transform.rotation) * Vec3::Y;
+            assert!(up.y > 0.98, "{name} tipped while accelerating: up {up}");
+        }
+        let s = &v.snapshot(&w).vehicles[0];
+        let travel = Vec3::from_array(s.transform.position) - start;
+        assert!(
+            travel.z < -20. && travel.x.abs() < 1.,
+            "{name} must drive toward its nose, moved {travel}"
+        );
+        v.set_controls(
+            OwnerId(10),
+            OccupantId(20),
+            Controls {
+                throttle: 1.,
+                steer: 1.,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        step(&mut v, &mut w, 90, None);
+        let s = &v.snapshot(&w).vehicles[0];
+        let rotation = glam::Quat::from_array(s.transform.rotation);
+        assert!((rotation * Vec3::Y).y > 0.95, "{name} rolled over turning");
+        assert!(
+            (rotation * Vec3::NEG_Z).x > 0.2,
+            "{name} must turn right on positive steer"
+        );
+    }
 }

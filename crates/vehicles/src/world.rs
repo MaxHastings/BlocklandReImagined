@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 mod checkpoint;
+/// Torque vehicles and players fall at 20 m/s^2 whatever the shared world uses.
+pub const VEHICLE_GRAVITY: f32 = 20.;
 pub use checkpoint::*;
 macro_rules! id {
     ($name:ident) => {
@@ -370,7 +372,7 @@ impl VehiclesWorld {
             "duplicate spawn brick"
         );
         let d = self.catalog.get(&s.definition).context("unknown vehicle")?;
-        let (builder, collider, prepared_turret) = prepare_spawn(&s, d)?;
+        let (builder, collider, prepared_turret) = prepare_spawn(&s, d, world.gravity.length())?;
         let (body, collider) = world.insert(builder, collider);
         let turret_collider =
             prepared_turret.map(|collider| world.insert_collider(collider, Some(body)));
@@ -931,13 +933,13 @@ impl VehiclesWorld {
                     .cast_ray(&Ray::new(p, -Vec3::Y), range, true)
                     .map_or(range, |(_, distance)| distance)
             });
-            let gravity = world.gravity.y.abs();
+            let gravity = VEHICLE_GRAVITY;
             let b = &mut world.bodies[v.body];
             b.reset_forces(false);
             b.reset_torques(false);
             if submerged > 0. {
                 b.add_force(
-                    Vec3::Y * (d.mass * 9.81 * submerged / d.density.max(0.05))
+                    Vec3::Y * (d.mass * gravity * submerged / d.density.max(0.05))
                         - velocity * (d.mass * submerged * 1.5),
                     true,
                 );
@@ -962,7 +964,7 @@ impl VehiclesWorld {
                                 true,
                             );
                             b.add_torque(
-                                up * (c.steer * d.yaw_force)
+                                -up * (c.steer * d.yaw_force)
                                     + right * (c.pitch * d.pitch_force)
                                     + forward * (c.roll * d.roll_force),
                                 true,
@@ -1021,7 +1023,7 @@ impl VehiclesWorld {
                     Family::Horse | Family::Rowboat => {
                         let horse = d.family == Family::Horse;
                         let moving = if horse { ground || in_water } else { in_water };
-                        let yaw = c.steer * 2.5 * FIXED_DT;
+                        let yaw = -c.steer * 2.5 * FIXED_DT;
                         let rotation = Quat::from_rotation_y(yaw) * rot;
                         b.set_rotation(rotation, true);
                         if moving {
@@ -1084,7 +1086,7 @@ impl VehiclesWorld {
                             }
                         }
                         b.add_torque(
-                            up * (c.steer * d.yaw_force)
+                            -up * (c.steer * d.yaw_force)
                                 + right * (c.pitch * d.pitch_force)
                                 + forward * (c.roll * d.roll_force),
                             true,
@@ -1099,7 +1101,9 @@ impl VehiclesWorld {
             if let Some(controller) = &mut v.controller {
                 let wheel_count = d.wheels.iter().filter(|w| w.powered).count().max(1) as f32;
                 for (w, def) in controller.wheels_mut().iter_mut().zip(&d.wheels) {
-                    w.steering = v.steering * def.steering;
+                    // Positive steering turns right (clockwise from above); Rapier
+                    // turns the wheel counterclockwise about the chassis up axis.
+                    w.steering = -v.steering * def.steering;
                     w.engine_force = if def.powered {
                         c.throttle * d.engine_force / wheel_count
                             * (1. - speed.abs() / d.max_speed).max(0.)
@@ -1430,6 +1434,7 @@ fn weapon_step(
 fn prepare_spawn(
     s: &Spawn,
     d: &Definition,
+    world_gravity: f32,
 ) -> Result<(RigidBodyBuilder, ColliderBuilder, Option<ColliderBuilder>)> {
     ensure!(
         s.scale.is_finite() && (0.2..=5.).contains(&s.scale),
@@ -1475,6 +1480,11 @@ fn prepare_spawn(
     };
     let mut builder = RigidBodyBuilder::dynamic()
         .pose(pose(&s.transform))
+        .gravity_scale(if world_gravity > 0. {
+            VEHICLE_GRAVITY / world_gravity
+        } else {
+            0.
+        })
         .linear_damping(if d.family == Family::Flying {
             0.
         } else {
@@ -1513,13 +1523,28 @@ fn prepare_spawn(
     Ok((
         builder,
         ColliderBuilder::new(shape)
-            .mass(d.mass)
+            .mass_properties(mass_properties(d, s.scale))
             .friction(d.friction)
             .restitution(d.restitution),
         prepared_turret,
     ))
 }
 
+/// Torque rigid bodies: authored mass at `massCenter` with the inertia of a
+/// solid box, rather than a uniform-density collision hull.
+fn mass_properties(d: &Definition, scale: f32) -> MassProperties {
+    let size = Vec3::from_array(d.inertia_box) * scale;
+    let squared = size * size;
+    MassProperties::new(
+        Vec3::from_array(d.mass_center) * scale,
+        d.mass,
+        Vec3::new(
+            squared.y + squared.z,
+            squared.x + squared.z,
+            squared.x + squared.y,
+        ) * (d.mass / 12.),
+    )
+}
 fn build_controller(
     body: RigidBodyHandle,
     d: &Definition,
@@ -1529,14 +1554,17 @@ fn build_controller(
     c.index_up_axis = 1;
     c.index_forward_axis = 2;
     for w in &d.wheels {
+        // Torque springs push `force * (1 - extension)` and damp
+        // `damping * velocity / length`; Rapier takes both per unit chassis mass.
+        let length = w.rest_length * scale;
         let tuning = WheelTuning {
-            suspension_stiffness: w.spring / d.mass / scale,
-            suspension_compression: w.damping / d.mass,
-            suspension_damping: w.damping / d.mass,
-            max_suspension_travel: w.rest_length * scale,
+            suspension_stiffness: w.spring / length / d.mass,
+            suspension_compression: w.damping / length / d.mass,
+            suspension_damping: w.damping / length / d.mass,
+            max_suspension_travel: length,
             side_friction_stiffness: 1.,
             friction_slip: w.friction,
-            max_suspension_force: w.spring,
+            max_suspension_force: f32::MAX,
         };
         c.add_wheel(
             Vec3::from_array(w.position) * scale,
@@ -1557,7 +1585,7 @@ mod scale_tests {
     fn native_wheel_geometry_scales_with_collision_and_mass_stays_authored() {
         let pack = Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-007/vehicles.json"
+            "/../../content/vehicles-pack-008/vehicles.json"
         ))
         .unwrap();
         let mut vehicles = VehiclesWorld::new(pack).unwrap();
