@@ -99,6 +99,17 @@ fn option_pairs(o: &AdminOptions) -> Vec<(&'static str, String)> {
     }
     p
 }
+/// Sends the confirmed request. `changeMapButton::click` also pops
+/// changeMapGui and adminGui, so the loading GUI takes over the screen.
+fn accept_confirmation(core: &mut Core) {
+    if let Some(c) = core.admin.confirmation.take() {
+        if matches!(c.action, AdminAction::ChangeMap { .. }) {
+            core.pop(ScreenId::AdminMaps);
+            core.pop(ScreenId::Admin);
+        }
+        core.admin_request(c.action);
+    }
+}
 impl AdminScreen {
     pub fn new(id: ScreenId, core: &Core) -> Self {
         let layout = match id {
@@ -818,9 +829,7 @@ impl Screen for AdminScreen {
             return true;
         }
         if self.id == ScreenId::AdminConfirm && matches!(key, Key::Return | Key::NumpadEnter) {
-            if let Some(c) = core.admin.confirmation.take() {
-                core.admin_request(c.action);
-            }
+            accept_confirmation(core);
             core.pop(self.id);
             return true;
         }
@@ -863,9 +872,7 @@ impl Screen for AdminScreen {
         let cmd = command_of(&self.view, ev.node).to_ascii_lowercase();
         if self.id == ScreenId::AdminConfirm {
             if !cmd.contains("nocallback") {
-                if let Some(c) = core.admin.confirmation.take() {
-                    core.admin_request(c.action);
-                }
+                accept_confirmation(core);
             } else {
                 core.admin.confirmation = None;
             }

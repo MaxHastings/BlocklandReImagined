@@ -348,3 +348,93 @@ fn unban_waits_for_correlated_host_acceptance_and_clears_stale_selection() {
         .unwrap();
     assert_eq!(model.selected_ban, None);
 }
+
+#[test]
+fn confirming_change_map_closes_the_map_and_admin_menus() {
+    use bri_ui::{
+        api::{ConnectionState, Settings, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        input::{InputEvent, Key, Modifiers},
+        models::admin::{AdminConfirmation, AdminMap},
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl},
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in [
+        "MainMenuGui",
+        "PlayGui",
+        "LoadingGui",
+        "adminGui",
+        "changeMapGui",
+        "MessageBoxYesNoDlg",
+    ] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        Settings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: true,
+        single_player: true,
+        admin: true,
+    }));
+    ui.core
+        .admin
+        .apply(AdminUpdate::State(state(AdminRole::SuperAdmin, true)))
+        .unwrap();
+    ui.core.admin.maps = vec![AdminMap {
+        id: "bedroom".into(),
+        name: "Bedroom".into(),
+    }];
+    ui.core.admin.confirmation = Some(AdminConfirmation {
+        title: "Change Map?".into(),
+        text: "Change to Bedroom?".into(),
+        action: AdminAction::ChangeMap {
+            map: "bedroom".into(),
+        },
+    });
+    for id in [ScreenId::Admin, ScreenId::AdminMaps, ScreenId::AdminConfirm] {
+        ui.core.push(id);
+    }
+    ui.update(0);
+    ui.drain_actions();
+    // The host has answered the map list request by the time Max confirms.
+    ui.core.admin.pending.clear();
+    assert_eq!(ui.top_id(), ScreenId::AdminConfirm);
+    ui.handle_input(InputEvent::KeyDown {
+        key: Key::Return,
+        mods: Modifiers::NONE,
+        repeat: false,
+    });
+    assert!(
+        ui.core
+            .admin
+            .pending
+            .values()
+            .any(|a| matches!(a, AdminAction::ChangeMap { .. })),
+        "the confirmed map change is requested"
+    );
+    ui.update(16);
+    let stack = ui.stack();
+    for id in [ScreenId::Admin, ScreenId::AdminMaps, ScreenId::AdminConfirm] {
+        assert!(!stack.contains(&id), "{id:?} stays open: {stack:?}");
+    }
+}
