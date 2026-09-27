@@ -16,7 +16,7 @@ if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $ExecutablePath = Join-Path
 if ([string]::IsNullOrWhiteSpace($DestinationRoot)) { $DestinationRoot = Join-Path $RepoRoot 'dist' }
 $ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
 $DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
-$script:PackFields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','vehicles','events','tutorial')
+$script:PackFields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','weapon_debris','vehicles','events','tutorial')
 
 function Get-PackageFiles([string]$Path) {
     $all = @(Get-ChildItem -LiteralPath $Path -Force -Recurse)

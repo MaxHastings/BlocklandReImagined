@@ -909,3 +909,21 @@ fn spray_paint_effects_carry_the_palette_index() {
         assert_eq!(paint_effect_base(name), None, "{name}");
     }
 }
+#[test]
+fn scripted_arm_poses_follow_the_original_on_mount_threads() {
+    // AkimboGunImage mounts LeftHandedGunImage, whose onMount raises both arms.
+    assert_eq!(
+        scripted_arm_pose("v20.image.lefthandedgunimage", "Ready"),
+        Some((true, true))
+    );
+    assert_eq!(
+        scripted_arm_pose("v20.image.basketballimage", "Ready"),
+        Some((true, false))
+    );
+    assert_eq!(scripted_arm_pose("v20.image.footballimage", "Ready"), None);
+    assert_eq!(
+        scripted_arm_pose("v20.image.footballimage", "Charge"),
+        Some((true, false))
+    );
+    assert_eq!(scripted_arm_pose("v20.image.gunimage", "Ready"), None);
+}

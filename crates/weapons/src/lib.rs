@@ -54,6 +54,18 @@ impl ItemBounds {
         (0..3).all(|a| self.min[a] <= other.max[a] && self.max[a] >= other.min[a])
     }
 }
+/// Arms (right, left) raised by an image's script instead of its `armReady`
+/// field: `onMount`/`onCharge` calls to `playThread(1, armReady*)` in the
+/// Akimbo Guns and Item_Sports scripts. Other images follow `armReady`.
+pub fn scripted_arm_pose(image: &str, state: &str) -> Option<(bool, bool)> {
+    let name = image.rsplit('.').next().unwrap_or(image).to_ascii_lowercase();
+    match name.as_str() {
+        "lefthandedgunimage" | "basketballshootimage" | "dodgeballimage" => Some((true, true)),
+        "basketballimage" => Some((true, false)),
+        "footballimage" if matches!(state, "Charge" | "Armed") => Some((true, false)),
+        _ => None,
+    }
+}
 pub fn native_id(kind: &str, name: &str) -> String {
     format!("v20.{kind}.{}", name.to_ascii_lowercase())
 }

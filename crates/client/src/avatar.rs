@@ -362,6 +362,10 @@ pub fn locomotion(player: &PlayerState) -> LocomotionAction {
 impl AvatarMesh {
     /// The same sampled node matrices used by this frame's visible character.
     /// Missing nodes remain missing; attachments must not invent a hand offset.
+    /// The player's object transform: feet position and body yaw.
+    pub fn body_transform(&self) -> Mat4 {
+        self.model_transform
+    }
     pub fn world_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
         let index = assets
             .rig

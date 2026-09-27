@@ -127,6 +127,9 @@ pub struct App {
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// Ejected gun casings (`stateEjectShell`) and their GPU model.
+    weapon_shells: crate::weapon_debris::WeaponDebris,
+    shell_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
     weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
     weapon_cue_drops: u64,
     /// Killed-brick debris (v20 brick explosions) and its GPU models.
@@ -307,6 +310,7 @@ impl App {
         self.weapon_effects.reset(checkpoint_cursor);
         self.actor_effects.reset(checkpoint_cursor);
         self.explosion_shapes.reset(checkpoint_cursor);
+        self.weapon_shells.reset(checkpoint_cursor);
         self.weapon_cues
             .retain(|(cue, _)| cue.id > checkpoint_cursor);
         self.weapon_animation_cues
@@ -465,6 +469,10 @@ impl App {
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
         &self.item_assets
     }
+    /// Gun casings currently tumbling or resting.
+    pub fn weapon_shell_count(&self) -> usize {
+        self.weapon_shells.active_count()
+    }
     pub fn world_item_stats(&self) -> &crate::world_items::WorldItemDiagnostics {
         &self.world_items.diagnostics
     }
@@ -562,6 +570,10 @@ impl App {
         let weapon_pack = Arc::new(content.weapons.pack.clone());
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
+        let weapon_shells = crate::weapon_debris::WeaponDebris::new(
+            crate::weapon_debris::WeaponDebrisAssets::load(&content.paths.weapon_debris)?,
+            Default::default(),
+        )?;
         let actor_effects = crate::actor_effects::ActorEffects::new(
             effects_pack.clone(),
             weapon_pack.clone(),
@@ -688,6 +700,8 @@ impl App {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            weapon_shells,
+            shell_gpu: None,
             weapon_cues: VecDeque::new(),
             weapon_cue_drops: 0,
             brick_debris: Default::default(),
@@ -804,6 +818,7 @@ impl App {
         self.weapon_effects.reset(0);
         self.actor_effects.reset(0);
         self.explosion_shapes.reset(0);
+        self.weapon_shells.clear();
         self.weapon_cues.clear();
         self.weapon_animation_cues.clear();
         self.weapon_animation_drops = 0;
@@ -2887,7 +2902,13 @@ impl PlatformApp for App {
                 let mut ready_hands = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
-                        if let Some(image) = self.content.weapons.pack.images.get(&mounted.image) {
+                        if let Some((right, left)) =
+                            bri_weapons::scripted_arm_pose(&mounted.image, &mounted.state)
+                        {
+                            ready_hands.extend([(0, right), (1, left)]);
+                        } else if let Some(image) =
+                            self.content.weapons.pack.images.get(&mounted.image)
+                        {
                             ready_hands.push((mounted.hand, image.arm_ready));
                         }
                     }
@@ -2998,11 +3019,14 @@ impl PlatformApp for App {
                     };
                     Some(crate::world_items::MountPose {
                         eye: avatar.eye_transform(&self.avatar_assets, yaw, pitch)?,
-                        mounts: (0..8)
-                            .filter_map(|n| {
-                                avatar
-                                    .world_node(&self.avatar_assets, &format!("Mount{n}"))
-                                    .map(|transform| (n, transform))
+                        // Torque mounts an image whose mount point has no
+                        // `mountN` node (the dribbled basketball's Mount8) at
+                        // the player's own transform.
+                        mounts: (0..32)
+                            .map(|n| {
+                                let node =
+                                    avatar.world_node(&self.avatar_assets, &format!("Mount{n}"));
+                                (n, node.unwrap_or_else(|| avatar.body_transform()))
                             })
                             .collect(),
                         velocity: Vec3::from_array(player.velocity),
@@ -3027,6 +3051,39 @@ impl PlatformApp for App {
                 elapsed.as_secs_f32(),
             )?;
             self.explosion_shapes.advance(elapsed.as_secs_f32());
+            let shells: Vec<_> = self
+                .weapon_effects
+                .take_host_requests()
+                .filter_map(|r| match r {
+                    crate::weapon_effects::HostRequest::Shell(cue) => Some(cue),
+                    _ => None,
+                })
+                .collect();
+            let world_items = &self.world_items;
+            let eject = |actor: u64, image: &str, hand: u8| {
+                world_items
+                    .mounted_node(actor, hand, image, "ejectPoint")
+                    .or_else(|_| world_items.mounted_node(actor, hand, image, "muzzlePoint"))
+                    .ok()
+            };
+            self.weapon_shells.cues(&shells, eject, |actor| {
+                presented
+                    .get(&actor)
+                    .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity))
+            })?;
+            self.weapon_shells
+                .advance(elapsed.as_secs_f32(), eject, |from, to| {
+                    let delta = to - from;
+                    let length = delta.length();
+                    if length < 1e-5 {
+                        return None;
+                    }
+                    let hit = building.target(from, delta / length, length).ok()??;
+                    Some(crate::weapon_debris::DebrisHit {
+                        fraction: (hit.distance / length).clamp(0., 1.),
+                        normal: hit.normal.normalize(),
+                    })
+                })?;
             self.audio
                 .sync_projectiles(&view.weapons.projectiles, &self.content.weapons.pack);
             let kills = std::mem::take(&mut self.brick_kills);
@@ -3583,6 +3640,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
         }
@@ -3627,6 +3685,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
         }
@@ -3681,8 +3740,17 @@ impl PlatformApp for App {
             .vitals
             .iter()
             .filter(|(_, v)| v.light && v.alive)
-            .filter_map(|(owner, _)| self.motion.presented().get(owner))
-            .map(|p| Vec3::from(p.feet) + Vec3::Y * 2.6 + p.forward() * 0.5)
+            .filter_map(|(owner, _)| {
+                // `serverCmdLight` attaches the PlayerLight to the player; it
+                // shines from the left hand (Mount1) and follows the arm.
+                let hand = self
+                    .avatars
+                    .get(owner)
+                    .and_then(|a| a.world_node(&self.avatar_assets, "Mount1"))
+                    .map(|m| m.w_axis.truncate());
+                let p = self.motion.presented().get(owner)?;
+                Some(hand.unwrap_or_else(|| Vec3::from(p.feet) + Vec3::Y * 1.5))
+            })
             .collect();
         let renderer = self
             .renderer
@@ -3830,6 +3898,35 @@ impl PlatformApp for App {
         )?;
         self.explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
+        let shells: Vec<_> = self
+            .weapon_shells
+            .instances()
+            .map(|i| bri_render::scene::SceneTransform {
+                transform: i.transform,
+                tint: i.tint,
+            })
+            .collect();
+        if !shells.is_empty() || self.shell_gpu.is_some() {
+            if self.shell_gpu.is_none() {
+                let scene = renderer.upload(
+                    frame.device,
+                    frame.queue,
+                    &self.weapon_shells.assets().shell_scene,
+                )?;
+                self.shell_gpu = Some((
+                    scene,
+                    bri_render::scene::GpuInstances::new(frame.device, 64)?,
+                ));
+            }
+            let (_, instances) = self.shell_gpu.as_mut().unwrap();
+            if instances.capacity() < shells.len() {
+                *instances = bri_render::scene::GpuInstances::new(
+                    frame.device,
+                    shells.len().next_power_of_two(),
+                )?;
+            }
+            instances.update(frame.queue, &shells)?;
+        }
         let (yaw, pitch) = self.controls.camera_angles();
         let pitch = pitch.clamp(-1.56, 1.56);
         let forward = Vec3::new(
@@ -3980,6 +4077,11 @@ impl PlatformApp for App {
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
+        if let Some((scene, instances)) = &self.shell_gpu
+            && self.weapon_shells.active_count() > 0
+        {
+            item_draws.push((scene, instances));
+        }
         item_draws.extend(self.debris_models.draws());
         renderer.render_with_instances(
             frame.encoder,
