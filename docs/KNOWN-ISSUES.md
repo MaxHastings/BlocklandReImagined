@@ -3,13 +3,14 @@
 Crashes, missing content, unusable controls, disappearing saves or broken core
 flows are blockers: please report them. The items below are known gaps.
 
-- **Wrench events:** a subset of outputs runs (brick color/FX/render/collision,
-  relays and similar). Many Player/Client/MiniGame/Vehicle/Bot outputs still
-  show as unsupported rows and do nothing.
-- **Special bricks:** checkpoint, teledoor, treasure chest, pumpkin and water
-  bricks still refuse to plant until their behaviors exist.
-- **Terrain:** maps use a finite loaded terrain region. Very long travel on
-  Slopes and similar maps can leave the collision area.
+- **Wrench events:** all vanilla inputs and outputs are listed. Not yet
+  applied: projectile outputs (`Explode`, `Delete`, `Bounce`, `Redirect`),
+  `BurnPlayer`, `setPlayerScale`, and the Tutorial-only `onToolBreak` input.
+  Rows using them are kept and shown read-only.
+- **Special bricks:** water bricks are swimmable but river/rapids bricks do not
+  push you along yet.
+- **Terrain:** terrain streams without bounds; distance LOD and detail/bump
+  texturing are still missing.
 - **Vehicles:** physics is a native adaptation, not Torque-exact; driving feel
   needs your judgment. The tank turret barrel may be oriented incorrectly.
   Vehicle burning/splash emitters and wreck models are not drawn yet.

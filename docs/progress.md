@@ -1614,6 +1614,51 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   leaves them intact. Receiving agent must coordinate before integration/build/
   commits; prior green tests do not certify the moving working tree.
 
+## 2026-09-27 — alpha push: movement, combat, vehicles, events, special bricks
+- Movement: client prediction replays unacknowledged inputs against a collision
+  mirror built exactly like the server's (`bri_sim::prediction`). The server
+  consumes one queued input per 120 Hz tick, holds on short gaps, catches up on
+  backlog and acknowledges the processed sequence in each pose. Remote players
+  interpolate nine ticks behind. Poses go out at 40 Hz; movement datagrams carry
+  the last six inputs. Protocol version 11.
+- Combat and minigames run on `bri-minigames`: health, falling damage, kills with
+  v20 death messages and icons, respawn timers, team chat, minigame invites and
+  settings. Vehicles run on `bri-vehicles` with spawn bricks, seats, driving,
+  damage and respawn. Bots are server-side peers spawned from bot bricks that
+  fight inside the brick owner's minigame. LAN hosting advertises on UDP 28050
+  with a persistent host certificate and trust-on-first-use pins.
+- Wrench events: the world's seven-output stub is gone. `bri-events` is the only
+  event system: 16 inputs, 65 outputs, typed rows, named targets, relays, delays,
+  cancel and row toggles. World schema 2 stores `bri_events::Row`s. The host
+  (`crates/sim/src/session/events.rs`) fires onActivate, onPlayerTouch/onBotTouch,
+  onProjectileHit, onBlownUp, onRespawn, onTeledoorEnter/Exit, OnKeyMatch/
+  Mismatch, onTouchdown and onBallHit. It applies brick, player, client and
+  minigame outputs; harmful player outputs need a shared minigame. Projectile
+  outputs, burning, player scale and onToolBreak remain gaps (known issues).
+- Explosions and heavy hits knock out bricks within `max_volume` when the
+  shooter's minigame allows brick damage. The bricks respawn after the
+  minigame's brick respawn time.
+- Saves: `bind_world_events` types the vanilla `+-EVENT` records against the
+  catalog and binds `+-VEHICLE`/`+-AUDIOEMITTER` spawn bricks:
+  `cargo run --release -p bri-convert --bin bind_world_events -- content/worlds-pass-004 content/events-pack-002/catalog.json content/audio-pack-001/manifest.json content/weapons-pack-003/weapons.json content/vehicles-pack-007/vehicles.json content/effects-pass-004/effects.json content/worlds-pass-005`
+  Result: 35 worlds, 1491 rows, 1483 runnable. The eight others are empty
+  source lines, kept as preserved rows. 8 vehicle and 7 music bricks were bound.
+  `events_native` (ignored, needs content) installs every evented save and runs
+  its activations for ten seconds. The only diagnostics are sandbox permission
+  rejections (AddHealth, BurnPlayer outside a minigame).
+- Special bricks follow their add-on scripts: checkpoints set the respawn point
+  (`/clearCheckpoint`), consecutive teledoors pair and carry players through,
+  treasure chests open for two seconds once per player with found counts
+  (`/treasureStatus`), swords carve pumpkins, and water bricks are swimmable
+  liquid volumes (server and prediction). `special_bricks` (ignored, needs
+  content) covers the first four behaviors plus water.
+- Streamed terrain (from the terrain session) replaced the finite region. The
+  packager and its fixture test no longer carry `terrain_region`, and they ship
+  `events-pack-002`.
+- Work is now split across parallel sessions (terrain, effects/audio, UI,
+  jetting, tools and held items, vehicles, brick debris). This session remains
+  the integrator for packaging, docs and the release build.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

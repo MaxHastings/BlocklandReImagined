@@ -366,6 +366,20 @@ impl Session {
                     position,
                     ..
                 } => self.push_vehicle(vehicle, position, impulse),
+                WeaponEvent::Key {
+                    actor,
+                    brick,
+                    matched,
+                } => {
+                    let input = if matched { "OnKeyMatch" } else { "OnKeyMismatch" };
+                    self.fire_input(brick, input, Some(actor.0));
+                }
+                WeaponEvent::Touchdown { actor, brick } => {
+                    self.fire_input(brick, "onTouchdown", Some(actor.0));
+                }
+                WeaponEvent::BallHit { source, brick, .. } => {
+                    self.fire_input(brick, "onBallHit", Some(source.0));
+                }
                 WeaponEvent::SportMovement { locked: false, .. } => {}
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
             }
