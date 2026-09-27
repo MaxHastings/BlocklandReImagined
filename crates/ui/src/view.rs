@@ -553,6 +553,20 @@ impl View {
         Some([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32])
     }
 
+    /// Full-screen backgrounds fill the canvas by cropping, never by
+    /// stretching, so screenshots keep their aspect on any window shape.
+    fn blit_cover(&self, pack: &Pack, dl: &mut DrawList, image: &str, r: Rect, tint: Rgba) {
+        if let Some((w, h)) = pack.image_size(image) {
+            dl.image(
+                TexKey::Image(image.to_string()),
+                cover_src((w as f32, h as f32), (r.w as f32, r.h as f32)),
+                [r.x as f32, r.y as f32, r.w as f32, r.h as f32],
+                tint,
+                Filter::Linear,
+            );
+        }
+    }
+
     fn blit(&self, pack: &Pack, dl: &mut DrawList, image: &str, r: Rect, tint: Rgba) {
         if let Some((w, h)) = pack.image_size(image) {
             dl.image(
@@ -730,6 +744,8 @@ impl View {
                     let tint = n.state.tint.unwrap_or(WHITE);
                     if n.ctrl.field("wrap") == Some("1") {
                         self.blit_tiled(pack, dl, &b, r, tint);
+                    } else if r == Rect::new(0, 0, self.canvas.0, self.canvas.1) {
+                        self.blit_cover(pack, dl, &b, r, tint);
                     } else {
                         self.blit(pack, dl, &b, r, tint);
                     }
@@ -1958,6 +1974,9 @@ pub fn resize(
     new: (i32, i32),
 ) -> Rect {
     let (dx, dy) = (new.0 - old.0, new.1 - old.1);
+    if matches!((h, v), (HSizing::Relative, VSizing::Relative)) && old.0 > 0 && old.1 > 0 {
+        return relative_uniform(a, min, old, new);
+    }
     let (mut x, mut y, mut w, mut hh) = (a.x, a.y, a.w, a.h);
     match h {
         HSizing::Center => x = (new.0 - a.w) >> 1,
@@ -1981,4 +2000,100 @@ pub fn resize(
     }
     // GuiControl::resize clamps the extent to minExtent.
     Rect::new(x, y, w.max(min[0]), hh.max(min[1]))
+}
+
+/// Source rectangle (pixels) of an image that covers `dst` at its own aspect,
+/// cropping the overflow evenly from both sides.
+fn cover_src(img: (f32, f32), dst: (f32, f32)) -> [f32; 4] {
+    if img.0 <= 0.0 || img.1 <= 0.0 || dst.0 <= 0.0 || dst.1 <= 0.0 {
+        return [0.0, 0.0, img.0, img.1];
+    }
+    let k = (dst.0 / img.0).max(dst.1 / img.1);
+    let (w, h) = (dst.0 / k, dst.1 / k);
+    [(img.0 - w) / 2.0, (img.1 - h) / 2.0, w, h]
+}
+
+/// Torque scales a relative/relative control by the parent's change on each
+/// axis separately, which squashes the main menu's text bitmaps on any aspect
+/// other than 4:3. Keep v20's relative placement but scale the extent by one
+/// factor so art keeps its aspect. Inside its relative cell the control hugs
+/// the parent edge it was authored against, otherwise it stays centred.
+fn relative_uniform(a: Rect, min: [i32; 2], old: (i32, i32), new: (i32, i32)) -> Rect {
+    let sx = new.0 as f32 / old.0 as f32;
+    let sy = new.1 as f32 / old.1 as f32;
+    let k = sx.min(sy);
+    let w = ((a.w as f32 * k).round() as i32).max(min[0]);
+    let h = ((a.h as f32 * k).round() as i32).max(min[1]);
+    let place = |pos: i32, len: i32, parent: i32, s: f32, fit: i32| {
+        let (start, cell) = (pos as f32 * s, len as f32 * s);
+        let slack = cell - fit as f32;
+        (if pos <= 0 {
+            start
+        } else if pos + len >= parent {
+            start + slack
+        } else {
+            start + slack / 2.0
+        })
+        .round() as i32
+    };
+    Rect::new(
+        place(a.x, a.w, old.0, sx, w),
+        place(a.y, a.h, old.1, sy, h),
+        w,
+        h,
+    )
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn relative_controls_scale_uniformly_on_widescreen() {
+        // v20's main menu Join button, left edge, on a 16:9 canvas.
+        let join = Rect::new(0, 200, 224, 40);
+        let r = resize(
+            join,
+            HSizing::Relative,
+            VSizing::Relative,
+            [8, 2],
+            (640, 480),
+            (960, 540),
+        );
+        assert_eq!(r, Rect::new(0, 225, 252, 45));
+        // The About button, authored past the right edge, hugs it.
+        let about = Rect::new(520, 390, 160, 30);
+        let r = resize(
+            about,
+            HSizing::Relative,
+            VSizing::Relative,
+            [8, 2],
+            (640, 480),
+            (960, 540),
+        );
+        assert_eq!((r.w, r.h), (180, 34));
+        assert_eq!(r.x + r.w, 1020);
+        // 4:3 matches Torque exactly.
+        let r = resize(
+            about,
+            HSizing::Relative,
+            VSizing::Relative,
+            [8, 2],
+            (640, 480),
+            (1280, 960),
+        );
+        assert_eq!(r, Rect::new(1040, 780, 320, 60));
+    }
+
+    #[test]
+    fn backgrounds_crop_to_cover() {
+        assert_eq!(
+            cover_src((640.0, 480.0), (960.0, 540.0)),
+            [0.0, 60.0, 640.0, 360.0]
+        );
+        assert_eq!(
+            cover_src((640.0, 480.0), (640.0, 480.0)),
+            [0.0, 0.0, 640.0, 480.0]
+        );
+    }
 }
