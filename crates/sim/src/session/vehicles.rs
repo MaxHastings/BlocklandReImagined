@@ -594,7 +594,7 @@ impl Session {
             if !peer.combat.alive || self.vehicles.mounted.contains_key(owner) {
                 continue;
             }
-            let bounds = peer.player.world_bounds();
+            let bounds = crate::player::item_bounds(&peer.player);
             let half = (Vec3::from(bounds.max) - Vec3::from(bounds.min)) * 0.5 + Vec3::splat(0.05);
             let body = Cuboid::new(half);
             let pose =

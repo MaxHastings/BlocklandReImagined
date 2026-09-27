@@ -355,7 +355,7 @@ impl Session {
         if !peer.combat.alive {
             return Ok(());
         }
-        let bounds = peer.player.world_bounds();
+        let bounds = crate::player::item_bounds(&peer.player);
         let (min, max) = (Vec3::from(bounds.min), Vec3::from(bounds.max));
         let inside: BTreeSet<usize> = self
             .tutorial()

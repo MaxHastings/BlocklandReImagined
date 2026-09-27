@@ -124,7 +124,7 @@ impl Session {
                 continue;
             }
             let actor = ActorId(owner);
-            let contact = peer.player.world_bounds();
+            let contact = crate::player::item_bounds(&peer.player);
             let game = self.game_of(owner);
             for (projectile, source, bounds) in &balls {
                 // `sportIsInSameMinigame`: both in one game or both outside.

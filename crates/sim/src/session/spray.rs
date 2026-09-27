@@ -139,7 +139,7 @@ impl Session {
             else {
                 continue;
             };
-            let bounds = peer.player.world_bounds();
+            let bounds = crate::player::item_bounds(&peer.player);
             let center = (Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5;
             self.cues.emit(
                 tick,

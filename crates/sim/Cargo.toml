@@ -11,6 +11,7 @@ serde_json.workspace = true
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
+bri-motor = { path = "../motor" }
 bri-weapons = { path = "../weapons" }
 bri-admin = { path = "../admin" }
 bri-minigames = { path = "../minigames" }

@@ -466,6 +466,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-motor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-content",
+ "bri-physics",
+ "glam 0.33.10",
+ "rapier3d",
+ "serde",
+]
+
+[[package]]
 name = "bri-net"
 version = "0.1.0"
 dependencies = [
@@ -534,6 +546,7 @@ dependencies = [
  "bri-content",
  "bri-events",
  "bri-minigames",
+ "bri-motor",
  "bri-physics",
  "bri-vehicles",
  "bri-weapons",

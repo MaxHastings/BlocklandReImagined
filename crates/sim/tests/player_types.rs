@@ -87,8 +87,8 @@ fn quake_and_horse_run_at_their_own_speeds_in_their_own_boxes() {
         step(&mut p, &mut w, run, 240);
         let v = Vec3::from(p.state().velocity);
         assert!((v.length() - speed).abs() < 0.05, "{datablock:?} {v}");
-        let b = p.world_bounds();
-        assert!((b.max[0] - b.min[0] - width).abs() < 0.001);
+        let (min, max) = p.world_bounds();
+        assert!((max[0] - min[0] - width).abs() < 0.001);
     }
 }
 
@@ -106,8 +106,8 @@ fn scale_grows_the_box_and_eye_but_not_the_speed() {
         },
         240,
     );
-    let b = p.world_bounds();
-    assert!((b.max[1] - b.min[1] - 5.3).abs() < 0.001);
+    let (min, max) = p.world_bounds();
+    assert!((max[1] - min[1] - 5.3).abs() < 0.001);
     assert!((p.eye().y - p.state().feet[1] - 4.8).abs() < 0.001);
     assert!((Vec3::from(p.state().velocity).length() - 7.0).abs() < 0.05);
 }
