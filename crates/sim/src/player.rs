@@ -388,8 +388,8 @@ impl Player {
         }
         self.state.feet = feet.to_array();
         self.state.velocity = velocity.to_array();
-        self.state.yaw = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
-            - std::f32::consts::PI;
+        self.state.yaw =
+            (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         self.state.grounded = true;
         self.state.crouched = false;
         self.state.jetting = false;
@@ -575,8 +575,8 @@ impl Player {
         let horizontal_speed = Vec3::new(velocity.x, 0.0, velocity.z).length();
         if horizontal_speed > t.horizontal_resist_speed {
             let capped = horizontal_speed.min(t.horizontal_max_speed);
-            let resisted = capped
-                - (capped - t.horizontal_resist_speed) * t.horizontal_resist_factor * dt;
+            let resisted =
+                capped - (capped - t.horizontal_resist_speed) * t.horizontal_resist_factor * dt;
             velocity.x *= resisted / horizontal_speed;
             velocity.z *= resisted / horizontal_speed;
         }
@@ -631,7 +631,8 @@ impl Player {
         // each closes at most half its gap to another player per tick.
         let mut translation = velocity * dt;
         let is_player = |_: ColliderHandle, collider: &Collider| collider.user_data >> 64 == 1;
-        if let Some((direction, distance)) = translation.try_normalize().zip(Some(translation.length()))
+        if let Some((direction, distance)) =
+            translation.try_normalize().zip(Some(translation.length()))
             && let Some((_, hit)) = physics
                 .query_pipeline_with_filter(filter.predicate(&is_player))
                 .cast_shape(

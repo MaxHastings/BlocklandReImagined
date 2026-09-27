@@ -101,7 +101,11 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
             .unwrap();
         world.step();
     }
-    assert!(player.state().grounded, "Crouch did not dive: {:?}", player.state());
+    assert!(
+        player.state().grounded,
+        "Crouch did not dive: {:?}",
+        player.state()
+    );
     assert!(player.state().feet[1] < 0.01);
     // Holding jump swims back up faster than floating does.
     let mut surfaced = None;
@@ -375,8 +379,11 @@ fn ramp(w: &mut PhysicsWorld, start: f32, run: f32, rise: f32) {
     ];
     w.insert_collider(ColliderBuilder::convex_hull(&points).unwrap(), None);
     w.insert_collider(
-        ColliderBuilder::cuboid(3.0, rise * 0.5, 5.0)
-            .translation(Vector::new(0.0, rise * 0.5, -start - run - 5.0)),
+        ColliderBuilder::cuboid(3.0, rise * 0.5, 5.0).translation(Vector::new(
+            0.0,
+            rise * 0.5,
+            -start - run - 5.0,
+        )),
         None,
     );
     w.detect_collisions(&(), &());
@@ -393,8 +400,14 @@ fn ramps_are_walked_at_running_speed() {
         let ticks = ((1.0 + length + 1.0) / 7.0 * 120.0 * 1.25) as usize;
         walk_forward(&mut p, &mut w, ticks);
         let s = p.state();
-        assert!(s.feet[2] < -1.0 - run, "{degrees} degree ramp stalled: {s:?}");
-        assert!((s.feet[1] - rise).abs() < 0.05, "{degrees} degree ramp: {s:?}");
+        assert!(
+            s.feet[2] < -1.0 - run,
+            "{degrees} degree ramp stalled: {s:?}"
+        );
+        assert!(
+            (s.feet[1] - rise).abs() < 0.05,
+            "{degrees} degree ramp: {s:?}"
+        );
         assert!(s.grounded);
     }
 }
@@ -407,8 +420,11 @@ fn brick_staircases_and_ledges_are_climbed_without_jumping() {
         let height = 0.6 * (i + 1) as f32;
         let depth = if i == 5 { 5.0 } else { 0.25 };
         w.insert_collider(
-            ColliderBuilder::cuboid(3.0, height * 0.5, depth)
-                .translation(Vector::new(0.0, height * 0.5, -1.25 - 0.5 * i as f32 - depth + 0.25)),
+            ColliderBuilder::cuboid(3.0, height * 0.5, depth).translation(Vector::new(
+                0.0,
+                height * 0.5,
+                -1.25 - 0.5 * i as f32 - depth + 0.25,
+            )),
             None,
         );
     }
