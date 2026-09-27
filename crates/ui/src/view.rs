@@ -140,6 +140,25 @@ impl Popup {
     }
 }
 
+/// Thumb (y, height) on a scroll track showing `visible` of `content`
+/// pixels scrolled by `offset`, or `None` when everything fits.
+fn thumb(
+    track_y: i32,
+    track_h: i32,
+    content: i32,
+    visible: i32,
+    offset: i32,
+) -> Option<(i32, i32)> {
+    let content = content.max(1);
+    if content <= visible || track_h <= 12 {
+        return None;
+    }
+    let th = ((track_h as i64 * visible as i64) / content as i64).max(16) as i32;
+    let max_scroll = content - visible;
+    let ty = track_y + ((track_h - th) as i64 * offset as i64 / max_scroll.max(1) as i64) as i32;
+    Some((ty, th))
+}
+
 /// Popup list scroll bar width (the blockscroll arrow pieces are 14px wide).
 const POPUP_BAR: i32 = 14;
 const SCROLL_SKIN: &str = "base/client/ui/blockscroll";
@@ -153,6 +172,9 @@ pub struct View {
     pub pressed: Option<(NodeId, MouseButton)>,
     pub focus: Option<NodeId>,
     popup: Option<Popup>,
+    /// Scroll control whose thumb is being dragged: (control, grab offset,
+    /// up arrow height, down arrow height).
+    scroll_drag: Option<(NodeId, i32, i32, i32)>,
     last_click: Option<(NodeId, u64)>,
     pub time_ms: u64,
     canvas: (i32, i32),
@@ -191,6 +213,7 @@ impl View {
             pressed: None,
             focus: None,
             popup: None,
+            scroll_drag: None,
             last_click: None,
             time_ms: 0,
             canvas: (640, 480),
@@ -1000,6 +1023,25 @@ impl View {
             .map_or(12, |p| p[2] as i32)
     }
 
+    /// Heights of the scroll bar's up and down arrows.
+    fn scroll_arrows(&self, pack: &Pack, id: NodeId) -> (i32, i32) {
+        let part = |p: usize| {
+            self.scroll_bitmap(pack, id)
+                .and_then(|b| self.skin_piece(pack, b, p * scroll::STATES))
+                .map_or(12, |r| r[3] as i32)
+        };
+        (part(scroll::UP), part(scroll::DOWN))
+    }
+
+    fn scroll_step(&self, id: NodeId) -> i32 {
+        self.nodes[id]
+            .ctrl
+            .field("rowHeight")
+            .and_then(|r| r.parse::<i32>().ok())
+            .filter(|r| *r > 0)
+            .unwrap_or(32)
+    }
+
     pub fn content_height(&self, id: NodeId) -> i32 {
         self.nodes[id]
             .children
@@ -1078,29 +1120,22 @@ impl View {
         self.piece(dl, img, page, Rect::new(x, bar.y + uh, bw, bar.h - uh - dh));
         self.piece(dl, img, up, Rect::new(x, bar.y, bw, uh));
         self.piece(dl, img, dn, Rect::new(x, bar.bottom() - dh, bw, dh));
-        let content = content.max(1);
-        let track = bar.h - uh - dh;
-        if content > visible && track > 12 {
-            let th = ((track as i64 * visible as i64) / content as i64).max(16) as i32;
-            let max_scroll = content - visible;
-            let ty = bar.y
-                + uh
-                + ((track - th) as i64 * offset as i64 / max_scroll.max(1) as i64) as i32;
-            if let (Some(t0), Some(t1), Some(t2)) = (
+        if let Some((ty, th)) = thumb(bar.y + uh, bar.h - uh - dh, content, visible, offset)
+            && let (Some(t0), Some(t1), Some(t2)) = (
                 get(scroll::THUMB_TOP),
                 get(scroll::THUMB),
                 get(scroll::THUMB_BOTTOM),
-            ) {
-                let (h0, h2) = (t0[3] as i32, t2[3] as i32);
-                self.piece(dl, img, t0, Rect::new(x, ty, bw, h0));
-                self.piece(
-                    dl,
-                    img,
-                    t1,
-                    Rect::new(x, ty + h0, bw, (th - h0 - h2).max(0)),
-                );
-                self.piece(dl, img, t2, Rect::new(x, ty + th - h2, bw, h2));
-            }
+            )
+        {
+            let (h0, h2) = (t0[3] as i32, t2[3] as i32);
+            self.piece(dl, img, t0, Rect::new(x, ty, bw, h0));
+            self.piece(
+                dl,
+                img,
+                t1,
+                Rect::new(x, ty + h0, bw, (th - h0 - h2).max(0)),
+            );
+            self.piece(dl, img, t2, Rect::new(x, ty + th - h2, bw, h2));
         }
     }
 
@@ -1395,6 +1430,7 @@ impl View {
     /// hover so a later real entry produces exactly one new Hover event.
     pub fn mouse_leave(&mut self) {
         self.hover = None;
+        self.scroll_drag = None;
         self.close_hot = false;
     }
 
@@ -1405,6 +1441,10 @@ impl View {
             if let Some(i) = p.row_at(x, y, items) {
                 p.hover = Some(i);
             }
+            return;
+        }
+        if let Some((id, grab, uh, dh)) = self.scroll_drag {
+            self.drag_scroll(id, y - grab, uh, dh);
             return;
         }
         if let Some((id, MouseButton::Left)) = self.pressed
@@ -1486,12 +1526,29 @@ impl View {
             {
                 self.open_popup(pack, t);
             }
+            // GuiScrollCtrl: arrows step a row, the thumb drags and the
+            // track pages by the visible height.
             "GuiScrollCtrl" if b == MouseButton::Left => {
                 let r = self.nodes[t].rect;
                 let bw = self.scroll_bar_width(pack, t);
-                if x >= r.right() - bw {
-                    let page = if y < r.y + r.h / 2 { -r.h / 2 } else { r.h / 2 };
-                    self.scroll_by(t, page);
+                if bw > 0 && x >= r.right() - bw {
+                    let (uh, dh) = self.scroll_arrows(pack, t);
+                    let offset = self.nodes[t].state.scroll_y;
+                    let content = self.content_height(t);
+                    let track = (r.y + uh, r.h - uh - dh);
+                    if y < r.y + uh {
+                        self.scroll_by(t, -self.scroll_step(t));
+                    } else if y >= r.bottom() - dh {
+                        self.scroll_by(t, self.scroll_step(t));
+                    } else if let Some((ty, th)) = thumb(track.0, track.1, content, r.h, offset) {
+                        if y < ty {
+                            self.scroll_by(t, -r.h);
+                        } else if y >= ty + th {
+                            self.scroll_by(t, r.h);
+                        } else {
+                            self.scroll_drag = Some((t, y - ty, uh, dh));
+                        }
+                    }
                 }
             }
             "GuiTextListCtrl" if b == MouseButton::Left => {
@@ -1531,6 +1588,7 @@ impl View {
         out: &mut Vec<ViewEvent>,
     ) {
         self.mouse = (x, y);
+        self.scroll_drag = None;
         if let Some(mut open) = self.popup {
             // Press-drag-release over a row picks it, like Torque's list.
             let items = self.nodes[open.node].state.items.len();
@@ -1624,9 +1682,34 @@ impl View {
     }
 
     pub fn scroll_by(&mut self, id: NodeId, dy: i32) {
+        let to = self.nodes[id].state.scroll_y + dy;
+        self.scroll_to(id, to);
+    }
+
+    /// Set a scroll control's offset and move its children with it.
+    pub fn scroll_to(&mut self, id: NodeId, y: i32) {
         let max = (self.content_height(id) - self.nodes[id].rect.h).max(0);
-        let s = &mut self.nodes[id].state.scroll_y;
-        *s = (*s + dy).clamp(0, max);
+        let y = y.clamp(0, max);
+        if self.nodes[id].state.scroll_y == y {
+            return;
+        }
+        self.nodes[id].state.scroll_y = y;
+        let a = authored_rect(&self.nodes[id].ctrl);
+        let r = self.nodes[id].rect;
+        self.layout_children(id, (a.w, a.h), r);
+    }
+
+    /// Thumb dragged so its top is at `thumb_y`.
+    fn drag_scroll(&mut self, id: NodeId, thumb_y: i32, uh: i32, dh: i32) {
+        let r = self.nodes[id].rect;
+        let content = self.content_height(id);
+        let Some((_, th)) = thumb(r.y + uh, r.h - uh - dh, content, r.h, 0) else {
+            return;
+        };
+        let free = (r.h - uh - dh - th).max(1);
+        let t = (thumb_y - r.y - uh).clamp(0, free);
+        let to = (t as i64 * (content - r.h) as i64 / free as i64) as i32;
+        self.scroll_to(id, to);
     }
 
     /// Mouse wheel: scroll the innermost scroll control under the cursor.
@@ -1641,12 +1724,7 @@ impl View {
         };
         loop {
             if self.nodes[id].ctrl.class == "GuiScrollCtrl" {
-                let step = self.nodes[id]
-                    .ctrl
-                    .field("rowHeight")
-                    .and_then(|r| r.parse::<i32>().ok())
-                    .unwrap_or(32);
-                self.scroll_by(id, -delta * step);
+                self.scroll_by(id, -delta * self.scroll_step(id));
                 return true;
             }
             match self.nodes[id].parent {

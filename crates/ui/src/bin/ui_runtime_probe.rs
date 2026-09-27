@@ -270,6 +270,23 @@ fn main() -> Result<()> {
         ui.core.run_command("useTools", true);
         ui.update(120);
         render(&ui, "hud-tools", &mut renderer, &mut report)?;
+        ui.core.push(ScreenId::MiniGameSettings);
+        ui.update(0);
+        render(&ui, "minigame-settings", &mut renderer, &mut report)?;
+        let (x, y) = ui
+            .control_center(ScreenId::MiniGameSettings, "CMG_Scroll")
+            .context("missing CMG_Scroll")?;
+        ui.handle_input(InputEvent::MouseMove { x, y });
+        for _ in 0..4 {
+            ui.handle_input(InputEvent::Wheel { delta: -1.0 });
+        }
+        render(
+            &ui,
+            "minigame-settings-scrolled",
+            &mut renderer,
+            &mut report,
+        )?;
+        key(&mut ui, Key::Escape);
         ui.core.push(ScreenId::EscapeMenu);
         ui.update(0);
         render(&ui, "escape-menu", &mut renderer, &mut report)?;

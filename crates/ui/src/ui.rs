@@ -820,6 +820,8 @@ pub struct Ui {
     cfg: UiConfig,
     mods: Modifiers,
     mouse: (f32, f32),
+    /// Unused fraction of a wheel notch over menus.
+    wheel_rest: f32,
     sounds: Vec<UiSound>,
     dropped_sounds: u64,
 }
@@ -939,6 +941,7 @@ impl Ui {
             cfg,
             mods: Modifiers::NONE,
             mouse: (-1.0, -1.0),
+            wheel_rest: 0.0,
             sounds: Vec::new(),
             dropped_sounds: 0,
         };
@@ -1541,8 +1544,13 @@ impl Ui {
                     return;
                 }
                 if self.cursor_visible() {
+                    // Touchpads send fractions of a notch; scroll whole rows.
+                    self.wheel_rest += delta;
+                    let steps = self.wheel_rest.trunc();
+                    self.wheel_rest -= steps;
                     let t = self.mouse_target();
-                    let used = self.with_target(t, |s, _| s.view_mut().wheel(delta.round() as i32));
+                    let used = steps == 0.0
+                        || self.with_target(t, |s, _| s.view_mut().wheel(steps as i32));
                     if used {
                         return;
                     }

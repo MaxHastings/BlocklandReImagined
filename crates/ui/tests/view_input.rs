@@ -248,3 +248,40 @@ fn long_popup_scrolls_and_takes_keyboard_and_drag_selection() {
         "End scrolled the list to items 18-29"
     );
 }
+
+#[test]
+fn scroll_panes_move_their_content_by_wheel_arrows_track_and_thumb() {
+    let pack = Pack::from_parts(UiPack::default(), ".".into());
+    let mut root = c("GuiControl", "root", [0, 0], [640, 480]);
+    let mut scroll = c("GuiScrollCtrl", "scroll", [10, 10], [200, 100]);
+    scroll.fields.insert("rowHeight".into(), "20".into());
+    scroll.children = vec![c("GuiControl", "page", [0, 0], [188, 400])];
+    root.children = vec![scroll];
+    let mut v = View::new(&root);
+    v.layout(640, 480);
+    let (scroll, page) = (v.id("scroll").unwrap(), v.id("page").unwrap());
+    let mut out = Vec::new();
+    v.mouse_move(50, 50, &mut out);
+    assert!(v.wheel(-2));
+    assert_eq!(v.node(page).rect.y, 10 - 40, "content moves with the wheel");
+    // The bar is the right 12px (fallback skin); arrows are 12px tall.
+    click(&mut v, &pack, 205, 105);
+    assert_eq!(v.node(scroll).state.scroll_y, 60, "down arrow steps a row");
+    click(&mut v, &pack, 205, 15);
+    assert_eq!(v.node(scroll).state.scroll_y, 40, "up arrow steps back");
+    click(&mut v, &pack, 205, 95);
+    assert_eq!(
+        v.node(scroll).state.scroll_y,
+        140,
+        "track pages by the view"
+    );
+    // Drag the thumb to the bottom of the track.
+    v.mouse_move(205, 60, &mut out);
+    // Track 22..98, thumb 76 * 100 / 400 = 19px tall.
+    let thumb_y = 22 + (76 - 19) * 140 / 300;
+    v.mouse_down(MouseButton::Left, 205, thumb_y + 2, &pack, &mut out);
+    v.mouse_move(205, 200, &mut out);
+    v.mouse_up(MouseButton::Left, 205, 200, &pack, &mut out);
+    assert_eq!(v.node(scroll).state.scroll_y, 300);
+    assert_eq!(v.node(page).rect.y, 10 - 300);
+}
