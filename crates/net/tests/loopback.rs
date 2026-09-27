@@ -631,12 +631,18 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
     wait(&mut host, |c| c.admin_snapshot.is_some()).await?;
     assert_eq!(host.admin_snapshot.as_ref().unwrap().role, Role::SuperAdmin);
 
-    let mut guest = Client::connect(
+    // Password login needs a durable identity (failed guesses follow it).
+    let guest_dir = tempfile::tempdir()?;
+    let guest_identity =
+        ClientIdentity::load_or_create(guest_dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guest".into(),
         "fixture-v1".into(),
         None,
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut guest, |c| c.admin_snapshot.is_some()).await?;
@@ -834,12 +840,14 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
             .is_some_and(|s| !s.players.iter().any(|p| p.name == "Guest"))
     })
     .await?;
-    let mut resumed = Client::connect(
+    let mut resumed = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guest".into(),
         "fixture-v1".into(),
         Some(guest_ticket),
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut resumed, |c| c.admin_snapshot.is_some()).await?;
@@ -871,12 +879,18 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
         password: Secret::new("correct".into())?,
     })))
     .await?;
-    let mut guest = Client::connect(
+    // Password login needs a durable identity (failed guesses follow it).
+    let guest_dir = tempfile::tempdir()?;
+    let guest_identity =
+        ClientIdentity::load_or_create(guest_dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guessing client".into(),
         "fixture-v1".into(),
         None,
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut guest, |c| c.admin_snapshot.is_some()).await?;

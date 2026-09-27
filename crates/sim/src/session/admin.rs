@@ -96,9 +96,6 @@ pub struct AdminReply {
 #[derive(Debug)]
 pub struct AdminCall {
     pub reply: AdminReply,
-    /// Network adapter must close these authenticated peer connections before
-    /// returning success for a kick or failed-password disconnect.
-    pub disconnects: Vec<OwnerId>,
 }
 
 #[derive(Default)]
@@ -503,10 +500,13 @@ impl AdminRuntime {
         if changed {
             self.revision = self.revision.saturating_add(1);
         }
+        // Committed effects are published before the reply is built: the
+        // reply can fail (a sender who just locked itself out has no
+        // snapshot) and must not take the disconnects with it.
+        session.admin_disconnects.extend(disconnects);
         let snapshot = self.snapshot(owner)?;
         Ok(AdminCall {
             reply: AdminReply { snapshot, data },
-            disconnects,
         })
     }
 }

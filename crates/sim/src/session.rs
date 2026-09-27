@@ -206,6 +206,61 @@ pub enum Command {
     BuildGesture(BuildGesture),
 }
 
+/// What a command needs of its sender, checked once before dispatch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Preconditions {
+    /// Refused while the sender is dead.
+    pub alive: bool,
+    /// Refused where the sender's mini-game denies this build action.
+    pub build: Option<bri_minigames::BuildAction>,
+}
+impl Command {
+    /// Every command declares its preconditions here, so a new command
+    /// cannot skip the living or mini-game checks by omission (stress
+    /// campaign W4). Checks that depend on the command's fields (firing only
+    /// on trigger down) or must follow a role check stay in the handler.
+    pub fn preconditions(&self) -> Preconditions {
+        use bri_minigames::BuildAction;
+        let (alive, build) = match self {
+            Command::Plant { .. } => (true, Some(BuildAction::Build)),
+            Command::UseSprayCan { .. }
+            | Command::UseFxCan { .. }
+            | Command::EquipTool { .. }
+            | Command::Activate
+            | Command::ToggleLight
+            | Command::Emote(_)
+            | Command::Wand
+            | Command::BuildGesture(_) => (true, None),
+            Command::Admin(_)
+            | Command::Tool(_)
+            | Command::DropTool { .. }
+            | Command::WeaponTrigger { .. }
+            | Command::Avatar(_)
+            | Command::SaveBuild { .. }
+            | Command::LoadBuild { .. }
+            | Command::Chat(_)
+            | Command::Suicide
+            | Command::Respawn
+            | Command::MiniGame(_)
+            | Command::SwitchSeat(_)
+            | Command::TeamChat(_)
+            | Command::ClearCheckpoint
+            | Command::TreasureStatus
+            | Command::TrustInvite { .. }
+            | Command::AcceptTrust { .. }
+            | Command::RejectTrust { .. }
+            | Command::IgnoreTrust { .. }
+            | Command::DemoteTrust { .. }
+            | Command::UnIgnore { .. }
+            | Command::TrustList(_)
+            | Command::DropPlayerAt { .. }
+            | Command::ControlPlayer
+            | Command::BrickHand(_)
+            | Command::Talking(_) => (false, None),
+        };
+        Preconditions { alive, build }
+    }
+}
 /// `ServerCmdShiftBrick`, `ServerCmdSuperShiftBrick` and
 /// `ServerCmdRotateBrick` play these on the builder's thread 3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -351,6 +406,7 @@ struct Peer {
     window_tick: u64,
     actions: u32,
     chats: u32,
+    saves: u32,
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
@@ -418,6 +474,7 @@ pub struct Session {
     ownership_scope: Option<String>,
     bulk_window_tick: u64,
     bulk_requests: u32,
+    save_requests: u32,
     admin: admin::AdminRuntime,
     admin_disconnects: VecDeque<OwnerId>,
     /// v20 `$Server::LAN`: single-player and LAN hosts use the looser brick
@@ -479,6 +536,7 @@ impl Session {
             ownership_scope: None,
             bulk_window_tick: 0,
             bulk_requests: 0,
+            save_requests: 0,
             admin: admin::AdminRuntime::default(),
             admin_disconnects: VecDeque::new(),
             lan_host: false,
@@ -645,6 +703,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                saves: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -792,6 +851,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                saves: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -942,48 +1002,77 @@ impl Session {
                 .unwrap_or_default()
                 .as_secs();
             let call = self.admin_request(owner, request.clone(), now, &mut persist)?;
-            self.admin_disconnects.extend(call.disconnects);
             return Ok(Reply::Admin(Box::new(call.reply)));
         }
-        if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command
-        {
+        // Cheap admission (sequence, rate) runs before any per-element work,
+        // so a replayed or rate-limited request costs nothing to refuse.
+        let tick = self.simulation.state().tick;
+        let (alive, player) = {
+            let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+            ensure!(sequence > peer.last_sequence, "Stale/replayed command");
+            peer.last_sequence = sequence;
+            if tick - peer.window_tick >= 120 {
+                peer.window_tick = tick;
+                peer.actions = 0;
+                peer.chats = 0;
+                peer.saves = 0;
+            }
+            peer.actions = peer.actions.saturating_add(1);
+            ensure!(peer.actions <= 60, "Action command rate exceeded");
+            (peer.combat.alive, peer.combat.player)
+        };
+        let needs = command.preconditions();
+        ensure!(alive || !needs.alive, "Dead players cannot do that");
+        if let Some(action) = needs.build {
+            ensure!(
+                !matches!(
+                    self.minigames.can_build(player, action),
+                    Ok(bri_minigames::Decision::Deny(_))
+                ),
+                "Building is disabled in this mini-game"
+            );
+        }
+        if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command {
+            ensure!(
+                rows.len() <= bri_world::MAX_EVENTS_PER_BRICK,
+                "Brick exceeds the native {}-event admission limit",
+                bri_world::MAX_EVENTS_PER_BRICK
+            );
             self.validate_event_rows(rows)?;
         }
         self.tutorial_check(&command)?;
-        let tick = self.simulation.state().tick;
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-        ensure!(sequence > peer.last_sequence, "Stale/replayed command");
-        peer.last_sequence = sequence;
-        if tick - peer.window_tick >= 120 {
-            peer.window_tick = tick;
-            peer.actions = 0;
-            peer.chats = 0;
-        }
-        peer.actions = peer.actions.saturating_add(1);
-        ensure!(peer.actions <= 60, "Action command rate exceeded");
         if let Some(aim) = aim {
             aim.validate()?;
         }
         let direction = aim.map_or_else(|| peer.player.state().forward(), ActionAim::direction);
-        if matches!(
-            command,
-            Command::SaveBuild { .. } | Command::LoadBuild { .. }
-        ) {
-            if matches!(command, Command::LoadBuild { .. }) {
-                ensure!(
-                    peer.actor.administrator,
-                    "Only the host/administrator may load builds"
-                );
-            }
-            if tick.saturating_sub(self.bulk_window_tick) >= 120 {
-                self.bulk_window_tick = tick;
-                self.bulk_requests = 0;
-            }
+        if tick.saturating_sub(self.bulk_window_tick) >= 120 {
+            self.bulk_window_tick = tick;
+            self.bulk_requests = 0;
+            self.save_requests = 0;
+        }
+        // Loads (administrators) and saves (anyone) have separate budgets, and
+        // one player may take only one of the shared save slots, so players
+        // can neither starve the administrator nor each other.
+        if matches!(command, Command::LoadBuild { .. }) {
+            ensure!(
+                peer.actor.administrator,
+                "Only the host/administrator may load builds"
+            );
             self.bulk_requests = self.bulk_requests.saturating_add(1);
             ensure!(
                 self.bulk_requests <= 4,
-                "Build save/load rate exceeded; retry shortly"
+                "Build load rate exceeded; retry shortly"
             );
+        }
+        if matches!(command, Command::SaveBuild { .. }) {
+            ensure!(peer.saves == 0, "Build save rate exceeded; retry shortly");
+            ensure!(
+                self.save_requests < 4,
+                "Build save rate exceeded; retry shortly"
+            );
+            peer.saves += 1;
+            self.save_requests += 1;
         }
         match command {
             Command::Admin(_) => unreachable!("handled by the authenticated admin branch above"),

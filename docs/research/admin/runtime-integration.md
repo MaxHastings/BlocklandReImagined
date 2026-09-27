@@ -33,7 +33,12 @@ clearing all bricks, and clearing one brick group. Role updates also update the
 Session actor used by existing build and brick permissions, and roster
 snapshots are broadcast to all clients. Kicks, bans, and the fourth failed
 password attempt close affected authenticated peers and remove their Session
-owners. Ban/unban state is committed atomically before memory state,
+owners. Password login needs a verified durable identity, and failed guesses
+follow that identity for 10 minutes after the last one (`LOGIN_STRIKE_SECONDS`),
+so reconnecting never buys fresh guesses; an identity past its fourth failure
+is refused without the password being checked (stress campaign W3). The
+lockout disconnect is published before the reply is built, so it reaches the
+host even though the locked sender's own reply fails. Ban/unban state is committed atomically before memory state,
 disconnects, or a successful reply become visible. Clear requests preflight
 world revision capacity before removing any brick. Group IDs are authoritative
 owner IDs; ID 0 is represented as the unowned group.
