@@ -441,6 +441,12 @@ impl View {
             if is_scroll {
                 abs = abs.offset(0, -scroll_y);
             }
+            // Like Torque's GuiTextListCtrl::setSize, a list grows to hold every
+            // row; its scroll parent clips and scrolls it. Otherwise rows past
+            // the authored extent are clipped away and cannot be reached.
+            if self.nodes[k].ctrl.class == "GuiTextListCtrl" {
+                abs.h = abs.h.max(self.list_height(k));
+            }
             self.nodes[k].rect = abs;
             self.layout_children(k, (a.w, a.h), abs);
         }
