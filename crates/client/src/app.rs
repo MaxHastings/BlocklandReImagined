@@ -1561,6 +1561,7 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
+                    autosave: None,
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),

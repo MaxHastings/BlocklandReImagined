@@ -27,7 +27,20 @@ pub struct ServerOptions {
     pub certificate: Option<HostCertificate>,
     /// Builds a configured, empty session for a map id (admin Change Map).
     pub map_loader: Option<MapLoader>,
+    /// Periodic durable checkpoints of the authoritative world, so a crash
+    /// loses at most one interval. None keeps state only in memory.
+    pub autosave: Option<Autosave>,
 }
+/// The host hands a snapshot of its world to `save` every `every`, on a
+/// blocking thread and never two at once, and once more when the host loop
+/// ends with an error (a clean stop returns the world in its report).
+#[derive(Clone)]
+pub struct Autosave {
+    pub every: Duration,
+    pub save: SaveWorld,
+}
+/// Writes one world snapshot durably; runs on a blocking thread.
+pub type SaveWorld = Arc<dyn Fn(&bri_world::World) -> Result<()> + Send + Sync>;
 /// Loads a map for Change Map; runs on a blocking thread.
 pub type MapLoader = Arc<dyn Fn(&str) -> Result<Session> + Send + Sync>;
 /// Self-signed QUIC host certificate and its PKCS#8 private key.
@@ -122,6 +135,9 @@ pub struct ServerReport {
     pub commands: u64,
     pub rejected: u64,
     pub final_world: PublicWorld,
+    /// Completed and failed autosaves.
+    pub autosaves: u64,
+    pub autosave_failures: u64,
     #[serde(skip)]
     pub native_world: bri_world::World,
     pub notices: Vec<String>,
@@ -727,6 +743,15 @@ async fn run(
     let mut resumes = 0;
     let mut commands = 0;
     let mut rejected = 0;
+    let autosave = options.autosave.clone();
+    let mut autosave_timer = tokio::time::interval(
+        autosave.as_ref().map_or(Duration::from_secs(3600), |a| a.every.max(Duration::from_secs(1))),
+    );
+    autosave_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    autosave_timer.reset();
+    let mut autosaving: Option<tokio::task::JoinHandle<Result<()>>> = None;
+    let mut autosaves = 0_u64;
+    let mut autosave_failures = 0_u64;
     let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / 120.0));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut clock = crate::tick_clock::TickClock::default();
@@ -744,6 +769,16 @@ async fn run(
             }
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
+        _=autosave_timer.tick(),if autosave.is_some()=>{
+            // One save in flight; a slow disk skips intervals, never queues them.
+            if let Some(done)=autosaving.take_if(|task|task.is_finished()) {
+                match done.await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave failed: {error}");}}
+            }
+            if autosaving.is_none() && let Some(autosave)=&autosave {
+                let world=session.simulation().state().clone();let save=autosave.save.clone();
+                autosaving=Some(tokio::task::spawn_blocking(move||save(&world)));
+            }
+        },
         Some((admin,loaded))=map_rx.recv()=>{
             match loaded {
                 Ok(new)=>{
@@ -856,6 +891,21 @@ async fn run(
     endpoint.close(0_u32.into(), b"Server shutdown");
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
+    if let Some(task) = autosaving.take() {
+        match task.await {
+            Ok(Ok(())) => autosaves += 1,
+            _ => autosave_failures += 1,
+        }
+    }
+    if let (Err(error), Some(autosave)) = (&outcome, &autosave) {
+        // The report (and its world) is lost with the error; keep the world.
+        eprintln!("Host stopped with an error ({error:#}); saving its world");
+        let world = session.simulation().state().clone();
+        let save = autosave.save.clone();
+        if let Err(save_error) = tokio::task::spawn_blocking(move || save(&world)).await? {
+            eprintln!("Final autosave failed: {save_error:#}");
+        }
+    }
     outcome?;
     Ok(ServerReport {
         weapon_adapter_gaps: session.weapon_adapter_gaps().clone(),
@@ -867,6 +917,8 @@ async fn run(
         commands,
         rejected,
         final_world: Checkpoint::from_session(&session, cursor).world,
+        autosaves,
+        autosave_failures,
         native_world: session.simulation().state().clone(),
         notices: session.take_notices(),
     })

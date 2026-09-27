@@ -54,6 +54,17 @@ file. This currently requires hard-link support (verified on this Windows host);
 FAT/external-filesystem alternatives and a user-facing revision browser remain work.
 No claim of power-loss durability of directory metadata is made.
 
+Hosts checkpoint the authoritative world while running (`ServerOptions::autosave`,
+stress campaign W2). Every interval the host loop hands a snapshot to a save
+callback on a blocking thread, with at most one save in flight, and saves once
+more if the loop ends with an error, since the stop report and its world are lost
+then. `persistence::autosave` publishes `autosave-<unix millis>.world.json` with
+`save_new` and keeps the newest revisions. The dedicated `bri-server` autosaves
+every 60 s into its state directory and keeps 3; passing the newest as its
+`<world.json>` resumes after a crash. The snapshot is a clone of the world taken
+on the tick thread, which costs time on very large worlds. The windowed client
+host does not autosave yet.
+
 ## Original saves
 
 ```powershell

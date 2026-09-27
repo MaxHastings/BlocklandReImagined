@@ -1,6 +1,10 @@
 use crate::World;
 use anyhow::{Result, ensure};
-use std::{fs::File, io::Read, path::Path};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 pub const MAX_SAVE_BYTES: u64 = 512 * 1024 * 1024;
 pub fn decode(bytes: &[u8]) -> Result<World> {
     ensure!(
@@ -40,6 +44,37 @@ pub fn save_new(path: &Path, world: &World) -> Result<()> {
         "Oversized native world"
     );
     Ok(bri_files::create_new(path, &bytes)?)
+}
+const AUTOSAVE_PREFIX: &str = "autosave-";
+const AUTOSAVE_SUFFIX: &str = ".world.json";
+/// Publish `dir/autosave-<unix millis>.world.json` crash-safely, then delete
+/// all but the newest `keep` autosaves. A failed write leaves every earlier
+/// autosave in place, so the newest good one always survives.
+pub fn autosave(dir: &Path, world: &World, keep: usize) -> Result<PathBuf> {
+    ensure!(keep >= 1, "Autosave must keep at least one revision");
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+    let path = dir.join(format!("{AUTOSAVE_PREFIX}{millis:020}{AUTOSAVE_SUFFIX}"));
+    save_new(&path, world)?;
+    let saves = autosaves(dir)?;
+    for old in &saves[..saves.len().saturating_sub(keep)] {
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(path)
+}
+/// Autosaves in `dir`, oldest first.
+pub fn autosaves(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut saves: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(AUTOSAVE_PREFIX) && n.ends_with(AUTOSAVE_SUFFIX))
+        })
+        .collect();
+    saves.sort();
+    Ok(saves)
 }
 
 #[cfg(test)]
@@ -86,6 +121,28 @@ mod tests {
             legacy["bricks"]["1"]["item_spawn"] = invalid;
             assert!(decode(&serde_json::to_vec(&legacy).unwrap()).is_err());
         }
+    }
+    #[test]
+    fn autosave_keeps_the_newest_revisions() {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-autosave-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let mut world = World::new("autosaved".into(), "map/test".into(), vec![[1.0; 4]]);
+        let mut written = Vec::new();
+        for n in 0..4 {
+            world.name = format!("revision {n}");
+            written.push(autosave(&directory, &world, 2).unwrap());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(autosaves(&directory).unwrap(), written[2..]);
+        assert_eq!(load(&written[3]).unwrap().name, "revision 3");
+        std::fs::remove_dir_all(&directory).unwrap();
     }
     #[test]
     fn save_publish_never_overwrites_an_existing_revision() {

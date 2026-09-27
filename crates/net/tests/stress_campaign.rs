@@ -80,11 +80,12 @@ fn options() -> ServerOptions {
     ServerOptions {
         bind: "127.0.0.1:0".parse().unwrap(),
         content_id: "fixture-v1".into(),
-        spawn_points: (0..16)
-            .map(|i| Vec3::new(-24.0 + 3.0 * i as f32, 0.05, 0.0))
+        spawn_points: (0..32)
+            .map(|i| Vec3::new(-48.0 + 3.0 * i as f32, 0.05, 0.0))
             .collect(),
         certificate: None,
         map_loader: None,
+        autosave: None,
     }
 }
 
@@ -227,5 +228,175 @@ async fn guests_reserving_huge_request_frames_cannot_stall_other_players() -> Re
     }
     victim.close();
     server.stop().await?;
+    Ok(())
+}
+
+/// E3 (resource pressure / fairness). A joined peer writes tiny commands as
+/// fast as its stream allows and never reads a reply. Session rate limits
+/// reject most of them, but each still crosses the host's shared event queue.
+/// Other players' command latency must stay interactive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_flood_does_not_starve_other_players() -> Result<()> {
+    use bri_net::protocol::Request;
+    let server = server::start(session(), options())?;
+    let mut victim = join(&server, "Victim").await?;
+    let baseline = command_latency(&mut victim).await?;
+    let mut flooder = raw_join(&server, "Flooder").await?;
+    // Replay: Request { sequence: 1.., command: ToggleLight } back to back.
+    let flood = tokio::spawn(async move {
+        let mut sent = 0_u64;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            sent += 1;
+            let request = Request {
+                sequence: sent,
+                command: Command::ToggleLight,
+                aim: None,
+            };
+            if codec::write_request(&mut flooder.send, &request, codec::PLAYER_MAX_REQUEST)
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+        (sent, flooder)
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut worst = Duration::ZERO;
+    for _ in 0..10 {
+        worst = worst.max(command_latency(&mut victim).await?);
+    }
+    let (sent, _flooder) = flood.await?;
+    assert!(
+        worst < Duration::from_millis(500),
+        "victim worst latency {worst:?} (baseline {baseline:?}) during a flood of {sent} commands"
+    );
+    victim.close();
+    server.stop().await?;
+    Ok(())
+}
+
+/// E4 (resource pressure / many editors). 24 clients plant bricks at the
+/// session's full per-player action rate at once. The host must keep its
+/// tick rate and every client's replica must converge on the same world.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn many_clients_building_at_once_converge_without_dropping_ticks() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let mut clients = Vec::new();
+    for n in 0..24 {
+        clients.push(join(&server, &format!("Builder{n}")).await?);
+    }
+    // Replay: client n plants a plate at x = 2n - 23.5, z = 20.25 + 0.5k (k < 40),
+    // pipelined without waiting for replies.
+    let started = Instant::now();
+    let mut tasks = Vec::new();
+    for (n, mut client) in clients.into_iter().enumerate() {
+        tasks.push(tokio::spawn(async move {
+            let mut sequences = Vec::new();
+            for k in 0..40 {
+                sequences.push(
+                    client
+                        .request(Command::Plant {
+                            definition: "plate".into(),
+                            position: [2.0 * n as f32 - 23.5, 0.1, 20.25 + 0.5 * k as f32],
+                            quarter_turns: 0,
+                            color: 0,
+                        })
+                        .await?,
+                );
+            }
+            let mut planted = 0;
+            let mut replies = 0;
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while replies < sequences.len() {
+                    if let bri_net::client::ClientEvent::Reply { result, .. } =
+                        client.receive().await?
+                    {
+                        replies += 1;
+                        match result {
+                            Ok(Reply::Planted(_)) => planted += 1,
+                            other => eprintln!("E4 client {n} reply {replies}: {other:?}"),
+                        }
+                    }
+                }
+                anyhow::Ok(())
+            })
+            .await??;
+            anyhow::Ok((planted, client))
+        }));
+    }
+    let mut total = 0;
+    let mut clients = Vec::new();
+    for task in tasks {
+        let (planted, client) = task.await??;
+        total += planted;
+        clients.push(client);
+    }
+    let elapsed = started.elapsed();
+    assert_eq!(total, 24 * 40, "every non-overlapping plant succeeds");
+    // Every replica converges on the host's world.
+    for client in &mut clients {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while client.replica.world.bricks.len() < total {
+                client.receive().await?;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+    }
+    for client in &clients {
+        client.close();
+    }
+    let report = server.stop().await?;
+    eprintln!(
+        "E4: {total} plants from 24 clients in {elapsed:?}; ticks {} dropped {}",
+        report.ticks, report.dropped_ticks
+    );
+    assert_eq!(report.final_world.bricks.len(), total);
+    assert_eq!(report.dropped_ticks, 0, "host fell behind its tick rate");
+    Ok(())
+}
+
+/// E5 (persistence / crash). A host that dies without a clean stop used to
+/// lose every change since it started: the world was only written from the
+/// stop report. With an autosave configured, a build must be on disk within
+/// one interval, readable as a startup world, while the host is still running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_crashed_host_loses_at_most_one_autosave_interval() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let saves = dir.path().to_path_buf();
+    let mut options = options();
+    options.autosave = Some(server::Autosave {
+        every: Duration::from_secs(1),
+        save: std::sync::Arc::new(move |world| {
+            bri_world::persistence::autosave(&saves, world, 2).map(drop)
+        }),
+    });
+    let server = server::start(session(), options)?;
+    let mut builder = join(&server, "Builder").await?;
+    // Replay: one plate at (0.5, 0.1, 3.25).
+    let Reply::Planted(id) = builder
+        .command(Command::Plant {
+            definition: "plate".into(),
+            position: [0.5, 0.1, 3.25],
+            quarter_turns: 0,
+            color: 0,
+        })
+        .await?
+    else {
+        panic!("plant rejected")
+    };
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    // The "crash" point: nothing below depends on the host stopping cleanly.
+    let newest = bri_world::persistence::autosaves(dir.path())?
+        .pop()
+        .expect("an autosave within one interval");
+    let world = bri_world::persistence::load_startup(&newest)?;
+    assert!(world.bricks.contains_key(&id), "autosave holds the new brick");
+    assert!(bri_world::persistence::autosaves(dir.path())?.len() <= 2);
+    builder.close();
+    let report = server.stop().await?;
+    assert!(report.autosaves >= 2 && report.autosave_failures == 0);
     Ok(())
 }

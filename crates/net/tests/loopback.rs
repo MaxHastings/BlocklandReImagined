@@ -540,6 +540,7 @@ fn options() -> ServerOptions {
         ],
         certificate: None,
         map_loader: None,
+        autosave: None,
     }
 }
 

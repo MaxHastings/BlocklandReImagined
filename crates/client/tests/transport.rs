@@ -31,6 +31,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 spawn_points: vec![Vec3::new(0.0, 100.0, 0.0)],
                 certificate: None,
                 map_loader: None,
+                autosave: None,
             },
             1,
         )?;
