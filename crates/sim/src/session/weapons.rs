@@ -189,6 +189,9 @@ impl Session {
                         Some(bri_vehicles::Family::Skis) => bri_weapons::Mount::Skis,
                         Some(_) => bri_weapons::Mount::Other,
                     },
+                    scale: state.scale,
+                    can_jet: state.tuning().can_jet,
+                    horse: state.datablock == crate::player_types::PlayerType::Horse,
                     ..Frame::default()
                 },
             )?;
@@ -455,7 +458,19 @@ impl Session {
                         );
                     }
                 }
-                WeaponEvent::SportMovement { locked: false, .. } => {}
+                // `HorseRayProjectile::Damage`: the player becomes a horse
+                // until respawn and is thrown off any mount.
+                WeaponEvent::HorseTransform { target, .. } => {
+                    if self.is_alive(target.0) {
+                        self.set_player_datablock(
+                            target.0,
+                            crate::player_types::PlayerType::Horse,
+                        )?;
+                    }
+                }
+                WeaponEvent::SportMovement { actor, locked } => {
+                    self.sport_movement(actor.0, locked)?
+                }
                 WeaponEvent::StartSkis {
                     actor,
                     position,
@@ -495,6 +510,28 @@ impl Session {
         self.notify(source, Notice::Bottom { text, seconds: 5.0 });
         let text = format!("{prefix} {red}From {color}{passer} {base}");
         self.notify(catcher, Notice::Bottom { text, seconds: 5.0 });
+    }
+    /// `basketballShootImage::onMount`/`onUnMount`: a no-jet Blockhead lining
+    /// up a shot becomes `BallShootPlayer` and gets its datablock back after.
+    fn sport_movement(&mut self, owner: OwnerId, locked: bool) -> Result<()> {
+        use crate::player_types::PlayerType;
+        let Some(peer) = self.peers.get_mut(&owner) else {
+            return Ok(());
+        };
+        let current = peer.player.state().datablock;
+        if locked {
+            if !matches!(current, PlayerType::Horse | PlayerType::BallShoot)
+                && peer.sport_datablock.is_none()
+            {
+                peer.sport_datablock = Some(current);
+                self.set_player_datablock(owner, PlayerType::BallShoot)?;
+            }
+        } else if let Some(previous) = peer.sport_datablock.take()
+            && current == PlayerType::BallShoot
+        {
+            self.set_player_datablock(owner, previous)?;
+        }
+        Ok(())
     }
     fn note_weapon_gap(&mut self, name: &str, count: u64) {
         let entry = self.weapon_gaps.entry(name.into()).or_default();

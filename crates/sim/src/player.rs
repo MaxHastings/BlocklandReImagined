@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Original engine tick; v20 per-tick constants are converted with it.
-const TORQUE_TICK: f32 = 0.032;
+pub const TORQUE_TICK: f32 = 0.032;
 /// `sTractionDistance`: how far below the feet contact is found.
 const JUMP_TRACTION: f32 = 0.03 + 0.005;
 /// `PlayerStandardArmor.minJumpSpeed`/`maxJumpSpeed`: upward speeds over
@@ -78,6 +78,21 @@ pub struct PlayerState {
     pub jetting: bool,
     #[serde(default)]
     pub jump: JumpState,
+    /// The player's datablock (`setDataBlock`).
+    #[serde(default)]
+    pub datablock: crate::player_types::PlayerType,
+    /// Uniform `setScale` (`setPlayerScale`).
+    #[serde(default = "unit")]
+    pub scale: f32,
+    /// Jet energy (`mEnergy`), up to the datablock's `maxEnergy`.
+    #[serde(default = "full_energy")]
+    pub energy: f32,
+}
+fn unit() -> f32 {
+    1.0
+}
+fn full_energy() -> f32 {
+    100.0
 }
 /// v20 jump bookkeeping (`Player::canJump` and the jump in `updateMove`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -105,6 +120,10 @@ impl PlayerState {
             self.pitch.sin(),
             -self.yaw.cos() * self.pitch.cos(),
         )
+    }
+    /// The motor constants of this player's datablock at its scale.
+    pub fn tuning(&self) -> PlayerTuning {
+        self.datablock.tuning().scaled(self.scale)
     }
     pub fn eye(&self, tuning: &PlayerTuning) -> Vec3 {
         Vec3::from(self.feet)
@@ -153,6 +172,18 @@ pub struct PlayerTuning {
     pub ground_snap: f32,
     pub slope_degrees: f32,
     pub jump_surface_degrees: f32,
+    /// `jumpDelay`, in 120 Hz ticks.
+    pub jump_delay_ticks: u8,
+    /// `canJet`.
+    pub can_jet: bool,
+    /// `maxEnergy`.
+    pub max_energy: f32,
+    /// `rechargeRate`, per second.
+    pub recharge: f32,
+    /// `minJetEnergy`: energy needed to keep jetting.
+    pub min_jet_energy: f32,
+    /// `jetEnergyDrain`, per second of jetting.
+    pub jet_drain: f32,
 }
 impl Default for PlayerTuning {
     fn default() -> Self {
@@ -201,10 +232,28 @@ impl Default for PlayerTuning {
             ground_snap: 0.2,
             slope_degrees: 70.0,
             jump_surface_degrees: 80.0,
+            jump_delay_ticks: JUMP_DELAY_TICKS,
+            can_jet: true,
+            max_energy: 100.0,
+            recharge: 0.8 / TORQUE_TICK,
+            min_jet_energy: 0.0,
+            jet_drain: 0.0,
         }
     }
 }
 impl PlayerTuning {
+    /// Torque `setScale` scales the player's box and eye; speeds, forces and
+    /// the step height stay those of the datablock.
+    pub fn scaled(mut self, scale: f32) -> Self {
+        if scale.is_finite() && scale > 0.0 && scale != 1.0 {
+            self.width *= scale;
+            self.stand_height *= scale;
+            self.crouch_height *= scale;
+            self.stand_eye *= scale;
+            self.crouch_eye *= scale;
+        }
+        self
+    }
     fn height(&self, crouched: bool) -> f32 {
         if crouched {
             self.crouch_height
@@ -229,19 +278,10 @@ impl PlayerTuning {
             self.crouch_height,
             self.stand_eye,
             self.crouch_eye,
-            self.forward,
-            self.backward,
-            self.sideways,
-            self.underwater_forward,
-            self.underwater_backward,
-            self.underwater_sideways,
             self.density,
             self.swim_acceleration,
             self.swim_rise,
             self.dive_acceleration,
-            self.crouch_forward,
-            self.crouch_backward,
-            self.crouch_sideways,
             self.acceleration,
             self.air_control,
             self.drag,
@@ -255,7 +295,6 @@ impl PlayerTuning {
             self.up_max_speed,
             self.up_resist_speed,
             self.up_resist_factor,
-            self.step_height,
             self.ground_snap,
             self.slope_degrees,
             self.jump_surface_degrees,
@@ -264,7 +303,25 @@ impl PlayerTuning {
             values
                 .iter()
                 .all(|n| n.is_finite() && *n > 0.0 && *n <= 1000.0)
-                && self.crouch_height < self.stand_height
+                && self.crouch_height <= self.stand_height
+                && [self.max_energy, self.recharge, self.min_jet_energy, self.jet_drain]
+                    .iter()
+                    .all(|n| n.is_finite() && (0.0..=10000.0).contains(n))
+                // Speeds and the step may be zero (`BallShootPlayer`).
+                && [
+                    self.forward,
+                    self.backward,
+                    self.sideways,
+                    self.underwater_forward,
+                    self.underwater_backward,
+                    self.underwater_sideways,
+                    self.crouch_forward,
+                    self.crouch_backward,
+                    self.crouch_sideways,
+                    self.step_height,
+                ]
+                .iter()
+                .all(|n| n.is_finite() && (0.0..=1000.0).contains(n))
                 && self.slope_degrees < 90.0
                 && self.jump_surface_degrees < 90.0
                 && self.horizontal_resist_speed < self.horizontal_max_speed
@@ -331,6 +388,9 @@ impl Player {
                 crouched: false,
                 jetting: false,
                 jump: Default::default(),
+                datablock: Default::default(),
+                scale: 1.0,
+                energy: tuning.max_energy,
             },
             tuning,
             body,
@@ -340,11 +400,8 @@ impl Player {
     }
     /// Mirror an existing authoritative player (client prediction). Unlike
     /// `spawn`, the server already validated this position.
-    pub fn attach(
-        physics: &mut PhysicsWorld,
-        state: PlayerState,
-        tuning: PlayerTuning,
-    ) -> Result<Self> {
+    pub fn attach(physics: &mut PhysicsWorld, state: PlayerState) -> Result<Self> {
+        let tuning = state.tuning();
         tuning.validate()?;
         ensure!(state.owner > 0, "Invalid player owner");
         let pose = tuning.pose(Vec3::from(state.feet), state.crouched);
@@ -368,6 +425,35 @@ impl Player {
     }
     pub fn state(&self) -> &PlayerState {
         &self.state
+    }
+    pub fn tuning(&self) -> &PlayerTuning {
+        &self.tuning
+    }
+    /// A new body starts with a full energy bar.
+    pub fn refill_energy(&mut self) {
+        self.state.energy = self.tuning.max_energy;
+    }
+    /// `setDataBlock`/`setScale`: new motor constants and box. Growing the box
+    /// may overlap geometry; like Torque, the motor resolves it by moving.
+    pub fn set_datablock(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        datablock: crate::player_types::PlayerType,
+        scale: f32,
+    ) -> Result<()> {
+        ensure!(
+            scale.is_finite() && (0.1..=10.0).contains(&scale),
+            "Invalid player scale"
+        );
+        let tuning = datablock.tuning().scaled(scale);
+        tuning.validate()?;
+        self.state.datablock = datablock;
+        self.state.scale = scale;
+        self.state.energy = self.state.energy.min(tuning.max_energy);
+        self.tuning = tuning;
+        physics.colliders[self.collider].set_shape(self.tuning.shape(self.state.crouched));
+        self.synchronize_pose(physics);
+        Ok(())
     }
     /// Authoritative contact box, including current crouch dimensions. This is
     /// the same pose/shape used by the player motor, not a client pickup radius.
@@ -395,6 +481,11 @@ impl Player {
                 && state.pitch.is_finite(),
             "Invalid authoritative player correction"
         );
+        if state.datablock != self.state.datablock || state.scale != self.state.scale {
+            let tuning = state.tuning();
+            tuning.validate()?;
+            self.tuning = tuning;
+        }
         physics.colliders[self.collider].set_shape(self.tuning.shape(state.crouched));
         self.state = state;
         self.contacts.clear();
@@ -485,6 +576,13 @@ impl Player {
         input.validate()?;
         let dt = bri_physics::FIXED_DT;
         let t = &self.tuning;
+        // `canJet` and `minJetEnergy` gate the jets; jetting drains energy and
+        // `rechargeRate` refills it every tick.
+        let jet = input.jet && t.can_jet && self.state.energy >= t.min_jet_energy;
+        let input = MoveInput { jet, ..input };
+        let drain = if jet { t.jet_drain } else { 0.0 };
+        self.state.energy =
+            (self.state.energy - drain * dt + t.recharge * dt).clamp(0.0, t.max_energy);
         let was_grounded = self.state.grounded;
         let was_crouched = self.state.crouched;
         let feet = Vec3::from(self.state.feet);
@@ -632,7 +730,7 @@ impl Player {
                 velocity += direction * t.jump_speed * away;
             }
             velocity.y += normal.y * t.jump_speed * rise_scale;
-            jump.delay = JUMP_DELAY_TICKS;
+            jump.delay = t.jump_delay_ticks;
             jump.since_contact = JUMP_WINDOW_TICKS;
         } else if jump_contact.is_some() {
             jump.delay = jump.delay.saturating_sub(1);

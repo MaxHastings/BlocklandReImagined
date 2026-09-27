@@ -14,7 +14,7 @@ use crate::network::View;
 use anyhow::Result;
 use bri_net::protocol::{POSE_INTERVAL, PublicWorld};
 use bri_sim::{
-    player::{MoveInput, PlayerState, PlayerTuning},
+    player::{MoveInput, PlayerState},
     prediction::{CollisionMirror, Predictor},
 };
 use bri_world::OwnerId;
@@ -250,7 +250,7 @@ impl Motion {
         if steps == MAX_STEPS {
             self.accumulator = self.accumulator.min(TICK);
         }
-        let tuning = PlayerTuning::default();
+        let tuning = predictor.state().tuning();
         self.crouch
             .update(predictor.state().crouched, seconds, CROUCH_SECONDS);
         self.eye_height = Some(
@@ -293,7 +293,7 @@ impl Motion {
             state.head_yaw = head_yaw;
             let eye = self
                 .eye_height
-                .unwrap_or_else(|| state.eye(&PlayerTuning::default()).y - feet.y);
+                .unwrap_or_else(|| state.eye(&state.tuning()).y - feet.y);
             self.local_eye = Some(feet + Vec3::Y * eye);
             self.presented.insert(view.owner, state);
         } else if let Some(pose) = view.poses.get(&view.owner) {
@@ -387,6 +387,9 @@ mod tests {
             crouched: false,
             jetting: false,
             jump: Default::default(),
+            datablock: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {

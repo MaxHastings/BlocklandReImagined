@@ -18,7 +18,6 @@ use bri_render::{
 };
 use bri_sim::{
     definitions::Definitions,
-    player::PlayerTuning,
     session::{Command, InspectMode, Reply, Session, ToolAction},
 };
 use bri_ui::{
@@ -1067,7 +1066,7 @@ impl App {
         let eye = self.motion.local_eye().or_else(|| {
             view.poses
                 .get(&view.owner)
-                .map(|p| p.player.eye(&PlayerTuning::default()))
+                .map(|p| p.player.eye(&p.player.tuning()))
         });
         self.controls.follow(control, view.owner, eye);
     }
@@ -1124,9 +1123,13 @@ impl App {
                 }
                 if local.health < c.health && c.alive == Some(true) {
                     // Armor::onDamage: flash += delta / maxDamage * 2.
-                    updates.push(UiUpdate::DamageFlash(
-                        (c.health - local.health) / bri_sim::session::MAX_HEALTH * 2.0,
-                    ));
+                    let max = view
+                        .poses
+                        .get(&view.owner)
+                        .map_or(bri_sim::session::MAX_HEALTH, |p| {
+                            p.player.datablock.max_health()
+                        });
+                    updates.push(UiUpdate::DamageFlash((c.health - local.health) / max * 2.0));
                 }
                 c.countdown = None;
             } else {
@@ -3119,7 +3122,7 @@ impl PlatformApp for App {
                             .filter(|sound| !sound.is_empty() && self.audio.is_looping(sound));
                         if let Some(sound) = sound {
                             let eye = Vec3::from(player.feet)
-                                + Vec3::Y * bri_sim::player::PlayerTuning::default().stand_eye;
+                                + Vec3::Y * player.tuning().stand_eye;
                             loops.insert((*owner, mounted.hand), (sound.to_string(), eye.to_array()));
                         }
                     }
@@ -3300,7 +3303,7 @@ impl PlatformApp for App {
             let eye = self
                 .motion
                 .local_eye()
-                .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
+                .unwrap_or_else(|| local.eye(&local.tuning()));
             let chase = third_person
             .then(|| {
                 Self::chase_camera(&self.vehicle_assets, &self.vehicles, self.chase_lag, view)
@@ -4332,7 +4335,7 @@ impl PlatformApp for App {
         let eye = self
             .motion
             .local_eye()
-            .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
+            .unwrap_or_else(|| local.eye(&local.tuning()));
         let chase = third_person
             .then(|| {
                 Self::chase_camera(&self.vehicle_assets, &self.vehicles, self.chase_lag, view)

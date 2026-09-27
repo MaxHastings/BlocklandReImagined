@@ -4,7 +4,7 @@
 //! the predictor restores that state and replays the inputs still in flight.
 use crate::{
     definitions::{Definitions, brick_water},
-    player::{MotionEvents, MoveInput, Player, PlayerState, PlayerTuning},
+    player::{MotionEvents, MoveInput, Player, PlayerState},
     simulation::{MAP_TAG, brick_collider},
 };
 use anyhow::{Result, ensure};
@@ -166,7 +166,7 @@ pub struct Predictor {
 impl Predictor {
     /// Begin predicting from an authoritative state (normally the join pose).
     pub fn new(mut world: CollisionMirror, state: PlayerState) -> Result<Self> {
-        let player = Player::attach(&mut world.physics, state, PlayerTuning::default())?;
+        let player = Player::attach(&mut world.physics, state)?;
         world.stream_terrain();
         Ok(Self {
             world,

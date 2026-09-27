@@ -6,6 +6,7 @@
 //! `Armor::onImpact`, `GameConnection::onDeath`, `createPlayer` and the
 //! `MiniGameSO` membership functions.
 use super::*;
+use crate::player_types::PlayerType;
 use bri_minigames::{
     self as mg, DamageSource, Decision, EnvironmentDamage, GameId, LifeState, MinigamesWorld,
 };
@@ -200,7 +201,9 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
     }
 }
 
-pub(super) fn new_world(catalog: mg::Catalog) -> MinigamesWorld {
+/// Every selectable player datablock, whatever weapons are installed.
+pub(super) fn new_world(mut catalog: mg::Catalog) -> MinigamesWorld {
+    catalog.player_types = PlayerType::ALL.map(|t| t.id().to_string()).into();
     MinigamesWorld::new(catalog, mg::PolicyMode::Internet, true).unwrap_or_else(|_| {
         MinigamesWorld::new(
             mg::Catalog::minimal_vanilla(),
@@ -720,8 +723,11 @@ impl Session {
                 }
                 mg::Effect::RestoreOwner { player, .. } => {
                     if let Some(owner) = self.owner_of(player) {
+                        // Outside a minigame the body is a Standard Player.
+                        self.set_player_datablock(owner, PlayerType::Standard)?;
+                        self.set_player_scale(owner, 1.0)?;
                         let peer = self.peers.get_mut(&owner).unwrap();
-                        peer.combat.health = MAX_HEALTH;
+                        peer.combat.health = PlayerType::Standard.max_health();
                         self.give_loadout(owner, None)?;
                     }
                 }
@@ -729,12 +735,19 @@ impl Session {
                     player,
                     equipment,
                     changed_slots,
+                    change_player_type,
                     ..
                 } => {
-                    if changed_slots.iter().any(|c| *c)
-                        && let Some(owner) = self.owner_of(player)
-                    {
-                        self.give_loadout(owner, Some(&equipment))?;
+                    if let Some(owner) = self.owner_of(player) {
+                        // `MiniGameSO::updatePlayerDatablock` for live members.
+                        if change_player_type && self.is_alive(owner) {
+                            let datablock = PlayerType::from_id(&equipment.player_type)
+                                .unwrap_or_default();
+                            self.set_player_datablock(owner, datablock)?;
+                        }
+                        if changed_slots.iter().any(|c| *c) {
+                            self.give_loadout(owner, Some(&equipment))?;
+                        }
                     }
                 }
                 mg::Effect::Death {
@@ -893,8 +906,15 @@ impl Session {
                 mg::Effect::Created { .. }
                 | mg::Effect::Configured { .. }
                 | mg::Effect::Score { .. }
-                | mg::Effect::Reset { .. }
-                | mg::Effect::StartBall { .. } => {}
+                | mg::Effect::Reset { .. } => {}
+                // `updatePlayerBalls`: members with empty hands get the ball.
+                mg::Effect::StartBall { player, image, .. } => {
+                    if let Some(owner) = self.owner_of(player)
+                        && self.is_alive(owner)
+                    {
+                        self.weapons.start_ball(ActorId(owner), &image)?;
+                    }
+                }
             }
         }
         Ok(())
@@ -938,8 +958,16 @@ impl Session {
             }
             peer.player
                 .teleport(&mut self.simulation.physics, feet, yaw)?;
+            // A new body: the minigame's player type, unscaled, full energy.
+            let datablock = equipment
+                .as_ref()
+                .and_then(|e| PlayerType::from_id(&e.player_type))
+                .unwrap_or_default();
+            peer.player
+                .set_datablock(&mut self.simulation.physics, datablock, 1.0)?;
+            peer.player.refill_energy();
             peer.player.set_solid(&mut self.simulation.physics, true);
-            peer.combat.health = MAX_HEALTH;
+            peer.combat.health = datablock.max_health();
             peer.combat.alive = true;
             peer.combat.spawn_tick = tick;
             peer.combat.shot_once = false;
@@ -953,7 +981,8 @@ impl Session {
         }
         self.give_loadout(owner, equipment.as_ref())?;
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
-        let center = feet + Vec3::Y * crate::player::PlayerTuning::default().stand_height * 0.5;
+        let center = feet
+            + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
             .weapons
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
@@ -1102,8 +1131,9 @@ impl Session {
         match change {
             HealthChange::Unchanged => Ok(()),
             HealthChange::SetDamage(damage) => {
+                let max = self.max_health(owner);
                 if let Some(peer) = self.peers.get_mut(&owner) {
-                    peer.combat.health = (MAX_HEALTH - damage).clamp(0.0, MAX_HEALTH);
+                    peer.combat.health = (max - damage).clamp(0.0, max);
                 }
                 Ok(())
             }
@@ -1111,6 +1141,37 @@ impl Session {
                 self.damage_player(owner, amount, DamageKind::Event, None)
             }
         }
+    }
+    /// The player's datablock `maxDamage`.
+    pub(super) fn max_health(&self, owner: OwnerId) -> f32 {
+        self.peers
+            .get(&owner)
+            .map_or(MAX_HEALTH, |p| p.player.state().datablock.max_health())
+    }
+    /// `Player::setDataBlock`, keeping the player's scale and damage taken.
+    pub(super) fn set_player_datablock(
+        &mut self,
+        owner: OwnerId,
+        datablock: PlayerType,
+    ) -> Result<()> {
+        let old = self.max_health(owner);
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let scale = peer.player.state().scale;
+        peer.player
+            .set_datablock(&mut self.simulation.physics, datablock, scale)?;
+        let max = datablock.max_health();
+        peer.combat.health = (max - (old - peer.combat.health)).clamp(0.0, max);
+        if !datablock.can_ride() {
+            self.eject(owner);
+        }
+        Ok(())
+    }
+    /// `Player::setPlayerScale`: `setScale` on all three axes.
+    pub(super) fn set_player_scale(&mut self, owner: OwnerId, scale: f32) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let datablock = peer.player.state().datablock;
+        peer.player
+            .set_datablock(&mut self.simulation.physics, datablock, scale)
     }
     pub fn is_alive(&self, owner: OwnerId) -> bool {
         self.peers.get(&owner).is_some_and(|p| p.combat.alive)

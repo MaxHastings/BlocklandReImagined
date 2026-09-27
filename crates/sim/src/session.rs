@@ -49,7 +49,7 @@ pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 
 /// The surface height of water covering any part of this player's body.
 fn water_surface(waters: &[bri_content::water::Water], state: &crate::player::PlayerState) -> Option<f32> {
-    let tuning = crate::player::PlayerTuning::default();
+    let tuning = state.tuning();
     let height = if state.crouched {
         tuning.crouch_height
     } else {
@@ -344,6 +344,8 @@ struct Peer {
     last_sequence: u64,
     last_move_sequence: u64,
     last_input_tick: u64,
+    /// The datablock a basketball shot swapped for `BallShootPlayer`.
+    sport_datablock: Option<crate::player_types::PlayerType>,
     window_tick: u64,
     actions: u32,
     chats: u32,
@@ -633,6 +635,7 @@ impl Session {
                 last_sequence: 0,
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
+                sport_datablock: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
@@ -778,6 +781,7 @@ impl Session {
                 last_sequence: 0,
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
+                sport_datablock: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
@@ -1058,7 +1062,7 @@ impl Session {
                     eye.is_finite() && eye.abs().max_element() < 1_000_000.0 && yaw.is_finite(),
                     "Invalid camera position"
                 );
-                let feet = eye - Vec3::Y * PlayerTuning::default().stand_eye;
+                let feet = eye - Vec3::Y * peer.player.tuning().stand_eye;
                 peer.player
                     .teleport(&mut self.simulation.physics, feet, yaw)?;
                 peer.inputs.clear();
@@ -1294,6 +1298,7 @@ impl Session {
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut driving = Vec::new();
+        let mut triggers = Vec::new();
         let liquids = self.simulation.liquids();
         for (&owner, peer) in self.peers.iter_mut() {
             if self.vehicles.is_mounted(owner) {
@@ -1332,7 +1337,18 @@ impl Session {
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
                     // Corpses fall and camera operators stand, ignoring controls.
+                    let previous = peer.input;
                     peer.input = peer.body_input(input);
+                    // `armor::onTrigger` for jump (2), crouch (3) and jet (4).
+                    for (trigger, was, now) in [
+                        (2, previous.jump, peer.input.jump),
+                        (3, previous.crouch, peer.input.crouch),
+                        (4, previous.jet, peer.input.jet),
+                    ] {
+                        if was != now {
+                            triggers.push((owner, trigger, now));
+                        }
+                    }
                     peer.tutorial.abilities().apply(peer.input)
                 } else {
                     MoveInput {
@@ -1375,6 +1391,14 @@ impl Session {
             }
         }
         self.fire_touches(touches);
+        for (owner, trigger, down) in triggers {
+            // The sports balls' `onBallTrigger` alternate actions.
+            if self.weapons.holds_ball(bri_weapons::ActorId(owner)) {
+                let _ = self
+                    .weapons
+                    .sport_trigger(bri_weapons::ActorId(owner), trigger, down);
+            }
+        }
         for (owner, input) in driving {
             self.vehicle_input(owner, input)?;
         }

@@ -165,10 +165,12 @@ pub fn state(
             })
             .collect(),
         invitations,
-        player_types: vec![MiniGameChoice {
-            id: bri_minigames::STANDARD_PLAYER.into(),
-            name: "Standard Player".into(),
-        }],
+        player_types: bri_sim::player_types::PlayerType::ALL
+            .map(|t| MiniGameChoice {
+                id: t.id().into(),
+                name: t.name().into(),
+            })
+            .into(),
         items: items
             .iter()
             .map(|(id, name)| MiniGameChoice {

@@ -1,6 +1,6 @@
 //! Client intentions and view angles; authoritative simulation owns positions.
 use bri_sim::{
-    player::{MAX_FREELOOK, MoveInput, PlayerState, PlayerTuning},
+    player::{MAX_FREELOOK, MoveInput, PlayerState},
     session::ControlObject,
 };
 use bri_ui::api::{GameAction, HeldControl};
@@ -194,7 +194,7 @@ impl Controls {
         match self.observer?.mode {
             ObserverMode::Orbit(target) => presented
                 .get(&target)
-                .map(|p| p.eye(&PlayerTuning::default())),
+                .map(|p| p.eye(&p.tuning())),
             ObserverMode::Free(_) => None,
         }
     }
@@ -427,6 +427,9 @@ mod tests {
             crouched: false,
             jetting: false,
             jump: Default::default(),
+            datablock: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(c.orbit_focus(&presented), None);

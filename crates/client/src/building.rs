@@ -12,7 +12,7 @@ use bri_sim::{
     definitions::Definitions,
     ghost,
     grid::{self, Bounds, Index},
-    player::{PlayerState, PlayerTuning},
+    player::PlayerState,
     session::{BuildGesture, Command, ToolAction, ToolInventory},
     simulation::Hit,
 };
@@ -1017,7 +1017,7 @@ impl Building {
         let command = match &self.equipment {
             Equipment::Brick(id) => {
                 self.selectable(id)?;
-                let eye = player.eye(&PlayerTuning::default());
+                let eye = player.eye(&player.tuning());
                 let Some(hit) = self.target(eye, player.forward(), DEPLOY_REACH)? else {
                     return Ok(());
                 };
@@ -1274,6 +1274,9 @@ mod tests {
             crouched: false,
             jetting: false,
             jump: Default::default(),
+            datablock: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
         }
     }
     fn fire() -> UiAction {

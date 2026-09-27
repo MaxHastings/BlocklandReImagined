@@ -15,7 +15,6 @@ use bri_weapons::ActorId;
 /// Print IDs `printCountUp` and friends display (Letters, digits 0-9).
 const DIGIT_PRINTS: &str = "print/print_letters_default/";
 /// The only player datablock; `changeDatablock` accepts it as a no-op.
-const PLAYER_DATA: &str = "PlayerStandardArmor";
 const TICKS_PER_SECOND: u64 = 120;
 
 fn id(index: u64) -> Id {
@@ -90,7 +89,12 @@ impl Session {
             "ProjectileData".into(),
             self.weapons.pack.projectiles.keys().cloned().collect(),
         );
-        datablocks.insert("PlayerData".into(), BTreeSet::from([PLAYER_DATA.into()]));
+        datablocks.insert(
+            "PlayerData".into(),
+            crate::player_types::PlayerType::ALL
+                .map(|t| t.datablock_name().to_string())
+                .into(),
+        );
         datablocks.insert("Sound".into(), self.events.sounds.clone());
         let bindings = ev::Bindings {
             palette_len: self.simulation.state().palette.len(),
@@ -788,13 +792,15 @@ impl EventHost<'_> {
             }
             PlayerOp::AddVelocity(v) => self.session.peers.get_mut(&owner).unwrap().player.push(*v),
             PlayerOp::AddHealth(amount) => {
-                let damage = MAX_HEALTH - self.session.peers[&owner].combat.health;
-                let change = ev::semantics::add_health(MAX_HEALTH, damage, *amount);
+                let max = self.session.max_health(owner);
+                let damage = max - self.session.peers[&owner].combat.health;
+                let change = ev::semantics::add_health(max, damage, *amount);
                 self.session.change_health(owner, change)?
             }
             PlayerOp::SetHealth(amount) => {
-                let damage = MAX_HEALTH - self.session.peers[&owner].combat.health;
-                let change = ev::semantics::set_health(MAX_HEALTH, damage, *amount);
+                let max = self.session.max_health(owner);
+                let damage = max - self.session.peers[&owner].combat.health;
+                let change = ev::semantics::set_health(max, damage, *amount);
                 self.session.change_health(owner, change)?
             }
             PlayerOp::ClearTools => {
@@ -835,8 +841,15 @@ impl EventHost<'_> {
                     self.spawn_projectile(d, projectile, feet + Vec3::Y, Vec3::ZERO, *scale);
                 }
             }
-            // One player type exists.
-            PlayerOp::DataBlock(_) => {}
+            // `Player::ChangeDataBlock`: unknown datablocks are ignored.
+            PlayerOp::DataBlock(datablock) => {
+                if let Some(datablock) = datablock
+                    .as_deref()
+                    .and_then(crate::player_types::PlayerType::from_datablock_name)
+                {
+                    self.session.set_player_datablock(owner, datablock)?;
+                }
+            }
             // `Player::BurnPlayer`/`clearBurn`: PlayerBurnImage flames for the
             // given seconds; clearing ends them at once.
             PlayerOp::Burn { seconds } => {
@@ -847,11 +860,7 @@ impl EventHost<'_> {
                 self.burn(owner, 0.0);
                 self.session.clear_burn(owner);
             }
-            PlayerOp::Scale(_) => {
-                return Ok(Apply::Rejected(
-                    "player scaling is not available yet".into(),
-                ));
-            }
+            PlayerOp::Scale(scale) => self.session.set_player_scale(owner, *scale)?,
         }
         Ok(Apply::Applied)
     }

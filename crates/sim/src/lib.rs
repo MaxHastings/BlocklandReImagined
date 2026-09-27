@@ -5,6 +5,7 @@ pub mod grid;
 pub mod item_spawners;
 pub mod map;
 pub mod player;
+pub mod player_types;
 pub mod prediction;
 pub mod presentation;
 pub mod session;

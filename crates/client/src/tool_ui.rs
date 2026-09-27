@@ -217,10 +217,12 @@ impl ToolUi {
             .insert("ProjectileData".into(), menu(projectiles));
         self.datablocks.insert(
             "PlayerData".into(),
-            vec![Choice {
-                id: "PlayerStandardArmor".into(),
-                name: "Standard Player".into(),
-            }],
+            bri_sim::player_types::PlayerType::ALL
+                .map(|t| Choice {
+                    id: t.datablock_name().into(),
+                    name: t.name().into(),
+                })
+                .into(),
         );
         self.events = Some(catalog);
         self.invalidate();
@@ -609,8 +611,6 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
     })
 }
 
-/// Outputs the host does not apply yet; rows using them stay read-only.
-const UNSUPPORTED_OUTPUTS: &[(&str, &str)] = &[("Player", "setPlayerScale")];
 /// The dialog's view of the host catalog: every vanilla input and output.
 pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
     let param = |p: &bri_events::Param| match p.clone() {
@@ -653,10 +653,7 @@ pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
                 class: o.class_name.clone(),
                 name: o.name.clone(),
                 params: o.params.iter().map(param).collect(),
-                supported: !UNSUPPORTED_OUTPUTS.iter().any(|(class, name)| {
-                        class.eq_ignore_ascii_case(&o.class_name)
-                            && name.eq_ignore_ascii_case(&o.name)
-                    }),
+                supported: true,
             })
             .collect(),
     }

@@ -49,6 +49,9 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             crouched: false,
             jetting: false,
             jump: Default::default(),
+            datablock: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
         },
     }
 }

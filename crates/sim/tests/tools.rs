@@ -1112,3 +1112,55 @@ fn hammering_a_brick_fires_its_on_tool_break_events() {
     assert!(!s.simulation().state().bricks.contains_key(&id));
     assert_eq!(center_prints(&mut s, owner), ["Broken"]);
 }
+
+#[test]
+#[ignore = "requires the converted native event catalog"]
+fn player_datablock_and_scale_events_reshape_the_player() {
+    let mut s = session(vec![], false);
+    let catalog = bri_events::Catalog::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/events-pack-002/catalog.json"),
+    )
+    .unwrap();
+    s.set_event_catalog(catalog, Vec::new()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
+        .unwrap();
+    let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let row = |output: &str, params| EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onPlayerTouch".into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(bri_events::Slot::Player),
+        output: output.into(),
+        params,
+    };
+    s.edit_brick(
+        owner,
+        id,
+        Edit::Events(vec![
+            row(
+                "ChangeDatablock",
+                vec![EventValue::Datablock(Some("PlayerQuakeArmor".into()))],
+            ),
+            row("setPlayerScale", vec![EventValue::Float(1.5)]),
+        ]),
+    )
+    .unwrap();
+    s.fire_brick_input(id, "onPlayerTouch", Some(owner));
+    s.step().unwrap();
+    let player = s
+        .snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
+        .unwrap();
+    assert_eq!(
+        player.datablock,
+        bri_sim::player_types::PlayerType::Quake,
+        "{:?}",
+        s.take_event_diagnostics()
+    );
+    assert_eq!(player.scale, 1.5);
+}

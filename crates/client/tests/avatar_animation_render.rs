@@ -74,6 +74,9 @@ fn player(
         crouched: false,
         jetting: false,
         jump: Default::default(),
+        datablock: Default::default(),
+        scale: 1.0,
+        energy: 100.0,
     };
     if new_tick {
         *tick_state = Some(state.clone());
@@ -313,6 +316,9 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
         crouched: false,
         jetting: false,
         jump: Default::default(),
+        datablock: Default::default(),
+        scale: 1.0,
+        energy: 100.0,
     };
     let gestures = [
         "shiftAway",
