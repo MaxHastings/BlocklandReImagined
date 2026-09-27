@@ -109,6 +109,14 @@ impl Session {
     pub fn event_datablocks(&self) -> &BTreeMap<String, BTreeSet<String>> {
         &self.events.bindings.datablocks
     }
+    /// Cancel every pending event job (delayed rows and chains in flight).
+    pub(super) fn cancel_all_events(&mut self) {
+        if let Some(world) = self.events.world.as_mut() {
+            for brick in &self.events.installed {
+                world.cancel_source(id(*brick), ev::CancelMode::All);
+            }
+        }
+    }
     pub fn take_event_diagnostics(&mut self) -> Vec<String> {
         self.events.diagnostics.drain(..).collect()
     }

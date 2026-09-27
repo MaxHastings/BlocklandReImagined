@@ -15,6 +15,7 @@ mod admin;
 mod bots;
 mod combat;
 mod events;
+mod admin_world;
 mod inventory;
 mod special;
 mod vehicles;
@@ -240,6 +241,7 @@ struct Peer {
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
+    highlights: BTreeMap<OwnerId, admin_world::Highlight>,
     bots: bots::Bots,
     vehicles: vehicles::Vehicles,
     minigames: bri_minigames::MinigamesWorld,
@@ -294,6 +296,7 @@ impl Session {
         Self {
             events: Default::default(),
             specials: Default::default(),
+            highlights: BTreeMap::new(),
             bots: Default::default(),
             vehicles: Default::default(),
             minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
@@ -1087,6 +1090,7 @@ impl Session {
         self.step_items()?;
         self.step_combat(impacts)?;
         self.step_specials()?;
+        self.step_highlights()?;
         let changed = self.dirty.clone();
         self.step_events(&changed)?;
         Ok(())

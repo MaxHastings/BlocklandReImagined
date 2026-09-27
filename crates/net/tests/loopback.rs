@@ -567,6 +567,23 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         bri_sim::session::AdminData::BrickGroups(ref rows)
             if rows.iter().any(|row| row.id == guest.owner && row.bricks == 1)
     ));
+    // Highlight flashes the group with Glow, then restores it.
+    let Reply::Admin(_) = host
+        .command(Command::Admin(Request::new(Action::HighlightBrickGroup {
+            group: guest.owner,
+        })))
+        .await?
+    else {
+        panic!("authorized highlight is acknowledged")
+    };
+    wait(&mut host, |c| {
+        c.replica.world.bricks.values().all(|b| b.color_effect == 3)
+    })
+    .await?;
+    wait(&mut host, |c| {
+        c.replica.world.bricks.values().all(|b| b.color_effect == 0 && b.color == 0)
+    })
+    .await?;
     let Reply::Admin(_) = host
         .command(Command::Admin(Request::new(Action::ClearBrickGroup {
             group: guest.owner,

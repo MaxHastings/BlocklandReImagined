@@ -319,6 +319,16 @@ impl Session {
             .get(&brick_id)
             .context("Unknown brick")?;
         ensure!(brick.vehicle.is_some(), "This brick has no vehicle");
+        if let Some(kind) = brick.vehicle.as_ref().and_then(|v| match &v.vehicle {
+            bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id) => {
+                Some(id.clone())
+            }
+            _ => None,
+        }) {
+            // Bots come back fresh at their brick.
+            self.reconcile_bot_brick(brick_id, None)?;
+            return self.reconcile_bot_brick(brick_id, Some(&kind));
+        }
         if let Some(id) = self.vehicles.by_brick.get(&brick_id).copied() {
             self.remove_vehicle(id)?;
         } else if let Some(world) = &mut self.vehicles.world {

@@ -18,6 +18,10 @@ pub enum AdminCapability {
     Unban,
     ClearBricks,
     AdminPassword,
+    /// Brick Management "Hilight".
+    HighlightBricks,
+    /// `/realBrickCount`, `/cancelAllEvents`, `/clearBots`.
+    WorldCommands,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +192,8 @@ impl AdminRuntime {
         .collect();
         if role.is_admin() {
             supported.insert(AdminCapability::Unban);
+            supported.insert(AdminCapability::HighlightBricks);
+            supported.insert(AdminCapability::WorldCommands);
             if rows.iter().any(|row| {
                 row.durable_identity_available
                     && !row.is_owner
@@ -234,6 +240,10 @@ impl AdminRuntime {
                 | Action::ClearAllBricks
                 | Action::ClearBrickGroup { .. }
                 | Action::RequestBrickGroups
+                | Action::HighlightBrickGroup { .. }
+                | Action::RealBrickCount
+                | Action::CancelAllEvents
+                | Action::ClearBots
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
                 | Action::HostSetPassword {
@@ -358,6 +368,14 @@ impl AdminRuntime {
                             }
                             changed = true;
                         }
+                        GameplayCommand::HighlightBrickGroup(group) => {
+                            session.highlight_brick_group(group)?;
+                        }
+                        GameplayCommand::RealBrickCount => session.admin_brick_count(actor_owner),
+                        GameplayCommand::CancelAllEvents => {
+                            session.admin_cancel_all_events(actor_owner)
+                        }
+                        GameplayCommand::ClearBots => session.admin_clear_bots(actor_owner)?,
                         other => {
                             anyhow::bail!("Administration action is not implemented: {other:?}")
                         }

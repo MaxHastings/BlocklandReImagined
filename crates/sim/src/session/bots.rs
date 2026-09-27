@@ -111,6 +111,9 @@ impl Session {
         }
         Ok(())
     }
+    pub(super) fn bot_bricks(&self) -> Vec<BrickId> {
+        self.bots.by_brick.keys().copied().collect()
+    }
     /// Bots whose brick changed kind, or vanished, are removed by reconcile;
     /// this also retries bricks that could not spawn their bot yet.
     fn bot_bricks_pending(&self) -> Vec<BrickId> {
