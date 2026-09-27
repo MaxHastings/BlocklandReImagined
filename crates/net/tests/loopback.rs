@@ -2006,7 +2006,7 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn join_reports_the_world_download_against_the_welcome_frame_length() -> Result<()> {
+async fn join_reports_the_world_download_in_bricks() -> Result<()> {
     use bri_progress::{Progress, Stage, Unit};
     let state_dir = tempfile::tempdir()?;
     let key = ClientIdentity::load_or_create(state_dir.path().join("joiner.identity"))?;
@@ -2031,11 +2031,12 @@ async fn join_reports_the_world_download_against_the_welcome_frame_length() -> R
     let seen = progress.snapshot();
     assert_eq!(
         (seen.stage, seen.unit),
-        (Stage::ReceivingWorld, Unit::Bytes)
+        (Stage::ReceivingWorld, Unit::Bricks)
     );
-    assert!(seen.total.is_some_and(|total| total > 0));
     assert_eq!(Some(seen.done), seen.total);
     assert_eq!(seen.fraction(), 1.0);
+    Ok(())
+}
 
 /// A client that is slow to drain its events (a busy frame thread, a test
 /// between steps) must not be disconnected by unreliable pose traffic

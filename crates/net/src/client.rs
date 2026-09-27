@@ -56,6 +56,8 @@ pub struct Client {
     pub replica: Replica,
     /// A changed map whose bricks are still streaming in.
     changing_map: Option<WorldAssembly>,
+    /// Where joins and map changes report their world download.
+    progress: Progress,
     sequence: u64,
 }
 impl Client {
@@ -194,17 +196,13 @@ impl Client {
             });
         }
         codec::write_small_request(&mut send, &hello).await?;
-        // The host builds the world checkpoint before the Welcome starts.
         progress.begin(Stage::WaitingForServer, Unit::Steps, None);
         let welcome: Message = codec::decode(
-            &codec::read_frame_reporting(
-                &mut receive,
-                codec::MAX_FRAME,
+            &tokio::time::timeout(
                 Duration::from_secs(30),
-                &progress,
-                Stage::ReceivingWorld,
+                codec::read_frame(&mut receive, codec::MAX_FRAME),
             )
-            .await?,
+            .await??,
         )?;
         let (owner, administrator, resume, checkpoint) = match welcome {
             Message::Welcome {
@@ -216,6 +214,12 @@ impl Client {
             Message::Rejected(reason) => anyhow::bail!("Join rejected: {reason}"),
             _ => anyhow::bail!("Expected welcome"),
         };
+        // The Welcome is small; the world streams after it in chunks.
+        progress.begin(
+            Stage::ReceivingWorld,
+            Unit::Bricks,
+            Some(checkpoint.world_bricks),
+        );
         let mut world = WorldAssembly::new(checkpoint)?;
         while !world.complete() {
             let frame = tokio::time::timeout(
@@ -224,7 +228,11 @@ impl Client {
             )
             .await??;
             match codec::decode(&frame)? {
-                Message::WorldChunk(chunk) => world.add(chunk)?,
+                Message::WorldChunk(chunk) => {
+                    let bricks = chunk.len() as u64;
+                    world.add(chunk)?;
+                    progress.advance(bricks);
+                }
                 Message::Rejected(reason) => anyhow::bail!("Join rejected: {reason}"),
                 _ => anyhow::bail!("Expected world chunk"),
             }
@@ -286,6 +294,7 @@ impl Client {
             resume,
             replica,
             changing_map: None,
+            progress,
             sequence: 0,
         })
     }
@@ -336,7 +345,9 @@ impl Client {
                             let Some(world) = self.changing_map.as_mut() else {
                                 unreachable!()
                             };
+                            let bricks = chunk.len() as u64;
                             world.add(chunk)?;
+                            self.progress.advance(bricks);
                             if let Some(event) = self.finish_map_change()? {
                                 return Ok(event);
                             }
@@ -363,6 +374,11 @@ impl Client {
                     }
                     Message::MapChanged(checkpoint) => {
                         let map = checkpoint.world.map_id.clone();
+                        self.progress.begin(
+                            Stage::ReceivingWorld,
+                            Unit::Bricks,
+                            Some(checkpoint.world_bricks),
+                        );
                         self.changing_map = Some(WorldAssembly::new(checkpoint)?);
                         match self.finish_map_change()? {
                             Some(event) => Ok(event),

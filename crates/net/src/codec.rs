@@ -73,32 +73,6 @@ pub async fn read_frame(stream: &mut quinn::RecvStream, limit: usize) -> Result<
     let length = read_length(stream, limit).await?;
     read_body(stream, length).await
 }
-/// Like [`read_frame`], but waits up to `wait` for the frame to start, then
-/// enters `stage` and reports the body's bytes as they arrive. A large body
-/// may take as long as it keeps arriving; only a stall fails it.
-pub async fn read_frame_reporting(
-    stream: &mut quinn::RecvStream,
-    limit: usize,
-    wait: std::time::Duration,
-    progress: &bri_progress::Progress,
-    stage: bri_progress::Stage,
-) -> Result<Vec<u8>> {
-    let length = tokio::time::timeout(wait, read_length(stream, limit)).await??;
-    progress.begin(stage, bri_progress::Unit::Bytes, Some(length as u64));
-    let mut bytes = vec![0; length];
-    let mut filled = 0;
-    while filled < length {
-        let read = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            stream.read(&mut bytes[filled..]),
-        )
-        .await??
-        .context("Stream closed mid-frame")?;
-        filled += read;
-        progress.set_in(stage, filled as u64);
-    }
-    Ok(bytes)
-}
 async fn read_length(stream: &mut quinn::RecvStream, limit: usize) -> Result<usize> {
     let mut length = [0; 4];
     stream.read_exact(&mut length).await?;
