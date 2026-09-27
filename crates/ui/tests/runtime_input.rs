@@ -545,3 +545,52 @@ fn ski_crash_whiteout_takes_the_stronger_flash_and_fades() {
     u.update(1000);
     assert_eq!(u.core.whiteout, 0.0);
 }
+#[test]
+fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
+    let mut u = ui();
+    u.core.binds.bind(BindInput::Wheel, "scrollInventory");
+    u.core.binds.bind(
+        BindInput::Key(Chord {
+            key: Key::Digit(1),
+            mods: Modifiers::NONE,
+        }),
+        "useBricks",
+    );
+    play(&mut u);
+    let brick = |id: &str| BrickInfo {
+        id: id.into(),
+        ui_name: id.into(),
+        category: "Bricks".into(),
+        subcategory: "Basic".into(),
+        icon: IconRef::None,
+    };
+    u.apply(UiUpdate::Bricks(vec![brick("a"), brick("b"), brick("c")]));
+    u.apply(UiUpdate::BrickInventory(vec![
+        Some("a".into()),
+        Some("b".into()),
+        None,
+        Some("c".into()),
+    ]));
+    down(&mut u, Key::Digit(1));
+    up(&mut u, Key::Digit(1));
+    assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 0 }]);
+    // Wheel down (Torque negative) moves to the next filled slot.
+    u.handle_input(InputEvent::Wheel { delta: -1.0 });
+    assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
+    u.handle_input(InputEvent::Wheel { delta: -1.0 });
+    assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 3 }]);
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
+    // A high-resolution wheel reports eighths of a notch: one slot per
+    // notch, not one per report (which lapped a full bar back to the start).
+    for _ in 0..7 {
+        u.handle_input(InputEvent::Wheel { delta: -0.125 });
+        assert!(actions(&mut u).is_empty());
+    }
+    u.handle_input(InputEvent::Wheel { delta: -0.125 });
+    assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 3 }]);
+    // Reversing discards the unfinished notch in the old direction.
+    u.handle_input(InputEvent::Wheel { delta: -0.5 });
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
+}

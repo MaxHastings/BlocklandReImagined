@@ -201,13 +201,11 @@ impl ActorEffects {
                         self.note(format!("Player splash emitter unavailable: {emitter}"));
                     }
                 }
-                let ring =
-                    self.world
-                        .start_emitter(PLAYER_SPLASH_RING, at, SourceOptions::default());
+                let ring = self
+                    .world
+                    .start_emitter(PLAYER_SPLASH_RING, at, SourceOptions::default());
                 if ring.is_err() {
-                    self.note(format!(
-                        "Player splash emitter unavailable: {PLAYER_SPLASH_RING}"
-                    ));
+                    self.note(format!("Player splash emitter unavailable: {PLAYER_SPLASH_RING}"));
                 }
             }
             CueKind::WeaponEffect { definition, .. } => {
@@ -534,14 +532,16 @@ pub fn muzzle(
     position: Vec3,
     rotation: Quat,
     aim: [f32; 2],
-    definition: &bri_vehicles::Definition,
-) -> Option<Mat4> {
-    let (local, direction) = definition.muzzle(aim)?;
-    let direction = rotation * direction;
-    Some(Mat4::from_rotation_translation(
+    weapon: &bri_vehicles::schema::Weapon,
+) -> Mat4 {
+    let aim = Quat::from_rotation_y(aim[0]) * Quat::from_rotation_x(aim[1]);
+    let pivot = Vec3::from(weapon.pivot);
+    let local = pivot + aim * (Vec3::from(weapon.muzzle.position) - pivot);
+    let direction = rotation * aim * Vec3::NEG_Z;
+    Mat4::from_rotation_translation(
         Quat::from_rotation_arc(Vec3::Y, direction.normalize_or(Vec3::Y)),
         position + rotation * local,
-    ))
+    )
 }
 
 /// Keep one continuous emitter per key; removed keys drain.

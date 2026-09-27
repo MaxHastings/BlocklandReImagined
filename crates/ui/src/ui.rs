@@ -28,6 +28,8 @@ pub struct UiSound {
 }
 
 const MAX_QUEUED_SOUNDS: usize = 128;
+/// Most scrollInventory steps one wheel event may take (a fast free spin).
+const NUM_WHEEL_STEPS: usize = 10;
 const AUDIO_ERROR: UiSound = UiSound {
     profile: "AudioError",
     trigger: "ui.error",
@@ -1577,15 +1579,21 @@ impl Ui {
                 if !delta.is_finite() || delta == 0.0 {
                     return;
                 }
+                // High-resolution wheels and touchpads send fractions of a
+                // notch; v20 (DirectInput, 120 per notch) acts once per notch,
+                // so menus and scrollInventory both step on whole notches.
+                if self.wheel_rest != 0.0 && self.wheel_rest.signum() != delta.signum() {
+                    self.wheel_rest = 0.0;
+                }
+                self.wheel_rest += delta;
+                let steps = self.wheel_rest.trunc();
+                self.wheel_rest -= steps;
+                if steps == 0.0 {
+                    return;
+                }
                 if self.cursor_visible() {
-                    // Touchpads send fractions of a notch; scroll whole rows.
-                    self.wheel_rest += delta;
-                    let steps = self.wheel_rest.trunc();
-                    self.wheel_rest -= steps;
                     let t = self.mouse_target();
-                    let used = steps == 0.0
-                        || self.with_target(t, |s, _| s.view_mut().wheel(steps as i32));
-                    if used {
+                    if self.with_target(t, |s, _| s.view_mut().wheel(steps as i32)) {
                         return;
                     }
                 }
@@ -1595,7 +1603,9 @@ impl Ui {
                 if self.content.id() == ScreenId::Play && dialogs == 0 {
                     match self.core.binds.command_for(&BindInput::Wheel) {
                         Some(c) if c.eq_ignore_ascii_case("scrollInventory") => {
-                            self.core.wheel_scroll(delta)
+                            for _ in 0..(steps.abs() as usize).min(NUM_WHEEL_STEPS) {
+                                self.core.wheel_scroll(steps.signum());
+                            }
                         }
                         _ => {}
                     }
@@ -1626,6 +1636,7 @@ impl Ui {
             }
             InputEvent::FocusLost => {
                 self.core.release_all();
+                self.wheel_rest = 0.0;
                 self.mods = Modifiers::NONE;
                 self.content.view_mut().pressed = None;
                 self.content.view_mut().mouse_leave();
