@@ -305,3 +305,31 @@ fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
     );
     assert_eq!(world.bricks.len(), bri_sim::item_spawners::MAX_STATIC_ITEMS);
 }
+#[test]
+fn dropped_item_rests_on_the_bottom_of_its_box() {
+    let mut tall = bounds();
+    // v20 hammerItem's authored box: origin mid-handle, 0.73 above its foot.
+    tall.insert(
+        CORE_TOOLS[0].into(),
+        ItemBounds {
+            min: [-0.18, -0.73, -0.32],
+            max: [0.18, 0.73, 0.32],
+        },
+    );
+    let mut s = session();
+    s.set_item_bounds(tall).unwrap();
+    let a = s
+        .join("Thrower".into(), Vec3::new(8., 1., 8.), false)
+        .unwrap();
+    s.command(a, 2, Command::DropTool { slot: 0 }).unwrap();
+    for _ in 0..600 {
+        s.step().unwrap();
+    }
+    let drop = s.weapon_view().drops[0].clone();
+    assert_eq!(drop.velocity, Vec3::ZERO);
+    assert!(
+        (drop.position.y - 0.73).abs() < 0.01,
+        "hammer origin rests {} above the floor",
+        drop.position.y
+    );
+}

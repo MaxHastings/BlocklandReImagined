@@ -14,7 +14,7 @@ impl Session {
             ensure!(self.weapons.contains_item(id), "Unknown item bounds: {id}");
             shape.validate()?;
         }
-        let mut spawners = crate::item_spawners::ItemSpawners::new(bounds);
+        let mut spawners = crate::item_spawners::ItemSpawners::new(bounds.clone());
         for (&id, brick) in &self.simulation.state().bricks {
             spawners.reconcile(
                 id,
@@ -24,6 +24,7 @@ impl Session {
             )?;
         }
         self.item_spawners = spawners;
+        self.weapons.set_item_bounds(bounds);
         Ok(())
     }
     pub(super) fn drop_tool(&mut self, owner: OwnerId, slot: usize, direction: Vec3) -> Result<()> {

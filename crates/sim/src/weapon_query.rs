@@ -1,7 +1,8 @@
 //! Weapon queries against the same native collision world used by players.
 use crate::simulation::Simulation;
 use bri_weapons::{ActorId, ContactResponse, Filter, Hit, Nearby, ProjectileContact, Query, TargetId};
-use glam::Vec3;
+use rapier3d::parry::query::ShapeCastOptions;
+use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::BTreeMap;
 
@@ -150,6 +151,83 @@ impl Query for WeaponQuery<'_> {
                     fraction: hit.time_of_impact / distance,
                     color,
                 })
+            });
+        match (physical, terrain) {
+            (Some(a), Some(b)) => Some(if b.fraction < a.fraction { b } else { a }),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn sweep_box(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        half: Vec3,
+        rotation: Quat,
+        filter: Filter,
+    ) -> Option<Hit> {
+        let delta = end - start;
+        let distance = delta.length();
+        if !start.is_finite()
+            || !end.is_finite()
+            || !half.is_finite()
+            || half.min_element() < 0.0
+            || !(0.000001..=10000.).contains(&distance)
+        {
+            return None;
+        }
+        // Items collide with the world only: map, terrain and bricks.
+        let predicate = |_: ColliderHandle, collider: &Collider| {
+            matches!(
+                target(collider.user_data),
+                Some(TargetId::Map(_) | TargetId::Brick(_))
+            ) || (!filter.world_only && target(collider.user_data).is_some())
+        };
+        let shape = Cuboid::new(Vector::from_array(half.max(Vec3::splat(0.001)).to_array()));
+        let pose = Pose::from_parts(
+            Vector::from_array(start.to_array()),
+            rotation,
+        );
+        let physical = self
+            .simulation
+            .physics
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    .exclude_sensors()
+                    .predicate(&predicate),
+            )
+            .cast_shape(
+                &pose,
+                Vector::from_array(delta.to_array()),
+                &shape,
+                ShapeCastOptions {
+                    max_time_of_impact: 1.0,
+                    stop_at_penetration: false,
+                    compute_impact_geometry_on_penetration: true,
+                    ..Default::default()
+                },
+            )
+            .and_then(|(handle, hit)| {
+                Some(Hit {
+                    target: target(self.simulation.physics.colliders[handle].user_data)?,
+                    position: start + delta * hit.time_of_impact,
+                    normal: Vec3::from_array(hit.normal1.to_array()),
+                    fraction: hit.time_of_impact,
+                    color: None,
+                })
+            });
+        // Terrain is a heightfield outside Rapier: sweep the box's lowest point.
+        let bottom = Vec3::Y * bri_weapons::ItemBounds::lowest(half, rotation);
+        let direction = delta / distance;
+        let terrain = self
+            .simulation
+            .terrain_ray(start - bottom, direction, distance)
+            .map(|(time, normal)| Hit {
+                target: TargetId::Map(0),
+                position: start + direction * time,
+                normal,
+                fraction: time / distance,
+                color: None,
             });
         match (physical, terrain) {
             (Some(a), Some(b)) => Some(if b.fraction < a.fraction { b } else { a }),

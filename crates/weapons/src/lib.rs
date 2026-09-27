@@ -45,6 +45,11 @@ impl ItemBounds {
             max: max.to_array(),
         }
     }
+    /// Depth of a rotated box's lowest corner below its centre.
+    pub fn lowest(half: glam::Vec3, rotation: glam::Quat) -> f32 {
+        let m = glam::Mat3::from_quat(rotation);
+        (m.row(1).abs() * half).element_sum()
+    }
     pub fn overlaps(&self, other: &Self) -> bool {
         (0..3).all(|a| self.min[a] <= other.max[a] && self.max[a] >= other.min[a])
     }

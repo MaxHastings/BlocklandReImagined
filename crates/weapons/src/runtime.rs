@@ -155,6 +155,24 @@ pub trait Query {
     }
 
     fn sweep(&mut self, start: Vec3, end: Vec3, filter: Filter) -> Option<Hit>;
+    /// Sweep a box of `half` extents and `rotation` whose centre moves from
+    /// `start` to `end`; the hit position is the box centre at contact.
+    /// Adapters without shape casts sweep the box's lowest point instead.
+    fn sweep_box(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        half: Vec3,
+        rotation: Quat,
+        filter: Filter,
+    ) -> Option<Hit> {
+        let bottom = Vec3::Y * -ItemBounds::lowest(half, rotation);
+        self.sweep(start - bottom, end - bottom, filter)
+            .map(|hit| Hit {
+                position: hit.position + bottom,
+                ..hit
+            })
+    }
     fn radius(&mut self, center: Vec3, radius: f32, limit: usize) -> Vec<Nearby>;
     fn can_affect(&self, source: ActorId, target: TargetId) -> bool;
     /// Explosion splash; unlike a direct hit it also honours `selfDamage`.
@@ -395,6 +413,8 @@ pub struct WeaponsWorld {
     actors: BTreeMap<ActorId, Actor>,
     projectiles: BTreeMap<u64, Projectile>,
     drops: BTreeMap<u64, Drop>,
+    /// Authored item boxes; a drop without one falls as a point.
+    item_bounds: BTreeMap<String, ItemBounds>,
     next_id: u64,
     events: Vec<Event>,
 }
@@ -407,6 +427,7 @@ impl WeaponsWorld {
             actors: BTreeMap::new(),
             projectiles: BTreeMap::new(),
             drops: BTreeMap::new(),
+            item_bounds: BTreeMap::new(),
             next_id: 1,
             events: vec![],
         })
@@ -525,6 +546,10 @@ impl WeaponsWorld {
         a.spawn_tick = self.tick;
         self.actors.insert(id, a);
         Ok(())
+    }
+    /// Authored item boxes that dropped items fall and rest on.
+    pub fn set_item_bounds(&mut self, bounds: BTreeMap<String, ItemBounds>) {
+        self.item_bounds = bounds;
     }
     pub fn contains_item(&self, item: &str) -> bool {
         self.pack.items.contains_key(item) || CORE_TOOLS.contains(&item)
@@ -858,36 +883,47 @@ impl WeaponsWorld {
                 self.events.push(Event::Removed { projectile: id });
             }
         }
+        // v20 `Item::updatePos`: the item's box falls under gravity 20 and
+        // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
         for d in self.drops.values_mut() {
             if d.velocity.length_squared() < 0.000001 {
                 continue;
             }
             d.velocity.y -= 20.0 / 120.0;
-            let end = d.position + d.velocity / 120.0;
-            if let Some(hit) = q.sweep(
-                d.position,
-                end,
-                Filter {
-                    projectile_age_ticks: None,
-                    source: d.source,
-                    players: false,
-                    world_only: true,
-                },
-            ) {
+            let shape = self.item_bounds.get(&d.item).map(|b| {
+                let min = Vec3::from(b.min) * d.scale;
+                let max = Vec3::from(b.max) * d.scale;
+                (d.rotation * ((min + max) * 0.5), (max - min) * 0.5)
+            });
+            let (offset, half) = shape.unwrap_or((Vec3::ZERO, Vec3::ZERO));
+            let start = d.position + offset;
+            let end = start + d.velocity / 120.0;
+            let filter = Filter {
+                projectile_age_ticks: None,
+                source: d.source,
+                players: false,
+                world_only: true,
+            };
+            let hit = if shape.is_some() {
+                q.sweep_box(start, end, half, d.rotation, filter)
+            } else {
+                q.sweep(start, end, filter)
+            };
+            if let Some(hit) = hit {
                 if hit.position.is_finite()
                     && hit.normal.is_finite()
                     && hit.normal.length_squared() > 0.1
                 {
                     let normal = hit.normal.normalize();
                     let vn = normal * d.velocity.dot(normal);
-                    d.position = hit.position + normal * 0.002;
+                    d.position = hit.position - offset + normal * 0.002;
                     d.velocity = ((d.velocity - vn) * 0.4 - vn) * 0.2;
                     if d.velocity.length() < 0.15 {
                         d.velocity = Vec3::ZERO;
                     }
                 }
             } else {
-                d.position = end;
+                d.position = end - offset;
             }
         }
         let expired: Vec<_> = self
