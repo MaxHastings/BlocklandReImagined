@@ -538,16 +538,17 @@ fn sports_charge_throw_consume_catch_and_dodgeball_damage() {
 #[ignore = "requires converted vanilla weapons pack"]
 fn malicious_projectile_and_state_inputs_are_bounded() {
     let mut p = load();
-    p.images
+    // A zero-tick cycle between two states. A state timing out into itself
+    // is the wands' timed sparkle loop, so the cycle must span two states.
+    let states = &mut p
+        .images
         .get_mut(&native_id("image", "gunImage"))
         .unwrap()
-        .states[0]
-        .ticks = 0;
-    p.images
-        .get_mut(&native_id("image", "gunImage"))
-        .unwrap()
-        .states[0]
-        .timeout = Some(0);
+        .states;
+    for (state, next) in [(0, 1), (1, 0)] {
+        states[state].ticks = 0;
+        states[state].timeout = Some(next);
+    }
     let mut w = WeaponsWorld::new(p).unwrap();
     w.add_actor(ActorId(1), 5).unwrap();
     w.give(ActorId(1), &native_id("weapon", "GunItem")).unwrap();
@@ -573,7 +574,8 @@ fn malicious_projectile_and_state_inputs_are_bounded() {
 #[ignore = "requires converted vanilla weapons pack"]
 fn pack_complete_native_models_and_hidden_variants() {
     let p = load();
-    assert_eq!(p.items.len(), 17);
+    // 17 weapons plus the hammer, wrench, printer and wand images.
+    assert_eq!(p.items.len(), 21);
     for n in [
         "LeftHandedGunImage",
         "basketballShootImage",
