@@ -224,6 +224,7 @@ pub struct Core {
     pub plant_error: Option<(PlantError, u64)>,
     /// Current damage flash opacity (0..=0.75), fading over time.
     pub damage_flash: f32,
+    pub energy: Option<f32>,
     /// Current whiteout opacity (0..=1), fading over time.
     pub whiteout: f32,
     pub net_graph: Option<String>,
@@ -334,6 +335,7 @@ impl Core {
         self.bottom_print = None;
         self.plant_error = None;
         self.damage_flash = 0.0;
+        self.energy = None;
         self.whiteout = 0.0;
         self.lagging = false;
         self.super_shift = false;
@@ -929,6 +931,7 @@ impl Ui {
             bottom_print: None,
             plant_error: None,
             damage_flash: 0.0,
+            energy: None,
             whiteout: 0.0,
             net_graph: None,
             lagging: false,
@@ -1313,6 +1316,9 @@ impl Ui {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
                 }
+            }
+            UiUpdate::Energy(energy) => {
+                c.energy = energy.filter(|e| e.is_finite()).map(|e| e.clamp(0.0, 1.0));
             }
             UiUpdate::DamageFlash(amount) => {
                 if amount.is_finite() {

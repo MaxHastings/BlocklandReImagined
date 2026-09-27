@@ -847,6 +847,9 @@ pub enum UiUpdate {
     PlantError(PlantError),
     /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
     DamageFlash(f32),
+    /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it
+    /// (`clientCmdShowEnergyBar`, from the datablock's `showEnergyBar`).
+    Energy(Option<f32>),
     /// White screen (`setWhiteout`) that fades over a second per unit.
     Whiteout(f32),
     /// Net graph text (`toggleNetGraph`); None hides it.

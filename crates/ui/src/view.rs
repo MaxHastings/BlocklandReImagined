@@ -197,7 +197,7 @@ fn initial_value(c: &Control) -> Value {
         "GuiSliderCtrl" => Value::Num(c.field("value").and_then(|v| v.parse().ok()).unwrap_or(0.0)),
         "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => Value::Text(c.text.clone().unwrap_or_default()),
         "GuiPopUpMenuCtrl" | "GuiTextListCtrl" => Value::Selected(None),
-        "GuiProgressCtrl" => Value::Num(0.0),
+        "GuiProgressCtrl" | "GuiHealthBarHud" => Value::Num(0.0),
         _ => Value::None,
     }
 }
@@ -902,6 +902,41 @@ impl View {
                 let thumb = Rect::new(tx - 4, mid - 8, 8, 16);
                 dl.fill(thumb, [149, 152, 166, 255]);
                 dl.frame(thumb, geom::BLACK);
+            }
+            // Torque GuiHealthBarHud: background fill, the value bar in
+            // damageFillColor, then the frame.
+            "GuiHealthBarHud" => {
+                let color = |field: &str| -> Option<Rgba> {
+                    let c: Vec<u8> = n
+                        .ctrl
+                        .field(field)?
+                        .split_whitespace()
+                        .filter_map(|x| x.parse::<f32>().ok())
+                        .map(|x| (x.clamp(0.0, 1.0) * 255.0) as u8)
+                        .collect();
+                    c.try_into().ok()
+                };
+                let on = |field: &str| n.ctrl.field(field).is_some_and(|v| v == "1");
+                if on("showFill")
+                    && let Some(c) = color("fillColor")
+                {
+                    dl.fill(r, c);
+                }
+                let f = self.num(id).clamp(0.0, 1.0);
+                let bar = if on("flipped") {
+                    let w = (r.w as f32 * f) as i32;
+                    Rect::new(r.x + r.w - w, r.y, w, r.h)
+                } else {
+                    Rect::new(r.x, r.y, (r.w as f32 * f) as i32, r.h)
+                };
+                if let Some(c) = color("damageFillColor") {
+                    dl.fill(bar, c);
+                }
+                if on("showFrame")
+                    && let Some(c) = color("frameColor")
+                {
+                    dl.frame(r, c);
+                }
             }
             "GuiProgressCtrl" => {
                 if let Some(s) = style {

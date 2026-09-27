@@ -368,6 +368,10 @@ impl Screen for Play {
         self.on_update(core);
     }
     fn on_update(&mut self, core: &mut Core) {
+        if let Some(n) = self.view.id("HUD_EnergyBar") {
+            self.view.set_visible(n, core.energy.is_some());
+            self.view.set_num(n, core.energy.unwrap_or(0.0));
+        }
         if let Some(n) = self.view.id("LagIcon") {
             self.view.set_visible(n, core.lagging);
         }

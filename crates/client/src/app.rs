@@ -755,7 +755,9 @@ impl App {
             &content.weapons.item_choices,
             &content.ui_pack,
         )?;
-        let avatar_assets = Arc::new(crate::avatar::AvatarAssets::load(&content.paths.avatar)?);
+        let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
+        avatar_assets.load_horse(&content.paths.vehicles)?;
+        let avatar_assets = Arc::new(avatar_assets);
         let vehicle_assets = crate::vehicles::VehicleAssets::load(&content.paths.vehicles)?;
         let world_items = crate::world_items::WorldItems::new(
             item_assets.clone(),
@@ -1086,6 +1088,18 @@ impl App {
         };
         let c = &mut self.combat;
         let mut updates = Vec::new();
+        // `showEnergyBar` datablocks show the predicted jet energy.
+        let energy = self
+            .motion
+            .presented()
+            .get(&view.owner)
+            .filter(|p| p.datablock.shows_energy())
+            .map(|p| p.energy / p.tuning().max_energy);
+        let shown = energy.map(|e| (e.clamp(0.0, 1.0) * 100.0).round() as u8);
+        if shown != c.energy {
+            c.energy = shown;
+            updates.push(UiUpdate::Energy(energy));
+        }
         for (owner, vitals) in &view.vitals {
             if !vitals.alive {
                 c.died_at
@@ -2703,7 +2717,7 @@ fn name_tags(
         let Some(state) = presented.get(owner) else {
             continue;
         };
-        let target = state.eye(&PlayerTuning::default());
+        let target = state.eye(&state.tuning());
         let distance = target.distance(camera);
         if distance <= 0.0 || distance > visible_distance {
             continue;
@@ -2866,6 +2880,8 @@ struct CombatPresentation {
     sitting: std::collections::BTreeSet<bri_world::OwnerId>,
     minigame_revision: u64,
     minigame_state: Option<MiniGameUiState>,
+    /// Energy bar fraction last shown, in hundredths.
+    energy: Option<u8>,
 }
 impl CombatPresentation {
     /// Corpses disappear after `$CorpseTimeoutValue` (5 s).
@@ -3211,15 +3227,21 @@ impl PlatformApp for App {
                     .avatars
                     .get(owner)
                     .unwrap_or(&self.avatar_assets.package.defaults);
+                // `HorseArmor` players draw horse.dts.
+                let horse = player.datablock == bri_sim::player_types::PlayerType::Horse;
                 if self
                     .avatars
                     .get(owner)
-                    .is_none_or(|mesh| &mesh.appearance != appearance)
+                    .is_none_or(|mesh| &mesh.appearance != appearance || mesh.horse != horse)
                 {
-                    let mut mesh = self.avatar_assets.mesh(appearance.clone())?;
+                    let mut mesh = if horse {
+                        self.avatar_assets.horse_mesh(appearance.clone())?
+                    } else {
+                        self.avatar_assets.mesh(appearance.clone())?
+                    };
                     // Outfit changes (spray paint included) keep the running
                     // action thread instead of restarting the clip.
-                    if let Some(old) = self.avatars.get(owner) {
+                    if let Some(old) = self.avatars.get(owner).filter(|old| old.horse == horse) {
                         mesh.continue_animation(old);
                     }
                     self.avatars.insert(*owner, mesh);
