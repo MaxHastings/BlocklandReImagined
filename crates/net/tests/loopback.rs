@@ -421,6 +421,7 @@ fn options() -> ServerOptions {
             Vec3::new(3.0, 0.05, 0.0),
             Vec3::new(-3.0, 0.05, 0.0),
         ],
+        certificate: None,
     }
 }
 

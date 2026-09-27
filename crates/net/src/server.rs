@@ -14,6 +14,43 @@ pub struct ServerOptions {
     pub bind: SocketAddr,
     pub content_id: String,
     pub spawn_points: Vec<Vec3>,
+    /// A persistent host identity lets joiners keep trusting this host
+    /// across restarts. None generates a throwaway certificate.
+    pub certificate: Option<HostCertificate>,
+}
+/// Self-signed QUIC host certificate and its PKCS#8 private key.
+#[derive(Clone)]
+pub struct HostCertificate {
+    pub der: Vec<u8>,
+    pub key: Vec<u8>,
+}
+impl HostCertificate {
+    pub fn generate() -> Result<Self> {
+        let cert = rcgen::generate_simple_self_signed(vec!["blockland.local".into()])?;
+        Ok(Self {
+            der: cert.cert.der().to_vec(),
+            key: cert.signing_key.serialize_der(),
+        })
+    }
+    /// Load `host-certificate.der` / `host-key.der` from a private state
+    /// directory, creating them on first use.
+    pub fn load_or_create(dir: &std::path::Path) -> Result<Self> {
+        let cert_path = dir.join("host-certificate.der");
+        let key_path = dir.join("host-key.der");
+        if let (Ok(der), Ok(key)) = (std::fs::read(&cert_path), std::fs::read(&key_path))
+            && !der.is_empty()
+            && der.len() <= 16384
+            && !key.is_empty()
+            && key.len() <= 16384
+        {
+            return Ok(Self { der, key });
+        }
+        let identity = Self::generate()?;
+        std::fs::create_dir_all(dir)?;
+        std::fs::write(&key_path, &identity.key)?;
+        std::fs::write(&cert_path, &identity.der)?;
+        Ok(identity)
+    }
 }
 pub struct ServerHandle {
     pub address: SocketAddr,
@@ -154,10 +191,13 @@ fn start_configured(
             && options.content_id.len() <= 128,
         "Invalid server options"
     );
-    let cert = rcgen::generate_simple_self_signed(vec!["blockland.local".into()])?;
-    let certificate = cert.cert.der().to_vec();
+    let identity = match &options.certificate {
+        Some(identity) => identity.clone(),
+        None => HostCertificate::generate()?,
+    };
+    let certificate = identity.der.clone();
     let server_fingerprint: [u8; 32] = Sha256::digest(&certificate).into();
-    let key = quinn::rustls::pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+    let key = quinn::rustls::pki_types::PrivatePkcs8KeyDer::from(identity.key.clone());
     let mut config =
         quinn::ServerConfig::with_single_cert(vec![certificate.clone().into()], key.into())?;
     config.transport_config(Arc::new(transport()));

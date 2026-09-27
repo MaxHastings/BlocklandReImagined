@@ -40,13 +40,12 @@ vehicle obstruction, original offsets and camera smoothing remain work.
 Spawn-sphere distribution/orientation and exact FOV feel
 also require fidelity work; the initial Bedroom center faces a nearby wall.
 
-Direct-IP joining currently requires an explicitly supplied certificate pin in
-the native client state directory's `trusted-hosts.json`, an address-to-DER-byte
-array mapping. There is no insecure certificate fallback. The eventual in-game
-host discovery/trust flow remains required; manual pin setup is a development
-mechanism, not the finished user experience. LAN hosting writes its public DER
-certificate and host metadata beside settings. Passwords/resume credentials are
-not written by this adapter.
+LAN hosts advertise a listing and their public QUIC certificate over UDP
+discovery (port 28050); the Join Server list uses it. Direct-IP joins query the
+address once and pin its certificate in `trusted-hosts.json` (trust on first
+use). LAN hosts keep a persistent certificate/key pair in their state
+directory so pins stay valid across restarts; single-player hosts use a
+throwaway certificate. There is no insecure certificate fallback.
 
 ## Rendering and content
 

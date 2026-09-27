@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
                     Vec3::new(2000.0, 2000.0, 2000.0),
                     Vec3::new(2003.0, 2000.0, 2000.0),
                 ],
+                certificate: None,
             },
         )?;
         let start = Instant::now();

@@ -17,17 +17,15 @@ junctions are rejected.
 Package layout:
 
 ```text
-BlocklandReImagined-building-playtest-<version>/
+BlocklandReImagined-alpha-<version>/
   bri-client.exe
   content/
     client-content.json
-    <14 selected native packages, recursively copied>
+    <15 selected native packages, recursively copied>
   PLAYTEST.md
   KNOWN-ISSUES.md
   Launch.cmd
   Launch-Playtest.ps1
-  Trust Host.cmd
-  Trust-Host.ps1
   MANIFEST.json
   user-state/             created on first launch; never copied into a release
   logs/                   timestamped stdout/stderr files from each launch
@@ -35,15 +33,15 @@ BlocklandReImagined-building-playtest-<version>/
 
 Launch with `Launch.cmd`. It sets the working directory to the package
 folder, uses package-local `user-state/`, and saves separate timestamped logs
-under `logs/`. State and host pins therefore remain beside the playtest build.
-The helper does not alter the host certificate. To join a hosted session, copy
-the host's `user-state/host-certificate.der` into the player's package-local
-`user-state/`, then run `Trust Host.cmd -Address <ip:port>` (or bracketed IPv6)
-from the package. The prompt displays the certificate's SHA-256 fingerprint.
-The helper imports only an explicit DER certificate, never discovers hosts or
-turns off certificate checks. The normal host currently creates a new ephemeral
-certificate after each restart, so players must review and import its new
-fingerprint again.
+under `logs/`. State and saved host certificates therefore remain beside the
+playtest build.
+
+LAN hosts answer discovery broadcasts (UDP 28050) with their listing and public
+QUIC certificate; the Join Server list shows them. A direct-IP join asks the
+address once for its certificate and saves it in `user-state/trusted-hosts.json`
+(trust on first use). Hosts keep a persistent certificate in `user-state/`
+(`host-certificate.der`, `host-key.der`), so saved trust survives restarts. Do
+not share `host-key.der`.
 
 `MANIFEST.json` contains ordinally sorted relative paths, byte sizes and SHA-256
 hashes for the executable, selected content, normalized config and package

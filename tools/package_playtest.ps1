@@ -16,7 +16,7 @@ if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $ExecutablePath = Join-Path
 if ([string]::IsNullOrWhiteSpace($DestinationRoot)) { $DestinationRoot = Join-Path $RepoRoot 'dist' }
 $ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
 $DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
-$script:PackFields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation')
+$script:PackFields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','vehicles')
 
 function Get-PackageFiles([string]$Path) {
     $all = @(Get-ChildItem -LiteralPath $Path -Force -Recurse)
@@ -162,9 +162,7 @@ $docInputs = @(
     @{ source = (Join-Path $RepoRoot 'docs/PLAYTEST.md'); destination = 'PLAYTEST.md' },
     @{ source = (Join-Path $RepoRoot 'docs/KNOWN-ISSUES.md'); destination = 'KNOWN-ISSUES.md' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.ps1'); destination = 'Launch-Playtest.ps1' },
-    @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' },
-    @{ source = (Join-Path $PSScriptRoot 'Trust-Host.ps1'); destination = 'Trust-Host.ps1' },
-    @{ source = (Join-Path $PSScriptRoot 'Trust Host.cmd'); destination = 'Trust Host.cmd' }
+    @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' }
 )
 foreach ($input in $docInputs) { if (-not (Test-Path -LiteralPath $input.source -PathType Leaf)) { throw "Required package file is missing: $($input.source)" } }
 if ($ValidateOnly) {
@@ -179,7 +177,7 @@ if ([string]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[A-Za-z0-9][
 if ([string]::IsNullOrWhiteSpace($ExpectedExecutableSha256) -or $ExpectedExecutableSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'Supply the SHA-256 reported for the root-provided release executable using -ExpectedExecutableSha256.' }
 if ($executableSha256 -cne $ExpectedExecutableSha256.ToLowerInvariant()) { throw "Release executable hash differs from root's expected build: $executableSha256" }
 [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
-$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-building-playtest-$Version"
+$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-alpha-$Version"
 if (Test-Path -LiteralPath $releasePath) { throw "Refusing to overwrite an existing playtest release: $releasePath" }
 [IO.Directory]::CreateDirectory($releasePath) | Out-Null
 try {

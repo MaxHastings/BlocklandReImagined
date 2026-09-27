@@ -1034,6 +1034,12 @@ impl App {
                     bind,
                     content_id: identity.clone(),
                     spawn_points: loaded.spawn_points,
+                    // LAN hosts keep one identity so joiners' saved trust stays valid.
+                    certificate: if single {
+                        None
+                    } else {
+                        Some(server::HostCertificate::load_or_create(&state_dir)?)
+                    },
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),

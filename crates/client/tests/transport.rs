@@ -29,6 +29,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 bind: "127.0.0.1:0".parse()?,
                 content_id: "fixture".into(),
                 spawn_points: vec![Vec3::new(0.0, 100.0, 0.0)],
+                certificate: None,
             },
             1,
         )?;

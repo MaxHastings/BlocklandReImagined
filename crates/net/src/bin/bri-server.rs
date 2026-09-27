@@ -102,6 +102,7 @@ async fn main() -> Result<()> {
             bind,
             content_id: content_id.clone(),
             spawn_points,
+            certificate: Some(server::HostCertificate::load_or_create(&paths[13])?),
         },
         64,
         paths[13].join("administration.json"),
