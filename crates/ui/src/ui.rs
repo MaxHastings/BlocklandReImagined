@@ -200,6 +200,7 @@ pub struct Core {
     pub events: EventCatalog,
     pub datablocks: DatablockMenus,
     pub menu_backgrounds: Vec<IconRef>,
+    pub display_modes: Option<crate::api::DisplayModes>,
     pub avatar_preview: IconRef,
     pub save_maps: Vec<String>,
     pub save_files: Vec<SaveFileInfo>,
@@ -912,6 +913,7 @@ impl Ui {
             events: EventCatalog::default(),
             datablocks: DatablockMenus::new(),
             menu_backgrounds: Vec::new(),
+            display_modes: None,
             avatar_preview: IconRef::None,
             save_maps: Vec::new(),
             save_files: Vec::new(),
@@ -1403,6 +1405,14 @@ impl Ui {
             }
             UiUpdate::SaveContext { map, preview } => c.save_context = Some((map, preview)),
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
+            UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
+            UiUpdate::DisplayChanged {
+                resolution,
+                fullscreen,
+            } => {
+                crate::screens::options::record_display(&mut c.prefs, resolution, fullscreen);
+                c.save_settings();
+            }
         }
         self.content.on_update(&mut self.core);
         for d in &mut self.dialogs {

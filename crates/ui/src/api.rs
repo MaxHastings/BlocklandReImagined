@@ -793,6 +793,14 @@ pub struct MiniGameUiState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MiniGameOperation { List, Create, Configure, Join, Leave, Invite, AcceptInvite, RejectInvite, IgnoreInvite, RemoveMember, Reset, RespawnAll, End }
 
+/// Fullscreen is borderless at the monitor's `native` size; a window may take
+/// any `windowed` size, each smaller than the desktop as v20's list was.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayModes {
+    pub native: (u32, u32),
+    pub windowed: Vec<(u32, u32)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
     Admin(crate::models::admin::AdminUpdate),
@@ -808,6 +816,14 @@ pub enum UiUpdate {
         querying: bool,
     },
     MainMenuBackgrounds(Vec<IconRef>),
+    /// The window's monitor: what Options may offer (platform to UI).
+    DisplayModes(DisplayModes),
+    /// The platform changed the display itself (Alt+Enter, or a saved mode
+    /// the monitor cannot show); the UI records it in the video prefs.
+    DisplayChanged {
+        resolution: (u32, u32),
+        fullscreen: bool,
+    },
     // ---- server content (sent after mission download)
     Bricks(Vec<BrickInfo>),
     Colorset(Vec<PaintDivision>),

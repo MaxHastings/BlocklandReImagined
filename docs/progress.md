@@ -2194,3 +2194,21 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `next_brick_of_the_aspect_takes_the_players_last_print_like_v20`,
   `last_print_updates_the_ghost_and_later_bricks_of_its_aspect`,
   `letter_shortcuts_work_on_the_prints_tab`.
+- 2026-09-27 Mouse capture, display modes and menu scaling. Windows locks the
+  cursor where it sits, so after Alt+Tab or a taskbar restore it was locked
+  outside the window; like v20's setMouseClipping (exe 0x607ce0, called from
+  WM_ACTIVATE) the platform parks it inside and re-clips on focus, resize,
+  move, restore and a 1 s watchdog, and drops the click that activates the
+  window. Fullscreen is now borderless at the monitor's size (winit's
+  exclusive mode changed the desktop mode, never restored it on Alt+Tab and
+  asserts on failure); Options lists the monitor's real modes, filtered by
+  the fullscreen toggle as v20's `OptGraphicsResolutionMenu::init` did.
+  Alt+Enter and startup corrections are recorded in the video prefs; windowed
+  changes un-maximize first; DPI changes keep the chosen pixel size; the
+  swapchain reconfigures whenever it disagrees with the window. Relative/
+  relative GUI controls scale by one factor so menu text keeps its aspect,
+  and full-screen backgrounds crop instead of stretching (a deliberate change
+  from v20, which stretched both). Dropped: fullscreen below native
+  resolution. Evidence: `cargo test -p bri-ui -p bri-client` (content-backed
+  tests need `content/`), `ui_gallery` MainMenuGui at 1920x1080, a 20 s
+  windowed startup. Needs Max's playtest: Alt+Tab, restore, Alt+Enter, Apply.

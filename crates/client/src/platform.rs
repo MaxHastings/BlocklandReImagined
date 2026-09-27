@@ -1,7 +1,7 @@
 //! Native window and GPU ownership. Nothing creates a window until `run` is
 //! explicitly called by the executable. Mapping tests never start an event loop.
 use anyhow::{Context, Result, bail};
-use bri_ui::api::{RequestId, UiUpdate};
+use bri_ui::api::{DisplayModes, RequestId, UiUpdate};
 use bri_ui::binds::Platform;
 use bri_ui::gpu::UiRenderer;
 use bri_ui::input::{InputEvent, Key, Modifiers, MouseButton};
@@ -191,12 +191,95 @@ impl Graphics {
 }
 
 struct DisplayChange {
-    request: RequestId,
+    /// None when the platform changed the mode itself (Alt+Enter).
+    request: Option<RequestId>,
     expected: PhysicalSize<u32>,
     deadline: Instant,
     old_size: PhysicalSize<u32>,
-    old_fullscreen: Option<Fullscreen>,
+    old_fullscreen: bool,
     old_vsync: bool,
+}
+
+fn set_mode(window: &Window, fullscreen: bool, size: PhysicalSize<u32>) {
+    if fullscreen {
+        window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
+    } else {
+        window.set_fullscreen(None);
+        // A maximized window ignores size requests.
+        window.set_maximized(false);
+        let _ = window.request_inner_size(size);
+        // A game launched fullscreen has no earlier window spot to return
+        // to; keep the whole window on its monitor.
+        if let Some(m) = window.current_monitor()
+            && let Ok(pos) = window.outer_position()
+        {
+            let (mp, ms, os) = (m.position(), m.size(), window.outer_size());
+            let inside = pos.x >= mp.x
+                && pos.y >= mp.y
+                && pos.x + os.width as i32 <= mp.x + ms.width as i32
+                && pos.y + os.height as i32 <= mp.y + ms.height as i32;
+            if !inside {
+                window.set_outer_position(PhysicalPosition::new(
+                    mp.x + (ms.width as i32 - os.width as i32).max(0) / 2,
+                    mp.y + (ms.height as i32 - os.height as i32).max(0) / 2,
+                ));
+            }
+        }
+    }
+}
+
+/// Window frame and caption around the client area, as v20 subtracted them
+/// from the desktop (`getWindowFrameSize`, `getWindowCaptionHeight`).
+fn decorations(window: &Window) -> (u32, u32) {
+    let outer = window.outer_size();
+    let inner = window.inner_size();
+    if window.fullscreen().is_none()
+        && !window.is_maximized()
+        && outer.width > inner.width
+        && outer.height > inner.height
+    {
+        (outer.width - inner.width, outer.height - inner.height)
+    } else {
+        let s = window.scale_factor();
+        ((16.0 * s).round() as u32, (39.0 * s).round() as u32)
+    }
+}
+
+fn display_modes(window: &Window) -> Option<DisplayModes> {
+    let monitor = window.current_monitor()?;
+    let native = monitor.size();
+    let deco = decorations(window);
+    let desk = (
+        native.width.saturating_sub(deco.0),
+        native.height.saturating_sub(deco.1),
+    );
+    let modes = monitor
+        .video_modes()
+        .map(|m| (m.size().width, m.size().height));
+    Some(DisplayModes {
+        native: (native.width, native.height),
+        windowed: windowed_sizes(modes, desk),
+    })
+}
+
+/// v20's windowed list: the monitor's modes strictly inside the desktop
+/// minus the window frame, at least 640 x 480.
+pub fn windowed_sizes(
+    modes: impl IntoIterator<Item = (u32, u32)>,
+    desk: (u32, u32),
+) -> Vec<(u32, u32)> {
+    let mut list: Vec<_> = modes
+        .into_iter()
+        .filter(|&(w, h)| w >= 640 && h >= 480 && w < desk.0 && h < desk.1)
+        .collect();
+    list.sort_unstable();
+    list.dedup();
+    list
+}
+
+/// Whether a window size fits inside some listed windowed size.
+fn fits(windowed: &[(u32, u32)], (w, h): (u32, u32)) -> bool {
+    windowed.is_empty() || windowed.iter().any(|&(mw, mh)| w <= mw && h <= mh)
 }
 
 struct Runner {
@@ -217,6 +300,9 @@ struct Runner {
     last_tick: Instant,
     next_tick: Instant,
     display: Option<DisplayChange>,
+    modes: Option<DisplayModes>,
+    /// Last client size while windowed and not maximized.
+    windowed: PhysicalSize<u32>,
     error: Option<anyhow::Error>,
     screenshot: Option<(std::path::PathBuf, bool)>,
 }
@@ -228,6 +314,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         bail!("Native client requires at least 640 x 480 pixels");
     }
     let now = Instant::now();
+    let windowed = PhysicalSize::new(config.size.0, config.size.1);
     let mut runner = Runner {
         config,
         window: None,
@@ -246,6 +333,8 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         last_tick: now,
         next_tick: now,
         display: None,
+        modes: None,
+        windowed,
         error: None,
         screenshot: None,
     };
@@ -365,72 +454,130 @@ impl Runner {
             bail!("Requested resolution exceeds the GPU's {limit}-pixel texture limit");
         }
         let mode = present_mode(vsync, &graphics.present_modes)?;
-        let target = PhysicalSize::new(resolution.0, resolution.1);
-        let fs = if fullscreen {
-            let monitor = window
+        let target = if fullscreen {
+            window
                 .current_monitor()
-                .context("No current monitor is available")?;
-            let video = monitor
-                .video_modes()
-                .filter(|m| m.size() == target)
-                .max_by_key(|m| m.refresh_rate_millihertz())
-                .context(
-                    "Requested fullscreen resolution is not supported by the current monitor",
-                )?;
-            Some(Fullscreen::Exclusive(video))
+                .context("No current monitor is available")?
+                .size()
         } else {
-            None
+            PhysicalSize::new(resolution.0, resolution.1)
+        };
+        let old_vsync = self.config.vsync;
+        self.config.vsync = vsync;
+        graphics.config.present_mode = mode;
+        graphics.reconfigure = true;
+        self.change_mode(Some(request), fullscreen, target, old_vsync);
+        Ok(())
+    }
+    /// Fullscreen is always borderless on the window's monitor: no display
+    /// mode switch, so Alt+Tab and focus changes stay clean. Windowed sizes
+    /// are client-area pixels, applied after leaving fullscreen or maximized.
+    fn change_mode(
+        &mut self,
+        request: Option<RequestId>,
+        fullscreen: bool,
+        target: PhysicalSize<u32>,
+        old_vsync: bool,
+    ) {
+        let Some(window) = &self.window else {
+            return;
         };
         self.display = Some(DisplayChange {
             request,
             expected: target,
             deadline: Instant::now() + Duration::from_secs(5),
             old_size: window.inner_size(),
-            old_fullscreen: window.fullscreen(),
-            old_vsync: self.config.vsync,
+            old_fullscreen: window.fullscreen().is_some(),
+            old_vsync,
         });
-        window.set_fullscreen(fs);
-        if !fullscreen {
-            let _ = window.request_inner_size(target);
-        }
-        self.config.vsync = vsync;
-        graphics.config.present_mode = mode;
-        let actual = window.inner_size();
-        self.resize(actual);
-        Ok(())
+        set_mode(window, fullscreen, target);
+        self.regrab = true;
+        self.finish_display();
     }
     fn finish_display(&mut self) {
         let Some(change) = self.display.as_ref() else {
             return;
         };
-        let actual = self.window.as_ref().map(|w| w.inner_size());
-        if actual == Some(change.expected) && self.graphics.is_some() {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let actual = window.inner_size();
+        if actual == change.expected && self.graphics.is_some() {
             let change = self.display.take().unwrap();
-            self.config.size = (change.expected.width, change.expected.height);
-            self.config.fullscreen = self
-                .window
-                .as_ref()
-                .is_some_and(|w| w.fullscreen().is_some());
-            self.config.app.ui_mut().apply(UiUpdate::ActionResult {
-                id: change.request,
-                result: Ok(()),
-            });
+            self.config.size = (actual.width, actual.height);
+            self.config.fullscreen = window.fullscreen().is_some();
+            self.resize(actual);
+            let update = match change.request {
+                Some(id) => UiUpdate::ActionResult { id, result: Ok(()) },
+                None => UiUpdate::DisplayChanged {
+                    resolution: self.config.size,
+                    fullscreen: self.config.fullscreen,
+                },
+            };
+            self.config.app.ui_mut().apply(update);
         } else if Instant::now() >= change.deadline {
             let change = self.display.take().unwrap();
             self.config.vsync = change.old_vsync;
-            if let Some(window) = &self.window {
-                window.set_fullscreen(change.old_fullscreen);
-                let _ = window.request_inner_size(change.old_size);
-            }
+            set_mode(&window, change.old_fullscreen, change.old_size);
             if let Some(g) = &mut self.graphics
                 && let Ok(mode) = present_mode(change.old_vsync, &g.present_modes)
             {
                 g.config.present_mode = mode;
+                g.reconfigure = true;
             }
-            if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
-                self.resize(size);
+            self.resize(window.inner_size());
+            if let Some(id) = change.request {
+                self.reject_display(
+                    id,
+                    "The requested resolution was not observed; reverting to the previous display settings.".into(),
+                );
             }
-            self.reject_display(change.request,"The requested resolution was not observed; reverting to the previous display settings.".into());
+        }
+    }
+    /// Alt+Enter (v20's toggleFullScreen): swap between borderless fullscreen
+    /// and the last windowed size, and remember the result as Options does.
+    fn toggle_fullscreen(&mut self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        if self.display.is_some() {
+            return;
+        }
+        let vsync = self.config.vsync;
+        if window.fullscreen().is_some() {
+            let size = self.windowed_size();
+            self.change_mode(None, false, size, vsync);
+        } else if let Some(monitor) = window.current_monitor() {
+            self.change_mode(None, true, monitor.size(), vsync);
+        }
+    }
+    /// The size to leave fullscreen at: the last window size if it still fits
+    /// on this monitor, else the largest listed size up to 1280 x 720.
+    fn windowed_size(&self) -> PhysicalSize<u32> {
+        let size = self.windowed;
+        match &self.modes {
+            Some(m) if !fits(&m.windowed, (size.width, size.height)) => m
+                .windowed
+                .iter()
+                .rev()
+                .find(|&&(w, h)| w <= 1280 && h <= 720)
+                .or(m.windowed.last())
+                .map_or(size, |&(w, h)| PhysicalSize::new(w, h)),
+            _ => size,
+        }
+    }
+    /// Tell the UI what this monitor can show; called when the window is
+    /// created and whenever it changes monitor or scale.
+    fn report_modes(&mut self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        let Some(modes) = display_modes(window) else {
+            return;
+        };
+        if self.modes.as_ref() != Some(&modes) {
+            self.modes = Some(modes.clone());
+            self.config.app.ui_mut().apply(UiUpdate::DisplayModes(modes));
         }
     }
     fn pump(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
@@ -454,17 +601,7 @@ impl Runner {
                             self.reject_display(request, e.to_string());
                         }
                     }
-                    PlatformCommand::ToggleFullscreen => {
-                        if self.display.is_none()
-                            && let Some(w) = &self.window
-                        {
-                            w.set_fullscreen(if w.fullscreen().is_some() {
-                                None
-                            } else {
-                                Some(Fullscreen::Borderless(w.current_monitor()))
-                            });
-                        }
-                    }
+                    PlatformCommand::ToggleFullscreen => self.toggle_fullscreen(),
                     PlatformCommand::Screenshot { path, hud } => {
                         self.screenshot = Some((path, hud));
                     }
@@ -487,7 +624,9 @@ impl Runner {
         if let Some(reason) = g.device_lost.lock().ok().and_then(|mut error| error.take()) {
             bail!("The native GPU device was lost: {reason}");
         }
-        if g.reconfigure {
+        // Resized can trail the real size (restore, DPI, fullscreen toggles);
+        // never present a swapchain that disagrees with the window.
+        if g.reconfigure || (g.config.width, g.config.height) != (size.width, size.height) {
             g.resize(size);
         }
         let surface = match g.surface.get_current_texture() {
@@ -689,23 +828,33 @@ impl ApplicationHandler for Runner {
                         .create_window(attributes)
                         .context("creating the native client window")?,
                 );
-                if self.config.fullscreen {
-                    let target = PhysicalSize::new(self.config.size.0, self.config.size.1);
-                    let video = window.current_monitor().and_then(|monitor| {
-                        monitor
-                            .video_modes()
-                            .filter(|mode| mode.size() == target)
-                            .max_by_key(|mode| mode.refresh_rate_millihertz())
-                    });
-                    if let Some(video) = video {
-                        window.set_fullscreen(Some(Fullscreen::Exclusive(video)));
-                    } else {
-                        self.config.fullscreen = false;
-                        eprintln!("Saved fullscreen resolution is unavailable; starting windowed.");
-                    }
-                }
                 self.focused = window.has_focus();
                 self.window = Some(window);
+                self.report_modes();
+                // Saved prefs may name a size this monitor cannot show, or an
+                // exclusive fullscreen mode from before fullscreen went
+                // borderless; start in the nearest mode and record it.
+                let saved = self.config.size;
+                let fits_here = self.modes.as_ref().is_none_or(|m| fits(&m.windowed, saved));
+                if self.config.fullscreen || !fits_here {
+                    let fullscreen = self.config.fullscreen;
+                    let target = if fullscreen {
+                        let window = self.window.as_ref().unwrap();
+                        window.current_monitor().map(|m| m.size())
+                    } else {
+                        Some(self.windowed_size())
+                    };
+                    match target {
+                        Some(t) if t == PhysicalSize::new(saved.0, saved.1) => {
+                            set_mode(self.window.as_ref().unwrap(), fullscreen, t);
+                        }
+                        Some(t) => {
+                            let vsync = self.config.vsync;
+                            self.change_mode(None, fullscreen, t, vsync);
+                        }
+                        None => self.config.fullscreen = false,
+                    }
+                }
             }
             if self.graphics.is_none() {
                 let gpu = Graphics::new(
@@ -749,15 +898,13 @@ impl ApplicationHandler for Runner {
         if let Some(change) = self.display.take() {
             self.config.vsync = change.old_vsync;
             self.config.size = (change.old_size.width, change.old_size.height);
-            self.config.fullscreen = change.old_fullscreen.is_some();
+            self.config.fullscreen = change.old_fullscreen;
             if let Some(window) = &self.window {
-                window.set_fullscreen(change.old_fullscreen);
-                let _ = window.request_inner_size(change.old_size);
+                set_mode(window, change.old_fullscreen, change.old_size);
             }
-            self.reject_display(
-                change.request,
-                "Display change interrupted by suspension.".into(),
-            );
+            if let Some(id) = change.request {
+                self.reject_display(id, "Display change interrupted by suspension.".into());
+            }
         }
     }
     fn window_event(
@@ -773,14 +920,35 @@ impl ApplicationHandler for Runner {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 self.regrab = true;
+                if let Some(w) = &self.window
+                    && w.fullscreen().is_none()
+                    && !w.is_maximized()
+                    && w.is_minimized() != Some(true)
+                    && size.width > 0
+                    && size.height > 0
+                {
+                    self.windowed = size;
+                }
                 self.resize(size)
             }
-            WindowEvent::Moved(_) => self.regrab = true,
-            WindowEvent::ScaleFactorChanged { .. } => {
+            WindowEvent::Moved(_) => {
+                self.regrab = true;
+                self.report_modes();
+            }
+            WindowEvent::ScaleFactorChanged {
+                mut inner_size_writer,
+                ..
+            } => {
                 self.regrab = true;
                 if let Some(w) = &self.window {
+                    // Resolutions are physical pixels: a DPI change keeps the
+                    // chosen size rather than growing the window with it.
+                    if w.fullscreen().is_none() && !w.is_maximized() {
+                        let _ = inner_size_writer.request_inner_size(w.inner_size());
+                    }
                     self.resize(w.inner_size());
                 }
+                self.report_modes();
             }
             WindowEvent::Occluded(hidden) => {
                 self.regrab |= !hidden;
@@ -1205,6 +1373,25 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windowed_sizes_fit_inside_the_desktop_like_v20() {
+        // A 1920 x 1080 monitor with a 16 x 39 window frame.
+        let modes = [
+            (640, 480),
+            (1920, 1080),
+            (1280, 720),
+            (1280, 720),
+            (1600, 900),
+            (1904, 1000),
+            (320, 200),
+        ];
+        let list = windowed_sizes(modes, (1904, 1041));
+        assert_eq!(list, vec![(640, 480), (1280, 720), (1600, 900)]);
+        assert!(fits(&list, (1280, 720)));
+        assert!(fits(&list, (1000, 700)));
+        assert!(!fits(&list, (1920, 1080)));
+        assert!(fits(&[], (1920, 1080)));
+    }
     #[test]
     fn activating_click_only_refocuses_the_game() {
         let t = Instant::now();

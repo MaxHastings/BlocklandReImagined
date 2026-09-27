@@ -3,7 +3,7 @@
 //! audio drivers or network stack are hidden and the remaining authored rows
 //! close up, so every visible control does something.
 use super::*;
-use crate::api::{BindInput, UiAction};
+use crate::api::{BindInput, DisplayModes, UiAction};
 use crate::binds::{BindMap, RemapOutcome};
 use crate::input::Chord;
 use crate::prefs::Prefs;
@@ -120,6 +120,57 @@ fn display(p: &Prefs, fallback: (i32, i32)) -> DisplaySettings {
         vsync: !p.bool_or(NO_VSYNC, false),
     }
 }
+/// A display change the platform made itself (Alt+Enter, or a saved mode
+/// the monitor cannot show), kept so the next launch matches it.
+pub fn record_display(p: &mut Prefs, resolution: (u32, u32), fullscreen: bool) {
+    let vsync = !p.bool_or(NO_VSYNC, false);
+    put_display(
+        p,
+        DisplaySettings {
+            resolution,
+            fullscreen,
+            vsync,
+        },
+    );
+}
+
+/// Headless and pre-window fallback when the platform has not reported the
+/// monitor's modes.
+const FALLBACK_RESOLUTIONS: &[(u32, u32)] = &[
+    (640, 480),
+    (800, 600),
+    (1024, 768),
+    (1280, 720),
+    (1280, 800),
+    (1366, 768),
+    (1600, 900),
+    (1920, 1080),
+    (2560, 1440),
+    (3840, 2160),
+];
+
+/// v20's `OptGraphicsResolutionMenu::init`: the list depends on the
+/// fullscreen toggle. Fullscreen is borderless at the monitor's own size;
+/// windowed sizes come from the monitor's modes that fit on the desktop.
+fn resolution_list(
+    modes: Option<&DisplayModes>,
+    fullscreen: bool,
+    current: (u32, u32),
+) -> Vec<(u32, u32)> {
+    let mut list = match modes {
+        Some(m) if fullscreen => vec![m.native],
+        Some(m) if !m.windowed.is_empty() => m.windowed.clone(),
+        _ => {
+            let mut l = FALLBACK_RESOLUTIONS.to_vec();
+            l.push(current);
+            l
+        }
+    };
+    list.sort_unstable();
+    list.dedup();
+    list
+}
+
 fn put_display(p: &mut Prefs, d: DisplaySettings) {
     p.set(
         RESOLUTION,
@@ -286,27 +337,15 @@ pub struct Options {
     pending_display: Option<(RequestId, DisplaySettings, bool)>,
     pending_enabled: Vec<NodeId>,
     resolutions: Vec<(u32, u32)>,
+    modes: Option<DisplayModes>,
     committed: bool,
 }
 
 impl Options {
     pub fn new(core: &Core) -> Self {
         let current = display(&core.prefs, core.logical);
-        let mut resolutions = vec![
-            (640, 480),
-            (800, 600),
-            (1024, 768),
-            (1280, 720),
-            (1280, 800),
-            (1366, 768),
-            (1600, 900),
-            (1920, 1080),
-            (2560, 1440),
-            (3840, 2160),
-            current.resolution,
-        ];
-        resolutions.sort_unstable();
-        resolutions.dedup();
+        let modes = core.display_modes.clone();
+        let resolutions = resolution_list(modes.as_ref(), current.fullscreen, current.resolution);
         let mut s = Self {
             view: layout_view(core, "optionsDlg"),
             draft: core.prefs.clone(),
@@ -317,6 +356,7 @@ impl Options {
             pending_display: None,
             pending_enabled: Vec::new(),
             resolutions,
+            modes,
             committed: false,
         };
         s.native_layout();
@@ -330,18 +370,7 @@ impl Options {
                 s.view.set_bool(n, core.prefs.bool_or(&var, on));
             }
         }
-        s.menu(
-            "OptGraphicsResolutionMenu",
-            s.resolutions
-                .iter()
-                .enumerate()
-                .map(|(i, (w, h))| (format!("{w} x {h}"), i as i64))
-                .collect(),
-            s.resolutions
-                .iter()
-                .position(|r| *r == current.resolution)
-                .unwrap_or(0) as i64,
-        );
+        s.resolution_menu(current.resolution);
         for &(name, pref, _) in VOLUMES {
             s.slider(name, core.prefs.f32_or(pref, 1.0).clamp(0.0, 1.0));
         }
@@ -504,6 +533,21 @@ impl Options {
             self.view.state(n).items = items;
             self.view.select(n, Some(selected));
         }
+    }
+    /// Fill the resolution menu, selecting `want` or else the largest size.
+    fn resolution_menu(&mut self, want: (u32, u32)) {
+        let items = self
+            .resolutions
+            .iter()
+            .enumerate()
+            .map(|(i, (w, h))| (format!("{w} x {h}"), i as i64))
+            .collect();
+        let selected = self
+            .resolutions
+            .iter()
+            .position(|r| *r == want)
+            .unwrap_or(self.resolutions.len().saturating_sub(1));
+        self.menu("OptGraphicsResolutionMenu", items, selected as i64);
     }
     fn slider(&mut self, name: &str, value: f32) {
         if let Some(n) = self.view.id(name) {
@@ -795,6 +839,16 @@ impl Screen for Options {
             {
                 self.draft.set_bool(&var, self.view.bool_value(ev.node));
                 self.smart_toggle();
+                if var.eq_ignore_ascii_case(FULLSCREEN) {
+                    // OptGraphicsFullscreenToggle::onAction rebuilds the list.
+                    let keep = self.selected_display().resolution;
+                    self.resolutions = resolution_list(
+                        self.modes.as_ref(),
+                        self.view.bool_value(ev.node),
+                        self.applied_display.resolution,
+                    );
+                    self.resolution_menu(keep);
+                }
             }
             return;
         }
@@ -1494,6 +1548,27 @@ mod tests {
         assert_eq!(ui.core.prefs.get(DEFAULT_FOV), Some("102"));
         ui.core.prefs.set(DEFAULT_FOV, "500");
         assert_eq!(default_fov(&ui.core.prefs), FOV_RANGE.1);
+    }
+    #[test]
+    fn resolution_list_follows_the_fullscreen_toggle_and_the_monitor() {
+        let mut ui = fixture();
+        ui.core.display_modes = Some(DisplayModes {
+            native: (1920, 1080),
+            windowed: vec![(800, 600), (1280, 720)],
+        });
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id("OptGraphicsResolutionMenu").unwrap();
+        assert_eq!(s.resolutions, vec![(800, 600), (1280, 720)]);
+        toggle_audio(&mut s, &mut ui, FULLSCREEN, true);
+        assert_eq!(s.resolutions, vec![(1920, 1080)]);
+        assert_eq!(s.view.selected(n), Some(0));
+        toggle_audio(&mut s, &mut ui, FULLSCREEN, false);
+        assert_eq!(s.view.selected(n), Some(1));
+        s.view.select(n, Some(0));
+        toggle_audio(&mut s, &mut ui, FULLSCREEN, true);
+        toggle_audio(&mut s, &mut ui, FULLSCREEN, false);
+        assert_eq!(s.selected_display().resolution, (1280, 720));
+        assert_eq!(resolution_list(None, true, (1000, 700)).len(), 11);
     }
     #[test]
     fn display_rejection_does_not_commit_then_success_retains_applied_boundary() {
