@@ -886,7 +886,10 @@ impl Building {
                     self.weapon_fire_down = false;
                     out.commands.push(Command::WeaponTrigger { down: false });
                 } else if *down && (self.held_image || image_equipment(&self.equipment)) {
-                    if !self.weapon_fire_down {
+                    // A tool switched since the last trigger mounts a fresh
+                    // image, so a new click must reach it even before the
+                    // switch is acknowledged.
+                    if !self.weapon_fire_down || self.latest_equipment_request > self.fire_request {
                         self.weapon_fire_down = true;
                         out.commands.push(Command::WeaponTrigger { down: true });
                     }
@@ -1813,6 +1816,25 @@ mod tests {
             [Command::WeaponTrigger { down: false }]
         ));
         assert!(!b.weapon_fire_down);
+    }
+    #[test]
+    fn click_after_switching_tools_fires_the_new_image_before_the_ack() {
+        let mut b = weapon_controller();
+        b.sync_tools(&weapon_inventory()).unwrap();
+        choose(&mut b, 1, 1);
+        let down = b
+            .ui_action(&fire(), &player())
+            .unwrap()
+            .unwrap()
+            .commands
+            .remove(0);
+        b.command_sent(2, &down).unwrap();
+        // The trigger is never released; the player switches and clicks again.
+        choose(&mut b, 3, 2);
+        let again = b.ui_action(&fire(), &player()).unwrap().unwrap().commands;
+        assert!(matches!(&again[..], [Command::WeaponTrigger { down: true }]));
+        b.command_sent(4, &again[0]).unwrap();
+        assert!(b.ui_action(&fire(), &player()).unwrap().unwrap().commands.is_empty());
     }
     #[test]
     fn queue_failure_and_slot_replacement_cannot_leave_a_pending_tool_grant() {

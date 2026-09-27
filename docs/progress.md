@@ -1956,3 +1956,9 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `cargo test -p bri-client --test held_items_render --release -- --ignored`
   (frames in `artifacts/held-items/`). Open: player types, setPlayerScale,
   Horse Ray (one protocol bump).
+- 2026-09-27 app_flow `native_host_cancel` timed out at the wrench. Cause:
+  the client drops a Fire press while its previous trigger is still held
+  until the host acknowledges the tool switch, so clicking right after
+  switching tools did nothing. A click after a newer switch now always
+  reaches the new image. The test also now expects the host's
+  `wrenchHitSound` profile (the `WrenchHit` cue is no longer emitted).

@@ -707,7 +707,7 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     );
     ensure!(
         app.audio_requests()
-            .get("tool.wrench.hit")
+            .get("wrenchHitSound")
             .copied()
             .unwrap_or(0)
             >= 1,
