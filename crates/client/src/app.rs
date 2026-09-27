@@ -770,7 +770,7 @@ impl App {
         self.motion.reset();
         self.vehicles.clear();
         self.music_world = None;
-        self.controls.free_camera = None;
+        self.controls.clear_observer();
         self.macro_recording = None;
         self.macro_playback.clear();
         self.combat = Default::default();
@@ -824,9 +824,26 @@ impl App {
             .and_then(|v| v.vitals.get(&v.owner))
             .is_some_and(|v| v.mounted.is_some())
     }
+    /// Steer whatever the server says this client controls. A granted free
+    /// camera starts at the player's smoothed eye (`dropCameraAtPlayer`).
+    fn follow_control(&mut self) {
+        let Some(view) = self.network_view() else {
+            return;
+        };
+        let control = view
+            .vitals
+            .get(&view.owner)
+            .map_or_else(Default::default, |v| v.control);
+        let eye = self.motion.local_eye().or_else(|| {
+            view.poses
+                .get(&view.owner)
+                .map(|p| p.player.eye(&PlayerTuning::default()))
+        });
+        self.controls.follow(control, view.owner, eye);
+    }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person || self.controls.free_camera.is_some() || !self.local_alive()
+        self.controls.third_person || self.controls.observer().is_some() || !self.local_alive()
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -1408,6 +1425,11 @@ impl App {
             Command::Tool(ToolAction::Inspect { mode }) => Some(*mode),
             _ => None,
         };
+        // Administration requests never carry a gameplay aim.
+        let aim = (!matches!(command, Command::Admin(_))).then_some(bri_sim::session::ActionAim {
+            yaw: self.controls.yaw,
+            pitch: self.controls.pitch,
+        });
         let dialog_request = inspection.is_some()
             || matches!(
                 action,
@@ -1420,14 +1442,7 @@ impl App {
             .filter(|a| a.entered)
             .context("Not connected")?
             .worker
-            .request_with_aim(
-                id,
-                command,
-                Some(bri_sim::session::ActionAim {
-                    yaw: self.controls.yaw,
-                    pitch: self.controls.pitch,
-                }),
-            )?;
+            .request_with_aim(id, command, aim)?;
         self.pending_actions.insert(
             id,
             PendingAction {
@@ -2136,6 +2151,31 @@ impl Drop for App {
         self.disconnect();
     }
 }
+/// Eye of the camera in control: the free camera itself, an orbit around the
+/// spied player, the chase camera, or the player's own eye.
+fn camera_eye(
+    controls: &Controls,
+    presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    building: &crate::building::Building,
+    own_eye: Vec3,
+    forward: Vec3,
+    chase: Option<f32>,
+) -> Result<Vec3> {
+    use crate::controls::ObserverMode;
+    match controls.observer().map(|o| o.mode) {
+        Some(ObserverMode::Free(position)) => Ok(position),
+        // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
+        Some(ObserverMode::Orbit(_)) => building.camera_position(
+            controls.orbit_focus(presented).unwrap_or(own_eye),
+            forward,
+            8.0,
+        ),
+        None => match chase {
+            Some(distance) => building.camera_position(own_eye, forward, distance),
+            None => Ok(own_eye),
+        },
+    }
+}
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -2310,9 +2350,10 @@ impl PlatformApp for App {
         self.poll_network()?;
         self.poll_files();
         let alive = self.local_alive();
-        let observing = self.controls.fly(elapsed.as_secs_f32());
+        self.follow_control();
+        self.controls.fly(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
-            let input = if alive && !observing {
+            let input = if alive {
                 self.controls.movement()
             } else {
                 // Corpses ignore controls; keep aim so the server agrees.
@@ -2510,7 +2551,7 @@ impl PlatformApp for App {
             self.effects.sync(view.world.clone(), meshes)?;
             self.foliage.advance(elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.
-            let (yaw, pitch) = self.controls.view_angles();
+            let (yaw, pitch) = self.controls.camera_angles();
             let forward = Vec3::new(
                 yaw.sin() * pitch.cos(),
                 pitch.sin(),
@@ -2520,17 +2561,15 @@ impl PlatformApp for App {
                 .motion
                 .local_eye()
                 .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
-            let eye = if let Some(camera) = self.controls.free_camera {
-                camera
-            } else if third_person {
-                building.camera_position(
-                    eye,
-                    forward,
-                    Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.),
-                )?
-            } else {
-                eye
-            };
+            let eye = camera_eye(
+                &self.controls,
+                presented,
+                building,
+                eye,
+                forward,
+                third_person
+                    .then(|| Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.)),
+            )?;
             listener = bri_audio::Listener {
                 position: eye.to_array(),
                 forward: forward.to_array(),
@@ -2642,6 +2681,24 @@ impl PlatformApp for App {
                     }
                 }
                 self.answer(id, Ok(()));
+                continue;
+            }
+            // Clicking out of the spy orbit returns to the body
+            // (`Observer::onTrigger` in `Corpse` mode); the free camera
+            // ignores triggers. The dead click to respawn above.
+            if let Some(observer) = self.controls.observer()
+                && let UiAction::Game(GameAction::Held {
+                    control: HeldControl::Fire,
+                    down,
+                }) = action
+            {
+                if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
+                    if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
+                        self.answer(id, Err(error));
+                    }
+                } else {
+                    self.answer(id, Ok(()));
+                }
                 continue;
             }
             if self.local_mounted()
@@ -2869,19 +2926,24 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::Game(GameAction::DropCameraAtPlayer) => {
-                    // `serverCmdDropCameraAtPlayer`: administrators only.
+                    // `serverCmdDropCameraAtPlayer`: the server hands control
+                    // to the camera; pressing again re-drops it at the eye.
                     match self.network_view() {
                         Some(view) if view.administrator => {
-                            if self.controls.free_camera.is_some() {
-                                self.controls.free_camera = None;
-                            } else {
-                                self.controls.free_camera = self.motion.local_eye().or_else(|| {
-                                    view.poses
-                                        .get(&view.owner)
-                                        .map(|p| p.player.eye(&PlayerTuning::default()))
-                                });
+                            if let Some(eye) = self.motion.local_eye() {
+                                self.controls.redrop_camera(eye);
                             }
-                            Ok(())
+                            let result = self.command(
+                                id,
+                                Command::Admin(bri_admin::Request::new(
+                                    bri_admin::Action::DropCameraAtPlayer,
+                                )),
+                                action.clone(),
+                            );
+                            if result.is_ok() {
+                                continue;
+                            }
+                            result
                         }
                         Some(_) => Err(anyhow::anyhow!(
                             "Only administrators can use the free camera"
@@ -2890,13 +2952,16 @@ impl PlatformApp for App {
                     }
                 }
                 UiAction::Game(GameAction::DropPlayerAtCamera) => {
-                    match self.controls.free_camera.take() {
+                    match self.controls.free_camera() {
                         Some(eye) => {
+                            // The body arrives facing the camera's heading.
+                            let (yaw, _) = self.controls.camera_angles();
+                            self.controls.yaw = yaw;
                             let result = self.command(
                                 id,
                                 Command::DropPlayerAt {
                                     eye: eye.to_array(),
-                                    yaw: self.controls.yaw,
+                                    yaw,
                                 },
                                 action.clone(),
                             );
@@ -3182,7 +3247,7 @@ impl PlatformApp for App {
             return Ok(false);
         };
         let third_person = self.controls.third_person
-            || self.controls.free_camera.is_some()
+            || self.controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
         let hidden = self.combat.hidden_bodies(&view.vitals);
         let lights_on: Vec<Vec3> = view
@@ -3272,7 +3337,7 @@ impl PlatformApp for App {
         )?;
         self.explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
-        let (yaw, pitch) = self.controls.view_angles();
+        let (yaw, pitch) = self.controls.camera_angles();
         let pitch = pitch.clamp(-1.56, 1.56);
         let forward = Vec3::new(
             yaw.sin() * pitch.cos(),
@@ -3284,16 +3349,16 @@ impl PlatformApp for App {
             .local_eye()
             .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
         let camera_distance = Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.0);
-        let eye = if let Some(camera) = self.controls.free_camera {
-            camera
-        } else if third_person {
+        let eye = camera_eye(
+            &self.controls,
+            self.motion.presented(),
             self.building
                 .as_ref()
-                .context("Camera collision mirror missing")?
-                .camera_position(eye, forward, camera_distance)?
-        } else {
-            eye
-        };
+                .context("Camera collision mirror missing")?,
+            eye,
+            forward,
+            third_person.then_some(camera_distance),
+        )?;
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
         let forward = if shake == Vec3::ZERO {

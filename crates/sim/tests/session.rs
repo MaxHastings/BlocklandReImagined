@@ -689,3 +689,125 @@ fn physical_touch_enters_event_scheduler_once() {
     }
     assert_eq!(s.simulation().state().bricks[&id].color, 1);
 }
+fn body(s: &Session, owner: u64) -> bri_sim::player::PlayerState {
+    s.snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
+        .unwrap()
+}
+fn walk(s: &mut Session, owner: u64, from: u64, ticks: u64) {
+    for seq in from..from + ticks {
+        s.movement(
+            owner,
+            seq,
+            MoveInput {
+                forward: 1.0,
+                yaw: 1.3,
+                pitch: -0.4,
+                jump: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+}
+#[test]
+fn camera_control_parks_the_body_until_control_returns() {
+    use bri_admin::{Action, Request};
+    use bri_sim::session::ControlObject;
+    let mut s = session();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    let parked = body(&s, admin);
+    let camera = Command::Admin(Request::new(Action::DropCameraAtPlayer));
+    s.command(admin, 1, camera).unwrap();
+    assert_eq!(s.vitals()[&admin].control, ControlObject::Camera);
+    walk(&mut s, admin, 1, 120);
+    let still = body(&s, admin);
+    assert_eq!(
+        (still.feet, still.yaw, still.pitch),
+        (parked.feet, parked.yaw, parked.pitch)
+    );
+    // Moves are still consumed and acknowledged so prediction stays in step.
+    assert_eq!(
+        s.motion_states()
+            .iter()
+            .find(|(p, _)| p.owner == admin)
+            .unwrap()
+            .1,
+        120
+    );
+    s.command(admin, 2, Command::ControlPlayer).unwrap();
+    assert_eq!(s.vitals()[&admin].control, ControlObject::Player);
+    walk(&mut s, admin, 121, 60);
+    let moved = body(&s, admin);
+    assert!(Vec3::from(moved.feet).distance(Vec3::from(parked.feet)) > 1.0);
+    assert!((moved.yaw - 1.3).abs() < 1e-4);
+}
+#[test]
+fn spy_is_admin_only_follows_its_target_and_ends_when_they_leave() {
+    use bri_admin::{Action, ConnectionId, Request};
+    use bri_sim::session::ControlObject;
+    let mut s = session();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(4.0, 0.05, 0.0), false)
+        .unwrap();
+    let connection = |s: &Session, name: &str| {
+        ConnectionId(
+            s.admin_state(admin)
+                .unwrap()
+                .players
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .connection,
+        )
+    };
+    let spy = |target| Command::Admin(Request::new(Action::Spy { target }));
+    assert!(s.command(guest, 1, spy(connection(&s, "Admin"))).is_err());
+    assert_eq!(s.vitals()[&guest].control, ControlObject::Player);
+    s.command(admin, 1, spy(connection(&s, "Guest"))).unwrap();
+    assert_eq!(s.vitals()[&admin].control, ControlObject::Spy(guest));
+    assert!(s.command(admin, 2, spy(connection(&s, "Admin"))).is_err());
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    let parked = body(&s, admin);
+    walk(&mut s, admin, 1, 60);
+    assert_eq!(body(&s, admin).feet, parked.feet);
+    s.disconnect(guest).unwrap();
+    assert_eq!(s.vitals()[&admin].control, ControlObject::Player);
+}
+#[test]
+fn death_hands_control_to_the_corpse_camera_until_respawn() {
+    use bri_sim::session::ControlObject;
+    let mut s = session();
+    let owner = s
+        .join("Player".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    s.command(owner, 1, Command::Suicide).unwrap();
+    assert_eq!(s.vitals()[&owner].control, ControlObject::Corpse);
+    let corpse = body(&s, owner);
+    walk(&mut s, owner, 1, 60);
+    assert_eq!(body(&s, owner).yaw, corpse.yaw);
+    // Leaving a camera while dead lands back on the corpse camera.
+    s.command(owner, 2, Command::ControlPlayer).unwrap();
+    assert_eq!(s.vitals()[&owner].control, ControlObject::Corpse);
+    for _ in 0..600 {
+        s.step().unwrap();
+    }
+    s.command(owner, 3, Command::Respawn).unwrap();
+    assert_eq!(s.vitals()[&owner].control, ControlObject::Player);
+}

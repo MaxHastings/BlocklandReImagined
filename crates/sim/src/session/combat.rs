@@ -64,6 +64,8 @@ pub struct Vitals {
     pub light: bool,
     /// Vehicle id and seat while riding.
     pub mounted: Option<(u64, u8)>,
+    /// What this player's moves steer.
+    pub control: super::ControlObject,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -250,6 +252,7 @@ impl Session {
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
+                        control: peer.control,
                     },
                 )
             })
@@ -445,6 +448,7 @@ impl Session {
             peer.combat.died_tick = tick;
             peer.combat.corpse_cleared = false;
             peer.inputs.clear();
+            peer.control = super::ControlObject::Corpse;
         }
         self.weapons.trigger(ActorId(victim), false)?;
         self.weapon_triggers.remove(&victim);
@@ -828,6 +832,8 @@ impl Session {
             peer.combat.last_direct = None;
             peer.combat.corpse_cleared = false;
             peer.inputs.clear();
+            // `spawnPlayer` hands control back to the new body.
+            peer.control = super::ControlObject::Player;
         }
         self.give_loadout(owner, equipment.as_ref())?;
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.

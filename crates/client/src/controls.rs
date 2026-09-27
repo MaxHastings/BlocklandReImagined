@@ -1,8 +1,12 @@
 //! Client intentions and view angles; authoritative simulation owns positions.
-use bri_sim::player::MoveInput;
+use bri_sim::{
+    player::{MoveInput, PlayerState, PlayerTuning},
+    session::ControlObject,
+};
 use bri_ui::api::{GameAction, HeldControl};
+use bri_world::OwnerId;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     f32::consts::{FRAC_PI_2, PI},
 };
 
@@ -15,10 +19,28 @@ pub struct Controls {
     free_pitch: f32,
     pub third_person: bool,
     zoom_fov: Option<f32>,
-    /// Admin observer camera (`dropCameraAtPlayer`): flies with the movement
-    /// keys while the player stands still.
-    pub free_camera: Option<glam::Vec3>,
+    /// The admin camera in control, if any. The body's `yaw`/`pitch` stay
+    /// where they were left while it is active.
+    observer: Option<Observer>,
 }
+/// The client's half of a replicated camera [`ControlObject`]: look and move
+/// keys steer it instead of the body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Observer {
+    pub mode: ObserverMode,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ObserverMode {
+    /// `Observer` fly mode, flown locally from `dropCameraAtPlayer`.
+    Free(glam::Vec3),
+    /// `Corpse` orbit mode around a spied player, or around one's own body
+    /// after death.
+    Orbit(OwnerId),
+}
+/// Observer cameras stop just short of straight up or down.
+const OBSERVER_PITCH: f32 = FRAC_PI_2 - 0.01;
 fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(2.0 * PI) - PI
 }
@@ -62,7 +84,10 @@ impl Controls {
         true
     }
     fn look(&mut self, yaw: f32, pitch: f32) {
-        if self.held(HeldControl::FreeLook) {
+        if let Some(observer) = &mut self.observer {
+            observer.yaw = wrap(observer.yaw + yaw);
+            observer.pitch = (observer.pitch + pitch).clamp(-OBSERVER_PITCH, OBSERVER_PITCH);
+        } else if self.held(HeldControl::FreeLook) {
             self.free_yaw = wrap(self.free_yaw + yaw);
             self.free_pitch =
                 (self.free_pitch + pitch).clamp(-FRAC_PI_2 - self.pitch, FRAC_PI_2 - self.pitch);
@@ -74,28 +99,113 @@ impl Controls {
     fn axis(&self, positive: HeldControl, negative: HeldControl) -> f32 {
         u8::from(self.held(positive)) as f32 - u8::from(self.held(negative)) as f32
     }
-    /// Fly the observer camera; returns true while it is active.
-    pub fn fly(&mut self, seconds: f32) -> bool {
-        let Some(mut position) = self.free_camera else {
-            return false;
+    /// Follow the server's control object for player `owner`. A newly
+    /// granted camera starts at `eye`, looking where the player was looking.
+    pub fn follow(&mut self, control: ControlObject, owner: OwnerId, eye: Option<glam::Vec3>) {
+        let mode = match control {
+            ControlObject::Player => {
+                self.observer = None;
+                return;
+            }
+            ControlObject::Camera => match self.observer {
+                Some(Observer {
+                    mode: ObserverMode::Free(_),
+                    ..
+                }) => return,
+                _ => match eye {
+                    Some(eye) => ObserverMode::Free(eye),
+                    None => return,
+                },
+            },
+            ControlObject::Spy(target) => ObserverMode::Orbit(target),
+            ControlObject::Corpse => ObserverMode::Orbit(owner),
+        };
+        if let Some(observer) = &mut self.observer {
+            observer.mode = mode;
+        } else {
+            let (yaw, pitch) = self.view_angles();
+            self.free_yaw = 0.0;
+            self.free_pitch = 0.0;
+            self.observer = Some(Observer {
+                mode,
+                yaw,
+                pitch: pitch.clamp(-OBSERVER_PITCH, OBSERVER_PITCH),
+            });
+        }
+    }
+    pub fn observer(&self) -> Option<Observer> {
+        self.observer
+    }
+    /// `dropCameraAtPlayer` again while flying: back to the player's eye.
+    pub fn redrop_camera(&mut self, eye: glam::Vec3) {
+        if let Some(observer) = &mut self.observer
+            && let ObserverMode::Free(position) = &mut observer.mode
+        {
+            *position = eye;
+        }
+    }
+    pub fn clear_observer(&mut self) {
+        self.observer = None;
+    }
+    pub fn free_camera(&self) -> Option<glam::Vec3> {
+        match self.observer?.mode {
+            ObserverMode::Free(position) => Some(position),
+            ObserverMode::Orbit(_) => None,
+        }
+    }
+    /// The orbited player's presented eye, which the orbit camera circles.
+    pub fn orbit_focus(&self, presented: &BTreeMap<OwnerId, PlayerState>) -> Option<glam::Vec3> {
+        match self.observer?.mode {
+            ObserverMode::Orbit(target) => presented
+                .get(&target)
+                .map(|p| p.eye(&PlayerTuning::default())),
+            ObserverMode::Free(_) => None,
+        }
+    }
+    /// Fly the free camera with the movement keys.
+    pub fn fly(&mut self, seconds: f32) {
+        let Some(Observer {
+            mode: ObserverMode::Free(mut position),
+            yaw,
+            pitch,
+        }) = self.observer
+        else {
+            return;
         };
         if !seconds.is_finite() {
-            return true;
+            return;
         }
-        let (yaw, pitch) = (self.yaw, self.pitch);
-        let forward = glam::Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos());
+        let forward = glam::Vec3::new(
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        );
         let right = glam::Vec3::new(yaw.cos(), 0.0, yaw.sin());
         let up = u8::from(self.held.contains(&HeldControl::Jump)) as f32
             - u8::from(self.held.contains(&HeldControl::Crouch)) as f32;
-        let speed = if self.held.contains(&HeldControl::Walk) { 8.0 } else { 30.0 };
+        let speed = if self.held.contains(&HeldControl::Walk) {
+            8.0
+        } else {
+            30.0
+        };
         let direction = forward * self.axis(HeldControl::Forward, HeldControl::Backward)
             + right * self.axis(HeldControl::Right, HeldControl::Left)
             + glam::Vec3::Y * up;
         position += direction.normalize_or_zero() * speed * seconds.clamp(0.0, 0.1);
-        self.free_camera = Some(position);
-        true
+        if let Some(observer) = &mut self.observer {
+            observer.mode = ObserverMode::Free(position);
+        }
     }
+    /// The body's move: the held controls, unless a camera has control, when
+    /// the body stands still with the aim it was left with.
     pub fn movement(&self) -> MoveInput {
+        if self.observer.is_some() {
+            return MoveInput {
+                yaw: self.yaw,
+                pitch: self.pitch,
+                ..Default::default()
+            };
+        }
         let walk = if self.held(HeldControl::Walk) {
             0.4
         } else {
@@ -111,8 +221,15 @@ impl Controls {
             jet: self.held(HeldControl::Jet),
         }
     }
+    /// The body's head and eye direction, including held free-look.
     pub fn view_angles(&self) -> (f32, f32) {
         (wrap(self.yaw + self.free_yaw), self.pitch + self.free_pitch)
+    }
+    /// Where the rendered camera looks: the observer's own angles while a
+    /// camera has control.
+    pub fn camera_angles(&self) -> (f32, f32) {
+        self.observer
+            .map_or_else(|| self.view_angles(), |o| (o.yaw, o.pitch))
     }
     pub fn fov(&self, normal: f32) -> f32 {
         if self.held(HeldControl::Zoom) {
@@ -163,6 +280,105 @@ mod tests {
         assert_eq!(c.fov(90.0), 45.0);
         held(&mut c, HeldControl::Zoom, false);
         assert_eq!(c.fov(90.0), 90.0);
+    }
+    #[test]
+    fn camera_control_leaves_the_body_still_and_unturned() {
+        let mut c = Controls::default();
+        c.action(&GameAction::Look {
+            yaw: 0.4,
+            pitch: 0.1,
+        });
+        let body = c.movement();
+        c.follow(
+            ControlObject::Camera,
+            1,
+            Some(glam::Vec3::new(0.0, 2.0, 0.0)),
+        );
+        held(&mut c, HeldControl::Forward, true);
+        held(&mut c, HeldControl::Jump, true);
+        c.action(&GameAction::Look {
+            yaw: 1.2,
+            pitch: -0.5,
+        });
+        let input = c.movement();
+        assert_eq!(
+            input,
+            MoveInput {
+                yaw: body.yaw,
+                pitch: body.pitch,
+                ..Default::default()
+            }
+        );
+        assert_eq!(c.view_angles(), (body.yaw, body.pitch));
+        assert_ne!(c.camera_angles().0, body.yaw);
+        c.fly(0.05);
+        let flown = c.free_camera().unwrap();
+        assert!(flown.y > 2.0, "jump flies the camera up");
+        // A repeated grant keeps the camera where it was flown.
+        c.follow(ControlObject::Camera, 1, Some(glam::Vec3::ZERO));
+        assert_eq!(c.free_camera(), Some(flown));
+        c.follow(ControlObject::Player, 1, None);
+        assert_eq!(c.movement().forward, 1.0);
+        assert_eq!(c.movement().yaw, body.yaw);
+    }
+    #[test]
+    fn spy_orbits_with_the_mouse_and_never_flies() {
+        let mut c = Controls::default();
+        c.follow(ControlObject::Spy(7), 1, None);
+        held(&mut c, HeldControl::Forward, true);
+        c.fly(0.05);
+        assert_eq!(c.free_camera(), None);
+        c.action(&GameAction::Look {
+            yaw: 0.3,
+            pitch: 0.0,
+        });
+        assert_eq!(c.observer().unwrap().mode, ObserverMode::Orbit(7));
+        assert!((c.camera_angles().0 - 0.3).abs() < 1e-6);
+        assert_eq!(c.movement().forward, 0.0);
+        assert_eq!(c.movement().yaw, 0.0);
+    }
+    #[test]
+    fn spy_orbit_follows_its_target() {
+        let mut c = Controls::default();
+        let body = |owner, x: f32| PlayerState {
+            owner,
+            feet: [x, 0.0, 0.0],
+            velocity: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            grounded: true,
+            crouched: false,
+            jetting: false,
+            jet_boost: 0.0,
+            jump_held: false,
+        };
+        let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
+        assert_eq!(c.orbit_focus(&presented), None);
+        c.follow(ControlObject::Spy(7), 1, None);
+        let first = c.orbit_focus(&presented).unwrap();
+        assert_eq!(first.x, 5.0);
+        presented.insert(7, body(7, 12.0));
+        assert_eq!(c.orbit_focus(&presented).unwrap().x, 12.0);
+        assert!(first.y > 1.0, "orbits the eye, not the feet");
+    }
+    #[test]
+    fn death_orbits_the_corpse_without_turning_it() {
+        let mut c = Controls::default();
+        c.action(&GameAction::Look {
+            yaw: 0.7,
+            pitch: 0.0,
+        });
+        let body = c.movement().yaw;
+        c.follow(ControlObject::Corpse, 1, None);
+        assert_eq!(c.observer().unwrap().mode, ObserverMode::Orbit(1));
+        c.action(&GameAction::Look {
+            yaw: 2.0,
+            pitch: 0.0,
+        });
+        assert_eq!(c.movement().yaw, body);
+        assert_eq!(c.view_angles().0, body);
+        c.follow(ControlObject::Player, 1, None);
+        assert_eq!(c.observer(), None);
     }
     #[test]
     fn invalid_and_large_look_stays_valid() {

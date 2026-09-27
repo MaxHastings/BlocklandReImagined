@@ -53,6 +53,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::AdminPassword => ui::AdminFeature::AdminPassword,
                 Capability::HighlightBricks => ui::AdminFeature::HighlightBricks,
                 Capability::WorldCommands => ui::AdminFeature::ClearBricks,
+                Capability::Spy => ui::AdminFeature::Spy,
             })
             .collect(),
         players: snapshot
@@ -100,6 +101,12 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
                 target: ConnectionId(*target),
                 duration: minutes.map_or(BanDuration::Forever, BanDuration::Minutes),
                 reason: reason.clone(),
+            },
+        ),
+        ui::AdminAction::Spy { target } => (
+            Capability::Spy,
+            Action::Spy {
+                target: ConnectionId(*target),
             },
         ),
         ui::AdminAction::RequestBans => (Capability::Unban, Action::RequestBanList),
@@ -211,6 +218,7 @@ pub fn reply_updates(
             AdminData::None,
             ui::AdminAction::Kick { .. }
             | ui::AdminAction::Ban { .. }
+            | ui::AdminAction::Spy { .. }
             | ui::AdminAction::Unban { .. }
             | ui::AdminAction::ClearBrickGroup { .. }
             | ui::AdminAction::ClearAllBricks
