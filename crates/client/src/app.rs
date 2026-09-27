@@ -300,6 +300,8 @@ pub struct App {
     mount_heading: Option<f32>,
     /// `mCameraOffset`: how far the chase camera trails the vehicle.
     chase_lag: Vec3,
+    /// This frame's seat rotation for every mounted player.
+    rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
     /// The tumble vehicle the local player last started riding.
     tumble: Option<u64>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
@@ -910,6 +912,7 @@ impl App {
             vehicles: Default::default(),
             mount_heading: None,
             chase_lag: Vec3::ZERO,
+            rider_rotations: BTreeMap::new(),
             tumble: None,
             music_world: None,
             net_graph: None,
@@ -3259,15 +3262,19 @@ impl PlatformApp for App {
                     self.animation_time,
                     view,
                 )?;
-                // Riders sit exactly on their rendered vehicle's seat.
+                // Riders sit exactly on their rendered vehicle's seat, tilted
+                // with it (`Player::processTick` takes the mount transform).
+                self.rider_rotations.clear();
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
                         continue;
                     };
                     if let Some(info) = view.vehicles.get(&vehicle)
-                        && let Some((mut feet, yaw)) =
-                            self.vehicles
-                                .seat(&self.vehicle_assets, info, usize::from(seat))
+                        && let Some((mut feet, mut rotation)) = self.vehicles.seat_transform(
+                            &self.vehicle_assets,
+                            info,
+                            usize::from(seat),
+                        )
                     {
                         // A horse's rider rides its animated mount node, rising
                         // and falling with the gait like v20's `mountObject`.
@@ -3281,8 +3288,14 @@ impl PlatformApp for App {
                             )
                             .and_then(|(mesh, s)| mesh.world_node(&self.avatar_assets, &s.node))
                         {
-                            feet = node.w_axis.truncate();
+                            let (_, node_rotation, position) =
+                                node.to_scale_rotation_translation();
+                            feet = position;
+                            rotation = node_rotation;
                         }
+                        let forward = rotation * Vec3::NEG_Z;
+                        let yaw = forward.x.atan2(-forward.z);
+                        self.rider_rotations.insert(*owner, rotation);
                         let velocity = self
                             .vehicles
                             .frame(vehicle)
@@ -3292,6 +3305,7 @@ impl PlatformApp for App {
                             *owner,
                             feet,
                             Some(yaw),
+                            rotation * Vec3::Y,
                             velocity,
                             *owner == view.owner,
                         );
@@ -3475,6 +3489,7 @@ impl PlatformApp for App {
                     });
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
+                    mount_rotation: self.rider_rotations.get(owner).copied(),
                     held_tool_pose: if dead {
                         crate::avatar::HeldToolPose::None
                     } else {

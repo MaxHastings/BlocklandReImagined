@@ -446,6 +446,9 @@ pub struct AvatarAnimationInput {
     /// position, 0 looking straight up to 1 straight down, stays inside
     /// `[down, up]`. The view itself is not limited.
     pub look_limits: Option<[f32; 2]>,
+    /// A seated rider's full mount rotation, in place of the upright yaw,
+    /// so they sit flush with a tilted seat.
+    pub mount_rotation: Option<Quat>,
     /// Current thread-2 action from the authoritative animation cue stream.
     /// Clear this on the corresponding vanilla stop/root cue or image switch.
     pub action: Option<ActionAnimation>,
@@ -784,7 +787,7 @@ impl AvatarMesh {
         });
         let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
         self.channels = Some(channels);
-        self.finish_pose(assets, player, pose)
+        self.finish_pose(assets, player, pose, animation_input.mount_rotation)
     }
 
     fn finish_pose(
@@ -792,11 +795,14 @@ impl AvatarMesh {
         assets: &AvatarAssets,
         player: &PlayerState,
         pose: bri_content::animation::Pose,
+        mount_rotation: Option<Quat>,
     ) -> Result<()> {
         // `setScale` scales the whole shape about the feet.
         let model_transform = Mat4::from_scale_rotation_translation(
             Vec3::splat(player.scale),
-            Quat::from_rotation_y(-player.yaw),
+            mount_rotation
+                .filter(|q| q.is_finite() && q.is_normalized())
+                .unwrap_or_else(|| Quat::from_rotation_y(-player.yaw)),
             Vec3::from(player.feet),
         );
         self.data.vertices.clear();
@@ -1274,6 +1280,27 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[ignore = "requires the converted avatar pack"]
+    fn seated_body_takes_the_mount_rotation() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let assets = AvatarAssets::load(&root)?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let tilt = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(0.35);
+        mesh.pose_with_animation(
+            &assets,
+            &player(),
+            0.0,
+            &AvatarAnimationInput {
+                mount_rotation: Some(tilt),
+                sitting: true,
+                ..Default::default()
+            },
+        )?;
+        let up = mesh.body_transform().transform_vector3(Vec3::Y);
+        assert!(up.dot(tilt * Vec3::Y) > 0.999, "{up}");
+        Ok(())
+    }
     #[test]
     fn seated_look_limits_bound_the_arms_not_the_view() {
         // The Jeep's `setLookLimits(0.65, 0.45)`.

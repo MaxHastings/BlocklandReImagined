@@ -170,3 +170,57 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the converted native vehicle pack"]
+fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
+    let definition = "v20.vehicle.jeepvehicle";
+    let wheels = assets.definition(definition).context("jeep")?.wheels.len();
+    let info = VehicleInfo {
+        id: 1,
+        definition: definition.into(),
+        color: Some(0),
+        occupants: vec![],
+        destroyed: false,
+    };
+    // Nose up a 20 degree incline, heading 0.6 rad.
+    let slope = glam::Quat::from_rotation_y(0.6) * glam::Quat::from_rotation_x(20f32.to_radians());
+    let infos: BTreeMap<u64, VehicleInfo> = [(1, info.clone())].into();
+    let poses: BTreeMap<u64, VehiclePose> = [(
+        1,
+        VehiclePose {
+            id: 1,
+            tick: 1,
+            position: [0.0; 3],
+            rotation: slope.to_array(),
+            velocity: [0.0; 3],
+            steering: 0.0,
+            wheel_suspension: vec![0.3; wheels],
+            wheel_rotation: vec![0.0; wheels],
+            turret_aim: [0.0, 0.0],
+            jetting: false,
+        },
+    )]
+    .into();
+    let mut vehicles = ClientVehicles::default();
+    vehicles.update(&infos, &poses, None, None);
+    for seat in 0..assets.definition(definition).unwrap().seats.len() {
+        let (_, rotation) = vehicles
+            .seat_transform(&assets, &info, seat)
+            .context("seat")?;
+        let up = rotation * glam::Vec3::Y;
+        let vehicle_up = slope * glam::Vec3::Y;
+        ensure!(
+            up.dot(vehicle_up) > 0.999,
+            "seat {seat} sits flush: {up} vs {vehicle_up}"
+        );
+        ensure!(up.y < 0.95, "seat {seat} tilts off vertical: {up}");
+        // The facing yaw ignores the tilt: body yaw turns the other way
+        // from a quaternion's turn about +Y.
+        let (_, yaw) = vehicles.seat(&assets, &info, seat).context("seat")?;
+        ensure!(seat != 0 || (yaw + 0.6).abs() < 0.01, "driver yaw {yaw}");
+    }
+    Ok(())
+}

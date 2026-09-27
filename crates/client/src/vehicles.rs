@@ -327,6 +327,18 @@ impl ClientVehicles {
         info: &VehicleInfo,
         seat: usize,
     ) -> Option<(Vec3, f32)> {
+        let (position, rotation) = self.seat_transform(assets, info, seat)?;
+        let forward = rotation * Vec3::NEG_Z;
+        Some((position, forward.x.atan2(-forward.z)))
+    }
+    /// The seat's world position and full rotation: a mounted player takes
+    /// the mount node's transform, tilting with the vehicle on slopes.
+    pub fn seat_transform(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        seat: usize,
+    ) -> Option<(Vec3, Quat)> {
         let frame = self.frames.get(&info.id)?;
         let d = assets.definition(&info.definition)?;
         let s = d.seats.get(seat)?;
@@ -346,8 +358,7 @@ impl ClientVehicles {
         }
         let world = to_transform(frame.position, frame.rotation) * local;
         let (_, rotation, position) = world.to_scale_rotation_translation();
-        let forward = rotation * Vec3::NEG_Z;
-        Some((position, forward.x.atan2(-forward.z)))
+        Some((position, rotation))
     }
     /// Refresh per-model instance lists (chassis, wheels, turrets).
     pub fn prepare(

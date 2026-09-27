@@ -100,6 +100,7 @@ impl Motion {
         owner: OwnerId,
         feet: Vec3,
         yaw: Option<f32>,
+        up: Vec3,
         velocity: Vec3,
         local: bool,
     ) {
@@ -114,8 +115,13 @@ impl Motion {
             state.jetting = false;
         }
         if local {
-            // Seated eye height in the original sit pose.
-            self.local_eye = Some(feet + Vec3::Y * 1.6);
+            // Seated eye height in the original sit pose, along the seat's up.
+            let up = if up.is_finite() && up.length_squared() > 0.5 {
+                up.normalize()
+            } else {
+                Vec3::Y
+            };
+            self.local_eye = Some(feet + up * 1.6);
         }
     }
     /// Ingest the latest replicated view: brick collision, the local
