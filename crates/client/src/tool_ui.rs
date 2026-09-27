@@ -5,7 +5,7 @@ use bri_content::{brick::Catalog, brick_materials::Bundle, effects::Library};
 use bri_net::protocol::PublicWorld;
 use bri_sim::session::{Command, InspectMode, Reply, ToolAction, ToolCatalog, WrenchProperties};
 use bri_ui::{api::*, models::events::NAMED_BRICK, pack::Pack, schema::ParamSpec};
-use bri_world::{Action, Brick, ContentRef, Event, Input, ItemSpawn, Target};
+use bri_world::{Brick, ContentRef, EventRow as Row, EventTarget, EventValue, ItemSpawn};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,8 +14,8 @@ struct Inspection {
     mode: InspectMode,
     brick: Brick,
     rows: Vec<EventRow>,
-    /// Native events outside the editable UI capability set are retained here.
-    retained: BTreeMap<String, Event>,
+    /// Rows the dialog cannot edit (preserved imports) are retained here.
+    retained: BTreeMap<String, Row>,
     wrench_original: Option<Brick>,
 }
 
@@ -27,6 +27,8 @@ pub struct ToolUi {
     datablocks: DatablockMenus,
     variants: BTreeMap<String, WrenchVariant>,
     inspection: Option<Inspection>,
+    /// The host's wrench event catalog; empty until installed.
+    events: Option<bri_events::Catalog>,
 }
 
 impl ToolUi {
@@ -126,6 +128,7 @@ impl ToolUi {
             datablocks,
             variants,
             inspection: None,
+            events: None,
         })
     }
     pub fn server_catalog(&self) -> ToolCatalog {
@@ -193,9 +196,38 @@ impl ToolUi {
         self.invalidate();
         Ok(())
     }
+    /// Install the wrench event catalog and the datablock menus only events
+    /// use: sounds, projectiles and player types.
+    pub fn install_events(
+        &mut self,
+        catalog: bri_events::Catalog,
+        sounds: Vec<(String, String)>,
+        projectiles: Vec<(String, String)>,
+    ) {
+        let menu = |entries: Vec<(String, String)>| {
+            let mut choices: Vec<_> = entries
+                .into_iter()
+                .map(|(id, name)| Choice { id, name })
+                .collect();
+            choices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            choices
+        };
+        self.datablocks.insert("Sound".into(), menu(sounds));
+        self.datablocks
+            .insert("ProjectileData".into(), menu(projectiles));
+        self.datablocks.insert(
+            "PlayerData".into(),
+            vec![Choice {
+                id: "PlayerStandardArmor".into(),
+                name: "Standard Player".into(),
+            }],
+        );
+        self.events = Some(catalog);
+        self.invalidate();
+    }
     pub fn catalog_updates(&self) -> Vec<UiUpdate> {
         let mut updates = vec![
-            UiUpdate::Events(event_catalog()),
+            UiUpdate::Events(self.events.as_ref().map(event_catalog).unwrap_or_default()),
             UiUpdate::Datablocks(self.datablocks.clone()),
         ];
         updates.extend(self.prints.iter().map(|(aspect, prints)| UiUpdate::Prints {
@@ -331,7 +363,8 @@ impl ToolUi {
                 UiUpdate::OpenPrintSelector { aspect, current }
             }
             InspectMode::Events => {
-                (rows, retained) = event_rows(brick, &self.catalog)?;
+                let catalog = self.events.as_ref().context("Events are unavailable")?;
+                (rows, retained) = event_rows(brick, catalog)?;
                 let names: BTreeSet<_> = world
                     .bricks
                     .values()
@@ -469,10 +502,11 @@ impl ToolUi {
                     original == submitted,
                     "Preserved event rows were changed, removed or forged"
                 );
+                let catalog = self.events.as_ref().context("Events are unavailable")?;
                 let mut events = vec![];
                 for row in rows {
                     match row {
-                        EventRow::Editable(line) => events.push(native_event(line, &self.catalog)?),
+                        EventRow::Editable(line) => events.push(native_event(line, catalog)?),
                         EventRow::Preserved { token, .. } => {
                             if let Some(event) = inspection.retained.get(token) {
                                 events.push(event.clone());
@@ -559,7 +593,12 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
         raycasting: brick.raycast,
         colliding: brick.colliding,
         rendering: brick.visible,
-        sound: brick.sound.as_ref().map(resolved).transpose()?.map(str::to_owned),
+        sound: brick
+            .sound
+            .as_ref()
+            .map(resolved)
+            .transpose()?
+            .map(str::to_owned),
         vehicle: brick
             .vehicle
             .as_ref()
@@ -570,178 +609,179 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
     })
 }
 
-pub fn event_catalog() -> EventCatalog {
-    let bool_spec = || vec![ParamSpec::Bool];
-    let mut outputs = vec![
-        ("setColor", vec![ParamSpec::PaintColor { default: 0 }]),
-        (
-            "setColorFX",
-            vec![ParamSpec::List {
-                items: [
-                    "None", "Pearl", "Chrome", "Glow", "Blink", "Swirl", "Rainbow",
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(i, s)| (s.into(), i as i64))
-                .collect(),
-            }],
-        ),
-        ("setColliding", bool_spec()),
-        ("setRendering", bool_spec()),
-        ("setRayCasting", bool_spec()),
-        (
-            "setLight",
-            vec![ParamSpec::Datablock {
-                class: "FxLightData".into(),
-            }],
-        ),
-        (
-            "setEmitter",
-            vec![ParamSpec::Datablock {
-                class: "ParticleEmitterData".into(),
-            }],
-        ),
-    ];
+/// Outputs the host does not apply yet; rows using them stay read-only.
+const UNSUPPORTED_OUTPUTS: &[(&str, &str)] = &[
+    ("Player", "BurnPlayer"),
+    ("Player", "ClearBurn"),
+    ("Player", "setPlayerScale"),
+];
+/// The dialog's view of the host catalog: every vanilla input and output.
+pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
+    let param = |p: &bri_events::Param| match p.clone() {
+        bri_events::Param::Int { min, max, default } => ParamSpec::Int { min, max, default },
+        bri_events::Param::Float {
+            min,
+            max,
+            step,
+            default,
+        } => ParamSpec::Float {
+            min,
+            max,
+            step,
+            default,
+        },
+        bri_events::Param::Bool => ParamSpec::Bool,
+        bri_events::Param::String { max_length, width } => ParamSpec::String { max_length, width },
+        bri_events::Param::Datablock { class_name } => ParamSpec::Datablock { class: class_name },
+        bri_events::Param::Vector { max_length } => ParamSpec::Vector { max: max_length },
+        bri_events::Param::PaintColor { default } => ParamSpec::PaintColor {
+            default: i64::from(default),
+        },
+        bri_events::Param::IntList { width } => ParamSpec::IntList { width },
+        bri_events::Param::List { items } => ParamSpec::List { items },
+    };
     EventCatalog {
-        inputs: ["onActivate", "onPlayerTouch"]
-            .into_iter()
-            .map(|name| EventInputInfo {
-                name: name.into(),
-                targets: vec![("Self".into(), "fxDTSBrick".into())],
+        inputs: catalog
+            .inputs
+            .iter()
+            .map(|i| EventInputInfo {
+                name: i.name.clone(),
+                targets: i.targets.clone(),
                 supported: true,
             })
             .collect(),
-        outputs: outputs
-            .drain(..)
-            .map(|(name, params)| EventOutputInfo {
-                class: "fxDTSBrick".into(),
-                name: name.into(),
-                params,
-                supported: true,
+        outputs: catalog
+            .outputs
+            .iter()
+            .map(|o| EventOutputInfo {
+                class: o.class_name.clone(),
+                name: o.name.clone(),
+                params: o.params.iter().map(param).collect(),
+                supported: !o.class_name.eq_ignore_ascii_case("Projectile")
+                    && !UNSUPPORTED_OUTPUTS.iter().any(|(class, name)| {
+                        class.eq_ignore_ascii_case(&o.class_name)
+                            && name.eq_ignore_ascii_case(&o.name)
+                    }),
             })
             .collect(),
     }
 }
-fn native_event(line: &EventLine, catalog: &ToolCatalog) -> Result<Event> {
+/// Dialog line to engine row. The dialog shows Torque's X/Y/Z vector order;
+/// datablock membership and the palette are checked by the server.
+fn native_event(line: &EventLine, catalog: &bri_events::Catalog) -> Result<Row> {
     ensure!(
         line.delay_ms <= bri_ui::models::events::MAX_DELAY_MS,
         "Event delay exceeds supported dialog range"
     );
-    let input = match line.input.as_str() {
-        "onActivate" => Input::Activate,
-        "onPlayerTouch" => Input::Touch,
-        _ => anyhow::bail!("Unsupported native event input"),
+    if let Some(name) = &line.named_target {
+        ensure!(
+            !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
+            "Invalid named event target"
+        );
+    }
+    let row = bri_events::migration::ui_event(&serde_json::to_value(line)?)?;
+    let row = bri_events::migration::normalize_ui_row(catalog, row)?;
+    // Check everything but datablock membership, which only the host knows.
+    let mut shape = row.clone();
+    for value in &mut shape.params {
+        if let EventValue::Datablock(id) = value {
+            *id = None;
+        }
+    }
+    let bindings = bri_events::Bindings {
+        palette_len: 256,
+        datablocks: Default::default(),
     };
-    let target = match (line.target.as_str(), line.named_target.as_deref()) {
-        ("Self", None) => Target::ThisBrick,
-        (NAMED_BRICK, Some(name))
-            if !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control) =>
-        {
-            Target::Named(name.into())
-        }
-        _ => anyhow::bail!("Unsupported native event target"),
-    };
-    ensure!(
-        line.params.len() == 1,
-        "Native event requires exactly one parameter"
-    );
-    let action = match (line.output.as_str(), &line.params[0]) {
-        ("setColor", ParamValue::PaintColor(n)) => {
-            Action::Color(u8::try_from(*n).context("Color exceeds palette index range")?)
-        }
-        ("setColorFX", ParamValue::List(n)) if (0..=6).contains(n) => Action::ColorEffect(*n as u8),
-        ("setColliding", ParamValue::Bool(v)) => Action::Colliding(*v),
-        ("setRendering", ParamValue::Bool(v)) => Action::Visible(*v),
-        ("setRayCasting", ParamValue::Bool(v)) => Action::Raycast(*v),
-        ("setLight", ParamValue::Datablock(id)) => {
-            validate_choice(id.as_deref(), &catalog.lights, "light")?;
-            Action::Light(id.clone().map(ContentRef::Resolved))
-        }
-        ("setEmitter", ParamValue::Datablock(id)) => {
-            validate_choice(id.as_deref(), &catalog.emitters, "emitter")?;
-            Action::Emitter(id.clone().map(ContentRef::Resolved))
-        }
-        _ => anyhow::bail!("Unsupported native output or parameter type"),
-    };
-    Ok(Event {
-        enabled: line.enabled,
-        input,
-        delay_ms: line.delay_ms,
-        target,
-        action,
-    })
+    catalog.validate_row(&shape, &bindings)?;
+    Ok(row)
 }
-fn ui_event(event: &Event) -> Result<EventLine> {
-    let (output, param) = match &event.action {
-        Action::Color(v) => ("setColor", ParamValue::PaintColor(u32::from(*v))),
-        Action::ColorEffect(v) => ("setColorFX", ParamValue::List(i64::from(*v))),
-        Action::Colliding(v) => ("setColliding", ParamValue::Bool(*v)),
-        Action::Visible(v) => ("setRendering", ParamValue::Bool(*v)),
-        Action::Raycast(v) => ("setRayCasting", ParamValue::Bool(*v)),
-        Action::Light(v) => (
-            "setLight",
-            ParamValue::Datablock(v.as_ref().map(resolved).transpose()?.map(str::to_owned)),
-        ),
-        Action::Emitter(v) => (
-            "setEmitter",
-            ParamValue::Datablock(v.as_ref().map(resolved).transpose()?.map(str::to_owned)),
-        ),
-    };
-    let (target, named_target) = match &event.target {
-        Target::ThisBrick => ("Self", None),
-        Target::Named(n) => (NAMED_BRICK, Some(n.clone())),
-    };
-    Ok(EventLine {
-        enabled: event.enabled,
-        delay_ms: event.delay_ms,
-        input: match event.input {
-            Input::Activate => "onActivate",
-            Input::Touch => "onPlayerTouch",
+/// Engine row to dialog line.
+fn ui_event(row: &Row, catalog: &bri_events::Catalog) -> Result<EventLine> {
+    ensure!(row.preserved.is_none(), "Preserved rows are not editable");
+    let input = catalog.input(&row.input).context("Unknown event input")?;
+    let (target, named_target, class) = match &row.target {
+        EventTarget::Slot(slot) => {
+            let (name, class) = input
+                .targets
+                .iter()
+                .find(|(s, _)| bri_events::Slot::parse(s) == Some(*slot))
+                .context("Target unavailable for input")?;
+            (
+                name.clone(),
+                None,
+                bri_events::Class::parse(class).context("Unknown target class")?,
+            )
         }
-        .into(),
-        target: target.into(),
+        EventTarget::Named(name) => (
+            NAMED_BRICK.to_string(),
+            Some(name.clone()),
+            bri_events::Class::Brick,
+        ),
+    };
+    let output = catalog
+        .output(class, &row.output)
+        .context("Unknown event output")?;
+    ensure!(
+        output.params.len() == row.params.len(),
+        "Wrong parameter count"
+    );
+    let params = output
+        .params
+        .iter()
+        .zip(&row.params)
+        .map(|(spec, value)| match (spec, value) {
+            (bri_events::Param::List { .. }, EventValue::Int(v)) => ParamValue::List(*v),
+            (_, EventValue::Int(v)) => ParamValue::Int(*v),
+            (_, EventValue::Float(v)) => ParamValue::Float(*v),
+            (_, EventValue::Bool(v)) => ParamValue::Bool(*v),
+            (_, EventValue::Text(v)) => ParamValue::Text(v.clone()),
+            (_, EventValue::Datablock(v)) => ParamValue::Datablock(v.clone()),
+            (_, EventValue::Vector(v)) => ParamValue::Vector([v.x, -v.z, v.y]),
+            (_, EventValue::Color(v)) => ParamValue::PaintColor(u32::from(*v)),
+            (_, EventValue::Rows(bri_events::RowSelection::All)) => ParamValue::Text("ALL".into()),
+            (_, EventValue::Rows(bri_events::RowSelection::Indices(v))) => {
+                ParamValue::Text(v.iter().map(u16::to_string).collect::<Vec<_>>().join(" "))
+            }
+        })
+        .collect();
+    Ok(EventLine {
+        enabled: row.enabled,
+        delay_ms: row.delay_ms,
+        input: input.name.clone(),
+        target,
         named_target,
-        output: output.into(),
-        params: vec![param],
+        output: output.name.clone(),
+        params,
     })
 }
 fn event_rows(
     brick: &Brick,
-    catalog: &ToolCatalog,
-) -> Result<(Vec<EventRow>, BTreeMap<String, Event>)> {
+    catalog: &bri_events::Catalog,
+) -> Result<(Vec<EventRow>, BTreeMap<String, Row>)> {
     let mut rows = vec![];
     let mut retained = BTreeMap::new();
-    for (index, event) in brick.events.iter().enumerate() {
-        if let Ok(line) = ui_event(event)
-            && native_event(&line, catalog)
+    for (index, row) in brick.events.iter().enumerate() {
+        let editable = ui_event(row, catalog).ok().filter(|line| {
+            native_event(line, catalog)
                 .as_ref()
-                .is_ok_and(|native| native == event)
-        {
+                .is_ok_and(|native| native == row)
+        });
+        if let Some(line) = editable {
             rows.push(EventRow::Editable(line));
-        } else {
-            let text = serde_json::to_string(event)?;
-            let token = format!("native:{index}:{:x}", Sha256::digest(text.as_bytes()));
-            retained.insert(token.clone(), event.clone());
-            rows.push(EventRow::Preserved {
-                enabled: event.enabled,
-                text,
-                token,
-            });
+            continue;
         }
-    }
-    for (index, record) in brick.source_records.iter().enumerate().filter(|(_, r)| {
-        r.text
-            .trim_start()
-            .to_ascii_uppercase()
-            .starts_with("+-EVENT")
-    }) {
+        let text = match &row.preserved {
+            Some(p) => p.original.clone(),
+            None => serde_json::to_string(row)?,
+        };
         let token = format!(
-            "source:{index}:{:x}",
-            Sha256::digest(serde_json::to_vec(record)?)
+            "native:{index}:{:x}",
+            Sha256::digest(serde_json::to_vec(row)?)
         );
+        retained.insert(token.clone(), row.clone());
         rows.push(EventRow::Preserved {
-            enabled: record.text.split_whitespace().nth(2) == Some("1"),
-            text: record.text.clone(),
+            enabled: row.enabled,
+            text,
             token,
         });
     }
@@ -778,6 +818,73 @@ mod tests {
             datablocks: BTreeMap::new(),
             variants: [("plate".into(), WrenchVariant::Normal)].into(),
             inspection: None,
+            events: Some(events()),
+        }
+    }
+    fn events() -> bri_events::Catalog {
+        use bri_events::{InputDef, OutputDef, Param};
+        let targets = [
+            ("Self", "fxDTSBrick"),
+            ("Player", "Player"),
+            ("Client", "GameConnection"),
+        ];
+        let input = |name: &str| InputDef {
+            id: format!("in/{name}"),
+            class_name: "fxDTSBrick".into(),
+            name: name.into(),
+            targets: targets
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            source: "fixture".into(),
+            source_line: 1,
+        };
+        let output = |class: &str, name: &str, params: Vec<Param>| OutputDef {
+            id: format!("out/{class}/{name}"),
+            class_name: class.into(),
+            name: name.into(),
+            params,
+            append_client: false,
+            source: "fixture".into(),
+            source_line: 1,
+        };
+        bri_events::Catalog {
+            schema_version: 1,
+            inputs: vec![input("onActivate"), input("onPlayerTouch")],
+            outputs: vec![
+                output(
+                    "fxDTSBrick",
+                    "setColor",
+                    vec![Param::PaintColor { default: 0 }],
+                ),
+                output(
+                    "fxDTSBrick",
+                    "setColorFX",
+                    vec![Param::List {
+                        items: (0..7).map(|i| (format!("fx{i}"), i)).collect(),
+                    }],
+                ),
+                output("fxDTSBrick", "setRendering", vec![Param::Bool]),
+                output(
+                    "fxDTSBrick",
+                    "setEventEnabled",
+                    vec![Param::IntList { width: 157 }, Param::Bool],
+                ),
+                output(
+                    "fxDTSBrick",
+                    "setLight",
+                    vec![Param::Datablock {
+                        class_name: "FxLightData".into(),
+                    }],
+                ),
+                output(
+                    "Player",
+                    "addVelocity",
+                    vec![Param::Vector { max_length: 200.0 }],
+                ),
+            ],
+            sources: vec![],
+            scope: serde_json::Value::Null,
         }
     }
     fn brick() -> Brick {
@@ -816,14 +923,19 @@ mod tests {
         )
         .unwrap()
     }
-    fn event(action: Action) -> Event {
-        Event {
+    fn row(output: &str, params: Vec<EventValue>) -> Row {
+        Row {
+            preserved: None,
             enabled: true,
-            input: Input::Activate,
+            input: "onActivate".into(),
             delay_ms: 0,
-            target: Target::ThisBrick,
-            action,
+            target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: output.into(),
+            params,
         }
+    }
+    fn line(output: &str, params: Vec<EventValue>) -> EventLine {
+        ui_event(&row(output, params), &events()).unwrap()
     }
     #[test]
     fn item_choices_install_atomically_and_wrench_roundtrips_fields() {
@@ -987,60 +1099,77 @@ mod tests {
         }
     }
     #[test]
-    fn native_event_capabilities_roundtrip_without_extra_targets_or_coercions() {
-        let ui = fixture();
-        let capabilities = event_catalog();
+    fn event_rows_roundtrip_through_dialog_lines_without_coercion() {
+        let catalog = events();
+        let capabilities = event_catalog(&catalog);
         assert_eq!(capabilities.inputs.len(), 2);
-        assert_eq!(capabilities.outputs.len(), 7);
-        assert!(
-            capabilities
-                .inputs
-                .iter()
-                .all(|i| i.targets == [("Self".into(), "fxDTSBrick".into())])
-        );
-        for action in [
-            Action::Color(1),
-            Action::ColorEffect(6),
-            Action::Visible(false),
-            Action::Colliding(true),
-            Action::Raycast(false),
-            Action::Light(Some(ContentRef::Resolved("light/red".into()))),
-            Action::Emitter(None),
+        assert_eq!(capabilities.outputs.len(), 6);
+        assert!(capabilities.outputs.iter().all(|o| o.supported));
+        for (output, params) in [
+            ("setColor", vec![EventValue::Color(1)]),
+            ("setColorFX", vec![EventValue::Int(6)]),
+            ("setRendering", vec![EventValue::Bool(false)]),
+            (
+                "setEventEnabled",
+                vec![
+                    EventValue::Rows(bri_events::RowSelection::Indices(vec![0, 2])),
+                    EventValue::Bool(true),
+                ],
+            ),
+            (
+                "setLight",
+                vec![EventValue::Datablock(Some("light/red".into()))],
+            ),
         ] {
-            let mut original = event(action);
-            original.input = Input::Touch;
-            original.target = Target::Named("lamp".into());
-            let row = ui_event(&original).unwrap();
-            assert_eq!(native_event(&row, &ui.catalog).unwrap(), original);
-            let mut invalid = row.clone();
+            let mut original = row(output, params);
+            original.input = "onPlayerTouch".into();
+            original.target = EventTarget::Named("lamp".into());
+            let line = ui_event(&original, &catalog).unwrap();
+            assert_eq!(native_event(&line, &catalog).unwrap(), original);
+            let mut invalid = line.clone();
             invalid.target = "Player".into();
-            assert!(native_event(&invalid, &ui.catalog).is_err());
-            let mut invalid = row.clone();
+            invalid.named_target = None;
+            assert!(native_event(&invalid, &catalog).is_err());
+            let mut invalid = line.clone();
             invalid.params.push(ParamValue::Int(0));
-            assert!(native_event(&invalid, &ui.catalog).is_err());
+            assert!(native_event(&invalid, &catalog).is_err());
         }
-        let mut line = ui_event(&event(Action::Color(1))).unwrap();
-        line.params = vec![ParamValue::Int(1)];
-        assert!(native_event(&line, &ui.catalog).is_err());
-        line.output = "relay".into();
-        assert!(native_event(&line, &ui.catalog).is_err());
+        // The dialog shows Torque X/Y/Z; the engine stores native Y-up.
+        let mut velocity = row(
+            "addVelocity",
+            vec![EventValue::Vector(glam::Vec3::new(1.0, 5.0, -2.0))],
+        );
+        velocity.target = EventTarget::Slot(bri_events::Slot::Player);
+        let line = ui_event(&velocity, &catalog).unwrap();
+        assert_eq!(line.params, vec![ParamValue::Vector([1.0, 2.0, 5.0])]);
+        assert_eq!(native_event(&line, &catalog).unwrap(), velocity);
+        let mut invalid = line.clone();
+        invalid.output = "relay".into();
+        assert!(native_event(&invalid, &catalog).is_err());
     }
     #[test]
     fn preserved_events_cannot_be_dropped_duplicated_or_modified() {
         let mut ui = fixture();
         let mut b = brick();
         b.events = vec![
-            event(Action::Color(1)),
-            Event {
+            row("setColor", vec![EventValue::Color(1)]),
+            Row {
                 delay_ms: 60_000,
-                ..event(Action::Visible(false))
+                ..row("setRendering", vec![EventValue::Bool(false)])
+            },
+            Row {
+                preserved: Some(bri_events::PreservedRow {
+                    original: "+-EVENT\t2\t1\tonUnknown\t0\tSelf\t\tfireRelay\t\t\t\t".into(),
+                    diagnostic: "Unknown input".into(),
+                }),
+                enabled: true,
+                input: String::new(),
+                delay_ms: 0,
+                target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+                output: String::new(),
+                params: vec![],
             },
         ];
-        b.source_records.push(bri_world::SourceRecord {
-            line: 10,
-            text: "+-EVENT\t2\t1\tonRelay\t0\tSelf\tfireRelay".into(),
-            diagnostic: Some("Unsupported relay".into()),
-        });
         let updates = open(&mut ui, &b, InspectMode::Events);
         let UiUpdate::OpenEvents {
             rows,
@@ -1205,9 +1334,10 @@ mod tests {
         open(&mut ui, &b, InspectMode::Events);
         // Cancelling just the nested UI emits no write or context invalidation.
         assert!(ui.action_command(&wrench).unwrap().is_some());
-        let rows = vec![EventRow::Editable(
-            ui_event(&event(Action::Color(1))).unwrap(),
-        )];
+        let rows = vec![EventRow::Editable(line(
+            "setColor",
+            vec![EventValue::Color(1)],
+        ))];
         let command = ui
             .action_command(&UiAction::SendEvents { brick: 7, rows })
             .unwrap()
@@ -1224,7 +1354,7 @@ mod tests {
         let mut ui = fixture();
         let mut b = brick();
         b.events = (0..bri_world::MAX_EVENTS_PER_BRICK)
-            .map(|i| event(Action::Color((i % 2) as u8)))
+            .map(|i| row("setColor", vec![EventValue::Color((i % 2) as u8)]))
             .collect();
         let updates = open(&mut ui, &b, InspectMode::Events);
         let UiUpdate::OpenEvents { rows, .. } = &updates[0] else {

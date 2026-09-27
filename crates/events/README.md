@@ -87,7 +87,7 @@ Existing `World.pending` lacks original event row and input context. It cannot b
 cargo test --manifest-path crates/events/Cargo.toml -- --include-ignored
 cargo clippy --manifest-path crates/events/Cargo.toml --all-targets -- -D warnings
 python -m unittest discover -s crates/events-import -p test_import.py
-cargo run --release --manifest-path crates/events/Cargo.toml --example headless_probe -- content/events-pack-002/catalog.json artifacts/native-events-runtime/performance.json
+cargo run --release --manifest-path crates/events/Cargo.toml --example events_probe -- content/events-pack-002/catalog.json artifacts/native-events-runtime/performance.json
 ```
 
 Twenty Rust tests (including both private actual-catalog gates) and three importer tests cover all 65 dispatch routes, 4,096 rows, branching and zero-delay cycles, eight active origins, cancellation, host deferral, byte/admission/expansion limits, named scope/generation, timers, source math, migration and tamper-resistant checkpoint replay. The benchmark is the native scheduler with eight mutation-recording host adapters, not bots/physics/networking. Root must still bind all subsystem effects, editor/network/save paths and the complete eight-client gameplay workload before the alpha contract is satisfied.

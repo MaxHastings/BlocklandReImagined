@@ -254,10 +254,13 @@ impl Session {
                     }
                     self.notices.push_back(format!("Weapon runtime: {message}"));
                 }
-                WeaponEvent::Contact { impact } if matches!(impact.target, TargetId::Brick(_)) => {
-                    self.note_weapon_gap("projectile brick event hook", 1)
+                WeaponEvent::Contact { impact } => {
+                    if let TargetId::Brick(brick) = impact.target {
+                        self.special_projectile_hit(impact.source.0, brick, &impact.definition)?;
+                        let source = Some(impact.source.0).filter(|o| self.peers.contains_key(o));
+                        self.fire_input(brick, "onProjectileHit", source);
+                    }
                 }
-                WeaponEvent::Contact { .. } => {}
                 WeaponEvent::Effect {
                     source,
                     definition,
@@ -318,7 +321,18 @@ impl Session {
                         position,
                     );
                 }
-                WeaponEvent::BrickImpact { .. } => self.note_weapon_gap("brick weapon damage", 1),
+                WeaponEvent::BrickImpact {
+                    source,
+                    target,
+                    position,
+                    parameters,
+                } => {
+                    let brick = match target {
+                        Some(TargetId::Brick(id)) => Some(id),
+                        _ => None,
+                    };
+                    self.blow_up_bricks(source.0, brick, position, &parameters)?;
+                }
                 WeaponEvent::Damage {
                     source,
                     target: TargetId::Actor(target),

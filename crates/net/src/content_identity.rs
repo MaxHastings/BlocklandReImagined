@@ -728,6 +728,16 @@ pub fn with_vehicles(base: &str, root: &Path) -> Result<String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
+/// The wrench event catalog: hosts and joiners must offer the same events.
+pub fn with_events(base: &str, root: &Path) -> Result<String> {
+    let catalog = bri_events::Catalog::load(contained(&root.canonicalize()?, "catalog.json")?)?;
+    let mut hash = Sha256::new();
+    hash.update(b"BRI_EVENTS_V1 ");
+    hash.update(base);
+    hash.update(catalog.fingerprint());
+    Ok(format!("{:x}", hash.finalize()))
+}
+
 fn hash_files(
     domain: &[u8],
     files: BTreeMap<String, PathBuf>,

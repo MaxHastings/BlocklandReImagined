@@ -23,51 +23,8 @@ fn number(s: &str) -> Result<f32> {
     ensure!(n.is_finite(), "Nonfinite number");
     Ok(n)
 }
-fn event(line: &str) -> Result<Event> {
-    let fields: Vec<_> = line.split('\t').collect();
-    ensure!(fields.len() == 12, "Expected 12 event fields");
-    let _: u16 = fields[1].parse().context("Invalid original event index")?;
-    let enabled = boolean(fields[2])?;
-    let input = match fields[3].to_ascii_lowercase().as_str() {
-        "onactivate" => Input::Activate,
-        "onplayertouch" => Input::Touch,
-        _ => bail!("Unsupported event input {}", fields[3]),
-    };
-    let delay_ms = fields[4].parse()?;
-    let target = match fields[5].to_ascii_lowercase().as_str() {
-        "self" => Target::ThisBrick,
-        "-1" => Target::Named(fields[6].into()),
-        _ => bail!("Unsupported event target {}", fields[5]),
-    };
-    ensure!(
-        fields[9..].iter().all(|s| s.is_empty()),
-        "Extra event parameters need adaptation"
-    );
-    let effect = |namespace: &str| {
-        if fields[8] == "-1" {
-            None
-        } else {
-            Some(reference(namespace, fields[8]))
-        }
-    };
-    let action = match fields[7].to_ascii_lowercase().as_str() {
-        "setcolor" => Action::Color(fields[8].parse()?),
-        "setrendering" => Action::Visible(boolean(fields[8])?),
-        "setcolliding" => Action::Colliding(boolean(fields[8])?),
-        "setraycasting" => Action::Raycast(boolean(fields[8])?),
-        "setcolorfx" => Action::ColorEffect(fields[8].parse()?),
-        "setlight" => Action::Light(effect("light_datablock")),
-        "setemitter" => Action::Emitter(effect("emitter_datablock")),
-        _ => bail!("Unsupported event output {}", fields[7]),
-    };
-    Ok(Event {
-        enabled,
-        input,
-        delay_ms,
-        target,
-        action,
-    })
-}
+/// Diagnostic on `+-EVENT` records until `events::bind` types them.
+pub const EVENT_PENDING: &str = "Wrench event row awaiting catalog binding";
 fn attachment<'a>(line: &'a str, tag: &str) -> Result<(&'a str, &'a str)> {
     line.strip_prefix(tag)
         .context("Missing attachment tag")?
@@ -75,20 +32,11 @@ fn attachment<'a>(line: &'a str, tag: &str) -> Result<(&'a str, &'a str)> {
         .split_once('"')
         .context("Attachment is missing its name delimiter")
 }
-fn extension(brick: &mut Brick, line: &str, palette_len: usize) -> Result<Option<String>> {
+fn extension(brick: &mut Brick, line: &str) -> Result<Option<String>> {
     let tag = line.split_whitespace().next().context("Empty extension")?;
     match tag {
-        "+-EVENT" => {
-            let e = event(line)?;
-            let mut check = brick.clone();
-            check.events.push(e.clone());
-            check.validate(palette_len)?;
-            let unresolved = matches!(e.action, Action::Light(Some(_)) | Action::Emitter(Some(_)));
-            brick.events.push(e);
-            Ok(unresolved.then(|| {
-                "Event behavior adapted; effect content reference requires resolution".into()
-            }))
-        }
+        // Rows are typed against the event catalog by `events::bind`.
+        "+-EVENT" => Ok(Some(EVENT_PENDING.into())),
         "+-NTOBJECTNAME" => {
             let name = line.strip_prefix(tag).unwrap().trim();
             ensure!(!name.is_empty() && name.len() <= 128, "Invalid brick name");
@@ -253,7 +201,7 @@ pub fn read(bytes: &[u8], catalog: &Catalog, name: &str, map_id: &str) -> Result
                 brick.source_records.len() < 4096,
                 "Too many extensions on a brick"
             );
-            let diagnostic = match extension(brick, line, world.palette.len()) {
+            let diagnostic = match extension(brick, line) {
                 Ok(d) => d,
                 Err(e) => Some(e.to_string()),
             };
@@ -349,7 +297,14 @@ mod tests {
         assert_eq!(b.owner, 0);
         assert_eq!(b.quarter_turns, 1);
         assert!(!b.colliding);
-        assert_eq!(b.events.len(), 1);
+        assert!(b.events.is_empty());
+        assert_eq!(
+            b.source_records
+                .iter()
+                .filter(|r| r.diagnostic.as_deref() == Some(EVENT_PENDING))
+                .count(),
+            2
+        );
         assert_eq!(b.source_records.len(), 5);
         assert_eq!(b.source_records[4].text, "+-CUSTOM keep exactly");
         assert!(

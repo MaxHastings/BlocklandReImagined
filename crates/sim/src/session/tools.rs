@@ -2,7 +2,6 @@
 //! source records cross this boundary. Minigame permissions,
 //! spray projectile flight and audiovisual effects remain separate adapters.
 use super::*;
-use bri_world::{Action, Event};
 
 /// Original game.cs constructs New_QueueSO(512). This queue currently records
 /// planting only; vanilla paint/FX/print undo and chain-kill effects remain work.
@@ -49,7 +48,7 @@ pub enum ToolAction {
     /// remain untouched on the server and cannot be forged or removed here.
     SetEvents {
         brick: BrickId,
-        events: Vec<Event>,
+        events: Vec<bri_world::EventRow>,
     },
     UndoPlant,
     /// Vehicle spawn wrench `< Respawn >`.
@@ -157,18 +156,8 @@ impl ToolCatalog {
         );
         Ok(())
     }
-    fn validate_action(&self, action: &Action) -> Result<()> {
-        match action {
-            Action::Light(Some(reference)) => validate_asset(reference, &self.lights, "Light"),
-            Action::Emitter(Some(reference)) => {
-                validate_asset(reference, &self.emitters, "Emitter")
-            }
-            _ => Ok(()),
-        }
-    }
     pub(super) fn validate_edit(&self, brick: &Brick, edit: &Edit) -> Result<()> {
         match edit {
-            Edit::Action(action) => self.validate_action(action)?,
             Edit::Print(Some(print)) => self.validate_print(brick, print)?,
             Edit::Properties(properties) => {
                 properties.item_spawn.validate()?;
@@ -211,11 +200,7 @@ impl ToolCatalog {
                     )?;
                 }
             }
-            Edit::Events(events) => {
-                for event in events {
-                    self.validate_action(&event.action)?;
-                }
-            }
+            // Event rows are checked against the event catalog's bindings.
             _ => {}
         }
         Ok(())
@@ -251,7 +236,7 @@ impl Session {
         for peer in self.peers.values_mut() {
             peer.inspection = None;
         }
-        Ok(())
+        self.refresh_event_bindings()
     }
     pub(super) fn tool_action(
         &mut self,
@@ -376,8 +361,8 @@ impl Session {
             return Ok(Reply::Accepted);
         }
         let (edit, dialog) = match action {
-            ToolAction::Paint { color } => (Edit::Action(Action::Color(color)), None),
-            ToolAction::ColorEffect { effect } => (Edit::Action(Action::ColorEffect(effect)), None),
+            ToolAction::Paint { color } => (Edit::Color(color), None),
+            ToolAction::ColorEffect { effect } => (Edit::ColorEffect(effect), None),
             ToolAction::ShapeEffect { effect } => (Edit::ShapeEffect(effect), None),
             ToolAction::SetPrint {
                 brick: expected,

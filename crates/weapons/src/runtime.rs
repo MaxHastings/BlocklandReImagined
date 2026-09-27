@@ -479,7 +479,12 @@ impl WeaponsWorld {
                 "Unknown or duplicate loadout item"
             );
         }
-        let slots = self.actors.get(&id).context("Unknown actor")?.inventory.len();
+        let slots = self
+            .actors
+            .get(&id)
+            .context("Unknown actor")?
+            .inventory
+            .len();
         ensure!(items.len() == slots, "Loadout slot count mismatch");
         let mut a = self.actors.remove(&id).context("Unknown actor")?;
         self.unmount(id, &mut a);
@@ -659,6 +664,43 @@ impl WeaponsWorld {
             item,
             position: pos,
             velocity: vel,
+        });
+        Ok(drop)
+    }
+    /// A world drop not thrown by an actor (the `spawnItem` brick event).
+    /// Anyone may pick it up at once; it pops after ten seconds.
+    pub fn spawn_drop(&mut self, item: &str, position: Vec3, velocity: Vec3) -> Result<u64> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        ensure!(self.drops.len() < MAX_DROPS, "Drop budget");
+        ensure!(self.contains_item(item), "Unknown item");
+        ensure!(
+            position.is_finite()
+                && velocity.is_finite()
+                && position.abs().max_element() < 1e7
+                && velocity.length() <= 200.0,
+            "Invalid drop input"
+        );
+        let drop = self.next_id;
+        self.next_id += 1;
+        self.drops.insert(
+            drop,
+            Drop {
+                rotation: Quat::IDENTITY,
+                scale: 1.0,
+                id: drop,
+                item: item.into(),
+                position,
+                velocity,
+                source: ActorId(0),
+                pickup_after: self.tick,
+                expires: self.tick + 1200,
+            },
+        );
+        self.events.push(Event::Dropped {
+            drop,
+            item: item.into(),
+            position,
+            velocity,
         });
         Ok(drop)
     }

@@ -307,6 +307,7 @@ dependencies = [
  "bri-admin",
  "bri-audio",
  "bri-content",
+ "bri-events",
  "bri-foliage",
  "bri-fx-runtime",
  "bri-identity",
@@ -347,6 +348,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-content",
+ "bri-events",
  "bri-world",
  "glam 0.33.10",
  "image",
@@ -355,6 +357,17 @@ dependencies = [
  "sha2",
  "walkdir",
  "zip 6.0.0",
+]
+
+[[package]]
+name = "bri-events"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam 0.33.10",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -440,6 +453,7 @@ dependencies = [
  "anyhow",
  "bri-admin",
  "bri-content",
+ "bri-events",
  "bri-identity",
  "bri-physics",
  "bri-sim",
@@ -495,6 +509,7 @@ dependencies = [
  "anyhow",
  "bri-admin",
  "bri-content",
+ "bri-events",
  "bri-minigames",
  "bri-physics",
  "bri-vehicles",
@@ -617,6 +632,7 @@ name = "bri-world"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-events",
  "glam 0.33.10",
  "serde",
  "serde_json",

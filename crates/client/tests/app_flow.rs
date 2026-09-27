@@ -891,7 +891,6 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
         saved_build.world.bricks.values().next().unwrap(),
         &before_save
     );
-    assert!(saved_build.world.pending.is_empty());
     app.ui.core.push(ScreenId::LoadBricks);
     step(&mut app, Duration::from_millis(16))?;
     until(

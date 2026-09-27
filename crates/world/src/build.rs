@@ -1,6 +1,6 @@
 //! Native build snapshots and atomic append planning. A build is not a running
 //! simulation checkpoint: queued actions are never replayed when planting it.
-use crate::{Action, Brick, BrickId, OwnerId, World};
+use crate::{Brick, BrickId, EventValue, OwnerId, World};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -77,7 +77,6 @@ impl SavedBuild {
         ownership: bool,
     ) -> Result<Self> {
         let mut world = world.clone();
-        world.pending.clear();
         for brick in world.bricks.values_mut() {
             if !events {
                 brick.events.clear();
@@ -167,8 +166,10 @@ impl LoadPlan {
         for (offset, mut brick) in build.world.bricks.into_values().enumerate() {
             brick.color = colors[brick.color as usize];
             for event in &mut brick.events {
-                if let Action::Color(color) = &mut event.action {
-                    *color = colors[*color as usize];
+                for value in &mut event.params {
+                    if let EventValue::Color(color) = value {
+                        *color = colors[*color as usize];
+                    }
                 }
             }
             brick.owner = if !preserve_ownership {

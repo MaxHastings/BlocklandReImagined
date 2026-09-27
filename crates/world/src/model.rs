@@ -2,11 +2,11 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const WORLD_SCHEMA: u32 = 1;
+pub const WORLD_SCHEMA: u32 = 2;
 pub const MAX_BRICKS: usize = 1_000_000;
 /// Native admission bound, not the original 100-row editor limit. Runtime work
 /// budgets and usable large-list editing are separate acceptance requirements.
-pub const MAX_EVENTS_PER_BRICK: usize = 4096;
+pub const MAX_EVENTS_PER_BRICK: usize = 1024;
 pub const TICKS_PER_SECOND: u64 = 120;
 pub type BrickId = u64;
 /// Assigned by the server's identity service; zero is world-owned content.
@@ -119,49 +119,9 @@ impl ItemSpawn {
         (u64::from(self.respawn_ms) * TICKS_PER_SECOND).div_ceil(1000)
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Input {
-    Activate,
-    Touch,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum Target {
-    ThisBrick,
-    Named(String),
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum Action {
-    Color(u8),
-    Visible(bool),
-    Colliding(bool),
-    Raycast(bool),
-    Light(Option<ContentRef>),
-    Emitter(Option<ContentRef>),
-    ColorEffect(u8),
-}
-impl Action {
-    pub fn validate(&self, palette_len: usize) -> Result<()> {
-        match self {
-            Self::Color(n) => ensure!((*n as usize) < palette_len, "Color outside palette"),
-            Self::ColorEffect(n) => ensure!(*n <= 6, "Unknown color effect"),
-            Self::Light(Some(r)) | Self::Emitter(Some(r)) => r.validate()?,
-            _ => {}
-        };
-        Ok(())
-    }
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Event {
-    pub enabled: bool,
-    pub input: Input,
-    pub delay_ms: u32,
-    pub target: Target,
-    pub action: Action,
-}
+/// Wrench event rows: the vanilla input/target/output model executed by
+/// `bri-events` (the single event system for bricks).
+pub use bri_events::{Row as EventRow, Target as EventTarget, Value as EventValue};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Brick {
@@ -192,7 +152,7 @@ pub struct Brick {
     /// Vehicle spawn brick setting (`fxDTSBrick::setVehicle`).
     #[serde(default)]
     pub vehicle: Option<VehicleSpawn>,
-    pub events: Vec<Event>,
+    pub events: Vec<EventRow>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
 }
@@ -275,10 +235,37 @@ impl Brick {
         );
         for e in &self.events {
             ensure!(e.delay_ms <= 300_000, "Event delay exceeds five minutes");
-            if let Target::Named(n) = &e.target {
+            // Bounds keep a full brick's rows inside one network frame.
+            ensure!(
+                e.input.len() <= 128 && e.output.len() <= 128 && e.params.len() <= 4,
+                "Invalid event row"
+            );
+            if let Some(p) = &e.preserved {
+                ensure!(
+                    p.original.len() <= 2048 && p.diagnostic.len() <= 1024,
+                    "Oversized preserved event row"
+                );
+            }
+            if let EventTarget::Named(n) = &e.target {
                 ensure!(!n.is_empty() && n.len() <= 128, "Invalid target name");
             }
-            e.action.validate(palette_len)?;
+            for value in &e.params {
+                match value {
+                    EventValue::Color(c) => {
+                        ensure!((*c as usize) < palette_len, "Event color outside palette")
+                    }
+                    EventValue::Text(t) => {
+                        ensure!(t.chars().count() <= 200, "Event text too long")
+                    }
+                    EventValue::Datablock(Some(id)) => {
+                        ensure!(id.len() <= 256, "Event datablock ID too long")
+                    }
+                    EventValue::Rows(bri_events::RowSelection::Indices(rows)) => {
+                        ensure!(rows.len() <= 256, "Too many event row indices")
+                    }
+                    _ => {}
+                }
+            }
         }
         for r in &self.source_records {
             ensure!(
@@ -291,16 +278,6 @@ impl Brick {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PendingAction {
-    pub due_tick: u64,
-    pub order: u64,
-    pub source: BrickId,
-    pub source_owner: OwnerId,
-    pub target: BrickId,
-    pub action: Action,
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct World {
     pub schema_version: u32,
     pub name: String,
@@ -310,9 +287,7 @@ pub struct World {
     pub tick: u64,
     pub revision: u64,
     pub next_brick_id: BrickId,
-    pub next_event_order: u64,
     pub bricks: BTreeMap<BrickId, Brick>,
-    pub pending: Vec<PendingAction>,
     pub source_sha256: Option<String>,
     pub source_encoding: Option<String>,
 }
@@ -327,9 +302,7 @@ impl World {
             tick: 0,
             revision: 0,
             next_brick_id: 1,
-            next_event_order: 1,
             bricks: BTreeMap::new(),
-            pending: vec![],
             source_sha256: None,
             source_encoding: None,
         }
@@ -370,26 +343,6 @@ impl World {
         );
         for b in self.bricks.values() {
             b.validate(self.palette.len())?;
-        }
-        ensure!(
-            self.pending.len() <= 20_000 && self.next_event_order > 0,
-            "Invalid pending event queue"
-        );
-        let mut previous = None;
-        let mut orders = std::collections::BTreeSet::new();
-        for p in &self.pending {
-            let key = (p.due_tick, p.order);
-            ensure!(
-                previous.is_none_or(|last| last < key)
-                    && orders.insert(p.order)
-                    && p.order < self.next_event_order
-                    && p.order > 0
-                    && p.source > 0
-                    && p.target > 0,
-                "Unordered/invalid pending events"
-            );
-            previous = Some(key);
-            p.action.validate(self.palette.len())?;
         }
         Ok(())
     }

@@ -2,7 +2,7 @@
 //! records or dropping unknown community resources.
 use anyhow::{Result, ensure};
 use bri_content::effects::Library;
-use bri_world::{Action, ContentRef, World};
+use bri_world::{ContentRef, World};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -51,10 +51,6 @@ pub fn bind(world: &mut World, library: &Library) -> Result<Report> {
             }
         }
     };
-    let action = |a: &mut Action, resolve: &mut dyn FnMut(&mut ContentRef)| match a {
-        Action::Light(Some(r)) | Action::Emitter(Some(r)) => resolve(r),
-        _ => {}
-    };
     for brick in world.bricks.values_mut() {
         if let Some(light) = &mut brick.light {
             resolve(&mut light.asset);
@@ -64,12 +60,6 @@ pub fn bind(world: &mut World, library: &Library) -> Result<Report> {
         {
             resolve(asset);
         }
-        for e in &mut brick.events {
-            action(&mut e.action, &mut resolve);
-        }
-    }
-    for event in &mut world.pending {
-        action(&mut event.action, &mut resolve);
     }
     world.validate()?;
     Ok(report)
@@ -79,9 +69,9 @@ pub fn bind(world: &mut World, library: &Library) -> Result<Report> {
 mod tests {
     use super::*;
     use bri_content::effects::Light;
-    use bri_world::{Brick, Event, Input, SourceRecord, Target};
+    use bri_world::{Brick, SourceRecord};
     #[test]
-    fn binds_names_and_event_datablocks_but_preserves_unknowns_and_original_records() {
+    fn binds_names_but_preserves_unknowns_and_original_records() {
         let library = Library {
             schema_version: 1,
             lights: vec![Light {
@@ -110,13 +100,6 @@ mod tests {
             asset: unresolved("light_ui", "RED LIGHT"),
             enabled: false,
         });
-        brick.events.push(Event {
-            enabled: true,
-            input: Input::Activate,
-            delay_ms: 10,
-            target: Target::ThisBrick,
-            action: Action::Light(Some(unresolved("light_datablock", "RedLight"))),
-        });
         brick.emitter = Some(bri_world::Emitter {
             asset: Some(unresolved("emitter_ui", "Community Effect")),
             direction: 5,
@@ -130,7 +113,7 @@ mod tests {
         world.next_brick_id = 2;
         let original = world.bricks[&1].source_records.clone();
         let report = bind(&mut world, &library).unwrap();
-        assert_eq!(report.resolved, 2);
+        assert_eq!(report.resolved, 1);
         assert_eq!(report.unresolved["emitter_ui:Community Effect"], 1);
         assert_eq!(world.bricks[&1].source_records, original);
         assert!(!world.bricks[&1].light.as_ref().unwrap().enabled);

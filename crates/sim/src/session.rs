@@ -14,10 +14,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod admin;
 mod bots;
 mod combat;
+mod events;
 mod inventory;
+mod special;
 mod vehicles;
-pub use vehicles::{VehicleInfo, VehiclePose};
 use vehicles::combat_input_burst;
+pub use vehicles::{VehicleInfo, VehiclePose};
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
@@ -122,6 +124,10 @@ pub enum Command {
     SwitchSeat(i8),
     /// `teamChat`: only the sender's minigame members see it.
     TeamChat(String),
+    /// `/clearCheckpoint`: forget the checkpoint brick and respawn.
+    ClearCheckpoint,
+    /// `/treasureStatus`: how many treasure chests this player has found.
+    TreasureStatus,
     /// Admin `dropPlayerAtCamera`: move the player to the free camera's eye.
     DropPlayerAt {
         eye: [f32; 3],
@@ -215,8 +221,11 @@ struct Peer {
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
     combat: combat::Combat,
+    special: special::Progress,
 }
 pub struct Session {
+    events: events::Events,
+    specials: special::Specials,
     bots: bots::Bots,
     vehicles: vehicles::Vehicles,
     minigames: bri_minigames::MinigamesWorld,
@@ -235,7 +244,15 @@ pub struct Session {
     next_owner: OwnerId,
     chat: VecDeque<ChatLine>,
     next_chat: u64,
-    departed: BTreeMap<OwnerId, (String, bool, Option<bri_content::avatar::Appearance>, Option<bri_admin::Principal>)>,
+    departed: BTreeMap<
+        OwnerId,
+        (
+            String,
+            bool,
+            Option<bri_content::avatar::Appearance>,
+            Option<bri_admin::Principal>,
+        ),
+    >,
     dirty: BTreeSet<BrickId>,
     notices: VecDeque<String>,
     tool_catalog: ToolCatalog,
@@ -261,6 +278,8 @@ impl Session {
         let mut weapons = inventory::core_runtime();
         weapons.tick = simulation.state().tick;
         Self {
+            events: Default::default(),
+            specials: Default::default(),
             bots: Default::default(),
             vehicles: Default::default(),
             minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
@@ -420,6 +439,7 @@ impl Session {
                 name: name.clone(),
                 principal,
                 combat,
+                special: Default::default(),
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -443,8 +463,15 @@ impl Session {
         self.admin_disconnect(owner);
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
         self.weapon_triggers.remove(&owner);
-        self.departed
-            .insert(owner, (peer.name, peer.actor.administrator, peer.avatar, peer.principal));
+        self.departed.insert(
+            owner,
+            (
+                peer.name,
+                peer.actor.administrator,
+                peer.avatar,
+                peer.principal,
+            ),
+        );
         peer.player.despawn(&mut self.simulation.physics);
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
@@ -482,7 +509,10 @@ impl Session {
             .get(&owner)
             .context("Unknown disconnected owner")?
             .clone();
-        ensure!(saved_principal == principal, "Resume identity does not match authenticated ticket");
+        ensure!(
+            saved_principal == principal,
+            "Resume identity does not match authenticated ticket"
+        );
         let role = self.admin_connect(owner, name.clone(), trusted_host, false, principal)?;
         let player = match Player::spawn(
             &mut self.simulation.physics,
@@ -521,6 +551,7 @@ impl Session {
                 name: name.clone(),
                 principal,
                 combat,
+                special: Default::default(),
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -632,6 +663,14 @@ impl Session {
             self.admin_disconnects.extend(call.disconnects);
             return Ok(Reply::Admin(Box::new(call.reply)));
         }
+        if let Command::Edit {
+            edit: Edit::Events(rows),
+            ..
+        }
+        | Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command
+        {
+            self.validate_event_rows(rows)?;
+        }
         let tick = self.simulation.state().tick;
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         ensure!(sequence > peer.last_sequence, "Stale/replayed command");
@@ -740,11 +779,22 @@ impl Session {
                 peer.inputs.clear();
                 // `serverCmdDropPlayerAtCamera` costs a point inside minigames.
                 let player = peer.combat.player;
-                if self.minigames.player(player).is_ok_and(|p| p.game.is_some())
+                if self
+                    .minigames
+                    .player(player)
+                    .is_ok_and(|p| p.game.is_some())
                     && let Ok(effects) = self.minigames.event_score(player, -1, true)
                 {
                     self.apply_minigame_effects(effects)?;
                 }
+                Ok(Reply::Accepted)
+            }
+            Command::ClearCheckpoint => {
+                self.clear_checkpoint(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::TreasureStatus => {
+                self.treasure_status(owner)?;
                 Ok(Reply::Accepted)
             }
             Command::SwitchSeat(step) => {
@@ -814,6 +864,7 @@ impl Session {
                     reach: 50.0,
                 };
                 let id = self.simulation.plant(&builder, brick)?;
+                self.special_planted(owner, id)?;
                 self.dirty.insert(id);
                 let undo = self.plant_undo.entry(owner).or_default();
                 if undo.len() == UNDO_PLANT_LIMIT {
@@ -867,9 +918,16 @@ impl Session {
                     .emit(tick, crate::presentation::CueKind::Break, position);
                 Ok(Reply::Accepted)
             }
-            Command::Activate => Ok(Reply::Activated(
-                self.simulation.activate(peer.player.eye(), direction)?,
-            )),
+            Command::Activate => {
+                ensure!(peer.combat.alive, "Dead players cannot activate bricks");
+                let hit = self.simulation.activate(peer.player.eye(), direction)?;
+                if let Some(brick) = hit
+                    && self.special_activate(owner, brick)?
+                {
+                    self.fire_input(brick, "onActivate", Some(owner));
+                }
+                Ok(Reply::Activated(hit))
+            }
             Command::Tool(action) => self.tool_action(owner, action, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
@@ -905,6 +963,7 @@ impl Session {
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut driving = Vec::new();
+        let liquids = self.simulation.liquids();
         for (&owner, peer) in self.peers.iter_mut() {
             if self.vehicles.is_mounted(owner) {
                 peer.input_budget = (peer.input_budget + 1.0).min(combat_input_burst());
@@ -959,13 +1018,11 @@ impl Session {
                         ..Default::default()
                     }
                 };
-                let motion = peer.player.step_in_water(
-                    &mut self.simulation.physics,
-                    input,
-                    &self.simulation.waters,
-                )?;
+                let motion =
+                    peer.player
+                        .step_in_water(&mut self.simulation.physics, input, &liquids)?;
                 if peer.combat.alive {
-                    touches.extend(motion.touched);
+                    touches.extend(motion.touched.into_iter().map(|brick| (owner, brick)));
                     impacts.push((owner, motion.impact));
                 }
                 if motion.jumped {
@@ -977,26 +1034,19 @@ impl Session {
                 }
             }
         }
-        for id in touches {
-            if self.simulation.state().bricks.contains_key(&id)
-                && let Err(error) = self.simulation.touch(id)
-            {
-                if self.notices.len() == 64 {
-                    self.notices.pop_front();
-                }
-                self.notices
-                    .push_back(format!("Brick {id} touch event rejected: {error}"));
-            }
-        }
+        self.fire_touches(touches);
         for (owner, input) in driving {
             self.vehicle_input(owner, input)?;
         }
         self.vehicle_pre_step()?;
-        self.dirty.extend(self.simulation.step()?);
+        self.simulation.step()?;
         self.vehicle_post_step()?;
         self.step_weapons()?;
         self.step_items()?;
         self.step_combat(impacts)?;
+        self.step_specials()?;
+        let changed = self.dirty.clone();
+        self.step_events(&changed)?;
         Ok(())
     }
     pub fn snapshot(&self) -> Snapshot {

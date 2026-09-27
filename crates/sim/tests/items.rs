@@ -48,7 +48,7 @@ fn definitions() -> Definitions {
                 collision,
                 shape,
                 indestructible: false,
-                requires_behavior_adapter: false,
+                special: Default::default(),
             },
         )]),
     }

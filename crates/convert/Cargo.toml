@@ -8,6 +8,7 @@ default-run = "bri-convert"
 [dependencies]
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
+bri-events = { path = "../events" }
 anyhow.workspace = true
 glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

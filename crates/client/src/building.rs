@@ -887,15 +887,10 @@ impl Building {
             self.catalog.contains_key(id),
             "Brick is not in the selectable native catalog"
         );
-        let definition = self
-            .definitions
+        self.definitions
             .entries
             .get(id)
             .context("Undefined brick")?;
-        ensure!(
-            !definition.requires_behavior_adapter,
-            "This brick requires a native behavior adapter"
-        );
         Ok(())
     }
 
@@ -1100,7 +1095,7 @@ mod tests {
             shape: SharedShape::cuboid(0.5, 0.1, 0.25),
             collision,
             indestructible: false,
-            requires_behavior_adapter: false,
+            special: Default::default(),
         };
         let definitions = Definitions {
             entries: [("plate".into(), definition)].into(),

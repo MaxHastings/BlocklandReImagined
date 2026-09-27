@@ -9,6 +9,7 @@ pub mod effect_bindings;
 pub mod effect_script;
 pub mod effects;
 pub mod environment;
+pub mod events;
 pub mod interior;
 pub mod lighting;
 pub mod mission;

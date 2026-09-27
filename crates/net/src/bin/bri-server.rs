@@ -30,21 +30,37 @@ fn audio_music(audio: &std::path::Path) -> Result<Vec<String>> {
         .filter_map(|t| t["sound"].as_str().map(str::to_string))
         .collect())
 }
+fn audio_event_sounds(audio: &std::path::Path) -> Result<Vec<String>> {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(audio.join("manifest.json"))?)?;
+    Ok(manifest["sounds"]
+        .as_array()
+        .context("Missing audio sounds")?
+        .iter()
+        .filter(|s| {
+            s["lists"]
+                .as_array()
+                .is_some_and(|l| l.iter().any(|v| v == "event-param:Sound"))
+        })
+        .filter_map(|s| s["id"].as_str().map(str::to_string))
+        .collect())
+}
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(
-        args.len() == 16 || args.len() == 17,
-        "Usage: bri-server <catalog-dir> <native-content> <world.json> <map-bundle> <brick-materials-dir> <effects-dir> <avatar-dir> <effects-runtime-dir> <audio-dir> <weather-dir> <foliage-dir> <weapons-dir> <item-presentation-dir> <vehicles-dir> <state-dir> <listen-address> [run-seconds]"
+        args.len() == 17 || args.len() == 18,
+        "Usage: bri-server <catalog-dir> <native-content> <world.json> <map-bundle> <brick-materials-dir> <effects-dir> <avatar-dir> <effects-runtime-dir> <audio-dir> <weather-dir> <foliage-dir> <weapons-dir> <item-presentation-dir> <vehicles-dir> <events-dir> <state-dir> <listen-address> [run-seconds]"
     );
-    let mut paths: Vec<_> = args[..15].iter().map(PathBuf::from).collect();
+    let mut paths: Vec<_> = args[..16].iter().map(PathBuf::from).collect();
+    let events_dir = paths.remove(14);
     let vehicles_dir = paths.remove(13);
-    let bind = args[15]
+    let bind = args[16]
         .to_str()
         .context("Invalid listen address")?
         .parse()?;
-    let seconds = if args.len() == 17 {
-        let seconds: u64 = args[16].to_str().context("Invalid duration")?.parse()?;
+    let seconds = if args.len() == 18 {
+        let seconds: u64 = args[17].to_str().context("Invalid duration")?.parse()?;
         ensure!((1..=86400).contains(&seconds), "Duration out of range");
         Some(seconds)
     } else {
@@ -64,6 +80,7 @@ async fn main() -> Result<()> {
     let item_physics = content_identity::ItemPhysicsContent::load(&paths[12], &weapons)?;
     let content_id = item_physics.extend_identity(&content_id);
     let content_id = content_identity::with_vehicles(&content_id, &vehicles_dir)?;
+    let content_id = content_identity::with_events(&content_id, &events_dir)?;
     let vehicle_pack = bri_vehicles::Pack::load(vehicles_dir.join("vehicles.json"))?;
     let catalog = serde_json::from_slice(&std::fs::read(paths[0].join("stock-catalog.json"))?)?;
     let materials = serde_json::from_slice(&std::fs::read(paths[4].join("brick-materials.json"))?)?;
@@ -93,6 +110,10 @@ async fn main() -> Result<()> {
     )?;
     session.set_tool_catalog(tools)?;
     session.set_weapon_pack(weapons.pack)?;
+    session.set_event_catalog(
+        bri_events::Catalog::load(events_dir.join("catalog.json"))?,
+        audio_event_sounds(&paths[8])?,
+    )?;
     session.set_item_bounds(item_physics.bounds)?;
     session.set_avatar_catalog(serde_json::from_slice(&std::fs::read(
         paths[6].join("avatar.json"),

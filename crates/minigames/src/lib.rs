@@ -570,7 +570,11 @@ impl MinigamesWorld {
     }
     /// Trusted host placement: bots follow their spawn brick owner's game
     /// without invitations or join cooldowns.
-    pub fn host_place(&mut self, player: PlayerId, game: Option<GameId>) -> Result<Vec<Effect>, Error> {
+    pub fn host_place(
+        &mut self,
+        player: PlayerId,
+        game: Option<GameId>,
+    ) -> Result<Vec<Effect>, Error> {
         self.player(player)?;
         let mut out = Vec::new();
         match game {
@@ -673,6 +677,14 @@ impl MinigamesWorld {
             };
             self.add_score(player, delta, &mut out);
         }
+        Ok(out)
+    }
+    /// `instantRespawn` event output: respawn now, alive or dead, skipping the
+    /// respawn delay. The host validates event permission first.
+    pub fn event_respawn(&mut self, player: PlayerId) -> Result<Vec<Effect>, Error> {
+        self.player(player)?;
+        let mut out = Vec::new();
+        self.spawn(player, SpawnReason::Respawn, &mut out);
         Ok(out)
     }
     /// Native Client incScore/setScore event integration; host validates event ownership first.

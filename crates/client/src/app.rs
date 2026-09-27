@@ -478,6 +478,17 @@ impl App {
                 .chain(bri_sim::session::Session::bot_choices())
                 .collect(),
         )?;
+        tool_ui.install_events(
+            content.events.clone(),
+            content.event_sounds.clone(),
+            content
+                .weapons
+                .pack
+                .projectiles
+                .iter()
+                .map(|(id, p)| (id.clone(), p.name.clone()))
+                .collect(),
+        );
         let item_assets = Arc::new(crate::items::ItemAssets::load(
             &content.paths.item_presentation,
             &content.paths.weapons,
@@ -921,6 +932,13 @@ impl App {
                 progress: 0.0,
             }),
         );
+        let event_catalog = self.content.events.clone();
+        let event_sounds: Vec<String> = self
+            .content
+            .event_sounds
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
         let worker = Worker::start(self.runtime.handle(), async move {
             let identity_file = state_dir.join("client.identity");
             let native_identity = tokio::task::spawn_blocking(move || {
@@ -956,6 +974,7 @@ impl App {
                     let identity = weapons.extend_identity(&identity);
                     let identity = item_physics.extend_identity(&identity);
                     let identity = content_identity::with_vehicles(&identity, &paths.vehicles)?;
+                    let identity = content_identity::with_events(&identity, &paths.events)?;
                     let vehicle_pack =
                         bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?;
                     let meshes = Arc::new(
@@ -1033,6 +1052,7 @@ impl App {
             session.set_item_bounds(item_bounds)?;
             session.set_avatar_catalog(avatar_catalog)?;
             session.set_vehicle_pack(vehicle_pack)?;
+            session.set_event_catalog(event_catalog, event_sounds)?;
             session.set_spawn_points(loaded.spawn_points.clone())?;
             let mut host = server::start_with_admin_store_and_limit(
                 session,
@@ -1097,16 +1117,20 @@ impl App {
         // Certificates come from LAN discovery, then saved pins, then a direct
         // discovery query to the address (trust on first use, then pinned).
         let pins_file = self.state_dir.join("trusted-hosts.json");
-        let known = self.lan_hosts.get(&address.to_string()).cloned().or_else(|| {
-            std::fs::metadata(&pins_file)
-                .ok()
-                .filter(|m| m.len() <= 1024 * 1024)
-                .and_then(|_| std::fs::read(&pins_file).ok())
-                .and_then(|bytes| {
-                    serde_json::from_slice::<BTreeMap<String, Vec<u8>>>(&bytes).ok()
-                })
-                .and_then(|pins| pins.get(&address.to_string()).cloned())
-        });
+        let known = self
+            .lan_hosts
+            .get(&address.to_string())
+            .cloned()
+            .or_else(|| {
+                std::fs::metadata(&pins_file)
+                    .ok()
+                    .filter(|m| m.len() <= 1024 * 1024)
+                    .and_then(|_| std::fs::read(&pins_file).ok())
+                    .and_then(|bytes| {
+                        serde_json::from_slice::<BTreeMap<String, Vec<u8>>>(&bytes).ok()
+                    })
+                    .and_then(|pins| pins.get(&address.to_string()).cloned())
+            });
         let paths = self.content.paths.clone();
         let player = self.player_name();
         let weapon_snapshot = self.content.weapons.clone();
@@ -1181,9 +1205,12 @@ impl App {
                 let identity = content_identity::with_audio(&identity, &identity_paths.audio)?;
                 let identity = content_identity::with_weather(&identity, &identity_paths.weather)?;
                 let identity = content_identity::with_foliage(&identity, &identity_paths.foliage)?;
-                content_identity::with_vehicles(
-                    &item_physics.extend_identity(&weapons.extend_identity(&identity)),
-                    &identity_paths.vehicles,
+                content_identity::with_events(
+                    &content_identity::with_vehicles(
+                        &item_physics.extend_identity(&weapons.extend_identity(&identity)),
+                        &identity_paths.vehicles,
+                    )?,
+                    &identity_paths.events,
                 )
             })
             .await??;
@@ -1593,26 +1620,16 @@ impl App {
             Some(failure) => {
                 use bri_sim::simulation::PlantFailure as F;
                 let icon = match failure {
-                    F::Overlap => Some(PlantError::Overlap),
-                    F::Float => Some(PlantError::Float),
-                    F::Buried => Some(PlantError::Buried),
-                    F::Stuck => Some(PlantError::Stuck),
-                    F::TooFar => Some(PlantError::TooFar),
-                    F::Forbidden => Some(PlantError::Forbidden),
-                    F::Limit => Some(PlantError::Limit),
-                    F::Unsupported => None,
+                    F::Overlap => PlantError::Overlap,
+                    F::Float => PlantError::Float,
+                    F::Buried => PlantError::Buried,
+                    F::Stuck => PlantError::Stuck,
+                    F::TooFar => PlantError::TooFar,
+                    F::Forbidden => PlantError::Forbidden,
+                    F::Limit => PlantError::Limit,
                 };
-                match icon {
-                    Some(icon) => self.ui.apply_session(attempt.id, UiUpdate::PlantError(icon)),
-                    None => self.ui.apply_session(
-                        attempt.id,
-                        UiUpdate::BottomPrint {
-                            text: failure.to_string(),
-                            seconds: 3.0,
-                            hide_bar: false,
-                        },
-                    ),
-                };
+                self.ui
+                    .apply_session(attempt.id, UiUpdate::PlantError(icon));
                 Ok(())
             }
             None => result,
@@ -2001,10 +2018,9 @@ impl App {
                         .map(|(&owner, name)| PlayerRow {
                             id: owner,
                             name: plain_chat(name),
-                            score: view
-                                .vitals
-                                .get(&owner)
-                                .map_or(0, |v| v.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+                            score: view.vitals.get(&owner).map_or(0, |v| {
+                                v.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                            }),
                             admin: owner == view.owner && view.administrator,
                             super_admin: false,
                             bl_id: None,
@@ -2065,7 +2081,9 @@ fn server_markup(text: &str) -> String {
                 if after[8..end]
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
-                    && after[8..end].to_ascii_lowercase().starts_with("base/client/ui/") =>
+                    && after[8..end]
+                        .to_ascii_lowercase()
+                        .starts_with("base/client/ui/") =>
             {
                 out.push_str(&after[..=end].to_ascii_lowercase());
                 rest = &after[end + 1..];
@@ -2266,8 +2284,11 @@ impl PlatformApp for App {
                         );
                     }
                 }
-                self.vehicles
-                    .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
+                self.vehicles.prepare(
+                    &mut self.vehicle_assets,
+                    &view.vehicles,
+                    &view.world.palette,
+                );
                 if self
                     .music_world
                     .as_ref()
@@ -2514,10 +2535,7 @@ impl PlatformApp for App {
                     })
                 )
             {
-                if matches!(
-                    action,
-                    UiAction::Game(GameAction::Held { down: true, .. })
-                ) {
+                if matches!(action, UiAction::Game(GameAction::Held { down: true, .. })) {
                     let ready = self.network_view().is_some_and(|view| {
                         view.vitals
                             .get(&view.owner)
@@ -2772,7 +2790,9 @@ impl PlatformApp for App {
                             }
                             Ok(())
                         }
-                        Some(_) => Err(anyhow::anyhow!("Only administrators can use the free camera")),
+                        Some(_) => Err(anyhow::anyhow!(
+                            "Only administrators can use the free camera"
+                        )),
                         None => Err(anyhow::anyhow!("Not connected")),
                     }
                 }
@@ -2877,6 +2897,8 @@ impl PlatformApp for App {
                     let command = match name.to_ascii_lowercase().as_str() {
                         "suicide" | "kill" => Some(Command::Suicide),
                         "light" => Some(Command::ToggleLight),
+                        "clearcheckpoint" => Some(Command::ClearCheckpoint),
+                        "treasurestatus" => Some(Command::TreasureStatus),
                         "sit" | "love" | "hate" | "alarm" | "confusion" => {
                             Some(Command::Emote(name.to_ascii_lowercase()))
                         }
@@ -3226,12 +3248,15 @@ impl PlatformApp for App {
                 color: [1.0, 1.0, 1.0, 0.0],
             })
             .collect();
-        lights.extend(effects_frame.lights.iter().map(|light| {
-            bri_render::scene::PointLight {
-                position_radius: light.position.extend(light.radius).to_array(),
-                color: light.color.extend(0.).to_array(),
-            }
-        }));
+        lights.extend(
+            effects_frame
+                .lights
+                .iter()
+                .map(|light| bri_render::scene::PointLight {
+                    position_radius: light.position.extend(light.radius).to_array(),
+                    color: light.color.extend(0.).to_array(),
+                }),
+        );
         lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self

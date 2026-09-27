@@ -62,6 +62,7 @@ pub struct ContentConfig {
     pub weapons: String,
     pub item_presentation: String,
     pub vehicles: String,
+    pub events: String,
 }
 impl Default for ContentConfig {
     fn default() -> Self {
@@ -71,7 +72,7 @@ impl Default for ContentConfig {
             brick_catalog: "stock-catalog-004".into(),
             geometry: "maps-pass-003".into(),
             effects: "effects-pass-004".into(),
-            worlds: "worlds-pass-004".into(),
+            worlds: "worlds-pass-005".into(),
             ui_pack: "ui-pack-003".into(),
             brick_materials: "brick-materials-001".into(),
             avatar: "avatar-pack-001".into(),
@@ -82,6 +83,7 @@ impl Default for ContentConfig {
             weapons: "weapons-pack-003".into(),
             item_presentation: "item-presentation-pack-003".into(),
             vehicles: "vehicles-pack-007".into(),
+            events: "events-pack-002".into(),
         }
     }
 }
@@ -106,6 +108,7 @@ pub struct ContentPaths {
     pub weapons: PathBuf,
     pub item_presentation: PathBuf,
     pub vehicles: PathBuf,
+    pub events: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +150,9 @@ pub struct ClientContent {
     pub vehicles: bri_vehicles::Pack,
     /// Music-brick loops: (sound id, display name).
     pub music: Vec<(String, String)>,
+    /// Wrench event catalog and the sounds `playSound` may use.
+    pub events: bri_events::Catalog,
+    pub event_sounds: Vec<(String, String)>,
     pub warnings: Vec<String>,
 }
 
@@ -301,6 +307,7 @@ impl ContentPaths {
             weapons: package(&config.weapons)?,
             item_presentation: package(&config.item_presentation)?,
             vehicles: package(&config.vehicles)?,
+            events: package(&config.events)?,
             root,
         })
     }
@@ -537,9 +544,14 @@ impl ClientContent {
         let vehicles = bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))
             .context("Loading native vehicles")?;
         let music = music_choices(&paths.audio)?;
+        let event_sounds = event_sound_choices(&paths.audio)?;
+        let events = bri_events::Catalog::load(paths.events.join("catalog.json"))
+            .context("Loading the wrench event catalog")?;
         Ok(Self {
             vehicles,
             music,
+            events,
+            event_sounds,
             ui_pack: Rc::new(Pack::from_parts(schema, paths.ui_pack.clone())),
             paths,
             maps,
@@ -561,6 +573,30 @@ impl ClientContent {
 }
 
 /// Music bricks play the `music-brick:*` loops declared by the audio pack.
+/// Sounds the `playSound` event may play: (sound id, name).
+fn event_sound_choices(audio: &Path) -> Result<Vec<(String, String)>> {
+    let manifest: serde_json::Value =
+        read_json(&file(audio, "manifest.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
+    Ok(manifest["sounds"]
+        .as_array()
+        .context("Audio manifest has no sounds")?
+        .iter()
+        .filter(|s| {
+            s["lists"]
+                .as_array()
+                .is_some_and(|l| l.iter().any(|v| v == "event-param:Sound"))
+        })
+        .filter_map(|s| {
+            let id = s["id"].as_str()?.to_string();
+            let name = s["ui_name"]
+                .as_str()
+                .or(s["name"].as_str())
+                .unwrap_or(&id)
+                .to_string();
+            Some((id, name))
+        })
+        .collect())
+}
 fn music_choices(audio: &Path) -> Result<Vec<(String, String)>> {
     #[derive(Deserialize)]
     struct Trigger {

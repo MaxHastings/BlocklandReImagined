@@ -1,10 +1,10 @@
 use crate::{
-    definitions::{Definition, Definitions},
+    definitions::{Definition, Definitions, Special, brick_water},
     grid::{self, Bounds, Index},
 };
 use anyhow::{Context, Result, ensure};
 use bri_world::{
-    Brick, BrickId, Input, World,
+    Brick, BrickId, World,
     authority::{Actor, Authority, Edit},
 };
 use glam::Vec3;
@@ -25,8 +25,6 @@ pub enum PlantFailure {
     TooFar,
     Forbidden,
     Limit,
-    /// The brick needs a behavior adapter that does not exist yet.
-    Unsupported,
 }
 impl std::fmt::Display for PlantFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -38,7 +36,6 @@ impl std::fmt::Display for PlantFailure {
             Self::TooFar => "Brick is too far away",
             Self::Forbidden => "You do not have permission to build here",
             Self::Limit => "Brick limit reached",
-            Self::Unsupported => "This special brick is not supported yet",
         })
     }
 }
@@ -60,7 +57,9 @@ pub struct Simulation {
     authority: Authority,
     pub definitions: Definitions,
     pub physics: PhysicsWorld,
+    /// Map liquids. Water bricks add their own volumes (see `liquids`).
     pub waters: Vec<bri_content::water::Water>,
+    brick_waters: BTreeMap<BrickId, bri_content::water::Water>,
     index: Index,
     handles: BTreeMap<BrickId, ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
@@ -77,7 +76,7 @@ fn pose(brick: &Brick) -> Pose {
 pub fn brick_collider(brick: &Brick, definition: &Definition, id: BrickId) -> ColliderBuilder {
     ColliderBuilder::new(definition.shape.clone())
         .position(pose(brick))
-        .sensor(!brick.colliding)
+        .sensor(!brick.colliding || definition.special == Special::Water)
         .user_data(u128::from(id))
 }
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
@@ -92,8 +91,12 @@ impl Simulation {
         }
         let mut index = Index::default();
         let mut handles = BTreeMap::new();
+        let mut brick_waters = BTreeMap::new();
         for (id, brick) in &world.bricks {
             let definition = definitions.get(brick)?;
+            if let Some(water) = brick_water(brick, definition) {
+                brick_waters.insert(*id, water);
+            }
             let bounds = Bounds::new(brick, &definition.mesh)?;
             index.insert(*id, bounds);
             handles.insert(
@@ -107,6 +110,7 @@ impl Simulation {
             definitions,
             physics,
             waters: Vec::new(),
+            brick_waters,
             index,
             handles,
             terrain: None,
@@ -172,6 +176,10 @@ impl Simulation {
         let ids = self.authority.load_build(actor, plan)?;
         for (id, bounds, collider) in prepared {
             self.index.insert(id, bounds);
+            let brick = &self.authority.state().bricks[&id];
+            if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
+                self.brick_waters.insert(id, water);
+            }
             self.handles
                 .insert(id, self.physics.insert_collider(collider, None));
         }
@@ -197,6 +205,9 @@ impl Simulation {
                 .insert_collider(brick_collider(brick, definition, id), None),
         );
         self.index.insert(id, bounds);
+        if let Some(water) = brick_water(brick, definition) {
+            self.brick_waters.insert(id, water);
+        }
         self.physics.detect_collisions(&(), &());
         Ok(id)
     }
@@ -214,6 +225,7 @@ impl Simulation {
         );
         self.authority.remove(actor, id)?;
         self.index.remove(id);
+        self.brick_waters.remove(&id);
         if let Some(handle) = self.handles.remove(&id) {
             self.physics.remove_collider(handle);
         }
@@ -221,32 +233,117 @@ impl Simulation {
         Ok(())
     }
     fn sync_flags(&mut self, id: BrickId) {
-        if let Some(handle) = self.handles.get(&id) {
-            self.physics.colliders[*handle]
-                .set_sensor(!self.authority.state().bricks[&id].colliding);
+        let Some(handle) = self.handles.get(&id) else {
+            return;
+        };
+        let brick = &self.authority.state().bricks[&id];
+        let sensor = !brick.colliding
+            || self
+                .definitions
+                .get(brick)
+                .is_ok_and(|d| d.special == Special::Water);
+        let collider = &mut self.physics.colliders[*handle];
+        if collider.is_sensor() == sensor {
+            return;
+        }
+        collider.set_sensor(sensor);
+        // Bodies resting on a brick that stops colliding must fall through.
+        let aabb = collider.compute_aabb();
+        let (min, max) = (
+            Vec3::from(aabb.mins.to_array()) - Vec3::splat(1.0),
+            Vec3::from(aabb.maxs.to_array()) + Vec3::splat(1.0),
+        );
+        let resting: Vec<_> = self
+            .physics
+            .bodies
+            .iter()
+            .filter(|(_, body)| {
+                let p = Vec3::from(body.translation().to_array());
+                body.is_dynamic() && body.is_sleeping() && p.cmpge(min).all() && p.cmple(max).all()
+            })
+            .map(|(handle, _)| handle)
+            .collect();
+        for handle in resting {
+            self.physics.wake_up(handle, true);
         }
     }
-    pub fn step(&mut self) -> Result<Vec<BrickId>> {
-        let changed = self.authority.step()?;
-        for id in &changed {
-            self.sync_flags(*id);
-        }
+    /// Trusted server change from the event engine or game rules.
+    pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
+        self.authority.mutate(id, change)?;
+        self.sync_flags(id);
+        self.physics.detect_collisions(&(), &());
+        Ok(())
+    }
+    pub fn step(&mut self) -> Result<()> {
+        self.authority.step()?;
         self.physics.step();
         self.stream_terrain();
-        Ok(changed)
+        Ok(())
     }
-    /// Eye and direction are from the server's player state, not packet positions.
-    pub fn activate(&mut self, eye: Vec3, direction: Vec3) -> Result<Option<BrickId>> {
-        let Some(hit) = self.target(eye, direction, 5.0)? else {
-            return Ok(None);
+    /// The brick an activation (click) ray reaches. Eye and direction are
+    /// from the server's player state, not packet positions.
+    pub fn activate(&self, eye: Vec3, direction: Vec3) -> Result<Option<BrickId>> {
+        Ok(self.target(eye, direction, 5.0)?.and_then(|hit| hit.brick))
+    }
+    /// World-space box of a brick's logical grid volume.
+    pub fn brick_box(&self, id: BrickId) -> Option<(Vec3, Vec3)> {
+        let brick = self.state().bricks.get(&id)?;
+        let mesh = &self.definitions.get(brick).ok()?.mesh;
+        Some(crate::definitions::brick_box(brick, mesh))
+    }
+    /// Map liquids plus water bricks, for the player motor.
+    pub fn liquids(&self) -> Vec<bri_content::water::Water> {
+        self.waters
+            .iter()
+            .chain(self.brick_waters.values())
+            .cloned()
+            .collect()
+    }
+    /// Swap a brick to another definition with the same grid size (the
+    /// treasure chest opening, a pumpkin being carved).
+    pub fn set_definition(&mut self, id: BrickId, definition: &str) -> Result<()> {
+        let brick = self.state().bricks.get(&id).context("Unknown brick")?;
+        let old = self.definitions.get(brick)?;
+        let new = self
+            .definitions
+            .entries
+            .get(definition)
+            .context("Unknown brick definition")?;
+        ensure!(
+            old.mesh.footprint_studs == new.mesh.footprint_studs
+                && old.mesh.height_plates == new.mesh.height_plates,
+            "Replacement brick has a different size"
+        );
+        let definition = definition.to_string();
+        self.authority.mutate(id, |b| {
+            b.definition = bri_world::ContentRef::Resolved(definition)
+        })?;
+        let brick = &self.authority.state().bricks[&id];
+        let collider = brick_collider(brick, self.definitions.get(brick)?, id);
+        if let Some(handle) = self.handles.remove(&id) {
+            self.physics.remove_collider(handle);
+        }
+        self.handles
+            .insert(id, self.physics.insert_collider(collider, None));
+        self.physics.detect_collisions(&(), &());
+        Ok(())
+    }
+    /// Bricks whose grid volume overlaps a world-space box.
+    pub fn bricks_in_box(&self, min: Vec3, max: Vec3) -> Vec<BrickId> {
+        let lo: [i32; 3] = std::array::from_fn(|a| (min[a] / grid::CELL[a]).floor() as i32 - 1);
+        let hi: [i32; 3] = std::array::from_fn(|a| (max[a] / grid::CELL[a]).ceil() as i32 + 1);
+        let bounds = Bounds {
+            min: lo,
+            size: std::array::from_fn(|a| (hi[a] - lo[a]).max(1)),
         };
-        let Some(id) = hit.brick else { return Ok(None) };
-        self.authority.trigger(id, Input::Activate)?;
-        Ok(Some(id))
-    }
-    /// Call on contact entry from the authoritative player collision controller.
-    pub fn touch(&mut self, id: BrickId) -> Result<usize> {
-        self.authority.trigger(id, Input::Touch)
+        self.index
+            .query(bounds)
+            .into_iter()
+            .filter(|id| {
+                self.brick_box(*id)
+                    .is_some_and(|(bmin, bmax)| bmin.cmplt(max).all() && bmax.cmpgt(min).all())
+            })
+            .collect()
     }
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
         self.target_filtered(origin, direction, max_distance, false)
@@ -348,9 +445,6 @@ fn validate_placement(
         "Invalid builder position/reach"
     );
     let definition = defs.get(brick)?;
-    if definition.requires_behavior_adapter {
-        return Err(PlantFailure::Unsupported.into());
-    }
     let bounds = Bounds::new(brick, &definition.mesh)?;
     let radius = *definition.mesh.footprint_studs.iter().max().unwrap() as f32 * 0.25;
     if builder.position.distance(Vec3::from(brick.position)) > builder.reach + radius {

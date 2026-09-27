@@ -139,15 +139,29 @@ mod tests {
     use super::*;
     #[test]
     fn maximum_native_event_strings_fit_even_with_json_escaping() {
-        let event = bri_world::Event {
+        let event = bri_world::EventRow {
+            preserved: None,
             enabled: false,
-            input: bri_world::Input::Activate,
+            input: "\u{1}".repeat(128),
             delay_ms: 300_000,
-            target: bri_world::Target::Named("\u{1}".repeat(128)),
-            action: bri_world::Action::Light(Some(bri_world::ContentRef::Resolved(
-                "\u{1}".repeat(512),
-            ))),
+            target: bri_world::EventTarget::Named("\u{1}".repeat(128)),
+            output: "\u{1}".repeat(128),
+            params: vec![bri_world::EventValue::Datablock(Some("\u{1}".repeat(256))); 4],
         };
+        let preserved = bri_world::EventRow {
+            preserved: Some(bri_events::PreservedRow {
+                original: "\u{1}".repeat(2048),
+                diagnostic: "\u{1}".repeat(1024),
+            }),
+            enabled: false,
+            input: String::new(),
+            delay_ms: 0,
+            target: bri_world::EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: String::new(),
+            params: vec![],
+        };
+        let mut rows = vec![event; bri_world::MAX_EVENTS_PER_BRICK / 2];
+        rows.resize(bri_world::MAX_EVENTS_PER_BRICK, preserved);
         let request = crate::protocol::Request {
             sequence: u64::MAX,
             aim: Some(bri_sim::session::ActionAim {
@@ -156,11 +170,11 @@ mod tests {
             }),
             command: bri_sim::session::Command::Tool(bri_sim::session::ToolAction::SetEvents {
                 brick: u64::MAX,
-                events: vec![event; bri_world::MAX_EVENTS_PER_BRICK],
+                events: rows,
             }),
         };
         let bytes = encode_request(&request, MAX_REQUEST).unwrap();
-        assert!(bytes.len() > 4 * 1024 * 1024);
+        assert!(bytes.len() > 8 * 1024 * 1024);
         assert!(bytes.len() <= MAX_REQUEST && bytes.len() <= MAX_FRAME);
         eprintln!("Worst escaped native event request: {} bytes", bytes.len());
         let decoded: crate::protocol::Request = serde_json::from_slice(&bytes).unwrap();

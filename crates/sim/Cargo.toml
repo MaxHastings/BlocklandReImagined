@@ -15,5 +15,6 @@ bri-weapons = { path = "../weapons" }
 bri-admin = { path = "../admin" }
 bri-minigames = { path = "../minigames" }
 bri-vehicles = { path = "../vehicles" }
+bri-events = { path = "../events" }
 glam = "0.33"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }

@@ -6,13 +6,83 @@ use bri_content::{
 use bri_world::{Brick as Placed, ContentRef};
 use rapier3d::prelude::SharedShape;
 use std::{collections::BTreeMap, path::Path};
+/// Stock bricks whose behavior comes from their add-on script rather than
+/// geometry alone; the session implements each natively.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Special {
+    #[default]
+    None,
+    /// `isWaterBrick`: a swimmable, non-solid liquid volume.
+    Water,
+    Checkpoint,
+    Teledoor,
+    TreasureChest,
+    /// The open chest shown briefly after a find.
+    TreasureChestOpen,
+    /// Uncarved pumpkin; a sword hit carves it.
+    Pumpkin,
+}
 #[derive(Clone)]
 pub struct Definition {
     pub mesh: Brick,
     pub collision: CollisionBody,
     pub shape: SharedShape,
     pub indestructible: bool,
-    pub requires_behavior_adapter: bool,
+    pub special: Special,
+}
+/// World-space box of a placed brick's logical grid volume.
+pub fn brick_box(brick: &Placed, mesh: &Brick) -> (glam::Vec3, glam::Vec3) {
+    let (x, z) = if brick.quarter_turns % 2 == 1 {
+        (mesh.footprint_studs[1], mesh.footprint_studs[0])
+    } else {
+        (mesh.footprint_studs[0], mesh.footprint_studs[1])
+    };
+    let half = glam::Vec3::new(
+        x as f32 * 0.25,
+        mesh.height_plates as f32 * 0.1,
+        z as f32 * 0.25,
+    );
+    let center = glam::Vec3::from(brick.position);
+    (center - half, center + half)
+}
+/// The swimmable volume of a water brick. Presentation comes from the brick's
+/// own mesh; this is only the liquid players move through.
+pub fn brick_water(brick: &Placed, definition: &Definition) -> Option<bri_content::water::Water> {
+    if definition.special != Special::Water {
+        return None;
+    }
+    let (min, max) = brick_box(brick, &definition.mesh);
+    let image = || bri_content::environment::Image {
+        file: "brick-water".into(),
+        source: String::new(),
+        sha256: "0".repeat(64),
+        width: 1,
+        height: 1,
+    };
+    Some(bri_content::water::Water {
+        schema_version: 1,
+        node: 0,
+        id: "brick-water".into(),
+        min: min.to_array(),
+        max: max.to_array(),
+        repeat_period: None,
+        liquid_type: "Water".into(),
+        density: 1.0,
+        viscosity: 15.0,
+        surface: image(),
+        shore: image(),
+        reflection: None,
+        opacity: 0.5,
+        wave_amplitude: 0.0,
+        flow: [0.0; 2],
+        distortion: [0.0, 0.0, 1.0],
+        tiles: [1.0; 2],
+        depth_mask: false,
+        depth_alpha: [0.0; 4],
+        reflection_intensity: 0.0,
+        parallax: 0.0,
+        warnings: vec![],
+    })
 }
 #[derive(Default, Clone)]
 pub struct Definitions {
@@ -68,18 +138,22 @@ impl Definitions {
                 .build()
                 .shared_shape()
                 .clone();
-            let requires_behavior_adapter = entry
+            let special = if entry
                 .other_properties
                 .get("iswaterbrick")
                 .is_some_and(|v| v == "true" || v == "1")
-                // These stock declarations depend on script callbacks, not just
-                // geometry. Keep the gap explicit until native adapters exist.
-                || matches!(entry.id.as_str(),
-                    "v20/brick/brickpumpkinbasedata" |
-                    "v20/brick/bricktreasurechestdata" |
-                    "v20/brick/bricktreasurechestopendata" |
-                    "v20/brick/brickcheckpointdata" |
-                    "v20/brick/brickteledoordata");
+            {
+                Special::Water
+            } else {
+                match entry.id.as_str() {
+                    "v20/brick/brickcheckpointdata" => Special::Checkpoint,
+                    "v20/brick/brickteledoordata" => Special::Teledoor,
+                    "v20/brick/bricktreasurechestdata" => Special::TreasureChest,
+                    "v20/brick/bricktreasurechestopendata" => Special::TreasureChestOpen,
+                    "v20/brick/brickpumpkinbasedata" => Special::Pumpkin,
+                    _ => Special::None,
+                }
+            };
             ensure!(
                 out.entries
                     .insert(
@@ -89,7 +163,7 @@ impl Definitions {
                             collision,
                             shape,
                             indestructible: entry.indestructible,
-                            requires_behavior_adapter
+                            special,
                         }
                     )
                     .is_none(),

@@ -48,7 +48,6 @@ fn main() -> Result<()> {
     }
     let bundle = json(args[3].join("bundle.json"))?;
     let mut catalog_checks = 0;
-    let mut pending_bricks = Vec::new();
     let mut catalog_sim = Simulation::new(
         World::new(
             "Catalog placement".into(),
@@ -68,10 +67,6 @@ fn main() -> Result<()> {
     };
     for name in ids {
         let definition = &catalog_sim.definitions.entries[&name];
-        if definition.requires_behavior_adapter {
-            pending_bricks.push(name);
-            continue;
-        }
         let [width, depth] = definition.mesh.footprint_studs.map(|v| v as f32);
         let height = definition.mesh.height_plates as f32;
         for turn in 0..4 {
@@ -183,7 +178,7 @@ fn main() -> Result<()> {
     std::fs::write(
         &args[4],
         serde_json::to_vec_pretty(
-            &serde_json::json!({"status":"passed","definitions":definition_count,"catalog_plant_remove_cases":catalog_checks,"pending_brick_behaviors":pending_bricks,"worlds":worlds,"total_bricks":total,"maps":map_checks,"elapsed_seconds":start.elapsed().as_secs_f64(),"scope":"Native corpus grid/collider loading, catalog placement in four orientations on a fixture floor, and building near original Bedroom/Kitchen/Slopes spawns. Terrain coverage is the explicit finite cell region; streaming beyond it and listed object adapters remain pending. Headless CPU timings include parsing and collision cooking/indexing; not game frame rates. Player feel is not accepted by this probe."}),
+            &serde_json::json!({"status":"passed","definitions":definition_count,"catalog_plant_remove_cases":catalog_checks,"worlds":worlds,"total_bricks":total,"maps":map_checks,"elapsed_seconds":start.elapsed().as_secs_f64(),"scope":"Native corpus grid/collider loading, catalog placement in four orientations on a fixture floor, and building near original Bedroom/Kitchen/Slopes spawns. Terrain coverage is the explicit finite cell region; streaming beyond it and listed object adapters remain pending. Headless CPU timings include parsing and collision cooking/indexing; not game frame rates. Player feel is not accepted by this probe."}),
         )?,
     )?;
     println!(

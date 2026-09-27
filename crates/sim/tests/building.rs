@@ -8,10 +8,7 @@ use bri_sim::{
     grid::Bounds,
     simulation::{Builder, Simulation},
 };
-use bri_world::{
-    Action, Brick, ContentRef, Event, Input, Target, World,
-    authority::{Actor, Edit},
-};
+use bri_world::{Brick, ContentRef, World, authority::Actor};
 use glam::Vec3;
 use rapier3d::prelude::*;
 
@@ -47,7 +44,7 @@ fn definitions() -> Definitions {
                 collision,
                 shape,
                 indestructible: false,
-                requires_behavior_adapter: false,
+                special: Default::default(),
             },
         )]
         .into(),
@@ -119,18 +116,10 @@ fn targeting_flags_and_delayed_collision_changes_reach_the_solver() {
         position: Vec3::Y,
         reach: 50.0,
     };
-    let mut b = brick(0.1);
-    b.events.push(Event {
-        enabled: true,
-        input: Input::Activate,
-        delay_ms: 10,
-        target: Target::ThisBrick,
-        action: Action::Colliding(false),
-    });
+    let b = brick(0.1);
     let id = sim.plant(&builder, b).unwrap();
     let eye = Vec3::new(0.5, 2.0, 0.25);
-    sim.edit(&owner, id, Edit::Action(Action::Visible(false)))
-        .unwrap();
+    sim.mutate(id, |b| b.visible = false).unwrap();
     assert_eq!(
         sim.target(eye, -Vec3::Y, 3.0).unwrap().unwrap().brick,
         Some(id)
@@ -144,10 +133,7 @@ fn targeting_flags_and_delayed_collision_changes_reach_the_solver() {
     }
     assert!((sim.physics.bodies[body].translation().y - 0.3).abs() < 0.015);
     assert_eq!(sim.activate(eye, -Vec3::Y).unwrap(), Some(id));
-    sim.step().unwrap();
-    sim.step().unwrap();
-    assert!(sim.state().bricks[&id].colliding);
-    sim.step().unwrap();
+    sim.mutate(id, |b| b.colliding = false).unwrap();
     assert!(!sim.state().bricks[&id].colliding);
     for _ in 0..240 {
         sim.step().unwrap();
@@ -157,8 +143,7 @@ fn targeting_flags_and_delayed_collision_changes_reach_the_solver() {
         sim.target(eye, -Vec3::Y, 3.0).unwrap().unwrap().brick,
         Some(id)
     );
-    sim.edit(&owner, id, Edit::Action(Action::Raycast(false)))
-        .unwrap();
+    sim.mutate(id, |b| b.raycast = false).unwrap();
     assert_eq!(sim.target(eye, -Vec3::Y, 3.0).unwrap().unwrap().brick, None);
 }
 

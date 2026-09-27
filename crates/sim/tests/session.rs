@@ -8,7 +8,7 @@ use bri_sim::{
     session::{Command, Reply, Session, Snapshot},
     simulation::Simulation,
 };
-use bri_world::{Action, World, authority::Edit};
+use bri_world::{EventRow, EventTarget, EventValue, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
 fn session() -> Session {
@@ -43,7 +43,7 @@ fn session() -> Session {
                 collision,
                 shape,
                 indestructible: false,
-                requires_behavior_adapter: false,
+                special: Default::default(),
             },
         )]
         .into(),
@@ -106,27 +106,41 @@ fn failed_spawn_attempts_do_not_leave_admin_rows_on_join_or_resume() {
         .unwrap();
     let principal = Some(Principal([2; 32]));
 
-    assert!(s
-        .join_verified("Guest".into(), Vec3::splat(f32::NAN), false, principal)
-        .is_err());
+    assert!(
+        s.join_verified("Guest".into(), Vec3::splat(f32::NAN), false, principal)
+            .is_err()
+    );
     let guest = s
         .join_verified("Guest".into(), Vec3::new(5.0, 1.0, 0.0), false, principal)
         .unwrap();
     let rows = s.admin_state(host).unwrap().players;
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().any(|row| row.name == "Host" && row.connection == 1));
-    assert!(rows.iter().any(|row| row.name == "Guest" && row.connection == 3));
+    assert!(
+        rows.iter()
+            .any(|row| row.name == "Host" && row.connection == 1)
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.name == "Guest" && row.connection == 3)
+    );
 
     s.disconnect(guest).unwrap();
-    assert!(s
-        .resume_verified(guest, Vec3::splat(f32::NAN), false, principal)
-        .is_err());
+    assert!(
+        s.resume_verified(guest, Vec3::splat(f32::NAN), false, principal)
+            .is_err()
+    );
     s.resume_verified(guest, Vec3::new(9.0, 1.0, 0.0), false, principal)
         .unwrap();
     let rows = s.admin_state(host).unwrap().players;
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().any(|row| row.name == "Host" && row.connection == 1));
-    assert!(rows.iter().any(|row| row.name == "Guest" && row.connection == 5));
+    assert!(
+        rows.iter()
+            .any(|row| row.name == "Host" && row.connection == 1)
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.name == "Guest" && row.connection == 5)
+    );
 }
 
 #[test]
@@ -140,12 +154,13 @@ fn setup_admin_passwords_are_prejoin_only_and_login_grants_authoritative_role() 
     )
     .unwrap();
     let owner = s.join("Player".into(), Vec3::Y, false).unwrap();
-    assert!(s
-        .set_admin_passwords(
+    assert!(
+        s.set_admin_passwords(
             Secret::new("replacement".into()).unwrap(),
             Secret::new(String::new()).unwrap(),
         )
-        .is_err());
+        .is_err()
+    );
 
     let command = Command::Admin(Request::new(Action::Login {
         password: Secret::new("admin-pass".into()).unwrap(),
@@ -187,11 +202,12 @@ fn ban_and_unban_publish_only_after_durable_commit() {
         reason: "fixture".into(),
     }));
 
-    assert!(s
-        .command_with_aim_and_admin_persistence(host, 1, ban.clone(), None, |_| {
+    assert!(
+        s.command_with_aim_and_admin_persistence(host, 1, ban.clone(), None, |_| {
             anyhow::bail!("disk full")
         })
-        .is_err());
+        .is_err()
+    );
     assert!(s.admin_durable_state().bans.is_empty());
     assert!(s.names().contains_key(&target));
     assert!(s.take_admin_disconnects().is_empty());
@@ -215,11 +231,12 @@ fn ban_and_unban_publish_only_after_durable_commit() {
     let unban = Command::Admin(Request::new(Action::Unban {
         ban: saved.bans[0].id,
     }));
-    assert!(s
-        .command_with_aim_and_admin_persistence(host, 3, unban, None, |_| {
+    assert!(
+        s.command_with_aim_and_admin_persistence(host, 3, unban, None, |_| {
             anyhow::bail!("disk full")
         })
-        .is_err());
+        .is_err()
+    );
     assert_eq!(s.admin_durable_state().bans, saved.bans);
 }
 
@@ -453,7 +470,7 @@ fn two_players_build_edit_and_late_join_share_authoritative_state() {
             2,
             Command::Edit {
                 brick: id,
-                edit: Edit::Action(Action::Color(1))
+                edit: Edit::Color(1)
             }
         )
         .unwrap_err()
@@ -466,7 +483,7 @@ fn two_players_build_edit_and_late_join_share_authoritative_state() {
         3,
         Command::Edit {
             brick: id,
-            edit: Edit::Action(Action::Color(1)),
+            edit: Edit::Color(1),
         },
     )
     .unwrap();
@@ -507,16 +524,15 @@ fn packet_frequency_cannot_advance_time_or_forge_positions_and_authority() {
     let before = s.snapshot().players[0].clone();
     let mut accepted = 0;
     for seq in 1..=240 {
-        if s
-            .movement(
-                a,
-                seq,
-                MoveInput {
-                    forward: 1.0,
-                    ..Default::default()
-                },
-            )
-            .is_ok()
+        if s.movement(
+            a,
+            seq,
+            MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+        )
+        .is_ok()
         {
             accepted += 1;
         }
@@ -623,6 +639,8 @@ fn converging_players_do_not_pass_through_each_other() {
 #[test]
 fn physical_touch_enters_event_scheduler_once() {
     let mut s = session();
+    s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
     let a = s
         .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
         .unwrap();
@@ -652,12 +670,14 @@ fn physical_touch_enters_event_scheduler_once() {
         3,
         Command::Edit {
             brick: id,
-            edit: Edit::Events(vec![bri_world::Event {
+            edit: Edit::Events(vec![EventRow {
+                preserved: None,
                 enabled: true,
-                input: bri_world::Input::Touch,
+                input: "onPlayerTouch".into(),
                 delay_ms: 100,
-                target: bri_world::Target::ThisBrick,
-                action: Action::Color(1),
+                target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+                output: "setColor".into(),
+                params: vec![EventValue::Color(1)],
             }]),
         },
     )
@@ -668,6 +688,4 @@ fn physical_touch_enters_event_scheduler_once() {
         s.step().unwrap();
     }
     assert_eq!(s.simulation().state().bricks[&id].color, 1);
-    assert!(s.simulation().state().pending.is_empty());
-    assert_eq!(s.simulation().state().next_event_order, 2);
 }

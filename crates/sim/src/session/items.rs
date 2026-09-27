@@ -57,6 +57,11 @@ impl Session {
         }
         Ok(())
     }
+    /// `spawnItem` event output.
+    pub(super) fn spawn_event_item(&mut self, item: &str, at: Vec3, velocity: Vec3) -> Result<()> {
+        self.weapons.spawn_drop(item, at, velocity)?;
+        Ok(())
+    }
     pub(super) fn step_items(&mut self) -> Result<()> {
         if self.item_spawners.bounds.is_empty() {
             return Ok(());

@@ -9,4 +9,5 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 glam = "0.33"
+bri-events = { path = "../events" }
 

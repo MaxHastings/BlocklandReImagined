@@ -105,7 +105,7 @@ impl Session {
         weapons.tick = self.simulation.state().tick;
         self.weapons = weapons;
         self.minigames = super::combat::new_world(catalog);
-        Ok(())
+        self.refresh_event_bindings()
     }
 
     pub(super) fn spawn_inventory(&mut self, owner: OwnerId) -> Result<()> {
@@ -180,8 +180,7 @@ pub(super) fn require_equipment(
 pub(super) fn edit_equipment(edit: &Edit) -> Option<&'static str> {
     match edit {
         Edit::Print(_) => Some(CORE_TOOLS[2]),
-        Edit::Action(bri_world::Action::Color(_) | bri_world::Action::ColorEffect(_))
-        | Edit::ShapeEffect(_) => None,
+        Edit::Color(_) | Edit::ColorEffect(_) | Edit::ShapeEffect(_) => None,
         _ => Some(CORE_TOOLS[1]),
     }
 }

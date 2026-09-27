@@ -13,7 +13,8 @@ use rapier3d::prelude::*;
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
 /// Families that are not placed on spawn bricks (item/state vehicles).
-const INTERNAL_FAMILIES: [veh::Family; 3] = [veh::Family::Skis, veh::Family::Tumble, veh::Family::Turret];
+const INTERNAL_FAMILIES: [veh::Family; 3] =
+    [veh::Family::Skis, veh::Family::Tumble, veh::Family::Turret];
 /// Collider tag namespace for vehicles (players use 1 << 64).
 pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 
@@ -93,7 +94,7 @@ impl Session {
             world: Some(veh::VehiclesWorld::new(pack)?),
             ..Default::default()
         };
-        Ok(())
+        self.refresh_event_bindings()
     }
     /// Vehicles a spawn brick may hold (the wrench's Vehicle list).
     pub fn vehicle_choices(&self) -> Vec<(String, String)> {
@@ -229,15 +230,14 @@ impl Session {
         self.tag_vehicle(id);
         self.vehicles.by_brick.insert(brick_id, id);
         self.vehicles.brick_of.insert(id, brick_id);
-        self.vehicles
-            .colors
-            .insert(id, spawn_color(&brick));
+        self.vehicles.colors.insert(id, spawn_color(&brick));
         Ok(())
     }
     fn tag_vehicle(&mut self, id: VehicleId) {
         if let Some(world) = &self.vehicles.world {
             for collider in world.colliders_of(&self.simulation.physics, id) {
-                self.simulation.physics.colliders[collider].user_data = VEHICLE_TAG | u128::from(id.0);
+                self.simulation.physics.colliders[collider].user_data =
+                    VEHICLE_TAG | u128::from(id.0);
             }
         }
     }
@@ -407,7 +407,11 @@ impl Session {
         let Some(world) = &mut self.vehicles.world else {
             return Ok(());
         };
-        let was_held = self.vehicles.jump_held.insert(owner, input.jump).unwrap_or(true);
+        let was_held = self
+            .vehicles
+            .jump_held
+            .insert(owner, input.jump)
+            .unwrap_or(true);
         let family = world
             .snapshot(&self.simulation.physics)
             .vehicles
@@ -440,7 +444,12 @@ impl Session {
             brake: input.crouch && !horse,
             jump: horse && input.jump,
             jet: input.jet,
-            fire: self.vehicles.fire_held.get(&owner).copied().unwrap_or(false),
+            fire: self
+                .vehicles
+                .fire_held
+                .get(&owner)
+                .copied()
+                .unwrap_or(false),
             aim_yaw: input.yaw,
             aim_pitch: input.pitch,
         };
@@ -525,7 +534,7 @@ impl Session {
     }
     pub(super) fn vehicle_pre_step(&mut self) -> Result<()> {
         self.reconcile_vehicle_bricks()?;
-        let waters = self.simulation.waters.clone();
+        let waters = self.simulation.liquids();
         if let Some(world) = &mut self.vehicles.world {
             world.pre_step(&mut self.simulation.physics, |p| {
                 waters
@@ -601,11 +610,16 @@ impl Session {
                             yaw,
                         )?;
                         peer.player.push(Vec3::from(velocity));
-                        peer.player.set_solid(&mut self.simulation.physics, peer.combat.alive);
+                        peer.player
+                            .set_solid(&mut self.simulation.physics, peer.combat.alive);
                         peer.inputs.clear();
                     }
                 }
-                Intent::Effect { vehicle, id, active } => {
+                Intent::Effect {
+                    vehicle,
+                    id,
+                    active,
+                } => {
                     if active && let Some(position) = self.vehicle_position(vehicle) {
                         self.cues.emit(
                             tick,

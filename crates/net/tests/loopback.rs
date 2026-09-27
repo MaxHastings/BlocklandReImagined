@@ -3,23 +3,25 @@ use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
 };
+use bri_identity::ClientIdentity;
 use bri_net::{
     client::Client,
-    protocol::{Hello, IdentityProof, JoinBegin, Message, ResumeToken, VERSION, identity_transcript},
+    protocol::{
+        Hello, IdentityProof, JoinBegin, Message, ResumeToken, VERSION, identity_transcript,
+    },
     server::{self, ServerOptions},
 };
-use bri_identity::ClientIdentity;
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
     session::{AdminData, Command, InspectMode, Reply, Session, ToolAction},
     simulation::Simulation,
 };
-use bri_world::{Action, World, authority::Edit};
+use bri_world::{EventRow, EventTarget, EventValue, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::time::Duration;
 use sha2::Digest;
+use std::time::Duration;
 fn session() -> Session {
     let mesh = Mesh {
         schema_version: 1,
@@ -52,12 +54,12 @@ fn session() -> Session {
                 collision,
                 shape,
                 indestructible: false,
-                requires_behavior_adapter: false,
+                special: Default::default(),
             },
         )]
         .into(),
     };
-    Session::new(
+    let mut session = Session::new(
         Simulation::new(
             World::new(
                 "Loopback".into(),
@@ -70,7 +72,22 @@ fn session() -> Session {
             ],
         )
         .unwrap(),
-    )
+    );
+    session
+        .set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    session
+}
+fn color_row(target: EventTarget, color: u8) -> EventRow {
+    EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 0,
+        target,
+        output: "setColor".into(),
+        params: vec![EventValue::Color(color)],
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -221,14 +238,12 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         matches!(owner.command(inspect.clone()).await?, Reply::Inspected { brick_id, mode: InspectMode::Events, .. } if brick_id == id)
     );
     let events: Vec<_> = (0..bri_world::MAX_EVENTS_PER_BRICK)
-        .map(|index| bri_world::Event {
-            enabled: true,
-            input: bri_world::Input::Activate,
-            delay_ms: 0,
-            // Unique names make ordering loss observable without triggering these
-            // events; relay execution/per-tick budgets are separate acceptance work.
-            target: bri_world::Target::Named(format!("event-order-{index:04}")),
-            action: Action::Color((index % 2) as u8),
+        // Unique names make ordering loss observable without triggering these events.
+        .map(|index| {
+            color_row(
+                EventTarget::Named(format!("event-order-{index:04}")),
+                (index % 2) as u8,
+            )
         })
         .collect();
     let command = Command::Tool(ToolAction::SetEvents {
@@ -647,7 +662,12 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         })))
         .await
         .unwrap_err();
-    assert!(denied.to_string().to_ascii_lowercase().contains("protected"));
+    assert!(
+        denied
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("protected")
+    );
 
     let mut target = Client::connect(
         server.address,
@@ -787,7 +807,7 @@ async fn wait(client: &mut Client, predicate: impl Fn(&Client) -> bool) -> Resul
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result<()> {
-    use bri_world::{Brick, ContentRef, Event, Input, Target, build::SavedBuild};
+    use bri_world::{Brick, ContentRef, build::SavedBuild};
     let server = server::start(session(), options())?;
     let mut guest = Client::connect(
         server.address,
@@ -834,13 +854,9 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         guest.owner,
     );
     brick.name = Some("button".into());
-    brick.events.push(Event {
-        enabled: true,
-        input: Input::Activate,
-        delay_ms: 0,
-        target: Target::Named("button".into()),
-        action: Action::Color(0),
-    });
+    brick
+        .events
+        .push(color_row(EventTarget::Named("button".into()), 0));
     source.bricks.insert(99, brick);
     source.next_brick_id = 100;
     let build = SavedBuild::capture(&source, None, true, true)?;
@@ -861,7 +877,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         guest.replica.world.palette[first.color as usize],
         source.palette[0]
     );
-    assert_eq!(first.events[0].action, Action::Color(first.color));
+    assert_eq!(first.events[0].params, vec![EventValue::Color(first.color)]);
     let Reply::Saved(saved) = guest
         .command(Command::SaveBuild {
             events: true,
@@ -1176,7 +1192,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
     assert!(
         b.command(Command::Edit {
             brick: id,
-            edit: Edit::Action(Action::Color(1))
+            edit: Edit::Color(1)
         })
         .await
         .unwrap_err()
@@ -1185,7 +1201,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
     );
     a.command(Command::Edit {
         brick: id,
-        edit: Edit::Action(Action::Color(1)),
+        edit: Edit::Color(1),
     })
     .await?;
     a.command(Command::Chat("Native multiplayer".into()))
@@ -1313,7 +1329,10 @@ async fn wrong_host_certificate_is_rejected_and_idle_input_stops() -> Result<()>
 /// datagrams. Returns the final sequence.
 fn send_inputs(client: &mut Client, inputs: &[MoveInput]) -> Result<u64> {
     let first = client.replica.poses[&client.owner].acknowledged_input + 1;
-    for (i, chunk) in inputs.chunks(bri_net::protocol::MOVEMENT_REDUNDANCY).enumerate() {
+    for (i, chunk) in inputs
+        .chunks(bri_net::protocol::MOVEMENT_REDUNDANCY)
+        .enumerate()
+    {
         let newest = first + (i * bri_net::protocol::MOVEMENT_REDUNDANCY + chunk.len()) as u64 - 1;
         client.movement(newest, chunk)?;
     }
@@ -1413,54 +1432,122 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
     let victim_key = ClientIdentity::load_or_create(state_dir.path().join("victim.identity"))?;
     let other_key = ClientIdentity::load_or_create(state_dir.path().join("other.identity"))?;
 
-    let server = server::start_with_admin_store_and_limit(
-        session(), options(), 7, &admin_file,
-    )?;
-    assert!(Client::connect(
-        server.address, &server.certificate, "Anonymous".into(), "fixture-v1".into(), None,
-    ).await.is_err());
+    let server = server::start_with_admin_store_and_limit(session(), options(), 7, &admin_file)?;
+    assert!(
+        Client::connect(
+            server.address,
+            &server.certificate,
+            "Anonymous".into(),
+            "fixture-v1".into(),
+            None,
+        )
+        .await
+        .is_err()
+    );
     let mut host = Client::connect_with_identity(
-        server.address, &server.certificate, "Host".into(), "fixture-v1".into(),
-        None, Some(server.host_token.clone()), &host_key,
-    ).await?;
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        "fixture-v1".into(),
+        None,
+        Some(server.host_token.clone()),
+        &host_key,
+    )
+    .await?;
     let victim = Client::connect_with_identity(
-        server.address, &server.certificate, "Copied Name".into(), "fixture-v1".into(),
-        None, None, &victim_key,
-    ).await?;
-    wait(&mut host, |client| client.admin_snapshot.as_ref().is_some_and(|snapshot|
-        snapshot.players.iter().any(|player| player.name == "Copied Name"))) .await?;
+        server.address,
+        &server.certificate,
+        "Copied Name".into(),
+        "fixture-v1".into(),
+        None,
+        None,
+        &victim_key,
+    )
+    .await?;
+    wait(&mut host, |client| {
+        client.admin_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot
+                .players
+                .iter()
+                .any(|player| player.name == "Copied Name")
+        })
+    })
+    .await?;
     let victim_owner = victim.owner;
     let victim_ticket = victim.resume.clone();
     drop(victim);
-    wait(&mut host, |client| !client.replica.names.contains_key(&victim_owner)).await?;
+    wait(&mut host, |client| {
+        !client.replica.names.contains_key(&victim_owner)
+    })
+    .await?;
     let revision_before_resume = host.admin_snapshot.as_ref().unwrap().revision;
     let victim = Client::connect_with_identity(
-        server.address, &server.certificate, "Copied Name".into(), "fixture-v1".into(),
-        Some(victim_ticket.clone()), None, &victim_key,
-    ).await?;
+        server.address,
+        &server.certificate,
+        "Copied Name".into(),
+        "fixture-v1".into(),
+        Some(victim_ticket.clone()),
+        None,
+        &victim_key,
+    )
+    .await?;
     assert_eq!(victim.owner, victim_owner);
-    wait(&mut host, |client| client.admin_snapshot.as_ref().is_some_and(|snapshot|
-        snapshot.revision > revision_before_resume
-            && snapshot.players.iter().filter(|player| player.name == "Copied Name").count() == 1)).await?;
-    let victim_connection = host.admin_snapshot.as_ref().unwrap().players.iter()
-        .find(|player| player.name == "Copied Name").unwrap().connection;
+    wait(&mut host, |client| {
+        client.admin_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.revision > revision_before_resume
+                && snapshot
+                    .players
+                    .iter()
+                    .filter(|player| player.name == "Copied Name")
+                    .count()
+                    == 1
+        })
+    })
+    .await?;
+    let victim_connection = host
+        .admin_snapshot
+        .as_ref()
+        .unwrap()
+        .players
+        .iter()
+        .find(|player| player.name == "Copied Name")
+        .unwrap()
+        .connection;
 
-    let host_connection = host.admin_snapshot.as_ref().unwrap().players.iter()
-        .find(|player| player.owner).unwrap().connection;
-    let protected = host.command(Command::Admin(Request::new(AdminAction::Ban {
-        target: bri_admin::ConnectionId(host_connection),
-        duration: BanDuration::Forever,
-        reason: "must not ban host".into(),
-    }))).await.unwrap_err();
+    let host_connection = host
+        .admin_snapshot
+        .as_ref()
+        .unwrap()
+        .players
+        .iter()
+        .find(|player| player.owner)
+        .unwrap()
+        .connection;
+    let protected = host
+        .command(Command::Admin(Request::new(AdminAction::Ban {
+            target: bri_admin::ConnectionId(host_connection),
+            duration: BanDuration::Forever,
+            reason: "must not ban host".into(),
+        })))
+        .await
+        .unwrap_err();
     assert!(protected.to_string().contains("protected"));
 
-    let Reply::Admin(ban_reply) = host.command(Command::Admin(Request::new(AdminAction::Ban {
-        target: bri_admin::ConnectionId(victim_connection),
-        duration: BanDuration::Forever,
-        reason: "verified target".into(),
-    }))).await? else { panic!("ban must return admin reply") };
+    let Reply::Admin(ban_reply) = host
+        .command(Command::Admin(Request::new(AdminAction::Ban {
+            target: bri_admin::ConnectionId(victim_connection),
+            duration: BanDuration::Forever,
+            reason: "verified target".into(),
+        })))
+        .await?
+    else {
+        panic!("ban must return admin reply")
+    };
     assert!(matches!(ban_reply.data, AdminData::None));
-    wait(&mut host, |client| !client.replica.names.contains_key(&victim_owner)).await?;
+    wait(&mut host, |client| {
+        !client.replica.names.contains_key(&victim_owner)
+    })
+    .await?;
     let stored = DurableState::read(std::fs::File::open(&admin_file)?)?;
     assert_eq!(stored.bans.len(), 1);
     let expected_principal: [u8; 32] = sha2::Sha256::digest(victim_key.public_key()).into();
@@ -1468,47 +1555,89 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
     let ban_id = stored.bans[0].id;
 
     let stolen_ticket = Client::connect_with_identity(
-        server.address, &server.certificate, "Copied Name".into(), "fixture-v1".into(),
-        Some(victim_ticket.clone()), None, &other_key,
-    ).await;
+        server.address,
+        &server.certificate,
+        "Copied Name".into(),
+        "fixture-v1".into(),
+        Some(victim_ticket.clone()),
+        None,
+        &other_key,
+    )
+    .await;
     assert!(stolen_ticket.is_err());
     let banned_reconnect = Client::connect_with_identity(
-        server.address, &server.certificate, "Renamed".into(), "fixture-v1".into(),
-        Some(victim_ticket.clone()), None, &victim_key,
-    ).await;
+        server.address,
+        &server.certificate,
+        "Renamed".into(),
+        "fixture-v1".into(),
+        Some(victim_ticket.clone()),
+        None,
+        &victim_key,
+    )
+    .await;
     assert!(banned_reconnect.is_err());
 
     // A copied name does not inherit the ban; only possession of the key does.
     let other = Client::connect_with_identity(
-        server.address, &server.certificate, "Copied Name".into(), "fixture-v1".into(),
-        None, None, &other_key,
-    ).await?;
+        server.address,
+        &server.certificate,
+        "Copied Name".into(),
+        "fixture-v1".into(),
+        None,
+        None,
+        &other_key,
+    )
+    .await?;
     drop(other);
     drop(host);
     drop(victim);
     server.stop().await?;
 
-    let server = server::start_with_admin_store_and_limit(
-        session(), options(), 7, &admin_file,
-    )?;
+    let server = server::start_with_admin_store_and_limit(session(), options(), 7, &admin_file)?;
     let mut host = Client::connect_with_identity(
-        server.address, &server.certificate, "Host".into(), "fixture-v1".into(),
-        None, Some(server.host_token.clone()), &host_key,
-    ).await?;
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        "fixture-v1".into(),
+        None,
+        Some(server.host_token.clone()),
+        &host_key,
+    )
+    .await?;
     let banned_after_restart = Client::connect_with_identity(
-        server.address, &server.certificate, "Renamed".into(), "fixture-v1".into(),
-        None, None, &victim_key,
-    ).await;
+        server.address,
+        &server.certificate,
+        "Renamed".into(),
+        "fixture-v1".into(),
+        None,
+        None,
+        &victim_key,
+    )
+    .await;
     assert!(banned_after_restart.is_err());
-    let Reply::Admin(list) = host.command(Command::Admin(Request::new(AdminAction::RequestBanList))).await? else {
+    let Reply::Admin(list) = host
+        .command(Command::Admin(Request::new(AdminAction::RequestBanList)))
+        .await?
+    else {
         panic!("ban list must return admin reply")
     };
-    assert!(matches!(list.data, AdminData::BanList { rows, .. } if rows.len() == 1 && rows[0].id == ban_id));
-    let Reply::Admin(unban) = host.command(Command::Admin(Request::new(AdminAction::Unban { ban: BanId(ban_id.0) }))).await? else {
+    assert!(
+        matches!(list.data, AdminData::BanList { rows, .. } if rows.len() == 1 && rows[0].id == ban_id)
+    );
+    let Reply::Admin(unban) = host
+        .command(Command::Admin(Request::new(AdminAction::Unban {
+            ban: BanId(ban_id.0),
+        })))
+        .await?
+    else {
         panic!("unban must return admin reply")
     };
     assert!(matches!(unban.data, AdminData::None));
-    assert!(DurableState::read(std::fs::File::open(&admin_file)?)?.bans.is_empty());
+    assert!(
+        DurableState::read(std::fs::File::open(&admin_file)?)?
+            .bans
+            .is_empty()
+    );
     drop(host);
     server.stop().await?;
 
@@ -1517,7 +1646,8 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         ..Default::default()
     };
     let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?.as_secs();
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
     expired.bans.push(bri_admin::BanRecord {
         id: BanId(1),
         principal: bri_admin::Principal(expected_principal),
@@ -1531,21 +1661,34 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
     expired.write(&mut expired_bytes)?;
     std::fs::write(&admin_file, expired_bytes)?;
 
-    let server = server::start_with_admin_store_and_limit(
-        session(), options(), 7, &admin_file,
-    )?;
+    let server = server::start_with_admin_store_and_limit(session(), options(), 7, &admin_file)?;
     let mut host = Client::connect_with_identity(
-        server.address, &server.certificate, "Host".into(), "fixture-v1".into(),
-        None, Some(server.host_token.clone()), &host_key,
-    ).await?;
-    let Reply::Admin(expired_list) = host.command(Command::Admin(Request::new(AdminAction::RequestBanList))).await? else {
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        "fixture-v1".into(),
+        None,
+        Some(server.host_token.clone()),
+        &host_key,
+    )
+    .await?;
+    let Reply::Admin(expired_list) = host
+        .command(Command::Admin(Request::new(AdminAction::RequestBanList)))
+        .await?
+    else {
         panic!("expired ban list must return admin reply")
     };
     assert!(matches!(expired_list.data, AdminData::BanList { rows, .. } if rows.is_empty()));
     let recovered = Client::connect_with_identity(
-        server.address, &server.certificate, "Renamed".into(), "fixture-v1".into(),
-        None, None, &victim_key,
-    ).await?;
+        server.address,
+        &server.certificate,
+        "Renamed".into(),
+        "fixture-v1".into(),
+        None,
+        None,
+        &victim_key,
+    )
+    .await?;
     drop(recovered);
     drop(host);
     server.stop().await?;
@@ -1558,11 +1701,9 @@ async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<(
     server
         .advertise("LAN Host".into(), "Fixture".into(), 8, "fixture-v1".into())
         .await?;
-    let found = bri_net::discovery::query(
-        &["127.0.0.1:28050".parse()?],
-        Duration::from_millis(1500),
-    )
-    .await?;
+    let found =
+        bri_net::discovery::query(&["127.0.0.1:28050".parse()?], Duration::from_millis(1500))
+            .await?;
     let (address, beacon) = found
         .into_iter()
         .next()
@@ -1583,11 +1724,9 @@ async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<(
     .await?;
     client.command(Command::Chat("found you".into())).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let found = bri_net::discovery::query(
-        &["127.0.0.1:28050".parse()?],
-        Duration::from_millis(1500),
-    )
-    .await?;
+    let found =
+        bri_net::discovery::query(&["127.0.0.1:28050".parse()?], Duration::from_millis(1500))
+            .await?;
     assert_eq!(found[0].1.players, 1, "listing reports connected players");
     drop(client);
     server.stop().await?;

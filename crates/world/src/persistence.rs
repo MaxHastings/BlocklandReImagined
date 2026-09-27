@@ -31,11 +31,7 @@ pub fn load_startup(path: &Path) -> Result<World> {
         .read_to_end(&mut bytes)?;
     match decode(&bytes) {
         Ok(world) => Ok(world),
-        Err(_) => {
-            let mut build = crate::build::decode(&bytes)?;
-            build.world.pending.clear();
-            Ok(build.world)
-        }
+        Err(_) => Ok(crate::build::decode(&bytes)?.world),
     }
 }
 /// Flush a staging file, then publish a new revision with an atomic no-clobber

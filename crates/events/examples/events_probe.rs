@@ -118,7 +118,7 @@ fn main() -> Result<()> {
     let a: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
         a.len() == 2,
-        "Usage: headless_probe <native-catalog.json> <report.json>"
+        "Usage: events_probe <native-catalog.json> <report.json>"
     );
     let catalog = Catalog::load(&a[0])?;
     let report = json!({"profile":if cfg!(debug_assertions){"debug"}else{"release"},"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"processor":std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default(),"inputs":catalog.inputs.len(),"outputs":catalog.outputs.len(),"sustained":run(&catalog,64,512,240)?,"overloaded":run(&catalog,4096,4096,120)?});

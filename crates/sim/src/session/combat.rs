@@ -7,7 +7,7 @@
 //! `MiniGameSO` membership functions.
 use super::*;
 use bri_minigames::{
-    self as mg, Decision, DamageSource, EnvironmentDamage, GameId, LifeState, MinigamesWorld,
+    self as mg, DamageSource, Decision, EnvironmentDamage, GameId, LifeState, MinigamesWorld,
 };
 use bri_weapons::{ActorId, CORE_TOOLS};
 
@@ -77,15 +77,30 @@ pub struct MiniGameView {
 pub enum Notice {
     /// Chat line; may contain color escapes and `<bitmap:...>` death icons.
     Chat(String),
-    Center { text: String, seconds: f32 },
-    Bottom { text: String, seconds: f32 },
+    Center {
+        text: String,
+        seconds: f32,
+    },
+    Bottom {
+        text: String,
+        seconds: f32,
+    },
     /// Invitation from a minigame owner, answered with Accept/Reject.
-    Invite { game: u64, owner_name: String, title: String },
+    Invite {
+        game: u64,
+        owner_name: String,
+        title: String,
+    },
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum MiniGameRequest {
     Create { color: u8, settings: mg::Settings },
     Configure { settings: mg::Settings },
@@ -103,10 +118,15 @@ pub enum MiniGameRequest {
 /// Damage classes from `DamageTypes.cs`; weapon types carry their own name.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum DamageKind {
-    Weapon { name: String, direct: bool },
+    Weapon {
+        name: String,
+        direct: bool,
+    },
     Fall,
     Impact,
     Suicide,
+    /// Wrench event output (`kill`, negative `addHealth`).
+    Event,
 }
 impl DamageKind {
     fn direct(&self) -> bool {
@@ -129,7 +149,7 @@ impl DamageKind {
             }
             Self::Fall => "crater",
             Self::Impact => "splat",
-            Self::Suicide => "skull",
+            Self::Suicide | Self::Event => "skull",
         }
     }
 }
@@ -150,11 +170,14 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
 }
 
 pub(super) fn new_world(catalog: mg::Catalog) -> MinigamesWorld {
-    MinigamesWorld::new(catalog, mg::PolicyMode::Internet, true)
-        .unwrap_or_else(|_| {
-            MinigamesWorld::new(mg::Catalog::minimal_vanilla(), mg::PolicyMode::Internet, true)
-                .expect("minimal vanilla catalog is valid")
-        })
+    MinigamesWorld::new(catalog, mg::PolicyMode::Internet, true).unwrap_or_else(|_| {
+        MinigamesWorld::new(
+            mg::Catalog::minimal_vanilla(),
+            mg::PolicyMode::Internet,
+            true,
+        )
+        .expect("minimal vanilla catalog is valid")
+    })
 }
 
 fn color_code(n: u32) -> char {
@@ -165,15 +188,18 @@ impl Session {
     /// Map spawn points (feet positions) for respawns outside spawn bricks.
     pub fn set_spawn_points(&mut self, points: Vec<Vec3>) -> Result<()> {
         ensure!(
-            !points.is_empty()
-                && points.len() <= 256
-                && points.iter().all(|p| p.is_finite()),
+            !points.is_empty() && points.len() <= 256 && points.iter().all(|p| p.is_finite()),
             "Invalid spawn points"
         );
         self.spawn_points = points;
         Ok(())
     }
-    pub(super) fn combat_connect(&mut self, owner: OwnerId, name: &str, admin: bool) -> Result<Combat> {
+    pub(super) fn combat_connect(
+        &mut self,
+        owner: OwnerId,
+        name: &str,
+        admin: bool,
+    ) -> Result<Combat> {
         let player = self
             .minigames
             .connect(mg::AccountId(owner), name.to_string(), admin)
@@ -206,7 +232,7 @@ impl Session {
             .find(|(_, p)| p.combat.player == player)
             .map(|(id, _)| *id)
     }
-    fn game_of(&self, owner: OwnerId) -> Option<GameId> {
+    pub(super) fn game_of(&self, owner: OwnerId) -> Option<GameId> {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
     }
@@ -253,7 +279,7 @@ impl Session {
     pub fn take_private_notices(&mut self) -> Vec<(OwnerId, Notice)> {
         self.private_notices.drain(..).collect()
     }
-    fn notify(&mut self, owner: OwnerId, notice: Notice) {
+    pub(super) fn notify(&mut self, owner: OwnerId, notice: Notice) {
         if self.private_notices.len() == MAX_NOTICES {
             self.private_notices.pop_front();
         }
@@ -338,7 +364,7 @@ impl Session {
         }
         if tick.saturating_sub(peer.combat.spawn_tick) < INVULNERABLE_TICKS
             && !peer.combat.shot_once
-            && kind != DamageKind::Suicide
+            && !matches!(kind, DamageKind::Suicide | DamageKind::Event)
         {
             return Ok(());
         }
@@ -364,7 +390,12 @@ impl Session {
         self.kill(target, source, kind)
     }
 
-    fn kill(&mut self, victim: OwnerId, killer: Option<OwnerId>, kind: DamageKind) -> Result<()> {
+    pub(super) fn kill(
+        &mut self,
+        victim: OwnerId,
+        killer: Option<OwnerId>,
+        kind: DamageKind,
+    ) -> Result<()> {
         let tick = self.simulation.state().tick;
         let Some(peer) = self.peers.get(&victim) else {
             return Ok(());
@@ -379,10 +410,10 @@ impl Session {
             return Ok(());
         };
         // A killer from another minigame (or none) cannot be credited.
-        let killer = killer.filter(|k| {
-            *k == victim || self.game_of(*k) == self.game_of(victim)
-        });
-        let killer_player = killer.and_then(|k| self.peers.get(&k)).map(|p| p.combat.player);
+        let killer = killer.filter(|k| *k == victim || self.game_of(*k) == self.game_of(victim));
+        let killer_player = killer
+            .and_then(|k| self.peers.get(&k))
+            .map(|p| p.combat.player);
         let effects = self
             .minigames
             .died(player, life, killer_player)
@@ -480,8 +511,17 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn minigame_request(&mut self, owner: OwnerId, request: MiniGameRequest) -> Result<()> {
-        let actor = self.peers.get(&owner).context("Unknown connection")?.combat.player;
+    pub(super) fn minigame_request(
+        &mut self,
+        owner: OwnerId,
+        request: MiniGameRequest,
+    ) -> Result<()> {
+        let actor = self
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .combat
+            .player;
         let lookup = |session: &Self, target: OwnerId| -> Result<mg::PlayerId> {
             Ok(session
                 .peers
@@ -569,7 +609,11 @@ impl Session {
             self.chat_game(
                 game,
                 None,
-                format!("{}{name}{} reset the mini-game", color_code(3), color_code(5)),
+                format!(
+                    "{}{name}{} reset the mini-game",
+                    color_code(3),
+                    color_code(5)
+                ),
             );
         }
         self.apply_minigame_effects(effects)
@@ -741,7 +785,8 @@ impl Session {
         let (feet, yaw) = self.pick_spawn(owner);
         {
             let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-            peer.player.teleport(&mut self.simulation.physics, feet, yaw)?;
+            peer.player
+                .teleport(&mut self.simulation.physics, feet, yaw)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.combat.health = MAX_HEALTH;
             peer.combat.alive = true;
@@ -766,6 +811,9 @@ impl Session {
         if let Some(home) = self.bot_home(owner) {
             return (home, 0.0);
         }
+        if let Some(checkpoint) = self.checkpoint_spawn(owner) {
+            return checkpoint;
+        }
         let world = self.simulation.state();
         let spawn_bricks: Vec<_> = world
             .bricks
@@ -781,7 +829,13 @@ impl Session {
             .wrapping_add(1442695040888963407);
         let word = self.spawn_seed;
         let chosen = self.peers.get(&owner).and_then(|peer| {
-            if self.minigames.player(peer.combat.player).ok()?.game.is_some() {
+            if self
+                .minigames
+                .player(peer.combat.player)
+                .ok()?
+                .game
+                .is_some()
+            {
                 let points: Vec<_> = spawn_bricks
                     .iter()
                     .map(|(id, owner)| mg::SpawnPoint {
@@ -873,6 +927,26 @@ impl Session {
     pub(super) fn note_shot(&mut self, owner: OwnerId) {
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.combat.shot_once = true;
+        }
+    }
+    /// `addHealth` / `setHealth` event outputs.
+    pub(super) fn change_health(
+        &mut self,
+        owner: OwnerId,
+        change: bri_events::semantics::HealthChange,
+    ) -> Result<()> {
+        use bri_events::semantics::HealthChange;
+        match change {
+            HealthChange::Unchanged => Ok(()),
+            HealthChange::SetDamage(damage) => {
+                if let Some(peer) = self.peers.get_mut(&owner) {
+                    peer.combat.health = (MAX_HEALTH - damage).clamp(0.0, MAX_HEALTH);
+                }
+                Ok(())
+            }
+            HealthChange::Damage(amount) => {
+                self.damage_player(owner, amount, DamageKind::Event, None)
+            }
         }
     }
     pub fn is_alive(&self, owner: OwnerId) -> bool {

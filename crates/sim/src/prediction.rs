@@ -3,7 +3,7 @@
 //! world. Authoritative poses acknowledge the last input the server consumed;
 //! the predictor restores that state and replays the inputs still in flight.
 use crate::{
-    definitions::Definitions,
+    definitions::{Definitions, brick_water},
     player::{MotionEvents, MoveInput, Player, PlayerState, PlayerTuning},
     simulation::{MAP_TAG, brick_collider},
 };
@@ -42,7 +42,10 @@ impl Geometry {
 pub struct CollisionMirror {
     physics: PhysicsWorld,
     definitions: Definitions,
+    map_waters: Vec<Water>,
+    /// Map liquids followed by water bricks, as the server's motor sees them.
     waters: Vec<Water>,
+    brick_waters: BTreeMap<BrickId, Water>,
     bricks: BTreeMap<BrickId, (ColliderHandle, Geometry)>,
     terrain: Option<crate::map::TerrainStream>,
 }
@@ -56,7 +59,9 @@ impl CollisionMirror {
         Self {
             physics,
             definitions,
+            map_waters: waters.clone(),
             waters,
+            brick_waters: BTreeMap::new(),
             bricks: BTreeMap::new(),
             terrain: None,
         }
@@ -69,7 +74,12 @@ impl CollisionMirror {
             let geometry = Geometry::of(brick);
             if self.bricks.get(id).is_none_or(|(_, old)| *old != geometry) {
                 let definition = self.definitions.get(brick)?;
-                changed.push((*id, brick_collider(brick, definition, *id), geometry));
+                changed.push((
+                    *id,
+                    brick_collider(brick, definition, *id),
+                    geometry,
+                    brick_water(brick, definition),
+                ));
             }
         }
         let removed: Vec<_> = self
@@ -83,17 +93,27 @@ impl CollisionMirror {
         }
         for id in removed {
             if let Some((handle, _)) = self.bricks.remove(&id) {
-                self.physics
-                    .remove_collider(handle);
+                self.physics.remove_collider(handle);
             }
+            self.brick_waters.remove(&id);
         }
-        for (id, collider, geometry) in changed {
+        for (id, collider, geometry, water) in changed {
             if let Some((handle, _)) = self.bricks.remove(&id) {
                 self.physics.remove_collider(handle);
             }
             let handle = self.physics.insert_collider(collider, None);
             self.bricks.insert(id, (handle, geometry));
+            match water {
+                Some(water) => self.brick_waters.insert(id, water),
+                None => self.brick_waters.remove(&id),
+            };
         }
+        self.waters = self
+            .map_waters
+            .iter()
+            .chain(self.brick_waters.values())
+            .cloned()
+            .collect();
         self.physics.detect_collisions(&(), &());
         Ok(true)
     }
@@ -226,14 +246,17 @@ impl Predictor {
         // other bodies), so replays can differ by float noise. Keep the local
         // prediction through sub-millimeter differences rather than jittering.
         if Vec3::from(predicted.feet).distance(Vec3::from(corrected.feet)) < NOISE
-            && Vec3::from(predicted.velocity).distance(Vec3::from(corrected.velocity)) < NOISE * 10.0
+            && Vec3::from(predicted.velocity).distance(Vec3::from(corrected.velocity))
+                < NOISE * 10.0
             && predicted.grounded == corrected.grounded
             && predicted.crouched == corrected.crouched
         {
             self.player.restore(&mut self.world.physics, predicted)?;
             return Ok(Some(Vec3::ZERO));
         }
-        Ok(Some(Vec3::from(predicted.feet) - Vec3::from(corrected.feet)))
+        Ok(Some(
+            Vec3::from(predicted.feet) - Vec3::from(corrected.feet),
+        ))
     }
     /// Server-initiated relocation (respawn, teleport): discard in-flight inputs.
     pub fn teleport(&mut self, tick: u64, ack: u64, state: PlayerState) -> Result<()> {

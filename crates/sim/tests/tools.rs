@@ -12,7 +12,7 @@ use bri_sim::{
     simulation::Simulation,
 };
 use bri_world::{
-    Action, Brick, ContentRef, Event, Input, SourceRecord, Target, World, authority::Edit,
+    Brick, ContentRef, EventRow, EventTarget, EventValue, SourceRecord, World, authority::Edit,
 };
 use glam::Vec3;
 use rapier3d::prelude::*;
@@ -49,7 +49,7 @@ fn session(bricks: Vec<Brick>, wall: bool) -> Session {
                 collision,
                 shape,
                 indestructible: false,
-                requires_behavior_adapter: false,
+                special: Default::default(),
             },
         )]
         .into(),
@@ -70,7 +70,11 @@ fn session(bricks: Vec<Brick>, wall: bool) -> Session {
             ColliderBuilder::cuboid(10.0, 10.0, 0.1).translation(Vector::new(0.0, 0.0, -2.0)),
         );
     }
-    Session::new(Simulation::new(world, definitions, colliders).unwrap())
+    let mut session = Session::new(Simulation::new(world, definitions, colliders).unwrap());
+    session
+        .set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    session
 }
 fn catalog() -> ToolCatalog {
     ToolCatalog {
@@ -747,12 +751,14 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
         .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
         .unwrap();
     aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
-    let event = Event {
+    let event = EventRow {
+        preserved: None,
         enabled: true,
-        input: Input::Activate,
+        input: "onActivate".into(),
         delay_ms: 25,
-        target: Target::ThisBrick,
-        action: Action::Light(Some(ContentRef::Resolved("unknown".into()))),
+        target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+        output: "setLight".into(),
+        params: vec![EventValue::Datablock(Some("unknown".into()))],
     };
     inspect(&mut s, owner, 1, InspectMode::Events);
     let before = s.snapshot().world;
@@ -779,20 +785,10 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
         )
         .is_err()
     );
-    assert!(
-        s.command(
-            owner,
-            4,
-            Command::Edit {
-                brick: 1,
-                edit: Edit::Action(event.action)
-            }
-        )
-        .is_err()
-    );
     assert_eq!(s.snapshot().world, before);
-    let event = Event {
-        action: Action::Color(1),
+    let event = EventRow {
+        output: "setColor".into(),
+        params: vec![EventValue::Color(1)],
         ..event
     };
     tool(
@@ -975,12 +971,14 @@ fn nested_events_return_to_wrench_without_overwriting_concurrent_properties() {
             5,
             ToolAction::SetEvents {
                 brick: id,
-                events: vec![Event {
+                events: vec![EventRow {
+                    preserved: None,
                     enabled: true,
-                    input: Input::Activate,
+                    input: "onActivate".into(),
                     delay_ms: 0,
-                    target: Target::ThisBrick,
-                    action: Action::Color(1),
+                    target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+                    output: "setColor".into(),
+                    params: vec![EventValue::Color(1)],
                 }],
             },
         )
