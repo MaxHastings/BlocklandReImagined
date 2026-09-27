@@ -568,6 +568,20 @@ impl MinigamesWorld {
         }
         Ok(out)
     }
+    /// Trusted host placement: bots follow their spawn brick owner's game
+    /// without invitations or join cooldowns.
+    pub fn host_place(&mut self, player: PlayerId, game: Option<GameId>) -> Result<Vec<Effect>, Error> {
+        self.player(player)?;
+        let mut out = Vec::new();
+        match game {
+            Some(id) => {
+                self.game(id)?;
+                self.join_member(player, id, &mut out)?;
+            }
+            None => self.remove_member(player, &mut out)?,
+        }
+        Ok(out)
+    }
     /// Trusted host moderation entry point. A network admin flag must not call this directly.
     pub fn moderate_end(&mut self, game: GameId) -> Result<Vec<Effect>, Error> {
         self.game(game)?;

@@ -763,6 +763,9 @@ impl Session {
     /// Minigame spawn bricks per `MiniGameSO::pickSpawnPoint`, then the
     /// player's own spawn bricks outside minigames, then the map drop points.
     fn pick_spawn(&mut self, owner: OwnerId) -> (Vec3, f32) {
+        if let Some(home) = self.bot_home(owner) {
+            return (home, 0.0);
+        }
         let world = self.simulation.state();
         let spawn_bricks: Vec<_> = world
             .bricks

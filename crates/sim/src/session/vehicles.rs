@@ -104,6 +104,7 @@ impl Session {
                 w.definitions()
                     .filter(|d| !INTERNAL_FAMILIES.contains(&d.family))
                     .map(|d| (d.id.clone(), d.name.trim().to_string()))
+                    .chain(Self::bot_choices())
                     .collect()
             })
             .unwrap_or_default()
@@ -177,6 +178,18 @@ impl Session {
         }
     }
     fn spawn_vehicle_for(&mut self, brick_id: BrickId) -> Result<()> {
+        if self
+            .simulation
+            .state()
+            .bricks
+            .get(&brick_id)
+            .and_then(|b| b.vehicle.as_ref())
+            .is_some_and(|v| {
+                matches!(&v.vehicle, bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id))
+            })
+        {
+            return Ok(());
+        }
         let Some(brick) = self.simulation.state().bricks.get(&brick_id).cloned() else {
             return Ok(());
         };
@@ -269,6 +282,9 @@ impl Session {
                     bri_world::ContentRef::Resolved(id) => Some(id.clone()),
                     _ => None,
                 });
+            self.reconcile_bot_brick(brick_id, wanted.as_deref())?;
+            // Bot kinds share the spawn brick's list but are not vehicles.
+            let wanted = wanted.filter(|id| !super::bots::is_bot_kind(id));
             let current = self.vehicles.by_brick.get(&brick_id).copied();
             let current_definition = current.and_then(|id| {
                 self.vehicles
@@ -443,6 +459,7 @@ impl Session {
         let mut attempts = Vec::new();
         for (owner, peer) in &self.peers {
             if !peer.combat.alive
+                || self.bots.is_bot(*owner)
                 || self.vehicles.mounted.contains_key(owner)
                 || self
                     .vehicles

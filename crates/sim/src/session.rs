@@ -12,6 +12,7 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod admin;
+mod bots;
 mod combat;
 mod inventory;
 mod vehicles;
@@ -216,6 +217,7 @@ struct Peer {
     combat: combat::Combat,
 }
 pub struct Session {
+    bots: bots::Bots,
     vehicles: vehicles::Vehicles,
     minigames: bri_minigames::MinigamesWorld,
     spawn_points: Vec<Vec3>,
@@ -259,6 +261,7 @@ impl Session {
         let mut weapons = inventory::core_runtime();
         weapons.tick = simulation.state().tick;
         Self {
+            bots: Default::default(),
             vehicles: Default::default(),
             minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
             spawn_points: Vec::new(),
@@ -362,6 +365,16 @@ impl Session {
         trusted_host: bool,
         principal: Option<bri_admin::Principal>,
     ) -> Result<OwnerId> {
+        self.join_inner(name, spawn, trusted_host, false, principal)
+    }
+    fn join_inner(
+        &mut self,
+        name: String,
+        spawn: Vec3,
+        trusted_host: bool,
+        is_bot: bool,
+        principal: Option<bri_admin::Principal>,
+    ) -> Result<OwnerId> {
         ensure!(self.peers.len() < 64, "Server is full");
         ensure!(
             !name.trim().is_empty() && name.len() <= 48 && !name.chars().any(char::is_control),
@@ -369,7 +382,7 @@ impl Session {
         );
         let owner = self.next_owner;
         let next = owner.checked_add(1).context("Owner IDs exhausted")?;
-        let role = self.admin_connect(owner, name.clone(), trusted_host, false, principal)?;
+        let role = self.admin_connect(owner, name.clone(), trusted_host, is_bot, principal)?;
         let player = match Player::spawn(
             &mut self.simulation.physics,
             owner,
@@ -888,6 +901,7 @@ impl Session {
     }
     pub fn step(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
+        self.step_bots()?;
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut driving = Vec::new();

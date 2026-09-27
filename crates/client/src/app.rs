@@ -470,6 +470,7 @@ impl App {
                     )
                 })
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
+                .chain(bri_sim::session::Session::bot_choices())
                 .collect(),
         )?;
         let item_assets = Arc::new(crate::items::ItemAssets::load(
