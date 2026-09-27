@@ -510,8 +510,8 @@ BRICK",
                     let torque = [0, 1, 2].map(|c| p[c].as_f64().unwrap() as f32);
                     let native = [torque[0], torque[2], -torque[1]];
                     let vertex = quad.vertices[k];
-                    for c in 0..3 {
-                        assert!((vertex.position[c] - native[c]).abs() < 1e-5, "{size:?}");
+                    for (actual, want) in vertex.position.iter().zip(native) {
+                        assert!((actual - want).abs() < 1e-5, "{size:?}");
                     }
                     for c in 0..2 {
                         let want = uv[c].as_f64().unwrap() as f32;
