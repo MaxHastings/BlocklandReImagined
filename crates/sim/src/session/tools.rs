@@ -52,6 +52,10 @@ pub enum ToolAction {
         events: Vec<Event>,
     },
     UndoPlant,
+    /// Vehicle spawn wrench `< Respawn >`.
+    RespawnVehicle {
+        brick: BrickId,
+    },
 }
 
 /// Server-configured bindings, never supplied by a remote player. An empty
@@ -70,6 +74,13 @@ pub struct ToolCatalog {
     /// Original new printable bricks use Letters/A unless a last-print choice
     /// exists. None is useful for synthetic servers without a print catalog.
     pub default_print: Option<String>,
+    /// Music loops a sound brick may play.
+    pub sounds: BTreeSet<String>,
+    /// Vehicles a vehicle spawn brick may hold.
+    pub vehicles: BTreeSet<String>,
+    /// Brick definitions that accept a sound / a vehicle.
+    pub sound_bricks: BTreeSet<String>,
+    pub vehicle_bricks: BTreeSet<String>,
 }
 
 impl ToolCatalog {
@@ -177,6 +188,28 @@ impl ToolCatalog {
                 if let Some(name) = &properties.name {
                     ensure!(!name.chars().any(char::is_control), "Invalid brick name");
                 }
+                let definition = match &brick.definition {
+                    ContentRef::Resolved(id) => id.as_str(),
+                    _ => "",
+                };
+                if let Some(sound) = &properties.sound {
+                    ensure!(
+                        self.sound_bricks.contains(definition),
+                        "Only music bricks can play music"
+                    );
+                    validate_asset(&ContentRef::Resolved(sound.clone()), &self.sounds, "Music")?;
+                }
+                if let Some(vehicle) = &properties.vehicle {
+                    ensure!(
+                        self.vehicle_bricks.contains(definition),
+                        "Only vehicle spawn bricks can hold vehicles"
+                    );
+                    validate_asset(
+                        &ContentRef::Resolved(vehicle.clone()),
+                        &self.vehicles,
+                        "Vehicle",
+                    )?;
+                }
             }
             Edit::Events(events) => {
                 for event in events {
@@ -235,7 +268,8 @@ impl Session {
             | ToolAction::SetPrint { .. } => Some(Some(bri_weapons::CORE_TOOLS[2])),
             ToolAction::Inspect { .. }
             | ToolAction::SetWrench { .. }
-            | ToolAction::SetEvents { .. } => Some(Some(bri_weapons::CORE_TOOLS[1])),
+            | ToolAction::SetEvents { .. }
+            | ToolAction::RespawnVehicle { .. } => Some(Some(bri_weapons::CORE_TOOLS[1])),
             ToolAction::Paint { .. }
             | ToolAction::ColorEffect { .. }
             | ToolAction::ShapeEffect { .. } => Some(None),
@@ -317,6 +351,12 @@ impl Session {
                 );
             }
             return Ok(reply);
+        }
+        if let ToolAction::RespawnVehicle { brick: expected } = action {
+            ensure!(id == expected, "Vehicle spawn brick is out of reach");
+            peer.inspection = None;
+            self.respawn_vehicle_brick(id)?;
+            return Ok(Reply::Accepted);
         }
         if action == ToolAction::Hammer {
             let position = brick.position;

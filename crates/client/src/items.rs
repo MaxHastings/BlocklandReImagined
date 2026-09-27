@@ -154,7 +154,7 @@ fn visible_detail(shape: &Shape) -> Option<usize> {
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) -> Result<Vec<u8>> {
+pub(crate) fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) -> Result<Vec<u8>> {
     ensure!(
         expected.len() == 64 && expected.bytes().all(|b| b.is_ascii_hexdigit()),
         "Invalid native SHA256"
@@ -169,6 +169,114 @@ fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) -> Result<V
 fn valid_tint(tint: [f32; 4]) -> bool {
     tint.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v))
 }
+/// One native DTS-derived shape as a posed scene. Opaque materials act as
+/// paint overlays (texture alpha over the tint), matching colorShift models.
+pub fn native_shape_scene(
+    model: &str,
+    shape: &Shape,
+    textures: &[&SceneImage],
+    tint: [f32; 4],
+    transform: Mat4,
+    pose: &Pose,
+) -> Result<SceneData> {
+    validate_transform(transform)?;
+    ensure!(valid_tint(tint), "Invalid model tint");
+    ensure!(
+        textures.len() == shape.materials.len(),
+        "Unbound native model material: {model}"
+    );
+
+        let mut scene = SceneData {
+            id: model.into(),
+            name: model.into(),
+            ..Default::default()
+        };
+        if shape
+            .meshes
+            .iter()
+            .flatten()
+            .any(|m| m.billboard || m.billboard_y)
+        {
+            scene.omissions.push(format!("{model}: authored billboard flag retained; current generic posed geometry does not face the camera automatically"));
+        }
+        let mut bindings = Vec::new();
+        let mut image_bindings = BTreeMap::new();
+        for (source, texture) in shape.materials.iter().zip(textures) {
+            let overlay = source.blend == "opaque";
+            let key = (texture.label.clone(), overlay);
+            let image = *image_bindings.entry(key).or_insert_with(|| {
+                let mut image = (*texture).clone();
+                image.srgb = !overlay;
+                let index = scene.images.len();
+                scene.images.push(image);
+                index
+            });
+            let mut material = if overlay {
+                Material::brick_overlay(format!("item/{model}/{}", source.name), image)
+            } else {
+                Material::vertex_lit(format!("item/{model}/{}", source.name), image)
+            };
+            if source.unlit {
+                material.kind = if overlay {
+                    MaterialKind::UnlitOverlay
+                } else {
+                    MaterialKind::Unlit
+                };
+            }
+            material.alpha = match source.blend.as_str() {
+                "opaque" if tint[3] >= 1. => AlphaMode::Opaque,
+                "opaque" | "alpha" => AlphaMode::Blend,
+                "additive" => AlphaMode::Additive,
+                other => anyhow::bail!("Unsupported item blend {other}"),
+            };
+            if source.environment || source.bump_map.is_some() || source.detail_map.is_some() {
+                scene.omissions.push(format!(
+                    "{model}/{}: environment/bump/detail maps are not composed",
+                    source.name
+                ));
+            }
+            if !source.wrap_u || !source.wrap_v {
+                scene.omissions.push(format!(
+                    "{model}/{}: shared scene sampler repeats both axes",
+                    source.name
+                ));
+            }
+            bindings.push(scene.materials.len());
+            scene.materials.push(material);
+        }
+        let fallback = scene.materials.len();
+        scene
+            .materials
+            .push(Material::vertex_lit("Unassigned original model face", 0));
+        if let Some(detail) = shape
+            .details
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.collision)
+            .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
+            .map(|(i, _)| i)
+        {
+            scene.append_shape(
+                ShapeInstance {
+                    shape,
+                    pose,
+                    detail,
+                    transform,
+                    materials: &bindings,
+                    translucent_materials: None,
+                    unassigned_material: fallback,
+                },
+                |_| Some(tint),
+            )?;
+        } else {
+            scene.omissions.push(format!(
+                "{model}: authored native shape has no visible detail"
+            ));
+        }
+        scene.validate()?;
+        Ok(scene)
+}
+
 fn validate_transform(transform: Mat4) -> Result<()> {
     ensure!(
         transform.is_finite()
@@ -434,102 +542,14 @@ impl ItemAssets {
         sequence: Option<&str>,
         seconds: f32,
     ) -> Result<SceneData> {
-        validate_transform(transform)?;
-        ensure!(valid_tint(tint), "Invalid item tint");
         let shape = self.shape(model)?;
         let pose = self.pose(model, sequence, seconds)?;
-        let mut scene = SceneData {
-            id: model.into(),
-            name: model.into(),
-            ..Default::default()
-        };
-        if shape
-            .meshes
+        let textures: Vec<&SceneImage> = self.presentation.models[model]
+            .textures
             .iter()
-            .flatten()
-            .any(|m| m.billboard || m.billboard_y)
-        {
-            scene.omissions.push(format!("{model}: authored billboard flag retained; current generic posed geometry does not face the camera automatically"));
-        }
-        let mut bindings = Vec::new();
-        let mut image_bindings = BTreeMap::new();
-        for (source, texture) in shape
-            .materials
-            .iter()
-            .zip(&self.presentation.models[model].textures)
-        {
-            let overlay = source.blend == "opaque";
-            let image = *image_bindings.entry((texture, overlay)).or_insert_with(|| {
-                let mut image = self.textures[texture].clone();
-                image.srgb = !overlay;
-                let index = scene.images.len();
-                scene.images.push(image);
-                index
-            });
-            let mut material = if overlay {
-                Material::brick_overlay(format!("item/{model}/{}", source.name), image)
-            } else {
-                Material::vertex_lit(format!("item/{model}/{}", source.name), image)
-            };
-            if source.unlit {
-                material.kind = if overlay {
-                    MaterialKind::UnlitOverlay
-                } else {
-                    MaterialKind::Unlit
-                };
-            }
-            material.alpha = match source.blend.as_str() {
-                "opaque" if tint[3] >= 1. => AlphaMode::Opaque,
-                "opaque" | "alpha" => AlphaMode::Blend,
-                "additive" => AlphaMode::Additive,
-                other => anyhow::bail!("Unsupported item blend {other}"),
-            };
-            if source.environment || source.bump_map.is_some() || source.detail_map.is_some() {
-                scene.omissions.push(format!(
-                    "{model}/{}: environment/bump/detail maps are not composed",
-                    source.name
-                ));
-            }
-            if !source.wrap_u || !source.wrap_v {
-                scene.omissions.push(format!(
-                    "{model}/{}: shared scene sampler repeats both axes",
-                    source.name
-                ));
-            }
-            bindings.push(scene.materials.len());
-            scene.materials.push(material);
-        }
-        let fallback = scene.materials.len();
-        scene
-            .materials
-            .push(Material::vertex_lit("Unassigned original model face", 0));
-        if let Some(detail) = shape
-            .details
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| !d.collision)
-            .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
-            .map(|(i, _)| i)
-        {
-            scene.append_shape(
-                ShapeInstance {
-                    shape,
-                    pose: &pose,
-                    detail,
-                    transform,
-                    materials: &bindings,
-                    translucent_materials: None,
-                    unassigned_material: fallback,
-                },
-                |_| Some(tint),
-            )?;
-        } else {
-            scene.omissions.push(format!(
-                "{model}: authored native shape has no visible detail"
-            ));
-        }
-        scene.validate()?;
-        Ok(scene)
+            .map(|id| &self.textures[id])
+            .collect();
+        native_shape_scene(model, shape, &textures, tint, transform, &pose)
     }
     pub fn item_scene(&self, id: &str, transform: Mat4) -> Result<SceneData> {
         let item = self

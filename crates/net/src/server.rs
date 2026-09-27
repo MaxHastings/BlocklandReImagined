@@ -342,6 +342,7 @@ async fn run(
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
     let mut minigames = Vec::new();
+    let mut vehicles = Vec::new();
     let mut last_chat = 0;
     let mut joins = 0;
     let mut resumes = 0;
@@ -417,7 +418,8 @@ async fn run(
             for _ in 0..steps {
             session.step()?;let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
-                for pose in poses(&session){let bytes=serde_json::to_vec(&pose)?;for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}
+                for pose in poses(&session){let bytes=serde_json::to_vec(&Datagram::Pose(pose))?;for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}
+                for pose in session.vehicle_poses(){let bytes=serde_json::to_vec(&Datagram::Vehicle(pose))?;if bytes.len()<=MAX_DATAGRAM{for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}}
             }
             if tick.is_multiple_of(6) {
                 let mut bricks=BTreeMap::new();for id in session.take_dirty(){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
@@ -428,10 +430,11 @@ async fn run(
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
                 let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
+                let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames}))?);cursor=next;
+                let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles}))?);cursor=next;
                 for peer in peers.values(){if peer.out.try_send(bytes.clone()).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){let bytes=Arc::new(codec::encode(&Message::Notice(notice))?);if peer.out.try_send(bytes).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}}
             }

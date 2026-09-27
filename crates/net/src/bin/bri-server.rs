@@ -14,20 +14,37 @@ use std::{
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+/// Music-brick loop ids declared by the audio pack.
+fn audio_music(audio: &std::path::Path) -> Result<Vec<String>> {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(audio.join("manifest.json"))?)?;
+    Ok(manifest["triggers"]
+        .as_array()
+        .context("Missing audio triggers")?
+        .iter()
+        .filter(|t| {
+            t["key"]
+                .as_str()
+                .is_some_and(|k| k.starts_with("music-brick:"))
+        })
+        .filter_map(|t| t["sound"].as_str().map(str::to_string))
+        .collect())
+}
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(
-        args.len() == 15 || args.len() == 16,
-        "Usage: bri-server <catalog-dir> <native-content> <world.json> <map-bundle> <brick-materials-dir> <effects-dir> <avatar-dir> <effects-runtime-dir> <audio-dir> <weather-dir> <foliage-dir> <weapons-dir> <item-presentation-dir> <state-dir> <listen-address> [run-seconds]"
+        args.len() == 16 || args.len() == 17,
+        "Usage: bri-server <catalog-dir> <native-content> <world.json> <map-bundle> <brick-materials-dir> <effects-dir> <avatar-dir> <effects-runtime-dir> <audio-dir> <weather-dir> <foliage-dir> <weapons-dir> <item-presentation-dir> <vehicles-dir> <state-dir> <listen-address> [run-seconds]"
     );
-    let paths: Vec<_> = args[..14].iter().map(PathBuf::from).collect();
-    let bind = args[14]
+    let mut paths: Vec<_> = args[..15].iter().map(PathBuf::from).collect();
+    let vehicles_dir = paths.remove(13);
+    let bind = args[15]
         .to_str()
         .context("Invalid listen address")?
         .parse()?;
-    let seconds = if args.len() == 16 {
-        let seconds: u64 = args[15].to_str().context("Invalid duration")?.parse()?;
+    let seconds = if args.len() == 17 {
+        let seconds: u64 = args[16].to_str().context("Invalid duration")?.parse()?;
         ensure!((1..=86400).contains(&seconds), "Duration out of range");
         Some(seconds)
     } else {
@@ -46,6 +63,8 @@ async fn main() -> Result<()> {
     let content_id = weapons.extend_identity(&content_id);
     let item_physics = content_identity::ItemPhysicsContent::load(&paths[12], &weapons)?;
     let content_id = item_physics.extend_identity(&content_id);
+    let content_id = content_identity::with_vehicles(&content_id, &vehicles_dir)?;
+    let vehicle_pack = bri_vehicles::Pack::load(vehicles_dir.join("vehicles.json"))?;
     let catalog = serde_json::from_slice(&std::fs::read(paths[0].join("stock-catalog.json"))?)?;
     let materials = serde_json::from_slice(&std::fs::read(paths[4].join("brick-materials.json"))?)?;
     let effects = serde_json::from_slice(&std::fs::read(paths[5].join("effects.json"))?)?;
@@ -64,6 +83,12 @@ async fn main() -> Result<()> {
     let spawn_points =
         bri_sim::spawn::candidates(&simulation.physics, &map.scene, &Default::default())?;
     let mut session = Session::new(simulation);
+    session.set_vehicle_pack(vehicle_pack)?;
+    session.set_spawn_points(spawn_points.clone())?;
+    tools.install_special(
+        audio_music(&paths[8])?,
+        session.vehicle_choices().into_iter().map(|(id, _)| id),
+    )?;
     session.set_tool_catalog(tools)?;
     session.set_weapon_pack(weapons.pack)?;
     session.set_item_bounds(item_physics.bounds)?;

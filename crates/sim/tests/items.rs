@@ -269,6 +269,7 @@ fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
         raycast: true,
         colliding: true,
         visible: true,
+        ..Default::default()
     };
     let edit = bri_world::authority::Edit::Properties(properties.clone());
     assert!(spawners.validate_edit(&world, 1, &edit).is_ok());

@@ -154,6 +154,21 @@ impl Predictor {
         self.sequence = sequence;
         Ok((sequence, events))
     }
+    /// Record an input without running the walking motor (the player is
+    /// seated in a vehicle; the server turns inputs into vehicle controls).
+    pub fn record(&mut self, input: MoveInput) -> Result<u64> {
+        input.validate()?;
+        let sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Input sequence exhausted"))?;
+        if self.pending.len() == INPUT_HISTORY {
+            self.pending.pop_front();
+        }
+        self.pending.push_back((sequence, input));
+        self.sequence = sequence;
+        Ok(sequence)
+    }
     /// The most recent inputs, oldest first, for redundant datagrams.
     pub fn recent(&self, count: usize) -> impl Iterator<Item = &(u64, MoveInput)> {
         self.pending

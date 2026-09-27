@@ -701,6 +701,33 @@ pub fn with_foliage(base: &str, root: &Path) -> Result<String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
+/// Vehicles join the runtime identity: definitions and every declared
+/// converted model, clip and texture byte.
+pub fn with_vehicles(base: &str, root: &Path) -> Result<String> {
+    let root = root.canonicalize()?;
+    let path = contained(&root, "vehicles.json")?;
+    let pack = bri_vehicles::Pack::load(&path)?;
+    let mut files = BTreeMap::from([("vehicles.json".to_string(), path)]);
+    let mut expected = BTreeMap::new();
+    for asset in &pack.assets {
+        // Identical converted files (e.g. the shared blank paint texture) are
+        // referenced from several original add-on paths.
+        if let Some(sha) = expected.get(&asset.path) {
+            ensure!(sha == &asset.sha256, "Conflicting vehicle asset digests");
+            continue;
+        }
+        ensure!(asset.path != "vehicles.json", "Reserved vehicle asset path");
+        files.insert(asset.path.clone(), contained(&root, &asset.path)?);
+        expected.insert(asset.path.clone(), asset.sha256.clone());
+    }
+    let vehicles = hash_files(b"BRI_VEHICLES_V1\0", files, &expected)?;
+    let mut hash = Sha256::new();
+    hash.update(b"BRI_NATIVE_RUNTIME_V8\0");
+    hash.update(base);
+    hash.update(vehicles);
+    Ok(format!("{:x}", hash.finalize()))
+}
+
 fn hash_files(
     domain: &[u8],
     files: BTreeMap<String, PathBuf>,

@@ -1,9 +1,9 @@
 [package]
 name = "bri-vehicles"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.93"
-publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 [dependencies]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }

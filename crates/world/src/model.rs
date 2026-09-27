@@ -52,6 +52,14 @@ pub struct Emitter {
     pub asset: Option<ContentRef>,
     pub direction: u8,
 }
+/// Vehicle spawn brick contents. `recolor` paints the vehicle with the
+/// brick color (the wrench "Recolor Vehicle" checkbox).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VehicleSpawn {
+    pub vehicle: ContentRef,
+    pub recolor: bool,
+}
 /// Vanilla ordinary-brick item attachment. Selectors persist even for NONE.
 /// Positions: Up0, Down1, North2, East3, South4, West5. Facing: North2..West5.
 /// These are world-axis selectors, independent of the brick's quarter turns.
@@ -178,6 +186,12 @@ pub struct Brick {
     /// with original wrench defaults. Appearance/pickup state is host-owned.
     #[serde(default)]
     pub item_spawn: ItemSpawn,
+    /// Music/sound brick loop (`fxDTSBrick::setSound`, `AudioEmitter`).
+    #[serde(default)]
+    pub sound: Option<ContentRef>,
+    /// Vehicle spawn brick setting (`fxDTSBrick::setVehicle`).
+    #[serde(default)]
+    pub vehicle: Option<VehicleSpawn>,
     pub events: Vec<Event>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
@@ -201,6 +215,8 @@ impl Brick {
             light: None,
             emitter: None,
             item_spawn: ItemSpawn::default(),
+            sound: None,
+            vehicle: None,
             events: vec![],
             source_records: vec![],
         }
@@ -243,6 +259,12 @@ impl Brick {
             }
         }
         self.item_spawn.validate()?;
+        if let Some(sound) = &self.sound {
+            sound.validate()?;
+        }
+        if let Some(vehicle) = &self.vehicle {
+            vehicle.vehicle.validate()?;
+        }
         ensure!(
             self.events.len() <= MAX_EVENTS_PER_BRICK,
             "Brick exceeds the native {MAX_EVENTS_PER_BRICK}-event admission limit"

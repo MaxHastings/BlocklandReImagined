@@ -167,6 +167,32 @@ impl ToolUi {
         self.invalidate();
         Ok(())
     }
+    /// Install the music loops and vehicles for sound and vehicle spawn
+    /// bricks (wrench "Music" and "Vehicle" lists).
+    pub fn install_special(
+        &mut self,
+        sounds: Vec<(String, String)>,
+        vehicles: Vec<(String, String)>,
+    ) -> Result<()> {
+        let mut catalog = self.catalog.clone();
+        catalog.install_special(
+            sounds.iter().map(|(id, _)| id.clone()),
+            vehicles.iter().map(|(id, _)| id.clone()),
+        )?;
+        self.catalog = catalog;
+        let menu = |entries: Vec<(String, String)>| {
+            let mut choices: Vec<_> = entries
+                .into_iter()
+                .map(|(id, name)| Choice { id, name })
+                .collect();
+            choices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            choices
+        };
+        self.datablocks.insert("Music".into(), menu(sounds));
+        self.datablocks.insert("Vehicle".into(), menu(vehicles));
+        self.invalidate();
+        Ok(())
+    }
     pub fn catalog_updates(&self) -> Vec<UiUpdate> {
         let mut updates = vec![
             UiUpdate::Events(event_catalog()),
@@ -241,10 +267,6 @@ impl ToolUi {
         let mut retained = BTreeMap::new();
         let update = match mode {
             InspectMode::Wrench => {
-                ensure!(
-                    variant == WrenchVariant::Normal,
-                    "This special wrench requires its native sound/vehicle behavior adapter"
-                );
                 let mut bound = (**brick).clone();
                 bound.item_spawn.resolve_item(&self.item_aliases)?;
                 let data = wrench_data(&bound)?;
@@ -392,12 +414,13 @@ impl ToolUi {
             } => {
                 self.inspection(InspectMode::Wrench, Some(*brick))?;
                 ensure!(
-                    *variant == WrenchVariant::Normal
-                        && data.sound.is_none()
-                        && data.vehicle.is_none()
-                        && !data.recolor_vehicle,
-                    "Sound and vehicle wrench properties require native behavior adapters"
+                    (*variant == WrenchVariant::Sound || data.sound.is_none())
+                        && (*variant == WrenchVariant::VehicleSpawn
+                            || (data.vehicle.is_none() && !data.recolor_vehicle)),
+                    "This brick cannot hold that sound or vehicle"
                 );
+                validate_choice(data.sound.as_deref(), &self.catalog.sounds, "music")?;
+                validate_choice(data.vehicle.as_deref(), &self.catalog.vehicles, "vehicle")?;
                 validate_choice(data.light.as_deref(), &self.catalog.lights, "light")?;
                 validate_choice(data.emitter.as_deref(), &self.catalog.emitters, "emitter")?;
                 validate_choice(data.item.as_deref(), &self.catalog.items, "item")?;
@@ -422,6 +445,9 @@ impl ToolUi {
                         emitter: data.emitter.clone(),
                         emitter_direction: data.emitter_dir,
                         item_spawn,
+                        sound: data.sound.clone(),
+                        vehicle: data.vehicle.clone(),
+                        recolor_vehicle: data.recolor_vehicle,
                         raycast: data.raycasting,
                         colliding: data.colliding,
                         visible: data.rendering,
@@ -464,8 +490,9 @@ impl ToolUi {
                     events,
                 }
             }
-            UiAction::RespawnVehicle { .. } => {
-                anyhow::bail!("Vehicle respawn requires its native behavior adapter")
+            UiAction::RespawnVehicle { brick, .. } => {
+                self.inspection(InspectMode::Wrench, Some(*brick))?;
+                ToolAction::RespawnVehicle { brick: *brick }
             }
             _ => return Ok(None),
         };
@@ -532,7 +559,14 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
         raycasting: brick.raycast,
         colliding: brick.colliding,
         rendering: brick.visible,
-        ..Default::default()
+        sound: brick.sound.as_ref().map(resolved).transpose()?.map(str::to_owned),
+        vehicle: brick
+            .vehicle
+            .as_ref()
+            .map(|v| resolved(&v.vehicle))
+            .transpose()?
+            .map(str::to_owned),
+        recolor_vehicle: brick.vehicle.as_ref().is_some_and(|v| v.recolor),
     })
 }
 
@@ -731,6 +765,7 @@ mod tests {
                 .into(),
                 brick_print_aspects: [("plate".into(), "2x2f".into())].into(),
                 default_print: Some("print/A".into()),
+                ..Default::default()
             },
             prints: BTreeMap::new(),
             print_aliases: [
@@ -1153,7 +1188,7 @@ mod tests {
                 &BTreeMap::new(),
                 1
             )
-            .is_err()
+            .is_ok()
         );
     }
     #[test]

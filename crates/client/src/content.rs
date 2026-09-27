@@ -61,6 +61,7 @@ pub struct ContentConfig {
     pub foliage: String,
     pub weapons: String,
     pub item_presentation: String,
+    pub vehicles: String,
     /// Finite collision region, in native terrain cells. Streaming is pending.
     pub terrain_region: [i32; 4],
 }
@@ -82,6 +83,7 @@ impl Default for ContentConfig {
             foliage: "foliage-pack-001".into(),
             weapons: "weapons-pack-003".into(),
             item_presentation: "item-presentation-pack-003".into(),
+            vehicles: "vehicles-pack-007".into(),
             terrain_region: [-64, -64, 384, 384],
         }
     }
@@ -106,6 +108,7 @@ pub struct ContentPaths {
     pub foliage: PathBuf,
     pub weapons: PathBuf,
     pub item_presentation: PathBuf,
+    pub vehicles: PathBuf,
     pub terrain_region: [i32; 4],
 }
 
@@ -143,6 +146,9 @@ pub struct ClientContent {
     pub effects: Library,
     pub weapons: bri_net::content_identity::WeaponContent,
     pub item_physics: bri_net::content_identity::ItemPhysicsContent,
+    pub vehicles: bri_vehicles::Pack,
+    /// Music-brick loops: (sound id, display name).
+    pub music: Vec<(String, String)>,
     pub warnings: Vec<String>,
 }
 
@@ -304,6 +310,7 @@ impl ContentPaths {
             foliage: package(&config.foliage)?,
             weapons: package(&config.weapons)?,
             item_presentation: package(&config.item_presentation)?,
+            vehicles: package(&config.vehicles)?,
             root,
             terrain_region: config.terrain_region,
         })
@@ -534,7 +541,12 @@ impl ClientContent {
                 bundle.unresolved_textures.len()
             ));
         }
+        let vehicles = bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))
+            .context("Loading native vehicles")?;
+        let music = music_choices(&paths.audio)?;
         Ok(Self {
+            vehicles,
+            music,
             ui_pack: Rc::new(Pack::from_parts(schema, paths.ui_pack.clone())),
             paths,
             maps,
@@ -553,6 +565,28 @@ impl ClientContent {
     pub fn load_map(&self, map_id: &str, world_id: Option<&str>) -> Result<LoadedMap> {
         self.paths.load_map(map_id, world_id)
     }
+}
+
+/// Music bricks play the `music-brick:*` loops declared by the audio pack.
+fn music_choices(audio: &Path) -> Result<Vec<(String, String)>> {
+    #[derive(Deserialize)]
+    struct Trigger {
+        key: String,
+        sound: String,
+    }
+    #[derive(Deserialize)]
+    struct Manifest {
+        triggers: Vec<Trigger>,
+    }
+    let manifest: Manifest = read_json(&file(audio, "manifest.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
+    Ok(manifest
+        .triggers
+        .into_iter()
+        .filter_map(|t| {
+            let name = t.key.strip_prefix("music-brick:")?;
+            Some((t.sound, name.replace('_', " ").trim().to_string()))
+        })
+        .collect())
 }
 
 fn load_bundle(root: &Path) -> Result<Bundle> {

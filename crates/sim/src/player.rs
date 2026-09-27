@@ -356,6 +356,20 @@ impl Player {
         state.jet_boost = 0.0;
         self.restore(physics, state)
     }
+    /// Ride a vehicle seat: position and facing come from the seat node.
+    pub fn place(&mut self, physics: &mut PhysicsWorld, feet: Vec3, yaw: f32, velocity: Vec3) {
+        if !feet.is_finite() || !yaw.is_finite() || !velocity.is_finite() {
+            return;
+        }
+        self.state.feet = feet.to_array();
+        self.state.velocity = velocity.to_array();
+        self.state.yaw = (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        self.state.grounded = true;
+        self.state.crouched = false;
+        self.state.jetting = false;
+        self.synchronize_pose(physics);
+    }
     /// Add an impulse-derived velocity change (weapon knockback).
     pub fn push(&mut self, delta: Vec3) {
         if delta.is_finite() {

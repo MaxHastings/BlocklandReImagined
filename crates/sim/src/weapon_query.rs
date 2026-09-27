@@ -18,6 +18,8 @@ fn target(tag: u128) -> Option<TargetId> {
         Some(TargetId::Map(0))
     } else if tag >> 64 == 1 && tag as u64 != 0 {
         Some(TargetId::Actor(ActorId(tag as u64)))
+    } else if tag >> 64 == 2 && tag as u64 != 0 {
+        Some(TargetId::Vehicle(tag as u64))
     } else if tag > 0 && tag <= u128::from(u64::MAX) {
         Some(TargetId::Brick(tag as u64))
     } else {
@@ -94,7 +96,9 @@ impl Query for WeaponQuery<'_> {
         let query = self.simulation.physics.query_pipeline();
         let mut found = BTreeMap::new();
         for (_, collider) in query.intersect_aabb_conservative(area) {
-            let Some(target @ TargetId::Actor(_)) = target(collider.user_data) else {
+            let Some(target @ (TargetId::Actor(_) | TargetId::Vehicle(_))) =
+                target(collider.user_data)
+            else {
                 continue;
             };
             let bounds = collider.compute_aabb();

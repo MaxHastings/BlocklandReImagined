@@ -18,6 +18,7 @@ pub mod platform;
 pub mod saves;
 pub mod settings;
 pub mod tool_ui;
+pub mod vehicles;
 pub mod weapon_debris;
 pub mod weapon_effects;
 pub mod weather;

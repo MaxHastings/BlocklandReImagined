@@ -131,6 +131,8 @@ pub struct App {
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
     motion: crate::motion::Motion,
+    vehicle_assets: crate::vehicles::VehicleAssets,
+    vehicles: crate::vehicles::ClientVehicles,
     combat: CombatPresentation,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
@@ -445,6 +447,23 @@ impl App {
             &content.ui_pack,
         )?;
         tool_ui.install_items(content.weapons.item_choices.clone())?;
+        tool_ui.install_special(
+            content.music.clone(),
+            content
+                .vehicles
+                .definitions
+                .iter()
+                .filter(|d| {
+                    !matches!(
+                        d.family,
+                        bri_vehicles::Family::Skis
+                            | bri_vehicles::Family::Tumble
+                            | bri_vehicles::Family::Turret
+                    )
+                })
+                .map(|d| (d.id.clone(), d.name.trim().to_string()))
+                .collect(),
+        )?;
         let item_assets = Arc::new(crate::items::ItemAssets::load(
             &content.paths.item_presentation,
             &content.paths.weapons,
@@ -455,6 +474,7 @@ impl App {
             &content.ui_pack,
         )?;
         let avatar_assets = Arc::new(crate::avatar::AvatarAssets::load(&content.paths.avatar)?);
+        let vehicle_assets = crate::vehicles::VehicleAssets::load(&content.paths.vehicles)?;
         let world_items = crate::world_items::WorldItems::new(
             item_assets.clone(),
             Arc::new(content.weapons.pack.clone()),
@@ -544,6 +564,8 @@ impl App {
             preview_request: None,
             preview_dirty: false,
             motion: Default::default(),
+            vehicle_assets,
+            vehicles: Default::default(),
             combat: Default::default(),
         })
     }
@@ -632,6 +654,7 @@ impl App {
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
         self.motion.reset();
+        self.vehicles.clear();
         self.combat = Default::default();
     }
     /// The authoritative local player is alive (or not yet known).
@@ -639,6 +662,26 @@ impl App {
         self.network_view()
             .and_then(|v| v.vitals.get(&v.owner))
             .is_none_or(|v| v.alive)
+    }
+    /// Authored `cameraMaxDist` of the vehicle the local player rides.
+    fn vehicle_camera(
+        assets: &crate::vehicles::VehicleAssets,
+        view: &network::View,
+    ) -> Option<f32> {
+        let (vehicle, _) = view.vitals.get(&view.owner)?.mounted?;
+        let info = view.vehicles.get(&vehicle)?;
+        assets
+            .definition(&info.definition)?
+            .authored
+            .get("cameramaxdist")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite() && (1.0..=40.0).contains(v))
+            .or(Some(8.0))
+    }
+    fn local_mounted(&self) -> bool {
+        self.network_view()
+            .and_then(|v| v.vitals.get(&v.owner))
+            .is_some_and(|v| v.mounted.is_some())
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -826,7 +869,7 @@ impl App {
             })
             .await??;
             let permit = load_limit.acquire_owned().await?;
-            let (loaded, visual, identity, catalog, weapon_pack, item_bounds) =
+            let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
                     let _permit = permit;
                     let weapons = content_identity::WeaponContent::load(&paths.weapons)?;
@@ -859,6 +902,9 @@ impl App {
                     let identity = content_identity::with_foliage(&identity, &paths.foliage)?;
                     let identity = weapons.extend_identity(&identity);
                     let identity = item_physics.extend_identity(&identity);
+                    let identity = content_identity::with_vehicles(&identity, &paths.vehicles)?;
+                    let vehicle_pack =
+                        bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?;
                     let meshes = Arc::new(
                         loaded
                             .simulation
@@ -913,6 +959,7 @@ impl App {
                         catalog,
                         weapons.pack,
                         item_physics.bounds,
+                        vehicle_pack,
                     ))
                 })
                 .await??;
@@ -929,6 +976,8 @@ impl App {
             session.set_weapon_pack(weapon_pack)?;
             session.set_item_bounds(item_bounds)?;
             session.set_avatar_catalog(avatar_catalog)?;
+            session.set_vehicle_pack(vehicle_pack)?;
+            session.set_spawn_points(loaded.spawn_points.clone())?;
             let host = server::start_with_admin_store_and_limit(
                 session,
                 ServerOptions {
@@ -1061,8 +1110,9 @@ impl App {
                 let identity = content_identity::with_audio(&identity, &identity_paths.audio)?;
                 let identity = content_identity::with_weather(&identity, &identity_paths.weather)?;
                 let identity = content_identity::with_foliage(&identity, &identity_paths.foliage)?;
-                Ok::<_, anyhow::Error>(
-                    item_physics.extend_identity(&weapons.extend_identity(&identity)),
+                content_identity::with_vehicles(
+                    &item_physics.extend_identity(&weapons.extend_identity(&identity)),
+                    &identity_paths.vehicles,
                 )
             })
             .await??;
@@ -2084,8 +2134,42 @@ impl PlatformApp for App {
                 a.worker.movement(newest, inputs)?;
             }
             if let Some(view) = &a.view {
+                let mounted = view.vitals.get(&view.owner).and_then(|v| v.mounted);
+                self.motion.set_mounted(mounted.is_some());
                 self.motion
                     .present(view, self.controls.yaw, self.controls.pitch);
+                let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
+                self.vehicles.update(
+                    &view.vehicles,
+                    &view.vehicle_poses,
+                    self.motion.server_tick(),
+                    driven,
+                );
+                // Riders sit exactly on their rendered vehicle's seat.
+                for (owner, vitals) in &view.vitals {
+                    let Some((vehicle, seat)) = vitals.mounted else {
+                        continue;
+                    };
+                    if let Some(info) = view.vehicles.get(&vehicle)
+                        && let Some((feet, yaw)) =
+                            self.vehicles
+                                .seat(&self.vehicle_assets, info, usize::from(seat))
+                    {
+                        let velocity = self
+                            .vehicles
+                            .frame(vehicle)
+                            .map_or(Vec3::ZERO, |f| f.velocity);
+                        self.motion.override_presented(
+                            *owner,
+                            feet,
+                            yaw,
+                            velocity,
+                            *owner == view.owner,
+                        );
+                    }
+                }
+                self.vehicles
+                    .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
             }
         }
         self.update_combat_presentation();
@@ -2163,7 +2247,18 @@ impl PlatformApp for App {
                     },
                     action: self.avatar_actions.get(owner).cloned().filter(|_| !dead),
                     dead,
-                    sitting: !dead && self.combat.sitting.contains(owner),
+                    sitting: !dead
+                        && (self.combat.sitting.contains(owner)
+                            || view
+                                .vitals
+                                .get(owner)
+                                .and_then(|v| v.mounted)
+                                .and_then(|(vehicle, seat)| {
+                                    let info = view.vehicles.get(&vehicle)?;
+                                    let d = self.vehicle_assets.definition(&info.definition)?;
+                                    Some(d.seats.get(usize::from(seat))?.pose == "sit")
+                                })
+                                .unwrap_or(false)),
                 };
                 self.avatars.get_mut(owner).unwrap().pose_with_animation(
                     &self.avatar_assets,
@@ -2186,7 +2281,11 @@ impl PlatformApp for App {
                 .local_eye()
                 .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
             let eye = if third_person {
-                building.camera_position(eye, forward, 8.)?
+                building.camera_position(
+                    eye,
+                    forward,
+                    Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.),
+                )?
             } else {
                 eye
             };
@@ -2291,6 +2390,20 @@ impl PlatformApp for App {
                     }
                 }
                 self.answer(id, Ok(()));
+                continue;
+            }
+            if self.local_mounted()
+                && let UiAction::Game(GameAction::Held {
+                    control: HeldControl::Fire,
+                    down,
+                }) = action
+            {
+                // Seated fire drives the vehicle weapon (tank, cannon).
+                if let Err(error) =
+                    self.command(id, Command::WeaponTrigger { down }, action.clone())
+                {
+                    self.answer(id, Err(error));
+                }
                 continue;
             }
             if crate::minigame_ui::is_minigame_action(&action) {
@@ -2449,6 +2562,18 @@ impl PlatformApp for App {
                     platform.push(PlatformCommand::ToggleFullscreen);
                     continue;
                 }
+                UiAction::Game(GameAction::NextSeat | GameAction::PrevSeat) => {
+                    let step = if matches!(action, UiAction::Game(GameAction::NextSeat)) {
+                        1
+                    } else {
+                        -1
+                    };
+                    let result = self.command(id, Command::SwitchSeat(step), action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
                 UiAction::Game(GameAction::Suicide) => {
                     let result = self.command(id, Command::Suicide, action.clone());
                     if result.is_ok() {
@@ -2558,6 +2683,7 @@ impl PlatformApp for App {
     ) -> Result<()> {
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
+        crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
         }
@@ -2595,6 +2721,7 @@ impl PlatformApp for App {
     fn gpu_stopped(&mut self) {
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
+        crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         for avatar in self.avatars.values_mut() {
             avatar.gpu = None;
         }
@@ -2704,6 +2831,12 @@ impl PlatformApp for App {
         }
         self.world_items
             .upload(renderer, frame.device, frame.queue)?;
+        crate::vehicles::ClientVehicles::upload(
+            &mut self.vehicle_assets,
+            renderer,
+            frame.device,
+            frame.queue,
+        )?;
         let (yaw, pitch) = self.controls.view_angles();
         let pitch = pitch.clamp(-1.56, 1.56);
         let forward = Vec3::new(
@@ -2715,11 +2848,12 @@ impl PlatformApp for App {
             .motion
             .local_eye()
             .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
+        let camera_distance = Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.0);
         let eye = if third_person {
             self.building
                 .as_ref()
                 .context("Camera collision mirror missing")?
-                .camera_position(eye, forward, 8.0)?
+                .camera_position(eye, forward, camera_distance)?
         } else {
             eye
         };
@@ -2815,7 +2949,8 @@ impl PlatformApp for App {
                 scenes.push(gpu);
             }
         }
-        let item_draws = self.world_items.draws();
+        let mut item_draws = self.world_items.draws();
+        item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         renderer.render_with_instances(
             frame.encoder,
             frame.target,

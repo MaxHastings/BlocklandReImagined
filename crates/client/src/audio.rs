@@ -177,7 +177,15 @@ impl ClientAudio {
             CueKind::Death { .. } => "player.death_cry",
             CueKind::Spawn { .. } => "player.spawn",
             CueKind::Emote { name, .. } if name == "alarm" => "emote.alarm",
-            CueKind::Emote { .. } => return,
+            CueKind::Emote { .. } | CueKind::VehicleEffect { .. } => return,
+            CueKind::VehicleSound { sound, .. } => {
+                if sound.contains('.') {
+                    self.trigger(sound, Placement::World(cue.position));
+                } else {
+                    self.profile(sound, Placement::World(cue.position));
+                }
+                return;
+            }
         };
         self.trigger(key, Placement::World(cue.position));
     }

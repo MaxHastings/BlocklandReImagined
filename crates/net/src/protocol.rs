@@ -130,6 +130,12 @@ impl Movement {
         Ok(())
     }
 }
+/// Unreliable state datagrams from the host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Datagram {
+    Pose(Pose),
+    Vehicle(bri_sim::session::VehiclePose),
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pose {
     pub tick: u64,
@@ -163,6 +169,8 @@ pub struct Checkpoint {
     pub poses: Vec<Pose>,
     pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
     pub minigames: Vec<bri_sim::session::MiniGameView>,
+    pub vehicles: Vec<bri_sim::session::VehicleInfo>,
+    pub vehicle_poses: Vec<bri_sim::session::VehiclePose>,
 }
 impl Checkpoint {
     pub fn from_session(session: &Session, cursor: u64) -> Self {
@@ -190,6 +198,8 @@ impl Checkpoint {
             poses: poses(session),
             vitals: session.vitals(),
             minigames: session.minigame_views(),
+            vehicles: session.vehicle_infos(),
+            vehicle_poses: session.vehicle_poses(),
         }
     }
 }
@@ -220,6 +230,7 @@ pub struct Delta {
     pub chat: Vec<ChatLine>,
     pub vitals: Option<BTreeMap<OwnerId, bri_sim::session::Vitals>>,
     pub minigames: Option<Vec<bri_sim::session::MiniGameView>>,
+    pub vehicles: Option<Vec<bri_sim::session::VehicleInfo>>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {

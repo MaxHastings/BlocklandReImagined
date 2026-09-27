@@ -85,6 +85,7 @@ fn catalog() -> ToolCatalog {
         .into(),
         brick_print_aspects: [("plate".into(), "2x2".into())].into(),
         default_print: Some("print/A".into()),
+        ..Default::default()
     }
 }
 
@@ -137,6 +138,7 @@ fn remote_tool_use_requires_selected_inventory_and_switch_or_drop_revokes_inspec
         raycast: true,
         colliding: true,
         visible: true,
+        ..Default::default()
     };
     let edit = Command::Tool(ToolAction::SetWrench {
         brick: id,
@@ -342,6 +344,7 @@ fn properties() -> WrenchProperties {
         raycast: false,
         colliding: false,
         visible: false,
+        ..Default::default()
     }
 }
 fn setup() -> (Session, u64, u64) {

@@ -56,6 +56,8 @@ pub struct Vitals {
     pub minigame: Option<u64>,
     pub invite: Option<u64>,
     pub light: bool,
+    /// Vehicle id and seat while riding.
+    pub mounted: Option<(u64, u8)>,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -224,6 +226,7 @@ impl Session {
                         minigame: state.and_then(|s| s.game).map(|g| g.0),
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
+                        mounted: self.mounted(*owner),
                     },
                 )
             })
@@ -396,6 +399,7 @@ impl Session {
             }
             _ => kind,
         };
+        self.eject(victim);
         {
             let peer = self.peers.get_mut(&victim).unwrap();
             peer.combat.alive = false;

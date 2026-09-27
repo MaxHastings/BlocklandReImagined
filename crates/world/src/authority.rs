@@ -18,7 +18,7 @@ pub enum Edit {
 }
 /// Native, atomic subset of the ordinary brick wrench. Asset IDs are resolved
 /// against the server's tool catalog before reaching this authority boundary.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct WrenchProperties {
     pub name: Option<String>,
@@ -27,6 +27,14 @@ pub struct WrenchProperties {
     pub emitter_direction: u8,
     #[serde(default)]
     pub item_spawn: ItemSpawn,
+    /// Music/sound brick loop id.
+    #[serde(default)]
+    pub sound: Option<String>,
+    /// Vehicle spawn brick vehicle id and recolor flag.
+    #[serde(default)]
+    pub vehicle: Option<String>,
+    #[serde(default)]
+    pub recolor_vehicle: bool,
     pub raycast: bool,
     pub colliding: bool,
     pub visible: bool,
@@ -134,6 +142,11 @@ impl Authority {
                     direction: properties.emitter_direction,
                 });
                 next.item_spawn = properties.item_spawn;
+                next.sound = properties.sound.map(ContentRef::Resolved);
+                next.vehicle = properties.vehicle.map(|id| crate::VehicleSpawn {
+                    vehicle: ContentRef::Resolved(id),
+                    recolor: properties.recolor_vehicle,
+                });
                 next.raycast = properties.raycast;
                 next.colliding = properties.colliding;
                 next.visible = properties.visible;

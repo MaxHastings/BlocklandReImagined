@@ -18,6 +18,38 @@ pub struct Replica {
     history: BTreeMap<OwnerId, VecDeque<Pose>>,
     pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
     pub minigames: Vec<bri_sim::session::MiniGameView>,
+    pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
+    pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
+}
+fn validate_vehicles(vehicles: &[bri_sim::session::VehicleInfo]) -> Result<()> {
+    ensure!(
+        vehicles.len() <= 1024
+            && vehicles.iter().all(|v| v.id > 0
+                && !v.definition.is_empty()
+                && v.definition.len() <= 128
+                && v.occupants.len() <= 16),
+        "Invalid vehicle listing"
+    );
+    Ok(())
+}
+fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
+    ensure!(
+        pose.id > 0
+            && pose
+                .position
+                .iter()
+                .chain(&pose.rotation)
+                .chain(&pose.velocity)
+                .chain(&pose.turret_aim)
+                .chain(&pose.wheel_suspension)
+                .chain(&pose.wheel_rotation)
+                .all(|v| v.is_finite())
+            && pose.steering.is_finite()
+            && pose.wheel_suspension.len() <= 16
+            && pose.wheel_rotation.len() <= 16,
+        "Invalid vehicle pose"
+    );
+    Ok(())
 }
 fn validate_vitals(
     vitals: &BTreeMap<OwnerId, bri_sim::session::Vitals>,
@@ -61,6 +93,10 @@ impl Replica {
         validate_tools(&checkpoint.tools, &checkpoint.names)?;
         validate_vitals(&checkpoint.vitals, &checkpoint.names)?;
         validate_minigames(&checkpoint.minigames)?;
+        validate_vehicles(&checkpoint.vehicles)?;
+        for pose in &checkpoint.vehicle_poses {
+            validate_vehicle_pose(pose)?;
+        }
         checkpoint.weapons.validate(&checkpoint.names)?;
         let mut out = Self {
             weapons: checkpoint.weapons,
@@ -78,6 +114,12 @@ impl Replica {
             history: BTreeMap::new(),
             vitals: checkpoint.vitals,
             minigames: checkpoint.minigames,
+            vehicles: checkpoint.vehicles.into_iter().map(|v| (v.id, v)).collect(),
+            vehicle_poses: checkpoint
+                .vehicle_poses
+                .into_iter()
+                .map(|p| (p.id, p))
+                .collect(),
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -147,6 +189,9 @@ impl Replica {
         if let Some(games) = &delta.minigames {
             validate_minigames(games)?;
         }
+        if let Some(vehicles) = &delta.vehicles {
+            validate_vehicles(vehicles)?;
+        }
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -202,6 +247,11 @@ impl Replica {
         if let Some(games) = delta.minigames {
             self.minigames = games;
         }
+        if let Some(vehicles) = delta.vehicles {
+            self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();
+            self.vehicle_poses
+                .retain(|id, _| self.vehicles.contains_key(id));
+        }
         self.vitals.retain(|id, _| self.names.contains_key(id));
         self.avatars.retain(|id, _| self.names.contains_key(id));
         for line in delta.chat {
@@ -221,6 +271,18 @@ impl Replica {
         }
         self.dropped_cues = delta.dropped_cues;
         self.tick = delta.tick;
+        Ok(())
+    }
+    /// Newest-tick vehicle motion; older or unknown datagrams are ignored.
+    pub fn vehicle_pose(&mut self, pose: bri_sim::session::VehiclePose) -> Result<()> {
+        validate_vehicle_pose(&pose)?;
+        if self
+            .vehicle_poses
+            .get(&pose.id)
+            .is_none_or(|old| old.tick < pose.tick)
+        {
+            self.vehicle_poses.insert(pose.id, pose);
+        }
         Ok(())
     }
     pub fn take_cues(&mut self) -> Vec<bri_sim::presentation::Cue> {

@@ -29,6 +29,8 @@ fn checkpoint() -> Checkpoint {
         poses: vec![],
         vitals: Default::default(),
         minigames: vec![],
+        vehicles: vec![],
+        vehicle_poses: vec![],
     }
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
@@ -58,6 +60,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
     let delta = Delta {
         vitals: None,
         minigames: None,
+        vehicles: None,
         weapons: None,
         tools: Some(tools),
         base: 0,
@@ -113,6 +116,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
     let mut delta = Delta {
         vitals: None,
         minigames: None,
+        vehicles: None,
         weapons: Some(weapons),
         tools: None,
         base: 0,
@@ -159,6 +163,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
     let mut delta = Delta {
         vitals: None,
         minigames: None,
+        vehicles: None,
         weapons: None,
         tools: None,
         base: 0,
@@ -199,6 +204,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
     let mut delta = Delta {
         vitals: None,
         minigames: None,
+        vehicles: None,
         weapons: None,
         tools: None,
         cues: vec![],
@@ -230,6 +236,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         .update(Delta {
             vitals: None,
             minigames: None,
+        vehicles: None,
             weapons: None,
             tools: None,
             cues: vec![],
@@ -259,6 +266,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
     let mut delta = Delta {
         vitals: None,
         minigames: None,
+        vehicles: None,
         weapons: None,
         tools: None,
         cues: vec![],
@@ -300,6 +308,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
     let mut delta = Delta {
         vitals: None,
         minigames: None,
+        vehicles: None,
         weapons: None,
         tools: None,
         cues: vec![],
@@ -391,6 +400,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
     let mut delta = Delta {
         vitals: None,
         minigames: None,
+        vehicles: None,
         weapons: None,
         tools: None,
         cues: vec![cue],

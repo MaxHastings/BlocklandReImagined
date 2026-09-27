@@ -14,6 +14,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod admin;
 mod combat;
 mod inventory;
+mod vehicles;
+pub use vehicles::{VehicleInfo, VehiclePose};
+use vehicles::combat_input_burst;
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
@@ -114,6 +117,8 @@ pub enum Command {
     ToggleLight,
     Emote(String),
     MiniGame(MiniGameRequest),
+    /// Next (+1) or previous (-1) free vehicle seat.
+    SwitchSeat(i8),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatLine {
@@ -204,6 +209,7 @@ struct Peer {
     combat: combat::Combat,
 }
 pub struct Session {
+    vehicles: vehicles::Vehicles,
     minigames: bri_minigames::MinigamesWorld,
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
@@ -246,6 +252,7 @@ impl Session {
         let mut weapons = inventory::core_runtime();
         weapons.tick = simulation.state().tick;
         Self {
+            vehicles: Default::default(),
             minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
@@ -411,6 +418,7 @@ impl Session {
         Ok(owner)
     }
     pub fn disconnect(&mut self, owner: OwnerId) -> Result<()> {
+        self.eject(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
         self.admin_disconnect(owner);
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
@@ -645,6 +653,10 @@ impl Session {
                 self.drop_tool(owner, slot, direction)?;
                 Ok(Reply::Accepted)
             }
+            Command::WeaponTrigger { down } if self.vehicles.is_mounted(owner) => {
+                self.vehicles.set_fire(owner, down);
+                Ok(Reply::Accepted)
+            }
             Command::WeaponTrigger { down } => {
                 ensure!(!down || peer.combat.alive, "Dead players cannot fire");
                 self.weapon_trigger(owner, down, direction)?;
@@ -678,6 +690,11 @@ impl Session {
             }
             Command::MiniGame(request) => {
                 self.minigame_request(owner, request)?;
+                Ok(Reply::Accepted)
+            }
+            Command::SwitchSeat(step) => {
+                ensure!(step == 1 || step == -1, "Invalid seat step");
+                self.switch_seat(owner, i32::from(step))?;
                 Ok(Reply::Accepted)
             }
             Command::EquipTool { slot } => {
@@ -831,7 +848,20 @@ impl Session {
         let tick = self.simulation.state().tick;
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
+        let mut driving = Vec::new();
         for (&owner, peer) in self.peers.iter_mut() {
+            if self.vehicles.is_mounted(owner) {
+                peer.input_budget = (peer.input_budget + 1.0).min(combat_input_burst());
+                // Seated players drive; consume inputs without the walking motor.
+                while let Some((sequence, input)) = peer.inputs.pop_front() {
+                    peer.processed_move = sequence;
+                    peer.last_input_tick = tick;
+                    peer.input = input;
+                }
+                driving.push((owner, peer.input));
+                peer.player.hold(&mut self.simulation.physics);
+                continue;
+            }
             peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
             // Normally consume one queued input. A backlog (client clock ahead,
             // or a burst after a network stall) is drained a little faster. An
@@ -902,7 +932,12 @@ impl Session {
                     .push_back(format!("Brick {id} touch event rejected: {error}"));
             }
         }
+        for (owner, input) in driving {
+            self.vehicle_input(owner, input)?;
+        }
+        self.vehicle_pre_step()?;
         self.dirty.extend(self.simulation.step()?);
+        self.vehicle_post_step()?;
         self.step_weapons()?;
         self.step_items()?;
         self.step_combat(impacts)?;

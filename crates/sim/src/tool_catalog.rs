@@ -46,7 +46,40 @@ impl ToolCatalog {
             brick_print_aspects,
             default_print: Some(default.id.clone()),
             items: BTreeSet::new(),
+            sounds: BTreeSet::new(),
+            vehicles: BTreeSet::new(),
+            sound_bricks: catalog
+                .bricks
+                .iter()
+                .filter(|b| b.special_kind.as_deref() == Some("Sound"))
+                .map(|b| b.id.clone())
+                .collect(),
+            vehicle_bricks: catalog
+                .bricks
+                .iter()
+                .filter(|b| b.special_kind.as_deref() == Some("VehicleSpawn"))
+                .map(|b| b.id.clone())
+                .collect(),
         })
+    }
+    /// Install the music loops and vehicles the host actually supports.
+    pub fn install_special(
+        &mut self,
+        sounds: impl IntoIterator<Item = String>,
+        vehicles: impl IntoIterator<Item = String>,
+    ) -> Result<()> {
+        let sounds: BTreeSet<_> = sounds.into_iter().collect();
+        let vehicles: BTreeSet<_> = vehicles.into_iter().collect();
+        ensure!(
+            sounds.len() <= 1024 && vehicles.len() <= 1024,
+            "Too many sound/vehicle choices"
+        );
+        for id in sounds.iter().chain(vehicles.iter()) {
+            bri_world::ContentRef::Resolved(id.clone()).validate()?;
+        }
+        self.sounds = sounds;
+        self.vehicles = vehicles;
+        Ok(())
     }
 }
 

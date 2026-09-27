@@ -59,6 +59,7 @@ pub struct Motion {
     newest_local_tick: u64,
     presented: BTreeMap<OwnerId, PlayerState>,
     local_eye: Option<Vec3>,
+    mounted: bool,
 }
 
 impl Motion {
@@ -72,6 +73,33 @@ impl Motion {
     }
     pub fn predicting(&self) -> bool {
         self.predictor.is_some()
+    }
+    /// Seated players do not walk: inputs are recorded and sent, and the
+    /// authoritative seat pose is shown instead of a prediction.
+    pub fn set_mounted(&mut self, mounted: bool) {
+        self.mounted = mounted;
+    }
+    /// Estimated current server tick (for interpolating other entities).
+    pub fn server_tick(&self) -> Option<f64> {
+        self.clock_offset
+            .map(|offset| self.local_seconds * TICK_RATE + offset)
+    }
+    /// Replace a presented state (riders follow their rendered vehicle seat).
+    pub fn override_presented(&mut self, owner: OwnerId, feet: Vec3, yaw: f32, velocity: Vec3, local: bool) {
+        if let Some(state) = self.presented.get_mut(&owner) {
+            state.feet = feet.to_array();
+            if !local {
+                state.yaw = yaw;
+            }
+            state.velocity = velocity.to_array();
+            state.grounded = true;
+            state.crouched = false;
+            state.jetting = false;
+        }
+        if local {
+            // Seated eye height in the original sit pose.
+            self.local_eye = Some(feet + Vec3::Y * 1.6);
+        }
     }
     /// Ingest the latest replicated view: brick collision, the local
     /// authoritative pose and remote pose history.
@@ -121,6 +149,14 @@ impl Motion {
         });
     }
     fn observe_local(&mut self, pose: &bri_net::protocol::Pose) -> Result<()> {
+        if self.mounted
+            && let Some(predictor) = &mut self.predictor
+        {
+            predictor.teleport(pose.tick, pose.acknowledged_input, pose.player.clone())?;
+            self.previous = Some(predictor.state().clone());
+            self.correction = Vec3::ZERO;
+            return Ok(());
+        }
         if let Some(predictor) = &mut self.predictor {
             if let Some(offset) =
                 predictor.reconcile(pose.tick, pose.acknowledged_input, pose.player.clone())?
@@ -163,8 +199,12 @@ impl Motion {
         let mut steps = 0;
         while self.accumulator >= TICK && steps < MAX_STEPS {
             self.accumulator -= TICK;
-            self.previous = Some(predictor.state().clone());
-            predictor.step(input)?;
+            if self.mounted {
+                predictor.record(input)?;
+            } else {
+                self.previous = Some(predictor.state().clone());
+                predictor.step(input)?;
+            }
             steps += 1;
         }
         if steps == MAX_STEPS {

@@ -16,6 +16,7 @@ use sha2::Digest;
 enum Incoming {
     Reliable(Box<Message>),
     Pose(Pose),
+    Vehicle(bri_sim::session::VehiclePose),
     Closed(String),
 }
 #[derive(Debug)]
@@ -24,6 +25,7 @@ pub enum ClientEvent {
         world_changed: bool,
     },
     Pose(OwnerId),
+    Vehicle(u64),
     Reply {
         sequence: u64,
         result: Result<Reply, bri_sim::session::Rejection>,
@@ -200,9 +202,12 @@ impl Client {
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
                 if bytes.len() <= MAX_DATAGRAM
-                    && let Ok(pose) = serde_json::from_slice(&bytes)
+                    && let Ok(datagram) = serde_json::from_slice::<Datagram>(&bytes)
                 {
-                    let _ = events.try_send(Incoming::Pose(pose));
+                    let _ = events.try_send(match datagram {
+                        Datagram::Pose(pose) => Incoming::Pose(pose),
+                        Datagram::Vehicle(pose) => Incoming::Vehicle(pose),
+                    });
                 }
             }
         });
@@ -264,6 +269,11 @@ impl Client {
                 let id = pose.player.owner;
                 self.replica.pose(pose)?;
                 Ok(ClientEvent::Pose(id))
+            }
+            Incoming::Vehicle(pose) => {
+                let id = pose.id;
+                self.replica.vehicle_pose(pose)?;
+                Ok(ClientEvent::Vehicle(id))
             }
             Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
         }

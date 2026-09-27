@@ -199,8 +199,17 @@ impl Session {
                 }
             }
         }
+        let mut vehicles_hit = BTreeSet::new();
+        for info in self.vehicle_infos() {
+            for source in self.peers.keys() {
+                if self.can_damage_vehicle(*source, info.id) {
+                    vehicles_hit.insert((*source, info.id));
+                }
+            }
+        }
         let world = self.simulation.state();
         let affect = |source: ActorId, target| match target {
+            TargetId::Vehicle(vehicle) => vehicles_hit.contains(&(source.0, vehicle)),
             TargetId::Brick(id) => world
                 .bricks
                 .get(&id)
@@ -331,6 +340,18 @@ impl Session {
                     impulse,
                     ..
                 } => self.push_player(target.0, impulse),
+                WeaponEvent::Damage {
+                    source,
+                    target: TargetId::Vehicle(vehicle),
+                    amount,
+                    ..
+                } => self.damage_vehicle(vehicle, amount, source.0)?,
+                WeaponEvent::Impulse {
+                    target: TargetId::Vehicle(vehicle),
+                    impulse,
+                    position,
+                    ..
+                } => self.push_vehicle(vehicle, position, impulse),
                 WeaponEvent::SportMovement { locked: false, .. } => {}
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
             }

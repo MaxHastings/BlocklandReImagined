@@ -331,6 +331,24 @@ impl VehiclesWorld {
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         self.catalog.get(id)
     }
+    pub fn definitions(&self) -> impl Iterator<Item = &Definition> {
+        self.catalog.values()
+    }
+    /// Colliders attached to a vehicle body (chassis and turret), so the host
+    /// can tag them for weapon hit attribution.
+    pub fn colliders_of(&self, world: &PhysicsWorld, id: VehicleId) -> Vec<ColliderHandle> {
+        self.instances
+            .get(&id)
+            .map(|v| world.bodies[v.body].colliders().to_vec())
+            .unwrap_or_default()
+    }
+    /// Where an occupant sits, if mounted.
+    pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
+        self.occupied.get(&occupant).copied()
+    }
+    pub fn is_alive(&self, id: VehicleId) -> bool {
+        self.instances.get(&id).is_some_and(|v| v.dead_at.is_none())
+    }
     pub fn tick(&self) -> u64 {
         self.tick
     }

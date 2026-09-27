@@ -35,6 +35,8 @@ pub struct View {
     pub admin_snapshot: Option<bri_sim::session::AdminSnapshot>,
     pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
     pub minigames: Vec<bri_sim::session::MiniGameView>,
+    pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
+    pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
 }
 pub enum Event {
     Presentation {
@@ -164,6 +166,8 @@ fn publish(
         admin_snapshot: client.admin_snapshot.clone(),
         vitals: client.replica.vitals.clone(),
         minigames: client.replica.minigames.clone(),
+        vehicles: client.replica.vehicles.clone(),
+        vehicle_poses: client.replica.vehicle_poses.clone(),
     }));
 }
 async fn run(
@@ -213,7 +217,7 @@ async fn run(
                         if world_changed {world=Arc::new(client.replica.world.clone());}
                         publish(client,world.clone(),checkpoint_cue_cursor,view);
                     }
-                    ClientEvent::Pose(_)=>publish(client,world.clone(),checkpoint_cue_cursor,view),
+                    ClientEvent::Pose(_)|ClientEvent::Vehicle(_)=>publish(client,world.clone(),checkpoint_cue_cursor,view),
                     ClientEvent::AdminSnapshot(_)=>publish(client,world.clone(),checkpoint_cue_cursor,view),
                     ClientEvent::Notice(notice)=>events.try_send(Event::Notice(notice)).context("UI notice queue is full or closed")?,
                 }

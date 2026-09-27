@@ -15,6 +15,7 @@ bri-weapons = { path = "../weapons" }
 bri-sim = { path = "../sim" }
 bri-admin.workspace = true
 bri-minigames = { path = "../minigames" }
+bri-vehicles = { path = "../vehicles" }
 bri-identity = { path = "../identity" }
 bri-net = { path = "../net" }
 bri-render = { path = "../render" }

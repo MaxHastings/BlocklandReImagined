@@ -51,6 +51,17 @@ pub enum CueKind {
         actor: u64,
         name: String,
     },
+    /// Vehicle audio: a trigger key (`vehicle.*`, `player.mount`) or an
+    /// original sound profile name.
+    VehicleSound {
+        vehicle: u64,
+        sound: String,
+    },
+    /// Vehicle emitter (burning, splash).
+    VehicleEffect {
+        vehicle: u64,
+        effect: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -115,6 +126,14 @@ impl Cue {
             CueKind::Pain { actor } | CueKind::Death { actor } | CueKind::Spawn { actor } => {
                 ensure!(*actor > 0, "Invalid player cue")
             }
+            CueKind::VehicleSound { vehicle, sound: name }
+            | CueKind::VehicleEffect {
+                vehicle,
+                effect: name,
+            } => ensure!(
+                *vehicle > 0 && !name.is_empty() && text(name),
+                "Invalid vehicle cue"
+            ),
             CueKind::Emote { actor, name } => ensure!(
                 *actor > 0 && crate::session::EMOTES.contains(&name.as_str()),
                 "Invalid emote cue"
