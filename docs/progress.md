@@ -1914,6 +1914,20 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   still lands on terrain. Brick Shadows checkbox added under Anti-Aliasing
   in Options > Graphics (the authored Shadow Quality box clips a sixth row).
 
+- 2026-09-27 Vehicles thread paused (session limit). Landed on main: horizontal
+  FOV (879b923), v20 seats with tools while riding and jet to leave (31d944a),
+  riders flush with tilted seats (f8f1e5f), Vehicle Mouse Invert (cc155c3).
+  The rider chase camera already follows the rider's look plus `cameraTilt`
+  as v20's `Player::getCameraTransform` does, so it was left alone. Next, not
+  started: for every WheeledVehicle (Jeep, Tank, Flying Wheeled Jeep, ball,
+  skis, tumble), (1) linear damping drag/mass and angular damping
+  rotationalDrag + drag (world.rs `linear_damping`, today only FlyingWheeled);
+  (2) wheel steer -(s*|s|) instead of -s (`w.steering`); (3) mouse-steering
+  auto-return by `1 - rate * min(|throttle|, maxSpeed) / maxSpeed` per 32 ms
+  tick when yaw is 0 (0x570c4a, verified), for skis as for the Flying Wheeled
+  Jeep, and no return for the FlyingVehicle carpet (drop
+  STEERING_RETURN_PER_TICK). Each needs a test in crates/vehicles.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
