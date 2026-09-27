@@ -93,6 +93,8 @@ pub struct ClientFoliage {
     images: Vec<Image>,
     pub prepared: PreparedFoliage,
     renderer: Option<FoliageRenderer>,
+    /// Samples per pixel of the world pass the foliage draws into.
+    samples: u32,
     seconds: f64,
     pub stats: RenderStats,
 }
@@ -105,6 +107,7 @@ impl ClientFoliage {
             images,
             prepared: PreparedFoliage::default(),
             renderer: None,
+            samples: 1,
             seconds: 0.,
             stats: RenderStats::default(),
         })
@@ -121,6 +124,13 @@ impl ClientFoliage {
     }
     pub fn gpu_stopped(&mut self) {
         self.renderer = None;
+    }
+    /// Match the world pass's samples per pixel; the renderer is rebuilt.
+    pub fn set_samples(&mut self, samples: u32) {
+        if samples != self.samples {
+            self.samples = samples;
+            self.renderer = None;
+        }
     }
     pub fn advance(&mut self, elapsed: std::time::Duration) {
         self.seconds += elapsed.as_secs_f64();
@@ -145,7 +155,7 @@ impl ClientFoliage {
                 RenderConfig {
                     target: frame.format,
                     depth: bri_render::scene::DEPTH_FORMAT,
-                    samples: 1,
+                    samples: self.samples.max(1),
                 },
             )?);
         }

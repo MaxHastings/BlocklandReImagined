@@ -12,6 +12,7 @@ pub mod crouch;
 pub mod effects;
 pub mod explosion_shapes;
 pub mod foliage;
+pub mod graphics;
 pub mod item_ui;
 pub mod items;
 pub mod materials;

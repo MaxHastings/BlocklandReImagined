@@ -1,4 +1,5 @@
 pub mod environment_scene;
+pub mod mipmap;
 pub mod scene;
 pub mod scene_loader;
 pub mod shape_scene;

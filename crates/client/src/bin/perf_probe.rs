@@ -601,7 +601,7 @@ fn gpu_frames(
         ),
     ];
     let mut out = serde_json::Map::new();
-    for (name, eye, look) in views {
+    for &(name, eye, look) in &views {
         let mut camera = Camera::perspective(
             eye.to_array(),
             look.to_array(),
@@ -664,11 +664,143 @@ fn gpu_frames(
             json!(differing as f64 / (width * height) as f64);
         out.insert(name.into(), stats);
     }
+    let variants = quality_variants(
+        &device,
+        &queue,
+        snapshots,
+        map,
+        palette,
+        chunks,
+        &views,
+        (width, height),
+    )?;
     Ok(json!({
         "adapter": format!("{} ({:?})", info.name, info.backend),
         "resolution": [width, height],
         "upload_map_and_world_ms": upload_ms,
         "one_brick_chunk_upload_ms": one_chunk_upload_ms,
         "frames": out,
+        "quality_variants": variants,
     }))
+}
+
+/// Render each view with each graphics option set the client offers, saving
+/// `{view}-{variant}.png` and frame times, as the client composes its passes.
+#[allow(clippy::too_many_arguments)] // offscreen harness inputs
+fn quality_variants(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    snapshots: &std::path::Path,
+    map: &bri_render::scene::SceneData,
+    palette: &bri_client::world_chunks::BrickPalette,
+    chunks: &[(
+        bri_client::world_chunks::ChunkKey,
+        bri_render::scene::SceneData,
+    )],
+    views: &[(&str, Vec3, Vec3)],
+    (width, height): (u32, u32),
+) -> Result<serde_json::Value> {
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let texture = |samples: u32, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("variant target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let resolved = texture(
+        1,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let resolved_view = resolved.create_view(&Default::default());
+    let mut out = serde_json::Map::new();
+    for (variant, samples) in [("no-msaa", 1), ("msaa4", 4)] {
+        let mut renderer = SceneRenderer::with_samples(device, format, samples);
+        let gpu_map = renderer.upload(device, queue, map)?;
+        let gpu_palette = renderer.upload(device, queue, &palette.scene)?;
+        let gpu_world = chunks
+            .iter()
+            .map(|(_, chunk)| renderer.upload_chunk(device, chunk, &gpu_palette))
+            .collect::<Result<Vec<_>>>()?;
+        let mut scenes = vec![&gpu_map];
+        scenes.extend(gpu_world.iter());
+        let multisampled = (samples > 1).then(|| {
+            texture(samples, wgpu::TextureUsages::RENDER_ATTACHMENT)
+                .create_view(&Default::default())
+        });
+        let depth = bri_render::scene::create_depth_samples(device, width, height, samples)
+            .create_view(&Default::default());
+        let mut results = serde_json::Map::new();
+        for &(name, eye, look) in views {
+            let mut camera = Camera::perspective(
+                eye.to_array(),
+                look.to_array(),
+                width as f32 / height as f32,
+                90f32.to_radians(),
+                0.05,
+                4000.0,
+            );
+            camera.apply_environment(map);
+            renderer.update_camera(queue, &camera);
+            let mut frames = Vec::new();
+            for i in 0..40 {
+                let t = Instant::now();
+                let mut encoder = device.create_command_encoder(&Default::default());
+                renderer.render(
+                    &mut encoder,
+                    multisampled.as_ref().unwrap_or(&resolved_view),
+                    &depth,
+                    &scenes,
+                    Some(wgpu::Color::BLACK),
+                );
+                if let Some(color) = &multisampled {
+                    // The client resolves in its last world pass.
+                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("variant resolve"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: color,
+                            depth_slice: None,
+                            resolve_target: Some(&resolved_view),
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Discard,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+                queue.submit([encoder.finish()]);
+                device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })?;
+                if i >= 10 {
+                    frames.push(ms(t.elapsed()));
+                }
+            }
+            let pixels = read_back(device, queue, &resolved)?;
+            image::save_buffer(
+                snapshots.join(format!("{name}-{variant}.png")),
+                &pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            )?;
+            results.insert(name.into(), percentiles(&mut frames));
+        }
+        out.insert(variant.into(), results.into());
+    }
+    Ok(out.into())
 }

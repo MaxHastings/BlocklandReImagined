@@ -13,7 +13,7 @@ use bri_net::{
     server::{self, ServerOptions},
 };
 use bri_render::{
-    scene::{Camera, GpuScene, SceneData, SceneRenderer, create_depth},
+    scene::{Camera, GpuScene, SceneData, SceneRenderer, create_depth_samples},
     scene_loader::load_map_bundle,
 };
 use bri_sim::{
@@ -148,7 +148,9 @@ pub struct App {
     effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     gpu_scene: Option<GpuScene>,
     gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
-    depth: Option<(wgpu::Texture, (u32, u32))>,
+    /// World-pass depth and, with MSAA, the multisampled color attachment
+    /// that the last world pass resolves into the frame target.
+    depth: Option<(wgpu::Texture, Option<wgpu::Texture>, (u32, u32))>,
     meshes: Option<Arc<Meshes>>,
     /// Replicated bricks as independently rebuilt chunks sharing one
     /// uploaded material palette. A running job owns `chunked`.
@@ -162,6 +164,7 @@ pub struct App {
     world_revision: u64,
     world_log: Option<Arc<network::WorldLog>>,
     world_job: Option<WorldJob>,
+    graphics: crate::graphics::Graphics,
     load_limit: Arc<tokio::sync::Semaphore>,
     materials: Option<Arc<crate::materials::BrickMaterials>>,
     building: Option<crate::building::Building>,
@@ -648,6 +651,7 @@ impl App {
         )?;
         let mut saved = settings::load(&state_dir.join("settings.json"))?;
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
+        let graphics = crate::graphics::Graphics::from_settings(&saved);
         let audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
         let platform = if cfg!(target_os = "macos") {
             Platform::MacOs
@@ -731,6 +735,7 @@ impl App {
             world_revision: 0,
             world_log: None,
             world_job: None,
+            graphics,
             load_limit: Arc::new(tokio::sync::Semaphore::new(2)),
             materials: None,
             building: None,
@@ -3298,6 +3303,7 @@ impl PlatformApp for App {
                 UiAction::SaveSettings(value) => {
                     settings::save(&self.state_dir.join("settings.json"), &value).and_then(|()| {
                         self.audio.apply_settings(&value);
+                        self.graphics = crate::graphics::Graphics::from_settings(&value);
                         self.weather.apply_settings(&value)
                     })
                 }
@@ -3657,8 +3663,10 @@ impl PlatformApp for App {
         }
         self.avatar_preview = Some(crate::avatar::Preview::new(device));
         self.preview_dirty = self.preview_request.is_some();
-        self.renderer = Some(SceneRenderer::new(device, format));
+        let samples = self.graphics.samples;
+        self.renderer = Some(SceneRenderer::with_samples(device, format, samples));
         self.foliage.gpu_stopped();
+        self.foliage.set_samples(samples);
         let weather_limits = bri_weather::WeatherLimits::default();
         self.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
@@ -3666,7 +3674,7 @@ impl PlatformApp for App {
             self.weather.world.pack(),
             format,
             bri_render::scene::DEPTH_FORMAT,
-            1,
+            samples,
             weather_limits.drops + weather_limits.splashes,
         )?);
         let limits = bri_fx_runtime::EffectsLimits::default();
@@ -3676,7 +3684,7 @@ impl PlatformApp for App {
             self.weapon_effects.world().pack(),
             format,
             bri_render::scene::DEPTH_FORMAT,
-            1,
+            samples,
             limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
         )?);
         self.gpu_scene = None;
@@ -3717,6 +3725,14 @@ impl PlatformApp for App {
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
+        // Anti-aliasing changes every world pipeline and attachment.
+        if self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.samples() != self.graphics.samples)
+        {
+            self.gpu_ready(frame.device, frame.queue, frame.format)?;
+        }
         self.item_ui.register_icons(frame);
         if self.preview_dirty
             && let Some((appearance, rotation, distance)) = &self.preview_request
@@ -3767,6 +3783,7 @@ impl PlatformApp for App {
             .renderer
             .as_mut()
             .context("Scene GPU not initialized")?;
+        renderer.set_filtering(frame.device, self.graphics.filtering);
         if self.gpu_scene.is_none() {
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
             self.gpu_terrain = self
@@ -3887,10 +3904,28 @@ impl PlatformApp for App {
         if self
             .depth
             .as_ref()
-            .is_none_or(|(_, size)| *size != frame.size)
+            .is_none_or(|(_, _, size)| *size != frame.size)
         {
+            let samples = renderer.samples();
+            let color = (samples > 1).then(|| {
+                frame.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("multisampled world color"),
+                    size: wgpu::Extent3d {
+                        width: frame.size.0,
+                        height: frame.size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: frame.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+            });
             self.depth = Some((
-                create_depth(frame.device, frame.size.0, frame.size.1),
+                create_depth_samples(frame.device, frame.size.0, frame.size.1, samples),
+                color,
                 frame.size,
             ));
         }
@@ -4061,12 +4096,12 @@ impl PlatformApp for App {
             effects_camera.view_projection,
             &self.weather.world.snapshot(),
         )?;
-        let depth = self
-            .depth
+        let (depth, multisampled, _) = self.depth.as_ref().unwrap();
+        let depth = depth.create_view(&Default::default());
+        let multisampled = multisampled
             .as_ref()
-            .unwrap()
-            .0
-            .create_view(&Default::default());
+            .map(|color| color.create_view(&Default::default()));
+        let world_target = multisampled.as_ref().unwrap_or(frame.target);
         let [r, g, b, a] = scene.clear_color.map(f64::from);
         let mut scenes = vec![self.gpu_scene.as_ref().unwrap()];
         scenes.extend(self.gpu_chunks.values());
@@ -4096,7 +4131,7 @@ impl PlatformApp for App {
         item_draws.extend(self.debris_models.draws());
         renderer.render_with_instances(
             frame.encoder,
-            frame.target,
+            world_target,
             &depth,
             &scenes,
             &item_draws,
@@ -4106,13 +4141,18 @@ impl PlatformApp for App {
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("replicated world particles and flares"),
+                // The last world pass resolves MSAA into the frame for the UI.
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: frame.target,
+                    view: world_target,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: multisampled.as_ref().map(|_| frame.target),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+                        store: if multisampled.is_some() {
+                            wgpu::StoreOp::Discard
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {

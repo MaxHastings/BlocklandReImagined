@@ -1833,6 +1833,22 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `chat_talks_on_thread_three_for_fifty_ms_per_character`; the talk row of
   `artifacts/avatar-animation/builder-sheet.png`.
 
+- 2026-09-27 Mipmaps, texture filtering and MSAA. Every scene image now
+  uploads a CPU mip chain (`bri_render::mipmap`: sRGB averaged in linear
+  light, colour weighted by alpha so overlays keep their pigment coverage);
+  lightmap and terrain weight slots bind only the base level, so atlas
+  sheets never blend neighbouring surfaces. Samplers moved to the camera
+  group and follow v20's own Graphics prefs: `$pref::OpenGL::textureTrilinear`,
+  `useGLNearest` ("Use Sharp Filter") and `anisotropy` (0..1 slider to
+  1-16x); defaults trilinear, 8x. World-pass MSAA 4x (`$pref::Video::AntiAliasing`,
+  native pref, default on; v20 had no control) covers the scene, foliage,
+  effects and weather passes and resolves before the UI. Golden Gate
+  1080p: MSAA costs about 0.1 ms p50. Distant brick tops and road textures
+  no longer sparkle (`artifacts/perf/mips-compare.png`, `msaa-compare.png`).
+  Offscreen GPU tests brick_fx, brick_material_gallery, foliage_scene,
+  spray_paint_render, vehicle_render and world_items pass. `app_flow`'s
+  wrench step times out on main before these changes too.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

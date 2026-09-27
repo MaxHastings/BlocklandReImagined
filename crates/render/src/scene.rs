@@ -890,6 +890,122 @@ fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     })
 }
 
+/// Diffuse texture filtering, from v20's Trilinear Filtering, Use Sharp
+/// Filter and Anisotropy options. Lightmaps and weight maps always use plain
+/// bilinear sampling of their base level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureFiltering {
+    /// Blend between mip levels instead of snapping to the nearest one.
+    pub trilinear: bool,
+    /// Nearest-texel magnification and minification (`useGLNearest`).
+    pub sharp: bool,
+    /// Maximum anisotropic samples: 1, 2, 4, 8 or 16.
+    pub anisotropy: u16,
+}
+impl Default for TextureFiltering {
+    fn default() -> Self {
+        Self {
+            trilinear: true,
+            sharp: false,
+            anisotropy: 8,
+        }
+    }
+}
+impl TextureFiltering {
+    /// v20 stores anisotropy as a 0..1 slider value.
+    pub fn from_v20(trilinear: bool, sharp: bool, anisotropy: f32) -> Self {
+        let samples = if anisotropy.is_finite() {
+            1.0 + anisotropy.clamp(0.0, 1.0) * 15.0
+        } else {
+            1.0
+        };
+        Self {
+            trilinear,
+            sharp,
+            anisotropy: [16, 8, 4, 2]
+                .into_iter()
+                .find(|n| samples >= f32::from(*n))
+                .unwrap_or(1),
+        }
+    }
+}
+fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+/// Camera, lights and the four shared samplers: filtered repeat/clamp for
+/// diffuse images, plain bilinear repeat/clamp for lightmaps and weights.
+fn camera_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    camera: &wgpu::Buffer,
+    lights: &wgpu::Buffer,
+    filtering: TextureFiltering,
+) -> wgpu::BindGroup {
+    let filtered = |address_mode| {
+        let filter = if filtering.sharp {
+            wgpu::FilterMode::Nearest
+        } else {
+            wgpu::FilterMode::Linear
+        };
+        // Anisotropy requires linear filtering throughout.
+        let anisotropic = filtering.anisotropy > 1 && !filtering.sharp && filtering.trilinear;
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: address_mode,
+            address_mode_v: address_mode,
+            mag_filter: filter,
+            min_filter: filter,
+            mipmap_filter: if filtering.trilinear {
+                wgpu::MipmapFilterMode::Linear
+            } else {
+                wgpu::MipmapFilterMode::Nearest
+            },
+            anisotropy_clamp: if anisotropic { filtering.anisotropy } else { 1 },
+            ..Default::default()
+        })
+    };
+    let plain = |address_mode| {
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: address_mode,
+            address_mode_v: address_mode,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        })
+    };
+    let samplers = [
+        filtered(wgpu::AddressMode::Repeat),
+        filtered(wgpu::AddressMode::ClampToEdge),
+        plain(wgpu::AddressMode::Repeat),
+        plain(wgpu::AddressMode::ClampToEdge),
+    ];
+    let mut entries = vec![
+        wgpu::BindGroupEntry {
+            binding: 0,
+            resource: camera.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 1,
+            resource: lights.as_entire_binding(),
+        },
+    ];
+    for (i, sampler) in samplers.iter().enumerate() {
+        entries.push(wgpu::BindGroupEntry {
+            binding: 2 + i as u32,
+            resource: wgpu::BindingResource::Sampler(sampler),
+        });
+    }
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("camera"),
+        layout,
+        entries: &entries,
+    })
+}
+
 pub const MAX_POINT_LIGHTS: usize = 256;
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
 #[repr(C)]
@@ -903,17 +1019,27 @@ pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
+    camera_layout: wgpu::BindGroupLayout,
     camera_group: wgpu::BindGroup,
     material_layout: wgpu::BindGroupLayout,
     pipelines: Vec<wgpu::RenderPipeline>,
-    repeat: wgpu::Sampler,
-    clamp: wgpu::Sampler,
+    filtering: TextureFiltering,
+    samples: u32,
     eye: Vec3,
     frustum: Option<[glam::Vec4; 6]>,
 }
 
 impl SceneRenderer {
     pub fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat) -> Self {
+        Self::with_samples(device, color_format, 1)
+    }
+    /// Pipelines for `samples`-per-pixel color and depth attachments (see
+    /// `create_depth_samples`); the caller resolves the color attachment.
+    pub fn with_samples(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        samples: u32,
+    ) -> Self {
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene camera"),
             entries: &[
@@ -937,6 +1063,10 @@ impl SceneRenderer {
                     },
                     count: None,
                 },
+                sampler_entry(2),
+                sampler_entry(3),
+                sampler_entry(4),
+                sampler_entry(5),
             ],
         });
         let mut entries = vec![];
@@ -949,14 +1079,6 @@ impl SceneRenderer {
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
-                count: None,
-            });
-        }
-        for binding in 13..15 {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             });
         }
@@ -1021,7 +1143,7 @@ impl SceneRenderer {
                 })]},
                 primitive:wgpu::PrimitiveState {cull_mode:if double_sided {None} else {Some(wgpu::Face::Back)},..Default::default()},
                 depth_stencil:Some(wgpu::DepthStencilState {format:DEPTH_FORMAT,depth_write_enabled:Some(blend==0 && !background),depth_compare:Some(wgpu::CompareFunction::LessEqual),stencil:Default::default(),bias:Default::default()}),
-                multisample:Default::default(),fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants: &[ ("OUTPUT_ENCODED", if color_format.is_srgb() {0.0} else {1.0}) ],..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:blend_state,write_mask:wgpu::ColorWrites::ALL})]}),
+                multisample:wgpu::MultisampleState {count:samples,..Default::default()},fragment:Some(wgpu::FragmentState {module:&shader,entry_point:Some("fs_main"),compilation_options:wgpu::PipelineCompilationOptions {constants: &[ ("OUTPUT_ENCODED", if color_format.is_srgb() {0.0} else {1.0}) ],..Default::default()},targets:&[Some(wgpu::ColorTargetState {format:color_format,blend:blend_state,write_mask:wgpu::ColorWrites::ALL})]}),
                 multiview_mask:None,cache:None,
             }));
                 }
@@ -1037,29 +1159,14 @@ impl SceneRenderer {
             contents: &vec![0u8; 16 + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()],
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("camera"),
-            layout: &camera_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: light_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let sampler = |address_mode| {
-            device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: address_mode,
-                address_mode_v: address_mode,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            })
-        };
+        let filtering = TextureFiltering::default();
+        let camera_group = camera_group(
+            device,
+            &camera_layout,
+            &camera_buffer,
+            &light_buffer,
+            filtering,
+        );
         Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
@@ -1068,11 +1175,12 @@ impl SceneRenderer {
             }),
             camera_buffer,
             light_buffer,
+            camera_layout,
             camera_group,
             material_layout,
             pipelines,
-            repeat: sampler(wgpu::AddressMode::Repeat),
-            clamp: sampler(wgpu::AddressMode::ClampToEdge),
+            filtering,
+            samples,
             eye: Vec3::ZERO,
             frustum: None,
         }
@@ -1094,7 +1202,10 @@ impl SceneRenderer {
             "Scene buffer exceeds device limits"
         );
         let (vertices, indices) = geometry_buffers(device, &data.name, data);
+        // Every image is mipmapped; lightmap and weight slots bind only the
+        // base level so atlas sheets never blend neighbouring surfaces.
         let mut views = Vec::with_capacity(data.images.len());
+        let mut base_views = Vec::with_capacity(data.images.len());
         for image in &data.images {
             ensure!(
                 image.width <= limits.max_texture_dimension_2d
@@ -1107,10 +1218,11 @@ impl SceneRenderer {
                 height: image.height,
                 depth_or_array_layers: 1,
             };
+            let levels = crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb);
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&image.label),
                 size,
-                mip_level_count: 1,
+                mip_level_count: levels.len() as u32,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: if image.srgb {
@@ -1121,17 +1233,32 @@ impl SceneRenderer {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            queue.write_texture(
-                texture.as_image_copy(),
-                &image.rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(image.width * 4),
-                    rows_per_image: Some(image.height),
-                },
-                size,
-            );
+            for (level, (width, height, rgba)) in levels.iter().enumerate() {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: level as u32,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    rgba.as_ref(),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 4),
+                        rows_per_image: Some(*height),
+                    },
+                    wgpu::Extent3d {
+                        width: *width,
+                        height: *height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             views.push(texture.create_view(&Default::default()));
+            base_views.push(texture.create_view(&wgpu::TextureViewDescriptor {
+                mip_level_count: Some(1),
+                ..Default::default()
+            }));
         }
         let mut materials = vec![];
         for material in &data.materials {
@@ -1171,23 +1298,17 @@ impl SceneRenderer {
                 .enumerate()
                 .map(|(i, image)| wgpu::BindGroupEntry {
                     binding: i as u32,
-                    resource: wgpu::BindingResource::TextureView(&views[*image]),
+                    resource: wgpu::BindingResource::TextureView(if (8..=10).contains(&i) {
+                        &base_views[*image]
+                    } else {
+                        &views[*image]
+                    }),
                 })
                 .collect();
-            entries.extend([
-                wgpu::BindGroupEntry {
-                    binding: 13,
-                    resource: wgpu::BindingResource::Sampler(&self.repeat),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 14,
-                    resource: wgpu::BindingResource::Sampler(&self.clamp),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 15,
-                    resource: buffer.as_entire_binding(),
-                },
-            ]);
+            entries.push(wgpu::BindGroupEntry {
+                binding: 15,
+                resource: buffer.as_entire_binding(),
+            });
             materials.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&material.name),
                 layout: &self.material_layout,
@@ -1306,6 +1427,26 @@ impl SceneRenderer {
             index_count: data.indices.len(),
             image_count: base.image_count,
         })
+    }
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+    pub fn filtering(&self) -> TextureFiltering {
+        self.filtering
+    }
+    /// Texture filtering is sampler state shared by every uploaded scene, so
+    /// changing it rebuilds only the camera bind group.
+    pub fn set_filtering(&mut self, device: &wgpu::Device, filtering: TextureFiltering) {
+        if filtering != self.filtering {
+            self.filtering = filtering;
+            self.camera_group = camera_group(
+                device,
+                &self.camera_layout,
+                &self.camera_buffer,
+                &self.light_buffer,
+                filtering,
+            );
+        }
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.
@@ -1501,6 +1642,14 @@ impl SceneRenderer {
 
 /// Recreate only this attachment when the viewport changes.
 pub fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    create_depth_samples(device, width, height, 1)
+}
+pub fn create_depth_samples(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("scene depth"),
         size: wgpu::Extent3d {
@@ -1509,7 +1658,7 @@ pub fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Tex
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count: samples,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

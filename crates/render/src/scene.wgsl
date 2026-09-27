@@ -37,8 +37,12 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 @group(1) @binding(10) var weights1:texture_2d<f32>;
 @group(1) @binding(11) var detail:texture_2d<f32>;
 @group(1) @binding(12) var bump:texture_2d<f32>;
-@group(1) @binding(13) var tiled:sampler;
-@group(1) @binding(14) var clamped:sampler;
+// Diffuse images use the player's filtering; lightmaps and weights always
+// sample their base level bilinearly.
+@group(0) @binding(2) var tiled:sampler;
+@group(0) @binding(3) var clamped:sampler;
+@group(0) @binding(4) var tiled_exact:sampler;
+@group(0) @binding(5) var clamped_exact:sampler;
 @group(1) @binding(15) var<uniform> material:array<vec4<f32>,4>;
 // Brick FX IDs come from recovered v20 output registrations. Numerical visual
 // parameters below are explicit native approximations, not recovered engine code.
@@ -120,15 +124,15 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         // Halved bump plus halved-inverted bump shifted toward the sun,
         // faded to neutral grey over the last quarter, then modulate-2x.
         let uv=local/material[3].x*material[2].x;
-        let b0=textureSampleLevel(bump,tiled,uv,0.0).rgb;
-        let b1=textureSampleLevel(bump,tiled,uv+material[2].yz,0.0).rgb;
+        let b0=textureSampleLevel(bump,tiled_exact,uv,0.0).rgb;
+        let b1=textureSampleLevel(bump,tiled_exact,uv+material[2].yz,0.0).rgb;
         let emboss=clamp(vec3<f32>(127.0/255.0)+(b0-b1)*0.5,vec3<f32>(0.0),vec3<f32>(1.0));
         let fade=clamp((distance/zero_bump-0.75)*4.0,0.0,1.0);
         color=clamp(color*2.0*mix(emboss,vec3<f32>(127.0/255.0),fade),vec3<f32>(0.0),vec3<f32>(1.0));
     }
     let zero_detail=material[1].x;
     if (flags&1u)!=0u && distance<zero_detail {
-        let d=textureSampleLevel(detail,tiled,local*material[1].zw,0.0);
+        let d=textureSampleLevel(detail,tiled_exact,local*material[1].zw,0.0);
         let c=(1.0-fog)*clamp((zero_detail-distance)/zero_detail,0.0,1.0);
         color=color*(d.rgb*c+vec3<f32>(1.0-d.a*c));
     }
@@ -145,7 +149,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         let second=mat2x2<f32>(vec2<f32>(0.8660254,0.5),vec2<f32>(-0.5,0.8660254))*(base+drift*material[3].w);
         let first_rgb=display_color(textureSample(layer0,tiled,base+drift).rgb);
         let second_rgb=display_color(textureSample(layer0,tiled,second).rgb);
-        let masks=textureSample(lightmap,clamped,v.lightmap_uv);
+        let masks=textureSample(lightmap,clamped_exact,v.lightmap_uv);
         let a=masks.r;
         // Collapse the two classic straight-alpha surface passes into one.
         var alpha=1.0-(1.0-a)*(1.0-a);
@@ -169,7 +173,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     }
     if material[0].x==1.0 {
         let weight_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(weights0));
-        let a=textureSample(weights0,tiled,weight_uv);let b=textureSample(weights1,tiled,weight_uv);
+        let a=textureSample(weights0,tiled_exact,weight_uv);let b=textureSample(weights1,tiled_exact,weight_uv);
         let diffuse=display_color(textureSample(layer0,tiled,v.uv).rgb)*a.r
             +display_color(textureSample(layer1,tiled,v.uv).rgb)*a.g
             +display_color(textureSample(layer2,tiled,v.uv).rgb)*a.b
@@ -179,7 +183,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
             +display_color(textureSample(layer6,tiled,v.uv).rgb)*b.b
             +display_color(textureSample(layer7,tiled,v.uv).rgb)*b.a;
         let light_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(lightmap));
-        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(textureSample(lightmap,tiled,light_uv).rgb+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
+        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(textureSample(lightmap,tiled_exact,light_uv).rgb+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
     let albedo=textureSample(layer0,tiled,v.uv);
@@ -200,7 +204,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
-    var illumination=textureSample(lightmap,clamped,v.lightmap_uv).rgb;
+    var illumination=textureSample(lightmap,clamped_exact,v.lightmap_uv).rgb;
     if material[0].x==2.0 || material[0].x==3.0 {
         let normal=v.normal/max(length(v.normal),0.0001);
         let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
