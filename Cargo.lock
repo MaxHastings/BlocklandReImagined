@@ -333,6 +333,7 @@ dependencies = [
  "bri-audio",
  "bri-console",
  "bri-content",
+ "bri-crash",
  "bri-events",
  "bri-files",
  "bri-foliage",
@@ -388,6 +389,14 @@ dependencies = [
  "sha2",
  "walkdir",
  "zip 6.0.0",
+]
+
+[[package]]
+name = "bri-crash"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -502,6 +511,7 @@ dependencies = [
  "anyhow",
  "bri-admin",
  "bri-content",
+ "bri-crash",
  "bri-events",
  "bri-files",
  "bri-identity",
