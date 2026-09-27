@@ -20,7 +20,6 @@ pub struct Draw {
     pub diffuse: usize,
     pub lightmap: usize,
     pub scissor: [u32; 4],
-    pub terrain_images: Option<[usize; 11]>,
 }
 pub async fn render_textured(
     vertices: &[TextureVertex],
@@ -29,16 +28,7 @@ pub async fn render_textured(
     width: u32,
     height: u32,
 ) -> Result<Preview> {
-    render(vertices, images, draws, width, height, false).await
-}
-pub async fn render_terrain(
-    vertices: &[TextureVertex],
-    images: &[TextureImage],
-    draws: &[Draw],
-    width: u32,
-    height: u32,
-) -> Result<Preview> {
-    render(vertices, images, draws, width, height, true).await
+    render(vertices, images, draws, width, height).await
 }
 async fn render(
     vertices: &[TextureVertex],
@@ -46,7 +36,6 @@ async fn render(
     draws: &[Draw],
     width: u32,
     height: u32,
-    terrain: bool,
 ) -> Result<Preview> {
     ensure!(
         width > 0 && height > 0 && width <= 4096 && height <= 4096 && width.is_multiple_of(64),
@@ -68,11 +57,7 @@ async fn render(
             format!(
                 "{}\n{}",
                 include_str!("color.wgsl"),
-                if terrain {
-                    include_str!("terrain.wgsl")
-                } else {
-                    include_str!("textured.wgsl")
-                }
+                include_str!("textured.wgsl")
             )
             .into(),
         ),
@@ -175,33 +160,20 @@ async fn render(
                 binding: 0,
                 resource: wgpu::BindingResource::Sampler(&sampler),
             }];
-            if terrain {
-                let indices = draw
-                    .terrain_images
-                    .as_ref()
-                    .expect("Terrain draw missing image bindings");
-                for (i, index) in indices.iter().enumerate() {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: i as u32 + 1,
-                        resource: wgpu::BindingResource::TextureView(&views[*index]),
-                    });
-                }
-            } else {
-                entries.extend([
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&views[draw.diffuse]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&views[draw.lightmap]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&lm_sampler),
-                    },
-                ]);
-            }
+            entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&views[draw.diffuse]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&views[draw.lightmap]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&lm_sampler),
+                },
+            ]);
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("native material"),
                 layout: &layout,

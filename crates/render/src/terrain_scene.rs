@@ -186,6 +186,56 @@ impl TerrainScene {
     }
 }
 
+/// Classic `worldToScreenScale` (pixels per unit at unit distance) for the
+/// reference 1024-pixel-wide, 90-degree view. The original fade distances
+/// scaled with resolution; a fixed reference keeps them resolution-independent.
+const REFERENCE_WORLD_TO_SCREEN: f32 = 512.0;
+
+/// Terrain material uniforms reproducing the classic detail and emboss-bump
+/// passes (see `terrain_passes` in scene.wgsl). `detail_size` is the detail
+/// image size in pixels when bound; `sun_direction` is the native light
+/// direction (pointing away from the sun).
+pub fn parameters(
+    field: &TerrainField,
+    sun_direction: [f32; 3],
+    detail_size: Option<[u32; 2]>,
+    bump_bound: bool,
+) -> [[f32; 4]; 3] {
+    // Classic distances use the integer square size.
+    let square = field.spacing.round().max(1.0) as i32;
+    let zero = |shift: i32| {
+        (square as f32 * REFERENCE_WORLD_TO_SCREEN) / (1 << shift) as f32 - (square >> 1) as f32
+    };
+    let detail = detail_size.map_or([0.0; 2], |[w, h]| [62.0 / w as f32, 62.0 / h as f32]);
+    // Emboss offset: dot of the block's s/t tangents with the vector toward
+    // the sun, in Torque's Z-up object space. The t tangent samples heights
+    // at object points (0,255) and (255,0) exactly like the original.
+    let [nx, ny, nz] = sun_direction;
+    let sun = Vec3::new(-nx, nz, -ny);
+    let height = |x: f32, y: f32| {
+        field
+            .height(field.origin.x + x, field.origin.z - y)
+            .unwrap_or(field.origin.y)
+    };
+    let t_tangent =
+        Vec3::new(0.0, height(255.0, 0.0) - height(0.0, 255.0), square as f32).normalize_or_zero();
+    let offset = [
+        Vec3::X.dot(sun) * field.bump.offset,
+        t_tangent.dot(sun) * field.bump.offset,
+    ];
+    let flags = u8::from(detail_size.is_some()) + 2 * u8::from(bump_bound);
+    [
+        [zero(6), zero(field.bump.zero_scale), detail[0], detail[1]],
+        [
+            32.0 / field.bump.scale / 4.0,
+            offset[0],
+            offset[1],
+            f32::from(flags),
+        ],
+        [field.spacing, field.origin.x, field.origin.z, 0.0],
+    ]
+}
+
 /// GPU terrain: one shared upload plus per-variant instance lists.
 pub struct GpuTerrain {
     scene: Arc<TerrainScene>,
@@ -294,11 +344,11 @@ mod tests {
         let data = SceneData {
             materials: vec![Material {
                 name: "t".into(),
-                images: [0; 11],
+                images: [0; 13],
                 kind: MaterialKind::Terrain,
                 alpha: AlphaMode::Opaque,
                 double_sided: false,
-                water_parameters: None,
+                parameters: Some([[0.0; 4]; 3]),
             }],
             ..Default::default()
         };
@@ -364,5 +414,25 @@ mod tests {
         let visible = s.visible(inside, 2000.0);
         assert_eq!(visible.iter().map(Vec::len).sum::<usize>(), 4);
         assert!(visible.iter().flatten().all(|t| *t == Mat4::IDENTITY));
+    }
+
+    #[test]
+    fn classic_detail_and_bump_uniforms() {
+        let s = scene(true, vec![]);
+        // Straight-down sun: no emboss shift along the flat s tangent.
+        let p = parameters(&s.field, [0.0, -1.0, 0.0], Some([256, 128]), true);
+        // Square size 8 at the reference scale: 8*512/64 - 4 and 8*512/256 - 4.
+        assert_eq!(p[0][0], 60.0);
+        assert_eq!(p[0][1], 12.0);
+        assert_eq!([p[0][2], p[0][3]], [62.0 / 256.0, 62.0 / 128.0]);
+        assert_eq!(p[1][0], 8.0);
+        assert!(p[1][1].abs() < 1e-6 && p[1][2].abs() > 0.0);
+        assert_eq!(p[1][3], 3.0);
+        assert_eq!(p[2], [8.0, -512.0, 512.0, 0.0]);
+        let none = parameters(&s.field, [0.3, -1.0, 0.4], None, false);
+        assert_eq!(none[1][3], 0.0);
+        // A low sun along +X shifts the emboss sample along s.
+        let low = parameters(&s.field, [-1.0, -0.1, 0.0], None, true);
+        assert!(low[1][1] > 0.0);
     }
 }

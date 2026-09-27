@@ -993,7 +993,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
         // Far outside the old finite patch: repeated terrain must still stream in.
         let far_eye = map.terrain.first().map(|t| {
             let (x, z) = (data.spawn[0] + 6100.0, data.spawn[2] - 6100.0);
-            Vec3::new(x, t.field.height(x, z).unwrap_or(0.0) + 30.0, z)
+            Vec3::new(x, t.field.height(x, z).unwrap_or(0.0) + 4.0, z)
         });
         let scene = renderer.upload(&gpu.device, &gpu.queue, &data)?;
         let mut terrain = map
@@ -1050,10 +1050,10 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
             )?;
             frames.push(frame);
         }
-        if let Some(far) = far_eye.filter(|_| name == "slopes") {
+        if let Some(far) = far_eye {
             let mut camera = Camera::perspective(
                 far.to_array(),
-                (far + Vec3::new(100.0, -25.0, 0.0)).to_array(),
+                (far + Vec3::new(40.0, -6.0, 0.0)).to_array(),
                 4.0 / 3.0,
                 80_f32.to_radians(),
                 0.05,

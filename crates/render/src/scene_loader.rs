@@ -236,7 +236,16 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
     let water_bound = load_waters(&root, &bundle, &scene, &fields, &mut out, &mut cache)?;
     let terrain = fields
         .iter()
-        .map(|field| load_terrain(&root, &bundle, bindings, &scene, field.clone()))
+        .map(|field| {
+            load_terrain(
+                &root,
+                &bundle,
+                bindings,
+                &scene,
+                field.clone(),
+                out.sun_direction,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     for (node_index, node) in scene.nodes.iter().enumerate() {
         match node.kind {
@@ -578,6 +587,7 @@ fn load_terrain(
     bindings: &[Value],
     scene: &Scene,
     field: Arc<TerrainField>,
+    sun_direction: [f32; 3],
 ) -> Result<TerrainScene> {
     let id = field.id.as_str();
     let terrain = &field.terrain;
@@ -588,7 +598,7 @@ fn load_terrain(
         ..Default::default()
     };
     let cache = &mut BTreeMap::new();
-    let mut images = [0; 11];
+    let mut images = [0; 13];
     let mut bound = [false; 8];
     for binding in bindings.iter().filter(|b| b["asset"].as_str() == Some(id)) {
         let slot = binding["terrain_layer"]
@@ -648,16 +658,37 @@ fn load_terrain(
             srgb: false,
         });
     }
+    // Detail and bump images keep their authored bytes: the classic passes
+    // blend them in display space, not as linear colors.
+    let detail = field
+        .detail
+        .as_ref()
+        .map(|t| texture(root, &t.file, false, &mut out, cache))
+        .transpose()?;
+    let bump = field
+        .bump
+        .texture
+        .as_ref()
+        .map(|t| texture(root, &t.file, false, &mut out, cache))
+        .transpose()?;
+    images[11] = detail.unwrap_or(0);
+    images[12] = bump.unwrap_or(0);
+    let parameters = crate::terrain_scene::parameters(
+        &field,
+        sun_direction,
+        detail.map(|i| [out.images[i].width, out.images[i].height]),
+        bump.is_some(),
+    );
     out.materials.push(Material {
         name: id.into(),
         images,
         kind: MaterialKind::Terrain,
         alpha: AlphaMode::Opaque,
         double_sided: false,
-        water_parameters: None,
+        parameters: Some(parameters),
     });
     out.omissions.push(format!(
-        "Terrain {id} streams full-detail tiles around the camera; distance LOD and authored detail/bump modulation are not yet implemented"
+        "Terrain {id} streams full-detail tiles around the camera; distance LOD is not yet implemented"
     ));
     TerrainScene::build(field, out)
 }

@@ -51,7 +51,7 @@ pub fn append(
     material.double_sided = true;
     material.images[1] = textures[1];
     material.images[2] = textures[2];
-    material.water_parameters = Some([
+    material.parameters = Some([
         [
             water.flow[0],
             water.flow[1],

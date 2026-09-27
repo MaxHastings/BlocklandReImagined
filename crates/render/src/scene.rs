@@ -170,16 +170,18 @@ pub enum AlphaMode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Material {
     pub name: String,
-    /// Slots 0..8 diffuse layers, 8 lightmap, 9/10 RGBA weight maps.
+    /// Slots 0..8 diffuse layers, 8 lightmap, 9/10 RGBA weight maps,
+    /// 11 terrain detail, 12 terrain emboss bump.
     /// A surface/VertexLit material uses diffuse slot 0; supply valid fallback
     /// indices in unused slots (normally the 1x1 white image).
-    pub images: [usize; 11],
+    pub images: [usize; 13],
     pub kind: MaterialKind,
     pub alpha: AlphaMode,
     pub double_sided: bool,
-    /// Water-only groups: flow/wave/opacity, distortion/depth flag,
-    /// surface+shore tiling/reflection/parallax.
-    pub water_parameters: Option<[[f32; 4]; 3]>,
+    /// Kind-specific uniforms, required for water and terrain only.
+    /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
+    /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
+    pub parameters: Option<[[f32; 4]; 3]>,
 }
 impl Material {
     pub fn brick_overlay(name: impl Into<String>, diffuse: usize) -> Self {
@@ -193,7 +195,7 @@ impl Material {
         material
     }
     pub fn surface(name: impl Into<String>, diffuse: usize, lightmap: usize) -> Self {
-        let mut images = [0; 11];
+        let mut images = [0; 13];
         images[0] = diffuse;
         images[8] = lightmap;
         Self {
@@ -202,7 +204,7 @@ impl Material {
             kind: MaterialKind::Surface,
             alpha: AlphaMode::Opaque,
             double_sided: false,
-            water_parameters: None,
+            parameters: None,
         }
     }
 }
@@ -497,12 +499,13 @@ impl SceneData {
         }
         for material in &self.materials {
             ensure!(
-                material.water_parameters.is_some() == (material.kind == MaterialKind::Water)
+                material.parameters.is_some()
+                    == matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain)
                     && material
-                        .water_parameters
+                        .parameters
                         .as_ref()
                         .is_none_or(|p| p.iter().flatten().all(|x| x.is_finite())),
-                "Invalid water material uniforms"
+                "Invalid water/terrain material uniforms"
             );
             ensure!(
                 material.images.iter().all(|i| *i < self.images.len()),
@@ -860,7 +863,7 @@ impl SceneRenderer {
             ],
         });
         let mut entries = vec![];
-        for binding in 0..11 {
+        for binding in 0..13 {
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -872,7 +875,7 @@ impl SceneRenderer {
                 count: None,
             });
         }
-        for binding in 11..13 {
+        for binding in 13..15 {
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -881,7 +884,7 @@ impl SceneRenderer {
             });
         }
         entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 13,
+            binding: 15,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
@@ -1083,8 +1086,8 @@ impl SceneRenderer {
                 0.0,
                 0.0,
             ]);
-            if let Some(water) = material.water_parameters {
-                for (i, group) in water.iter().enumerate() {
+            if let Some(groups) = material.parameters {
+                for (i, group) in groups.iter().enumerate() {
                     parameters[(i + 1) * 4..(i + 2) * 4].copy_from_slice(group);
                 }
             }
@@ -1104,15 +1107,15 @@ impl SceneRenderer {
                 .collect();
             entries.extend([
                 wgpu::BindGroupEntry {
-                    binding: 11,
+                    binding: 13,
                     resource: wgpu::BindingResource::Sampler(&self.repeat),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 12,
+                    binding: 14,
                     resource: wgpu::BindingResource::Sampler(&self.clamp),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 13,
+                    binding: 15,
                     resource: buffer.as_entire_binding(),
                 },
             ]);

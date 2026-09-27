@@ -167,7 +167,6 @@ async fn run() -> Result<()> {
                     diffuse,
                     lightmap,
                     scissor: [cell as u32 * 768, 0, 768, 768],
-                    terrain_images: None,
                 });
                 vertices.extend(group);
             }

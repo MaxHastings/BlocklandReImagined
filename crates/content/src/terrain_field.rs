@@ -137,6 +137,10 @@ pub struct TerrainField {
     pub spacing: f32,
     pub origin: Vec3,
     pub repeat: bool,
+    /// Authored detail texture, modulated over nearby terrain.
+    pub detail: Option<TerrainTexture>,
+    /// Authored emboss bump parameters.
+    pub bump: TerrainBump,
     empty: Vec<u64>,
     empty_count: usize,
     min_height: f32,
@@ -184,6 +188,8 @@ impl TerrainField {
             spacing: instance.square_size,
             origin: Vec3::from(instance.origin),
             repeat: instance.repeat,
+            detail: instance.detail.clone(),
+            bump: instance.bump.clone(),
             empty,
             empty_count,
             min_height: min_height + instance.origin[1],

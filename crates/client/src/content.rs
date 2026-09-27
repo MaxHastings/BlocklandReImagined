@@ -433,7 +433,7 @@ impl ClientContent {
             "Native brick materials include verified default print packages; complete historical vanilla inventory and exact material/color fidelity remain acceptance work.".into(),
             "Native item choices are loaded; complete item presentation and pickup/respawn fidelity still require gameplay verification.".into(),
             "Reference worlds include installed sample/community builds; their index is not vanilla certification.".into(),
-            "Terrain streams around the camera and bodies at full detail; terrain LOD, detail/bump texturing, underwater presentation and dynamic map-object behavior remain pending.".into(),
+            "Terrain streams around the camera and bodies at full detail with classic detail/emboss passes; underwater presentation and dynamic map-object behavior remain pending.".into(),
         ];
         for entry in &bundle.maps {
             if !LOADABLE_MAPS.contains(&entry.id.as_str()) {

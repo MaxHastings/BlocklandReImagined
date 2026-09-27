@@ -35,9 +35,11 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 @group(1) @binding(8) var lightmap:texture_2d<f32>;
 @group(1) @binding(9) var weights0:texture_2d<f32>;
 @group(1) @binding(10) var weights1:texture_2d<f32>;
-@group(1) @binding(11) var tiled:sampler;
-@group(1) @binding(12) var clamped:sampler;
-@group(1) @binding(13) var<uniform> material:array<vec4<f32>,4>;
+@group(1) @binding(11) var detail:texture_2d<f32>;
+@group(1) @binding(12) var bump:texture_2d<f32>;
+@group(1) @binding(13) var tiled:sampler;
+@group(1) @binding(14) var clamped:sampler;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,4>;
 // Brick FX IDs come from recovered v20 output registrations. Numerical visual
 // parameters below are explicit native approximations, not recovered engine code.
 fn brick_fx(uv:vec2<f32>)->vec2<u32> {
@@ -94,11 +96,43 @@ struct VertexOut {
     }
     return out;
 }
-fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
+fn fog_amount(position:vec3<f32>)->f32 {
     let distance=length(position-camera.eye.xyz);
     let t=clamp((distance-camera.atmosphere.x)/max(camera.atmosphere.y-camera.atmosphere.x,0.001),0.0,1.0);
-    let amount=(1.0-(1.0-t)*(1.0-t))*camera.atmosphere.w;
-    return output_color(mix(display,camera.fog_color.rgb,amount));
+    return (1.0-(1.0-t)*(1.0-t))*camera.atmosphere.w;
+}
+fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
+    return output_color(mix(display,camera.fog_color.rgb,fog_amount(position)));
+}
+// Classic TerrainRender frame-buffer passes, evaluated per pixel in display
+// space. material[1]: zero-detail distance, zero-bump distance, detail texture
+// repeats per unit (s,t). material[2]: bump repeats per cell, sun-derived
+// emboss offset (s,t), flags (1 detail, 2 bump). material[3].xyz: cell size,
+// terrain origin x/z (texture generation is in terrain object space).
+fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
+    let distance=length(position-camera.eye.xyz);
+    let fog=fog_amount(position);
+    let local=vec2<f32>(position.x-material[3].y,material[3].z-position.z);
+    let flags=u32(material[2].w);
+    var color=clamp(mix(lit,camera.fog_color.rgb,fog),vec3<f32>(0.0),vec3<f32>(1.0));
+    let zero_bump=material[1].y;
+    if (flags&2u)!=0u && distance<zero_bump {
+        // Halved bump plus halved-inverted bump shifted toward the sun,
+        // faded to neutral grey over the last quarter, then modulate-2x.
+        let uv=local/material[3].x*material[2].x;
+        let b0=textureSampleLevel(bump,tiled,uv,0.0).rgb;
+        let b1=textureSampleLevel(bump,tiled,uv+material[2].yz,0.0).rgb;
+        let emboss=clamp(vec3<f32>(127.0/255.0)+(b0-b1)*0.5,vec3<f32>(0.0),vec3<f32>(1.0));
+        let fade=clamp((distance/zero_bump-0.75)*4.0,0.0,1.0);
+        color=clamp(color*2.0*mix(emboss,vec3<f32>(127.0/255.0),fade),vec3<f32>(0.0),vec3<f32>(1.0));
+    }
+    let zero_detail=material[1].x;
+    if (flags&1u)!=0u && distance<zero_detail {
+        let d=textureSampleLevel(detail,tiled,local*material[1].zw,0.0);
+        let c=(1.0-fog)*clamp((zero_detail-distance)/zero_detail,0.0,1.0);
+        color=color*(d.rgb*c+vec3<f32>(1.0-d.a*c));
+    }
+    return output_color(color);
 }
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     if material[0].x==6.0 {
@@ -145,7 +179,7 @@ fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
             +display_color(textureSample(layer6,tiled,v.uv).rgb)*b.b
             +display_color(textureSample(layer7,tiled,v.uv).rgb)*b.a;
         let light_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(lightmap));
-        return vec4<f32>(fogged(diffuse*v.color.rgb*(textureSample(lightmap,tiled,light_uv).rgb+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
+        return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(textureSample(lightmap,tiled,light_uv).rgb+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
     let albedo=textureSample(layer0,tiled,v.uv);
