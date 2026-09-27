@@ -723,7 +723,12 @@ impl Session {
             .state()
             .bricks
             .iter()
-            .filter(|(_, b)| b.owner == owner && b.vehicle.is_some())
+            .filter(|(_, b)| {
+                b.owner == owner
+                    && b.vehicle.as_ref().is_some_and(|v| {
+                        !matches!(&v.vehicle, bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id))
+                    })
+            })
             .map(|(id, _)| *id)
             .collect();
         for brick in bricks {

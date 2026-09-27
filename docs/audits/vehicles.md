@@ -93,11 +93,12 @@ weapons-pack-007.
 
 ## Verification
 
-- `cargo test -p bri-vehicles`: 26 native tests, including the new run-over
-  rule test and mouse-steered turning for the Flying Wheeled Jeep.
+- `cargo test -p bri-vehicles`: 28 native tests, including the run-over
+  rule, mouse-steered turning for the Flying Wheeled Jeep and two Rapier
+  island guards (a spawn before an unrelated collision pass, a restore).
 - `cargo test -p bri-sim --test vehicles -- --ignored`: boarding by jumping,
   horse running, jumping and dismounting, tank gunner aim relative to the
   hull, the Tank Turret on the spawn list, skis on and off, and the jeep
-  drive and respawn test. The bot-brick test in that file fails on main
-  without these changes too ("Hit a brick with the tool first").
+  drive and respawn test, and the bot-brick test (a minigame vehicle reset
+  leaves bots alone, as v20's `resetVehicles` predates bots).
 - None of this replaces Maxwell's interactive playtest of feel.

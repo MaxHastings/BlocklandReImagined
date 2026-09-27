@@ -1858,6 +1858,6 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   (schema 4) and weapons-pack-008 (schema 3; same as 007 apart from the new
   fields and main's bae2359 importer fix). Evidence: `cargo test -p
   bri-vehicles` (28 native tests), `cargo test -p bri-sim --test vehicles --
-  --ignored` (6 of 7; the bot-brick case failed on unmodified main too).
+  --ignored` (7 of 7).
   Open: barrel pitch pose, seated look limits, vehicle camera offset/tilt/lag,
   ski-crash whiteout, clearing event-spawned projectiles on minigame change.
