@@ -1185,7 +1185,6 @@ mod tests {
             grounded: false,
             crouched: false,
             jetting: false,
-            jet_boost: 0.0,
             jump_held: false,
         }
     }

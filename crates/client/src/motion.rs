@@ -296,7 +296,6 @@ fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     let turn = (b.yaw - a.yaw + PI).rem_euclid(2.0 * PI) - PI;
     out.yaw = (a.yaw + turn * t + PI).rem_euclid(2.0 * PI) - PI;
     out.pitch = a.pitch + (b.pitch - a.pitch) * t;
-    out.jet_boost = a.jet_boost + (b.jet_boost - a.jet_boost) * t;
     out
 }
 
@@ -313,7 +312,6 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jet_boost: 0.0,
             jump_held: false,
         }
     }

@@ -250,12 +250,19 @@ pub struct AvatarAnimationInput {
     pub sitting: bool,
 }
 
+/// v20 `Player::pickActionAnimation`: jetting always holds the root pose;
+/// otherwise only a real fall (below -10 vertical speed) uses `fall`.
 pub fn locomotion(player: &PlayerState) -> &'static str {
+    if player.jetting {
+        return "root";
+    }
     if !player.grounded {
-        return if player.velocity[1] > 0.5 && !player.jetting {
+        return if player.velocity[1] < -10.0 {
+            "fall"
+        } else if player.velocity[1] > 0.5 {
             "jump"
         } else {
-            "fall"
+            "root"
         };
     }
     let forward = Vec3::new(player.yaw.sin(), 0.0, -player.yaw.cos());
@@ -568,7 +575,6 @@ impl Preview {
                 grounded: true,
                 crouched: false,
                 jetting: false,
-                jet_boost: 0.0,
                 jump_held: false,
             },
             0.0,
@@ -633,7 +639,6 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jet_boost: 0.0,
             jump_held: false,
         }
     }
@@ -654,8 +659,14 @@ mod tests {
         p.grounded = false;
         p.velocity[1] = 4.0;
         assert_eq!(locomotion(&p), "jump");
-        p.jetting = true;
+        p.velocity[1] = -4.0;
+        assert_eq!(locomotion(&p), "root");
+        p.velocity[1] = -12.0;
         assert_eq!(locomotion(&p), "fall");
+        p.jetting = true;
+        assert_eq!(locomotion(&p), "root");
+        p.velocity[1] = 4.0;
+        assert_eq!(locomotion(&p), "root");
     }
 
     #[test]

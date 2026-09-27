@@ -107,7 +107,7 @@ fn main() -> Result<()> {
         // Measure from the lowest point: the crouch walk may end mid-fall off a ledge.
         let mut jet_rise = 0.0_f32;
         let mut lowest = crouched.feet[1];
-        for _ in 0..120 {
+        for _ in 0..240 {
             player.step(
                 &mut physics,
                 MoveInput {

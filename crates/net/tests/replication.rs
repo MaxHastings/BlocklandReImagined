@@ -46,7 +46,6 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             grounded: true,
             crouched: false,
             jetting: false,
-            jet_boost: 0.0,
             jump_held: false,
         },
     }

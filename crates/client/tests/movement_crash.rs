@@ -17,7 +17,6 @@ fn player() -> PlayerState {
         grounded: true,
         crouched: false,
         jetting: false,
-        jet_boost: 0.0,
         jump_held: false,
     }
 }

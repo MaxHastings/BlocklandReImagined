@@ -297,8 +297,7 @@ impl Replica {
                     .chain(p.velocity.iter())
                     .all(|n| n.is_finite())
                 && p.yaw.is_finite()
-                && p.pitch.is_finite()
-                && p.jet_boost.is_finite(),
+                && p.pitch.is_finite(),
             "Invalid player pose"
         );
         if !self.names.contains_key(&p.owner)

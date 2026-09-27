@@ -10,6 +10,8 @@ use rapier3d::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Original engine tick; v20 per-tick constants are converted with it.
+const TORQUE_TICK: f32 = 0.032;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveInput {
@@ -50,7 +52,6 @@ pub struct PlayerState {
     pub grounded: bool,
     pub crouched: bool,
     pub jetting: bool,
-    pub jet_boost: f32,
     pub jump_held: bool,
 }
 impl PlayerState {
@@ -85,27 +86,36 @@ pub struct PlayerTuning {
     pub underwater_backward: f32,
     pub underwater_sideways: f32,
     pub density: f32,
-    pub fluid_drag: f32,
+    pub swim_acceleration: f32,
+    pub swim_rise: f32,
+    pub dive_acceleration: f32,
     pub crouch_forward: f32,
     pub crouch_backward: f32,
     pub crouch_sideways: f32,
     pub acceleration: f32,
     pub air_control: f32,
+    pub drag: f32,
     pub gravity: f32,
     pub jump_speed: f32,
     pub jet_acceleration: f32,
-    pub jet_horizontal_acceleration: f32,
-    pub max_jet_rise: f32,
-    pub max_jet_forward: f32,
+    pub jet_lift: f32,
+    pub horizontal_max_speed: f32,
+    pub horizontal_resist_speed: f32,
+    pub horizontal_resist_factor: f32,
+    pub up_max_speed: f32,
+    pub up_resist_speed: f32,
+    pub up_resist_factor: f32,
     pub step_height: f32,
     pub ground_snap: f32,
     pub slope_degrees: f32,
 }
 impl Default for PlayerTuning {
     fn default() -> Self {
-        // Speeds, runForce/mass, air control, jumpForce/mass and runSurfaceAngle:
-        // recovered PlayerStandardArmor. Dimensions/eyes/gravity/jet/step behavior
-        // remain explicit adaptation assumptions; see docs/player-simulation.md.
+        // Speeds, runForce/mass, air control, drag, jumpForce/mass, resistance
+        // and runSurfaceAngle: recovered PlayerStandardArmor. Gravity, jet thrust,
+        // jet lift and step height (maxStepHeight default): v20 engine constants.
+        // Dimensions, eyes and ground snap remain adaptation assumptions; see
+        // docs/player-simulation.md.
         Self {
             width: 1.25,
             stand_height: 2.65,
@@ -119,19 +129,29 @@ impl Default for PlayerTuning {
             underwater_backward: 7.8,
             underwater_sideways: 7.8,
             density: 0.7,
-            fluid_drag: 0.1,
+            // v20 swim pushes, per 32 ms Torque tick: 0.5 along the move
+            // direction, 0.75 up while holding jump, 1 down while crouching.
+            swim_acceleration: 0.5 / TORQUE_TICK,
+            swim_rise: 0.75 / TORQUE_TICK,
+            dive_acceleration: 1.0 / TORQUE_TICK,
             crouch_forward: 3.0,
             crouch_backward: 2.0,
             crouch_sideways: 2.0,
             acceleration: 48.0,
             air_control: 0.1,
+            drag: 0.1,
             gravity: 20.0,
             jump_speed: 12.0,
-            jet_acceleration: 35.0,
-            jet_horizontal_acceleration: 48.0,
-            max_jet_rise: 25.0,
-            max_jet_forward: 33.0,
-            step_height: 0.6,
+            // Engine thrust 2000 / mass for players of mass 90 or more.
+            jet_acceleration: 2000.0 / 90.0,
+            jet_lift: 0.7,
+            horizontal_max_speed: 68.0,
+            horizontal_resist_speed: 33.0,
+            horizontal_resist_factor: 0.35,
+            up_max_speed: 80.0,
+            up_resist_speed: 25.0,
+            up_resist_factor: 0.3,
+            step_height: 1.0,
             ground_snap: 0.2,
             slope_degrees: 70.0,
         }
@@ -169,18 +189,25 @@ impl PlayerTuning {
             self.underwater_backward,
             self.underwater_sideways,
             self.density,
-            self.fluid_drag,
+            self.swim_acceleration,
+            self.swim_rise,
+            self.dive_acceleration,
             self.crouch_forward,
             self.crouch_backward,
             self.crouch_sideways,
             self.acceleration,
             self.air_control,
+            self.drag,
             self.gravity,
             self.jump_speed,
             self.jet_acceleration,
-            self.jet_horizontal_acceleration,
-            self.max_jet_rise,
-            self.max_jet_forward,
+            self.jet_lift,
+            self.horizontal_max_speed,
+            self.horizontal_resist_speed,
+            self.horizontal_resist_factor,
+            self.up_max_speed,
+            self.up_resist_speed,
+            self.up_resist_factor,
             self.step_height,
             self.ground_snap,
             self.slope_degrees,
@@ -190,7 +217,9 @@ impl PlayerTuning {
                 .iter()
                 .all(|n| n.is_finite() && *n > 0.0 && *n <= 1000.0)
                 && self.crouch_height < self.stand_height
-                && self.slope_degrees < 90.0,
+                && self.slope_degrees < 90.0
+                && self.horizontal_resist_speed < self.horizontal_max_speed
+                && self.up_resist_speed < self.up_max_speed,
             "Invalid player tuning"
         );
         Ok(())
@@ -250,7 +279,6 @@ impl Player {
                 grounded: false,
                 crouched: false,
                 jetting: false,
-                jet_boost: 0.0,
                 jump_held: false,
             },
             tuning,
@@ -312,9 +340,7 @@ impl Player {
                     .iter()
                     .all(|v| v.is_finite() && v.abs() <= 1000.0)
                 && state.yaw.is_finite()
-                && state.pitch.is_finite()
-                && state.jet_boost.is_finite()
-                && (0.0..=1.0).contains(&state.jet_boost),
+                && state.pitch.is_finite(),
             "Invalid authoritative player correction"
         );
         physics.colliders[self.collider].set_shape(self.tuning.shape(state.crouched));
@@ -353,7 +379,6 @@ impl Player {
         state.grounded = false;
         state.crouched = false;
         state.jetting = false;
-        state.jet_boost = 0.0;
         self.restore(physics, state)
     }
     /// Ride a vehicle seat: position and facing come from the seat node.
@@ -430,8 +455,6 @@ impl Player {
         self.state.yaw = input.yaw;
         self.state.pitch = input.pitch;
         self.state.jetting = input.jet;
-        let target_boost = if input.jet && input.crouch { 1.0 } else { 0.0 };
-        self.state.jet_boost += (target_boost - self.state.jet_boost).clamp(-8.0 * dt, 8.0 * dt);
         let forward = Vec3::new(input.yaw.sin(), 0.0, -input.yaw.cos());
         let right = Vec3::new(input.yaw.cos(), 0.0, input.yaw.sin());
         let liquid = waters
@@ -455,28 +478,63 @@ impl Player {
         } else {
             (t.forward, t.backward, t.sideways)
         };
-        let normalize = (input.forward * input.forward + input.right * input.right)
-            .sqrt()
-            .max(1.0);
-        let desired = (forward * input.forward * if input.forward >= 0.0 { fs } else { bs }
-            + right * input.right * ss)
-            / normalize;
+        // v20 Player::updateMove: the raw move vector runs at the larger of its
+        // directional speeds.
+        let move_vec = forward * input.forward + right * input.right;
+        let move_speed = if input.forward > 0.0 {
+            fs * input.forward
+        } else {
+            bs * -input.forward
+        }
+        .max(ss * input.right.abs());
+        // v20 runs parallel to the contact surface: on a walkable slope the move
+        // speed is along the slope, so ramps neither slow nor launch the player.
+        let walkable = t.slope_degrees.to_radians().cos();
+        let shape = t.shape(self.state.crouched);
+        let pose = t.pose(feet, self.state.crouched);
+        let ground = if was_grounded {
+            query
+                .cast_shape(
+                    &pose,
+                    Vector::new(0.0, -1.0, 0.0),
+                    shape.as_ref(),
+                    ShapeCastOptions {
+                        max_time_of_impact: t.ground_snap,
+                        compute_impact_geometry_on_penetration: true,
+                        ..Default::default()
+                    },
+                )
+                .map(|(_, hit)| Vec3::from(hit.normal1.to_array()))
+                .filter(|normal| normal.y >= walkable)
+        } else {
+            None
+        };
+        let along_ground = match ground {
+            Some(normal) => move_vec - normal * move_vec.dot(normal),
+            None => move_vec,
+        };
+        let desired = along_ground.normalize_or_zero() * move_speed;
+        let desired = Vec3::new(desired.x, 0.0, desired.z);
         let mut velocity = Vec3::from(self.state.velocity);
         let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
-        let acceleration = t.acceleration
-            * if was_grounded || liquid.is_some() {
-                1.0
-            } else {
-                t.air_control
-            };
-        // In the air, releasing movement preserves momentum; ground friction stops it.
-        let horizontal = if was_grounded || input.forward != 0.0 || input.right != 0.0 {
-            horizontal + (desired - horizontal).clamp_length_max(acceleration * dt)
+        let horizontal = if was_grounded {
+            horizontal + (desired - horizontal).clamp_length_max(t.acceleration * dt)
+        } else if liquid.is_some() {
+            // Swimming pushes along the move direction; water drag sets the speed.
+            horizontal + move_vec.normalize_or_zero() * t.swim_acceleration * dt
+        } else if input.jet {
+            // Jets replace air control: they steer through the thrust vector.
+            horizontal
         } else {
             horizontal
+                + air_control_direction(horizontal, move_vec, move_speed)
+                    * (move_speed * t.air_control).min(t.acceleration * t.air_control * dt)
         };
         velocity.x = horizontal.x;
         velocity.z = horizontal.z;
+        let surface_y = ground.map_or(0.0, |normal| {
+            -(normal.x * velocity.x + normal.z * velocity.z) / normal.y
+        });
         let jumped = input.jump && !self.state.jump_held && was_grounded;
         self.state.jump_held = input.jump;
         if jumped {
@@ -485,44 +543,114 @@ impl Player {
         if !was_grounded || jumped || input.jet {
             velocity.y -= t.gravity * dt;
         } else {
-            velocity.y = 0.0;
+            velocity.y = surface_y;
+        }
+        if let Some((_, coverage)) = liquid {
+            // v20: holding jump swims up (hard from a near standstill, less when
+            // only partly submerged); holding crouch dives.
+            if input.jump {
+                let previous = Vec3::from(self.state.velocity);
+                velocity.y += dt
+                    * if Vec3::new(previous.x, 0.0, previous.z).length() < 2.0 {
+                        2.0 * t.swim_rise
+                    } else if coverage <= 0.99 {
+                        (coverage * 1.25 + 0.25) / 0.75 * t.swim_rise
+                    } else {
+                        t.swim_rise
+                    };
+            }
+            if input.crouch {
+                velocity.y -= t.dive_acceleration * dt;
+            }
         }
         if input.jet {
-            let boost = self.state.jet_boost;
-            velocity.y = (velocity.y + t.jet_acceleration * (1.0 - boost) * dt).min(t.max_jet_rise);
-            let aim = self.state.forward();
-            let increase = (t.max_jet_forward - velocity.dot(aim))
-                .clamp(0.0, t.jet_horizontal_acceleration * boost * dt);
-            velocity += aim * increase;
-        }
-        if let Some((water, coverage)) = liquid {
-            velocity += Vec3::from(water.current) * coverage * dt;
-            let buoyancy = water.density / t.density * coverage;
-            if buoyancy > 1.0 || velocity.length_squared() > 0.0 || !was_grounded {
-                velocity.y += buoyancy * t.gravity * dt;
+            // Thrust leans into the move direction; it strengthens while falling.
+            let mut thrust = (move_vec + Vec3::Y * t.jet_lift).normalize();
+            let falling = -self.state.velocity[1];
+            if falling > 0.0 {
+                thrust.y *= 1.0 + 0.5 * (falling * 0.05).min(1.0);
             }
-            velocity *= (1.0 - t.fluid_drag * water.viscosity * coverage * dt).clamp(0.0, 1.0);
+            velocity += thrust * t.jet_acceleration * dt;
         }
+        let horizontal_speed = Vec3::new(velocity.x, 0.0, velocity.z).length();
+        if horizontal_speed > t.horizontal_resist_speed {
+            let capped = horizontal_speed.min(t.horizontal_max_speed);
+            let resisted = capped
+                - (capped - t.horizontal_resist_speed) * t.horizontal_resist_factor * dt;
+            velocity.x *= resisted / horizontal_speed;
+            velocity.z *= resisted / horizontal_speed;
+        }
+        if velocity.y > t.up_resist_speed {
+            let capped = velocity.y.min(t.up_max_speed);
+            velocity.y = capped - (capped - t.up_resist_speed) * t.up_resist_factor * dt;
+        }
+        // v20 ShapeBase::updateContainer: water drag is drag * viscosity and
+        // buoyancy is density-relative; crouching on the bottom holds the player
+        // down. Falling into partial coverage blends toward air drag.
+        let mut vertical_drag = t.drag;
+        let drag = match liquid {
+            Some((water, coverage)) => {
+                velocity += Vec3::from(water.current) * coverage * dt;
+                if !(input.crouch && was_grounded) {
+                    velocity.y += water.density / t.density * coverage * t.gravity * dt;
+                }
+                let drag = t.drag * water.viscosity;
+                vertical_drag = if coverage < 0.99 && velocity.y < 0.0 {
+                    (drag - t.drag) * coverage + t.drag
+                } else {
+                    drag
+                };
+                drag
+            }
+            None => t.drag,
+        };
+        let horizontal_keep = (1.0 - drag * dt).max(0.0);
+        velocity.x *= horizontal_keep;
+        velocity.z *= horizontal_keep;
+        velocity.y *= (1.0 - vertical_drag * dt).max(0.0);
         velocity.y = velocity.y.max(-80.0);
-        let rising = velocity.y > 0.0;
-        let shape = t.shape(self.state.crouched);
-        let pose = t.pose(feet, self.state.crouched);
+        let rising = velocity.y > surface_y.max(0.0);
         let controller = KinematicCharacterController {
             offset: CharacterLength::Absolute(0.005),
-            autostep: Some(CharacterAutostep {
+            // Players step up ledges while walking, not in mid-air.
+            autostep: was_grounded.then_some(CharacterAutostep {
                 max_height: CharacterLength::Absolute(t.step_height),
                 min_width: CharacterLength::Absolute(0.1),
                 include_dynamic_bodies: false,
             }),
             max_slope_climb_angle: t.slope_degrees.to_radians(),
             min_slope_slide_angle: t.slope_degrees.to_radians(),
-            snap_to_ground: if velocity.y <= 0.0 && !input.jet {
+            snap_to_ground: if !rising && !input.jet {
                 Some(CharacterLength::Absolute(t.ground_snap))
             } else {
                 None
             },
             ..Default::default()
         };
+        // Players move one after another against each other's previous pose, so
+        // each closes at most half its gap to another player per tick.
+        let mut translation = velocity * dt;
+        let is_player = |_: ColliderHandle, collider: &Collider| collider.user_data >> 64 == 1;
+        if let Some((direction, distance)) = translation.try_normalize().zip(Some(translation.length()))
+            && let Some((_, hit)) = physics
+                .query_pipeline_with_filter(filter.predicate(&is_player))
+                .cast_shape(
+                    &pose,
+                    Vector::from_array(direction.to_array()),
+                    shape.as_ref(),
+                    ShapeCastOptions {
+                        max_time_of_impact: distance * 2.0,
+                        ..Default::default()
+                    },
+                )
+        {
+            let normal = Vec3::from(hit.normal1.to_array());
+            let gap = hit.time_of_impact * -direction.dot(normal);
+            let into = -translation.dot(normal);
+            if into > gap * 0.5 {
+                translation += normal * (into - gap * 0.5);
+            }
+        }
         let mut contacts = BTreeSet::new();
         let mut normals = Vec::new();
         let motion = controller.move_shape(
@@ -530,7 +658,7 @@ impl Player {
             &query,
             shape.as_ref(),
             &pose,
-            Vector::from_array((velocity * dt).to_array()),
+            Vector::from_array(translation.to_array()),
             |c| {
                 let tag = physics.colliders[c.handle].user_data;
                 if let Ok(id) = u64::try_from(tag)
@@ -542,14 +670,36 @@ impl Player {
             },
         );
         let before_collision = velocity;
+        let intended = velocity * dt;
+        let moved = Vec3::from(motion.translation.to_array());
+        let climbed = moved.y > intended.y.max(0.0) + 0.01;
         // Remove blocked velocity, avoiding accumulation against ceilings/walls.
         for normal in normals {
             let into = velocity.dot(normal);
-            if into < 0.0 {
-                velocity -= normal * into;
+            if into >= 0.0 {
+                continue;
             }
+            if normal.y >= walkable {
+                if was_grounded && !jumped {
+                    // Walking onto a ramp turns the run along it at the same speed.
+                    let speed = velocity.length();
+                    velocity = (velocity - normal * into).normalize_or_zero() * speed;
+                } else {
+                    velocity -= normal * into;
+                }
+                continue;
+            }
+            // A step riser the controller climbed over does not stop the player.
+            let across = -Vec3::new(normal.x, 0.0, normal.z).normalize_or_zero();
+            let expected = intended.dot(across);
+            if climbed && expected > 0.0 && moved.dot(across) >= expected * 0.5 {
+                continue;
+            }
+            velocity -= normal * into;
         }
-        self.state.grounded = motion.grounded && !rising && !input.jet && !jumped;
+        // Like v20's run surface, support persists while jetting until thrust lifts
+        // the player: jetting along the floor keeps ground friction.
+        self.state.grounded = motion.grounded && !rising && !jumped;
         if self.state.grounded {
             velocity.y = 0.0;
         }
@@ -613,4 +763,22 @@ impl Player {
         );
         eye + backward * hit.map_or(8.0, |(_, h)| (h.time_of_impact - 0.02).max(0.0))
     }
+}
+/// v20 air control direction. Input pushes along the move vector, except that
+/// momentum at or above the requested speed is never braked: steering within
+/// about 25 degrees of travel adds nothing, and wider steering pushes only
+/// between the travel and move directions.
+fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> Vec3 {
+    let speed = horizontal.length();
+    if speed > 0.0 && move_speed <= speed {
+        let along = horizontal / speed;
+        let alignment = along.dot(move_vec);
+        if alignment >= 0.9 {
+            return Vec3::ZERO;
+        }
+        if alignment > 0.0 {
+            return ((move_vec - along) * 0.5).normalize_or_zero();
+        }
+    }
+    move_vec.normalize_or_zero()
 }
