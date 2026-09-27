@@ -529,6 +529,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-package"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "bri-physics"
 version = "0.1.0"
 dependencies = [

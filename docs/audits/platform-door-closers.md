@@ -9,6 +9,21 @@ The principles this grades against are in
 The question: which decisions in today's code would make the moddable,
 agent-driven platform expensive later, and which of them are cheap to fix now?
 
+## P0 progress
+
+Tracked by the Platform door-closer fixes thread. Each line names the commit
+that landed it.
+
+- **Package manifest (contract 5, 12):** format landed in `crates/package`
+  (`packages.json`, environment, per-package mismatch report), documented in
+  [`docs/architecture/packages.md`](../architecture/packages.md). Client and
+  `bri-server` loading through it: pending.
+- **One id grammar (contract 4):** `namespace:kind/name` defined in
+  `bri_package::id`, shared with the mod platform lane. Moving existing content
+  ids onto it: pending.
+- **Owner identity (contract 3, a):** pending.
+- **Avatar part names (contract 3):** pending.
+
 ## How to read the priorities
 
 Scope rule from Maxwell: during alpha there is no backward compatibility and no
