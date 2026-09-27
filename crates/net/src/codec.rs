@@ -17,8 +17,18 @@ pub const MAX_HELLO: usize = 64 * 1024;
 /// Fits full native event lists and converted stock builds. Requests are not
 /// compressed, so this is independent of the compressed server MAX_FRAME cap.
 pub const MAX_REQUEST: usize = 64 * 1024 * 1024;
-/// Shared queued/in-flight command body bytes, not a per-peer allowance.
-pub const REQUEST_BODY_BUDGET: usize = 128 * 1024 * 1024;
+/// Largest command a player without the bulk capability (build loading, held
+/// by administrators) may send. The worst native event list is ~2.4 MB.
+pub const PLAYER_MAX_REQUEST: usize = 4 * 1024 * 1024;
+/// Each peer's own queued/in-flight command body bytes. One peer's traffic
+/// only ever waits on this allowance, never on another peer's.
+pub const PEER_REQUEST_BUDGET: usize = PLAYER_MAX_REQUEST;
+/// Every command reserves at least this much of its peer's allowance, which
+/// bounds a peer to 8 commands in flight however small they are.
+pub const MIN_REQUEST_COST: usize = PEER_REQUEST_BUDGET / 8;
+/// Shared queued/in-flight bytes of bulk commands larger than
+/// [`PLAYER_MAX_REQUEST`], which only administrators may send.
+pub const BULK_REQUEST_BUDGET: usize = 128 * 1024 * 1024;
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 pub const MAX_DECODED: usize = 128 * 1024 * 1024;
 use crate::protocol::MAX_DATAGRAM;
@@ -118,14 +128,17 @@ async fn read_body(stream: &mut quinn::RecvStream, length: usize) -> Result<Vec<
 pub async fn read_small_request<T: DeserializeOwned>(stream: &mut quinn::RecvStream) -> Result<T> {
     from_bytes(&read_frame(stream, MAX_HELLO).await?)
 }
-/// Reserve before allocating/reading the body. The caller retains the permit
+/// Reserve before allocating/reading the body. `admit` maps the declared
+/// length to the budget it draws on and the permits it reserves, or refuses
+/// it before a byte of the body is read. The caller retains the permit
 /// alongside the parsed command until dispatch or rejection has completed.
 pub async fn read_budgeted_request<T: DeserializeOwned>(
     stream: &mut quinn::RecvStream,
-    budget: &Arc<Semaphore>,
+    admit: impl FnOnce(usize) -> Result<(Arc<Semaphore>, u32)>,
 ) -> Result<(T, OwnedSemaphorePermit)> {
     let length = read_length(stream, MAX_REQUEST).await?;
-    let permit = budget.clone().acquire_many_owned(length as u32).await?;
+    let (budget, cost) = admit(length)?;
+    let permit = budget.acquire_many_owned(cost).await?;
     let bytes = read_body(stream, length).await?;
     let request = from_bytes(&bytes)?;
     Ok((request, permit))
@@ -136,8 +149,10 @@ pub async fn read_request<T: DeserializeOwned>(stream: &mut quinn::RecvStream) -
 pub async fn write_request<T: Serialize>(
     stream: &mut quinn::SendStream,
     request: &T,
+    limit: usize,
 ) -> Result<()> {
-    let bytes = encode_request(request, MAX_REQUEST)?;
+    ensure!(limit <= MAX_REQUEST, "Invalid request limit");
+    let bytes = encode_request(request, limit)?;
     stream
         .write_all(&(bytes.len() as u32).to_le_bytes())
         .await?;
@@ -223,7 +238,7 @@ mod tests {
             }),
         };
         let bytes = encode_request(&request, MAX_REQUEST).unwrap();
-        assert!(bytes.len() <= MAX_REQUEST && bytes.len() <= MAX_FRAME);
+        assert!(bytes.len() <= PLAYER_MAX_REQUEST && bytes.len() <= MAX_FRAME);
         eprintln!("Worst native event request: {} bytes", bytes.len());
         let decoded: crate::protocol::Request = from_bytes(&bytes).unwrap();
         let bri_sim::session::Command::Tool(bri_sim::session::ToolAction::SetEvents {
@@ -360,7 +375,10 @@ mod tests {
         let budget = Arc::new(Semaphore::new(0));
         let task_budget = budget.clone();
         let task = tokio::spawn(async move {
-            let result = read_budgeted_request::<String>(&mut receive, &task_budget).await;
+            let result = read_budgeted_request::<String>(&mut receive, |length| {
+                Ok((task_budget, length as u32))
+            })
+            .await;
             (receive, result)
         });
         // Body has arrived but cannot be allocated/parsed before admission.
@@ -381,7 +399,9 @@ mod tests {
             .await?;
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            read_budgeted_request::<String>(&mut receive, &budget),
+            read_budgeted_request::<String>(&mut receive, |length| {
+                Ok((budget.clone(), length as u32))
+            }),
         )
         .await?;
         assert!(

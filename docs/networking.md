@@ -46,12 +46,26 @@ The runtime dependency graph contains no Torque readers.
   credentials resume an existing owner; old numeric Blockland IDs confer no
   authority. Server lookup stores credential hashes. Credentials and certificates
   currently last for one server process; restart persistence remains required.
-- Limits:64 peers,80 simultaneous connection/handshake tasks, bounded channels,
-  64 KiB Hello,64 MiB command requests,16 MiB compressed frames,128 MiB decoded
-  frames and bounded zstd window. A shared 128 MiB command-body admission budget
-  is acquired before allocation and held through command dispatch; it measures
-  wire body bytes, not all parsed/object memory. Body reads retain a 10-second
-  deadline. These are working limits, not proven maximum-load capacity.
+- Limits:64 peers, bounded channels, 64 KiB Hello, 16 MiB compressed frames,
+  128 MiB decoded frames and bounded zstd window. These are working limits, not
+  proven maximum-load capacity.
+- Admission is budgeted per origin, so no one source can exhaust a pool that
+  other players need (stress campaign W1, `docs/stress-lab/weakness-ledger.md`):
+  - Connections that have not joined yet are bounded to 64 in total and 8 per
+    source address, and the whole pre-join exchange shares one 10-second
+    deadline. When half the pending slots are taken, unvalidated sources must
+    first answer a stateless QUIC Retry, so spoofed addresses cannot hold slots.
+    A joined player no longer holds a pending slot; joined players are bounded
+    by the player limit.
+  - Command bodies are reserved from the declared length before allocation and
+    held through dispatch, against the sending peer's own 4 MiB allowance
+    (each command costs at least 512 KiB of it, so at most 8 are in flight).
+    A player command may be at most 4 MiB (the worst native event list is
+    about 2.4 MB). Larger bulk requests (build loads, up to 64 MiB) are only
+    accepted from a peer the host currently regards as administrator and draw
+    on a shared 128 MiB bulk budget; anyone else declaring one is disconnected
+    with the reason before a body byte is read. The client refuses such a
+    request locally. Body reads retain a 10-second deadline.
 
 The clock uses actual monotonic elapsed time, retaining fractional ticks and
 running up to 8 catch-up steps per wakeup. Coarse Windows timer wakeups previously

@@ -7,7 +7,15 @@ use glam::Vec3;
 use quinn::{Connection, Endpoint};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, SocketAddr},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 pub struct ServerOptions {
@@ -224,6 +232,8 @@ struct Peer {
     connection: Connection,
     out: mpsc::Sender<Arc<Vec<u8>>>,
     generation: usize,
+    /// May send bulk requests (administrators); read by the connection task.
+    bulk: Arc<AtomicBool>,
 }
 impl Peer {
     /// Queue an encoded reliable frame. A peer too far behind is disconnected
@@ -269,6 +279,7 @@ enum Event {
         principal: Option<Principal>,
         connection: Connection,
         out: mpsc::Sender<Arc<Vec<u8>>>,
+        bulk: Arc<AtomicBool>,
         answer: oneshot::Sender<Result<OwnerId, String>>,
     },
     Command {
@@ -390,17 +401,17 @@ fn start_configured(
 async fn connection_task(
     connection: Connection,
     events: mpsc::Sender<Event>,
-    request_budget: Arc<Semaphore>,
+    bulk_budget: Arc<Semaphore>,
+    handshake: HandshakeSlot,
+    deadline: tokio::time::Instant,
     server_fingerprint: [u8; 32],
     require_identity: bool,
 ) -> Result<()> {
-    let (mut send, mut receive) =
-        tokio::time::timeout(Duration::from_secs(10), connection.accept_bi()).await??;
-    let begin: JoinBegin = tokio::time::timeout(
-        Duration::from_secs(10),
-        codec::read_small_request(&mut receive),
-    )
-    .await??;
+    // The whole pre-join exchange shares one deadline, so a peer cannot hold
+    // its handshake slot for a timeout per step.
+    let (mut send, mut receive) = tokio::time::timeout_at(deadline, connection.accept_bi()).await??;
+    let begin: JoinBegin =
+        tokio::time::timeout_at(deadline, codec::read_small_request(&mut receive)).await??;
     if begin.version != VERSION {
         codec::write_frame(&mut send, &codec::encode(&Message::Rejected("Incompatible protocol version".into()))?).await?;
         send.finish()?;
@@ -413,11 +424,8 @@ async fn connection_task(
         &codec::encode(&Message::Challenge { nonce })?,
     )
     .await?;
-    let hello: Hello = tokio::time::timeout(
-        Duration::from_secs(10),
-        codec::read_small_request(&mut receive),
-    )
-    .await??;
+    let hello: Hello =
+        tokio::time::timeout_at(deadline, codec::read_small_request(&mut receive)).await??;
     let principal = match verify_identity(&hello, &nonce, &server_fingerprint, require_identity) {
         Ok(principal) => principal,
         Err(error) => {
@@ -430,12 +438,14 @@ async fn connection_task(
     };
     let (out, mut output) = mpsc::channel::<Arc<Vec<u8>>>(32);
     let (answer, accepted) = oneshot::channel();
+    let bulk = Arc::new(AtomicBool::new(false));
     events
         .send(Event::Join {
             hello,
             principal,
             connection: connection.clone(),
             out,
+            bulk: bulk.clone(),
             answer,
         })
         .await?;
@@ -448,7 +458,10 @@ async fn connection_task(
             return Ok(());
         }
     };
+    // Admitted players are bounded by the player limit, not handshake slots.
+    drop(handshake);
     let generation = connection.stable_id();
+    let own_budget = Arc::new(Semaphore::new(codec::PEER_REQUEST_BUDGET));
     let write = async {
         while let Some(bytes) = output.recv().await {
             tokio::time::timeout(
@@ -461,8 +474,24 @@ async fn connection_task(
     };
     let read = async {
         loop {
-            let (request, permit) =
-                codec::read_budgeted_request(&mut receive, &request_budget).await?;
+            let (request, permit) = codec::read_budgeted_request(&mut receive, |length| {
+                if length <= codec::PLAYER_MAX_REQUEST {
+                    return Ok((
+                        own_budget.clone(),
+                        length.max(codec::MIN_REQUEST_COST) as u32,
+                    ));
+                }
+                if !bulk.load(Ordering::Relaxed) {
+                    let reason = format!(
+                        "A {length}-byte request exceeds the {}-byte player limit; only administrators may send bulk requests",
+                        codec::PLAYER_MAX_REQUEST
+                    );
+                    connection.close(3_u32.into(), reason.as_bytes());
+                    anyhow::bail!(reason);
+                }
+                Ok((bulk_budget.clone(), length as u32))
+            })
+            .await?;
             events
                 .send(Event::Command {
                     owner,
@@ -529,6 +558,55 @@ impl MovementAllowance {
         }
         self.tokens -= 1.0;
         true
+    }
+}
+/// Unauthenticated connections (QUIC handshake through Welcome) may take at
+/// most this long in total.
+const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
+/// Connections still joining, across all sources.
+const MAX_HANDSHAKES: usize = 64;
+/// Connections still joining from one address. Enough for a LAN party behind
+/// one router joining at once, too few for one source to fill the host.
+const MAX_HANDSHAKES_PER_ADDRESS: usize = 8;
+/// Pre-join admission: a global and a per-address bound on connections that
+/// have not joined yet. Joined players are bounded by the player limit.
+#[derive(Clone, Default)]
+struct HandshakeGate {
+    pending: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
+}
+/// One pending connection's share of the gate, returned when dropped.
+struct HandshakeSlot {
+    gate: HandshakeGate,
+    address: IpAddr,
+}
+impl HandshakeGate {
+    fn admit(&self, address: IpAddr) -> Option<HandshakeSlot> {
+        let mut pending = self.pending.lock().ok()?;
+        let total: usize = pending.values().sum();
+        let from = pending.entry(address).or_default();
+        if total >= MAX_HANDSHAKES || *from >= MAX_HANDSHAKES_PER_ADDRESS {
+            return None;
+        }
+        *from += 1;
+        Some(HandshakeSlot {
+            gate: self.clone(),
+            address,
+        })
+    }
+    fn total(&self) -> usize {
+        self.pending.lock().map_or(0, |p| p.values().sum())
+    }
+}
+impl Drop for HandshakeSlot {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.gate.pending.lock()
+            && let Some(count) = pending.get_mut(&self.address)
+        {
+            *count -= 1;
+            if *count == 0 {
+                pending.remove(&self.address);
+            }
+        }
     }
 }
 fn verify_identity(
@@ -599,6 +677,8 @@ impl Tickets {
 }
 fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>) {
     for (owner, peer) in peers {
+        peer.bulk
+            .store(session.is_administrator(*owner), Ordering::Relaxed);
         match session.admin_state(*owner) {
             Ok(snapshot) => peer.send_message(&Message::AdminSnapshot(snapshot)),
             Err(error) => {
@@ -622,8 +702,8 @@ async fn run(
     mut stop: oneshot::Receiver<()>,
 ) -> Result<ServerReport> {
     let (events, mut incoming) = mpsc::channel(256);
-    let permits = Arc::new(Semaphore::new(80));
-    let request_budget = Arc::new(Semaphore::new(codec::REQUEST_BODY_BUDGET));
+    let handshakes = HandshakeGate::default();
+    let bulk_budget = Arc::new(Semaphore::new(codec::BULK_REQUEST_BUDGET));
     let mut tasks = tokio::task::JoinSet::new();
     let mut peers = BTreeMap::<OwnerId, Peer>::new();
     // Resume tokens are server-issued capabilities. Retain the host bit bound to
@@ -654,7 +734,14 @@ async fn run(
     let outcome:Result<()>=async {loop {tokio::select!{
         _=&mut stop=>break,
         accepted=endpoint.accept()=>{
-            if let Some(accepted)=accepted {if let Ok(permit)=permits.clone().try_acquire_owned(){let events=events.clone();let request_budget=request_budget.clone();tasks.spawn(async move{let _permit=permit;if let Ok(Ok(connection))=tokio::time::timeout(Duration::from_secs(10),accepted).await {let _=connection_task(connection,events,request_budget,server_fingerprint,require_identity).await;}});}else{accepted.refuse();}}
+            if let Some(accepted)=accepted {
+                // Under load, make a source prove its address (a stateless
+                // Retry round trip) before it may hold a pending slot, so
+                // spoofed addresses cannot fill the per-address bounds.
+                if !accepted.remote_address_validated() && accepted.may_retry() && handshakes.total()>=MAX_HANDSHAKES/2 {let _=accepted.retry();}
+                else if let Some(slot)=handshakes.admit(accepted.remote_address().ip()){let events=events.clone();let bulk_budget=bulk_budget.clone();tasks.spawn(async move{let deadline=tokio::time::Instant::now()+HANDSHAKE_DEADLINE;if let Ok(Ok(connection))=tokio::time::timeout_at(deadline,accepted).await {let _=connection_task(connection,events,bulk_budget,slot,deadline,server_fingerprint,require_identity).await;}});}
+                else{accepted.refuse();}
+            }
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
         Some((admin,loaded))=map_rx.recv()=>{
@@ -672,7 +759,7 @@ async fn run(
             }
         },
         Some(event)=incoming.recv()=>{match event {
-            Event::Join{hello,principal,connection,out,answer}=>{
+            Event::Join{hello,principal,connection,out,bulk,answer}=>{
                 let join:Result<OwnerId>= (||{
                     ensure!(hello.version==VERSION,"Incompatible protocol version");ensure!(hello.content_id==options.content_id,"Required content does not match");
                     ensure!(peers.len()<max_players,"Server is full");
@@ -696,7 +783,8 @@ async fn run(
                     let checkpoint=Checkpoint::from_session(&session,cursor);
                     let encoded=match codec::encode(&Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint}){Ok(frame)=>frame,Err(error)=>{let _=session.disconnect(owner);return Err(error)}};
                     if out.try_send(Arc::new(encoded)).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
-                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out});Ok(owner)
+                    bulk.store(session.is_administrator(owner),Ordering::Relaxed);
+                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,bulk});Ok(owner)
                 })();
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|e.to_string()));
             },
@@ -830,6 +918,27 @@ mod tests {
         // Refreshing an existing ticket never evicts.
         tickets.insert([0xff; 32], ticket(9999), |_| true).unwrap();
         assert!(tickets.insert([0xee; 32], ticket(1), |_| true).is_err());
+    }
+    #[test]
+    fn handshake_gate_bounds_each_address_and_the_total() {
+        let gate = HandshakeGate::default();
+        let one: IpAddr = "10.0.0.1".parse().unwrap();
+        let held: Vec<_> = (0..MAX_HANDSHAKES_PER_ADDRESS)
+            .map(|_| gate.admit(one).unwrap())
+            .collect();
+        assert!(gate.admit(one).is_none(), "per-address bound");
+        let mut others = Vec::new();
+        for n in 0..=255_u8 {
+            match gate.admit(IpAddr::from([10, 0, 1, n])) {
+                Some(slot) => others.push(slot),
+                None => break,
+            }
+        }
+        assert_eq!(held.len() + others.len(), MAX_HANDSHAKES, "total bound");
+        drop(held);
+        assert!(gate.admit(one).is_some(), "slots return when dropped");
+        drop(others);
+        assert_eq!(gate.total(), 0);
     }
     #[test]
     fn movement_allowance_bounds_a_flood_but_not_a_catch_up_burst() {

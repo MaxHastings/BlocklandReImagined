@@ -362,6 +362,13 @@ impl Client {
             .sequence
             .checked_add(1)
             .context("Command sequence exhausted")?;
+        // The host disconnects a non-administrator whose frame exceeds the
+        // player limit, so refuse it here with the stream still usable.
+        let limit = if self.administrator {
+            codec::MAX_REQUEST
+        } else {
+            codec::PLAYER_MAX_REQUEST
+        };
         codec::write_request(
             &mut self.send,
             &Request {
@@ -369,6 +376,7 @@ impl Client {
                 command,
                 aim,
             },
+            limit,
         )
         .await?;
         Ok(self.sequence)
