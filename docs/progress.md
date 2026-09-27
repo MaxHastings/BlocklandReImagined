@@ -2232,7 +2232,10 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   colour shift 0.647 grey, armReady) as a real server image, so it replicates
   like any tool and raises the arm through the image. `Vitals.brick_in_hand`
   is gone. The weapons importer now roots `brickImage`, which also fills
-  `horseBrickImage`'s inherited model. Content: weapons-pack-009 (008 plus
+  `horseBrickImage`'s inherited model; HorseArmor players hold that one on
+  mount3 and a datablock change swaps the held brick (`onNewDataBlock`). A
+  new loadout (respawn, leaving a minigame) re-mounts the brick while the
+  client still has it selected. Content: weapons-pack-009 (008 plus
   brickImage, brickDeployProjectile/Explosion and the brick trail emitter;
   008 reproduces byte-exact from the same importer before the change) and
   item-presentation-pack-010 built against it. Effects-runtime and

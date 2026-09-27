@@ -933,6 +933,10 @@ impl Session {
             && self.is_alive(owner)
         {
             self.weapons.start_ball(ActorId(owner), ball)?;
+        } else if self.brick_equipped(owner) && self.is_alive(owner) {
+            // A new loadout empties the hands, but the client keeps its brick
+            // selected (through death too).
+            self.hold_brick(owner)?;
         }
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.inspection = None;
@@ -977,10 +981,6 @@ impl Session {
             peer.control = super::ControlObject::Player;
         }
         self.give_loadout(owner, equipment.as_ref())?;
-        // The client keeps its brick selected through death.
-        if self.brick_equipped(owner) {
-            self.hold_brick(owner)?;
-        }
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
         let center = feet
             + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
@@ -1164,6 +1164,10 @@ impl Session {
         peer.combat.health = (max - (old - peer.combat.health)).clamp(0.0, max);
         if !datablock.can_ride() {
             self.eject(owner);
+        }
+        // `Armor::onNewDataBlock` swaps a held brick for the new datablock's.
+        if self.holds_brick(owner) {
+            self.hold_brick(owner)?;
         }
         Ok(())
     }

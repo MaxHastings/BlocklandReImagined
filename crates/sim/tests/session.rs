@@ -925,7 +925,23 @@ fn bricks_in_hand_mount_the_grey_brick_image_in_the_right_hand() {
     s.command(a, 5, Command::EquipTool { slot: None }).unwrap();
     s.command(a, 6, hand(true)).unwrap();
     assert_eq!(held(&s), brick);
-    s.command(a, 7, hand(false)).unwrap();
+    // `Armor::onNewDataBlock` swaps in HorseArmor's `horseBrickImage` and back.
+    let horse = bri_minigames::Settings {
+        player_type: bri_sim::player_types::PlayerType::Horse.id().into(),
+        ..Default::default()
+    };
+    let create = bri_sim::session::MiniGameRequest::Create {
+        color: 0,
+        settings: horse,
+    };
+    s.command(a, 7, Command::MiniGame(create)).unwrap();
+    s.step().unwrap();
+    assert_eq!(held(&s), [("v20.image.horsebrickimage".to_owned(), 0)]);
+    let leave = bri_sim::session::MiniGameRequest::Leave;
+    s.command(a, 8, Command::MiniGame(leave)).unwrap();
+    s.step().unwrap();
+    assert_eq!(held(&s), brick);
+    s.command(a, 9, hand(false)).unwrap();
     assert!(held(&s).is_empty());
 }
 

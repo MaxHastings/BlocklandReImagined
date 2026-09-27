@@ -34,6 +34,8 @@ const PRINTER_IMAGE: &str = "v20.image.printgunimage";
 const GUN_IMAGE: &str = "v20.image.gunimage";
 const WAND_IMAGE: &str = "v20.image.wandimage";
 const BRICK_IMAGE: &str = "v20.image.brickimage";
+/// `HorseArmor.brickImage` (Vehicle_Horse): the brick sits on mount3.
+const HORSE_BRICK_IMAGE: &str = "v20.image.horsebrickimage";
 const HORSE: &str = "v20.vehicle.horsearmor";
 const JEEP: &str = "v20.vehicle.jeepvehicle";
 const REWARD_SOUND: &str = "v20/sound/rewardsound";
@@ -265,21 +267,37 @@ impl Session {
             .is_some_and(|peer| peer.tutorial.hand.equipped)
     }
 
-    /// `%player.mountImage(brickImage, 0)`. Packs without the image mount nothing.
+    /// `%player.mountImage(%player.getDataBlock().brickImage, 0)`. Packs
+    /// without the image mount nothing.
     pub(super) fn hold_brick(&mut self, owner: OwnerId) -> Result<()> {
-        if !self.weapons.pack.images.contains_key(BRICK_IMAGE) || self.holds_brick(owner) {
+        let image = self.brick_image(owner);
+        if !self.weapons.pack.images.contains_key(image)
+            || self
+                .weapons
+                .image_state(ActorId(owner), 0)
+                .is_some_and(|(held, _)| held.id == image)
+        {
             return Ok(());
         }
         self.weapons.drop_ball(ActorId(owner))?;
-        self.weapons.mount_image(ActorId(owner), BRICK_IMAGE, None)?;
+        self.weapons.mount_image(ActorId(owner), image, None)?;
         self.weapon_triggers.remove(&owner);
         Ok(())
     }
 
-    fn holds_brick(&self, owner: OwnerId) -> bool {
+    /// The datablock's `brickImage`.
+    fn brick_image(&self, owner: OwnerId) -> &'static str {
+        let horse = self.peers.get(&owner).is_some_and(|peer| {
+            peer.player.state().datablock == crate::player_types::PlayerType::Horse
+        });
+        if horse { HORSE_BRICK_IMAGE } else { BRICK_IMAGE }
+    }
+
+    /// Either datablock's brick is mounted.
+    pub(super) fn holds_brick(&self, owner: OwnerId) -> bool {
         self.weapons
             .image_state(ActorId(owner), 0)
-            .is_some_and(|(image, _)| image.id == BRICK_IMAGE)
+            .is_some_and(|(image, _)| image.id == BRICK_IMAGE || image.id == HORSE_BRICK_IMAGE)
     }
 
     /// `noBreak` bricks and the vehicle pads' `vehicleLimit`.
