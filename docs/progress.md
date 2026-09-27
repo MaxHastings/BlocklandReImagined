@@ -2114,3 +2114,34 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   applies on Done, not while dragging. Evidence: `cargo test -p bri-ui --lib
   options`, `cargo test -p bri-client --lib controls`, offscreen
   `authored_options_save_players_offscreen` (options-AdvGraphics.png).
+- 2026-09-27 Leftovers group (tests, fx, content pipeline, Linux).
+  - The eight tool tests paused after the v20 tool images merge are rewritten
+    (identity fixtures carry the core tools as pack items; loopback swings a
+    synthetic stock-layout tool pack over QUIC; the aim test uses Activate).
+    `edit_brick` now validates event rows like the wrench path. Two sweep
+    tests: weapons pack counts 21 items; the transition-budget test uses a
+    two-state cycle because a zero-tick self-loop is the wands' timed sparkle.
+  - bot_brick: a player body inserted mid-step lost its island because
+    `detect_collisions` consumed its pending change without an island manager
+    (Rapier debug assert). New player bodies are re-queued. Vehicles'
+    checkpoint re-insert has the same shape; reported to its owner.
+    brick_material_gallery matched stale omission wording; lan_discovery binds
+    a free port through `Server::advertise_on`.
+  - fx daa5bc5: axis-angle image rotations (HateImage "1 0 0 -90" was read as
+    Euler [1,0,0]) and the PlayerSplash ring emitter, in weapons-pack-008,
+    item-presentation-pack-009 and effects-runtime-pack-004.
+  - Mission lighting is baked by `map_bundle` (`scene_lighting.rs`); `.ml`
+    caches are no longer read and `--lighting-cache-root` is gone. Sun from
+    azimuth/elevation; terrain sweep within 0.07-4.5/255 of the engine's caches;
+    interiors 2.8-3.3 after finding the 10-texel lightmap border. map-bundle-016
+    is in use; `terrain_bundle` is removed (map_bundle emits terrain itself).
+    Evidence: `lighting_compare` against map-bundle-015, offscreen
+    interior_preview of 015 vs the new bake.
+  - `tools/regenerate_content.py` rebuilds all 18 ContentConfig packs from a v20
+    folder (docs/content-regeneration.md). A run from an empty checkout
+    against the reference install passed `bri-client --check`; eight packs came
+    out byte-identical, the re-decompile matched `.research/v20-dso` exactly.
+  - Linux: `cargo check`/`build --target x86_64-unknown-linux-gnu` of bri-client
+    is warning-free; linked against an Ubuntu 24.04 sysroot, the binary passes
+    `--check` under WSL. `tools/package_playtest.sh` and `launch_playtest.sh`
+    package it. Window, input, audio and GPU on a Linux desktop remain unverified.

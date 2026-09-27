@@ -170,10 +170,10 @@ cargo build -p bri-client --release --locked
 ```
 
 The ignored tests require the generated local assets and/or an offscreen GPU.
-They never create a visible window or send OS input. Windows compilation is
-verified; actual window/input behavior and macOS/Linux execution are not yet
-verified. Maxwell performs interactive playtests when the complete alpha is
-ready.
+They never create a visible window or send OS input. Windows is verified.
+Linux x86_64 builds and passes `--check` (see "Linux" below); its window, input
+and audio are not yet verified, nor is macOS. Maxwell performs interactive
+playtests when the complete alpha is ready.
 
 Evidence:
 
@@ -210,3 +210,35 @@ It has deliberately not been launched visibly during this work. Native settings
 are versioned, atomically replaced and corruption is reported without erasing
 the existing file. Alt+Enter is currently transient; Options display changes
 use acknowledgment before committing preferences.
+
+## Linux
+
+`bri-client` builds and runs on x86_64 Linux with the same code; the only
+platform branches are the state directory above and the identity file (Windows
+user data protection there; a `0600` file on Linux).
+
+Build requirements beyond Rust: a C compiler and the ALSA headers
+(`pacman -S base-devel alsa-lib` on Arch/CachyOS, `apt install build-essential
+libasound2-dev pkg-config` on Debian/Ubuntu). Windowing uses Wayland or X11
+through libraries loaded at run time; graphics need a Vulkan driver (Mesa or
+the vendor driver) since wgpu picks Vulkan on Linux.
+
+```sh
+cargo build -p bri-client --release --locked
+python tools/regenerate_content.py --v20 "/path/to/Blockland v20"   # docs/content-regeneration.md
+target/release/bri-client --check content
+target/release/bri-client --run content
+tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
+```
+
+`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1`: it
+copies the release client and the packs ContentConfig selects into
+`dist/BlocklandReImagined-alpha-<version>-linux/` with `launch.sh` and a
+checksummed `MANIFEST.json`; `--validate-only` and `--verify <dir>` work as on
+Windows.
+
+Verified on 2026-09-27 from Windows: the client compiles for
+`x86_64-unknown-linux-gnu` without warnings, links against an Ubuntu 24.04
+sysroot, and the linked binary passes `--check` under WSL Ubuntu against the
+full content folder. Not yet verified: opening a window, input, audio output,
+and GPU rendering on a real Linux desktop; a CachyOS tester is the next step.
