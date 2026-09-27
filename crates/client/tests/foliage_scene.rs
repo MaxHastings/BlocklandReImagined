@@ -7,7 +7,8 @@ use bri_client::{
 };
 use bri_render::{
     scene::{Camera, SceneRenderer, create_depth},
-    scene_loader::{MapLoadOptions, load_map_bundle},
+    scene_loader::load_map_bundle,
+    terrain_scene::GpuTerrain,
 };
 use bri_ui::gpu::{Headless, UiRenderer};
 use glam::{Mat4, Vec3};
@@ -21,14 +22,14 @@ fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
     let artifact = workspace.join("artifacts/native-client-foliage");
     std::fs::create_dir_all(&artifact)?;
     let map = "v20/add-ons/map_bedroom/bedroom.mis";
-    let region = [-64, -64, 384, 384];
-    let native = bri_sim::map::NativeMap::load(&root.join("map-bundle-014"), map, region)?;
-    let building = Building::new(
+    let native = bri_sim::map::NativeMap::load(&root.join("map-bundle-015"), map)?;
+    let mut building = Building::new(
         bri_sim::definitions::Definitions {
             entries: BTreeMap::new(),
         },
         native.colliders,
     )?;
+    building.attach_terrain(native.terrain);
     let prepared = PreparedFoliage::load(
         &root.join("foliage-pack-001"),
         map,
@@ -41,13 +42,8 @@ fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
     let load_ms = prepared.elapsed_ms;
     let mut foliage = ClientFoliage::load(&root.join("foliage-pack-001"))?;
     foliage.set_map(prepared);
-    let scene = load_map_bundle(
-        &root.join("map-bundle-014"),
-        map,
-        MapLoadOptions {
-            terrain_region: region,
-        },
-    )?;
+    let map_scene = load_map_bundle(&root.join("map-bundle-015"), map)?;
+    let scene = map_scene.scene;
     let gpu = Headless::new()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let size = (768, 512);
@@ -70,6 +66,15 @@ fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
     let depth = create_depth(&gpu.device, size.0, size.1).create_view(&Default::default());
     let mut renderer = SceneRenderer::new(&gpu.device, format);
     let uploaded = renderer.upload(&gpu.device, &gpu.queue, &scene)?;
+    let mut terrain = map_scene
+        .terrain
+        .into_iter()
+        .map(|t| GpuTerrain::upload(&renderer, &gpu.device, &gpu.queue, t.into(), 4000.))
+        .collect::<Result<Vec<_>>>()?;
+    for t in &mut terrain {
+        t.update(&gpu.queue, eye, 4000.)?;
+    }
+    let terrain_draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
     let mut camera = Camera::perspective(
         eye.to_array(),
         target_point.to_array(),
@@ -85,11 +90,12 @@ fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
     let mut frames = vec![];
     for show in [false, true] {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        renderer.render(
+        renderer.render_with_instances(
             &mut encoder,
             &view,
             &depth,
             &[&uploaded],
+            &terrain_draws,
             Some(wgpu::Color::BLACK),
         );
         if show {

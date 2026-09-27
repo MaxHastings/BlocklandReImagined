@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bri_render::scene::*;
+use bri_render::{scene::*, terrain_scene::GpuTerrain};
 use glam::{Mat4, Vec3};
 
 fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode) -> SceneData {
@@ -911,7 +911,7 @@ fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires locally converted map-bundle-014; produces offscreen evidence only"]
+#[ignore = "requires locally converted map-bundle-015; produces offscreen evidence only"]
 fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = root.join("artifacts/persistent-scene");
@@ -919,7 +919,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let gpu = Gpu::new()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut reports = vec![];
-    let bundle_path = root.join("content/map-bundle-014");
+    let bundle_path = root.join("content/map-bundle-015");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle_path.join("bundle.json"))?)?;
     let maps = bundle["maps"].as_array().unwrap();
@@ -928,7 +928,8 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
         let id = map["id"].as_str().unwrap();
         let name = id.rsplit('/').next().unwrap().strip_suffix(".mis").unwrap();
         let started = std::time::Instant::now();
-        let data = bri_render::scene_loader::load_map_bundle(&bundle_path, id, Default::default())?;
+        let map = bri_render::scene_loader::load_map_bundle(&bundle_path, id)?;
+        let data = map.scene;
         assert_eq!(
             data.materials
                 .iter()
@@ -942,10 +943,13 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
             "bedroom" | "bedroomdark" | "kitchen" | "kitchendark" | "tutorial"
         );
         assert_eq!(
-            data.materials
+            map.terrain.len(),
+            usize::from(architectural || name == "slopes")
+        );
+        assert!(
+            map.terrain
                 .iter()
-                .any(|m| m.kind == MaterialKind::Terrain),
-            architectural || name == "slopes"
+                .all(|t| t.data.materials[0].kind == MaterialKind::Terrain)
         );
         if architectural {
             assert!(
@@ -986,10 +990,21 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                 [0.0, 4.0, 0.0],
             ),
         };
+        // Far outside the old finite patch: repeated terrain must still stream in.
+        let far_eye = map.terrain.first().map(|t| {
+            let (x, z) = (data.spawn[0] + 6100.0, data.spawn[2] - 6100.0);
+            Vec3::new(x, t.field.height(x, z).unwrap_or(0.0) + 30.0, z)
+        });
         let scene = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+        let mut terrain = map
+            .terrain
+            .into_iter()
+            .map(|t| GpuTerrain::upload(&renderer, &gpu.device, &gpu.queue, t.into(), 7000.0))
+            .collect::<Result<Vec<_>>>()?;
         let upload_ms = started.elapsed().as_millis();
         let eye = Vec3::from(data.spawn) + Vec3::from(offset);
         let mut frames = vec![];
+        let mut terrain_instances = 0;
         for (i, shift) in [0.0, 12.0].into_iter().enumerate() {
             let mut camera = Camera::perspective(
                 (eye + Vec3::X * shift).to_array(),
@@ -1000,7 +1015,24 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                 7000.0,
             );
             camera.apply_environment(&data);
-            let frame = gpu.frame(&mut renderer, &[&scene], &camera, (640, 480))?;
+            let radius = if camera.atmosphere[3] > 0. {
+                camera.atmosphere[1]
+            } else {
+                7000.
+            };
+            for t in &mut terrain {
+                t.update(&gpu.queue, eye + Vec3::X * shift, radius)?;
+            }
+            let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
+            terrain_instances = draws.iter().map(|(_, i)| i.len()).sum::<usize>();
+            let frame = gpu.frame_instances(
+                &mut renderer,
+                &[&scene],
+                &draws,
+                &camera,
+                (640, 480),
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )?;
             let occupied = frame
                 .chunks_exact(4)
                 .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
@@ -1018,6 +1050,47 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
             )?;
             frames.push(frame);
         }
+        if let Some(far) = far_eye.filter(|_| name == "slopes") {
+            let mut camera = Camera::perspective(
+                far.to_array(),
+                (far + Vec3::new(100.0, -25.0, 0.0)).to_array(),
+                4.0 / 3.0,
+                80_f32.to_radians(),
+                0.05,
+                7000.0,
+            );
+            camera.apply_environment(&data);
+            for t in &mut terrain {
+                t.update(&gpu.queue, far, camera.atmosphere[1].max(1.))?;
+            }
+            let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
+            assert!(draws.iter().any(|(_, i)| !i.is_empty()));
+            let frame = gpu.frame_instances(
+                &mut renderer,
+                &[&scene],
+                &draws,
+                &camera,
+                (640, 480),
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            )?;
+            image::save_buffer(
+                output.join(format!("{name}-far.png")),
+                &frame,
+                640,
+                480,
+                image::ColorType::Rgba8,
+            )?;
+            let bare = gpu.frame(&mut renderer, &[&scene], &camera, (640, 480))?;
+            let covered = frame
+                .chunks_exact(4)
+                .zip(bare.chunks_exact(4))
+                .filter(|(a, b)| a != b)
+                .count();
+            assert!(
+                covered > 640 * 480 / 4,
+                "Far repeated terrain did not render: {covered} pixels"
+            );
+        }
         if name == "destruct" {
             assert!(
                 frames[0].chunks_exact(4).all(|p| p[..3] == [0, 0, 0]),
@@ -1026,7 +1099,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
         } else if name != "construct" {
             assert_ne!(frames[0], frames[1], "Camera uniform did not move {name}");
         }
-        reports.push(serde_json::json!({"map":data.id,"name":data.name,"vertices":scene.vertex_count,"triangles":scene.index_count/3,"images":scene.image_count,"batches":data.batches.len(),"load_upload_ms":upload_ms,"camera_frames":2,"gpu_scene_uploads":1,"omissions":data.omissions}));
+        reports.push(serde_json::json!({"map":data.id,"name":data.name,"vertices":scene.vertex_count,"triangles":scene.index_count/3,"images":scene.image_count,"batches":data.batches.len(),"terrain_tile_instances":terrain_instances,"load_upload_ms":upload_ms,"camera_frames":2,"gpu_scene_uploads":1,"omissions":data.omissions,"terrain_omissions":terrain.iter().flat_map(|t| t.omissions().to_vec()).collect::<Vec<_>>()}));
     }
     std::fs::write(
         output.join("report.json"),

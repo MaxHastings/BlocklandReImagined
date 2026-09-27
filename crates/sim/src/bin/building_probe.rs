@@ -98,12 +98,8 @@ fn main() -> Result<()> {
     available = Some(catalog_sim.definitions);
     let mut map_checks = Vec::new();
     for map in bundle["maps"].as_array().context("Missing maps")? {
-        let terrain_region = [-64, -64, 384, 384];
-        let native = NativeMap::load(
-            &args[3],
-            map["id"].as_str().context("Missing map ID")?,
-            terrain_region,
-        )?;
+        let native = NativeMap::load(&args[3], map["id"].as_str().context("Missing map ID")?)?;
+        let anchors = native.spawn_anchors()?;
         let scene = native.scene;
         let colliders = native.colliders;
         let spawn = scene
@@ -114,6 +110,7 @@ fn main() -> Result<()> {
         let spawn = glam::Mat4::from_cols_array(&spawn.transform).transform_point3(Vec3::ZERO);
         let world = World::new("Building integration".into(), scene.id, vec![[1.0; 4]]);
         let mut sim = Simulation::new(world, available.take().unwrap(), colliders)?;
+        sim.attach_terrain(native.terrain, anchors)?;
         let x = (spawn.x / 0.5).floor() * 0.5 + 0.25;
         let z = (spawn.z / 0.5).floor() * 0.5 + 0.25;
         let ray_origin = Vec3::new(x, spawn.y + 5.0, z);
@@ -173,7 +170,7 @@ fn main() -> Result<()> {
             "Stale removed brick target"
         );
         sim.plant(&builder, brick)?;
-        map_checks.push(serde_json::json!({"map":scene.name,"original_spawn":spawn.to_array(),"floor":hit.position.to_array(),"planted":position,"terrain_region_cells":terrain_region,"pending_object_collision":native.pending_objects,"checks":["floor support","native brick target","overlap rejection","remove releases target and occupancy","replant"]}));
+        map_checks.push(serde_json::json!({"map":scene.name,"original_spawn":spawn.to_array(),"floor":hit.position.to_array(),"planted":position,"terrain_tiles":sim.terrain_tiles(),"pending_object_collision":native.pending_objects,"checks":["floor support","native brick target","overlap rejection","remove releases target and occupancy","replant"]}));
         available = Some(sim.definitions);
     }
     ensure!(

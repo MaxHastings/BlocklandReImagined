@@ -63,6 +63,7 @@ pub struct Simulation {
     pub waters: Vec<bri_content::water::Water>,
     index: Index,
     handles: BTreeMap<BrickId, ColliderHandle>,
+    terrain: Option<crate::map::TerrainStream>,
 }
 fn pose(brick: &Brick) -> Pose {
     Pose::from_parts(
@@ -108,7 +109,42 @@ impl Simulation {
             waters: Vec::new(),
             index,
             handles,
+            terrain: None,
         })
+    }
+    /// Stream the map's terrain collision around moving bodies and `anchors`
+    /// (authored spawn regions). Replaces any previously attached terrain.
+    pub fn attach_terrain(
+        &mut self,
+        fields: Vec<std::sync::Arc<bri_content::terrain_field::TerrainField>>,
+        anchors: Vec<bri_physics::terrain::Focus>,
+    ) -> Result<()> {
+        let mut stream = crate::map::TerrainStream::new(fields, MAP_TAG, anchors)?;
+        stream.update(&mut self.physics);
+        self.terrain = Some(stream);
+        Ok(())
+    }
+    /// Refresh streamed terrain after bodies were added or moved outside a
+    /// step (spawns, teleports). `step` refreshes it automatically.
+    pub fn stream_terrain(&mut self) {
+        if let Some(terrain) = &mut self.terrain {
+            terrain.update(&mut self.physics);
+        }
+    }
+    /// Currently loaded terrain collision tiles.
+    pub fn terrain_tiles(&self) -> usize {
+        self.terrain.as_ref().map_or(0, |t| t.active_tiles())
+    }
+    /// Exact terrain ray (normalized direction), independent of loaded tiles.
+    pub fn terrain_ray(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f32,
+    ) -> Option<(f32, Vec3)> {
+        self.terrain
+            .as_ref()
+            .and_then(|t| t.cast_ray(origin, direction, max_distance))
     }
     pub fn state(&self) -> &World {
         self.authority.state()
@@ -196,6 +232,7 @@ impl Simulation {
             self.sync_flags(*id);
         }
         self.physics.step();
+        self.stream_terrain();
         Ok(changed)
     }
     /// Eye and direction are from the server's player state, not packet positions.

@@ -1,11 +1,12 @@
 //! Loader for already converted native bundles. This module cannot read Torque
 //! assets and never searches the original installation for missing resources.
-use crate::scene::*;
+use crate::{scene::*, terrain_scene::TerrainScene};
 use anyhow::{Context, Result, ensure};
 use bri_content::{
     Terrain,
     interior::Interior,
     scene::{Kind, Node, Scene},
+    terrain_field::{TerrainField, TerrainInstance},
 };
 use glam::{Mat4, Vec3};
 use serde_json::Value;
@@ -13,20 +14,13 @@ use std::{
     collections::BTreeMap,
     io::{Cursor, Read},
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 
-#[derive(Clone, Copy, Debug)]
-pub struct MapLoadOptions {
-    /// Finite periodic terrain patch [column,row,width,height] in cells.
-    /// Extending/recentering it is explicit; no dominant-layer approximation.
-    pub terrain_region: [i32; 4],
-}
-impl Default for MapLoadOptions {
-    fn default() -> Self {
-        Self {
-            terrain_region: [-64, -64, 384, 384],
-        }
-    }
+/// A map's static scene plus its camera-following terrain placements.
+pub struct MapScene {
+    pub scene: SceneData,
+    pub terrain: Vec<TerrainScene>,
 }
 
 fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -144,7 +138,7 @@ fn rgb(value: Option<&String>, default: [f32; 3]) -> [f32; 3] {
 
 /// `map_id` is the stable native mission ID from bundle.json, never a display
 /// name or an original install path. Missing bound materials are hard errors.
-pub fn load_map_bundle(root: &Path, map_id: &str, options: MapLoadOptions) -> Result<SceneData> {
+pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
     let root = root.canonicalize().context("Opening native map bundle")?;
     let bundle: Value = serde_json::from_slice(&read(&root, "bundle.json")?)?;
     ensure!(
@@ -238,11 +232,15 @@ pub fn load_map_bundle(root: &Path, map_id: &str, options: MapLoadOptions) -> Re
         out.omissions
             .push("Native environment binding missing: authored sky/cloud/fog not rendered".into());
     }
-    let water_bound = load_waters(&root, &bundle, &scene, &mut out, &mut cache)?;
+    let fields = terrain_fields(&root, &bundle, &scene)?;
+    let water_bound = load_waters(&root, &bundle, &scene, &fields, &mut out, &mut cache)?;
+    let terrain = fields
+        .iter()
+        .map(|field| load_terrain(&root, &bundle, bindings, &scene, field.clone()))
+        .collect::<Result<Vec<_>>>()?;
     for (node_index, node) in scene.nodes.iter().enumerate() {
         match node.kind {
             Kind::Interior=>load_interior(&root,&bundle,bindings,&scene,node_index,node,&mut out,&mut cache)?,
-            Kind::Terrain=>load_terrain(&root,&bundle,bindings,&scene,node_index,node,options,&mut out,&mut cache)?,
             Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?,
             Kind::StaticModel=>anyhow::bail!("Static model {} has no native asset",node.name),
             Kind::Water if water_bound=>{},
@@ -253,13 +251,38 @@ pub fn load_map_bundle(root: &Path, map_id: &str, options: MapLoadOptions) -> Re
     out.omissions.push("Storm transitions/fog volumes, dynamic lighting and texture mip/anisotropic filtering remain incomplete".into());
     out.omissions.push("Translucent geometry sorts by mesh-batch center; intersecting translucent surfaces need finer sorting".into());
     out.validate()?;
-    Ok(out)
+    Ok(MapScene {
+        scene: out,
+        terrain,
+    })
+}
+
+fn terrain_fields(root: &Path, bundle: &Value, scene: &Scene) -> Result<Vec<Arc<TerrainField>>> {
+    let instances: Vec<TerrainInstance> = match bundle
+        .get("terrains")
+        .context("Map bundle has no converted terrain instances")?
+        .get(&scene.id)
+    {
+        Some(value) => {
+            serde_json::from_value(value.clone()).context("Invalid native terrain instances")?
+        }
+        None => Vec::new(),
+    };
+    bri_content::terrain_field::map_fields(scene, instances, |id| {
+        Ok(serde_json::from_slice::<Terrain>(&read(
+            root,
+            bundle["assets"][id]
+                .as_str()
+                .context("Terrain asset missing from bundle")?,
+        )?)?)
+    })
 }
 
 fn load_waters(
     root: &Path,
     bundle: &Value,
     scene: &Scene,
+    fields: &[Arc<TerrainField>],
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
 ) -> Result<bool> {
@@ -278,35 +301,6 @@ fn load_waters(
         waters.iter().map(|w| w.node).collect::<Vec<_>>() == expected,
         "Native water placements disagree with scene"
     );
-    let mut terrains = vec![];
-    for node in scene
-        .nodes
-        .iter()
-        .filter(|n| matches!(n.kind, Kind::Terrain))
-    {
-        let id = node
-            .asset
-            .as_ref()
-            .context("Missing water terrain reference")?;
-        let terrain: Terrain = serde_json::from_slice(&read(
-            root,
-            bundle["assets"][id]
-                .as_str()
-                .context("Missing water terrain asset")?,
-        )?)?;
-        terrain.validate()?;
-        let spacing: f32 = node
-            .properties
-            .get("squaresize")
-            .context("Missing terrain spacing")?
-            .parse()?;
-        ensure!(
-            spacing.is_finite() && spacing > 0.,
-            "Invalid terrain spacing"
-        );
-        let placement = transform(node)?;
-        terrains.push((terrain, spacing, placement, placement.inverse()));
-    }
     for water in &waters {
         water.validate()?;
         let mut textures = [0; 3];
@@ -338,13 +332,9 @@ fn load_waters(
             }
         }
         crate::water_scene::append(out, water, textures, |x, z| {
-            terrains
+            fields
                 .iter()
-                .map(|(t, s, m, inverse)| {
-                    let local = inverse.transform_point3(Vec3::new(x, 0., z));
-                    let height = bri_content::terrain_mesh::height(t, *s, local.x, local.z);
-                    m.transform_point3(Vec3::new(local.x, height, local.z)).y
-                })
+                .filter_map(|field| field.height(x, z))
                 .max_by(f32::total_cmp)
         })?;
     }
@@ -582,38 +572,22 @@ fn load_interior(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn load_terrain(
     root: &Path,
     bundle: &Value,
     bindings: &[Value],
     scene: &Scene,
-    node_index: usize,
-    node: &Node,
-    options: MapLoadOptions,
-    out: &mut SceneData,
-    cache: &mut BTreeMap<(String, bool), usize>,
-) -> Result<()> {
-    let id = node
-        .asset
-        .as_deref()
-        .context("Terrain placement has no native asset")?;
-    let terrain: Terrain = serde_json::from_slice(&read(
-        root,
-        bundle["assets"][id]
-            .as_str()
-            .context("Terrain asset missing from bundle")?,
-    )?)?;
-    terrain.validate()?;
-    let spacing: f32 = node
-        .properties
-        .get("squaresize")
-        .context("Terrain grid spacing missing")?
-        .parse()?;
-    let mesh = bri_content::terrain_mesh::mesh(&terrain, spacing, options.terrain_region)?;
-    let placement = transform(node)?;
-    let normal_transform = placement.inverse().transpose();
-    let mirrored = placement.determinant() < 0.0;
+    field: Arc<TerrainField>,
+) -> Result<TerrainScene> {
+    let id = field.id.as_str();
+    let terrain = &field.terrain;
+    let node_index = field.node;
+    let mut out = SceneData {
+        id: format!("{}/terrain-{node_index}", scene.id),
+        name: id.into(),
+        ..Default::default()
+    };
+    let cache = &mut BTreeMap::new();
     let mut images = [0; 11];
     let mut bound = [false; 8];
     for binding in bindings.iter().filter(|b| b["asset"].as_str() == Some(id)) {
@@ -627,7 +601,7 @@ fn load_terrain(
                 .as_str()
                 .context("Terrain texture filename missing")?,
             true,
-            out,
+            &mut out,
             cache,
         )?;
         bound[slot] = true;
@@ -651,7 +625,7 @@ fn load_terrain(
             .as_str()
             .context("Terrain lightmap filename missing")?,
         false,
-        out,
+        &mut out,
         cache,
     )?;
     for group in 0..2 {
@@ -674,33 +648,6 @@ fn load_terrain(
             srgb: false,
         });
     }
-    let base = u32::try_from(out.vertices.len()).context("Too many scene vertices")?;
-    for i in 0..mesh.positions.len() {
-        let uv = mesh.grid_uv[i];
-        let tiles = terrain.side as f32 / 8.0;
-        out.vertices.push(SceneVertex {
-            position: placement
-                .transform_point3(Vec3::from(mesh.positions[i]))
-                .to_array(),
-            normal: normal_transform
-                .transform_vector3(Vec3::from(mesh.normals[i]))
-                .normalize_or_zero()
-                .to_array(),
-            uv: [uv[0] * tiles, uv[1] * tiles],
-            lightmap_uv: uv,
-            color: [1.0; 4],
-        });
-    }
-    let start = out.indices.len() as u32;
-    for [a, b, c] in mesh.triangles {
-        out.indices.extend(if mirrored {
-            [base + a, base + c, base + b]
-        } else {
-            [base + a, base + b, base + c]
-        });
-    }
-    let center = centroid(&out.vertices, &out.indices[start as usize..]);
-    let material = out.materials.len();
     out.materials.push(Material {
         name: id.into(),
         images,
@@ -709,11 +656,8 @@ fn load_terrain(
         double_sided: false,
         water_parameters: None,
     });
-    out.batches.push(MeshBatch {
-        indices: start..out.indices.len() as u32,
-        material,
-        center,
-    });
-    out.omissions.push(format!("Terrain {id} is rendered as the explicit periodic patch {:?}; camera-following terrain streaming/LOD, authored detail/bump modulation and terrain holes are not yet implemented",options.terrain_region));
-    Ok(())
+    out.omissions.push(format!(
+        "Terrain {id} streams full-detail tiles around the camera; distance LOD and authored detail/bump modulation are not yet implemented"
+    ));
+    TerrainScene::build(field, out)
 }

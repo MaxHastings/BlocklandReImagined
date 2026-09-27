@@ -6,7 +6,7 @@
 //! documented fidelity gaps, not claims of exact v20 anchoring. Map collider
 //! metadata currently cannot distinguish terrain's additional -0.1 deploy bias.
 use anyhow::{Context, Result, ensure};
-use bri_content::brick::Brick as Mesh;
+use bri_content::{brick::Brick as Mesh, terrain_field::TerrainField};
 use bri_net::protocol::PublicWorld;
 use bri_sim::{
     definitions::Definitions,
@@ -20,7 +20,7 @@ use bri_ui::api::{GameAction, HeldControl, IconRef, ToolInfo, UiAction, UiUpdate
 use bri_world::{Brick, BrickId, ContentRef};
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 const SLOTS: usize = 10;
 const DEPLOY_REACH: f32 = 15.0;
@@ -67,6 +67,7 @@ pub struct Building {
     ghost: Option<Brick>,
     ghost_generation: u64,
     map: PhysicsWorld,
+    terrain: Vec<Arc<TerrainField>>,
     bricks: BTreeMap<BrickId, Brick>,
     index: Index,
     camera_index: Index,
@@ -108,12 +109,44 @@ impl Building {
             ghost: None,
             ghost_generation: 0,
             map,
+            terrain: Vec::new(),
             bricks: BTreeMap::new(),
             index: Index::default(),
             camera_index: Index::default(),
             visibility_index: Index::default(),
             query_generation: 0,
         })
+    }
+
+    /// Exact map terrain for every query; it is never approximated by tiles.
+    pub fn attach_terrain(&mut self, terrain: Vec<Arc<TerrainField>>) {
+        self.terrain = terrain;
+    }
+
+    /// Nearest map hit (interiors, static models and terrain) as
+    /// (distance, normal, surface) along a normalized direction.
+    fn map_ray(&self, origin: Vec3, direction: Vec3, distance: f32) -> Option<(f32, Vec3, u128)> {
+        let ray = Ray::new(
+            Vector::from_array(origin.to_array()),
+            Vector::from_array(direction.to_array()),
+        );
+        let physical = self
+            .map
+            .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
+            .cast_ray_and_get_normal(&ray, distance, true)
+            .map(|(handle, hit)| {
+                (
+                    hit.time_of_impact,
+                    Vec3::from_array(hit.normal.to_array()),
+                    self.map.colliders[handle].user_data,
+                )
+            });
+        let terrain = bri_sim::map::cast_terrain(&self.terrain, origin, direction, distance)
+            .map(|(time, normal)| (time, normal, bri_sim::map::MapSurface::Terrain as u128));
+        match (physical, terrain) {
+            (Some(a), Some(b)) => Some(if b.0 < a.0 { b } else { a }),
+            (a, b) => a.or(b),
+        }
     }
 
     pub fn set_catalog(&mut self, entries: Vec<(String, u8)>) -> Result<()> {
@@ -266,23 +299,16 @@ impl Building {
             "Invalid static surface query"
         );
         let direction = delta / distance;
-        let ray = Ray::new(
-            Vector::from_array(start.to_array()),
-            Vector::from_array(direction.to_array()),
-        );
-        self.map
-            .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
-            .cast_ray_and_get_normal(&ray, distance, true)
-            .map(|(handle, hit)| {
-                let surface =
-                    bri_sim::map::MapSurface::from_tag(self.map.colliders[handle].user_data)
-                        .context("Unclassified native static surface")?;
+        self.map_ray(start, direction, distance)
+            .map(|(time, normal, tag)| {
+                let surface = bri_sim::map::MapSurface::from_tag(tag)
+                    .context("Unclassified native static surface")?;
                 Ok((
                     Hit {
                         brick: None,
-                        position: start + direction * hit.time_of_impact,
-                        normal: Vec3::from_array(hit.normal.to_array()),
-                        distance: hit.time_of_impact,
+                        position: start + direction * time,
+                        normal,
+                        distance: time,
                     },
                     surface,
                 ))
@@ -511,19 +537,13 @@ impl Building {
         reach: f32,
         index: &Index,
     ) -> Result<Option<Hit>> {
-        let ray = Ray::new(
-            Vector::from_array(origin.to_array()),
-            Vector::from_array(direction.to_array()),
-        );
         let mut nearest = self
-            .map
-            .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
-            .cast_ray_and_get_normal(&ray, reach, true)
-            .map(|(_, hit)| Hit {
+            .map_ray(origin, direction, reach)
+            .map(|(time, normal, _)| Hit {
                 brick: None,
-                position: origin + direction * hit.time_of_impact,
-                normal: Vec3::from(hit.normal.to_array()),
-                distance: hit.time_of_impact,
+                position: origin + direction * time,
+                normal,
+                distance: time,
             });
         let end = origin + direction * reach;
         let low = origin.min(end) - Vec3::splat(0.01);
@@ -571,16 +591,7 @@ impl Building {
             return Ok(true);
         }
         let direction = delta / distance;
-        let ray = Ray::new(
-            Vector::from_array(eye.to_array()),
-            Vector::from_array(direction.to_array()),
-        );
-        if self
-            .map
-            .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
-            .cast_ray(&ray, distance - 0.001, true)
-            .is_some()
-        {
+        if self.map_ray(eye, direction, distance - 0.001).is_some() {
             return Ok(false);
         }
         for id in self.visibility_index.query(query_bounds(
@@ -640,6 +651,43 @@ impl Building {
             .cast_shape(&origin, velocity, &shape, options)
             .map_or(distance, |(_, hit)| hit.time_of_impact);
         let end = eye + backward * distance;
+        let low = eye.min(end) - Vec3::splat(radius);
+        let high = eye.max(end) + Vec3::splat(radius);
+        for field in &self.terrain {
+            let [gx0, gy0] = field.grid(low.x, high.z);
+            let [gx1, gy1] = field.grid(high.x, low.z);
+            let (x0, y0) = (gx0.floor() as i32, gy0.floor() as i32);
+            let region = [
+                x0,
+                y0,
+                gx1.floor() as i32 - x0 + 1,
+                gy1.floor() as i32 - y0 + 1,
+            ];
+            let mesh = field.mesh(region)?;
+            if mesh.triangles.is_empty() {
+                continue;
+            }
+            let patch = TriMesh::new(
+                mesh.positions
+                    .iter()
+                    .map(|p| Vector::from_array(*p))
+                    .collect(),
+                mesh.triangles,
+            )?;
+            if let Some(hit) = cast_shapes(
+                &origin,
+                velocity,
+                &shape,
+                &Pose::IDENTITY,
+                Vector::ZERO,
+                &patch,
+                options,
+            )
+            .map_err(|_| anyhow::anyhow!("Unsupported camera collision with terrain"))?
+            {
+                travel = travel.min(hit.time_of_impact);
+            }
+        }
         for id in self.camera_index.query(query_bounds(
             eye.min(end) - Vec3::splat(radius),
             eye.max(end) + Vec3::splat(radius),

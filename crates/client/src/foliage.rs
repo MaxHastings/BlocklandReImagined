@@ -205,17 +205,14 @@ mod tests {
     fn actual_client_collision_places_original_foliage_on_allowed_surfaces() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let map_id = "v20/add-ons/map_bedroom/bedroom.mis";
-        let map = bri_sim::map::NativeMap::load(
-            &root.join("map-bundle-014"),
-            map_id,
-            [-64, -64, 384, 384],
-        )?;
-        let building = Building::new(
+        let map = bri_sim::map::NativeMap::load(&root.join("map-bundle-015"), map_id)?;
+        let mut building = Building::new(
             Definitions {
                 entries: BTreeMap::new(),
             },
             map.colliders,
         )?;
+        building.attach_terrain(map.terrain);
         let prepared = PreparedFoliage::load(
             &root.join("foliage-pack-001"),
             map_id,

@@ -44,6 +44,7 @@ pub struct CollisionMirror {
     definitions: Definitions,
     waters: Vec<Water>,
     bricks: BTreeMap<BrickId, (ColliderHandle, Geometry)>,
+    terrain: Option<crate::map::TerrainStream>,
 }
 impl CollisionMirror {
     pub fn new(definitions: Definitions, map: Vec<ColliderBuilder>, waters: Vec<Water>) -> Self {
@@ -57,6 +58,7 @@ impl CollisionMirror {
             definitions,
             waters,
             bricks: BTreeMap::new(),
+            terrain: None,
         }
     }
     /// Incrementally mirror replicated brick collision. Returns whether any
@@ -98,6 +100,22 @@ impl CollisionMirror {
     pub fn physics(&self) -> &PhysicsWorld {
         &self.physics
     }
+    /// Stream the map's terrain collision around the predicted body, exactly
+    /// like the server's `Simulation`.
+    pub fn attach_terrain(
+        &mut self,
+        fields: Vec<std::sync::Arc<bri_content::terrain_field::TerrainField>>,
+    ) -> Result<()> {
+        let mut stream = crate::map::TerrainStream::new(fields, MAP_TAG, Vec::new())?;
+        stream.update(&mut self.physics);
+        self.terrain = Some(stream);
+        Ok(())
+    }
+    fn stream_terrain(&mut self) {
+        if let Some(terrain) = &mut self.terrain {
+            terrain.update(&mut self.physics);
+        }
+    }
 }
 
 pub struct Predictor {
@@ -112,6 +130,7 @@ impl Predictor {
     /// Begin predicting from an authoritative state (normally the join pose).
     pub fn new(mut world: CollisionMirror, state: PlayerState) -> Result<Self> {
         let player = Player::attach(&mut world.physics, state, PlayerTuning::default())?;
+        world.stream_terrain();
         Ok(Self {
             world,
             player,
@@ -144,6 +163,7 @@ impl Predictor {
             .sequence
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("Input sequence exhausted"))?;
+        self.world.stream_terrain();
         let events =
             self.player
                 .step_in_water(&mut self.world.physics, input, &self.world.waters)?;
@@ -191,6 +211,7 @@ impl Predictor {
         }
         let predicted = self.player.state().clone();
         self.player.restore(&mut self.world.physics, state)?;
+        self.world.stream_terrain();
         while self.pending.front().is_some_and(|(sequence, _)| *sequence <= ack) {
             self.pending.pop_front();
         }
@@ -217,6 +238,7 @@ impl Predictor {
     /// Server-initiated relocation (respawn, teleport): discard in-flight inputs.
     pub fn teleport(&mut self, tick: u64, ack: u64, state: PlayerState) -> Result<()> {
         self.player.restore(&mut self.world.physics, state)?;
+        self.world.stream_terrain();
         self.pending.clear();
         self.server_tick = Some(tick);
         self.acknowledged = ack.min(self.sequence);

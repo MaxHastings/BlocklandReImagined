@@ -55,8 +55,20 @@ impl Query for WeaponQuery<'_> {
             }
             true
         };
-        let ray = Ray::new(origin, Vector::from_array((delta / distance).to_array()));
-        self.simulation
+        let direction = delta / distance;
+        let ray = Ray::new(origin, Vector::from_array(direction.to_array()));
+        let terrain =
+            self.simulation
+                .terrain_ray(start, direction, distance)
+                .map(|(time, normal)| Hit {
+                    target: TargetId::Map(0),
+                    position: start + direction * time,
+                    normal,
+                    fraction: time / distance,
+                    color: None,
+                });
+        let physical = self
+            .simulation
             .physics
             .query_pipeline_with_filter(
                 QueryFilter::default()
@@ -79,12 +91,16 @@ impl Query for WeaponQuery<'_> {
                 };
                 Some(Hit {
                     target,
-                    position: start + delta / distance * hit.time_of_impact,
+                    position: start + direction * hit.time_of_impact,
                     normal: Vec3::from_array(hit.normal.to_array()),
                     fraction: hit.time_of_impact / distance,
                     color,
                 })
-            })
+            });
+        match (physical, terrain) {
+            (Some(a), Some(b)) => Some(if b.fraction < a.fraction { b } else { a }),
+            (a, b) => a.or(b),
+        }
     }
 
     fn radius(&mut self, center: Vec3, radius: f32, limit: usize) -> Vec<Nearby> {
@@ -144,15 +160,20 @@ impl Query for WeaponQuery<'_> {
             Vector::from_array((from + direction * advance).to_array()),
             Vector::from_array(direction.to_array()),
         );
+        let reach = (distance - advance - 0.001).max(0.);
         self.simulation
-            .physics
-            .query_pipeline_with_filter(
-                QueryFilter::default()
-                    .exclude_sensors()
-                    .predicate(&predicate),
-            )
-            .cast_ray(&ray, (distance - advance - 0.001).max(0.), true)
+            .terrain_ray(from + direction * advance, direction, reach)
             .is_none()
+            && self
+                .simulation
+                .physics
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .exclude_sensors()
+                        .predicate(&predicate),
+                )
+                .cast_ray(&ray, reach, true)
+                .is_none()
     }
     fn can_affect(&self, source: ActorId, target: TargetId) -> bool {
         (self.affect)(source, target)

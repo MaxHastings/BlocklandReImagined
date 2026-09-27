@@ -120,11 +120,10 @@ mod tests {
     #[test]
     #[ignore = "reads converted Slate Sea water; no original assets or devices"]
     fn repeated_native_water_and_roofs_choose_the_nearest_surface() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/map-bundle-014");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/map-bundle-015");
         let map = bri_sim::map::NativeMap::load(
             &root,
             "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
-            [0, 0, 1, 1],
         )?;
         let water = &map.waters[0];
         let center = (Vec3::from_array(water.min) + Vec3::from_array(water.max)) * 0.5;

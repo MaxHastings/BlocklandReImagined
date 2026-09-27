@@ -49,25 +49,6 @@ pub fn interior_collider(
     )?)
 }
 
-pub fn terrain_collider(
-    terrain: &bri_content::Terrain,
-    spacing: f32,
-    region: [i32; 4],
-    transform: glam::Mat4,
-) -> Result<ColliderBuilder> {
-    let mesh = bri_content::terrain_mesh::mesh(terrain, spacing, region)?;
-    let points = mesh
-        .positions
-        .iter()
-        .map(|v| Vector::from_array(transform.transform_point3(glam::Vec3::from(*v)).to_array()))
-        .collect();
-    Ok(ColliderBuilder::trimesh_with_flags(
-        points,
-        mesh.triangles,
-        TriMeshFlags::FIX_INTERNAL_EDGES,
-    )?)
-}
-
 /// Authored collision details for fixed map models. Visual leaves/billboards
 /// never substitute for collision meshes; models without collision stay decorative.
 pub fn static_shape_colliders(

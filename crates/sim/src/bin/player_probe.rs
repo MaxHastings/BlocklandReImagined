@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use bri_content::scene::Kind;
 use bri_sim::{
-    map::NativeMap,
+    map::{NativeMap, TerrainStream},
     player::{MoveInput, Player, PlayerTuning},
 };
 use glam::{Mat4, Vec3};
@@ -17,16 +17,15 @@ fn main() -> Result<()> {
         serde_json::from_slice(&std::fs::read(args[0].join("bundle.json"))?)?;
     let mut reports = Vec::new();
     for entry in bundle["maps"].as_array().context("Missing maps")? {
-        let native = NativeMap::load(
-            &args[0],
-            entry["id"].as_str().context("Missing map ID")?,
-            [-64, -64, 384, 384],
-        )?;
+        let native = NativeMap::load(&args[0], entry["id"].as_str().context("Missing map ID")?)?;
+        let anchors = native.spawn_anchors()?;
         let mut physics = bri_physics::new_world();
         for c in native.colliders {
             physics.insert_collider(c, None);
         }
         physics.detect_collisions(&(), &());
+        let mut terrain = TerrainStream::new(native.terrain, 0, anchors)?;
+        terrain.update(&mut physics);
         let node = native
             .scene
             .nodes
@@ -39,6 +38,7 @@ fn main() -> Result<()> {
         for _ in 0..240 {
             player.step(&mut physics, MoveInput::default())?;
             physics.step();
+            terrain.update(&mut physics);
         }
         ensure!(
             player.state().grounded,

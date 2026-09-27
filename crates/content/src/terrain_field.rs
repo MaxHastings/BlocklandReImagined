@@ -11,9 +11,10 @@
 //! empty squares apply only to the primary block `[0, side)²`, matching the
 //! legacy renderer and collision ("holes only in the primary terrain block").
 use crate::{Terrain, terrain_mesh};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub const TERRAIN_INSTANCE_SCHEMA: u32 = 1;
 
@@ -189,8 +190,7 @@ impl TerrainField {
             max_height: max_height + instance.origin[1],
         })
     }
-    /// Builds the legacy-compatible placement from a translation-only scene
-    /// transform. Used when a bundle predates converted terrain instances.
+    /// Placement origin from a translation-only scene transform (converter use).
     pub fn origin_from_transform(transform: &[f32; 16]) -> Result<[f32; 3]> {
         let matrix = Mat4::from_cols_array(transform);
         ensure!(matrix.is_finite(), "Non-finite terrain placement");
@@ -487,40 +487,38 @@ pub fn legacy_bool(value: &str) -> bool {
     value.eq_ignore_ascii_case("true") || value.parse::<f64>().is_ok_and(|v| v != 0.0)
 }
 
-/// Build a conservative instance from a scene node when a bundle predates
-/// converted terrain instances: spacing, origin and authored repetition only.
-pub fn fallback_instance(node_index: usize, node: &crate::scene::Node) -> Result<TerrainInstance> {
-    let terrain = node.asset.clone().context("Terrain node has no asset")?;
-    let square_size: f32 = node
-        .properties
-        .get("squaresize")
-        .context("Terrain grid spacing missing")?
-        .trim()
-        .parse()?;
-    let (repeat, repeat_source) = match node.properties.get("repeatterrain") {
-        Some(v) => (legacy_bool(v), RepeatSource::Authored),
-        None => (true, RepeatSource::LegacyDefaultUnverified),
-    };
-    Ok(TerrainInstance {
-        schema_version: TERRAIN_INSTANCE_SCHEMA,
-        node: node_index,
-        terrain,
-        square_size,
-        origin: TerrainField::origin_from_transform(&node.transform)?,
-        repeat,
-        repeat_source,
-        empty_runs: vec![],
-        detail: None,
-        bump: TerrainBump {
-            texture: None,
-            scale: 1.0,
-            offset: 0.01,
-            zero_scale: 8,
-        },
-        diagnostics: vec![
-            "Bundle predates converted terrain instances: empty squares, detail and bump textures are not bound".into(),
-        ],
-    })
+/// Bind a map's converted terrain placements to their native terrain assets.
+/// Every terrain scene node needs exactly one instance, listed in node order.
+pub fn map_fields(
+    scene: &crate::scene::Scene,
+    instances: Vec<TerrainInstance>,
+    mut load: impl FnMut(&str) -> Result<Terrain>,
+) -> Result<Vec<Arc<TerrainField>>> {
+    let expected: Vec<_> = scene
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| matches!(n.kind, crate::scene::Kind::Terrain))
+        .map(|(i, _)| i)
+        .collect();
+    ensure!(
+        instances.iter().map(|i| i.node).collect::<Vec<_>>() == expected,
+        "Native terrain instances disagree with the map's terrain placements"
+    );
+    instances
+        .iter()
+        .map(|instance| {
+            let node = &scene.nodes[instance.node];
+            ensure!(
+                node.asset.as_deref() == Some(instance.terrain.as_str()),
+                "Terrain instance refers to another placement asset"
+            );
+            Ok(Arc::new(TerrainField::new(
+                load(&instance.terrain)?,
+                instance,
+            )?))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -589,12 +587,12 @@ pub(crate) mod tests {
         assert_eq!(once.vertex(16, 3).y, once.vertex(0, 3).y);
         let bad = TerrainInstance {
             empty_runs: vec![[250, 7]],
-            ..fallback_like()
+            ..instance_like()
         };
         assert!(bad.validate(16).is_err());
     }
 
-    fn fallback_like() -> TerrainInstance {
+    fn instance_like() -> TerrainInstance {
         TerrainInstance {
             schema_version: TERRAIN_INSTANCE_SCHEMA,
             node: 0,
@@ -658,12 +656,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn mesh_matches_legacy_mesh_and_omits_holes() {
+    fn mesh_is_upward_wound_on_the_surface_and_omits_holes() {
         let f = fixture(16, true, vec![[16 + 1, 1]]);
         let mesh = f.mesh([-3, -2, 8, 6]).unwrap();
         assert_eq!(mesh.triangles.len(), 8 * 6 * 2 - 2);
-        let legacy = terrain_mesh::mesh(&f.terrain, f.spacing, [-3, -2, 8, 6]).unwrap();
-        assert_eq!(legacy.triangles.len(), 8 * 6 * 2);
         for tri in &mesh.triangles {
             let [a, b, c] = tri.map(|i| Vec3::from(mesh.positions[i as usize]));
             assert!((b - a).cross(c - a).y > 0.0);
@@ -671,36 +667,66 @@ pub(crate) mod tests {
             let h = f.height(centroid.x, centroid.z).unwrap();
             assert!((h - centroid.y).abs() < 1e-3);
         }
-        let first = Vec3::from(legacy.positions[0]) + f.origin;
+        // Periodic copies share the closing row/column samples exactly.
+        let copy = f.mesh([13, -2, 8, 6]).unwrap();
+        assert_eq!(copy.triangles.len(), 8 * 6 * 2);
         assert!(
-            mesh.positions
+            copy.positions
                 .iter()
-                .any(|p| Vec3::from(*p).distance(first) < 1e-4)
+                .any(|p| (Vec3::from(*p) - f.vertex(16, 0)).length() < 1e-4)
         );
+        assert_eq!(f.vertex(16, 0).y, f.vertex(0, 0).y);
     }
 
     #[test]
-    fn legacy_bool_and_fallback() {
+    fn legacy_bool_values() {
         assert!(
             legacy_bool("1") && legacy_bool("true") && legacy_bool(" TRUE ") && legacy_bool("2.5")
         );
         assert!(!legacy_bool("0") && !legacy_bool("false") && !legacy_bool(""));
-        let mut node = crate::scene::Node {
-            name: "t".into(),
+        assert!(
+            TerrainField::origin_from_transform(&Mat4::from_rotation_y(0.3).to_cols_array())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn map_fields_follow_terrain_nodes() {
+        let node = |kind, asset: Option<&str>| crate::scene::Node {
+            name: "n".into(),
             parent: None,
-            kind: crate::scene::Kind::Terrain,
-            transform: Mat4::from_translation(Vec3::new(-1024.0, 0.0, 1024.0)).to_cols_array(),
-            asset: Some("a".into()),
+            kind,
+            transform: Mat4::IDENTITY.to_cols_array(),
+            asset: asset.map(Into::into),
             properties: Default::default(),
         };
-        node.properties.insert("squaresize".into(), "8".into());
-        let i = fallback_instance(3, &node).unwrap();
-        assert!(i.repeat && i.repeat_source == RepeatSource::LegacyDefaultUnverified);
-        assert_eq!(i.origin, [-1024.0, 0.0, 1024.0]);
-        node.properties.insert("repeatterrain".into(), "0".into());
-        let i = fallback_instance(3, &node).unwrap();
-        assert!(!i.repeat && i.repeat_source == RepeatSource::Authored);
-        node.transform = Mat4::from_rotation_y(0.3).to_cols_array();
-        assert!(fallback_instance(3, &node).is_err());
+        let fixture = fixture(16, true, vec![]);
+        let scene = crate::scene::Scene {
+            schema_version: 1,
+            id: "map".into(),
+            name: "map".into(),
+            nodes: vec![
+                node(crate::scene::Kind::Spawn, None),
+                node(crate::scene::Kind::Terrain, Some("fixture")),
+            ],
+            pending_scripts: vec![],
+        };
+        let load = |_: &str| Ok(fixture.terrain.clone());
+        let instance = TerrainInstance {
+            node: 1,
+            ..instance_like()
+        };
+        assert_eq!(
+            map_fields(&scene, vec![instance.clone()], load)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(map_fields(&scene, vec![], load).is_err());
+        let wrong = TerrainInstance {
+            node: 0,
+            ..instance
+        };
+        assert!(map_fields(&scene, vec![wrong], load).is_err());
     }
 }

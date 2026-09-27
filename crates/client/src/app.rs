@@ -14,7 +14,7 @@ use bri_net::{
 };
 use bri_render::{
     scene::{Camera, GpuScene, SceneData, SceneRenderer, create_depth},
-    scene_loader::{MapLoadOptions, load_map_bundle},
+    scene_loader::load_map_bundle,
 };
 use bri_sim::{
     definitions::Definitions,
@@ -37,11 +37,14 @@ use std::{
 };
 
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
+/// World camera far plane; also the farthest terrain tiles are ever drawn.
+const FAR_PLANE: f32 = 4000.0;
 struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
     waters: Vec<bri_content::water::Water>,
     scene: SceneData,
+    terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
     materials: Arc<crate::materials::BrickMaterials>,
     building: crate::building::Building,
@@ -95,6 +98,7 @@ pub struct App {
     runtime: tokio::runtime::Runtime,
     attempt: Option<Attempt>,
     cpu_scene: Option<SceneData>,
+    cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<SceneRenderer>,
     effects: crate::effects::WorldEffects,
     weapon_effects: crate::weapon_effects::WeaponEffects,
@@ -107,6 +111,7 @@ pub struct App {
     weapon_animation_cursor: u64,
     effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     gpu_scene: Option<GpuScene>,
+    gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
     depth: Option<(wgpu::Texture, (u32, u32))>,
     meshes: Option<Arc<Meshes>>,
     cpu_world: Option<SceneData>,
@@ -537,6 +542,7 @@ impl App {
                 .build()?,
             attempt: None,
             cpu_scene: None,
+            cpu_terrain: Vec::new(),
             renderer: None,
             effects,
             weapon_effects,
@@ -549,6 +555,7 @@ impl App {
             weapon_animation_cursor: 0,
             effects_renderer: None,
             gpu_scene: None,
+            gpu_terrain: Vec::new(),
             depth: None,
             meshes: None,
             cpu_world: None,
@@ -650,7 +657,9 @@ impl App {
         self.avatar_action_images.clear();
         self.controls = Controls::default();
         self.cpu_scene = None;
+        self.cpu_terrain.clear();
         self.gpu_scene = None;
+        self.gpu_terrain.clear();
         self.meshes = None;
         self.cpu_world = None;
         self.gpu_world = None;
@@ -930,13 +939,7 @@ impl App {
                     )?;
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&map, None)?;
-                    let visual = load_map_bundle(
-                        &paths.map_bundle,
-                        &map,
-                        MapLoadOptions {
-                            terrain_region: paths.terrain_region,
-                        },
-                    )?;
+                    let visual = load_map_bundle(&paths.map_bundle, &map)?;
                     let identity = content_identity::fingerprint_runtime(
                         &paths.brick_catalog,
                         &paths.geometry,
@@ -967,15 +970,17 @@ impl App {
                     let materials = Arc::new(crate::materials::BrickMaterials::load(
                         &paths.brick_materials,
                     )?);
-                    let mirror = bri_sim::prediction::CollisionMirror::new(
+                    let mut mirror = bri_sim::prediction::CollisionMirror::new(
                         loaded.simulation.definitions.clone(),
                         loaded.query_colliders.clone(),
                         loaded.simulation.waters.clone(),
                     );
+                    mirror.attach_terrain(loaded.terrain.clone())?;
                     let mut building = crate::building::Building::new(
                         loaded.simulation.definitions.clone(),
                         loaded.query_colliders.clone(),
                     )?;
+                    building.attach_terrain(loaded.terrain.clone());
                     building.set_catalog(selected)?;
                     if let Some(print) = &catalog.default_print {
                         building.set_default_prints(
@@ -999,7 +1004,8 @@ impl App {
                             foliage,
                             map_id: map.clone(),
                             waters,
-                            scene: visual,
+                            scene: visual.scene,
+                            terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                             meshes,
                             materials,
                             building,
@@ -1213,13 +1219,7 @@ impl App {
             let permit = load_limit.acquire_owned().await?;
             let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
                 let _permit = permit;
-                let scene = load_map_bundle(
-                    &paths.map_bundle,
-                    &map,
-                    MapLoadOptions {
-                        terrain_region: paths.terrain_region,
-                    },
-                )?;
+                let visual = load_map_bundle(&paths.map_bundle, &map)?;
                 let definitions = Definitions::load(&paths.brick_catalog, &paths.geometry)?;
                 let meshes = Arc::new(
                     definitions
@@ -1228,18 +1228,19 @@ impl App {
                         .map(|(id, def)| (id.clone(), def.mesh.clone()))
                         .collect(),
                 );
-                let native_map =
-                    bri_sim::map::NativeMap::load(&paths.map_bundle, &map, paths.terrain_region)?;
+                let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
                 let materials = Arc::new(crate::materials::BrickMaterials::load(
                     &paths.brick_materials,
                 )?);
-                let mirror = bri_sim::prediction::CollisionMirror::new(
+                let mut mirror = bri_sim::prediction::CollisionMirror::new(
                     definitions.clone(),
                     native_map.colliders.clone(),
                     native_map.waters.clone(),
                 );
+                mirror.attach_terrain(native_map.terrain.clone())?;
                 let mut building =
                     crate::building::Building::new(definitions, native_map.colliders)?;
+                building.attach_terrain(native_map.terrain);
                 building.set_catalog(selected)?;
                 if let Some(print) = &catalog.default_print {
                     building.set_default_prints(
@@ -1260,7 +1261,8 @@ impl App {
                     foliage,
                     map_id: map,
                     waters: native_map.waters,
-                    scene,
+                    scene: visual.scene,
+                    terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                     meshes,
                     materials,
                     building,
@@ -1745,6 +1747,7 @@ impl App {
             self.foliage.set_map(prepared.foliage);
             self.weather.set_map(&prepared.map_id, prepared.waters)?;
             self.cpu_scene = Some(prepared.scene);
+            self.cpu_terrain = prepared.terrain;
             self.meshes = Some(prepared.meshes);
             self.materials = Some(prepared.materials);
             self.building = Some(prepared.building);
@@ -1754,6 +1757,7 @@ impl App {
                 .unwrap()
                 .set_tool_catalog(self.item_ui.catalog())?;
             self.gpu_scene = None;
+            self.gpu_terrain.clear();
         }
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
@@ -3007,6 +3011,7 @@ impl PlatformApp for App {
             limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
         )?);
         self.gpu_scene = None;
+        self.gpu_terrain.clear();
         self.gpu_world = None;
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
@@ -3026,6 +3031,7 @@ impl PlatformApp for App {
         self.weather_renderer = None;
         self.effects_renderer = None;
         self.gpu_scene = None;
+        self.gpu_terrain.clear();
         self.gpu_world = None;
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
@@ -3075,6 +3081,19 @@ impl PlatformApp for App {
             .context("Scene GPU not initialized")?;
         if self.gpu_scene.is_none() {
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
+            self.gpu_terrain = self
+                .cpu_terrain
+                .iter()
+                .map(|terrain| {
+                    bri_render::terrain_scene::GpuTerrain::upload(
+                        renderer,
+                        frame.device,
+                        frame.queue,
+                        terrain.clone(),
+                        FAR_PLANE,
+                    )
+                })
+                .collect::<Result<_>>()?;
         }
         if self.gpu_world.is_none()
             && let Some(world) = &self.cpu_world
@@ -3162,7 +3181,7 @@ impl PlatformApp for App {
             frame.size.0 as f32 / frame.size.1 as f32,
             self.controls.fov(90.0).to_radians(),
             0.05,
-            4000.0,
+            FAR_PLANE,
         );
         camera.apply_environment(scene);
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
@@ -3181,8 +3200,11 @@ impl PlatformApp for App {
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
-            (4000., 4001.)
+            (FAR_PLANE, FAR_PLANE + 1.)
         };
+        for terrain in &mut self.gpu_terrain {
+            terrain.update(frame.queue, eye, fog_end.max(1.))?;
+        }
         self.foliage.prepare(
             frame,
             &bri_foliage::Camera {
@@ -3250,6 +3272,7 @@ impl PlatformApp for App {
         }
         let mut item_draws = self.world_items.draws();
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
+        item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         renderer.render_with_instances(
             frame.encoder,
             frame.target,

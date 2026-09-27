@@ -62,14 +62,12 @@ pub struct ContentConfig {
     pub weapons: String,
     pub item_presentation: String,
     pub vehicles: String,
-    /// Finite collision region, in native terrain cells. Streaming is pending.
-    pub terrain_region: [i32; 4],
 }
 impl Default for ContentConfig {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            map_bundle: "map-bundle-014".into(),
+            map_bundle: "map-bundle-015".into(),
             brick_catalog: "stock-catalog-004".into(),
             geometry: "maps-pass-003".into(),
             effects: "effects-pass-004".into(),
@@ -84,7 +82,6 @@ impl Default for ContentConfig {
             weapons: "weapons-pack-003".into(),
             item_presentation: "item-presentation-pack-003".into(),
             vehicles: "vehicles-pack-007".into(),
-            terrain_region: [-64, -64, 384, 384],
         }
     }
 }
@@ -109,7 +106,6 @@ pub struct ContentPaths {
     pub weapons: PathBuf,
     pub item_presentation: PathBuf,
     pub vehicles: PathBuf,
-    pub terrain_region: [i32; 4],
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,6 +128,8 @@ pub struct LoadedMap {
     /// Shared-shape copies for the client-side query mirror; server authority
     /// remains in simulation. No original assets are read by either consumer.
     pub query_colliders: Vec<rapier3d::prelude::ColliderBuilder>,
+    /// Exact terrain placements for client collision streaming and queries.
+    pub terrain: Vec<std::sync::Arc<bri_content::terrain_field::TerrainField>>,
 }
 
 pub struct ClientContent {
@@ -279,14 +277,6 @@ impl ContentPaths {
             "Unsupported client content config schema {}",
             config.schema_version
         );
-        let [x0, z0, x1, z1] = config.terrain_region;
-        ensure!(
-            x1 > x0
-                && z1 > z0
-                && i64::from(x1) - i64::from(x0) <= 1024
-                && i64::from(z1) - i64::from(z0) <= 1024,
-            "Invalid terrain collision region"
-        );
         let root = root
             .canonicalize()
             .context("Content root is missing; supply the generated content directory")?;
@@ -312,7 +302,6 @@ impl ContentPaths {
             item_presentation: package(&config.item_presentation)?,
             vehicles: package(&config.vehicles)?,
             root,
-            terrain_region: config.terrain_region,
         })
     }
 
@@ -362,8 +351,8 @@ impl ContentPaths {
         let unresolved_items = weapons.resolve_world_items(&mut world)?;
         let definitions = Definitions::load(&self.brick_catalog, &self.geometry)
             .context("Loading native brick definitions")?;
-        let native = NativeMap::load(&self.map_bundle, map_id, self.terrain_region)
-            .context("Loading native map collision")?;
+        let native =
+            NativeMap::load(&self.map_bundle, map_id).context("Loading native map collision")?;
         let spawn = native
             .scene
             .nodes
@@ -380,8 +369,11 @@ impl ContentPaths {
             "Native map has an invalid spawn"
         );
         let query_colliders = native.colliders.clone();
+        let terrain = native.terrain.clone();
+        let anchors = native.spawn_anchors()?;
         let mut simulation = Simulation::new(world, definitions, native.colliders)
             .context("Building native simulation")?;
+        simulation.attach_terrain(native.terrain, anchors)?;
         simulation.waters = native.waters;
         let spawn_points =
             bri_sim::spawn::candidates(&simulation.physics, &native.scene, &Default::default())?;
@@ -399,6 +391,7 @@ impl ContentPaths {
             spawn_points,
             pending_objects,
             query_colliders,
+            terrain,
         })
     }
 }
@@ -433,7 +426,7 @@ impl ClientContent {
             "Native brick materials include verified default print packages; complete historical vanilla inventory and exact material/color fidelity remain acceptance work.".into(),
             "Native item choices are loaded; complete item presentation and pickup/respawn fidelity still require gameplay verification.".into(),
             "Reference worlds include installed sample/community builds; their index is not vanilla certification.".into(),
-            "Terrain/water rendering covers finite regions; streaming/LOD, underwater presentation and dynamic map-object behavior remain pending.".into(),
+            "Terrain streams around the camera and bodies at full detail; terrain LOD, detail/bump texturing, underwater presentation and dynamic map-object behavior remain pending.".into(),
         ];
         for entry in &bundle.maps {
             if !LOADABLE_MAPS.contains(&entry.id.as_str()) {
@@ -1015,7 +1008,7 @@ mod tests {
     }
     #[test]
     fn invalid_config_fails_before_filesystem_loading() {
-        let mut c = ContentConfig {
+        let c = ContentConfig {
             schema_version: 99,
             ..Default::default()
         };
@@ -1024,14 +1017,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("schema")
-        );
-        c.schema_version = 1;
-        c.terrain_region = [0, 0, i32::MAX, 1];
-        assert!(
-            ContentPaths::resolve(Path::new("nonexistent"), &c)
-                .unwrap_err()
-                .to_string()
-                .contains("region")
         );
     }
     #[test]

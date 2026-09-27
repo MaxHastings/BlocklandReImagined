@@ -73,12 +73,14 @@ async fn main() -> Result<()> {
     let tool_summary = serde_json::json!({"items":tools.items.len(),"prints":tools.prints.len(),"printable_definitions":tools.brick_print_aspects.len(),"lights":tools.lights.len(),"emitters":tools.emitters.len(),"default_print":tools.default_print});
     let mut world = bri_world::persistence::load_startup(&paths[2])?;
     let unresolved_items = weapons.resolve_world_items(&mut world)?;
-    let map = NativeMap::load(&paths[3], &world.map_id, [-64, -64, 384, 384])?;
+    let map = NativeMap::load(&paths[3], &world.map_id)?;
+    let anchors = map.spawn_anchors()?;
     let mut simulation = Simulation::new(
         world,
         Definitions::load(&paths[0], &paths[1])?,
         map.colliders,
     )?;
+    simulation.attach_terrain(map.terrain, anchors)?;
     simulation.waters = map.waters;
     let spawn_points =
         bri_sim::spawn::candidates(&simulation.physics, &map.scene, &Default::default())?;
@@ -112,7 +114,7 @@ async fn main() -> Result<()> {
     std::fs::write(
         paths[13].join("host.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"schema_version":1,"address":server.address.to_string(),"content_id":content_id,"content_identity_version":content_identity::CONTENT_IDENTITY_VERSION,"tool_catalog":tool_summary,"initial_static_items":initial_static_items,"unresolved_item_references":unresolved_items,"certificate":"server-cert.der","pending_map_objects":map.pending_objects,"terrain_region":[-64,-64,384,384]}),
+            &serde_json::json!({"schema_version":1,"address":server.address.to_string(),"content_id":content_id,"content_identity_version":content_identity::CONTENT_IDENTITY_VERSION,"tool_catalog":tool_summary,"initial_static_items":initial_static_items,"unresolved_item_references":unresolved_items,"certificate":"server-cert.der","pending_map_objects":map.pending_objects}),
         )?,
     )?;
     println!(

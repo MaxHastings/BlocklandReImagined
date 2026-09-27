@@ -37,7 +37,7 @@ pub fn camera(position: Vec3, target: Vec3) -> Camera {
     }
 }
 pub fn original_world() -> PhysicsWorld {
-    let path = root().join("content/map-bundle-014");
+    let path = root().join("content/map-bundle-015");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path.join("bundle.json")).unwrap()).unwrap();
     let scene_path = std::fs::read_dir(&path)
@@ -52,24 +52,33 @@ pub fn original_world() -> PhysicsWorld {
     let scene: bri_content::scene::Scene =
         serde_json::from_slice(&std::fs::read(scene_path).unwrap()).unwrap();
     let mut w = bri_physics::new_world();
+    let instances = serde_json::from_value(bundle["terrains"][scene.id.as_str()].clone()).unwrap();
+    let fields = bri_content::terrain_field::map_fields(&scene, instances, |id| {
+        Ok(serde_json::from_slice(&std::fs::read(
+            path.join(bundle["assets"][id].as_str().unwrap()),
+        )?)?)
+    })
+    .unwrap();
+    for field in fields {
+        let mesh = field.mesh([64, 64, 128, 128]).unwrap();
+        let c = ColliderBuilder::trimesh_with_flags(
+            mesh.positions
+                .iter()
+                .map(|p| Vector::from_array(*p))
+                .collect(),
+            mesh.triangles,
+            TriMeshFlags::FIX_INTERNAL_EDGES,
+        )
+        .unwrap()
+        .user_data(1);
+        w.insert_collider(c, None);
+    }
     for n in scene.nodes {
         let t = Mat4::from_cols_array(&n.transform);
         if let Some(asset) = n.asset {
             let data = std::fs::read(path.join(bundle["assets"][asset.as_str()].as_str().unwrap()))
                 .unwrap();
             match n.kind {
-                bri_content::scene::Kind::Terrain => {
-                    let terrain: bri_content::Terrain = serde_json::from_slice(&data).unwrap();
-                    let c = bri_physics::content::terrain_collider(
-                        &terrain,
-                        16.,
-                        [64, 64, 128, 128],
-                        t,
-                    )
-                    .unwrap()
-                    .user_data(1);
-                    w.insert_collider(c, None);
-                }
                 bri_content::scene::Kind::Interior => {
                     let interior: bri_content::interior::Interior =
                         serde_json::from_slice(&data).unwrap();
