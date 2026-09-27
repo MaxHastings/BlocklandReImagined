@@ -53,17 +53,21 @@ impl Session {
         ownership: bool,
     ) -> Result<usize> {
         ensure!(self.loading.is_none(), "There is another load in progress.");
-        let plan = bri_world::build::LoadPlan::prepare(
+        let mut plan = bri_world::build::LoadPlan::prepare(
             self.simulation.state(),
             build,
             owner,
             ownership,
-            self.ownership_scope.as_deref(),
             self.next_owner,
         )?;
         self.simulation.preflight_load(&plan)?;
         self.item_spawners
             .validate_append(self.simulation.state(), plan.bricks())?;
+        // The saved builders' numbers are claimed now; their bricks follow
+        // in batches.
+        for (number, record) in plan.take_owners() {
+            self.simulation.claim_owner(number, record)?;
+        }
         self.next_owner = plan.next_owner;
         let (palette, bricks) = plan.into_parts();
         let total = bricks.len();

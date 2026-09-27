@@ -96,6 +96,21 @@ impl Authority {
     pub fn state(&self) -> &World {
         &self.world
     }
+    /// Record who an owner number belongs to, or refresh their last known
+    /// name. A principal keeps one number per world.
+    pub fn claim_owner(&mut self, owner: OwnerId, record: OwnerRecord) -> Result<()> {
+        record.validate()?;
+        ensure!(owner != 0, "Owner zero is world-owned");
+        match self.world.owner_of(&record.principal) {
+            Some(existing) => ensure!(existing == owner, "Principal already owns another number"),
+            None => ensure!(
+                !self.world.owners.contains_key(&owner) && self.world.owners.len() < MAX_OWNERS,
+                "Owner number is taken or the owner table is full"
+            ),
+        }
+        self.world.owners.insert(owner, record);
+        Ok(())
+    }
     /// Commit only a plan validated against the same world revision. Physics
     /// adapters must preflight all geometry before this infallible publication.
     pub fn load_build(
@@ -116,7 +131,16 @@ impl Authority {
             .revision
             .checked_add(1)
             .context("Revision exhausted")?;
+        ensure!(
+            self.world.owners.len() + plan.owners.len() <= MAX_OWNERS
+                && plan.owners.iter().all(|(owner, record)| {
+                    !self.world.owners.contains_key(owner)
+                        && self.world.owner_of(&record.principal).is_none()
+                }),
+            "Loaded owners conflict with this world's owners"
+        );
         let ids = plan.bricks.keys().copied().collect();
+        self.world.owners.extend(plan.owners);
         self.world.bricks.extend(plan.bricks);
         self.world.palette = plan.palette;
         self.world.next_brick_id = plan.next_id;

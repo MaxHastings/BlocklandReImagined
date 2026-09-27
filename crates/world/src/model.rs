@@ -304,8 +304,55 @@ pub struct World {
     pub bricks: Bricks,
     pub source_sha256: Option<String>,
     pub source_encoding: Option<String>,
+    /// Who each brick owner number is: the durable principal of the player
+    /// who built with it. Owner numbers are world-scoped; a returning player
+    /// gets their number back from this table. Owners with no entry are
+    /// unclaimed (imported or anonymous builds).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub owners: BTreeMap<OwnerId, OwnerRecord>,
+}
+
+pub const MAX_OWNERS: usize = 65_536;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerRecord {
+    /// The player's public key, 64 lowercase hex characters.
+    pub principal: String,
+    /// Last name the player joined with, for display while they are away.
+    pub name: String,
+}
+impl OwnerRecord {
+    pub fn new(principal: [u8; 32], name: String) -> Self {
+        Self {
+            principal: principal.iter().map(|b| format!("{b:02x}")).collect(),
+            name,
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.principal.len() == 64
+                && self
+                    .principal
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+            "Invalid owner principal"
+        );
+        ensure!(
+            self.name.len() <= 48 && !self.name.chars().any(char::is_control),
+            "Invalid owner name"
+        );
+        Ok(())
+    }
 }
 impl World {
+    /// The owner number a principal built with in this world.
+    pub fn owner_of(&self, principal: &str) -> Option<OwnerId> {
+        self.owners
+            .iter()
+            .find(|(_, record)| record.principal == principal)
+            .map(|(owner, _)| *owner)
+    }
     pub fn new(name: String, map_id: String, palette: Vec<[f32; 4]>) -> Self {
         Self {
             schema_version: WORLD_SCHEMA,
@@ -319,6 +366,7 @@ impl World {
             bricks: Bricks::new(),
             source_sha256: None,
             source_encoding: None,
+            owners: BTreeMap::new(),
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -357,6 +405,18 @@ impl World {
         );
         for b in self.bricks.values() {
             b.validate(self.palette.len())?;
+        }
+        ensure!(
+            self.owners.len() <= MAX_OWNERS && !self.owners.contains_key(&0),
+            "Invalid owner table"
+        );
+        let mut principals = std::collections::BTreeSet::new();
+        for record in self.owners.values() {
+            record.validate()?;
+            ensure!(
+                principals.insert(&record.principal),
+                "A principal owns two owner numbers"
+            );
         }
         Ok(())
     }
