@@ -272,6 +272,10 @@ pub struct App {
     pending_actions: BTreeMap<RequestId, PendingAction>,
     tool_ui: crate::tool_ui::ToolUi,
     dialog_epoch: u64,
+    /// `dialog_epoch` when the latest trigger click was sent. A wrench or
+    /// printer hit notice opens its dialog only if no tool switch, cancel or
+    /// close has happened since, so a cancelled click never reopens late.
+    trigger_epoch: Option<u64>,
     query_source: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// The replica log and revision `query_source` came from.
     query_log: Option<(Arc<network::WorldLog>, u64)>,
@@ -854,6 +858,7 @@ impl App {
             pending_actions: BTreeMap::new(),
             tool_ui,
             dialog_epoch: 0,
+            trigger_epoch: None,
             query_source: None,
             query_log: None,
             ghost_gpu: None,
@@ -1772,6 +1777,9 @@ impl App {
             if matches!(command, Command::Tool(ToolAction::Inspect { .. })) {
                 self.invalidate_tool_dialogs();
             }
+            if matches!(command, Command::WeaponTrigger { down: true }) {
+                self.trigger_epoch = Some(self.dialog_epoch);
+            }
             if let Err(error) = self.building.as_mut().unwrap().command_sent(id, &command) {
                 for update in self
                     .building
@@ -2081,8 +2089,11 @@ impl App {
                     mode,
                 }) => {
                     // A wrench/printer hit opens its dialog only over plain
-                    // play, never over a newer modal or while typing.
-                    if self.ui.stack() != [ScreenId::Play] {
+                    // play, never over a newer modal or while typing, and
+                    // only for a click nothing has cancelled since.
+                    if self.ui.stack() != [ScreenId::Play]
+                        || self.trigger_epoch != Some(self.dialog_epoch)
+                    {
                         continue;
                     }
                     let Some(view) = a.view.as_ref() else {

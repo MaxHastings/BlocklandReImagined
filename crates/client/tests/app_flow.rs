@@ -50,7 +50,9 @@ fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> b
         }
         ensure!(
             start.elapsed() < timeout,
-            "Timed out waiting for {what}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+            "Timed out waiting for {what}; screens {:?}; tools {:?}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+            app.ui.stack(),
+            app.network_view().and_then(|v| v.tools.get(&v.owner).cloned()),
             app.ui.core.conn,
             app.network_view().map(|v| v.world.bricks.len()),
             app.pending_requests(),
