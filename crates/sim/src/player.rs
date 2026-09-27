@@ -255,6 +255,31 @@ impl Player {
             contacts: BTreeSet::new(),
         })
     }
+    /// Mirror an existing authoritative player (client prediction). Unlike
+    /// `spawn`, the server already validated this position.
+    pub fn attach(
+        physics: &mut PhysicsWorld,
+        state: PlayerState,
+        tuning: PlayerTuning,
+    ) -> Result<Self> {
+        tuning.validate()?;
+        ensure!(state.owner > 0, "Invalid player owner");
+        let pose = tuning.pose(Vec3::from(state.feet), state.crouched);
+        let (body, collider) = physics.insert(
+            RigidBodyBuilder::kinematic_position_based().pose(pose),
+            ColliderBuilder::new(tuning.shape(state.crouched))
+                .user_data((1_u128 << 64) | u128::from(state.owner)),
+        );
+        let mut player = Self {
+            state: state.clone(),
+            tuning,
+            body,
+            collider,
+            contacts: BTreeSet::new(),
+        };
+        player.restore(physics, state)?;
+        Ok(player)
+    }
     pub fn state(&self) -> &PlayerState {
         &self.state
     }
@@ -303,6 +328,15 @@ impl Player {
     }
     pub fn eye(&self) -> Vec3 {
         self.state.eye(&self.tuning)
+    }
+    /// A server tick in which this player's motor does not run (waiting for
+    /// its next input). The kinematic body still receives its target pose so
+    /// the physics step treats it like any other active kinematic body.
+    pub fn hold(&self, physics: &mut PhysicsWorld) {
+        physics.bodies[self.body].set_next_kinematic_position(
+            self.tuning
+                .pose(Vec3::from(self.state.feet), self.state.crouched),
+        );
     }
     pub fn despawn(self, physics: &mut PhysicsWorld) {
         physics.remove_body(self.body);

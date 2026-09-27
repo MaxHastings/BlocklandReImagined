@@ -11,7 +11,7 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::BTreeMap;
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
-const MAP_TAG: u128 = u128::MAX;
+pub const MAP_TAG: u128 = u128::MAX;
 pub struct Builder<'a> {
     pub actor: &'a Actor,
     pub position: Vec3,
@@ -40,7 +40,8 @@ fn pose(brick: &Brick) -> Pose {
         ),
     )
 }
-fn collider(brick: &Brick, definition: &Definition, id: BrickId) -> ColliderBuilder {
+/// Brick collision exactly as the authority inserts it; client prediction reuses it.
+pub fn brick_collider(brick: &Brick, definition: &Definition, id: BrickId) -> ColliderBuilder {
     ColliderBuilder::new(definition.shape.clone())
         .position(pose(brick))
         .sensor(!brick.colliding)
@@ -64,7 +65,7 @@ impl Simulation {
             index.insert(*id, bounds);
             handles.insert(
                 *id,
-                physics.insert_collider(collider(brick, definition, *id), None),
+                physics.insert_collider(brick_collider(brick, definition, *id), None),
             );
         }
         physics.detect_collisions(&(), &());
@@ -97,7 +98,7 @@ impl Simulation {
             prepared.push((
                 *id,
                 Bounds::new(brick, &definition.mesh)?,
-                collider(brick, definition, *id),
+                brick_collider(brick, definition, *id),
             ));
         }
         let ids = self.authority.load_build(actor, plan)?;
@@ -122,7 +123,7 @@ impl Simulation {
         self.handles.insert(
             id,
             self.physics
-                .insert_collider(collider(brick, definition, id), None),
+                .insert_collider(brick_collider(brick, definition, id), None),
         );
         self.index.insert(id, bounds);
         self.physics.detect_collisions(&(), &());

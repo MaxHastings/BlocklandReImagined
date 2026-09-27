@@ -1,7 +1,7 @@
 use crate::{admin_store::AdminStore, codec, protocol::*};
 use anyhow::{Context, Result, ensure};
 use bri_admin::Principal;
-use bri_sim::session::{Command, Session};
+use bri_sim::session::Session;
 use bri_world::OwnerId;
 use glam::Vec3;
 use quinn::{Connection, Endpoint};
@@ -258,11 +258,11 @@ async fn connection_task(
     let datagrams = async {
         loop {
             let bytes = connection.read_datagram().await?;
-            if bytes.len() > 512 {
+            if bytes.len() > MAX_DATAGRAM {
                 continue;
             }
             if let Ok(movement) = serde_json::from_slice::<Movement>(&bytes)
-                && movement.version == VERSION
+                && movement.validate().is_ok()
             {
                 events
                     .send(Event::Move {
@@ -389,8 +389,7 @@ async fn run(
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;
                     let old_admin_revision=session.admin_revision();
-                    let is_move=matches!(request.command,Command::Move(_));
-                    let result=if is_move{Err(anyhow::anyhow!("Movement requires the datagram channel"))}else{session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")})};
+                    let result=session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")});
                     if result.is_err(){rejected+=1;}
                     let bytes=match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|e.to_string())}) {Ok(bytes)=>bytes,Err(error)=>codec::encode(&Message::Reply{sequence:request.sequence,result:Err(format!("Could not transfer reply: {error}"))})?};
                     let output=peer.out.clone();
@@ -408,13 +407,16 @@ async fn run(
                     }
                 }
             },
-            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=session.movement(owner,movement.sequence,movement.input);}},
+            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}}},
         }},
         _=ticker.tick()=>{
             let now=std::time::Instant::now();
             let steps=clock.advance(now.duration_since(previous));previous=now;
             for _ in 0..steps {
             session.step()?;let tick=session.simulation().state().tick;
+            if tick.is_multiple_of(POSE_INTERVAL) {
+                for pose in poses(&session){let bytes=serde_json::to_vec(&pose)?;for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}
+            }
             if tick.is_multiple_of(6) {
                 let mut bricks=BTreeMap::new();for id in session.take_dirty(){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
                 let current_avatars=session.avatars();let changed_avatars=if avatars!=current_avatars{avatars=current_avatars;Some(avatars.clone())}else{None};
@@ -427,7 +429,6 @@ async fn run(
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
                 let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues}))?);cursor=next;
                 for peer in peers.values(){if peer.out.try_send(bytes.clone()).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}
-                for pose in poses(&session){let bytes=serde_json::to_vec(&pose)?;for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}
             }
             }
         },

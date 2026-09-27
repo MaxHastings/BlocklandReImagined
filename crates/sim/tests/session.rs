@@ -443,8 +443,8 @@ fn two_players_build_edit_and_late_join_share_authoritative_state() {
     };
     let a_look = aim(&s, a);
     let b_look = aim(&s, b);
-    s.command(a, 2, Command::Move(a_look)).unwrap();
-    s.command(b, 1, Command::Move(b_look)).unwrap();
+    s.movement(a, 1, a_look).unwrap();
+    s.movement(b, 1, b_look).unwrap();
     s.step().unwrap();
     let before = s.simulation().state().clone();
     assert!(
@@ -505,27 +505,30 @@ fn packet_frequency_cannot_advance_time_or_forge_positions_and_authority() {
         s.step().unwrap();
     }
     let before = s.snapshot().players[0].clone();
+    let mut accepted = 0;
     for seq in 1..=240 {
-        s.command(
-            a,
-            seq,
-            Command::Move(MoveInput {
-                forward: 1.0,
-                ..Default::default()
-            }),
-        )
-        .unwrap();
+        if s
+            .movement(
+                a,
+                seq,
+                MoveInput {
+                    forward: 1.0,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+        {
+            accepted += 1;
+        }
     }
+    // Queuing inputs never advances time; a flood exhausts the input budget.
     assert_eq!(s.snapshot().players[0], before);
-    assert!(
-        s.command(a, 241, Command::Move(MoveInput::default()))
-            .is_err()
-    );
+    assert!(accepted <= 48, "{accepted}");
     for _ in 0..180 {
         s.step().unwrap();
     }
     let after = &s.snapshot().players[0];
-    assert!(after.feet[2] < -2.0 && after.feet[2] > -5.0);
+    assert!(after.feet[2] < -1.0 && after.feet[2] > -5.0, "{after:?}");
     assert!(Vec3::from(after.velocity).length() < 0.01);
     assert!(serde_json::from_str::<Command>(r#"{"kind":"move","value":{"forward":0,"right":0,"yaw":0,"pitch":0,"jump":false,"crouch":false,"jet":false,"position":[0,9999,0]}}"#).is_err());
     assert!(serde_json::from_str::<Command>(r#"{"kind":"plant","value":{"definition":"plate","position":[0.5,0.1,-3.25],"quarter_turns":0,"color":0,"owner":1,"administrator":true}}"#).is_err());
@@ -593,22 +596,22 @@ fn converging_players_do_not_pass_through_each_other() {
         s.step().unwrap();
     }
     for tick in 0..120 {
-        s.command(
+        s.movement(
             a,
             tick + 1,
-            Command::Move(MoveInput {
+            MoveInput {
                 right: 1.0,
                 ..Default::default()
-            }),
+            },
         )
         .unwrap();
-        s.command(
+        s.movement(
             b,
             tick + 1,
-            Command::Move(MoveInput {
+            MoveInput {
                 right: -1.0,
                 ..Default::default()
-            }),
+            },
         )
         .unwrap();
         s.step().unwrap();
@@ -641,7 +644,7 @@ fn physical_touch_enters_event_scheduler_once() {
     else {
         panic!()
     };
-    s.command(a, 2, Command::Move(aim(&s, a))).unwrap();
+    s.movement(a, 1, aim(&s, a)).unwrap();
     s.step().unwrap();
     s.equip_tool(a, Some(1)).unwrap();
     s.command(

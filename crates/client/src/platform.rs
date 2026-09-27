@@ -138,7 +138,12 @@ impl Graphics {
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: present_mode(vsync, &caps.present_modes)?,
+            // A saved preference can outlive the GPU/monitor it was applied on.
+            // Interactive changes still reject unsupported modes explicitly.
+            present_mode: present_mode(vsync, &caps.present_modes).unwrap_or_else(|error| {
+                eprintln!("Saved display mode unavailable: {error}; starting with VSync.");
+                wgpu::PresentMode::Fifo
+            }),
             desired_maximum_frame_latency: 2,
             alpha_mode: caps
                 .alpha_modes
@@ -533,7 +538,19 @@ impl ApplicationHandler for Runner {
                         .context("creating the native client window")?,
                 );
                 if self.config.fullscreen {
-                    window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
+                    let target = PhysicalSize::new(self.config.size.0, self.config.size.1);
+                    let video = window.current_monitor().and_then(|monitor| {
+                        monitor
+                            .video_modes()
+                            .filter(|mode| mode.size() == target)
+                            .max_by_key(|mode| mode.refresh_rate_millihertz())
+                    });
+                    if let Some(video) = video {
+                        window.set_fullscreen(Some(Fullscreen::Exclusive(video)));
+                    } else {
+                        self.config.fullscreen = false;
+                        eprintln!("Saved fullscreen resolution is unavailable; starting windowed.");
+                    }
                 }
                 self.focused = window.has_focus();
                 self.window = Some(window);
@@ -741,7 +758,11 @@ impl ApplicationHandler for Runner {
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
-        if now >= self.next_tick {
+        // A focused, visible window renders continuously so simulation ticks
+        // and camera interpolation line up with every presented frame (paced
+        // by VSync). Background windows fall back to a slow timer.
+        let active = self.focused && !self.occluded && self.graphics.is_some();
+        if active || now >= self.next_tick {
             let elapsed = now.saturating_duration_since(self.last_tick);
             self.last_tick = now;
             // Avoid minutes of UI repeat catch-up after suspension/debug pauses.
@@ -766,7 +787,11 @@ impl ApplicationHandler for Runner {
             }
             self.next_tick = now + Duration::from_millis(if self.focused { 16 } else { 50 });
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_tick));
+        event_loop.set_control_flow(if active {
+            ControlFlow::Poll
+        } else {
+            ControlFlow::WaitUntil(self.next_tick)
+        });
     }
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.input(InputEvent::FocusLost);

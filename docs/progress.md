@@ -1563,6 +1563,57 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   not the full vanilla contract. Maxwell's interactive feel/audio/visual review
   remains necessary. Complete vanilla alpha goal remains active.
 
+## 2026-09-27 — post-handoff startup preferences fix
+- Previous goal turn made concrete progress: packaged/verified Windows playtest,
+  committed source and pushed new private MaxHastings/BlocklandReImagined repo.
+  Release tag playtest-2026-09-27-01 points to 3c90a6e. GitHub privacy and matching
+  local/remote main were verified. Original content is local only.
+- Follow-up source audit confirmed device-open failure already falls back to
+  silent audio. Its warning was retained only in memory; startup now emits it
+  into the launcher's stderr log. No audio device was opened for this audit.
+- Found and fixed an actual restart gap: main ignored saved display preferences
+  and always passed 1280x720/windowed/VSync to the platform. Startup now reads
+  native user overrides with case-insensitive keys, validates resolution against
+  default GPU limits, and restores size/fullscreen/VSync. Invalid saved sizes
+  fall back to windowed 1280x720 without modifying the saved file.
+- Startup fullscreen now selects the saved exact-resolution monitor mode like
+  the Options screen does. If that monitor mode is no longer available, launch
+  falls back to windowed and reports why. Unsupported saved no-VSync modes fall
+  back to FIFO at startup; interactive unsupported changes still reject normally.
+- Settings parsing and on-disk persistence regressions pass; client all-target
+  strict Clippy passes. These verify configuration and compilation, not actual
+  monitor switching. Maxwell remains responsible for interactive verification.
+- The delivered folder/ZIP/tag remain unchanged. In that release, display
+  settings take effect in-session but startup still uses the defaults. This
+  follow-up source correction is for the next build, not silently substituted
+  into the already verified package.
+
+## 2026-09-27 — user playtest feedback and full continuation handoff
+- Maxwell reports a crash around crouch/jump, then clarifies it may be jetting;
+  the exact input combination is uncertain. He also reports movement/jetting
+  feel is off. These reopen core-playtest blockers; packaging success was not
+  interactive acceptance. Do not claim his actual crash is proven fixed yet.
+- Inspected release logs are empty. Root reproduced a launcher defect under
+  Windows PowerShell with a console-only fixture: redirected native stderr plus
+  ErrorActionPreference Stop swallowed the error and replaced native exit7 with1.
+  Source launcher now uses direct process stream redirection. New
+  Test-PlaytestLauncher.ps1 passes both exit0-with-stderr and exit7, preserving
+  stdout/stderr and exit status. No game/window/audio was used for this test.
+- Rig metadata identifies a concrete animation ordering problem: additive jump
+  priority8 could precede absolute armReady14/crouch20; the sampler rejects this.
+  Local avatar assembler now orders absolute base layers before additive layers.
+  Initial CPU movement regression passed after the change. Luna is completing
+  the expanded original-content GPU/held-tool/jet transition test checkpoint.
+  This candidate and corrected launcher are NOT in the shipped 01 package.
+- Maxwell requested a full handoff. docs/ALPHA-HANDOFF.md captures product intent,
+  original expanded vanilla scope versus early playtest scope, actual released
+  source/package identities, existing systems/evidence, terrain handoff limits,
+  live fixes/feedback, commands, next work and ownership boundaries.
+- Maxwell confirms another agent is actively editing movement/prediction in the
+  same workspace. Root did not author or review those concurrent sim changes and
+  leaves them intact. Receiving agent must coordinate before integration/build/
+  commits; prior green tests do not certify the moving working tree.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

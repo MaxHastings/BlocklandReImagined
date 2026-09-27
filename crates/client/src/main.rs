@@ -65,11 +65,15 @@ fn main() -> Result<()> {
     // Executing --run explicitly opts into the normal game window and audio device.
     // Library/headless callers use App::load, which always selects silent output.
     let app = App::load_with_audio(&content, &state, (1280, 720), bri_audio::OutputKind::Device)?;
+    for warning in app.audio_warnings() {
+        eprintln!("{warning}");
+    }
+    let display = bri_client::settings::startup_display(&app.ui.settings());
     platform::run(PlatformConfig {
         title: "Blockland ReImagined — building playtest".into(),
-        size: (1280, 720),
-        fullscreen: false,
-        vsync: true,
+        size: display.size,
+        fullscreen: display.fullscreen,
+        vsync: display.vsync,
         app: Box::new(app),
     })
 }

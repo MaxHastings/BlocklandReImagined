@@ -53,7 +53,7 @@ struct Request {
 }
 pub struct Worker {
     requests: mpsc::Sender<Request>,
-    movement: watch::Sender<MoveInput>,
+    movement: mpsc::Sender<(u64, Vec<MoveInput>)>,
     pub view: watch::Receiver<Option<View>>,
     pub events: mpsc::Receiver<Event>,
     stop: Option<oneshot::Sender<()>>,
@@ -64,7 +64,7 @@ impl Worker {
         F: Future<Output = Result<Connected>> + Send + 'static,
     {
         let (requests, rx) = mpsc::channel(64);
-        let (movement, movement_rx) = watch::channel(MoveInput::default());
+        let (movement, movement_rx) = mpsc::channel(32);
         let (view_tx, view) = watch::channel(None);
         let (events_tx, events) = mpsc::channel(128);
         let (stop, mut stopped) = oneshot::channel();
@@ -111,15 +111,22 @@ impl Worker {
         if let Some(aim) = aim {
             aim.validate()?;
         }
-        ensure!(!matches!(command, Command::Move(_)), "Use movement channel");
         self.requests
             .try_send(Request { id, command, aim })
             .context("Network request queue is busy or disconnected")
     }
-    pub fn movement(&self, input: MoveInput) -> Result<()> {
-        input.validate()?;
-        self.movement.send_replace(input);
-        Ok(())
+    /// Queue a redundant input datagram (newest sequence, recent inputs).
+    /// A full queue drops it; the next datagram repeats these inputs anyway.
+    pub fn movement(&self, newest: u64, inputs: Vec<MoveInput>) -> Result<()> {
+        for input in &inputs {
+            input.validate()?;
+        }
+        match self.movement.try_send((newest, inputs)) {
+            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                anyhow::bail!("Network worker stopped")
+            }
+        }
     }
     pub fn cancel(&mut self) {
         if let Some(stop) = self.stop.take() {
@@ -157,7 +164,7 @@ fn publish(
 async fn run(
     client: &mut Client,
     mut requests: mpsc::Receiver<Request>,
-    movement: watch::Receiver<MoveInput>,
+    mut movement: mpsc::Receiver<(u64, Vec<MoveInput>)>,
     view: &watch::Sender<Option<View>>,
     events: &mpsc::Sender<Event>,
 ) -> Result<()> {
@@ -169,13 +176,16 @@ async fn run(
         .context("UI event queue closed")?;
     let mut pending = BTreeMap::<u64, (u64, std::time::Instant)>::new();
     let mut cue_drops = client.replica.dropped_cues;
-    let mut clock = tokio::time::interval(Duration::from_secs_f64(1.0 / 60.0));
+    let mut clock = tokio::time::interval(Duration::from_millis(250));
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _=clock.tick()=>{
                 ensure!(pending.values().all(|(_,at)|at.elapsed()<Duration::from_secs(10)),"Server request timed out");
-                client.movement(*movement.borrow())?;
+            }
+            batch=movement.recv()=>{
+                let Some((newest,inputs))=batch else { return Ok(()) };
+                client.movement(newest,&inputs)?;
             }
             request=requests.recv()=>{
                 let Some(request)=request else { return Ok(()) };

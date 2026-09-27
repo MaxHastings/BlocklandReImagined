@@ -362,7 +362,7 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
             .is_some_and(|images| images.iter().any(|i| i.state == "Ready"))
     })
     .await?;
-    first.movement(MoveInput::default())?;
+    send_inputs(&mut first, &[MoveInput::default()])?;
     first.command(Command::WeaponTrigger { down: true }).await?;
     first
         .command(Command::WeaponTrigger { down: false })
@@ -1052,13 +1052,16 @@ async fn aim(client: &mut Client) -> Result<()> {
     wait(client, |c| c.replica.poses[&c.owner].player.grounded).await?;
     let p = &client.replica.poses[&client.owner].player;
     let direction = Vec3::new(0.5, 0.1, -3.25) - (Vec3::from(p.feet) + Vec3::Y * 2.4);
-    let sequence = client.movement(MoveInput {
-        yaw: direction.x.atan2(-direction.z),
-        pitch: direction
-            .y
-            .atan2(Vec3::new(direction.x, 0.0, direction.z).length()),
-        ..Default::default()
-    })?;
+    let sequence = send_inputs(
+        client,
+        &[MoveInput {
+            yaw: direction.x.atan2(-direction.z),
+            pitch: direction
+                .y
+                .atan2(Vec3::new(direction.x, 0.0, direction.z).length()),
+            ..Default::default()
+        }],
+    )?;
     wait(client, |c| {
         c.replica.poses[&c.owner].acknowledged_input >= sequence
     })
@@ -1119,10 +1122,13 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
     assert_eq!(events, late.replica.take_cues());
     assert_eq!(events.len(), 1);
     wait(&mut a, |c| c.replica.poses[&c.owner].player.grounded).await?;
-    a.movement(MoveInput {
-        jump: true,
-        ..Default::default()
-    })?;
+    send_inputs(
+        &mut a,
+        &[MoveInput {
+            jump: true,
+            ..Default::default()
+        }],
+    )?;
     wait(&mut b, |c| c.replica.cue_cursor == 3).await?;
     let jumps = b.replica.take_cues();
     assert_eq!(jumps.len(), 1);
@@ -1277,14 +1283,21 @@ async fn wrong_host_certificate_is_rejected_and_idle_input_stops() -> Result<()>
     )
     .await?;
     wait(&mut client, |c| c.replica.poses[&c.owner].player.grounded).await?;
-    let sequence = client.movement(MoveInput {
-        forward: 1.0,
-        ..Default::default()
-    })?;
-    wait(&mut client, |c| {
-        c.replica.poses[&c.owner].acknowledged_input >= sequence
-    })
-    .await?;
+    // Half a second of held forward input, one input per prediction tick,
+    // paced below the server's input burst budget.
+    for _ in 0..2 {
+        let sequence = send_inputs(
+            &mut client,
+            &[MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            }; 30],
+        )?;
+        wait(&mut client, |c| {
+            c.replica.poses[&c.owner].acknowledged_input >= sequence
+        })
+        .await?;
+    }
     let tick = client.replica.poses[&client.owner].tick;
     wait(&mut client, |c| c.replica.poses[&c.owner].tick > tick + 150).await?;
     let player = &client.replica.poses[&client.owner].player;
@@ -1293,6 +1306,17 @@ async fn wrong_host_certificate_is_rejected_and_idle_input_stops() -> Result<()>
     drop(client);
     server.stop().await?;
     Ok(())
+}
+
+/// Send consecutive inputs after the last acknowledged one, in redundant-size
+/// datagrams. Returns the final sequence.
+fn send_inputs(client: &mut Client, inputs: &[MoveInput]) -> Result<u64> {
+    let first = client.replica.poses[&client.owner].acknowledged_input + 1;
+    for (i, chunk) in inputs.chunks(bri_net::protocol::MOVEMENT_REDUNDANCY).enumerate() {
+        let newest = first + (i * bri_net::protocol::MOVEMENT_REDUNDANCY + chunk.len()) as u64 - 1;
+        client.movement(newest, chunk)?;
+    }
+    Ok(first + inputs.len() as u64 - 1)
 }
 
 async fn raw_identity_challenge(
@@ -1487,8 +1511,10 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
     drop(host);
     server.stop().await?;
 
-    let mut expired = DurableState::default();
-    expired.next_ban_id = 2;
+    let mut expired = DurableState {
+        next_ban_id: 2,
+        ..Default::default()
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?.as_secs();
     expired.bans.push(bri_admin::BanRecord {

@@ -45,6 +45,7 @@ struct Prepared {
     meshes: Arc<Meshes>,
     materials: Arc<crate::materials::BrickMaterials>,
     building: crate::building::Building,
+    mirror: bri_sim::prediction::CollisionMirror,
 }
 type WorldRender = (
     Arc<bri_net::protocol::PublicWorld>,
@@ -129,6 +130,7 @@ pub struct App {
     avatar_preview: Option<crate::avatar::Preview>,
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
+    motion: crate::motion::Motion,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
 }
@@ -529,6 +531,7 @@ impl App {
             avatar_preview: None,
             preview_request: None,
             preview_dirty: false,
+            motion: Default::default(),
         })
     }
     fn answer(&mut self, id: RequestId, result: Result<()>) {
@@ -615,6 +618,7 @@ impl App {
         self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.motion.reset();
     }
     fn player_name(&self) -> String {
         let name = self.ui.settings().avatar.lan_name;
@@ -738,6 +742,11 @@ impl App {
                     let materials = Arc::new(crate::materials::BrickMaterials::load(
                         &paths.brick_materials,
                     )?);
+                    let mirror = bri_sim::prediction::CollisionMirror::new(
+                        loaded.simulation.definitions.clone(),
+                        loaded.query_colliders.clone(),
+                        loaded.simulation.waters.clone(),
+                    );
                     let mut building = crate::building::Building::new(
                         loaded.simulation.definitions.clone(),
                         loaded.query_colliders.clone(),
@@ -769,6 +778,7 @@ impl App {
                             meshes,
                             materials,
                             building,
+                            mirror,
                         },
                         identity,
                         catalog,
@@ -965,6 +975,11 @@ impl App {
                 let materials = Arc::new(crate::materials::BrickMaterials::load(
                     &paths.brick_materials,
                 )?);
+                let mirror = bri_sim::prediction::CollisionMirror::new(
+                    definitions.clone(),
+                    native_map.colliders.clone(),
+                    native_map.waters.clone(),
+                );
                 let mut building =
                     crate::building::Building::new(definitions, native_map.colliders)?;
                 building.set_catalog(selected)?;
@@ -991,6 +1006,7 @@ impl App {
                     meshes,
                     materials,
                     building,
+                    mirror,
                 })
             })
             .await??;
@@ -1102,11 +1118,12 @@ impl App {
             return Ok(true);
         }
         let view = self.network_view().context("No active network view")?;
-        let mut player = view
-            .poses
+        let mut player = self
+            .motion
+            .presented()
             .get(&view.owner)
-            .context("No authoritative local pose")?
-            .player
+            .or_else(|| view.poses.get(&view.owner).map(|pose| &pose.player))
+            .context("No local player pose")?
             .clone();
         // The latest local body aim drives ghost input. Free-look only changes
         // the camera; server tool targeting still uses its authoritative pose.
@@ -1406,6 +1423,7 @@ impl App {
             self.meshes = Some(prepared.meshes);
             self.materials = Some(prepared.materials);
             self.building = Some(prepared.building);
+            self.motion.install(prepared.mirror);
             self.building
                 .as_mut()
                 .unwrap()
@@ -1664,7 +1682,18 @@ impl App {
                 },
             );
         }
-        a.worker.movement(self.controls.movement())?;
+        if let Some(view) = &a.view
+            && let Err(error) = self.motion.observe(view)
+        {
+            self.ui.apply_session(
+                a.id,
+                UiUpdate::Connection(ConnectionState::Failed {
+                    reason: format!("Movement prediction: {error:#}"),
+                }),
+            );
+            self.disconnect();
+            return Ok(());
+        }
         self.attempt = Some(a);
         Ok(())
     }
@@ -1763,6 +1792,19 @@ impl PlatformApp for App {
         self.controls.tick(elapsed.as_secs_f32());
         self.poll_network()?;
         self.poll_files();
+        if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
+            if let Some((newest, inputs)) = self.motion.advance(
+                elapsed.as_secs_f32(),
+                self.controls.movement(),
+                bri_net::protocol::MOVEMENT_REDUNDANCY,
+            )? {
+                a.worker.movement(newest, inputs)?;
+            }
+            if let Some(view) = &a.view {
+                self.motion
+                    .present(view, self.controls.yaw, self.controls.pitch);
+            }
+        }
         let weapon_checkpoint = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
             a.view
                 .as_ref()
@@ -1776,10 +1818,11 @@ impl PlatformApp for App {
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref())
-            && let Some(pose) = view.poses.get(&view.owner)
+            && let Some(local) = self.motion.presented().get(&view.owner)
             && let Some(meshes) = &self.meshes
             && let Some(building) = &self.building
         {
+            let presented = self.motion.presented();
             // Sample every body, including the hidden first-person body, once.
             // Visible geometry and attached items consume these same original nodes.
             Self::update_avatar_animation_inputs(
@@ -1794,7 +1837,7 @@ impl PlatformApp for App {
                 .retain(|owner, _| view.poses.contains_key(owner));
             self.avatar_actions
                 .retain(|owner, _| view.poses.contains_key(owner));
-            for (owner, pose) in &view.poses {
+            for (owner, player) in presented {
                 let appearance = view
                     .avatars
                     .get(owner)
@@ -1832,7 +1875,7 @@ impl PlatformApp for App {
                 };
                 self.avatars.get_mut(owner).unwrap().pose_with_animation(
                     &self.avatar_assets,
-                    &pose.player,
+                    player,
                     self.animation_time,
                     &input,
                 )?;
@@ -1846,7 +1889,10 @@ impl PlatformApp for App {
                 pitch.sin(),
                 -yaw.cos() * pitch.cos(),
             );
-            let eye = pose.player.eye(&PlayerTuning::default());
+            let eye = self
+                .motion
+                .local_eye()
+                .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
             let eye = if self.controls.third_person {
                 building.camera_position(eye, forward, 8.)?
             } else {
@@ -1870,7 +1916,7 @@ impl PlatformApp for App {
                 },
                 |owner| {
                     let avatar = self.avatars.get(&owner)?;
-                    let player = &view.poses.get(&owner)?.player;
+                    let player = presented.get(&owner)?;
                     let (yaw, pitch) = if owner == view.owner {
                         (local_view_yaw, local_view_pitch)
                     } else {
@@ -1885,7 +1931,7 @@ impl PlatformApp for App {
                                     .map(|transform| (n, transform))
                             })
                             .collect(),
-                        velocity: Vec3::from_array(view.poses.get(&owner)?.player.velocity),
+                        velocity: Vec3::from_array(player.velocity),
                     })
                 },
             )?;
@@ -1911,7 +1957,7 @@ impl PlatformApp for App {
                     forward,
                     right,
                     up: right.cross(forward).normalize(),
-                    velocity: Vec3::from_array(pose.player.velocity),
+                    velocity: Vec3::from_array(local.velocity),
                 },
                 building,
             )?;
@@ -2227,7 +2273,7 @@ impl PlatformApp for App {
         let Some(view) = &a.view else {
             return Ok(false);
         };
-        let Some(pose) = view.poses.get(&view.owner) else {
+        let Some(local) = self.motion.presented().get(&view.owner) else {
             return Ok(false);
         };
         let renderer = self
@@ -2296,7 +2342,10 @@ impl PlatformApp for App {
             pitch.sin(),
             -yaw.cos() * pitch.cos(),
         );
-        let eye = pose.player.eye(&PlayerTuning::default());
+        let eye = self
+            .motion
+            .local_eye()
+            .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
         let eye = if self.controls.third_person {
             self.building
                 .as_ref()

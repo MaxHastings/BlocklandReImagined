@@ -5,7 +5,13 @@ use bri_sim::{
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
+/// Inputs repeated in every movement datagram so isolated losses cost nothing.
+pub const MOVEMENT_REDUNDANCY: usize = 6;
+/// Unreliable datagram payload bound (fits a conservative QUIC path MTU).
+pub const MAX_DATAGRAM: usize = 1200;
+/// Server ticks between unreliable pose broadcasts (40 Hz at 120 Hz).
+pub const POSE_INTERVAL: u64 = 3;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ResumeToken(pub [u8; 32]);
 impl std::fmt::Debug for ResumeToken {
@@ -100,8 +106,29 @@ pub struct Request {
 #[serde(deny_unknown_fields)]
 pub struct Movement {
     pub version: u32,
-    pub sequence: u64,
-    pub input: MoveInput,
+    /// Sequence of the last input; earlier entries count down from it.
+    pub newest: u64,
+    /// Consecutive prediction-tick inputs, oldest first.
+    pub inputs: Vec<MoveInput>,
+}
+impl Movement {
+    pub fn sequenced(&self) -> impl Iterator<Item = (u64, MoveInput)> + '_ {
+        let first = self.newest + 1 - self.inputs.len() as u64;
+        self.inputs
+            .iter()
+            .enumerate()
+            .map(move |(i, input)| (first + i as u64, *input))
+    }
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.version == VERSION
+                && !self.inputs.is_empty()
+                && self.inputs.len() <= MOVEMENT_REDUNDANCY
+                && self.newest >= self.inputs.len() as u64,
+            "Invalid movement datagram"
+        );
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pose {

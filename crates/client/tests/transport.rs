@@ -59,10 +59,16 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
             .await
             .is_err()
         );
-        worker.movement(MoveInput {
-            forward: 1.0,
-            ..Default::default()
-        })?;
+        worker.movement(
+            6,
+            vec![
+                MoveInput {
+                    forward: 1.0,
+                    ..Default::default()
+                };
+                6
+            ],
+        )?;
         worker.request(101, Command::Chat("one".into()))?;
         worker.request(102, Command::Chat("two".into()))?;
         let mut replies = Vec::new();

@@ -42,7 +42,6 @@ pub struct Client {
     pub resume: ResumeToken,
     pub replica: Replica,
     sequence: u64,
-    move_sequence: u64,
 }
 impl Client {
     /// The certificate is a trusted host pin. Never disable TLS verification.
@@ -199,7 +198,7 @@ impl Client {
         let datagram_connection = connection.clone();
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
-                if bytes.len() <= 1024
+                if bytes.len() <= MAX_DATAGRAM
                     && let Ok(pose) = serde_json::from_slice(&bytes)
                 {
                     let _ = events.try_send(Incoming::Pose(pose));
@@ -218,24 +217,25 @@ impl Client {
             resume,
             replica,
             sequence: 0,
-            move_sequence: 0,
         })
     }
-    pub fn movement(&mut self, input: MoveInput) -> Result<u64> {
-        input.validate()?;
-        let sequence = self
-            .move_sequence
-            .checked_add(1)
-            .context("Input sequence exhausted")?;
-        let bytes = serde_json::to_vec(&Movement {
+    /// Send the most recent prediction inputs, oldest first, ending at `newest`.
+    /// The server ignores inputs it already received, so every datagram can
+    /// repeat recent history and absorb isolated losses.
+    pub fn movement(&mut self, newest: u64, inputs: &[MoveInput]) -> Result<()> {
+        for input in inputs {
+            input.validate()?;
+        }
+        let movement = Movement {
             version: VERSION,
-            sequence,
-            input,
-        })?;
-        ensure!(bytes.len() <= 512, "Movement exceeds datagram budget");
+            newest,
+            inputs: inputs.to_vec(),
+        };
+        movement.validate()?;
+        let bytes = serde_json::to_vec(&movement)?;
+        ensure!(bytes.len() <= MAX_DATAGRAM, "Movement exceeds datagram budget");
         self.connection.send_datagram(bytes.into())?;
-        self.move_sequence = sequence;
-        Ok(sequence)
+        Ok(())
     }
     pub async fn receive(&mut self) -> Result<ClientEvent> {
         match self
@@ -279,10 +279,6 @@ impl Client {
         if let Some(aim) = aim {
             aim.validate()?;
         }
-        ensure!(
-            !matches!(command, Command::Move(_)),
-            "Use movement datagrams"
-        );
         self.sequence = self
             .sequence
             .checked_add(1)

@@ -24,6 +24,15 @@ pub use bri_world::authority::WrenchProperties;
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use tools::{InspectMode, ToolAction, ToolCatalog, UNDO_PLANT_LIMIT};
 
+/// Queued inputs above which the server simulates extra ticks to catch up.
+const INPUT_TARGET: usize = 6;
+/// Bound on buffered inputs (half a second at the 120 Hz input rate).
+const INPUT_QUEUE: usize = 60;
+/// Ticks without any input before the motor runs idle ticks.
+const INPUT_STARVED: u64 = 30;
+/// Token-bucket burst for inputs; it refills at one input per server tick.
+const INPUT_BURST: f32 = 48.0;
+
 /// Aim captured with a reliable action. It affects that action's ray only;
 /// movement and the authoritative player position are never rewound by it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -59,7 +68,6 @@ impl ActionAim {
 )]
 pub enum Command {
     Admin(bri_admin::Request),
-    Move(MoveInput),
     Plant {
         definition: String,
         position: [f32; 3],
@@ -136,12 +144,17 @@ struct Peer {
     actor: Actor,
     name: String,
     principal: Option<bri_admin::Principal>,
+    /// Last consumed input; its look angles persist while the queue is empty.
     input: MoveInput,
+    /// Received but not yet simulated inputs, one per client prediction tick.
+    inputs: VecDeque<(u64, MoveInput)>,
+    /// Highest input sequence consumed by the motor; acknowledged in poses.
+    processed_move: u64,
+    input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
     last_input_tick: u64,
     window_tick: u64,
-    moves: u32,
     actions: u32,
     chats: u32,
     inspection: Option<tools::Inspection>,
@@ -318,11 +331,13 @@ impl Session {
                 name: name.clone(),
                 principal,
                 input: MoveInput::default(),
+                inputs: VecDeque::new(),
+                processed_move: 0,
+                input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
                 window_tick: self.simulation.state().tick,
-                moves: 0,
                 actions: 0,
                 chats: 0,
                 inspection: None,
@@ -404,11 +419,13 @@ impl Session {
                 name: name.clone(),
                 principal,
                 input: MoveInput::default(),
+                inputs: VecDeque::new(),
+                processed_move: 0,
+                input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
                 window_tick: self.simulation.state().tick,
-                moves: 0,
                 actions: 0,
                 chats: 0,
                 inspection: None,
@@ -418,28 +435,29 @@ impl Session {
         self.departed.remove(&owner);
         Ok(())
     }
+    /// Queue one client input. Each input drives exactly one motor tick, so the
+    /// client's prediction replays the same sequence the server simulates.
+    /// Redundant copies of already-received inputs are ignored.
     pub fn movement(&mut self, owner: OwnerId, sequence: u64, input: MoveInput) -> Result<()> {
         input.validate()?;
-        let tick = self.simulation.state().tick;
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-        ensure!(sequence > peer.last_move_sequence, "Stale movement");
-        if tick - peer.window_tick >= 120 {
-            peer.window_tick = tick;
-            peer.moves = 0;
-            peer.actions = 0;
-            peer.chats = 0;
+        if sequence <= peer.last_move_sequence {
+            return Ok(());
         }
-        peer.moves = peer.moves.saturating_add(1);
-        ensure!(peer.moves <= 240, "Movement command rate exceeded");
+        ensure!(peer.input_budget >= 1.0, "Movement input rate exceeded");
+        peer.input_budget -= 1.0;
+        if peer.inputs.len() == INPUT_QUEUE {
+            peer.inputs.pop_front();
+        }
+        peer.inputs.push_back((sequence, input));
         peer.last_move_sequence = sequence;
-        peer.input = input;
-        peer.last_input_tick = tick;
         Ok(())
     }
+    /// Authoritative player states with the last input sequence each consumed.
     pub fn motion_states(&self) -> Vec<(PlayerState, u64)> {
         self.peers
             .values()
-            .map(|p| (p.player.state().clone(), p.last_move_sequence))
+            .map(|p| (p.player.state().clone(), p.processed_move))
             .collect()
     }
     pub fn names(&self) -> BTreeMap<OwnerId, String> {
@@ -497,7 +515,6 @@ impl Session {
                 peer.last_sequence = sequence;
                 if tick - peer.window_tick >= 120 {
                     peer.window_tick = tick;
-                    peer.moves = 0;
                     peer.actions = 0;
                     peer.chats = 0;
                 }
@@ -518,17 +535,11 @@ impl Session {
         peer.last_sequence = sequence;
         if tick - peer.window_tick >= 120 {
             peer.window_tick = tick;
-            peer.moves = 0;
             peer.actions = 0;
             peer.chats = 0;
         }
-        if matches!(command, Command::Move(_)) {
-            peer.moves = peer.moves.saturating_add(1);
-            ensure!(peer.moves <= 240, "Movement command rate exceeded");
-        } else {
-            peer.actions = peer.actions.saturating_add(1);
-            ensure!(peer.actions <= 60, "Action command rate exceeded");
-        }
+        peer.actions = peer.actions.saturating_add(1);
+        ensure!(peer.actions <= 60, "Action command rate exceeded");
         if let Some(aim) = aim {
             aim.validate()?;
         }
@@ -600,12 +611,6 @@ impl Session {
                     .context("Avatar catalog is not installed")?
                     .resolve(&appearance)?;
                 peer.avatar = Some(appearance);
-                Ok(Reply::Accepted)
-            }
-            Command::Move(input) => {
-                input.validate()?;
-                peer.input = input;
-                peer.last_input_tick = tick;
                 Ok(Reply::Accepted)
             }
             Command::Plant {
@@ -719,28 +724,47 @@ impl Session {
         let tick = self.simulation.state().tick;
         let mut touches = Vec::new();
         for peer in self.peers.values_mut() {
-            // Lost connections stop driving the player after half a second.
-            let input = if tick - peer.last_input_tick > 60 {
-                MoveInput {
-                    yaw: peer.input.yaw,
-                    pitch: peer.input.pitch,
-                    ..Default::default()
-                }
+            peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
+            // Normally consume one queued input. A backlog (client clock ahead,
+            // or a burst after a network stall) is drained a little faster. An
+            // empty queue holds the player briefly to absorb jitter; a starved
+            // connection falls back to idle ticks so it cannot hang mid-air.
+            let runs = if peer.inputs.len() > INPUT_TARGET {
+                3
+            } else if !peer.inputs.is_empty() || tick - peer.last_input_tick > INPUT_STARVED {
+                1
             } else {
-                peer.input
+                0
             };
-            let motion = peer.player.step_in_water(
-                &mut self.simulation.physics,
-                input,
-                &self.simulation.waters,
-            )?;
-            touches.extend(motion.touched);
-            if motion.jumped {
-                self.cues.emit(
-                    tick,
-                    crate::presentation::CueKind::Jump,
-                    peer.player.state().feet,
-                );
+            if runs == 0 {
+                peer.player.hold(&mut self.simulation.physics);
+            }
+            for _ in 0..runs {
+                let input = if let Some((sequence, input)) = peer.inputs.pop_front() {
+                    peer.processed_move = sequence;
+                    peer.last_input_tick = tick;
+                    peer.input = input;
+                    input
+                } else {
+                    MoveInput {
+                        yaw: peer.input.yaw,
+                        pitch: peer.input.pitch,
+                        ..Default::default()
+                    }
+                };
+                let motion = peer.player.step_in_water(
+                    &mut self.simulation.physics,
+                    input,
+                    &self.simulation.waters,
+                )?;
+                touches.extend(motion.touched);
+                if motion.jumped {
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::Jump,
+                        peer.player.state().feet,
+                    );
+                }
             }
         }
         for id in touches {

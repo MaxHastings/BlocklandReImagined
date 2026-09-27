@@ -391,9 +391,11 @@ impl AvatarMesh {
                 weight: 1.0,
             });
         }
-        // Absolute clips apply in increasing native priority. That lets the
-        // highest-priority sequence win only the channels it authored.
-        layers.sort_by_key(|layer| layer.animation.priority);
+        // Absolute clips establish the base pose before additive deltas. The
+        // original jump clip is additive even though other locomotion clips
+        // are absolute; priority alone would put it before armReady/crouch and
+        // make the sampler reject an ordinary jump while holding a tool.
+        layers.sort_by_key(|layer| (layer.animation.additive, layer.animation.priority));
         if self.outfit.head_up {
             let clip = assets
                 .rig

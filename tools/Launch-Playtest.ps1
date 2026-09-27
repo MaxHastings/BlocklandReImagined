@@ -12,8 +12,11 @@ $executable = Join-Path $packageRoot 'bri-client.exe'
 try {
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Missing packaged client: $executable" }
     if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'content/client-content.json') -PathType Leaf)) { throw 'The package has no normalized content/client-content.json.' }
-    & $executable --run '.\content' '.\user-state' 1> $stdout 2> $stderr
-    $exitCode = $LASTEXITCODE
+    # Windows PowerShell turns redirected native stderr into ErrorRecords. With
+    # Stop that swallowed the client's first error and left an empty error log.
+    # Let the OS redirect streams directly and preserve the real process status.
+    $clientProcess = Start-Process -FilePath $executable -ArgumentList @('--run', '.\content', '.\user-state') -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $exitCode = $clientProcess.ExitCode
     Write-Host "Client exited with code $exitCode. Logs: $stdout and $stderr"
     if ($exitCode -ne 0) { Write-Host 'Check the stderr log for startup or runtime errors.' }
     exit $exitCode
