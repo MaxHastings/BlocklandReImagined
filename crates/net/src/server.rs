@@ -8,7 +8,7 @@ use quinn::{Connection, Endpoint};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 pub struct ServerOptions {
     pub bind: SocketAddr,
@@ -220,23 +220,44 @@ impl Drop for RouterPorts {
         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
     }
 }
+/// One entry in a peer's ordered reliable stream.
+#[derive(Clone)]
+enum Frame {
+    Ready(Arc<Vec<u8>>),
+    /// Frames still being encoded on a blocking thread (a world transfer).
+    /// The writer waits for them in place, so later frames stay behind them.
+    Pending(watch::Receiver<Option<Result<Arc<[Vec<u8>]>, String>>>),
+}
+/// Encode a world transfer off the authority loop. Every peer given the
+/// returned frame writes the transfer at that point in its stream.
+fn encode_transfer(transfer: WorldTransfer) -> Frame {
+    let (ready, frames) = watch::channel(None);
+    tokio::task::spawn_blocking(move || {
+        let encoded = transfer
+            .encode()
+            .map(Arc::from)
+            .map_err(|error| format!("{error:#}"));
+        let _ = ready.send(Some(encoded));
+    });
+    Frame::Pending(frames)
+}
 struct Peer {
     connection: Connection,
-    out: mpsc::Sender<Arc<Vec<u8>>>,
+    out: mpsc::Sender<Frame>,
     generation: usize,
 }
 impl Peer {
-    /// Queue an encoded reliable frame. A peer too far behind is disconnected
-    /// rather than buffered without bound.
-    fn send(&self, bytes: Arc<Vec<u8>>) {
-        if self.out.try_send(bytes).is_err() {
+    /// Queue a reliable frame. A peer too far behind is disconnected rather
+    /// than buffered without bound.
+    fn send(&self, frame: Frame) {
+        if self.out.try_send(frame).is_err() {
             self.connection.close(1_u32.into(), b"Reliable backlog exceeded");
         }
     }
     /// Encode and queue a message for this peer only.
     fn send_message(&self, message: &Message) {
         match codec::encode(message) {
-            Ok(bytes) => self.send(Arc::new(bytes)),
+            Ok(bytes) => self.send(Frame::Ready(Arc::new(bytes))),
             Err(error) => {
                 eprintln!("Server could not encode a message: {error:#}");
                 self.connection.close(2_u32.into(), b"Host state exceeds transfer budget");
@@ -250,9 +271,9 @@ impl Peer {
 fn broadcast<'a>(peers: impl IntoIterator<Item = &'a Peer>, message: &Message) {
     match codec::encode(message) {
         Ok(bytes) => {
-            let bytes = Arc::new(bytes);
+            let frame = Frame::Ready(Arc::new(bytes));
             for peer in peers {
-                peer.send(bytes.clone());
+                peer.send(frame.clone());
             }
         }
         Err(error) => {
@@ -268,7 +289,7 @@ enum Event {
         hello: Hello,
         principal: Option<Principal>,
         connection: Connection,
-        out: mpsc::Sender<Arc<Vec<u8>>>,
+        out: mpsc::Sender<Frame>,
         answer: oneshot::Sender<Result<OwnerId, String>>,
     },
     Command {
@@ -428,7 +449,7 @@ async fn connection_task(
             return Ok(());
         }
     };
-    let (out, mut output) = mpsc::channel::<Arc<Vec<u8>>>(32);
+    let (out, mut output) = mpsc::channel::<Frame>(32);
     let (answer, accepted) = oneshot::channel();
     events
         .send(Event::Join {
@@ -450,12 +471,19 @@ async fn connection_task(
     };
     let generation = connection.stable_id();
     let write = async {
-        while let Some(bytes) = output.recv().await {
-            tokio::time::timeout(
-                Duration::from_secs(10),
-                codec::write_frame(&mut send, &bytes),
-            )
-            .await??;
+        while let Some(frame) = output.recv().await {
+            match frame {
+                Frame::Ready(bytes) => write_timed(&mut send, &bytes).await?,
+                Frame::Pending(mut ready) => {
+                    let encoded = ready.wait_for(Option::is_some).await?.clone();
+                    let frames = encoded
+                        .context("World transfer abandoned")?
+                        .map_err(|error| anyhow::anyhow!("World transfer failed: {error}"))?;
+                    for bytes in frames.iter() {
+                        write_timed(&mut send, bytes).await?;
+                    }
+                }
+            }
         }
         Result::<()>::Ok(())
     };
@@ -530,6 +558,10 @@ impl MovementAllowance {
         self.tokens -= 1.0;
         true
     }
+}
+/// A peer that stops reading for 10 s is gone.
+async fn write_timed(send: &mut quinn::SendStream, bytes: &[u8]) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), codec::write_frame(send, bytes)).await?
 }
 fn verify_identity(
     hello: &Hello,
@@ -665,7 +697,9 @@ async fn run(
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();
-                    broadcast(peers.values(),&Message::MapChanged(Checkpoint::from_session(&session,cursor)));
+                    let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
+                    let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks});
+                    for peer in peers.values(){peer.send(transfer.clone());}
                     broadcast_admin_snapshots(&session,&peers);
                 }
                 Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
@@ -693,9 +727,10 @@ async fn run(
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
-                    let checkpoint=Checkpoint::from_session(&session,cursor);
-                    let encoded=match codec::encode(&Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint}){Ok(frame)=>frame,Err(error)=>{let _=session.disconnect(owner);return Err(error)}};
-                    if out.try_send(Arc::new(encoded)).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
+                    // O(1) on the loop; the world is chunked and encoded off it.
+                    let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
+                    let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks});
+                    if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     peers.insert(owner,Peer{generation:connection.stable_id(),connection,out});Ok(owner)
                 })();
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|e.to_string()));
@@ -708,7 +743,7 @@ async fn run(
                     let result=session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")});
                     if result.is_err(){rejected+=1;}
                     match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {
-                        Ok(bytes)=>peer.send(Arc::new(bytes)),
+                        Ok(bytes)=>peer.send(Frame::Ready(Arc::new(bytes))),
                         Err(error)=>peer.send_message(&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
                     }
                     for target in session.take_admin_disconnects(){
@@ -778,7 +813,15 @@ async fn run(
         resumes,
         commands,
         rejected,
-        final_world: Checkpoint::from_session(&session, cursor).world,
+        final_world: {
+            let world = session.simulation().state();
+            PublicWorld {
+                name: world.name.clone(),
+                map_id: world.map_id.clone(),
+                palette: world.palette.clone(),
+                bricks: public_bricks(&world.bricks),
+            }
+        },
         native_world: session.simulation().state().clone(),
         notices: session.take_notices(),
     })

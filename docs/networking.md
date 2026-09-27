@@ -20,9 +20,26 @@ The runtime dependency graph contains no Torque readers.
 - The host assigns owner IDs. Commands cannot supply positions for the player,
   privileges or owner identities. Build transforms remain validated against
   authoritative reach, geometry, support and permissions.
-- Reliable messages carry actions, results, compressed initial checkpoints and
-  dirty-brick deltas. Native source records remain on the host; public brick
-  state preserves supported gameplay properties and events.
+- Reliable messages carry actions, results, checkpoints and dirty-brick deltas.
+  Native source records remain on the host; public brick state preserves
+  supported gameplay properties and events.
+- Wire format: one codec (`codec.rs`). Every message is MessagePack with named
+  fields, strictly decoded (a buffer is exactly one message); server frames are
+  zstd compressed. Datagrams (movement, poses, vehicles) are bounded to 1,100
+  bytes so any encodable one fits a minimum-MTU QUIC path.
+- World transfer: a Welcome or MapChanged checkpoint carries everything but the
+  bricks, plus `world_bricks`, the count that follows as `WorldChunk` frames of
+  at most 4,096 bricks. The authority loop takes only an O(1) snapshot of the
+  persistent brick map (`bri_world::Bricks`, an `imbl::OrdMap`); stripping
+  source records, chunking and compression run on a blocking thread, and the
+  peer's writer sends the frames at that point in its ordered stream. Clients
+  assemble with `WorldAssembly`, which accepts exactly the announced bricks
+  (no duplicates, no overrun) before building the replica, and emit
+  `ClientEvent::MapChanging` at a map change's head. There is no world size
+  ceiling beyond `MAX_BRICKS`, and joins no longer stall other players.
+- Replica worlds are the same persistent map: publishing a new world revision
+  to the frame thread after an edit is O(1) (6 us on Golden Gate, was 12-21 ms
+  of deep copy on the network worker that also sends movement).
 - Protocol version 4 retains optional validated yaw/pitch snapshots on reliable
   actions. The native client captures body aim at dispatch, so look/fire/look
   sequences remain correct even when the movement channel only delivers the
@@ -57,8 +74,8 @@ The clock uses actual monotonic elapsed time, retaining fractional ticks and
 running up to 8 catch-up steps per wakeup. Coarse Windows timer wakeups previously
 slowed gameplay (144 ticks in a two-second smoke); the corrected smoke reached241
 ticks with zero dropped ticks. Longer stalls discard excess debt and record it
-as `dropped_ticks`. Large checkpoint preparation still occurs in the authority
-loop; removing those stalls is pending performance work.
+as `dropped_ticks`. Checkpoint preparation is off the authority loop (see
+World transfer above).
 
 ## Executable host
 

@@ -194,11 +194,17 @@ pub struct Checkpoint {
     pub vehicle_poses: Vec<bri_sim::session::VehiclePose>,
     /// Admin `/timeScale`.
     pub time_scale: f32,
+    /// Bricks that stream after this checkpoint as `WorldChunk` frames;
+    /// `world.bricks` itself travels empty.
+    pub world_bricks: u64,
 }
 impl Checkpoint {
-    pub fn from_session(session: &Session, cursor: u64) -> Self {
+    /// Everything but the bricks, plus an O(1) snapshot of the authoritative
+    /// bricks to stream after it (see [`WorldTransfer`]). Cheap enough for the
+    /// authority loop at any world size.
+    pub fn from_session(session: &Session, cursor: u64) -> (Self, bri_world::Bricks) {
         let world = session.simulation().state();
-        Self {
+        let checkpoint = Self {
             weapons: session.weapon_view(),
             tools: session.tool_inventories(),
             cue_cursor: session.cue_cursor(),
@@ -209,7 +215,7 @@ impl Checkpoint {
                 name: world.name.clone(),
                 map_id: world.map_id.clone(),
                 palette: world.palette.clone(),
-                bricks: public_bricks(&world.bricks),
+                bricks: bri_world::Bricks::new(),
             },
             names: session.names(),
             avatars: session.avatars(),
@@ -220,7 +226,74 @@ impl Checkpoint {
             vehicles: session.vehicle_infos(),
             vehicle_poses: session.vehicle_poses(),
             time_scale: session.time_scale(),
+            world_bricks: world.bricks.len() as u64,
+        };
+        (checkpoint, world.bricks.clone())
+    }
+}
+/// Bricks per `WorldChunk` frame. A world of any size streams as bounded
+/// frames after its checkpoint instead of one monolithic message.
+pub const WORLD_CHUNK: usize = 4096;
+/// A checkpoint message (Welcome or MapChanged) and the bricks that follow it.
+pub struct WorldTransfer {
+    pub head: Message,
+    pub bricks: bri_world::Bricks,
+}
+impl WorldTransfer {
+    /// Encode the head and its chunks, dropping private source records.
+    /// Linear in the world: run it off the authority loop.
+    pub fn encode(self) -> anyhow::Result<Vec<Vec<u8>>> {
+        let mut frames = vec![crate::codec::encode(&self.head)?];
+        let mut chunk = Vec::with_capacity(WORLD_CHUNK);
+        for (id, brick) in &self.bricks {
+            chunk.push((*id, public_brick(brick)));
+            if chunk.len() == WORLD_CHUNK {
+                frames.push(crate::codec::encode(&Message::WorldChunk(std::mem::take(
+                    &mut chunk,
+                )))?);
+            }
         }
+        if !chunk.is_empty() {
+            frames.push(crate::codec::encode(&Message::WorldChunk(chunk))?);
+        }
+        Ok(frames)
+    }
+}
+/// Client side of a [`WorldTransfer`]: fills a checkpoint's world from the
+/// chunks that follow it, exactly as many bricks as it announced.
+pub struct WorldAssembly {
+    checkpoint: Checkpoint,
+}
+impl WorldAssembly {
+    pub fn new(checkpoint: Checkpoint) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            checkpoint.world.bricks.is_empty()
+                && checkpoint.world_bricks <= bri_world::MAX_BRICKS as u64,
+            "Invalid world transfer"
+        );
+        Ok(Self { checkpoint })
+    }
+    pub fn complete(&self) -> bool {
+        self.checkpoint.world.bricks.len() as u64 == self.checkpoint.world_bricks
+    }
+    pub fn add(&mut self, chunk: Vec<(BrickId, Brick)>) -> anyhow::Result<()> {
+        let remaining =
+            self.checkpoint.world_bricks - self.checkpoint.world.bricks.len() as u64;
+        anyhow::ensure!(
+            !chunk.is_empty() && chunk.len() <= WORLD_CHUNK && chunk.len() as u64 <= remaining,
+            "Invalid world chunk"
+        );
+        for (id, brick) in chunk {
+            anyhow::ensure!(
+                self.checkpoint.world.bricks.insert(id, brick).is_none(),
+                "Duplicate brick in world transfer"
+            );
+        }
+        Ok(())
+    }
+    pub fn finish(self) -> anyhow::Result<Checkpoint> {
+        anyhow::ensure!(self.complete(), "Incomplete world transfer");
+        Ok(self.checkpoint)
     }
 }
 pub fn poses(session: &Session) -> Vec<Pose> {
@@ -265,8 +338,11 @@ pub enum Message {
         checkpoint: Checkpoint,
     },
     Update(Delta),
-    /// The host changed maps: the full state of the new mission.
+    /// The host changed maps: the full state of the new mission. Its bricks
+    /// follow as `WorldChunk` frames, like a Welcome's.
     MapChanged(Checkpoint),
+    /// Up to `WORLD_CHUNK` bricks of the checkpoint sent just before.
+    WorldChunk(Vec<(BrickId, Brick)>),
     AdminSnapshot(bri_sim::session::AdminSnapshot),
     /// Addressed to this client only (minigame chat, prints, invitations).
     Notice(bri_sim::session::Notice),

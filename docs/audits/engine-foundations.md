@@ -30,8 +30,8 @@ Risk = likelihood x blast radius. "Fixed" items landed with this audit.
 | 7 | Net | Movement datagrams from one peer were unbounded; a flood filled the shared event queue that every player's commands and joins pass through. | Medium | Fixed |
 | 8 | Audio | An unplugged headset or a changed default output silenced the game until restart (the stream error was only logged). | Medium | Fixed |
 | 9 | Net | Wire format was JSON everywhere, datagrams included, with each path's own ad-hoc parsing and size checks. `MAX_DATAGRAM` (1,200) exceeded what a minimum-MTU QUIC path can carry, and pose datagrams had no size check at all: a grown `PlayerState` would silently vanish. | Medium | Fixed |
-| 10 | Replication | Every world-changing delta deep-clones the whole replica world on the network worker (Golden Gate: 12 to 21 ms per edit, linear in bricks; ~0.5 s at the 1 M brick cap). The same worker sends movement, so building on a big map delays input. | Medium | Open |
-| 11 | Replication | The join/map-change checkpoint is one monolithic frame built and encoded on the authority loop (Golden Gate: ~70 ms encode; the infrastructure audit measured a ~360 ms stall). Worlds above ~128 MB of encoded state cannot be joined at all. | Medium | Open |
+| 10 | Replication | Every world-changing delta deep-clones the whole replica world on the network worker (Golden Gate: 12 to 21 ms per edit, linear in bricks; ~0.5 s at the 1 M brick cap). The same worker sends movement, so building on a big map delays input. | Medium | Fixed (persistent map, 6 us) |
+| 11 | Replication | The join/map-change checkpoint is one monolithic frame built and encoded on the authority loop (Golden Gate: ~70 ms encode; the infrastructure audit measured a ~360 ms stall). Worlds above ~128 MB of encoded state cannot be joined at all. | Medium | Fixed (streamed chunks, off the loop) |
 | 12 | Files | Four different "atomic" write implementations (settings, saves, trust list, admin store) and two plain writes of security state: the host certificate and key pair (torn write: host cannot start, or its identity changes and every friend's pin breaks) and the joined-server pin list. | Medium | Fixed: `bri-files` (temp file, fsync, rename or no-clobber link, Unix directory fsync) now writes settings, saves, trust and pin lists, identities, admin state and the host certificate, which is one file |
 | 13 | Net | `Session::adopt` failing during Change Map still stops the host (`?`): the old session is moved in and lost on error. Its only failure is an invariant (a fresh map has no players), so this is latent. | Low | Open |
 | 14 | Net | Request body budget: one peer may reserve up to 64 MB of the shared 128 MB and trickle the body for 10 s, delaying other players' large requests (build loads). | Low | Open |
@@ -95,18 +95,34 @@ preferring the engine's sample rate (`Engine::set_sample_rate` keeps the
 clock continuous if the new device needs another rate), retrying every 2 s
 while no device exists.
 
+## Second pass: world snapshots and streaming
+
+`bri_world::Bricks` (an `imbl::OrdMap`) now backs both the authoritative
+`World` and the replicated `PublicWorld`. A copy is O(1) and an edit copies
+O(log n) nodes, so every consumer holding a snapshot (frame thread, collision
+mirror, music, checkpoint) shares structure instead of deep-cloning. The
+serialized form is unchanged, so saves and converted content are untouched.
+Golden Gate (`wire_benchmark`): replica edit plus snapshot 0.006 ms (was
+12-21 ms); a full iteration of 44k bricks 1.9 ms.
+
+Joins and map changes stream: the checkpoint head announces `world_bricks`,
+then `WorldChunk` frames of 4,096 bricks follow. The authority loop only
+snapshots; a blocking task strips source records, chunks and compresses, and
+the peer's writer emits the frames in order (a `Frame::Pending` entry keeps the
+peer's later frames behind the transfer). The client assembles exactly the
+announced bricks and signals `MapChanging` at the head so a loading screen can
+come up before the bricks arrive.
+
+The reported `fourth_failed_admin_password` flake could not be reproduced
+(64 of 64 passes, 16 in parallel) and its path is deterministic, so it is
+dropped. `unread_pose_datagrams_never_block_reliable_delivery` pins the one
+plausible mechanism checked while looking (an undrained client being kicked).
+
 ## Next, by payoff
 
-1. Item 10: make the replica world a persistent map (`imbl::OrdMap`) so a
-   published world is an O(1) snapshot and an edit is O(log n). Needs the
-   brick-consuming APIs (`CollisionMirror::sync`, world chunks, music) to take
-   the map type or an iterator; coordinate with the gameplay and graphics
-   threads, which own those files.
-2. Item 11: stream the checkpoint as world chunks after a small Welcome, built
-   from a persistent-map snapshot off the authority loop. Removes both the
-   join stall and the world-size ceiling.
-3. Item 12: done (`crates/files`).
-4. Item 9 follow-up: a compact wire form for bricks (ids and packed
+1. Items 10 and 11: done (second pass above).
+2. Item 12: done (`crates/files`).
+3. Item 9 follow-up: a compact wire form for bricks (ids and packed
    position/rotation/color instead of named fields) would cut checkpoint bytes
    several-fold; do it together with item 2.
 5. Items 14, 15, 17 as the owners of those areas touch them.

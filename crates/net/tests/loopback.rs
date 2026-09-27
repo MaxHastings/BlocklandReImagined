@@ -2036,5 +2036,34 @@ async fn join_reports_the_world_download_against_the_welcome_frame_length() -> R
     assert!(seen.total.is_some_and(|total| total > 0));
     assert_eq!(Some(seen.done), seen.total);
     assert_eq!(seen.fraction(), 1.0);
+
+/// A client that is slow to drain its events (a busy frame thread, a test
+/// between steps) must not be disconnected by unreliable pose traffic
+/// crowding out reliable messages. Regression for the flaky
+/// `fourth_failed_admin_password_closes_the_authenticated_connection`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let mut first = Client::connect(
+        server.address,
+        &server.certificate,
+        "First".into(),
+        "fixture-v1".into(),
+        None,
+    )
+    .await?;
+    let _second = Client::connect(
+        server.address,
+        &server.certificate,
+        "Second".into(),
+        "fixture-v1".into(),
+        None,
+    )
+    .await?;
+    // Two players' poses at 40 Hz each outrun any event queue in seconds.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let reply = first.command(Command::Chat("still here".into())).await;
+    assert!(reply.is_ok(), "{reply:?}");
+    server.stop().await?;
     Ok(())
 }

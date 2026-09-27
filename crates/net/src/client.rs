@@ -36,6 +36,10 @@ pub enum ClientEvent {
     },
     AdminSnapshot(bri_sim::session::AdminSnapshot),
     Notice(bri_sim::session::Notice),
+    /// The host changed maps and its bricks are streaming in (progress is
+    /// reported separately). `MapChanged` follows once the replica holds the
+    /// whole new world.
+    MapChanging { map: String },
     /// The replica now holds a new map.
     MapChanged,
 }
@@ -50,6 +54,8 @@ pub struct Client {
     pub admin_snapshot: Option<bri_sim::session::AdminSnapshot>,
     pub resume: ResumeToken,
     pub replica: Replica,
+    /// A changed map whose bricks are still streaming in.
+    changing_map: Option<WorldAssembly>,
     sequence: u64,
 }
 impl Client {
@@ -210,7 +216,20 @@ impl Client {
             Message::Rejected(reason) => anyhow::bail!("Join rejected: {reason}"),
             _ => anyhow::bail!("Expected welcome"),
         };
-        let replica = Replica::new(checkpoint)?;
+        let mut world = WorldAssembly::new(checkpoint)?;
+        while !world.complete() {
+            let frame = tokio::time::timeout(
+                Duration::from_secs(30),
+                codec::read_frame(&mut receive, codec::MAX_FRAME),
+            )
+            .await??;
+            match codec::decode(&frame)? {
+                Message::WorldChunk(chunk) => world.add(chunk)?,
+                Message::Rejected(reason) => anyhow::bail!("Join rejected: {reason}"),
+                _ => anyhow::bail!("Expected world chunk"),
+            }
+        }
+        let replica = Replica::new(world.finish()?)?;
         ensure!(
             replica.names.contains_key(&owner),
             "Welcome has no local player"
@@ -266,6 +285,7 @@ impl Client {
             admin_snapshot: None,
             resume,
             replica,
+            changing_map: None,
             sequence: 0,
         })
     }
@@ -301,49 +321,89 @@ impl Client {
         Ok(())
     }
     pub async fn receive(&mut self) -> Result<ClientEvent> {
-        match self
-            .incoming
-            .recv()
-            .await
-            .context("Network receiver stopped")?
-        {
-            Incoming::Reliable(message) => match *message {
-                Message::Update(delta) => {
-                    let world_changed = !delta.bricks.is_empty() || delta.palette.is_some();
-                    let changed_bricks = delta.bricks.keys().copied().collect();
-                    let palette_changed = delta.palette.is_some();
-                    self.replica.update(delta)?;
-                    Ok(ClientEvent::Updated {
-                        world_changed,
-                        changed_bricks,
-                        palette_changed,
-                    })
+        loop {
+            let incoming = self
+                .incoming
+                .recv()
+                .await
+                .context("Network receiver stopped")?;
+            // A changing map's chunks arrive before anything that depends on
+            // them; datagrams about the old or half-loaded map are dropped.
+            if self.changing_map.is_some() {
+                match incoming {
+                    Incoming::Reliable(message) => match *message {
+                        Message::WorldChunk(chunk) => {
+                            let Some(world) = self.changing_map.as_mut() else {
+                                unreachable!()
+                            };
+                            world.add(chunk)?;
+                            if let Some(event) = self.finish_map_change()? {
+                                return Ok(event);
+                            }
+                        }
+                        _ => anyhow::bail!("Unexpected message during a map transfer"),
+                    },
+                    Incoming::Pose(_) | Incoming::Vehicle(_) => {}
+                    Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
                 }
-                Message::MapChanged(checkpoint) => {
-                    self.replica = Replica::new(checkpoint)?;
-                    Ok(ClientEvent::MapChanged)
-                }
-                Message::Reply { sequence, result } => Ok(ClientEvent::Reply { sequence, result }),
-                Message::Notice(notice) => Ok(ClientEvent::Notice(notice)),
-                Message::AdminSnapshot(snapshot) => {
-                    self.administrator = snapshot.role.is_admin();
-                    self.admin_snapshot = Some(snapshot.clone());
-                    Ok(ClientEvent::AdminSnapshot(snapshot))
-                }
-                _ => anyhow::bail!("Unexpected message after welcome"),
-            },
-            Incoming::Pose(pose) => {
-                let id = pose.player.owner;
-                self.replica.pose(pose)?;
-                Ok(ClientEvent::Pose(id))
+                continue;
             }
-            Incoming::Vehicle(pose) => {
-                let id = pose.id;
-                self.replica.vehicle_pose(pose)?;
-                Ok(ClientEvent::Vehicle(id))
-            }
-            Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
+            return match incoming {
+                Incoming::Reliable(message) => match *message {
+                    Message::Update(delta) => {
+                        let world_changed = !delta.bricks.is_empty() || delta.palette.is_some();
+                        let changed_bricks = delta.bricks.keys().copied().collect();
+                        let palette_changed = delta.palette.is_some();
+                        self.replica.update(delta)?;
+                        Ok(ClientEvent::Updated {
+                            world_changed,
+                            changed_bricks,
+                            palette_changed,
+                        })
+                    }
+                    Message::MapChanged(checkpoint) => {
+                        let map = checkpoint.world.map_id.clone();
+                        self.changing_map = Some(WorldAssembly::new(checkpoint)?);
+                        match self.finish_map_change()? {
+                            Some(event) => Ok(event),
+                            None => Ok(ClientEvent::MapChanging { map }),
+                        }
+                    }
+                    Message::Reply { sequence, result } => {
+                        Ok(ClientEvent::Reply { sequence, result })
+                    }
+                    Message::Notice(notice) => Ok(ClientEvent::Notice(notice)),
+                    Message::AdminSnapshot(snapshot) => {
+                        self.administrator = snapshot.role.is_admin();
+                        self.admin_snapshot = Some(snapshot.clone());
+                        Ok(ClientEvent::AdminSnapshot(snapshot))
+                    }
+                    _ => anyhow::bail!("Unexpected message after welcome"),
+                },
+                Incoming::Pose(pose) => {
+                    let id = pose.player.owner;
+                    self.replica.pose(pose)?;
+                    Ok(ClientEvent::Pose(id))
+                }
+                Incoming::Vehicle(pose) => {
+                    let id = pose.id;
+                    self.replica.vehicle_pose(pose)?;
+                    Ok(ClientEvent::Vehicle(id))
+                }
+                Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
+            };
         }
+    }
+    /// Swap in the new map once every announced brick has arrived.
+    fn finish_map_change(&mut self) -> Result<Option<ClientEvent>> {
+        if !self.changing_map.as_ref().is_some_and(WorldAssembly::complete) {
+            return Ok(None);
+        }
+        let Some(world) = self.changing_map.take() else {
+            return Ok(None);
+        };
+        self.replica = Replica::new(world.finish()?)?;
+        Ok(Some(ClientEvent::MapChanged))
     }
     /// Send without waiting for its reply. The worker continues processing poses
     /// and correlates ClientEvent::Reply using the returned sequence.
