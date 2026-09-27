@@ -262,6 +262,7 @@ impl Action {
                     || !map
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b))
+                    || map.split('/').any(|part| matches!(part, "" | "." | ".."))
                 {
                     Err(Error::InvalidValue)
                 } else {
