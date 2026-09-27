@@ -88,8 +88,8 @@ difference between inputs into `Controls::look_delta`, and the vehicle
 accumulates it exactly as `Vehicle::updateMove` does. With v20's default
 vehicle mouse invert, moving the mouse up dips the nose.
 
-**Player-type mounts.** Kinematic bodies moved by a character controller with
-the datablock's speeds, run force, jump, step height, slope limit, drag and
+**Player-type mounts.** Kinematic bodies moved by the v20 player motor (its
+`updatePos` box sweep, see `docs/player-simulation.md`) with the datablock's speeds, run force, jump, step height, slope limit, drag and
 buoyancy. Impulses change their velocity by impulse / mass, like
 `Player::applyImpulse`.
 

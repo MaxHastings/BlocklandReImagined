@@ -5,17 +5,13 @@ type BrickId = u64;
 type OwnerId = u64;
 use glam::Vec3;
 use rapier3d::parry::query::ShapeCastOptions;
-use rapier3d::{
-    control::{CharacterLength, KinematicCharacterController},
-    prelude::*,
-};
+use crate::torque;
+use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Original engine tick; v20 per-tick constants are converted with it.
 pub const TORQUE_TICK: f32 = 0.032;
-/// `sTractionDistance`: how far below the feet contact is found.
-const JUMP_TRACTION: f32 = 0.03 + 0.005;
 /// `PlayerStandardArmor.minJumpSpeed`/`maxJumpSpeed`: upward speeds over
 /// which the jump impulse fades out.
 const MIN_JUMP_SPEED: f32 = 20.0;
@@ -171,7 +167,6 @@ pub struct PlayerTuning {
     pub up_resist_speed: f32,
     pub up_resist_factor: f32,
     pub step_height: f32,
-    pub ground_snap: f32,
     pub slope_degrees: f32,
     pub jump_surface_degrees: f32,
     /// `jumpDelay`, in 120 Hz ticks.
@@ -195,9 +190,8 @@ impl Default for PlayerTuning {
         // Speeds, runForce/mass, air control, drag, jumpForce/mass, resistance
         // and runSurfaceAngle: recovered PlayerStandardArmor. Gravity, jet thrust,
         // jet lift and step height (maxStepHeight default): v20 engine constants.
-        // Box dimensions: the v20 datablock boxes at 0.25 engine scale. Eyes and
-        // ground snap remain adaptation assumptions; see
-        // docs/player-simulation.md.
+        // Box dimensions: the v20 datablock boxes at 0.25 engine scale. Eyes
+        // remain an adaptation assumption; see docs/player-simulation.md.
         Self {
             width: 1.25,
             stand_height: 2.65,
@@ -234,7 +228,6 @@ impl Default for PlayerTuning {
             up_resist_speed: 25.0,
             up_resist_factor: 0.3,
             step_height: 1.0,
-            ground_snap: 0.2,
             slope_degrees: 70.0,
             jump_surface_degrees: 80.0,
             jump_delay_ticks: JUMP_DELAY_TICKS,
@@ -300,7 +293,6 @@ impl PlayerTuning {
             self.up_max_speed,
             self.up_resist_speed,
             self.up_resist_factor,
-            self.ground_snap,
             self.slope_degrees,
             self.jump_surface_degrees,
         ];
@@ -709,77 +701,74 @@ impl Player {
             bs * -input.forward
         }
         .max(ss * input.right.abs());
-        // v20 runs parallel to the contact surface: on a walkable slope the move
-        // speed is along the slope, so ramps neither slow nor launch the player.
-        let walkable = t.slope_degrees.to_radians().cos();
-        let shape = t.shape(self.state.crouched);
-        let pose = t.pose(feet, self.state.crouched);
-        let ground = if was_grounded {
-            query
-                .cast_shape(
-                    &pose,
-                    Vector::new(0.0, -1.0, 0.0),
-                    shape.as_ref(),
-                    ShapeCastOptions {
-                        max_time_of_impact: t.ground_snap,
-                        compute_impact_geometry_on_penetration: true,
-                        ..Default::default()
-                    },
-                )
-                .map(|(_, hit)| Vec3::from(hit.normal1.to_array()))
-                .filter(|normal| normal.y >= walkable)
-        } else {
-            None
+        // Torque's convex working list: every solid polygon this tick can reach,
+        // including a jump, a step and the contact slab under the feet.
+        let half = t.width * 0.5;
+        let height = t.height(self.state.crouched);
+        let step_reach = t.step_height * self.state.scale;
+        let previous = Vec3::from(self.state.velocity);
+        let body_box = |at: Vec3| torque::Box3 {
+            min: Vec3::new(at.x - half, at.y, at.z - half),
+            max: Vec3::new(at.x + half, at.y + height, at.z + half),
         };
-        let along_ground = match ground {
-            Some(normal) => move_vec - normal * move_vec.dot(normal),
-            None => move_vec,
-        };
-        let desired = along_ground.normalize_or_zero() * move_speed;
-        let desired = Vec3::new(desired.x, 0.0, desired.z);
-        let mut velocity = Vec3::from(self.state.velocity);
-        let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
-        let horizontal = if was_grounded {
-            horizontal + (desired - horizontal).clamp_length_max(t.acceleration * dt)
+        let reach = (previous.length() + 30.0) * dt + 0.2;
+        let soup = torque::Soup::gather(
+            &query,
+            &physics.bodies,
+            body_box(feet).expanded(Vec3::splat(reach) + Vec3::Y * (step_reach + 0.05)),
+            feet,
+        );
+        let run_cos = t.slope_degrees.to_radians().cos();
+        let jump_cos = t.jump_surface_degrees.to_radians().cos();
+        let contact = torque::find_contact(&soup, feet, half, run_cos, jump_cos);
+        // Per-tick epsilons of the 32 ms Torque tick, at this motor's rate.
+        let torque_ticks = dt / TORQUE_TICK;
+        let mut velocity = previous;
+        // v20 updateMove: gravity always applies; a run surface cancels the part
+        // into it and the run force (runForce / mass per tick) steers toward the
+        // move along the surface. Steeper than runSurfaceAngle is not a run
+        // surface, so gravity slides the player down it.
+        let mut acc = Vec3::new(0.0, -t.gravity * dt, 0.0);
+        if let (true, Some(normal)) = (contact.run, contact.normal) {
+            let into = -acc.dot(normal);
+            if into > 0.0 {
+                acc += normal * (into + 0.002 * torque_ticks);
+                // Blockland rests below 0.0021 (TGE: 0.0001), so level ground
+                // cancels the 0.002 lift exactly.
+                if acc.length() < 0.0021 * torque_ticks {
+                    acc = Vec3::ZERO;
+                }
+            }
+            let mut pv = move_vec;
+            let mut pvl = pv.length();
+            // Parallel to the surface, across the move; jets skip this in v20.
+            if pvl > 0.0 && !input.jet {
+                let across = pv.cross(Vec3::Y) / pvl;
+                let cv = normal - across * across.dot(normal);
+                pv -= cv * pv.dot(cv);
+                pvl = pv.length();
+            }
+            if pvl > 0.0 {
+                pv *= move_speed / pvl;
+            }
+            let run = pv - (velocity + acc);
+            acc += run.clamp_length_max(t.acceleration * dt);
         } else if liquid.is_some() {
             // Swimming pushes along the move direction; water drag sets the speed.
-            horizontal + move_vec.normalize_or_zero() * t.swim_acceleration * dt
-        } else if input.jet {
+            acc += move_vec.normalize_or_zero() * t.swim_acceleration * dt;
+        } else if !input.jet {
             // Jets replace air control: they steer through the thrust vector.
-            horizontal
-        } else {
-            horizontal
-                + air_control_direction(horizontal, move_vec, move_speed)
-                    * (move_speed * t.air_control).min(t.acceleration * t.air_control * dt)
-        };
-        velocity.x = horizontal.x;
-        velocity.z = horizontal.z;
-        let surface_y = ground.map_or(0.0, |normal| {
-            -(normal.x * velocity.x + normal.z * velocity.z) / normal.y
-        });
-        if was_grounded && !input.jet {
-            velocity.y = surface_y;
+            let horizontal = Vec3::new(velocity.x, 0.0, velocity.z);
+            acc += air_control_direction(horizontal, move_vec, move_speed)
+                * (move_speed * t.air_control).min(t.acceleration * t.air_control * dt);
         }
         // v20 jumps while jump is held, from any surface up to jumpSurfaceAngle,
         // shortly after leaving one, and adds the impulse to current velocity.
-        let jump_contact = query
-            .cast_shape(
-                &pose,
-                Vector::new(0.0, -1.0, 0.0),
-                shape.as_ref(),
-                ShapeCastOptions {
-                    max_time_of_impact: JUMP_TRACTION,
-                    compute_impact_geometry_on_penetration: true,
-                    ..Default::default()
-                },
-            )
-            .map(|(_, hit)| Vec3::from(hit.normal1.to_array()))
-            .filter(|normal| normal.y > t.jump_surface_degrees.to_radians().cos());
+        let jump_contact = contact.normal.filter(|_| contact.jump);
         let jump = &mut self.state.jump;
         if let Some(normal) = jump_contact {
             jump.normal = normal.to_array();
         }
-        let previous = Vec3::from(self.state.velocity);
         // Blockland's canJump also refuses while rising faster than 3 unless
         // moving faster than 4 overall.
         let jumped = input.jump
@@ -798,9 +787,9 @@ impl Player {
             let direction = move_vec.normalize_or_zero();
             let away = direction.dot(normal);
             if away > 0.0 {
-                velocity += direction * t.jump_speed * away;
+                acc += direction * t.jump_speed * away;
             }
-            velocity.y += normal.y * t.jump_speed * rise_scale;
+            acc.y += normal.y * t.jump_speed * rise_scale;
             jump.delay = t.jump_delay_ticks;
             jump.since_contact = JUMP_WINDOW_TICKS;
         } else if jump_contact.is_some() {
@@ -809,14 +798,11 @@ impl Player {
         } else {
             jump.since_contact = jump.since_contact.saturating_add(1).min(JUMP_WINDOW_TICKS);
         }
-        if !was_grounded || jumped || input.jet {
-            velocity.y -= t.gravity * dt;
-        }
+        velocity += acc;
         if let Some((_, coverage)) = liquid {
             // v20: holding jump swims up (hard from a near standstill, less when
             // only partly submerged); holding crouch dives.
             if input.jump {
-                let previous = Vec3::from(self.state.velocity);
                 velocity.y += dt
                     * if Vec3::new(previous.x, 0.0, previous.z).length() < 2.0 {
                         2.0 * t.swim_rise
@@ -838,7 +824,7 @@ impl Player {
                 forward
             } else {
                 let mut thrust = (move_vec + Vec3::Y * t.jet_lift).normalize();
-                let falling = -self.state.velocity[1];
+                let falling = -previous.y;
                 if falling > 0.0 {
                     thrust.y *= 1.0 + 0.5 * (falling * 0.05).min(1.0);
                 }
@@ -865,7 +851,7 @@ impl Player {
         let drag = match liquid {
             Some((water, coverage)) => {
                 velocity += Vec3::from(water.current) * coverage * dt;
-                if !(input.crouch && was_grounded) {
+                if !(input.crouch && contact.run) {
                     velocity.y += water.density / t.density * coverage * t.gravity * dt;
                 }
                 let drag = t.drag * water.viscosity;
@@ -883,23 +869,11 @@ impl Player {
         velocity.z *= horizontal_keep;
         velocity.y *= (1.0 - vertical_drag * dt).max(0.0);
         velocity.y = velocity.y.max(-80.0);
-        let rising = velocity.y > surface_y.max(0.0);
-        let controller = KinematicCharacterController {
-            offset: CharacterLength::Absolute(0.005),
-            // Steps are resolved below with v20's rule, not the controller's.
-            autostep: None,
-            max_slope_climb_angle: t.slope_degrees.to_radians(),
-            min_slope_slide_angle: t.slope_degrees.to_radians(),
-            snap_to_ground: if !rising && !input.jet {
-                Some(CharacterLength::Absolute(t.ground_snap))
-            } else {
-                None
-            },
-            ..Default::default()
-        };
         // Players move one after another against each other's previous pose, so
         // each closes at most half its gap to another player per tick.
-        let mut translation = velocity * dt;
+        let pose = t.pose(feet, self.state.crouched);
+        let shape = t.shape(self.state.crouched);
+        let translation = velocity * dt;
         let is_player = |_: ColliderHandle, collider: &Collider| collider.user_data >> 64 == 1;
         if let Some((direction, distance)) =
             translation.try_normalize().zip(Some(translation.length()))
@@ -919,95 +893,37 @@ impl Player {
             let gap = hit.time_of_impact * -direction.dot(normal);
             let into = -translation.dot(normal);
             if into > gap * 0.5 {
-                translation += normal * (into - gap * 0.5);
+                velocity += normal * (into - gap * 0.5) / dt;
             }
-        }
-        let mut contacts = BTreeSet::new();
-        let mut normals = Vec::new();
-        let motion = controller.move_shape(
-            dt,
-            &query,
-            shape.as_ref(),
-            &pose,
-            Vector::from_array(translation.to_array()),
-            |c| {
-                let tag = physics.colliders[c.handle].user_data;
-                if let Ok(id) = u64::try_from(tag)
-                    && id > 0
-                {
-                    contacts.insert(id);
-                }
-                normals.push(Vec3::from(c.hit.normal1.to_array()));
-            },
-        );
-        let mut moved = Vec3::from(motion.translation.to_array());
-        let mut grounded = motion.grounded;
-        // Players step up ledges while walking, not in mid-air.
-        if was_grounded
-            && let Some(rise) = v20_step(
-                &physics.query_pipeline_with_filter(
-                    filter.predicate(&|_, c: &Collider| c.user_data >> 64 != 1),
-                ),
-                t,
-                &shape,
-                feet + moved,
-                Vec3::new(translation.x - moved.x, 0.0, translation.z - moved.z),
-            )
-        {
-            let lifted = feet + moved + Vec3::Y * rise;
-            let rest = controller.move_shape(
-                dt,
-                &query,
-                shape.as_ref(),
-                &t.pose(lifted, self.state.crouched),
-                Vector::new(translation.x - moved.x, 0.0, translation.z - moved.z),
-                |c| {
-                    let tag = physics.colliders[c.handle].user_data;
-                    if let Ok(id) = u64::try_from(tag)
-                        && id > 0
-                    {
-                        contacts.insert(id);
-                    }
-                },
-            );
-            moved += Vec3::Y * rise + Vec3::from(rest.translation.to_array());
-            grounded = true;
         }
         let before_collision = velocity;
-        let intended = velocity * dt;
-        let climbed = moved.y > intended.y.max(0.0) + 0.01;
-        // Remove blocked velocity, avoiding accumulation against ceilings/walls.
-        for normal in normals {
-            let into = velocity.dot(normal);
-            if into >= 0.0 {
-                continue;
-            }
-            if normal.y >= walkable {
-                if was_grounded && !jumped {
-                    // Walking onto a ramp turns the run along it at the same speed.
-                    let speed = velocity.length();
-                    velocity = (velocity - normal * into).normalize_or_zero() * speed;
-                } else {
-                    velocity -= normal * into;
-                }
-                continue;
-            }
-            // A step riser the controller climbed over does not stop the player.
-            let across = -Vec3::new(normal.x, 0.0, normal.z).normalize_or_zero();
-            let expected = intended.dot(across);
-            if climbed && expected > 0.0 && moved.dot(across) >= expected * 0.5 {
-                continue;
-            }
-            velocity -= normal * into;
-        }
-        // Like v20's run surface, support persists while jetting until thrust lifts
-        // the player: jetting along the floor keeps ground friction.
-        self.state.grounded = grounded && !rising && !jumped;
-        if self.state.grounded {
-            velocity.y = 0.0;
-        }
-        self.state.feet = (feet + moved).to_array();
+        // v20 Player::updatePos: sweep, slide and step through the polygons.
+        let moved = torque::update_pos(
+            &soup,
+            &torque::Mover {
+                half_width: half,
+                height,
+                run_cos,
+                jump_cos,
+                max_step: t.step_height,
+                step_reach,
+                elasticity: torque::NORMAL_ELASTICITY,
+                back_off: torque::BACK_OFF * torque_ticks,
+                epsilon: torque::Epsilon::at(torque_ticks),
+            },
+            feet,
+            &mut velocity,
+            dt,
+        );
+        let mut contacts: BTreeSet<BrickId> = moved
+            .touched
+            .iter()
+            .filter_map(|tag| u64::try_from(*tag).ok().filter(|id| *id > 0))
+            .collect();
+        self.state.feet = moved.feet.to_array();
         self.state.velocity = velocity.to_array();
+        // Standing on a run surface after the move (v20's run-surface contact).
+        self.state.grounded = torque::find_contact(&soup, moved.feet, half, run_cos, jump_cos).run;
         // Grounded idle motion need not produce a sweep callback. Include nearby
         // solid contacts so on-touch is an entry event, not a movement event.
         let end_pose = t.pose(Vec3::from(self.state.feet), self.state.crouched);
@@ -1071,49 +987,6 @@ impl Player {
 /// momentum at or above the requested speed is never braked: steering within
 /// about 25 degrees of travel adds nothing, and wider steering pushes only
 /// between the travel and move directions.
-/// v20 `Player::step`: at the blocked move's destination, the highest surface
-/// below `step_height` that leaves the player's own height clear above it. Only
-/// that clearance is required, not `step_height` of extra headroom, so players
-/// step onto plates and bricks beneath ceilings that just clear their heads.
-fn v20_step(
-    query: &rapier3d::pipeline::QueryPipeline<'_>,
-    t: &PlayerTuning,
-    shape: &SharedShape,
-    feet: Vec3,
-    remaining: Vec3,
-) -> Option<f32> {
-    const SKIN: f32 = 0.005;
-    let direction = remaining.try_normalize()?;
-    // The controller stops short by its offset; reach just past the riser.
-    let target = feet + direction * remaining.length().max(4.0 * SKIN);
-    let half = t.width * 0.5;
-    let sole = SharedShape::cuboid(half, SKIN, half);
-    let (_, hit) = query.cast_shape(
-        &Pose::translation(target.x, feet.y + t.step_height + SKIN, target.z),
-        Vector::new(0.0, -1.0, 0.0),
-        sole.as_ref(),
-        ShapeCastOptions {
-            max_time_of_impact: t.step_height,
-            stop_at_penetration: true,
-            ..Default::default()
-        },
-    )?;
-    let rise = t.step_height - hit.time_of_impact + SKIN;
-    // Beneath the walkable floor offset, or a riser at least step_height tall.
-    if rise <= 2.0 * SKIN || hit.time_of_impact <= 0.0 {
-        return None;
-    }
-    let raised = Pose::translation(
-        target.x,
-        feet.y + rise + shape.compute_local_aabb().half_extents().y,
-        target.z,
-    );
-    query
-        .intersect_shape(raised, shape.as_ref())
-        .next()
-        .is_none()
-        .then_some(rise)
-}
 fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> Vec3 {
     let speed = horizontal.length();
     if speed > 0.0 && move_speed <= speed {
