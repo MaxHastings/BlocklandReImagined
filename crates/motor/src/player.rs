@@ -122,6 +122,8 @@ impl PlayerState {
             -self.yaw.cos() * self.pitch.cos(),
         )
     }
+    /// The `Eye` node: above the feet and slightly ahead of the body's
+    /// facing (it follows the body, not the head's free look).
     pub fn eye(&self, tuning: &PlayerTuning) -> Vec3 {
         Vec3::from(self.feet)
             + Vec3::Y
@@ -130,6 +132,7 @@ impl PlayerState {
                 } else {
                     tuning.stand_eye
                 }
+            + Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()) * tuning.eye_forward
     }
 }
 /// The collision body's shape.
@@ -167,6 +170,8 @@ pub struct PlayerTuning {
     pub crouch_height: f32,
     pub stand_eye: f32,
     pub crouch_eye: f32,
+    /// How far the eye sits ahead of the box centre, along the facing.
+    pub eye_forward: f32,
     pub forward: f32,
     pub backward: f32,
     pub sideways: f32,
@@ -217,8 +222,11 @@ impl Default for PlayerTuning {
         // Speeds, runForce/mass, air control, drag, jumpForce/mass, resistance
         // and runSurfaceAngle: recovered PlayerStandardArmor. Gravity, jet thrust,
         // jet lift and step height (maxStepHeight default): v20 engine constants.
-        // Box dimensions: the v20 datablock boxes at 0.25 engine scale. Eyes
-        // remain an adaptation assumption; see docs/player-simulation.md.
+        // Box dimensions: the v20 datablock boxes at 0.25 engine scale. Eyes:
+        // m.dts `Eye` node, standing and at the end of the `crouch` sequence
+        // (Player::getRenderEyeTransform 0x5aafa0 reads the animated node).
+        // Ground snap remains an adaptation assumption; see
+        // docs/player-simulation.md.
         Self {
             body: Body::Box,
             steering: Steering::Strafe,
@@ -226,8 +234,9 @@ impl Default for PlayerTuning {
             width: 1.25,
             stand_height: 2.65,
             crouch_height: 1.0,
-            stand_eye: 2.4,
-            crouch_eye: 0.85,
+            stand_eye: 2.156_496_5,
+            crouch_eye: 0.626_668_45,
+            eye_forward: 0.141_154_87,
             forward: 7.0,
             backward: 4.0,
             sideways: 6.0,
@@ -285,6 +294,7 @@ impl PlayerTuning {
             self.crouch_height *= scale;
             self.stand_eye *= scale;
             self.crouch_eye *= scale;
+            self.eye_forward *= scale;
         }
         self
     }

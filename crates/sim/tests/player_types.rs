@@ -115,7 +115,7 @@ fn scale_grows_the_box_and_eye_but_not_the_speed() {
     );
     let (min, max) = p.world_bounds();
     assert!((max[1] - min[1] - 5.3).abs() < 0.001);
-    assert!((p.eye().y - p.state().feet[1] - 4.8).abs() < 0.001);
+    assert!((p.eye().y - p.state().feet[1] - 2.0 * 2.156_496_5).abs() < 0.001);
     assert!((Vec3::from(p.state().velocity).length() - 7.0).abs() < 0.05);
 }
 

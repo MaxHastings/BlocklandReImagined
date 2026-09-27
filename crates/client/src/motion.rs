@@ -319,10 +319,12 @@ impl Motion {
             state.yaw = yaw;
             state.pitch = pitch;
             state.head_yaw = head_yaw;
-            let eye = self
+            let tuning = predictor.tuning().clone();
+            let height = self
                 .eye_height
-                .unwrap_or_else(|| state.eye(predictor.tuning()).y - feet.y);
-            self.local_eye = Some(feet + Vec3::Y * eye);
+                .unwrap_or_else(|| state.eye(&tuning).y - feet.y);
+            let ahead = Vec3::new(yaw.sin(), 0.0, -yaw.cos()) * tuning.eye_forward;
+            self.local_eye = Some(feet + Vec3::Y * height + ahead);
             self.presented.insert(view.owner, state);
         } else if let Some(pose) = view.poses.get(&view.owner) {
             self.presented.insert(view.owner, pose.player.clone());

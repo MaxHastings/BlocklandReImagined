@@ -351,6 +351,7 @@ pub(crate) fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
         crouch_height: size.y,
         stand_eye: size.y * 0.9,
         crouch_eye: size.y * 0.9,
+        eye_forward: 0.0,
         forward: d.max_speed,
         backward: d.reverse_speed,
         sideways: d.max_side_speed,

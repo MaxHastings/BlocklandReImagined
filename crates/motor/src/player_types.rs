@@ -187,6 +187,7 @@ impl PlayerType {
                 // horse.dts `Eye` node in its bind pose.
                 stand_eye: 2.4,
                 crouch_eye: 2.4,
+                eye_forward: 0.0,
                 acceleration: 28.0,
                 forward: 12.0,
                 backward: 6.0,
