@@ -2717,6 +2717,12 @@ impl PlatformApp for App {
                                     Some(d.seats.get(usize::from(seat))?.pose == "sit")
                                 })
                                 .unwrap_or(false)),
+                    // Riders show their seat, not their last walking tick.
+                    tick_state: self
+                        .motion
+                        .ticked(*owner)
+                        .filter(|_| view.vitals.get(owner).is_none_or(|v| v.mounted.is_none()))
+                        .cloned(),
                 };
                 self.avatars.get_mut(owner).unwrap().pose_with_animation(
                     &self.avatar_assets,

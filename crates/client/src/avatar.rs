@@ -1,7 +1,7 @@
 //! Native avatar resources, outfit binding and live player pose rendering.
 use anyhow::{Context, Result, ensure};
 use bri_content::{
-    animation::{Layer, sample_layers},
+    animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
 };
 use bri_render::{
@@ -174,8 +174,11 @@ impl AvatarAssets {
             materials,
             translucent_materials,
             mode: "root",
+            forward: true,
             phase: 0.0,
             last_time: None,
+            channels: None,
+            transition: None,
             posed_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
         })
@@ -192,8 +195,14 @@ pub struct AvatarMesh {
     materials: Vec<usize>,
     translucent_materials: Vec<usize>,
     mode: &'static str,
+    /// Torque plays the side clip backward to strafe right.
+    forward: bool,
     phase: f32,
     last_time: Option<f64>,
+    /// Locomotion channels of the last pose, frozen when a transition starts.
+    channels: Option<Channels>,
+    /// Frozen source pose and start time of the current action transition.
+    transition: Option<(Channels, f64)>,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -248,39 +257,85 @@ pub struct AvatarAnimationInput {
     pub dead: bool,
     /// The `sit` emote holds the original sit sequence until the player moves.
     pub sitting: bool,
+    /// The latest simulated tick state. v20 picks the action from the tick's
+    /// own rotation and velocity, not from the render-interpolated body or the
+    /// live mouse yaw; mixing those breaks the exact tie at 45 degrees.
+    pub tick_state: Option<PlayerState>,
 }
 
-/// v20 `Player::pickActionAnimation`: jetting always holds the root pose;
-/// otherwise only a real fall (below -10 vertical speed) uses `fall`.
-pub fn locomotion(player: &PlayerState) -> &'static str {
+/// `sAnimationTransitionTime`, and the shorter jump transition.
+const TRANSITION_TIME: f64 = 0.25;
+const JUMP_TRANSITION_TIME: f64 = 0.15;
+
+/// A picked action sequence and its play direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocomotionAction {
+    pub sequence: &'static str,
+    pub forward: bool,
+}
+
+/// Speeds within this of each other tie. v20 rotates velocity into object
+/// space with the transpose of the same z rotation that built it, so a
+/// 45 degree move yields bit-identical forward and side components. Our
+/// dot products differ by a few ulps instead, which alone must not flip it.
+const PICK_TIE: f32 = 1e-4;
+
+/// v20 `Player::pickActionAnimation` (blocklandv20.exe 0x5a2fe0): jetting
+/// always holds the root pose; otherwise only a real fall (below -10 vertical
+/// speed) uses `fall`.
+///
+/// On the ground an object-space velocity shorter than 0.4, vertical speed
+/// included, is root. Otherwise it walks `actionList` in order (run, back,
+/// side) and keeps the first sequence whose direction dotted with velocity
+/// beats the running maximum, which starts at 0.1. The comparison is strict,
+/// so an exact diagonal keeps `run` or `back`, never `side`. The Blockhead
+/// clips carry no ground motion, so their directions are the table defaults:
+/// run +Y, back -Y and side -X (left). Only the side clip is reused in
+/// reverse, for strafing right. Crouching maps these to the crouch clips.
+pub fn locomotion(player: &PlayerState) -> LocomotionAction {
+    let forward = |sequence| LocomotionAction {
+        sequence,
+        forward: true,
+    };
     if player.jetting {
-        return "root";
+        return forward("root");
     }
     if !player.grounded {
-        return if player.velocity[1] < -10.0 {
+        return forward(if player.velocity[1] < -10.0 {
             "fall"
         } else if player.velocity[1] > 0.5 {
             "jump"
         } else {
             "root"
-        };
+        });
     }
-    let forward = Vec3::new(player.yaw.sin(), 0.0, -player.yaw.cos());
+    let facing = Vec3::new(player.yaw.sin(), 0.0, -player.yaw.cos());
     let right = Vec3::new(player.yaw.cos(), 0.0, player.yaw.sin());
     let velocity = Vec3::from(player.velocity);
-    let f = velocity.dot(forward);
-    let r = velocity.dot(right);
-    if f.abs().max(r.abs()) < 0.1 {
-        return if player.crouched { "crouch" } else { "root" };
+    let (f, r) = (velocity.dot(facing), velocity.dot(right));
+    let [root, run, back, side] = if player.crouched {
+        ["crouch", "crouchrun", "crouchback", "crouchside"]
+    } else {
+        ["root", "run", "back", "side"]
+    };
+    let mut action = forward(root);
+    if velocity.length() < 0.4 {
+        return action;
     }
-    match (player.crouched, r.abs() > f.abs(), f < 0.0) {
-        (true, true, _) => "crouchside",
-        (true, false, true) => "crouchback",
-        (true, false, false) => "crouchrun",
-        (false, true, _) => "side",
-        (false, false, true) => "back",
-        _ => "run",
+    let mut best = 0.1;
+    for (sequence, d) in [(run, f), (back, -f), (side, -r)] {
+        if d > best + PICK_TIE {
+            best = d;
+            action = forward(sequence);
+        } else if sequence == side && -d > best + PICK_TIE {
+            best = -d;
+            action = LocomotionAction {
+                sequence,
+                forward: false,
+            };
+        }
     }
+    action
 }
 impl AvatarMesh {
     /// The same sampled node matrices used by this frame's visible character.
@@ -341,31 +396,53 @@ impl AvatarMesh {
                     .all(|v| v.is_finite()),
             "Invalid avatar pose input"
         );
+        let first = self.last_time.is_none();
         let elapsed = self
             .last_time
             .map_or(0.0, |last| (time - last).clamp(0.0, 0.25) as f32);
         self.last_time = Some(time);
-        let mode = if animation_input.dead {
-            "death1"
+        let scripted = if animation_input.dead {
+            Some("death1")
         } else if animation_input.sitting {
-            "sit"
+            Some("sit")
         } else {
-            locomotion(player)
+            None
         };
-        if self.mode != mode {
-            self.mode = mode;
-            self.phase = 0.0;
-        } else {
-            self.phase += elapsed;
-        }
+        // v20 picks every client frame: it kept `delayTicks` but dropped the
+        // test that would hold an action for `sNewAnimationTickTime`.
+        let next = Some(scripted.map_or_else(
+            || locomotion(animation_input.tick_state.as_ref().unwrap_or(player)),
+            |sequence| LocomotionAction {
+                sequence,
+                forward: true,
+            },
+        ));
+        // `Player::setActionThread` ignores a request for the running action,
+        // even in the other play direction.
+        let next = next.filter(|action| action.sequence != self.mode);
         let clip = assets
             .rig
-            .sequence(mode)
+            .sequence(next.map_or(self.mode, |action| action.sequence))
             .context("Missing avatar movement clip")?;
+        if let Some(action) = next {
+            self.transition = self
+                .channels
+                .take()
+                .filter(|_| !first)
+                .map(|channels| (channels, time));
+            self.mode = action.sequence;
+            self.forward = action.forward;
+            self.phase = if action.forward { 0.0 } else { clip.duration };
+        } else if self.forward {
+            self.phase += elapsed;
+        } else {
+            self.phase -= elapsed;
+        }
+        let mode = self.mode;
         if clip.looping && clip.duration > 0.0 {
             self.phase = self.phase.rem_euclid(clip.duration);
         } else {
-            self.phase = self.phase.min(clip.duration);
+            self.phase = self.phase.clamp(0.0, clip.duration);
         }
         let mut layers = Vec::new();
         layers.push(Layer {
@@ -462,7 +539,39 @@ impl AvatarMesh {
                 });
             }
         }
-        let pose = sample_layers(&assets.rig.shape, &layers)?;
+        // `transitionToSequence` blends the locomotion thread from the pose it
+        // had when the action changed. Its channels end right after the
+        // locomotion clip, or where the absolute layers end for additive jumps.
+        let at = if clip.additive {
+            layers
+                .iter()
+                .position(|layer| layer.animation.additive)
+                .unwrap_or(layers.len())
+        } else {
+            layers
+                .iter()
+                .position(|layer| std::ptr::eq(layer.animation, clip))
+                .context("Missing avatar movement layer")?
+                + 1
+        };
+        let transition_time = if mode == "jump" {
+            JUMP_TRANSITION_TIME
+        } else {
+            TRANSITION_TIME
+        };
+        if self
+            .transition
+            .as_ref()
+            .is_some_and(|(_, start)| time - start >= transition_time)
+        {
+            self.transition = None;
+        }
+        let from = self.transition.as_ref().map(|(channels, start)| {
+            let progress = ((time - start) / transition_time).clamp(0.0, 1.0);
+            (channels, 1.0 - progress as f32)
+        });
+        let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
+        self.channels = Some(channels);
         self.finish_pose(assets, player, pose)
     }
 
@@ -659,28 +768,55 @@ mod tests {
     #[test]
     fn movement_pose_uses_body_facing_and_distinguishes_air_crouch_and_strafe() {
         let mut p = player();
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p).sequence, "root");
         p.velocity = [0.0, 0.0, -7.0];
-        assert_eq!(locomotion(&p), "run");
+        assert_eq!(locomotion(&p).sequence, "run");
         p.yaw = std::f32::consts::PI;
-        assert_eq!(locomotion(&p), "back");
+        assert_eq!(locomotion(&p).sequence, "back");
         p.crouched = true;
-        assert_eq!(locomotion(&p), "crouchback");
+        assert_eq!(locomotion(&p).sequence, "crouchback");
         p.velocity = [3.0, 0.0, 0.0];
-        assert_eq!(locomotion(&p), "crouchside");
+        assert_eq!(locomotion(&p).sequence, "crouchside");
         p.velocity = [0.0; 3];
-        assert_eq!(locomotion(&p), "crouch");
+        assert_eq!(locomotion(&p).sequence, "crouch");
         p.grounded = false;
         p.velocity[1] = 4.0;
-        assert_eq!(locomotion(&p), "jump");
+        assert_eq!(locomotion(&p).sequence, "jump");
         p.velocity[1] = -4.0;
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p).sequence, "root");
         p.velocity[1] = -12.0;
-        assert_eq!(locomotion(&p), "fall");
+        assert_eq!(locomotion(&p).sequence, "fall");
         p.jetting = true;
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p).sequence, "root");
         p.velocity[1] = 4.0;
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p).sequence, "root");
+    }
+
+    #[test]
+    fn pick_follows_torque_action_list_order_and_reverses_side_for_right() {
+        let mut p = player();
+        let action = |p: &PlayerState| {
+            let a = locomotion(p);
+            (a.sequence, a.forward)
+        };
+        // Yaw 0 faces -Z with +X on the right.
+        p.velocity = [-6.0, 0.0, 0.0];
+        assert_eq!(action(&p), ("side", true));
+        p.velocity = [6.0, 0.0, 0.0];
+        assert_eq!(action(&p), ("side", false));
+        // Exact diagonals tie; the strict comparison keeps the earlier entry.
+        p.velocity = [4.0, 0.0, -4.0];
+        assert_eq!(action(&p), ("run", true));
+        p.velocity = [4.0, 0.0, 4.0];
+        assert_eq!(action(&p), ("back", true));
+        p.velocity = [4.001, 0.0, -4.0];
+        assert_eq!(action(&p), ("side", false));
+        // Every dot product must exceed 0.1.
+        p.velocity = [0.1, 0.0, -0.1];
+        assert_eq!(action(&p), ("root", true));
+        p.crouched = true;
+        p.velocity = [2.0, 0.0, 0.0];
+        assert_eq!(action(&p), ("crouchside", false));
     }
 
     #[test]

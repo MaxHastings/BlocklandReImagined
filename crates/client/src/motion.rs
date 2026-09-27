@@ -58,6 +58,8 @@ pub struct Motion {
     local_seconds: f64,
     newest_local_tick: u64,
     presented: BTreeMap<OwnerId, PlayerState>,
+    /// Each player's latest simulated tick, uninterpolated.
+    ticked: BTreeMap<OwnerId, PlayerState>,
     local_eye: Option<Vec3>,
     mounted: bool,
 }
@@ -230,9 +232,11 @@ impl Motion {
         head_yaw: f32,
     ) -> &BTreeMap<OwnerId, PlayerState> {
         self.presented.clear();
+        self.ticked.clear();
         self.local_eye = None;
         if let Some(predictor) = &self.predictor {
             let current = predictor.state();
+            self.ticked.insert(view.owner, current.clone());
             let previous = self.previous.as_ref().unwrap_or(current);
             let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
             let mut state = blend(previous, current, alpha);
@@ -256,16 +260,31 @@ impl Motion {
             if *owner == view.owner {
                 continue;
             }
-            let state = match (self.remotes.get(owner), render_tick) {
-                (Some(history), Some(tick)) if !history.is_empty() => sample(history, tick),
-                _ => pose.player.clone(),
+            let (state, ticked) = match (self.remotes.get(owner), render_tick) {
+                (Some(history), Some(tick)) if !history.is_empty() => (
+                    sample(history, tick),
+                    history
+                        .iter()
+                        .take_while(|pose| pose.tick as f64 <= tick)
+                        .last()
+                        .unwrap_or(history.front().unwrap())
+                        .player
+                        .clone(),
+                ),
+                _ => (pose.player.clone(), pose.player.clone()),
             };
+            self.ticked.insert(*owner, ticked);
             self.presented.insert(*owner, state);
         }
         &self.presented
     }
     pub fn presented(&self) -> &BTreeMap<OwnerId, PlayerState> {
         &self.presented
+    }
+    /// The simulated tick state at or before this frame's presented state:
+    /// the rotation and velocity the original action pick sees.
+    pub fn ticked(&self, owner: OwnerId) -> Option<&PlayerState> {
+        self.ticked.get(&owner)
     }
     /// Smoothed local eye (prediction, render interpolation and crouch blend).
     pub fn local_eye(&self) -> Option<Vec3> {

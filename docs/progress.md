@@ -1721,6 +1721,28 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   green, yellow, white, translucent blue and black) and checks every particle's
   RGB; sim `spray_cans_mount_in_hand_and_paint_by_projectile` checks the cues.
 
+- 2026-09-27 Diagonal walk animation. Cause: at 45 degrees the picker
+  compared |right| > |forward| on the render-interpolated body (live mouse
+  yaw, lerped tick velocity), so ulp-level noise flipped `run` (legs swing)
+  and `side` (hip bob only) every frame and restarted the clip each time; an
+  offscreen capture measured right-leg jumps of 77 deg between 60 Hz frames.
+  Now `avatar::locomotion` follows v20 `pickActionAnimation` as read from
+  blocklandv20.exe by the quirks thread: re-pick every frame (no
+  `delayTicks` hold), root below 0.4 object-space speed, then run/back/side
+  with curMax 0.1, strict `>` (ties keep run/back), side reversed for right,
+  crouch maps to the crouch clips, fixed 1.0 time scale. `setActionThread`
+  semantics: same action never restarts (reverse flag stays stale), a change
+  restarts at pos 0 (1 if reversed) with a 0.25 s transition (0.15 s jumps)
+  from the frozen pose (`animation::sample_layers_with_transition`). The pick
+  reads the latest simulated tick (`Motion::ticked`), where rotation and
+  velocity agree, as Torque's tick-time `mWorldToObj` does; `PICK_TIE` (1e-4)
+  stands in for Torque's bit-exact 45 degree tie. Not ported: water coverage
+  gate, first-person side-to-run swap. Verified:
+  `cargo test -p bri-client --test avatar_diagonal_render --release -- --ignored`
+  renders forward, slow-turning and wobbling 45 degree walks offscreen; both
+  diagonals match a straight run's leg motion within 0.03 deg/frame
+  (sheets in `artifacts/avatar-diagonal/`).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
