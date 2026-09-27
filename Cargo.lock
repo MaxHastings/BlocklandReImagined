@@ -488,6 +488,7 @@ dependencies = [
  "bri-identity",
  "bri-minigames",
  "bri-physics",
+ "bri-progress",
  "bri-sim",
  "bri-vehicles",
  "bri-weapons",
@@ -519,6 +520,10 @@ dependencies = [
  "rapier3d",
  "serde_json",
 ]
+
+[[package]]
+name = "bri-progress"
+version = "0.1.0"
 
 [[package]]
 name = "bri-render"

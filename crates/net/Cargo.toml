@@ -11,6 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
+bri-progress = { path = "../progress" }
 bri-sim = { path = "../sim" }
 bri-admin = { path = "../admin" }
 bri-identity = { path = "../identity" }

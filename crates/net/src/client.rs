@@ -1,18 +1,19 @@
 use crate::{codec, protocol::*, replica::Replica, server::transport};
 use anyhow::{Context, Result, ensure};
+use bri_identity::ClientIdentity;
+use bri_progress::{Progress, Stage, Unit};
 use bri_sim::{
     player::MoveInput,
     session::{Command, Reply},
 };
-use bri_identity::ClientIdentity;
 use bri_world::OwnerId;
+use sha2::Digest;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 use tokio::sync::mpsc;
-use sha2::Digest;
 enum Incoming {
     Reliable(Box<Message>),
     Pose(Pose),
@@ -71,7 +72,17 @@ impl Client {
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
     ) -> Result<Self> {
-        Self::connect_inner(address, certificate, name, content_id, resume, host, None).await
+        Self::connect_inner(
+            address,
+            certificate,
+            name,
+            content_id,
+            resume,
+            host,
+            None,
+            Progress::default(),
+        )
+        .await
     }
     pub async fn connect_with_identity(
         address: SocketAddr,
@@ -82,6 +93,31 @@ impl Client {
         host: Option<ResumeToken>,
         identity: &ClientIdentity,
     ) -> Result<Self> {
+        Self::connect_reporting(
+            address,
+            certificate,
+            name,
+            content_id,
+            resume,
+            host,
+            identity,
+            Progress::default(),
+        )
+        .await
+    }
+    /// Connects like [`Client::connect_with_identity`], reporting the
+    /// handshake and the world download into `progress`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_reporting(
+        address: SocketAddr,
+        certificate: &[u8],
+        name: String,
+        content_id: String,
+        resume: Option<ResumeToken>,
+        host: Option<ResumeToken>,
+        identity: &ClientIdentity,
+        progress: Progress,
+    ) -> Result<Self> {
         Self::connect_inner(
             address,
             certificate,
@@ -90,9 +126,11 @@ impl Client {
             resume,
             host,
             Some(identity),
+            progress,
         )
         .await
     }
+    #[allow(clippy::too_many_arguments)]
     async fn connect_inner(
         address: SocketAddr,
         certificate: &[u8],
@@ -101,7 +139,9 @@ impl Client {
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
         identity: Option<&ClientIdentity>,
+        progress: Progress,
     ) -> Result<Self> {
+        progress.begin(Stage::Connecting, Unit::Steps, None);
         let mut roots = quinn::rustls::RootCertStore::empty();
         roots.add(certificate.to_vec().into())?;
         let mut config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))?;
@@ -147,17 +187,18 @@ impl Client {
                 signature: identity.sign(&transcript)?.to_vec(),
             });
         }
-        codec::write_small_request(
-            &mut send,
-            &hello,
-        )
-        .await?;
+        codec::write_small_request(&mut send, &hello).await?;
+        // The host builds the world checkpoint before the Welcome starts.
+        progress.begin(Stage::WaitingForServer, Unit::Steps, None);
         let welcome: Message = codec::decode(
-            &tokio::time::timeout(
+            &codec::read_frame_reporting(
+                &mut receive,
+                codec::MAX_FRAME,
                 Duration::from_secs(30),
-                codec::read_frame(&mut receive, codec::MAX_FRAME),
+                &progress,
+                Stage::ReceivingWorld,
             )
-            .await??,
+            .await?,
         )?;
         let (owner, administrator, resume, checkpoint) = match welcome {
             Message::Welcome {
