@@ -2009,6 +2009,7 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   test against emulated output, `brick_audit` render vs
   `tools/brick_reference.py` independent v20 reference (1.1/255 mean
   difference). Open: port the exact v20 colour/shape FX equations.
+
 - 2026-09-27 Engine foundations audit (`docs/audits/engine-foundations.md`),
   protocol VERSION 21. Fixed: a hostile movement sequence could panic a
   dev-built host; any unencodable Update/MapChanged/Notice/admin snapshot
@@ -2052,3 +2053,11 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `artifacts/player-types/`). Open: horse `cameraVerticalOffset` (the camera
   pivots at the horse's eye), energy carried across a datablock change is
   clamped like v20 rather than refilled.
+
+- 2026-09-27 Exact v20 brick colour/shape FX. Pearl, chrome, glow, blink,
+  swirl, rainbow, undulo and water now follow the per-vertex equations of the
+  exe's quad emitter (0x52ed70; `docs/audits/bricks.md`). FX data moved from
+  the lightmap UV hack to a new `SceneVertex::fx` attribute (location 10:
+  brick centre + packed ids). Blink no longer makes bricks translucent.
+  Evidence: `brick_fx` and `item_rendering` GPU tests, `brick_audit` FX scene
+  vs the reference renderer (1.3/255 mean difference).

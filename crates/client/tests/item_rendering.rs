@@ -31,7 +31,7 @@ fn native_models_tints_mounts_icons_and_persistent_pose() -> Result<()> {
         let scene = assets.item_scene(&id, Mat4::IDENTITY)?;
         assert!(!scene.vertices.is_empty(), "Empty item {id}");
         assert!(assets.icon(&id)?.is_some());
-        assert!(scene.vertices.iter().all(|v| v.lightmap_uv == [0.; 2]));
+        assert!(scene.vertices.iter().all(|v| v.fx == [0.; 4]));
     }
     assert_eq!(
         assets.presentation.items["v20.weapon.bluekeyitem"].tint,
@@ -285,6 +285,7 @@ fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode, kind: MaterialKind) -> Sc
             uv: [0.; 2],
             lightmap_uv: [0.; 2],
             color,
+            fx: [0.; 4],
         })
         .to_vec();
     let mut scene = SceneData {
@@ -308,7 +309,7 @@ fn additive_unlit_and_ordinary_alpha_pixels() -> Result<()> {
     for kind in [MaterialKind::Unlit, MaterialKind::UnlitOverlay] {
         let mut invalid = triangle([1.; 4], 0.5, AlphaMode::Opaque, kind);
         for v in &mut invalid.vertices {
-            v.lightmap_uv = BrickFx::new(1, 0)?.encode()?;
+            v.fx = BrickFx::new(1, 0)?.encode([0.; 3], 0, 1)?;
         }
         assert!(
             invalid.validate().is_err(),

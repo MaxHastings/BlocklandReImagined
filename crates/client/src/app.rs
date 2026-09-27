@@ -5166,6 +5166,7 @@ image: "v20.image.gunimage".into(),
                 uv: [0.0; 2],
                 lightmap_uv: [0.0; 2],
                 color: [0.4, 0.6, 0.2, 0.5],
+                fx: [0.; 4],
             });
         }
         scene.indices = vec![0, 1, 2];

@@ -84,57 +84,73 @@ fn render(gpu: &Headless, scene: &SceneData, camera: &Camera, path: &Path) -> Re
     Ok(())
 }
 
-/// (catalog id, x, z, quarter turns, palette index, print alias)
-const LAYOUT: &[(&str, f32, f32, u8, u8, Option<&str>)] = &[
-    ("v20/brick/brick2x4data", -3.0, -2.0, 0, 0, None),
-    ("v20/brick/brick4x4fdata", -1.0, -2.0, 0, 1, None),
-    ("v20/brick/brick1x4fdata", 1.0, -2.25, 0, 2, None),
-    ("v20/brick/brick2x2rampdata", 3.0, -2.0, 0, 3, None),
-    ("v20/brick/brick2x2x5rampdata", 5.0, -2.0, 0, 0, None),
-    ("v20/brick/brick2x2rampcornerdata", -3.0, 0.5, 0, 1, None),
-    ("v20/brick/brick3x3rampcornerdata", -0.75, 0.25, 0, 2, None),
-    (
-        "v20/brick/brick2x2cresthighcornerdata",
-        1.5,
-        0.5,
-        0,
-        3,
-        None,
-    ),
-    ("v20/brick/brick1x2rampupdata", 3.25, 0.5, 0, 0, None),
-    ("v20/brick/brick2x2rounddata", 5.0, 0.5, 0, 1, None),
-    ("v20/brick/brick2x2x2conedata", -3.0, 3.0, 0, 2, None),
-    ("v20/brick/brick1x1rounddata", -1.25, 3.25, 0, 3, None),
-    (
-        "v20/brick/brick1x1printdata",
-        0.25,
-        3.25,
-        0,
-        2,
-        Some("Letters/A"),
-    ),
-    (
-        "v20/brick/brick2x2fprintdata",
-        2.0,
-        3.0,
-        0,
-        2,
-        Some("Letters/B"),
-    ),
-    (
-        "v20/brick/brick1x4x4printdata",
-        4.0,
-        3.25,
-        0,
-        2,
-        Some("Letters/C"),
-    ),
-    ("v20/brick/brick2x4data", 6.0, 3.0, 0, 4, None),
+struct Entry {
+    id: &'static str,
+    x: f32,
+    z: f32,
+    color: u8,
+    print: Option<&'static str>,
+    color_fx: u8,
+    shape_fx: u8,
+}
+const fn plain(id: &'static str, x: f32, z: f32, color: u8) -> Entry {
+    Entry {
+        id,
+        x,
+        z,
+        color,
+        print: None,
+        color_fx: 0,
+        shape_fx: 0,
+    }
+}
+const fn printed(id: &'static str, x: f32, z: f32, print: &'static str) -> Entry {
+    Entry {
+        print: Some(print),
+        ..plain(id, x, z, 2)
+    }
+}
+const fn fx(x: f32, z: f32, color: u8, color_fx: u8, shape_fx: u8) -> Entry {
+    Entry {
+        color_fx,
+        shape_fx,
+        ..plain("v20/brick/brick2x4data", x, z, color)
+    }
+}
+const FAMILIES: &[Entry] = &[
+    plain("v20/brick/brick2x4data", -3.0, -2.0, 0),
+    plain("v20/brick/brick4x4fdata", -1.0, -2.0, 1),
+    plain("v20/brick/brick1x4fdata", 1.0, -2.25, 2),
+    plain("v20/brick/brick2x2rampdata", 3.0, -2.0, 3),
+    plain("v20/brick/brick2x2x5rampdata", 5.0, -2.0, 0),
+    plain("v20/brick/brick2x2rampcornerdata", -3.0, 0.5, 1),
+    plain("v20/brick/brick3x3rampcornerdata", -0.75, 0.25, 2),
+    plain("v20/brick/brick2x2cresthighcornerdata", 1.5, 0.5, 3),
+    plain("v20/brick/brick1x2rampupdata", 3.25, 0.5, 0),
+    plain("v20/brick/brick2x2rounddata", 5.0, 0.5, 1),
+    plain("v20/brick/brick2x2x2conedata", -3.0, 3.0, 2),
+    plain("v20/brick/brick1x1rounddata", -1.25, 3.25, 3),
+    printed("v20/brick/brick1x1printdata", 0.25, 3.25, "Letters/A"),
+    printed("v20/brick/brick2x2fprintdata", 2.0, 3.0, "Letters/B"),
+    printed("v20/brick/brick1x4x4printdata", 4.0, 3.25, "Letters/C"),
+    plain("v20/brick/brick2x4data", 6.0, 3.0, 4),
+];
+/// Every colour FX (top row: pearl, chrome, glow, blink; middle: swirl,
+/// rainbow, none) and both shape FX, frozen at 0.37 s.
+const FX: &[Entry] = &[
+    fx(-3.0, -2.0, 0, 1, 0),
+    fx(-0.5, -2.0, 3, 2, 0),
+    fx(2.0, -2.0, 1, 3, 0),
+    fx(4.5, -2.0, 0, 4, 0),
+    fx(-3.0, 1.0, 3, 5, 0),
+    fx(-0.5, 1.0, 2, 6, 0),
+    fx(2.0, 1.0, 1, 0, 0),
+    fx(4.5, 1.0, 2, 0, 1),
+    fx(-0.5, 4.0, 3, 0, 2),
+    fx(2.0, 4.0, 0, 1, 2),
 ];
 
-#[test]
-#[ignore = "requires local converted original assets; offscreen only"]
-fn brick_family_audit_scene() -> Result<()> {
+fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");
     let config = bri_client::content::ContentConfig::default();
@@ -168,41 +184,43 @@ fn brick_family_audit_scene() -> Result<()> {
         bricks: BTreeMap::new(),
     };
     let mut records = vec![];
-    for (index, (id, x, z, turns, color, print)) in LAYOUT.iter().enumerate() {
-        let entry = catalog
+    for (index, entry) in layout.iter().enumerate() {
+        let catalog_entry = catalog
             .bricks
             .iter()
-            .find(|b| b.id == *id)
-            .with_context(|| format!("Missing catalog brick {id}"))?;
-        let mesh = &meshes[*id];
+            .find(|b| b.id == entry.id)
+            .with_context(|| format!("Missing catalog brick {}", entry.id))?;
+        let mesh = &meshes[entry.id];
         let height = mesh.height_plates as f32 * 0.2;
         let mut brick = Brick::new(
-            ContentRef::Resolved((*id).into()),
-            [*x, height * 0.5, *z],
+            ContentRef::Resolved(entry.id.into()),
+            [entry.x, height * 0.5, entry.z],
             1,
         );
-        brick.quarter_turns = *turns;
-        brick.color = *color;
-        let print_path = print.map(|alias| {
+        brick.color = entry.color;
+        brick.color_effect = entry.color_fx;
+        brick.shape_effect = entry.shape_fx;
+        let print_path = entry.print.map(|alias| {
             let p = materials.bundle.resolve(alias).expect("print alias");
             brick.print = Some(ContentRef::Resolved(p.id.clone()));
             p.diffuse.path.clone()
         });
         records.push(serde_json::json!({
-            "id": id, "blb": entry.mesh_id, "position": brick.position,
-            "quarter_turns": turns, "paint": palette[*color as usize],
-            "print": print_path,
+            "id": entry.id, "blb": catalog_entry.mesh_id, "position": brick.position,
+            "quarter_turns": 0, "paint": palette[entry.color as usize],
+            "print": print_path, "color_fx": entry.color_fx, "shape_fx": entry.shape_fx,
+            "depth_studs": mesh.footprint_studs[1],
         }));
         world.bricks.insert(index as u64 + 1, brick);
     }
     let scene = build_world_scene_materials(&world, &meshes, 4_000_000, Some(&materials))?;
     ensure!(!scene.indices.is_empty(), "Empty audit scene");
-    let out = root.join("artifacts/brick-audit");
+    let out = root.join("artifacts/brick-audit").join(name);
     std::fs::create_dir_all(&out)?;
     let eye = [1.5, 7.5, 10.5];
     let target = [1.5, 0.0, 0.5];
     let fov = 45_f32;
-    let camera = Camera::perspective(
+    let mut camera = Camera::perspective(
         eye,
         target,
         WIDTH as f32 / HEIGHT as f32,
@@ -210,13 +228,14 @@ fn brick_family_audit_scene() -> Result<()> {
         0.1,
         200.0,
     );
+    camera.atmosphere[2] = time;
     let gpu = Headless::new()?;
     render(&gpu, &scene, &camera, &out.join("ours.png"))?;
     std::fs::write(
         out.join("layout.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "width": WIDTH, "height": HEIGHT, "eye": eye, "target": target,
-            "fov_y_degrees": fov, "near": 0.1, "far": 200.0,
+            "fov_y_degrees": fov, "near": 0.1, "far": 200.0, "time_seconds": time,
             "sun_direction": &camera.sun_direction[..3], "sun_color": &camera.sun_color[..3],
             "ambient": &camera.ambient[..3], "background": [0.3, 0.3, 0.3],
             "materials": content.join(&config.brick_materials),
@@ -224,4 +243,16 @@ fn brick_family_audit_scene() -> Result<()> {
         }))?,
     )?;
     Ok(())
+}
+
+#[test]
+#[ignore = "requires local converted original assets; offscreen only"]
+fn brick_family_audit_scene() -> Result<()> {
+    audit_scene("families", FAMILIES, 0.0)
+}
+
+#[test]
+#[ignore = "requires local converted original assets; offscreen only"]
+fn brick_fx_audit_scene() -> Result<()> {
+    audit_scene("fx", FX, 0.37)
 }

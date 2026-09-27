@@ -618,6 +618,7 @@ fn load_interior(
                     inset[a].0 + vertex.lightmap_uv[a] * inset[a].1
                 }),
                 color: [1.0; 4],
+                fx: [0.; 4],
             });
         }
         for triangle in &surface.triangles {

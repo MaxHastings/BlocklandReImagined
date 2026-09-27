@@ -17,52 +17,81 @@ pub struct SceneVertex {
     pub lightmap_uv: [f32; 2],
     /// Display-encoded original material/brick color, straight alpha.
     pub color: [f32; 4],
+    /// Brick FX only: world brick centre and packed ids (`BrickFx::encode`).
+    /// All zero for everything else, including bricks without FX.
+    pub fx: [f32; 4],
 }
 
-/// Original recovered color IDs0..6 and shape IDs0..2. Equations are native
-/// visual approximations until an exact v20 renderer/reference comparison exists.
+/// v20 colour FX 0..6 (None, Pearl, Chrome, Glow, Blink, Swirl, Rainbow) and
+/// shape FX 0..2 (None, Undulo, Water). The shader evaluates the per-vertex
+/// equations of `blocklandv20.exe`'s quad emitter 0x52ed70; see
+/// docs/audits/bricks.md.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BrickFx {
     pub color: u8,
     pub shape: u8,
+}
+/// Decoded per-vertex FX record.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrickFxVertex {
+    pub fx: BrickFx,
+    /// v20 quad corner 0..3; swirl phases each corner by 250 ms.
+    pub corner: u8,
+    /// Datablock depth (brickSizeY) in studs, scaling pearl and chrome.
+    pub depth_studs: u8,
+    pub centre: [f32; 3],
 }
 impl BrickFx {
     pub fn new(color: u8, shape: u8) -> Result<Self> {
         ensure!(color <= 6 && shape <= 2, "Unsupported brick FX IDs");
         Ok(Self { color, shape })
     }
-    /// Brick-only spare UV encoding; marker is tested alongside material kind.
-    /// Never valid for a lightmapped surface, terrain, water, sky or avatar UV.
-    pub fn encode(self) -> Result<[f32; 2]> {
+    /// `[centre, 1 + color + 8*shape + 32*corner + 128*depth]`, or zeros
+    /// when the brick has no FX. Integers stay exact in f32.
+    pub fn encode(self, centre: [f32; 3], corner: u8, depth_studs: u8) -> Result<[f32; 4]> {
         Self::new(self.color, self.shape)?;
-        Ok(if self == Self::default() {
-            [0.; 2]
-        } else {
-            [
-                1024. + f32::from(self.color) + 8. * f32::from(self.shape),
-                -4096.,
-            ]
+        ensure!(
+            corner < 4 && depth_studs > 0,
+            "Invalid brick FX corner/depth"
+        );
+        if self == Self::default() {
+            return Ok([0.; 4]);
+        }
+        let code = 1
+            + u32::from(self.color)
+            + 8 * u32::from(self.shape)
+            + 32 * u32::from(corner)
+            + 128 * u32::from(depth_studs);
+        Ok([centre[0], centre[1], centre[2], code as f32])
+    }
+    pub fn decode(value: [f32; 4]) -> Option<BrickFxVertex> {
+        if value == [0.; 4] {
+            return Some(BrickFxVertex {
+                fx: Self::default(),
+                corner: 0,
+                depth_studs: 1,
+                centre: [0.; 3],
+            });
+        }
+        if !value.iter().all(|v| v.is_finite()) || value[3] < 1. || value[3].fract() != 0. {
+            return None;
+        }
+        let code = value[3] as u32 - 1;
+        let fx = Self::new((code % 8) as u8, (code / 8 % 4) as u8).ok()?;
+        let depth = code / 128;
+        (fx != Self::default() && (1..=255).contains(&depth)).then_some(BrickFxVertex {
+            fx,
+            corner: (code / 32 % 4) as u8,
+            depth_studs: depth as u8,
+            centre: [value[0], value[1], value[2]],
         })
     }
-    pub fn decode(value: [f32; 2]) -> Option<Self> {
-        if value == [0.; 2] {
-            return Some(Self::default());
-        }
-        if value[1] != -4096. || !value[0].is_finite() {
-            return None;
-        }
-        let code = value[0] - 1024.;
-        if !(0. ..=22.).contains(&code) || code.fract() != 0. {
-            return None;
-        }
-        let code = code as u8;
-        Self::new(code % 8, code / 8).ok()
-    }
     /// Conservative world-axis visual bounds; gameplay collision stays authored.
+    /// Undulo moves each axis by at most 0.08; water only lowers, by up to 0.2.
     pub fn displacement_bounds(self) -> [f32; 3] {
         match self.shape {
-            1 => [0.1; 3],
-            2 => [0., 0.1, 0.],
+            1 => [0.08; 3],
+            2 => [0., 0.2, 0.],
             _ => [0.; 3],
         }
     }
@@ -311,7 +340,9 @@ impl SceneData {
         fx: BrickFx,
     ) -> Result<()> {
         use bri_content::brick::Surface;
-        let fx_uv = fx.encode()?;
+        let centre = [transform[12], transform[13], transform[14]];
+        let depth_studs = mesh.footprint_studs[1].clamp(1, 255) as u8;
+        fx.encode(centre, 0, depth_studs)?;
         resolve_brick_vertex_color(paint, None)?;
         // Validate all authored sentinels before publishing any geometry.
         for quad in &mesh.quads {
@@ -377,7 +408,7 @@ impl SceneData {
                     resolved.rgba
                 })
             });
-            if (colors.iter().any(|c| c[3] < 1.0) || fx.color == 4)
+            if colors.iter().any(|c| c[3] < 1.0)
                 && self.materials[material].alpha != AlphaMode::Blend
             {
                 material = *blend_materials.entry(material).or_insert_with(|| {
@@ -391,8 +422,16 @@ impl SceneData {
                     index
                 });
             }
+            // v20 applies colour FX only to paint quads (negative authored
+            // alpha); literal-colour quads keep shape FX alone.
+            let quad_fx = if quad.colors.is_some_and(|c| c.iter().any(|c| c[3] >= 0.0)) {
+                BrickFx { color: 0, ..fx }
+            } else {
+                fx
+            };
             let base = self.vertices.len() as u32;
-            for (vertex, color) in quad.vertices.iter().zip(colors) {
+            // Native quads list v20's corners in order 0, 3, 2, 1.
+            for ((vertex, color), corner) in quad.vertices.iter().zip(colors).zip([0, 3, 2, 1]) {
                 self.vertices.push(SceneVertex {
                     position: placement
                         .transform_point3(Vec3::from(vertex.position))
@@ -402,8 +441,9 @@ impl SceneData {
                         .normalize_or_zero()
                         .to_array(),
                     uv: vertex.uv,
-                    lightmap_uv: fx_uv,
+                    lightmap_uv: [0.; 2],
                     color,
+                    fx: quad_fx.encode(centre, corner, depth_studs)?,
                 });
             }
             let group = groups.entry(material).or_default();
@@ -521,6 +561,7 @@ impl SceneData {
                 .chain(&v.uv)
                 .chain(&v.lightmap_uv)
                 .chain(&v.color)
+                .chain(&v.fx)
                 .all(|f| f.is_finite())),
             "Non-finite scene vertex"
         );
@@ -557,10 +598,10 @@ impl SceneData {
                 "Invalid scene batch"
             );
             for &index in &self.indices[batch.indices.start as usize..batch.indices.end as usize] {
-                let uv = self.vertices[index as usize].lightmap_uv;
-                if uv[1] == -4096. {
+                let fx = self.vertices[index as usize].fx;
+                if fx != [0.; 4] {
                     ensure!(
-                        BrickFx::decode(uv).is_some()
+                        BrickFx::decode(fx).is_some()
                             && matches!(
                                 self.materials[batch.material].kind,
                                 MaterialKind::VertexLit | MaterialKind::BrickOverlay
@@ -858,6 +899,7 @@ fn geometry_buffers(
         uv: [0.; 2],
         lightmap_uv: [0.; 2],
         color: [0.; 4],
+        fx: [0.; 4],
     }];
     let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -938,8 +980,7 @@ impl TextureFiltering {
         }
     }
 }
-const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
-    wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32x2,4=>Float32x4];
+const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32x2,4=>Float32x4,10=>Float32x4];
 const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
     wgpu::vertex_attr_array![5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4];
 /// Scene vertices plus per-instance model matrix and tint.

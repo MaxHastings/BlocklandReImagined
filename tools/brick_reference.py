@@ -162,6 +162,77 @@ def generated(w, d, h):
     return quads
 
 
+def folded(ms, period):
+    t = ms % period
+    return min(t, period - t) / (period * 0.5)
+
+
+def v20_fx(record, verts, normals, bases, paint_quad, eye, ms, sun, sun_color):
+    """Colour/shape FX of quad emitter 0x52ed70, in Torque axes (x, y, z) =
+    native (x, -z, y). Returns new vertices, normals and colours."""
+    color_fx, shape_fx = record.get("color_fx", 0), record.get("shape_fx", 0)
+    centre = np.array(record["position"], float)
+    depth = record.get("depth_studs", 1)
+    tau = 2 * math.pi
+    verts = [v.copy() for v in verts]
+    normals = [n.copy() for n in normals]
+    bases = [b.copy() for b in bases]
+    torque = lambda v: (v[0], -v[2], v[1])
+    if shape_fx == 1:
+        dist = np.linalg.norm(centre - eye)
+        if dist < 100:
+            amp = min(max(100 - dist, 0), 10) * 0.1 * 0.08
+            phase = (ms % 1000) * 0.001 * tau
+            for v in verts:
+                x, y, z = torque(v)
+                s_ = (y + x + z) * 1.256637 + phase
+                dx, dy, dz = math.sin(s_ + 2.094395) * amp, math.sin(s_ + 4.18879) * amp, math.sin(s_ + tau) * amp
+                v += np.array([dx, dz, -dy])
+    elif shape_fx == 2:
+        phase = (ms % 2000) * 0.0005 * tau
+        for v, n in zip(verts, normals):
+            a = v[0] * 1.256637 + phase
+            v[1] -= (math.sin(a + tau) + 1) * 0.1
+            n[1] += (math.sin(a + 2.094395) + 1) * 0.25
+    if not paint_quad or color_fx == 0:
+        return verts, normals, bases
+    paint = bases[0]
+    toward = centre - eye
+    toward = toward / max(np.linalg.norm(toward), 1e-9)
+    for k, (v, n) in enumerate(zip(verts, normals)):
+        if color_fx == 1:
+            t = min(max((v - centre) @ toward / (depth * 0.125) + 0.5, 0), 1)
+            rgb = np.minimum(paint[:3] * 1.6, 1) * (1 - t) + paint[:3] * 0.9 * t
+            bases[k] = np.append(rgb, paint[3] * (1 - t) + paint[3] * 0.9 * t)
+        elif color_fx == 2:
+            t = min(max((v - centre) @ toward / (depth * 0.5) + 0.5, 0), 1)
+            if t > 0.5:
+                s_ = min(max((t - 0.5) * 2, 0), 1)
+                rgb = paint[:3] * 0.5 * s_ + paint[:3] * (1 - s_)
+            else:
+                s_ = min(max(t * 2, 0), 1)
+                rgb = paint[:3] * s_ + (1 - s_)
+            bases[k] = np.append(rgb, paint[3])
+            normals[k] = n * 2
+        elif color_fx == 3:
+            shortest = 1.0
+            for c in sun_color:
+                if c > 0:
+                    shortest = min(shortest, c)
+            normals[k] = sun / shortest
+        elif color_fx == 4:
+            bases[k] = np.append(paint[:3] * (0.7 + 0.6 * folded(ms, 1000)), paint[3])
+        elif color_fx == 5:
+            bases[k] = np.append(paint[:3] * (0.4 + 0.6 * folded(ms + 250 * k, 1000)), paint[3])
+        elif color_fx == 6:
+            phase = (ms % 1000) * 0.001 * tau
+            x, y, z = torque(v)
+            wave = np.array([math.sin(y + z - x + phase + 2.094395), math.sin(x - y + z + phase + 4.18879),
+                             math.sin(y + x - z + phase + tau)])
+            bases[k] = np.append(wave * paint[:3], paint[3])
+    return verts, normals, bases
+
+
 def look_at(eye, target):
     f = target - eye
     f /= np.linalg.norm(f)
@@ -194,6 +265,7 @@ def main():
     sun = -np.array(layout["sun_direction"], float)
     sun /= np.linalg.norm(sun)
     sun_color = np.array(layout["sun_color"])
+    ms = layout.get("time_seconds", 0.0) * 1000.0
     ambient = np.array(layout["ambient"])
     shapes = install / "base/data/shapes"
     textures = {k: load_texture(shapes / f"{v}.png") for k, v in FILES.items()}
@@ -215,20 +287,23 @@ def main():
             chain = print_chain if tex == 5 else textures[tex]
             if chain is None:
                 continue
-            verts, lits = [], []
+            verts, norms, bases = [], [], []
             for k in range(4):
                 p = np.array(pos[k], float)
-                native = rot @ np.array([p[0] * 0.5, p[2] * 0.2, -p[1] * 0.5]) + origin
+                verts.append(rot @ np.array([p[0] * 0.5, p[2] * 0.2, -p[1] * 0.5]) + origin)
                 n = np.array(normals[k], float)
                 n = rot @ np.array([n[0], n[2], -n[1]])
-                n /= max(np.linalg.norm(n), 1e-9)
+                norms.append(n / max(np.linalg.norm(n), 1e-9))
                 base = paint.copy()
                 if colors is not None:
                     c = np.array(colors[k], float)
                     base = np.concatenate([np.clip(paint[:3] + c[:3], 0, 1), paint[3:]]) if c[3] < 0 else c
-                lit = np.clip(base[:3] * (ambient + sun_color * max(n @ sun, 0.0)), 0, 1)
-                verts.append(native)
-                lits.append(np.concatenate([lit, [base[3]]]))
+                bases.append(base)
+            paint_quad = colors is None or all(c[3] < 0 for c in colors)
+            verts, norms, bases = v20_fx(record, verts, norms, bases, paint_quad, eye, ms, sun, sun_color)
+            # Fixed-function lighting with the (possibly unnormalised) FX normal.
+            lits = [np.concatenate([np.clip(b[:3] * (ambient + sun_color * max(n @ sun, 0.0)), 0, 1), [b[3]]])
+                    for b, n in zip(bases, norms)]
             translucent = any(l[3] < 1 for l in lits)
             for a, b, c in ((0, 1, 2), (0, 2, 3)):
                 tris.append((tex, translucent, [verts[a], verts[b], verts[c]],

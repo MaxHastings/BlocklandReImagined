@@ -80,10 +80,14 @@ install was modified.
    now v20's two-shell pulsing look (`world_scene::v20_temp_brick`). The
    non-rendering bricks shown while building use the same look; v20's exact
    treatment of those was not traced.
-6. **Colour/shape FX were invented approximations (in progress).** Blink
-   changed alpha (v20 changes brightness), pearl/chrome used a fake sheen,
-   swirl and rainbow used unrelated waves, undulo/water used wrong axes and
-   amplitudes. Equations above; being ported next.
+6. **Colour/shape FX were invented approximations (fixed).** Blink changed
+   alpha (v20 changes brightness), pearl/chrome used a fake sheen, swirl and
+   rainbow used unrelated waves, undulo/water used wrong axes and amplitudes.
+   The brick shader now evaluates the equations above per vertex. FX data moved
+   out of the lightmap UV into a dedicated `SceneVertex::fx` attribute (brick
+   centre plus packed colour, shape, corner and depth). Not ported: the forced
+   glow for colour offsets above 0.9, glow's fallback for bricks carrying
+   their own light, and FX displacement in the shadow pass.
 7. **Pumpkin face colour explained (open).** Its literal RGB (200,150,0) goes
    through the literal-colour path and GL clamps it, so it renders as
    full-bright yellow (1,1,0) under any light brighter than 1/150.
@@ -101,9 +105,11 @@ side-by-side below shows them matching (letters read correctly, not mirrored).
 `cargo test -p bri-client --test brick_audit -- --ignored` renders sixteen
 bricks (generated bricks, plates, ramps, corner ramps, crest, rounds, cone,
 three print bricks, a translucent brick) offscreen to
-`artifacts/brick-audit/ours.png`. `python tools/brick_reference.py <v20>`
+`artifacts/brick-audit/<scene>/ours.png`.
+`python tools/brick_reference.py <v20> artifacts/brick-audit/<scene>`
 renders the same layout with an independent software rasterizer that reads
 the original BLBs and PNGs and applies only the exe-derived rules above, then
-writes `v20-reference.png` and `side-by-side.png`. After the fixes the mean
-absolute difference is 1.1/255; what remains is edge antialiasing and
-texture-filter noise on the ramp surface.
+writes `v20-reference.png` and `side-by-side.png` in `families/` and `fx/`
+(every colour FX and both shape FX frozen at 0.37 s). After the fixes the mean
+absolute difference is 1.1/255 for the families and 1.3/255 for the FX; what
+remains is edge antialiasing and texture-filter noise on the ramp surface.

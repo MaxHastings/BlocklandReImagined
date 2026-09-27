@@ -102,6 +102,7 @@ pub fn append(
                         uv,
                         lightmap_uv: uv,
                         color: [1.; 4],
+                        fx: [0.; 4],
                     });
                 }
             }

@@ -86,6 +86,7 @@ impl TerrainScene {
                     uv: [uv[0] * texture_repeats, uv[1] * texture_repeats],
                     lightmap_uv: uv,
                     color: [1.0; 4],
+                    fx: [0.; 4],
                 });
             }
             let start = data.indices.len() as u32;

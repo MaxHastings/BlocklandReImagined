@@ -11,6 +11,7 @@ fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode) -> SceneData {
             uv: [0.0; 2],
             lightmap_uv: [0.0; 2],
             color,
+            fx: [0.; 4],
         })
         .collect();
     let mut data = SceneData {

@@ -97,18 +97,24 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
     return mix(min(lightmap,camera.ambient.rgb),lightmap,shadow_lit(c));
 }
 @group(1) @binding(15) var<uniform> material:array<vec4<f32>,4>;
-// Brick FX IDs come from recovered v20 output registrations. Numerical visual
-// parameters below are explicit native approximations, not recovered engine code.
-fn brick_fx(uv:vec2<f32>)->vec2<u32> {
- if (material[0].x==2.0 || material[0].x==3.0) && uv.y==-4096.0 {
-  let code=uv.x-1024.0;
-  if code>=0.0 && code<=22.0 && floor(code)==code {
-   let bits=u32(code);if bits%8u<=6u {return vec2<u32>(bits%8u,bits/8u);}
-  }
- }
- return vec2<u32>(0u);
+// v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).
+// fx.w packs 1 + color + 8*shape + 32*corner + 128*depthStuds; fx.xyz is the
+// brick centre. Only brick materials read it.
+struct BrickFx { color:u32, shape:u32, corner:u32, depth:f32 };
+fn brick_fx(fx:vec4<f32>)->BrickFx {
+    var out=BrickFx(0u,0u,0u,1.0);
+    if (material[0].x==2.0 || material[0].x==3.0) && fx.w>=1.0 {
+        let code=u32(fx.w)-1u;
+        out.color=code%8u;out.shape=(code/8u)%4u;out.corner=(code/32u)%4u;out.depth=f32(code/128u);
+    }
+    return out;
 }
-fn rainbow(h:f32)->vec3<f32>{let p=abs(fract(vec3<f32>(h)+vec3<f32>(0.,0.6666667,0.3333333))*6.-3.);return clamp(p-1.,vec3<f32>(0.),vec3<f32>(1.));}
+// The v20 millisecond clock mod `period`, folded at half: 0 -> 1 -> 0.
+fn folded(ms:f32,period:f32)->f32 {
+    let t=ms-floor(ms/period)*period;
+    return min(t,period-t)/(period*0.5);
+}
+const TAU:f32=6.2831853;
 struct VertexOut {
     @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>,
     @location(1) lightmap_uv:vec2<f32>, @location(2) color:vec4<f32>, @location(3) normal:vec3<f32>,
@@ -116,7 +122,8 @@ struct VertexOut {
     @location(5) @interpolate(flat) fx:vec2<u32>,
 };
 @vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
-    @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>)->VertexOut {
+    @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>,
+    @location(10) fx_data:vec4<f32>)->VertexOut {
     let model=mat4x4<f32>(m0,m1,m2,m3);
     let position=(model*vec4<f32>(local_position,1.0)).xyz;
     // Cofactor matrix is det(M)*inverse-transpose(M). Positive affine
@@ -126,19 +133,57 @@ struct VertexOut {
     let color=local_color*tint;
     var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
     out.uv=uv;out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
-    let fx=brick_fx(lightmap_uv);out.fx=fx;let time=camera.atmosphere.z;
-    if fx.y==1u {
-        let phase=position.yzx*2.+vec3<f32>(time*2.);
-        out.world_position+=sin(phase)*0.1;
-        let c=cos(phase)*0.2;
-        let j0=vec3<f32>(1.,0.,c.z);let j1=vec3<f32>(c.x,1.,0.);let j2=vec3<f32>(0.,c.y,1.);
-        out.normal=normalize(cross(j1,j2)*normal.x+cross(j2,j0)*normal.y+cross(j0,j1)*normal.z);
-        out.position=camera.view_projection*vec4<f32>(out.world_position,1.);
-    } else if fx.y==2u {
-        let phase=position.xz*1.4+vec2<f32>(time*1.6);
-        out.world_position.y+=(sin(phase.x)+sin(phase.y))*0.05;
-        out.normal=normalize(vec3<f32>(normal.x-normal.y*cos(phase.x)*0.07,normal.y,normal.z-normal.y*cos(phase.y)*0.07));
-        out.position=camera.view_projection*vec4<f32>(out.world_position,1.);
+    let fx=brick_fx(fx_data);out.fx=vec2<u32>(fx.color,fx.shape);
+    let ms=camera.atmosphere.z*1000.0;
+    // Torque axes: x = native x, y = -native z, z = native y.
+    var world=position;
+    if fx.shape==1u {
+        // Undulo: only within 100 units, amplitude 0.08 at full strength.
+        let distance=length(fx_data.xyz-camera.eye.xyz);
+        if distance<100.0 {
+            let amplitude=clamp(100.0-distance,0.0,10.0)*0.1*0.08;
+            let s=(position.x-position.z+position.y)*1.256637+fract(ms/1000.0)*TAU;
+            world+=vec3<f32>(sin(s+2.094395),sin(s+TAU),-sin(s+4.18879))*amplitude;
+        }
+    } else if fx.shape==2u {
+        // Water: waves along x lower the vertex; GL leaves the normal unnormalised.
+        let a=position.x*1.256637+fract(ms/2000.0)*TAU;
+        world.y-=0.1*(sin(a+TAU)+1.0);
+        out.normal.y+=0.25*(sin(a+2.094395)+1.0);
+    }
+    var paint=color;
+    let toward=normalize(fx_data.xyz-camera.eye.xyz);
+    switch fx.color {
+        case 1u: {
+            // Pearl: near side clamp(1.6 paint), far side 0.9 paint.
+            let t=clamp(dot(world-fx_data.xyz,toward)/(fx.depth*0.125)+0.5,0.0,1.0);
+            paint=vec4<f32>(min(color.rgb*1.6,vec3<f32>(1.0))*(1.0-t)+color.rgb*0.9*t,color.a*(1.0-0.1*t));
+        }
+        case 2u: {
+            // Chrome: near half blends to white, far half to half paint.
+            let t=clamp(dot(world-fx_data.xyz,toward)/(fx.depth*0.5)+0.5,0.0,1.0);
+            if t>0.5 {
+                let k=clamp((t-0.5)*2.0,0.0,1.0);
+                paint=vec4<f32>(mix(color.rgb,color.rgb*0.5,k),color.a);
+            } else {
+                let k=clamp(t*2.0,0.0,1.0);
+                paint=vec4<f32>(color.rgb*k+vec3<f32>(1.0-k),color.a);
+            }
+        }
+        case 4u: {paint=vec4<f32>(color.rgb*(0.7+0.6*folded(ms,1000.0)),color.a);}
+        case 5u: {paint=vec4<f32>(color.rgb*(0.4+0.6*folded(ms+250.0*f32(fx.corner),1000.0)),color.a);}
+        case 6u: {
+            let phase=fract(ms/1000.0)*TAU;
+            let x=world.x;let y=-world.z;let z=world.y;
+            let wave=vec3<f32>(sin(y+z-x+phase+2.094395),sin(x-y+z+phase+4.18879),sin(y+x-z+phase+TAU));
+            paint=vec4<f32>(max(wave*color.rgb,vec3<f32>(0.0)),color.a);
+        }
+        default: {}
+    }
+    out.color=paint;
+    if fx.shape!=0u {
+        out.world_position=world;
+        out.position=camera.view_projection*vec4<f32>(world,1.0);
     }
     if material[0].x==6.0 {
         let phase=vec2<f32>(position.x+1024.0,1024.0-position.z)*0.05+vec2<f32>(camera.atmosphere.z);
@@ -248,9 +293,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     let edge=textureSampleGrad(layer0,clamped,clamp(snapped,vec2<f32>(0.5)/size,vec2<f32>(1.)-vec2<f32>(0.5)/size),dx,dy);
     var albedo=textureSampleGrad(layer0,tiled,v.uv,dx,dy);
     if material[0].z==1.0 {albedo=edge;}
-    var base_color=v.color.rgb;
-    if fx.x==6u {base_color=rainbow(fract(time/5.))*max(max(base_color.r,base_color.g),base_color.b);}
-    if fx.x==5u {let swirl=0.7+0.3*sin(v.world_position.y*3.+atan2(v.world_position.z,v.world_position.x)*2.-time*3.);base_color*=swirl;}
+    let base_color=v.color.rgb;
     var alpha=albedo.a*v.color.a;
     var pigment=display_color(albedo.rgb)*base_color;
     let decal=material[0].x==3.0;
@@ -266,7 +309,6 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         pigment=mix(base_color,albedo.rgb,albedo.a);
         alpha=v.color.a;
     }
-    if fx.x==4u {alpha*=0.5+0.5*cos(time*3.14159265);}
     if material[0].w==1.0 {
         // v20 temp brick (0x52e6b4): t = ms mod 800 folded at 400, then
         // alpha = offset 0.3 + range 0.3 * t/400, ignoring paint alpha.
@@ -281,28 +323,26 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     if material[0].x==2.0 || material[0].x==3.0 {
         let normal=v.normal/max(length(v.normal),0.0001);
         let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
-        let facing=max(dot(normal,-direction),0.0);
+        // Water keeps the lengthened GL normal; chrome doubles its normals.
+        var strength=1.0;
+        if fx.y==2u {strength=length(v.normal);}
+        if fx.x==2u {strength*=2.0;}
+        let facing=max(dot(normal,-direction),0.0)*strength;
         var sun=0.0;
         if facing>0.0 {sun=facing*sun_visibility(v.world_position,normal);}
-        illumination=camera.ambient.rgb+camera.sun_color.rgb*sun;
+        illumination=camera.ambient.rgb+camera.sun_color.rgb*sun
+            +point_illumination(v.world_position,v.normal)*strength;
+        if fx.x==3u {
+            // Glow aims the normal at the sun, 1/min(1, sun rgb) long.
+            var shortest=1.0;
+            for(var c=0;c<3;c+=1) {if camera.sun_color[c]>0.0 {shortest=min(shortest,camera.sun_color[c]);}}
+            illumination=camera.ambient.rgb+camera.sun_color.rgb/shortest;
+        }
     } else {
-        illumination=shadowed_lightmap(illumination,v.world_position,v.normal);
+        illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
+            +point_illumination(v.world_position,v.normal);
     }
-    illumination+=point_illumination(v.world_position,v.normal);
-    if fx.x==3u {illumination=max(illumination,vec3<f32>(1.));}
     var display=pigment*illumination;
-    if fx.x==1u || fx.x==2u {
-        let n=normalize(v.normal);let view=normalize(camera.eye.xyz-v.world_position);
-        let reflection=reflect(-view,n);
-        let fresnel=pow(1.-clamp(dot(n,view),0.,1.),3.);
-        // Host environment colors provide a bounded analytical sheen. This is
-        // not an actual v20 sphere-map or scene reflection capture.
-        let horizon=0.35+0.65*pow(0.5+0.5*reflection.y,2.);
-        let half_vector=normalize(view-normalize(camera.sun_direction.xyz));
-        let specular=pow(max(dot(n,half_vector),0.),select(24.,80.,fx.x==2u));
-        if fx.x==1u {display+=pigment*(0.12+0.25*fresnel)+camera.sun_color.rgb*specular*0.35;}
-        else {display=pigment*(0.25+0.65*horizon)+camera.sun_color.rgb*specular*0.65+vec3<f32>(fresnel*0.12);}
-    }
     // Fixed-function lighting clamps the vertex colour before texturing.
     if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
     return vec4<f32>(fogged(display,v.world_position),alpha);
