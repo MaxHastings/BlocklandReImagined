@@ -129,6 +129,21 @@ Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
   its objects into a staging directory, re-hashing it with `hash_dir`, and
   renaming it to `packages/<package hash>`, so an installed directory is
   always complete and is exactly the package the server loaded.
+- **Trust follows the bytes in use.** Nothing is trusted because it exists
+  or was checked earlier. An installed package has a seal
+  (`packages/<hash>.seal`: each file's size and modification time); when the
+  directory no longer matches it, it is re-hashed and removed if it is no
+  longer the package. Objects are checked by size before reuse and by hash as
+  each is copied into a package; a damaged one is deleted so the next fetch
+  replaces it. Every writer stages under its own unique name, so concurrent
+  fetches into one cache are safe. On the server, each offered file keeps
+  the size and modification time it was listed with, and a file the host
+  changed since is refused, naming the package.
+- **Bounded.** After every fetch the cache is pruned to 8 GiB
+  (`CACHE_BYTES`): least recently used packages go first, the fetched
+  server's packages always stay, objects are removed once settled (every
+  installed package holds its own files), and anything touched in the last
+  hour may belong to a fetch in progress and stays.
 - **Protocol.** A download is its own connection: `JoinBegin { purpose:
   Download }`, then `DownloadRequest::{Environment, Listing, Object}` answered
   in order (object ranges up to 1 MiB). No identity or game state is involved.
@@ -141,7 +156,8 @@ Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
   `packages: None` until it loads through `packages.json`, and the client
   does not call `fetch_missing` on a join mismatch. That wiring belongs with
   loading through `packages.json`.
-- The cache is never evicted or size-limited as a whole.
+- A host that edits a package must restart to offer the new version; there
+  is no reload.
 - Per-package `package.json` manifests, dependency resolution and archives.
 - Content inside the base packages still uses older id spellings
   (`v20/brick/...`, `v20.weapon....`) until those packs are regenerated under

@@ -6,6 +6,15 @@
 //! The cache is content addressed at two levels: files are stored once by
 //! SHA-256 (`objects/`), so an asset two packages share downloads once, and
 //! installed packages are directories named by package hash (`packages/`).
+//!
+//! Nothing in the cache is trusted merely because it exists. An installed
+//! package carries a seal (`packages/<hash>.seal`) recording each file's
+//! size and modification time; when the directory no longer matches its seal
+//! it is re-hashed, and removed if it no longer is the package it claims to
+//! be. Objects are checked by size before reuse and by hash as they are
+//! installed, and a damaged one is deleted so the next fetch replaces it.
+//! Every writer stages under its own unique name, so concurrent fetches into
+//! one cache never share a partial file.
 use crate::environment::{MAX_PACKAGE_FILES, PackageRef, hash_dir, is_hash};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -15,9 +24,26 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
+/// A name no other writer in any process uses, for staging files.
+fn unique(stem: &str, kind: &str) -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{stem}.{}-{}.{kind}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 pub const LISTING_SCHEMA: u32 = 1;
+/// Default bound on everything a client's cache holds. Least recently used
+/// packages are evicted past it; see [`Cache::prune`].
+pub const CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Objects and staging younger than this may belong to a fetch in progress
+/// and are never pruned.
+pub const IN_FLIGHT: std::time::Duration = std::time::Duration::from_secs(3600);
 /// Largest single file a server may send.
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 /// Largest package a server may send.
@@ -264,12 +290,48 @@ impl Cache {
         self.root.join("packages").join(&package.hash)
     }
 
-    /// The installed directory for `package`, if this cache holds it.
-    /// Installation is atomic, so a directory that exists is complete.
+    fn seal_path(&self, package: &PackageRef) -> PathBuf {
+        self.root
+            .join("packages")
+            .join(format!("{}.seal", package.hash))
+    }
+
+    /// The installed directory for `package`, if this cache holds it intact.
+    /// A directory that changed since it was sealed is hashed again; if it is
+    /// no longer the package, it is removed so a fetch installs it afresh.
     pub fn installed(&self, package: &PackageRef) -> Option<PathBuf> {
-        is_hash(&package.hash)
-            .then(|| self.package_dir(package))
-            .filter(|dir| dir.is_dir())
+        if !is_hash(&package.hash) {
+            return None;
+        }
+        let dir = self.package_dir(package);
+        if !dir.is_dir() {
+            return None;
+        }
+        let seal = self.seal_path(package);
+        let current = seal_of(&dir).ok()?;
+        if fs::read_to_string(&seal).ok().as_deref() == Some(current.as_str()) {
+            touch(&seal);
+            return Some(dir);
+        }
+        match hash_dir(&dir) {
+            Ok((hash, size)) if hash == package.hash && size == package.size => {
+                let _ = bri_files::replace(&seal, current.as_bytes());
+                Some(dir)
+            }
+            _ => {
+                // Move aside first so a concurrent reader never sees a
+                // half-removed package under its identity.
+                let doomed = self
+                    .root
+                    .join("incoming")
+                    .join(unique(&package.hash, "damaged"));
+                if fs::rename(&dir, &doomed).is_ok() {
+                    let _ = fs::remove_dir_all(&doomed);
+                }
+                let _ = fs::remove_file(&seal);
+                None
+            }
+        }
     }
 
     /// Files of `listing` the cache does not hold yet, each object once.
@@ -278,7 +340,11 @@ impl Cache {
         listing
             .files
             .iter()
-            .filter(|f| seen.insert(&f.sha256) && !self.object(&f.sha256).is_file())
+            .filter(|f| {
+                seen.insert(&f.sha256)
+                    && fs::metadata(self.object(&f.sha256))
+                        .map_or(true, |m| !m.is_file() || m.len() != f.size)
+            })
             .collect()
     }
 
@@ -287,11 +353,10 @@ impl Cache {
     pub fn receive(&self, file: &FileEntry) -> Result<ObjectWriter> {
         ensure!(is_hash(&file.sha256), "Invalid object hash");
         ensure!(file.size <= MAX_FILE_BYTES, "Object exceeds budget");
-        let partial = self.root.join("incoming").join(format!(
-            "{}.{}.partial",
-            file.sha256,
-            std::process::id()
-        ));
+        let partial = self
+            .root
+            .join("incoming")
+            .join(unique(&file.sha256, "partial"));
         Ok(ObjectWriter {
             target: self.object(&file.sha256),
             file: fs::File::create(&partial)?,
@@ -302,20 +367,80 @@ impl Cache {
         })
     }
 
+    /// Bound the cache to `max_bytes`. Packages in `keep` stay; others go
+    /// least recently used first. Objects are only a download store (every
+    /// installed package holds its own files), so settled ones are removed,
+    /// as is staging left by crashed fetches. Anything touched within
+    /// [`IN_FLIGHT`] may belong to a running fetch and stays.
+    pub fn prune(&self, max_bytes: u64, keep: &[PackageRef]) -> Result<Pruned> {
+        let now = std::time::SystemTime::now();
+        let settled = |path: &Path| {
+            fs::metadata(path)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| now.duration_since(t).unwrap_or_default() > IN_FLIGHT)
+        };
+        let mut pruned = Pruned::default();
+        for dir in ["objects", "incoming"] {
+            for entry in fs::read_dir(self.root.join(dir))? {
+                let path = entry?.path();
+                if settled(&path) {
+                    pruned.bytes += size_of(&path);
+                    let _ = fs::remove_dir_all(&path).or_else(|_| fs::remove_file(&path));
+                }
+            }
+        }
+        let keep: BTreeSet<&str> = keep.iter().map(|p| p.hash.as_str()).collect();
+        let mut packages = Vec::new();
+        let mut total = 0;
+        for entry in fs::read_dir(self.root.join("packages"))? {
+            let path = entry?.path();
+            let Some(hash) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| is_hash(n))
+            else {
+                continue;
+            };
+            let size = size_of(&path);
+            total += size;
+            let used = fs::metadata(path.with_extension("seal"))
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            if !keep.contains(hash) {
+                packages.push((used, size, path.clone()));
+            }
+        }
+        for dir in ["objects", "incoming"] {
+            total += size_of(&self.root.join(dir));
+        }
+        packages.sort();
+        for (_, size, path) in packages {
+            if total <= max_bytes {
+                break;
+            }
+            let _ = fs::remove_file(path.with_extension("seal"));
+            if fs::remove_dir_all(&path).is_ok() {
+                total -= size;
+                pruned.bytes += size;
+                pruned.packages += 1;
+            }
+        }
+        pruned.remaining = total;
+        Ok(pruned)
+    }
+
     /// Materialize a package whose objects are all present, verify the
     /// result against the package hash, then publish it atomically.
     pub fn install(&self, listing: &Listing) -> Result<PathBuf> {
         listing.validate(&listing.package)?;
-        let target = self.package_dir(&listing.package);
-        if target.is_dir() {
+        if let Some(target) = self.installed(&listing.package) {
             return Ok(target);
         }
-        let staging = self.root.join("incoming").join(format!(
-            "{}.{}.package",
-            listing.package.hash,
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&staging);
+        let target = self.package_dir(&listing.package);
+        let staging = self
+            .root
+            .join("incoming")
+            .join(unique(&listing.package.hash, "package"));
         let result = (|| {
             for file in &listing.files {
                 let destination = staging.join(&file.path);
@@ -326,6 +451,15 @@ impl Cache {
                 ensure!(source.is_file(), "{}: object not downloaded", file.path);
                 fs::copy(&source, &destination)
                     .with_context(|| format!("{}: could not install", file.path))?;
+                // Check the copy, not the object: the object may change
+                // under us, the copy is what gets published.
+                if hash_file(&destination)? != (file.sha256.clone(), file.size) {
+                    let _ = fs::remove_file(&source);
+                    bail!(
+                        "{}: the cached copy was damaged and has been discarded; fetch again",
+                        file.path
+                    );
+                }
             }
             fs::create_dir_all(&staging)?;
             // Independent check with the loader's own hash: whatever the
@@ -336,13 +470,49 @@ impl Cache {
                 "Installed files do not match package {}",
                 listing.package
             );
-            fs::rename(&staging, &target)?;
+            let seal = seal_of(&staging)?;
+            match fs::rename(&staging, &target) {
+                Ok(()) => {}
+                // Another install of the same package won the race.
+                Err(_) if self.installed(&listing.package).is_some() => {
+                    let _ = fs::remove_dir_all(&staging);
+                    return Ok(target.clone());
+                }
+                Err(error) => return Err(error.into()),
+            }
+            // Renaming keeps modification times, so the seal still holds.
+            bri_files::replace(&self.seal_path(&listing.package), seal.as_bytes())?;
             Ok(target.clone())
         })();
         if result.is_err() {
             let _ = fs::remove_dir_all(&staging);
         }
         result
+    }
+}
+
+/// What [`Cache::prune`] removed and what the cache holds afterwards.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Pruned {
+    pub packages: usize,
+    pub bytes: u64,
+    pub remaining: u64,
+}
+
+fn touch(path: &Path) {
+    if let Ok(file) = fs::File::options().append(true).open(path) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// Bytes under `path`, a file or a directory; unreadable parts count as 0.
+fn size_of(path: &Path) -> u64 {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => fs::read_dir(path)
+            .map(|entries| entries.flatten().map(|e| size_of(&e.path())).sum())
+            .unwrap_or(0),
+        Ok(meta) => meta.len(),
+        Err(_) => 0,
     }
 }
 
@@ -411,6 +581,36 @@ pub fn read_range(path: &Path, offset: u64, length: usize) -> Result<Vec<u8>> {
     let mut bytes = vec![0; length];
     file.read_exact(&mut bytes)?;
     Ok(bytes)
+}
+
+/// Each file's relative path, size and modification time, one per line in
+/// path order: cheap to recompute, and changed by any ordinary edit.
+fn seal_of(dir: &Path) -> Result<String> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(&next)? {
+            let entry = entry?;
+            let meta = entry.metadata()?;
+            if meta.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            let modified = meta
+                .modified()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let relative = entry
+                .path()
+                .strip_prefix(dir)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push(format!("{relative}\t{}\t{modified}", meta.len()));
+            ensure!(files.len() <= MAX_PACKAGE_FILES, "Too many files");
+        }
+    }
+    files.sort();
+    Ok(files.join("\n"))
 }
 
 fn hash_file(path: &Path) -> Result<(String, u64)> {
@@ -495,6 +695,85 @@ mod tests {
         let installed = cache.install(&listing).unwrap();
         assert_eq!(hash_dir(&installed).unwrap().0, package.hash);
         assert_eq!(cache.installed(&package), Some(installed));
+        let _ = fs::remove_dir_all(server);
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn prune_evicts_least_recently_used_packages_but_never_kept_or_in_flight_ones() {
+        let cache_root = tempdir("cache-prune");
+        let cache = Cache::open(&cache_root).unwrap();
+        let old = std::time::SystemTime::now() - 2 * IN_FLIGHT;
+        let mut packages = Vec::new();
+        for (i, name) in ["a", "b", "c"].into_iter().enumerate() {
+            let server = tempdir(&format!("server-prune-{name}"));
+            let package = package_in(&server, &[("blob.bin", &[i as u8; 1000])]);
+            let listing = Listing::of(&server, &package).unwrap();
+            fetch_all(&cache, &server, &listing);
+            cache.install(&listing).unwrap();
+            let _ = fs::remove_dir_all(server);
+            packages.push(package);
+        }
+        // Last used: c longest ago, then a, then b.
+        for (package, age) in packages.iter().zip([2, 3, 1]) {
+            let seal = cache.seal_path(package);
+            let file = fs::File::options().append(true).open(seal).unwrap();
+            file.set_modified(old + std::time::Duration::from_secs(age))
+                .unwrap();
+        }
+        // 3000 bytes of packages plus 3000 of objects still in flight: one
+        // eviction fits the budget, and it is the least recently used.
+        let pruned = cache.prune(5000, &[]).unwrap();
+        assert_eq!((pruned.packages, pruned.remaining), (1, 5000), "{pruned:?}");
+        assert!(!cache.seal_path(&packages[2]).exists());
+        assert!(cache.seal_path(&packages[0]).exists());
+        // Kept packages survive any budget.
+        let pruned = cache.prune(0, &packages[1..2]).unwrap();
+        assert_eq!(pruned.packages, 1, "{pruned:?}");
+        assert!(cache.installed(&packages[1]).is_some(), "kept");
+        assert!(cache.installed(&packages[0]).is_none());
+        assert_eq!(fs::read_dir(cache_root.join("objects")).unwrap().count(), 3);
+        for object in fs::read_dir(cache_root.join("objects")).unwrap() {
+            let file = fs::File::options()
+                .append(true)
+                .open(object.unwrap().path())
+                .unwrap();
+            file.set_modified(old).unwrap();
+        }
+        let pruned = cache.prune(u64::MAX, &[]).unwrap();
+        assert_eq!(
+            (pruned.packages, pruned.bytes),
+            (0, 3000),
+            "settled objects go"
+        );
+        assert_eq!(pruned.remaining, 1000);
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn damage_at_rest_is_discarded_rather_than_trusted() {
+        let server = tempdir("server-rest");
+        let package = package_in(&server, &[("a.json", b"real"), ("b.bin", b"data")]);
+        let listing = Listing::of(&server, &package).unwrap();
+        let cache_root = tempdir("cache-rest");
+        let cache = Cache::open(&cache_root).unwrap();
+        fetch_all(&cache, &server, &listing);
+        // Same size, different bytes: only the hash can tell.
+        let object = cache.object(&listing.files[0].sha256);
+        fs::write(&object, b"fake").unwrap();
+        let error = cache.install(&listing).unwrap_err().to_string();
+        assert!(error.contains("damaged"), "{error}");
+        assert!(!object.exists(), "the damaged object is discarded");
+        assert_eq!(cache.missing(&listing).len(), 1);
+        fetch_all(&cache, &server, &listing);
+        let installed = cache.install(&listing).unwrap();
+        // An edit inside the installed package breaks its seal; the package
+        // is re-hashed, found wrong and removed rather than returned.
+        fs::write(installed.join("b.bin"), b"DATA").unwrap();
+        assert_eq!(cache.installed(&package), None);
+        assert!(!installed.exists());
+        let again = cache.install(&listing).unwrap();
+        assert_eq!(hash_dir(&again).unwrap().0, package.hash);
         let _ = fs::remove_dir_all(server);
         let _ = fs::remove_dir_all(cache_root);
     }

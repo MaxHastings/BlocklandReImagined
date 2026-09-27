@@ -14,6 +14,7 @@ use bri_package::{
     sync::{Cache, Listing},
 };
 use bri_progress::{Progress, Stage};
+use sha2::Digest;
 use std::{path::Path, sync::Arc, time::Duration};
 
 mod common;
@@ -389,4 +390,132 @@ async fn raw_download(
             other => anyhow::bail!("unexpected {other:?}"),
         },
     }
+}
+
+/// E10 (category 8, lifecycle). Two fetches into one cache at once, as when
+/// a player opens a second server while the first is still downloading.
+/// Both finish with verified packages and the cache holds only good objects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_fetches_into_one_cache_both_verify() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (server, _) = modded_server(root.path())?;
+    let cache_dir = tempfile::tempdir()?;
+    for round in 0..3 {
+        let cache = Arc::new(Cache::open(&cache_dir.path().join(round.to_string()))?);
+        let fetches: Vec<_> = (0..2)
+            .map(|_| {
+                let cache = cache.clone();
+                let (address, certificate) = (server.address, server.certificate.clone());
+                tokio::spawn(async move {
+                    fetch_missing(address, &certificate, &cache, &Progress::default()).await
+                })
+            })
+            .collect();
+        for fetch in fetches {
+            for fetched in fetch.await?? {
+                assert_eq!(hash_dir(&fetched.dir)?.0, fetched.package.hash);
+            }
+        }
+        for object in std::fs::read_dir(cache_dir.path().join(round.to_string()).join("objects"))? {
+            let object = object?;
+            let bytes = std::fs::read(object.path())?;
+            assert_eq!(
+                hex(&sha2::Sha256::digest(&bytes)),
+                object.file_name().to_string_lossy(),
+                "an object in the cache does not match its name"
+            );
+        }
+    }
+    server.stop().await?;
+    Ok(())
+}
+
+/// E11 (category 8, lifecycle). The cache is damaged at rest: an object is
+/// truncated and a file inside an installed package is edited (a crash, a
+/// disk fault, a curious player). The next fetch notices, repairs what it
+/// needs from the server and returns packages that hash to their identity.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_damaged_cache_is_detected_and_repaired_by_the_next_fetch() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (server, _) = modded_server(root.path())?;
+    let cache_dir = tempfile::tempdir()?;
+    let cache = Cache::open(cache_dir.path())?;
+    let fetched = fetch_missing(
+        server.address,
+        &server.certificate,
+        &cache,
+        &Progress::default(),
+    )
+    .await?;
+    let creeper = fetched.iter().find(|f| f.package.id == "creeper").unwrap();
+    std::fs::write(creeper.dir.join("models/creeper.glb"), b"edited")?;
+    let texture = hex(&sha2::Sha256::digest([9_u8; 1_500_000]));
+    std::fs::write(cache_dir.path().join("objects").join(&texture), b"trunc")?;
+    std::fs::remove_dir_all(
+        fetched
+            .iter()
+            .find(|f| f.package.id == "zombies")
+            .unwrap()
+            .dir
+            .clone(),
+    )?;
+    let again = fetch_missing(
+        server.address,
+        &server.certificate,
+        &cache,
+        &Progress::default(),
+    )
+    .await?;
+    for fetched in &again {
+        assert_eq!(
+            hash_dir(&fetched.dir)?.0,
+            fetched.package.hash,
+            "{} was returned damaged",
+            fetched.package
+        );
+    }
+    server.stop().await?;
+    Ok(())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// E12 (category 8, lifecycle). The host edits a package file while hosting,
+/// the usual way a mod is iterated on. A client fetching afterwards is told
+/// the package changed on the host, rather than failing a hash check that
+/// reads as a hostile server, and nothing unverified is installed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_package_edited_while_hosting_is_reported_not_served() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (server, environment) = modded_server(root.path())?;
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(
+        root.path().join("creeper/models/creeper.glb"),
+        [8_u8; 300_000],
+    )?;
+    let cache_dir = tempfile::tempdir()?;
+    let cache = Cache::open(cache_dir.path())?;
+    let error = fetch_missing(
+        server.address,
+        &server.certificate,
+        &cache,
+        &Progress::default(),
+    )
+    .await
+    .unwrap_err();
+    let text = format!("{error:#}");
+    assert!(
+        text.contains("Package `creeper` changed on the host"),
+        "{text}"
+    );
+    let creeper = environment
+        .packages
+        .iter()
+        .find(|p| p.id == "creeper")
+        .unwrap();
+    assert!(cache.installed(creeper).is_none());
+    server.stop().await?;
+    Ok(())
 }

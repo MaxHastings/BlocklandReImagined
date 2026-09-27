@@ -535,6 +535,7 @@ name = "bri-package"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-files",
  "serde",
  "serde_json",
  "sha2",

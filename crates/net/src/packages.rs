@@ -30,7 +30,19 @@ pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(15);
 pub struct PackageShelf {
     offered: Vec<PackageRef>,
     listings: BTreeMap<String, Listing>,
-    objects: BTreeMap<String, PathBuf>,
+    objects: BTreeMap<String, Offered>,
+}
+
+/// Where an offered file lives and what it looked like when it was listed.
+struct Offered {
+    package: String,
+    path: PathBuf,
+    stamp: Option<(u64, std::time::SystemTime)>,
+}
+
+fn stamp(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
 }
 
 impl PackageShelf {
@@ -51,10 +63,15 @@ impl PackageShelf {
             let dir = package_dir(root, entry)?;
             let listing = Listing::of(&dir, package)?;
             for file in &listing.files {
+                let path = dir.join(&file.path);
                 shelf
                     .objects
                     .entry(file.sha256.clone())
-                    .or_insert_with(|| dir.join(&file.path));
+                    .or_insert_with(|| Offered {
+                        package: package.id.clone(),
+                        stamp: stamp(&path),
+                        path,
+                    });
             }
             shelf.listings.insert(package.hash.clone(), listing);
         }
@@ -73,10 +90,20 @@ impl PackageShelf {
                 offset,
                 length,
             } => {
-                let Some(path) = self.objects.get(&sha256) else {
+                let Some(offered) = self.objects.get(&sha256) else {
                     return DownloadReply::Refused("This server does not offer that file".into());
                 };
-                let size = std::fs::metadata(path).map_or(0, |m| m.len());
+                // Listed once at startup; a file edited since would reach
+                // the client as bytes that fail their hash, which reads as
+                // a hostile server. Say what actually happened instead.
+                let now = stamp(&offered.path);
+                if now.is_none() || now != offered.stamp {
+                    return DownloadReply::Refused(format!(
+                        "Package `{}` changed on the host after it was loaded; the host must restart to offer it",
+                        offered.package
+                    ));
+                }
+                let (path, size) = (&offered.path, now.map_or(0, |(size, _)| size));
                 if length == 0
                     || length > MAX_OBJECT_CHUNK
                     || offset.saturating_add(length.into()) > size
@@ -241,6 +268,10 @@ pub async fn fetch_missing(
                 *downloaded.entry(listing.package.hash.clone()).or_default() += file.size;
             }
         }
+        // Keep the cache bounded across every server this client visits;
+        // what this server needs stays. Failing to prune is not a failed
+        // fetch.
+        let _ = cache.prune(bri_package::sync::CACHE_BYTES, &offered);
         let mut fetched = Vec::new();
         for package in offered {
             let dir = match listings.iter().find(|l| l.package == package) {
