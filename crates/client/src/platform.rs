@@ -206,6 +206,9 @@ struct Runner {
     focused: bool,
     occluded: bool,
     grabbed: bool,
+    regrab: bool,
+    next_regrab: Instant,
+    focus_click: FocusClick,
     ime_allowed: bool,
     composing: bool,
     mods: Modifiers,
@@ -232,6 +235,9 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         focused: false,
         occluded: false,
         grabbed: false,
+        regrab: false,
+        next_regrab: now,
+        focus_click: FocusClick::default(),
         ime_allowed: false,
         composing: false,
         mods: Modifiers::NONE,
@@ -268,20 +274,29 @@ impl Runner {
         let Some(window) = &self.window else {
             return Ok(());
         };
-        let grab = self.focused && !self.config.app.ui().cursor_visible();
-        if grab != self.grabbed {
-            if grab {
-                window
-                    .set_cursor_grab(CursorGrabMode::Locked)
-                    .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
-                    .context("capturing the gameplay cursor")?;
-            } else {
-                window
-                    .set_cursor_grab(CursorGrabMode::None)
-                    .context("releasing the gameplay cursor")?;
-            }
-            self.grabbed = grab;
+        let size = window.inner_size();
+        let minimized =
+            window.is_minimized().unwrap_or(false) || size.width == 0 || size.height == 0;
+        let grab = self.focused && !minimized && !self.config.app.ui().cursor_visible();
+        if grab && (!self.grabbed || self.regrab) {
+            // Windows locks the cursor wherever it sits, which after Alt+Tab
+            // or a taskbar restore is outside the client area, and the OS
+            // drops the clip on activation changes. Like v20's
+            // setMouseClipping on WM_ACTIVATE, park it inside and re-clip.
+            let _ =
+                window.set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2));
+            window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                .context("capturing the gameplay cursor")?;
+            self.grabbed = true;
+        } else if !grab && self.grabbed {
+            window
+                .set_cursor_grab(CursorGrabMode::None)
+                .context("releasing the gameplay cursor")?;
+            self.grabbed = false;
         }
+        self.regrab = false;
         window.set_cursor_visible(!grab);
         let ime = self.focused && self.focused_text();
         if ime != self.ime_allowed {
@@ -705,6 +720,7 @@ impl ApplicationHandler for Runner {
             }
             self.resize(self.window.as_ref().unwrap().inner_size());
             self.focused = self.window.as_ref().unwrap().has_focus();
+            self.regrab = true;
             self.last_tick = Instant::now();
             self.next_tick = self.last_tick;
             self.sync_cursor()?;
@@ -755,16 +771,28 @@ impl ApplicationHandler for Runner {
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => self.resize(size),
+            WindowEvent::Resized(size) => {
+                self.regrab = true;
+                self.resize(size)
+            }
+            WindowEvent::Moved(_) => self.regrab = true,
             WindowEvent::ScaleFactorChanged { .. } => {
+                self.regrab = true;
                 if let Some(w) = &self.window {
                     self.resize(w.inner_size());
                 }
             }
-            WindowEvent::Occluded(hidden) => self.occluded = hidden,
+            WindowEvent::Occluded(hidden) => {
+                self.regrab |= !hidden;
+                self.occluded = hidden
+            }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
-                if !focused {
+                self.regrab = true;
+                if focused {
+                    self.focus_click.gained(Instant::now());
+                } else {
+                    self.focus_click = FocusClick::default();
                     self.input(InputEvent::FocusLost);
                     self.mods = Modifiers::NONE;
                     self.composing = false;
@@ -782,9 +810,15 @@ impl ApplicationHandler for Runner {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if self.focused => {
-                if let Some(button) = translate_button(button) {
+                let pressed = state == ElementState::Pressed;
+                let capturing = !self.config.app.ui().cursor_visible();
+                if let Some(button) = translate_button(button)
+                    && !self
+                        .focus_click
+                        .filter(button, pressed, Instant::now(), capturing)
+                {
                     let (x, y) = (self.cursor.x as f32, self.cursor.y as f32);
-                    self.input(if state == ElementState::Pressed {
+                    self.input(if pressed {
                         InputEvent::MouseDown { button, x, y }
                     } else {
                         InputEvent::MouseUp { button, x, y }
@@ -924,6 +958,16 @@ impl ApplicationHandler for Runner {
             }
             self.next_tick = now + Duration::from_millis(if self.focused { 16 } else { 50 });
         }
+        // Windows can drop the clip without telling the window (another
+        // app's ClipCursor, the secure desktop); re-assert it while playing.
+        if self.grabbed && now >= self.next_regrab {
+            self.next_regrab = now + Duration::from_secs(1);
+            self.regrab = true;
+            if let Err(e) = self.sync_cursor() {
+                self.fail(event_loop, e);
+                return;
+            }
+        }
         event_loop.set_control_flow(if active {
             ControlFlow::Poll
         } else {
@@ -935,6 +979,50 @@ impl ApplicationHandler for Runner {
         if self.graphics.is_some() {
             self.config.app.gpu_stopped();
             self.graphics = None;
+        }
+    }
+}
+
+/// The click that activates the window only refocuses the game, as in v20
+/// whose DirectInput mouse is acquired after WM_ACTIVATE; it must not fire a
+/// tool or place a brick. Clicking into a menu still passes through.
+#[derive(Default)]
+struct FocusClick {
+    gained: Option<Instant>,
+    swallowed: [bool; 3],
+}
+
+/// Windows delivers the activating button-down right after WM_SETFOCUS.
+const FOCUS_CLICK_WINDOW: Duration = Duration::from_millis(250);
+
+impl FocusClick {
+    fn gained(&mut self, now: Instant) {
+        self.gained = Some(now);
+    }
+    /// Whether to drop this button event: the first press shortly after focus
+    /// arrives while the game captures the mouse, and that press's release.
+    fn filter(
+        &mut self,
+        button: MouseButton,
+        pressed: bool,
+        now: Instant,
+        capturing: bool,
+    ) -> bool {
+        let i = match button {
+            MouseButton::Left => 0,
+            MouseButton::Right => 1,
+            MouseButton::Middle => 2,
+        };
+        if pressed {
+            let swallow = capturing
+                && self
+                    .gained
+                    .take()
+                    .is_some_and(|t| now.saturating_duration_since(t) <= FOCUS_CLICK_WINDOW);
+            self.swallowed[i] = swallow;
+            swallow
+        } else {
+            std::mem::take(&mut self.swallowed[i])
         }
     }
 }
@@ -1117,6 +1205,27 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn activating_click_only_refocuses_the_game() {
+        let t = Instant::now();
+        let soon = t + Duration::from_millis(5);
+        let mut f = FocusClick::default();
+        f.gained(t);
+        assert!(f.filter(MouseButton::Left, true, soon, true));
+        assert!(f.filter(MouseButton::Left, false, soon, true));
+        // Later clicks fire normally.
+        assert!(!f.filter(MouseButton::Left, true, soon, true));
+        assert!(!f.filter(MouseButton::Left, false, soon, true));
+        // Alt+Tab back, then a deliberate click later, is not swallowed.
+        f.gained(t);
+        let late = t + FOCUS_CLICK_WINDOW + Duration::from_millis(1);
+        assert!(!f.filter(MouseButton::Right, true, late, true));
+        assert!(!f.filter(MouseButton::Right, false, late, true));
+        // Clicking into a menu keeps the click.
+        f.gained(t);
+        assert!(!f.filter(MouseButton::Left, true, soon, false));
+        assert!(!f.filter(MouseButton::Left, false, soon, false));
+    }
     #[test]
     fn physical_key_mapping_preserves_numpad_and_platform_option() {
         assert_eq!(
