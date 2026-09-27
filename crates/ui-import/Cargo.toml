@@ -1,0 +1,16 @@
+[package]
+name = "bri-ui-import"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+description = "Offline converter: Blockland v20 UI art, font caches, GUI layouts and UI data -> native bri-ui pack"
+
+[dependencies]
+bri-ui = { path = "../ui", default-features = false }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+sha2 = "0.10"

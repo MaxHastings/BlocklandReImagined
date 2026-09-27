@@ -1,0 +1,21 @@
+[package]
+name = "bri-fx-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+glam = "0.33"
+bytemuck = { version = "1.25", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
+bri-content = { path = "../content" }
+
+[dev-dependencies]
+pollster = "0.4"

@@ -1,0 +1,66 @@
+class_name,output,route,host_binding_status,dependency,source,line
+fxDTSBrick,cancelEvents,scheduler/state,not integrated by this isolated task,runtime-owned; host still authorizes installed program,recovered/core/allGameScripts-Vanilla.cs,17407
+fxDTSBrick,decrementPrintCount,scheduler/state,not integrated by this isolated task,PrintDigit intent must bind native Letters/0..9 prints,recovered/core/allGameScripts-Vanilla.cs,17415
+fxDTSBrick,disappear,native timer + host presence,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17386
+fxDTSBrick,fakeKillBrick,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17387
+fxDTSBrick,fireRelay,scheduler/state,not integrated by this isolated task,runtime-owned; host still authorizes installed program,recovered/core/allGameScripts-Vanilla.cs,17400
+fxDTSBrick,fireRelayDown,scheduler/state,not integrated by this isolated task,directional relay requires host spatial slab query,recovered/core/allGameScripts-Vanilla.cs,17402
+fxDTSBrick,fireRelayEast,scheduler/state,not integrated by this isolated task,directional relay requires host spatial slab query,recovered/core/allGameScripts-Vanilla.cs,17404
+fxDTSBrick,fireRelayNorth,scheduler/state,not integrated by this isolated task,directional relay requires host spatial slab query,recovered/core/allGameScripts-Vanilla.cs,17403
+fxDTSBrick,fireRelaySouth,scheduler/state,not integrated by this isolated task,directional relay requires host spatial slab query,recovered/core/allGameScripts-Vanilla.cs,17405
+fxDTSBrick,fireRelayUp,scheduler/state,not integrated by this isolated task,directional relay requires host spatial slab query,recovered/core/allGameScripts-Vanilla.cs,17401
+fxDTSBrick,fireRelayWest,scheduler/state,not integrated by this isolated task,directional relay requires host spatial slab query,recovered/core/allGameScripts-Vanilla.cs,17406
+fxDTSBrick,incrementPrintCount,scheduler/state,not integrated by this isolated task,PrintDigit intent must bind native Letters/0..9 prints,recovered/core/allGameScripts-Vanilla.cs,17414
+fxDTSBrick,playSound,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17396
+fxDTSBrick,radiusImpulse,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17413
+fxDTSBrick,recoverVehicle,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17412
+fxDTSBrick,respawn,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17388
+fxDTSBrick,respawnVehicle,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17411
+fxDTSBrick,setColliding,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17383
+fxDTSBrick,setColor,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17380
+fxDTSBrick,setColorFX,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17381
+fxDTSBrick,setEmitter,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17389
+fxDTSBrick,setEmitterDirection,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17390
+fxDTSBrick,setEventEnabled,scheduler/state,not integrated by this isolated task,runtime-owned; host still authorizes installed program,recovered/core/allGameScripts-Vanilla.cs,17408
+fxDTSBrick,setItem,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17392
+fxDTSBrick,setItemDirection,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17393
+fxDTSBrick,setItemPosition,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17394
+fxDTSBrick,setLight,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17391
+fxDTSBrick,setMusic,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17395
+fxDTSBrick,setPrintCount,scheduler/state,not integrated by this isolated task,PrintDigit intent must bind native Letters/0..9 prints,recovered/core/allGameScripts-Vanilla.cs,17416
+fxDTSBrick,setRayCasting,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17385
+fxDTSBrick,setRendering,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17384
+fxDTSBrick,setShapeFX,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17382
+fxDTSBrick,setVehicle,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17410
+fxDTSBrick,spawnExplosion,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17399
+fxDTSBrick,spawnItem,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17397
+fxDTSBrick,spawnProjectile,typed synchronous host intent,not integrated by this isolated task,"brick properties, native resources, spawning/vehicle/physics as applicable",recovered/core/allGameScripts-Vanilla.cs,17398
+fxDTSBrick,toggleEventEnabled,scheduler/state,not integrated by this isolated task,runtime-owned; host still authorizes installed program,recovered/core/allGameScripts-Vanilla.cs,17409
+GameConnection,BottomPrint,typed synchronous host intent,not integrated by this isolated task,client message/audio and minigame score adapters,recovered/core/allGameScripts-Vanilla.cs,18148
+GameConnection,CenterPrint,typed synchronous host intent,not integrated by this isolated task,client message/audio and minigame score adapters,recovered/core/allGameScripts-Vanilla.cs,18147
+GameConnection,ChatMessage,typed synchronous host intent,not integrated by this isolated task,client message/audio and minigame score adapters,recovered/core/allGameScripts-Vanilla.cs,18149
+GameConnection,IncScore,typed synchronous host intent,not integrated by this isolated task,client message/audio and minigame score adapters,recovered/core/allGameScripts-Vanilla.cs,18150
+GameConnection,playSound,typed synchronous host intent,not integrated by this isolated task,client message/audio and minigame score adapters,recovered/core/allGameScripts-Vanilla.cs,18151
+MiniGame,BottomPrintAll,typed synchronous host intent,not integrated by this isolated task,bri-minigames commands and replicated recipients,recovered/core/allGameScripts-Vanilla.cs,18385
+MiniGame,CenterPrintAll,typed synchronous host intent,not integrated by this isolated task,bri-minigames commands and replicated recipients,recovered/core/allGameScripts-Vanilla.cs,18384
+MiniGame,ChatMsgAll,typed synchronous host intent,not integrated by this isolated task,bri-minigames commands and replicated recipients,recovered/core/allGameScripts-Vanilla.cs,18383
+MiniGame,Reset,typed synchronous host intent,not integrated by this isolated task,bri-minigames commands and replicated recipients,recovered/core/allGameScripts-Vanilla.cs,18386
+MiniGame,RespawnAll,typed synchronous host intent,not integrated by this isolated task,bri-minigames commands and replicated recipients,recovered/core/allGameScripts-Vanilla.cs,18387
+Player,AddHealth,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18204
+Player,AddVelocity,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18202
+Player,BurnPlayer,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18199
+Player,ChangeDataBlock,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18206
+Player,ClearBurn,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18200
+Player,ClearTools,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18210
+Player,Dismount,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18207
+Player,InstantRespawn,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18211
+Player,Kill,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18198
+Player,SetHealth,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18205
+Player,SetPlayerScale,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18203
+Player,SetVelocity,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18201
+Player,SpawnExplosion,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18209
+Player,SpawnProjectile,typed synchronous host intent,not integrated by this isolated task,"authoritative player body, inventory/weapons, minigame permissions and lifecycle",recovered/core/allGameScripts-Vanilla.cs,18208
+Projectile,Bounce,typed synchronous host intent,not integrated by this isolated task,bri-weapons current projectile/contact adapter,recovered/core/allGameScripts-Vanilla.cs,18390
+Projectile,Delete,typed synchronous host intent,not integrated by this isolated task,bri-weapons current projectile/contact adapter,recovered/core/allGameScripts-Vanilla.cs,18389
+Projectile,Explode,typed synchronous host intent,not integrated by this isolated task,bri-weapons current projectile/contact adapter,recovered/core/allGameScripts-Vanilla.cs,18388
+Projectile,Redirect,typed synchronous host intent,not integrated by this isolated task,bri-weapons current projectile/contact adapter,recovered/core/allGameScripts-Vanilla.cs,18391

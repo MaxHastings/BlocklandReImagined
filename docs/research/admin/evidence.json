@@ -1,0 +1,696 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "server": {
+      "file": ".research/v20-dso/server/mainServer.cs",
+      "sha256": "c0cd1b3e78ecc611fa069f8a6b124407567c319f54947238bb48e73f26a43917",
+      "dso_sha256": "2bc7bd2d9341a17f800584606290ab68130ce0c714e60d943a019e619cb89c18",
+      "reference_file": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20\\base\\server\\mainServer.cs.dso",
+      "reference_sha256": "2bc7bd2d9341a17f800584606290ab68130ce0c714e60d943a019e619cb89c18"
+    },
+    "game": {
+      "file": ".research/v20-dso/server/scripts/allGameScripts-Vanilla.cs",
+      "sha256": "a720f7a188a615276befa34409eda68585ec9abbc629b7a8107f37dcf7b33a9b",
+      "dso_sha256": "e1d0d0d5dc8535ff00ce5b1471bd876971106db2049aff74249ad6e130f114da",
+      "reference_file": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20\\base\\server\\scripts\\allGameScripts-Vanilla.cs.dso",
+      "reference_sha256": "e1d0d0d5dc8535ff00ce5b1471bd876971106db2049aff74249ad6e130f114da"
+    },
+    "client": {
+      "file": ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs",
+      "sha256": "d5fe78d5f7015903deb880acfc27828c4bab3540fdc4b18cda86fd3d1bcf1772",
+      "dso_sha256": "ae260b7f898cd070934c3efccb732a0f6b7c7b9525aad15f2c3151daee1aeea8",
+      "reference_file": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20\\base\\client\\scripts\\allClientScripts-Vanilla.cs.dso",
+      "reference_sha256": "ae260b7f898cd070934c3efccb732a0f6b7c7b9525aad15f2c3151daee1aeea8"
+    },
+    "gui": {
+      "file": ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui",
+      "sha256": "7f8c385e2f19df799329ab2d89632af8a824b00d3959816380ce15b4a7c4add2",
+      "dso_sha256": "1de4dd501ce89515fac4d8f32a8d9859da03b963d0c98caad64995d201ac9a41",
+      "reference_file": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20\\base\\client\\ui\\allClientGuis-Vanilla.gui.dso",
+      "reference_sha256": "1de4dd501ce89515fac4d8f32a8d9859da03b963d0c98caad64995d201ac9a41"
+    },
+    "defaults": {
+      "file": ".research/bl-decompiled/v20/server/defaults.cs",
+      "sha256": "91a3f2dec991ac2571ba1c2fb5429f093cc31cc399b69df8d8eab5c94fea550f",
+      "reference_file": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20\\base\\server\\defaults.cs",
+      "reference_sha256": "eba817e8dce7b6160a80d79e508a3e565fb60030880dda7c51b2fbb539485c57",
+      "note": "Loose reference defaults are B4v21-modified. Recovered v20 defaults are used, per the vanilla scope contract."
+    }
+  },
+  "role_references": [
+    {
+      "source": "server",
+      "function": "GameConnection::startLoad",
+      "line": 255,
+      "end_line": 354,
+      "role_test_lines": [
+        261,
+        262,
+        266,
+        267,
+        281,
+        281,
+        289,
+        289
+      ]
+    },
+    {
+      "source": "server",
+      "function": "GameConnection::autoAdminCheck",
+      "line": 355,
+      "end_line": 390,
+      "role_test_lines": [
+        362,
+        363,
+        373,
+        374,
+        384
+      ]
+    },
+    {
+      "source": "server",
+      "function": "spamAlert",
+      "line": 872,
+      "end_line": 894,
+      "role_test_lines": [
+        874
+      ]
+    },
+    {
+      "source": "server",
+      "function": "serverCmdSAD",
+      "line": 951,
+      "end_line": 1023,
+      "role_test_lines": [
+        971,
+        975,
+        976,
+        987,
+        991,
+        992,
+        1002,
+        1002,
+        1004
+      ]
+    },
+    {
+      "source": "server",
+      "function": "GameConnection::sendPlayerListUpdate",
+      "line": 1024,
+      "end_line": 1028,
+      "role_test_lines": [
+        1026,
+        1026
+      ]
+    },
+    {
+      "source": "server",
+      "function": "serverCmdSADSetPassword",
+      "line": 1029,
+      "end_line": 1036,
+      "role_test_lines": [
+        1031
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdAddEvent",
+      "line": 740,
+      "end_line": 1140,
+      "role_test_lines": [
+        744
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdRequestWrenchEvents",
+      "line": 1195,
+      "end_line": 1214,
+      "role_test_lines": [
+        1198
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdClearColors",
+      "line": 1710,
+      "end_line": 1725,
+      "role_test_lines": [
+        1712
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdSetColorMethod",
+      "line": 1726,
+      "end_line": 1745,
+      "role_test_lines": [
+        1728
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdSetSaveUploadDirName",
+      "line": 1746,
+      "end_line": 1760,
+      "role_test_lines": [
+        1748
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdInitUploadHandshake",
+      "line": 1761,
+      "end_line": 1813,
+      "role_test_lines": [
+        1763
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdStartSaveFileUpload",
+      "line": 1814,
+      "end_line": 1889,
+      "role_test_lines": [
+        1817
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdUploadSaveFileLine",
+      "line": 1890,
+      "end_line": 1908,
+      "role_test_lines": [
+        1892
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdCancelSaveFileUpload",
+      "line": 2735,
+      "end_line": 2765,
+      "role_test_lines": [
+        2737
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdEndSaveFileUpload",
+      "line": 2766,
+      "end_line": 2792,
+      "role_test_lines": [
+        2768
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdReloadBricks",
+      "line": 2793,
+      "end_line": 2888,
+      "role_test_lines": [
+        2795
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdKick",
+      "line": 3053,
+      "end_line": 3134,
+      "role_test_lines": [
+        3057,
+        3057,
+        3088
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdBan",
+      "line": 3135,
+      "end_line": 3283,
+      "role_test_lines": [
+        3139,
+        3166
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdRequestBanList",
+      "line": 3585,
+      "end_line": 3593,
+      "role_test_lines": [
+        3587
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdUnBan",
+      "line": 3594,
+      "end_line": 3604,
+      "role_test_lines": [
+        3596
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdMagicWand",
+      "line": 3605,
+      "end_line": 3615,
+      "role_test_lines": [
+        3607
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdChangeMap",
+      "line": 4261,
+      "end_line": 4308,
+      "role_test_lines": [
+        4271
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdGetMapList",
+      "line": 4328,
+      "end_line": 4349,
+      "role_test_lines": [
+        4330
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdListAllDataBlocks",
+      "line": 4411,
+      "end_line": 4428,
+      "role_test_lines": [
+        4413
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdGetID",
+      "line": 4429,
+      "end_line": 4451,
+      "role_test_lines": [
+        4431
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdGetTransform",
+      "line": 4452,
+      "end_line": 4474,
+      "role_test_lines": [
+        4454
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdFetch",
+      "line": 4511,
+      "end_line": 4556,
+      "role_test_lines": [
+        4513
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdFind",
+      "line": 4557,
+      "end_line": 4602,
+      "role_test_lines": [
+        4559
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdRet",
+      "line": 4603,
+      "end_line": 4612,
+      "role_test_lines": [
+        4605
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdSpy",
+      "line": 4613,
+      "end_line": 4655,
+      "role_test_lines": [
+        4615
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdWarp",
+      "line": 4656,
+      "end_line": 4682,
+      "role_test_lines": [
+        4658
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdTimeScale",
+      "line": 4683,
+      "end_line": 4700,
+      "role_test_lines": [
+        4685
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdRealBrickCount",
+      "line": 4701,
+      "end_line": 4729,
+      "role_test_lines": [
+        4703
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdTripOut",
+      "line": 4742,
+      "end_line": 4759,
+      "role_test_lines": [
+        4744
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdColorTest",
+      "line": 4792,
+      "end_line": 4800,
+      "role_test_lines": [
+        4794
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDropPlayerAtCamera",
+      "line": 4801,
+      "end_line": 4874,
+      "role_test_lines": [
+        4803
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDropCameraAtPlayer",
+      "line": 4875,
+      "end_line": 4890,
+      "role_test_lines": [
+        4877
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdCancelAllEvents",
+      "line": 4939,
+      "end_line": 4966,
+      "role_test_lines": [
+        4941
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdCancelEvents",
+      "line": 4967,
+      "end_line": 4997,
+      "role_test_lines": [
+        4979
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdResetVehicles",
+      "line": 5033,
+      "end_line": 5064,
+      "role_test_lines": [
+        5035
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdClearVehicles",
+      "line": 5065,
+      "end_line": 5088,
+      "role_test_lines": [
+        5067
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdClearBots",
+      "line": 5089,
+      "end_line": 5134,
+      "role_test_lines": [
+        5091
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDFG",
+      "line": 5135,
+      "end_line": 5164,
+      "role_test_lines": [
+        5137
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdGetPZ",
+      "line": 5165,
+      "end_line": 5180,
+      "role_test_lines": [
+        5167
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdRayPZ",
+      "line": 5181,
+      "end_line": 5199,
+      "role_test_lines": [
+        5183
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdSetPreviewCenter",
+      "line": 5200,
+      "end_line": 5221,
+      "role_test_lines": [
+        5202
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdPlantBrick",
+      "line": 5784,
+      "end_line": 5972,
+      "role_test_lines": [
+        5811,
+        5811
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdUseHammer",
+      "line": 6224,
+      "end_line": 6262,
+      "role_test_lines": [
+        6226
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdIconInit",
+      "line": 6559,
+      "end_line": 6570,
+      "role_test_lines": [
+        6561
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDoAllIcons",
+      "line": 6571,
+      "end_line": 6580,
+      "role_test_lines": [
+        6573
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDoIcon",
+      "line": 6581,
+      "end_line": 6601,
+      "role_test_lines": [
+        6583
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDoItemIcon",
+      "line": 6622,
+      "end_line": 6654,
+      "role_test_lines": [
+        6624
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDoPackIcons",
+      "line": 6655,
+      "end_line": 6688,
+      "role_test_lines": [
+        6657
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDoSecondPackIcons",
+      "line": 6689,
+      "end_line": 6722,
+      "role_test_lines": [
+        6691
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdDoPlayerIcons",
+      "line": 6723,
+      "end_line": 6828,
+      "role_test_lines": [
+        6725
+      ]
+    },
+    {
+      "source": "game",
+      "function": "Observer::onTrigger",
+      "line": 6949,
+      "end_line": 7004,
+      "role_test_lines": [
+        6996
+      ]
+    },
+    {
+      "source": "game",
+      "function": "wrenchImage::onHitObject",
+      "line": 10853,
+      "end_line": 10969,
+      "role_test_lines": [
+        10861
+      ]
+    },
+    {
+      "source": "game",
+      "function": "AdminWandImage::onHitObject",
+      "line": 12921,
+      "end_line": 13095,
+      "role_test_lines": [
+        12928
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdRequestBrickManList",
+      "line": 20479,
+      "end_line": 20502,
+      "role_test_lines": [
+        20481
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdHilightBrickGroup",
+      "line": 20503,
+      "end_line": 20565,
+      "role_test_lines": [
+        20505
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdClearBrickGroup",
+      "line": 20639,
+      "end_line": 20670,
+      "role_test_lines": [
+        20641
+      ]
+    },
+    {
+      "source": "game",
+      "function": "ServerCmdClearAllBricks",
+      "line": 20671,
+      "end_line": 20708,
+      "role_test_lines": [
+        20673
+      ]
+    },
+    {
+      "source": "game",
+      "function": "serverCmdRejectTrustInvite",
+      "line": 20883,
+      "end_line": 20923,
+      "role_test_lines": [
+        20905
+      ]
+    },
+    {
+      "source": "client",
+      "function": "secureClientCmd_ClientJoin",
+      "line": 190,
+      "end_line": 210,
+      "role_test_lines": [
+        190,
+        190,
+        196,
+        196
+      ]
+    },
+    {
+      "source": "client",
+      "function": "NewPlayerListGui::update",
+      "line": 517,
+      "end_line": 555,
+      "role_test_lines": [
+        517,
+        517,
+        520,
+        524
+      ]
+    }
+  ],
+  "gui_roots": [
+    {
+      "name": "changeMapGui",
+      "line": 10254
+    },
+    {
+      "name": "serverConfigGui",
+      "line": 10426
+    },
+    {
+      "name": "adminGui",
+      "line": 11325
+    },
+    {
+      "name": "addBanGui",
+      "line": 11599
+    },
+    {
+      "name": "unBanGui",
+      "line": 11772
+    },
+    {
+      "name": "BrickManGui",
+      "line": 11983
+    },
+    {
+      "name": "AdminLoginGui",
+      "line": 12375
+    }
+  ]
+}

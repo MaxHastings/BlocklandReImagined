@@ -1,0 +1,819 @@
+use bri_events::*;
+use std::collections::BTreeMap;
+fn id(n: u64) -> Id {
+    Id {
+        index: n,
+        generation: 1,
+    }
+}
+fn fixture() -> Catalog {
+    let input = |name: &str, targets: Vec<(&str, &str)>| InputDef {
+        id: format!("in/{name}"),
+        class_name: "fxDTSBrick".into(),
+        name: name.into(),
+        targets: targets
+            .into_iter()
+            .map(|(a, b)| (a.into(), b.into()))
+            .collect(),
+        source: "fixture".into(),
+        source_line: 1,
+    };
+    let output = |name: &str, params| OutputDef {
+        id: format!("out/{name}"),
+        class_name: "fxDTSBrick".into(),
+        name: name.into(),
+        params,
+        append_client: true,
+        source: "fixture".into(),
+        source_line: 1,
+    };
+    Catalog {
+        schema_version: 1,
+        inputs: vec![
+            input(
+                "onActivate",
+                vec![("Self", "fxDTSBrick"), ("Client", "GameConnection")],
+            ),
+            input("onRelay", vec![("Self", "fxDTSBrick")]),
+            input(
+                "onPrintCountOverFlow",
+                vec![("Self", "fxDTSBrick"), ("Client", "GameConnection")],
+            ),
+            input(
+                "onPrintCountUnderFlow",
+                vec![("Self", "fxDTSBrick"), ("Client", "GameConnection")],
+            ),
+            input("onToolBreak", vec![("Self", "fxDTSBrick")]),
+        ],
+        outputs: vec![
+            output("setColor", vec![Param::PaintColor { default: 0 }]),
+            output("fireRelay", vec![]),
+            output("fireRelayNorth", vec![]),
+            output("cancelEvents", vec![]),
+            output(
+                "setEventEnabled",
+                vec![Param::IntList { width: 157 }, Param::Bool],
+            ),
+            output("toggleEventEnabled", vec![Param::IntList { width: 176 }]),
+            output(
+                "incrementPrintCount",
+                vec![Param::Int {
+                    min: 1,
+                    max: 9,
+                    default: 1,
+                }],
+            ),
+            output(
+                "decrementPrintCount",
+                vec![Param::Int {
+                    min: 1,
+                    max: 9,
+                    default: 1,
+                }],
+            ),
+            output(
+                "setPrintCount",
+                vec![Param::Int {
+                    min: 0,
+                    max: 9,
+                    default: 0,
+                }],
+            ),
+            output(
+                "disappear",
+                vec![Param::Int {
+                    min: -1,
+                    max: 300,
+                    default: 5,
+                }],
+            ),
+        ],
+        sources: vec![],
+        scope: serde_json::Value::Null,
+    }
+}
+fn world(limits: Limits) -> EventWorld {
+    EventWorld::new(
+        fixture(),
+        Bindings {
+            palette_len: 64,
+            ..Default::default()
+        },
+        limits,
+    )
+    .unwrap()
+}
+fn row(input: &str, output: &str, params: Vec<Value>) -> Row {
+    Row {
+        preserved: None,
+        enabled: true,
+        input: input.into(),
+        delay_ms: 0,
+        target: Target::Slot(Slot::SelfBrick),
+        output: output.into(),
+        params,
+    }
+}
+fn color(input: &str, value: u8) -> Row {
+    row(input, "setColor", vec![Value::Color(value)])
+}
+fn brick(n: u64, rows: Vec<Row>) -> BrickProgram {
+    BrickProgram {
+        id: id(n),
+        owner_scope: 1,
+        name: None,
+        rows,
+        print_count: 0,
+        implicit_cancel_relays: false,
+    }
+}
+#[derive(Default)]
+struct FakeHost {
+    calls: Vec<Dispatch>,
+    dead: Vec<Entity>,
+    neighbors: Vec<Id>,
+    blocked: Option<u64>,
+}
+impl Host for FakeHost {
+    fn alive(&self, e: Entity) -> bool {
+        !self.dead.contains(&e)
+    }
+    fn permitted(&self, _: &Trigger, _: Entity, _: &str) -> bool {
+        true
+    }
+    fn relay_neighbors(&mut self, _: Id, _: Direction, _: usize) -> Result<Vec<Id>, String> {
+        Ok(self.neighbors.clone())
+    }
+    fn apply(&mut self, d: &Dispatch) -> Apply {
+        if self.blocked == Some(d.origin) {
+            return Apply::Deferred("fixture temporarily blocked".into());
+        }
+        self.calls.push(d.clone());
+        Apply::Applied
+    }
+}
+#[test]
+fn four_thousand_rows_execute_ordered_same_phase_and_invalid_edit_is_atomic() {
+    let mut w = world(Limits::default());
+    let rows = (0..4096)
+        .map(|i| color("onActivate", (i % 64) as u8))
+        .collect();
+    w.install_brick(brick(1, rows)).unwrap();
+    let mut host = FakeHost::default();
+    assert_eq!(
+        w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap(),
+        4096
+    );
+    let r = w.advance(0, &mut host).unwrap();
+    assert_eq!(r.applied, 4096);
+    assert_eq!(r.pending, 0);
+    for (i, d) in host.calls.iter().enumerate() {
+        assert_eq!(d.row, i as u16);
+        assert_eq!(d.now_us, 0);
+        assert_eq!(d.intent, Intent::Brick(BrickOp::Color((i % 64) as u8)));
+    }
+    let mut bad = w.program(id(1)).unwrap().clone();
+    bad.rows.push(color("onActivate", 1));
+    assert!(w.install_brick(bad).is_err());
+    assert_eq!(w.program(id(1)).unwrap().rows.len(), 4096);
+}
+#[test]
+fn relay_branches_preserve_authored_breadth_first_order_without_33ms() {
+    let mut w = world(Limits::default());
+    w.install_brick(brick(
+        1,
+        vec![
+            row("onActivate", "fireRelay", vec![]),
+            color("onActivate", 1),
+            color("onRelay", 2),
+            row("onRelay", "fireRelayNorth", vec![]),
+        ],
+    ))
+    .unwrap();
+    w.install_brick(brick(2, vec![color("onRelay", 3)]))
+        .unwrap();
+    let mut h = FakeHost {
+        neighbors: vec![id(2), id(2), id(1)],
+        ..Default::default()
+    };
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    let r = w.advance(0, &mut h).unwrap();
+    assert_eq!(r.pending, 0);
+    assert_eq!(
+        h.calls.iter().map(|d| d.intent.clone()).collect::<Vec<_>>(),
+        vec![
+            Intent::Brick(BrickOp::Color(1)),
+            Intent::Brick(BrickOp::Color(2)),
+            Intent::Brick(BrickOp::Color(3))
+        ]
+    );
+    assert!(h.calls.iter().all(|d| d.now_us == 0));
+}
+#[test]
+fn cancellation_prepass_preserves_new_rows_and_toolbreak_exception() {
+    let mut w = world(Limits::default());
+    let mut delayed = color("onRelay", 1);
+    delayed.delay_ms = 100;
+    let mut exception = color("onToolBreak", 2);
+    exception.delay_ms = 100;
+    let mut new = color("onActivate", 3);
+    new.delay_ms = 100;
+    w.install_brick(brick(
+        1,
+        vec![
+            delayed,
+            exception,
+            row("onActivate", "cancelEvents", vec![]),
+            new,
+        ],
+    ))
+    .unwrap();
+    w.trigger(Trigger::new(id(1), "onRelay", 1)).unwrap();
+    w.trigger(Trigger::new(id(1), "onToolBreak", 1)).unwrap();
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    assert_eq!(w.pending(), 2);
+    let mut h = FakeHost::default();
+    assert_eq!(w.advance(99999, &mut h).unwrap().applied, 0);
+    assert_eq!(w.advance(100000, &mut h).unwrap().applied, 2);
+    assert_eq!(h.calls[0].intent, Intent::Brick(BrickOp::Color(2)));
+    assert_eq!(h.calls[1].intent, Intent::Brick(BrickOp::Color(3)));
+}
+#[test]
+fn enabling_mutates_future_inputs_not_already_captured_output_rows() {
+    let mut w = world(Limits::default());
+    w.install_brick(brick(
+        1,
+        vec![
+            row(
+                "onActivate",
+                "setEventEnabled",
+                vec![
+                    Value::Rows(RowSelection::Indices(vec![1])),
+                    Value::Bool(false),
+                ],
+            ),
+            color("onActivate", 4),
+        ],
+    ))
+    .unwrap();
+    let mut h = FakeHost::default();
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    w.advance(0, &mut h).unwrap();
+    assert_eq!(h.calls.len(), 1);
+    assert!(!w.program(id(1)).unwrap().rows[1].enabled);
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    w.advance(0, &mut h).unwrap();
+    assert_eq!(h.calls.len(), 1);
+}
+#[test]
+fn eight_independent_origins_remain_fair_during_reentrant_zero_delay_loop() {
+    let limits = Limits {
+        steps_per_phase: 80,
+        steps_per_origin: 20,
+        loop_warning_depth: 2,
+        ..Default::default()
+    };
+    let mut w = world(limits);
+    for n in 1..=8 {
+        w.install_brick(brick(
+            n,
+            vec![
+                color("onRelay", n as u8),
+                row("onRelay", "fireRelay", vec![]),
+            ],
+        ))
+        .unwrap();
+        w.trigger(Trigger::new(id(n), "onRelay", n)).unwrap();
+    }
+    let mut h = FakeHost::default();
+    let r = w.advance(0, &mut h).unwrap();
+    assert_eq!(r.steps, 80);
+    assert!(r.origins.values().all(|o| o.steps == 10 && o.loops > 0));
+    assert_eq!(r.origins.len(), 8);
+    assert!(r.due_pending > 0);
+    assert!(w.cancel_origin(1) > 0);
+    let before = h.calls.iter().filter(|d| d.origin == 1).count();
+    let r = w.advance(0, &mut h).unwrap();
+    assert_eq!(before, h.calls.iter().filter(|d| d.origin == 1).count());
+    assert!(!r.origins.contains_key(&1));
+}
+#[test]
+fn named_targets_are_indexed_scoped_sorted_and_capture_generation() {
+    let mut w = world(Limits::default());
+    let mut named = color("onActivate", 7);
+    named.target = Target::Named("Door".into());
+    named.delay_ms = 10;
+    w.install_brick(brick(1, vec![named])).unwrap();
+    for n in 2..=4 {
+        let mut b = brick(n, vec![]);
+        b.name = Some("door".into());
+        if n == 4 {
+            b.owner_scope = 2;
+        }
+        w.install_brick(b).unwrap();
+    }
+    assert_eq!(w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap(), 2);
+    let mut h = FakeHost {
+        dead: vec![Entity::brick(id(2))],
+        ..Default::default()
+    };
+    let r = w.advance(10000, &mut h).unwrap();
+    assert_eq!(r.stale, 1);
+    assert_eq!(h.calls.len(), 1);
+    assert_eq!(h.calls[0].target.id, id(3));
+}
+#[test]
+fn overload_admission_is_atomic_and_internal_branch_can_resume() {
+    let mut w = world(Limits {
+        pending: 4,
+        ..Default::default()
+    });
+    let mut relay = row("onActivate", "fireRelay", vec![]);
+    relay.target = Target::Named("branch".into());
+    w.install_brick(brick(
+        1,
+        vec![relay, color("onActivate", 1), color("onActivate", 2)],
+    ))
+    .unwrap();
+    let mut b = brick(
+        2,
+        vec![
+            color("onRelay", 3),
+            color("onRelay", 4),
+            color("onRelay", 5),
+        ],
+    );
+    b.name = Some("branch".into());
+    w.install_brick(b).unwrap();
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    assert!(w.trigger(Trigger::new(id(1), "onActivate", 1)).is_err());
+    assert_eq!(w.pending(), 3);
+    let mut h = FakeHost::default();
+    let r = w.advance(0, &mut h).unwrap();
+    assert_eq!(r.admission_backpressure, 1);
+    assert_eq!(h.calls.len(), 2);
+    assert_eq!(w.pending(), 1);
+    w.advance(0, &mut h).unwrap();
+    assert_eq!(h.calls.len(), 5);
+    assert_eq!(w.pending(), 0);
+}
+#[test]
+fn host_deferred_work_preserves_row_order_but_other_origins_progress() {
+    let mut w = world(Limits::default());
+    for n in 1..=2 {
+        w.install_brick(brick(
+            n,
+            vec![color("onActivate", 1), color("onActivate", 2)],
+        ))
+        .unwrap();
+        w.trigger(Trigger::new(id(n), "onActivate", n)).unwrap();
+    }
+    let mut h = FakeHost {
+        blocked: Some(1),
+        ..Default::default()
+    };
+    let r = w.advance(0, &mut h).unwrap();
+    assert_eq!(r.applied, 2);
+    assert_eq!(r.pending, 2);
+    assert!(h.calls.iter().all(|d| d.origin == 2));
+    h.blocked = None;
+    w.advance(50, &mut h).unwrap();
+    assert_eq!(h.calls[2].row, 0);
+    assert_eq!(h.calls[3].row, 1);
+}
+#[test]
+fn print_overflow_updates_digit_then_fires_client_attributed_chain() {
+    let mut w = world(Limits::default());
+    let mut b = brick(
+        1,
+        vec![
+            row("onRelay", "incrementPrintCount", vec![Value::Int(3)]),
+            color("onPrintCountOverFlow", 9),
+        ],
+    );
+    b.print_count = 8;
+    w.install_brick(b).unwrap();
+    let mut trigger = Trigger::new(id(1), "onRelay", 1);
+    trigger.client = Some(Entity {
+        class: Class::Client,
+        id: id(99),
+    });
+    w.trigger(trigger).unwrap();
+    let mut h = FakeHost::default();
+    w.advance(0, &mut h).unwrap();
+    assert_eq!(w.program(id(1)).unwrap().print_count, 1);
+    assert_eq!(h.calls[0].intent, Intent::Brick(BrickOp::PrintDigit(1)));
+    assert_eq!(h.calls[1].intent, Intent::Brick(BrickOp::Color(9)));
+    assert_eq!(
+        h.calls[1].client,
+        Some(Entity {
+            class: Class::Client,
+            id: id(99)
+        })
+    );
+}
+#[test]
+fn checkpoint_resumes_delays_and_rejects_action_tampering() {
+    let mut w = world(Limits::default());
+    let mut delayed = color("onActivate", 4);
+    delayed.delay_ms = 20;
+    w.install_brick(brick(1, vec![delayed])).unwrap();
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    w.advance(5000, &mut FakeHost::default()).unwrap();
+    let save = w.save().unwrap();
+    let mut restored = EventWorld::restore(
+        fixture(),
+        Bindings {
+            palette_len: 64,
+            ..Default::default()
+        },
+        &save,
+    )
+    .unwrap();
+    let mut h = FakeHost::default();
+    assert!(restored.advance(4999, &mut h).is_err());
+    assert_eq!(restored.advance(19999, &mut h).unwrap().applied, 0);
+    assert_eq!(restored.advance(20000, &mut h).unwrap().applied, 1);
+    let mut corrupt: serde_json::Value = serde_json::from_slice(&save).unwrap();
+    corrupt["jobs"][0]["action"]["Intent"]["Brick"]["Color"] = serde_json::json!(63);
+    assert!(
+        EventWorld::restore(
+            fixture(),
+            Bindings {
+                palette_len: 64,
+                ..Default::default()
+            },
+            &serde_json::to_vec(&corrupt).unwrap()
+        )
+        .is_err()
+    );
+}
+#[test]
+fn disappear_timer_replacement_survives_save_and_is_not_cancel_events() {
+    let mut w = world(Limits::default());
+    w.install_brick(brick(
+        1,
+        vec![row("onActivate", "disappear", vec![Value::Int(1)])],
+    ))
+    .unwrap();
+    let mut h = FakeHost::default();
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    w.advance(0, &mut h).unwrap();
+    assert_eq!(w.cancel_source(id(1), CancelMode::AuthoredDelayed), 0);
+    let mut w = EventWorld::restore(
+        fixture(),
+        Bindings {
+            palette_len: 64,
+            ..Default::default()
+        },
+        &w.save().unwrap(),
+    )
+    .unwrap();
+    w.advance(1_000_000, &mut h).unwrap();
+    assert_eq!(h.calls.len(), 2);
+    assert_eq!(
+        h.calls[1].intent,
+        Intent::Brick(BrickOp::Presence {
+            rendering: true,
+            colliding: true,
+            ray_casting: true,
+            revive_fake_dead: false
+        })
+    );
+}
+#[test]
+fn source_math_keeps_health_projectile_and_relay_semantics() {
+    use bri_events::semantics::*;
+    use glam::Vec3;
+    assert_eq!(add_health(100., 100., 50), HealthChange::Unchanged);
+    assert_eq!(add_health(100., 20., 50), HealthChange::SetDamage(0.));
+    assert_eq!(set_health(100., 20., 0), HealthChange::Damage(100.));
+    assert_eq!(
+        bounce(Vec3::new(0., -300., 0.), Vec3::Y, 1.),
+        Vec3::Y * 200.
+    );
+    assert_eq!(redirect(Vec3::Y * 50., Vec3::X * 2., true), Vec3::X * 50.);
+    assert_eq!(
+        radius_impulse(Vec3::ZERO, Vec3::X * 5., 10., 100., 20.),
+        Vec3::new(75., 15., 0.)
+    );
+    let (c, s) = relay_box(Vec3::ZERO, Vec3::new(2., 1., 4.), Direction::North);
+    assert_eq!(c.z, 0.);
+    assert!((s.z - 0.1).abs() < 1e-6);
+    assert!(!may_recover_vehicle(&[(true, false)]));
+    assert_eq!(
+        item_spawn_position(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ONE * 2.,
+            Vec3::ZERO
+        ),
+        Vec3::ZERO
+    );
+    assert_eq!(
+        item_spawn_position(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ONE * 2.,
+            Vec3::Y
+        ),
+        Vec3::Y * 1.1
+    );
+    assert!(!sound_allowed(true, true));
+}
+#[test]
+#[ignore = "requires private native event catalog"]
+fn actual_catalog_compiles_all_65_outputs_and_covers_all_16_inputs() {
+    let catalog = Catalog::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/events-pack-002/catalog.json"),
+    )
+    .unwrap();
+    assert_eq!(catalog.inputs.len(), 16);
+    assert_eq!(catalog.outputs.len(), 65);
+    for output in &catalog.outputs {
+        let class = Class::parse(&output.class_name).unwrap();
+        let input = catalog
+            .inputs
+            .iter()
+            .find(|i| {
+                i.targets
+                    .iter()
+                    .any(|(_, c)| Class::parse(c) == Some(class))
+            })
+            .unwrap();
+        let slot = Slot::parse(
+            &input
+                .targets
+                .iter()
+                .find(|(_, c)| Class::parse(c) == Some(class))
+                .unwrap()
+                .0,
+        )
+        .unwrap();
+        let row = Row {
+            preserved: None,
+            enabled: true,
+            input: input.name.clone(),
+            delay_ms: 0,
+            target: Target::Slot(slot),
+            output: output.name.clone(),
+            params: output.params.iter().map(Param::default_value).collect(),
+        };
+        catalog
+            .validate_row(
+                &row,
+                &Bindings {
+                    palette_len: 64,
+                    datablocks: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn opaque_rows_keep_indices_and_disabled_source_future_does_not_renumber() {
+    let mut w = world(Limits::default());
+    let preserved = Row {
+        preserved: Some(PreservedRow {
+            original: "+-EVENT unknown community row".into(),
+            diagnostic: "unregistered".into(),
+        }),
+        enabled: true,
+        input: String::new(),
+        delay_ms: 0,
+        target: Target::Slot(Slot::SelfBrick),
+        output: String::new(),
+        params: vec![],
+    };
+    w.install_brick(brick(1, vec![preserved, color("onActivate", 2)]))
+        .unwrap();
+    w.trigger(Trigger::new(id(1), "onActivate", 1)).unwrap();
+    let mut h = FakeHost::default();
+    w.advance(0, &mut h).unwrap();
+    assert_eq!(h.calls[0].row, 1);
+    let restored = EventWorld::restore(
+        fixture(),
+        Bindings {
+            palette_len: 64,
+            ..Default::default()
+        },
+        &w.save().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        restored.program(id(1)).unwrap().rows[0]
+            .preserved
+            .as_ref()
+            .unwrap()
+            .original,
+        "+-EVENT unknown community row"
+    );
+}
+#[test]
+fn migration_preserves_native_actions_and_original_editor_vector_convention() {
+    use bri_events::migration::*;
+    let e = serde_json::json!({"enabled":true,"input":"activate","delay_ms":3,"target":{"kind":"named","value":"lamp"},"action":{"kind":"light","value":{"kind":"unresolved","value":{"namespace":"light_datablock","name":"RedLight"}}}});
+    assert!(legacy_event(&e, |_, _| None).is_err());
+    let migrated = legacy_event(&e, |ns, name| {
+        assert_eq!((ns, name), ("light_datablock", "RedLight"));
+        Some("v20.light.redlight".into())
+    })
+    .unwrap();
+    assert_eq!(migrated.target, Target::Named("lamp".into()));
+    assert_eq!(
+        migrated.params,
+        vec![Value::Datablock(Some("v20.light.redlight".into()))]
+    );
+    let ui = serde_json::json!({"enabled":true,"delay_ms":0,"input":"onActivate","target":"Player","named_target":null,"output":"SetVelocity","params":[{"Vector":[0.,0.,10.]}]});
+    assert_eq!(
+        ui_event(&ui).unwrap().params,
+        vec![Value::Vector(glam::Vec3::Y * 10.)]
+    );
+    assert_eq!(
+        row_selection("0 101 4095").unwrap(),
+        RowSelection::Indices(vec![0, 101, 4095])
+    );
+    assert!(row_selection("4096").is_err());
+    assert_eq!(world_tick_to_us(120).unwrap(), 1_000_000);
+}
+#[test]
+fn state_byte_limit_rejects_atomically_and_cancellation_reclaims_capacity() {
+    let mut w = world(Limits {
+        state_bytes: 4096,
+        ..Default::default()
+    });
+    let mut delayed = color("onActivate", 1);
+    delayed.delay_ms = 100;
+    w.install_brick(brick(1, vec![delayed])).unwrap();
+    let mut admitted = 0;
+    while w.trigger(Trigger::new(id(1), "onActivate", 1)).is_ok() {
+        admitted += 1;
+        assert!(admitted < 20);
+    }
+    assert!(admitted > 0);
+    assert_eq!(w.pending(), admitted);
+    let bytes = w.save().unwrap();
+    let mut restored = EventWorld::restore(
+        fixture(),
+        Bindings {
+            palette_len: 64,
+            ..Default::default()
+        },
+        &bytes,
+    )
+    .unwrap();
+    assert_eq!(restored.pending(), admitted);
+    assert!(
+        restored
+            .trigger(Trigger::new(id(1), "onActivate", 1))
+            .is_err()
+    );
+    assert_eq!(w.cancel_origin(1), admitted);
+    assert!(w.trigger(Trigger::new(id(1), "onActivate", 1)).is_ok());
+}
+#[test]
+fn delayed_relay_cycles_do_not_emit_zero_delay_loop_warnings() {
+    let mut w = world(Limits {
+        loop_warning_depth: 1,
+        ..Default::default()
+    });
+    let mut relay = row("onRelay", "fireRelay", vec![]);
+    relay.delay_ms = 1;
+    w.install_brick(brick(1, vec![relay])).unwrap();
+    w.trigger(Trigger::new(id(1), "onRelay", 1)).unwrap();
+    let mut h = FakeHost::default();
+    for tick in 1..20 {
+        let r = w.advance(tick * 1000, &mut h).unwrap();
+        assert!(r.origins.values().all(|o| o.loops == 0));
+    }
+}
+#[test]
+fn cancel_prepass_frees_origin_admission_and_saved_context_is_validated() {
+    let mut w = world(Limits {
+        origins: 1,
+        ..Default::default()
+    });
+    let mut delayed = color("onRelay", 1);
+    delayed.delay_ms = 10;
+    w.install_brick(brick(
+        1,
+        vec![
+            delayed,
+            row("onActivate", "cancelEvents", vec![]),
+            color("onActivate", 2),
+        ],
+    ))
+    .unwrap();
+    w.trigger(Trigger::new(id(1), "onRelay", 1)).unwrap();
+    assert!(w.trigger(Trigger::new(id(1), "onActivate", 2)).is_ok());
+    let mut corrupt: serde_json::Value = serde_json::from_slice(&w.save().unwrap()).unwrap();
+    corrupt["jobs"][0]["context"]["client"] =
+        serde_json::json!({"class":"Player","id":{"index":5,"generation":1}});
+    assert!(
+        EventWorld::restore(
+            fixture(),
+            Bindings {
+                palette_len: 64,
+                ..Default::default()
+            },
+            &serde_json::to_vec(&corrupt).unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+#[ignore = "requires private native event catalog"]
+fn every_vanilla_output_reaches_its_native_dispatch_or_internal_route() {
+    let catalog = Catalog::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/events-pack-002/catalog.json"),
+    )
+    .unwrap();
+    for output in &catalog.outputs {
+        let class = Class::parse(&output.class_name).unwrap();
+        let input = catalog
+            .inputs
+            .iter()
+            .find(|i| {
+                i.targets
+                    .iter()
+                    .any(|(_, c)| Class::parse(c) == Some(class))
+            })
+            .unwrap();
+        let slot = Slot::parse(
+            &input
+                .targets
+                .iter()
+                .find(|(_, c)| Class::parse(c) == Some(class))
+                .unwrap()
+                .0,
+        )
+        .unwrap();
+        let row = Row {
+            preserved: None,
+            enabled: true,
+            input: input.name.clone(),
+            delay_ms: 0,
+            target: Target::Slot(slot),
+            output: output.name.clone(),
+            params: output.params.iter().map(Param::default_value).collect(),
+        };
+        let mut world = EventWorld::new(
+            catalog.clone(),
+            Bindings {
+                palette_len: 64,
+                ..Default::default()
+            },
+            Limits::default(),
+        )
+        .unwrap();
+        world.install_brick(brick(1, vec![row])).unwrap();
+        let mut trigger = Trigger::new(id(1), &input.name, 1);
+        if slot != Slot::SelfBrick {
+            trigger.targets.insert(slot, Entity { class, id: id(2) });
+        }
+        let queued = world.trigger(trigger).unwrap();
+        let mut host = FakeHost::default();
+        let report = world.advance(0, &mut host).unwrap();
+        assert_eq!(report.rejected, 0, "{}", output.name);
+        assert_eq!(report.admission_backpressure, 0, "{}", output.name);
+        assert!(report.applied > 0 || queued == 0, "{}", output.name);
+        world.cancel_origin(1);
+        assert_eq!(world.pending(), 0);
+    }
+}
+#[test]
+fn expansion_budget_preserves_finite_branches_across_same_time_phases() {
+    let mut w = world(Limits {
+        expansions_per_phase: 2,
+        expansions_per_origin: 2,
+        ..Default::default()
+    });
+    for n in 1..=2 {
+        w.install_brick(brick(
+            n,
+            vec![
+                row("onActivate", "fireRelay", vec![]),
+                color("onRelay", n as u8),
+                color("onRelay", n as u8),
+            ],
+        ))
+        .unwrap();
+        w.trigger(Trigger::new(id(n), "onActivate", n)).unwrap();
+    }
+    let mut h = FakeHost::default();
+    let r = w.advance(0, &mut h).unwrap();
+    assert_eq!(r.expanded, 2);
+    assert_eq!(r.admission_backpressure, 1);
+    assert_eq!(h.calls.len(), 2);
+    w.advance(0, &mut h).unwrap();
+    assert_eq!(h.calls.len(), 4);
+    assert_eq!(w.pending(), 0);
+}

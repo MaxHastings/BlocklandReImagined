@@ -1,0 +1,1651 @@
+file	line	end	function	args
+.research/v20-dso/client/actionMap.cs	1	18	ActionMap::copyBind	%this, %otherMap, %command
+.research/v20-dso/client/actionMap.cs	20	32	ActionMap::blockBind	%this, %otherMap, %command
+.research/v20-dso/client/audio.cs	1	28	OpenALInit	
+.research/v20-dso/client/audio.cs	30	33	OpenALShutdown	
+.research/v20-dso/client/canvas.cs	1	15	initCanvas	%windowName
+.research/v20-dso/client/canvas.cs	17	29	resetCanvas	
+.research/v20-dso/client/canvas.cs	31	33	onWindowReactivate	
+.research/v20-dso/client/canvas.cs	35	55	restartAudio	
+.research/v20-dso/client/init.cs	1	35	initClient	
+.research/v20-dso/client/init.cs	37	40	onUDPFailure	
+.research/v20-dso/client/init.cs	42	46	loadMainMenu	
+.research/v20-dso/client/init.cs	48	90	convertFile	%inFileName, %outFileName
+.research/v20-dso/client/init.cs	94	108	notifyArrangedStart	%addy
+.research/v20-dso/client/init.cs	110	120	notifyArrangedAddress	%addy
+.research/v20-dso/client/init.cs	122	192	notifyArrangedFinish	%nonceA, %nonceB, %spamConnect
+.research/v20-dso/client/init.cs	194	204	onSendPunchPacket	%ip
+.research/v20-dso/client/message.cs	1	4	clientCmdChatMessage	%sender, %voice, %pitch, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/client/message.cs	6	20	clientCmdServerMessage	%msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/client/message.cs	22	32	addMessageCallback	%msgType, %func
+.research/v20-dso/client/message.cs	34	37	defaultMessageCallback	%msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/client/mission.cs	1	4	clientCmdMissionStart	%seq
+.research/v20-dso/client/mission.cs	6	11	clientCmdMissionEnd	%seq
+.research/v20-dso/client/missionDownload.cs	1	7	onManifestHashReceived	
+.research/v20-dso/client/missionDownload.cs	9	13	onManifestRecieved	
+.research/v20-dso/client/missionDownload.cs	15	18	setTotalPendingBlobs	%tpb
+.research/v20-dso/client/missionDownload.cs	20	32	onBlobCacheCheckFinished	
+.research/v20-dso/client/missionDownload.cs	34	54	updateBlobsRemaining	%blobsRemaining
+.research/v20-dso/client/missionDownload.cs	56	62	onBlobDownloadFinished	
+.research/v20-dso/client/missionDownload.cs	64	67	setDownloadSize	%size
+.research/v20-dso/client/missionDownload.cs	69	73	updateDownloadProgress	%val
+.research/v20-dso/client/missionDownload.cs	75	81	clientCmdMissionStartPhase1	%seq, %missionName, %musicTrack
+.research/v20-dso/client/missionDownload.cs	83	86	onDataBlockObjectReceived	%index, %total
+.research/v20-dso/client/missionDownload.cs	88	95	clientCmdMissionStartPhase2	%seq, %missionName
+.research/v20-dso/client/missionDownload.cs	97	101	onGhostAlwaysStarted	%ghostCount
+.research/v20-dso/client/missionDownload.cs	103	107	onGhostAlwaysObjectReceived	
+.research/v20-dso/client/missionDownload.cs	109	125	clientCmdMissionStartPhase3	%seq, %missionName
+.research/v20-dso/client/missionDownload.cs	127	134	updateLightingProgress	
+.research/v20-dso/client/missionDownload.cs	136	143	sceneLightingComplete	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	185	188	handleClientJoin	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	190	209	secureClientCmd_ClientJoin	%clientName, %clientId, %bl_id, %score, %isAI, %isAdmin, %isSuperAdmin, %trust, %inYourMiniGame
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	211	216	secureClientCmd_ClientDrop	%clientName, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	218	222	secureClientCmd_ClientScoreChanged	%score, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	224	229	secureClientCmd_ClientTrust	%clientId, %trustLevel
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	231	236	handleClientInYourMiniGame	%msgType, %msgString, %clientId, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	242	245	handleInitTeams	%msgType, %msgString
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	247	250	handleAddTeam	%msgType, %msgString, %teamID, %teamName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	252	255	handleRemoveTeam	%msgType, %msgString, %teamID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	257	260	handleSetTeamName	%msgType, %msgString, %teamID, %teamName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	265	274	handleAddClientToTeam	%msgType, %msgString, %clientId, %clientName, %teamID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	276	285	handleRemoveClientFromTeam	%msgType, %msgString, %clientId, %teamID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	287	296	handleSetTeamCaptain	%msgType, %msgString, %clientId, %teamID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	298	316	InitClientTeamManager	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	318	334	SO_ClientTeamManager::addTeam	%this, %teamID, %teamName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	336	355	SO_ClientTeamManager::removeTeam	%this, %teamID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	357	368	SO_ClientTeamManager::setTeamName	%this, %teamID, %teamName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	370	381	SO_ClientTeamManager::findTeamByID	%this, %teamID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	383	407	SO_ClientTeamManager::dumpTeams	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	409	414	SO_ClientTeam::addMember	%this, %clientId, %name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	416	434	SO_ClientTeam::removeMember	%this, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	436	439	SO_ClientTeam::setCaptain	%this, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	441	498	NewPlayerListGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	500	503	NewPlayerListGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	505	515	NewPlayerListGui::toggle	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	517	554	NewPlayerListGui::update	%this, %clientId, %clientName, %bl_id, %isSuperAdmin, %isAdmin, %score
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	556	609	NewPlayerListGui::updateTrust	%this, %clientId, %trustLevel
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	611	635	NewPlayerListGui::updateInYourMiniGame	%this, %clientId, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	637	657	NewPlayerListGui::ClearInYourMiniGame	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	659	675	NewPlayerListGui::updateScore	%this, %clientId, %score
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	677	764	NewPlayerListGui::clickList	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	766	780	NewPlayerListGui::sortList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	782	796	NewPlayerListGui::sortNumList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	798	810	NewPlayerListGui::ClickTrustInviteBuild	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	812	824	NewPlayerListGui::ClickTrustInviteFull	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	826	834	NewPlayerListGui::showTrustMessage	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	836	847	NewPlayerListGui::ClickTrustDemoteNONE	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	849	860	NewPlayerListGui::ClickTrustDemoteBUILD	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	862	870	NewPlayerListGui::ClickMiniGameInvite	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	872	880	NewPlayerListGui::ClickMiniGameRemove	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	882	891	NewPlayerListGui::ClickUnIgnore	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	893	902	NewPlayerListGui::setIgnoring	%this, %clientId, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	904	924	NewPlayerListGui::setIgnoringBL_ID	%this, %targetBL_ID, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	926	939	NewPlayerListGui::getIgnoringBL_ID	%this, %targetBL_ID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	941	968	clientCmdTrustInvite	%name, %bl_id, %level
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	970	985	TrustInviteGui::ClickAccept	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	987	992	TrustInviteGui::ClickReject	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	994	997	TrustInviteGui::ClickIgnore	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	999	1005	TrustInviteGui::Ignore	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1007	1010	rememberSentTrustInvite	%bl_id, %level
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1012	1028	clientCmdTrustInviteAccepted	%clientId, %bl_id, %level
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1030	1039	secureClientCmd_TrustDemoted	%clientId, %bl_id, %level
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1041	1059	updateClientTrustList	%bl_id, %level, %name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1061	1075	saveTrustList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1077	1112	loadTrustList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1114	1135	dumpTrustList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1137	1150	clientCmdTrustListUpload_Start	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1152	1154	MiniGameInviteGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1156	1158	MiniGameInviteGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1160	1175	clientCmdMiniGameInvite	%title, %name, %bl_id, %miniGameID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1177	1181	MiniGameInviteGui::ClickAccept	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1183	1187	MiniGameInviteGui::ClickReject	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1189	1192	MiniGameInviteGui::ClickIgnore	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1194	1200	MiniGameInviteGui::Ignore	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1202	1220	joinMiniGameGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1222	1224	joinMiniGameGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1226	1249	clientCmdAddMiniGameLine	%line, %id, %colorIdx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1251	1255	clientCmdRemoveMiniGameLine	%id
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1257	1260	clientCmdResetMiniGameList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1262	1279	joinMiniGameGui::clickList	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1281	1289	joinMiniGameGui::ClickJoin	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1291	1306	joinMiniGameGui::ClickLeave	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1308	1311	joinMiniGameGui::end	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1313	1317	joinMiniGameGui::ClickCreate	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1319	1336	clientCmdSetPlayingMiniGame	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1338	1349	clientCmdSetRunningMiniGame	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1351	1361	clientCmdSetBuildingDisabled	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1363	1373	clientCmdSetPaintingDisabled	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1375	1389	joinMiniGameGui::sortList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1391	1405	joinMiniGameGui::sortNumList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1407	1487	CreateMiniGameGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1489	1574	CreateMiniGameGui::LoadDataBlocks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1576	1578	CreateMiniGameGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1580	1589	ClientCmdAddMiniGameColor	%idx, %name, %RGB
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1591	1600	colorItoColorF	%intColor
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1602	1606	CreateMiniGameGui::clickColorList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1608	1620	CreateMiniGameGui::ClickCreate	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1622	1630	CreateMiniGameGui::clickReset	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1632	1638	CreateMiniGameGui::clickEnd	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1640	1644	CreateMiniGameGui::end	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1646	1650	clientCmdCreateMiniGameSuccess	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1652	1655	clientCmdCreateMiniGameFail	%reason
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1657	1660	CreateMiniGameGui::clickSetFavs	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1662	1702	CreateMiniGameGui::ClickFav	%this, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1704	1725	CreateMiniGameGui::Refresh	%this, %parentObj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1727	1781	CreateMiniGameGui::send	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1783	1785	connectingGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1787	1791	onSendConnectChallengeRequest	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1793	1810	connectingGui::cancel	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1812	1821	OnSubnetError	%code
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1823	1832	onInvalidConnectionAddress	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1834	1840	SAD	%password
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1842	1845	SADSetPassword	%password
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1847	1863	buildwall	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1865	1888	buildConfetti	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1890	1902	buildFloor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1904	1916	buildFloor2	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1918	1925	two	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1927	1938	maze	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1940	1951	maze2	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1953	1968	stress	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1970	1977	buildstairs	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1979	1995	clickSpam	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	1997	2000	clientCmdSetRemoteServerData	%serverLAN
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2002	2004	clientCmdSyncClock	%time
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2006	2008	GameConnection::prepDemoRecord	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2010	2013	GameConnection::prepDemoPlayback	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2015	2043	getLine	%phrase, %lineNum
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2045	2053	getLineCount	%phrase
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2055	2061	onMissionDownloadPhase1	%missionName, %musicTrack
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2063	2075	onPhase1Progress	%progress
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2077	2079	onPhase1Complete	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2081	2087	onMissionDownloadPhase2	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2089	2098	onPhase2Progress	%progress
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2100	2102	onPhase2Complete	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2104	2110	onMissionDownloadPhase3	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2112	2115	onPhase3Progress	%progress
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2117	2134	onPhase3Complete	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2136	2154	onMissionDownloadComplete	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2160	2171	handleLoadInfoMessage	%msgType, %msgString, %mapName, %mapSaveName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2173	2198	getValidSaveName	%saveName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2200	2221	handleLoadDescriptionMessage	%msgType, %msgString, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2223	2234	handleLoadMapPictureMessage	%msgType, %msgString, %imageName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2236	2238	handleLoadInfoDoneMessage	%msgType, %msgString
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2241	2244	handleConnectionErrorMessage	%msgType, %msgString, %msgError
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2246	2273	GameConnection::initialControlSet	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2275	2282	GameConnection::setLagIcon	%this, %state
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2284	2295	GameConnection::onConnectionAccepted	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2297	2301	GameConnection::onConnectionTimedOut	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2303	2308	GameConnection::onConnectionDropped	%this, %msg
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2310	2315	GameConnection::onConnectionError	%this, %msg
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2317	2374	GameConnection::onConnectRequestRejected	%this, %msg
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2376	2379	GameConnection::onConnectRequestTimedOut	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2381	2399	disconnect	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2401	2463	disconnectedCleanup	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2465	2468	LoadingGui::onAdd	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2470	2475	LoadingGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2477	2493	LoadingGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2495	2504	optionsDlg::setPane	%this, %pane
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2506	2693	optionsDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2695	2791	optionsDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2793	2797	UpdatePacketSize	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2799	2803	UpdateLagThreshold	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2805	2809	UpdateRateToClient	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2811	2815	UpdateRateToServer	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2817	2871	OptGraphicsDriverMenu::onSelect	%this, %id, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2873	2904	OptGraphicsResolutionMenu::onSelect	%this, %id, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2906	2939	OptGraphicsResolutionMenu::init	%this, %device, %fullScreen
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2941	2951	OptGraphicsFullscreenToggle::onAction	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2953	2975	OptGraphicsBPPMenu::init	%this, %device
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2977	2987	OptScreenshotMenu::init	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	2989	3021	optionsDlg::applyGraphics	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3276	3360	getMapDisplayName	%device, %action
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3362	3380	buildFullMapString	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3382	3398	OptRemapList::fillList	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3400	3411	OptRemapList::doRemap	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3413	3417	optionsDlg::RemapAll	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3419	3435	optionsDlg::RemapNext	%this, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3437	3446	redoMapping	%device, %action, %cmd, %oldIndex, %newIndex
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3448	3458	findRemapCmdIndex	%command
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3460	3514	OptRemapInputCtrl::onInputEvent	%this, %device, %action
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3516	3533	optionsDlg::clearAllBinds	%this, %confirm
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3535	3541	optionsDlg::setDefaultBinds	%this, %confirm
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3543	3547	OptAudioUpdate	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3613	3626	OptAudioUpdateMasterVolume	%volume
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3628	3648	OptAudioUpdateChannelVolume	%channel, %volume
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3650	3662	OptAudioDriverList::onSelect	%this, %id, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3664	3679	setActiveInv	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3681	3693	getActiveInv	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3695	3810	directSelectInv	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3812	3818	useFirstSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3820	3826	useSecondSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3828	3834	useThirdSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3836	3842	useFourthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3844	3850	useFifthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3852	3858	useSixthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3860	3866	useSeventhSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3868	3874	useEighthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3876	3882	useNinthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3884	3890	useTenthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3892	3898	dropFirstSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3900	3906	dropSecondSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3908	3914	dropThirdSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3916	3922	dropFourthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3924	3930	dropFifthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3932	3938	dropSixthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3940	3946	dropSeventhSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3948	3954	dropEighthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3956	3962	dropNinthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3964	3970	dropTenthSlot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3974	3985	repeatBrickAway	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	3987	3998	repeatBrickTowards	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4000	4011	repeatBrickLeft	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4013	4024	repeatBrickRight	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4026	4037	repeatBrickUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4039	4050	repeatBrickDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4052	4063	repeatBrickThirdUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4065	4076	repeatBrickThirdDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4078	4089	repeatBrickPlant	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4091	4109	shiftBrickAway	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4111	4129	shiftBrickTowards	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4131	4149	shiftBrickLeft	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4151	4169	shiftBrickRight	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4171	4189	shiftBrickUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4191	4209	shiftBrickDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4211	4224	shiftBrickThirdUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4226	4239	shiftBrickThirdDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4241	4251	RotateBrickCW	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4253	4263	RotateBrickCCW	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4265	4278	plantBrick	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4280	4290	cancelBrick	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4292	4314	openAdminWindow	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4316	4322	openOptionsWindow	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4324	4358	useTools	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4360	4368	clientCmdSetActiveTool	%slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4370	4378	clientCmdSetActiveBrick	%slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4380	4397	useBricks	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4399	4412	useSprayCan	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4414	4420	useLight	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4422	4428	showPlayerList	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4430	4451	openBSD	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4457	4540	scrollInventory	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4542	4588	scrollBricks	%direction
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4590	4705	shiftPaintColumn	%direction
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4707	4793	scrollPaint	%direction
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4795	4810	setActiveTool	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4812	4850	scrollTools	%direction
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4852	4977	setScrollMode	%newMode
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4979	4990	superRepeatBrickAway	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	4992	5003	superRepeatBrickTowards	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5005	5016	superRepeatBrickLeft	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5018	5029	superRepeatBrickRight	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5031	5042	superRepeatBrickUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5044	5055	superRepeatBrickDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5057	5067	superShiftBrickAwayProxy	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5069	5079	superShiftBrickTowardsProxy	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5081	5091	superShiftBrickLeftProxy	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5093	5103	superShiftBrickRightProxy	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5105	5115	superShiftBrickUpProxy	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5117	5127	superShiftBrickDownProxy	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5129	5142	superShiftBrickAway	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5144	5157	superShiftBrickTowards	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5159	5172	superShiftBrickLeft	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5174	5187	superShiftBrickRight	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5189	5202	superShiftBrickUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5204	5217	superShiftBrickDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5219	5270	toggleSuperShift	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5272	5278	dropTool	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5280	5290	undoBrick	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5292	5304	PageUpNewChatHud	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5306	5316	repeatPageUpNewChatHud	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5318	5330	PageDownNewChatHud	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5332	5342	repeatPageDownNewChatHud	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5344	5350	GlobalChat	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5352	5358	TeamChat	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5360	5397	ToggleCursor	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5423	5462	SetConnectionType	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5464	5472	UpdatePacketSize	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5474	5482	UpdateLagThreshold	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5484	5492	UpdateRateToClient	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5494	5502	UpdateRateToServer	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5504	5507	OPT_MaxLightsDrop	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5509	5512	OPT_DynLightsDrop	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5514	5521	OPT_ChatSizeDrop	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5523	5529	OPT_ChatSizeSlide	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5531	5558	OPT_SetChatSize	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5560	5582	invUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5584	5606	invDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5608	5630	invLeft	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5632	5654	invRight	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5656	5712	optionsDlg::setTextureQuality	%this, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5714	5745	optionsDlg::setParticleQuality	%this, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5747	5759	optionsDlg::setShadowQuality	%this, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5761	5797	optionsDlg::setLightingQuality	%this, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5799	5836	optionsDlg::setPhysicsQuality	%this, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5838	5864	optionsDlg::setBrickFXQuality	%this, %val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5866	5872	toggleNetGraph	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5874	5880	Suicide	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5882	5899	ToggleShapeNameHud	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5901	5907	emoteSit	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5909	5915	emoteLove	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5917	5923	emoteHate	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5925	5931	emoteConfusion	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5933	5939	emoteAlarm	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5941	5947	NextSeat	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5949	5955	PrevSeat	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5957	5961	optionsDlg::updateTempBrickBlockers	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5963	5966	optionsDlg::updateDrawDistanceBlocker	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5968	5989	PlayGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5991	5995	PlayGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	5997	6000	refreshBottomTextCtrl	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6002	6005	refreshCenterTextCtrl	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6007	6025	PlayGui::killInvHud	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6027	6212	PlayGui::createInvHud	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6214	6233	PlayGui::hideBrickBox	%this, %dist, %totalSteps, %currStep
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6235	6238	clientCmdPlayGui_LoadPaint	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6240	6593	PlayGui::LoadPaint	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6595	6614	PlayGui::hidePaintBox	%this, %dist, %totalSteps, %currStep
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6616	6632	PlayGui::updatePaintActive	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6634	6640	PlayGui::FadePaintRows	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6642	6654	PlayGui::FadePaintRow	%this, %row
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6656	6669	PlayGui::UnFadePaintRow	%this, %row
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6671	6696	PlayGui::killpaint	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6698	6702	clientCmdPlayGui_CreateToolHud	%numSlots
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6704	6857	PlayGui::createToolHud	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6859	6878	PlayGui::hideToolBox	%this, %dist, %totalSteps, %currStep
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6880	6898	PlayGui::killToolHud	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6900	6903	clientCmdShowEnergyBar	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6905	6908	clientCmdSetScrollMode	%mode
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6910	6914	clientCmdSetLoadingIndicator	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6921	6940	clientCmdCenterPrint	%message, %time, %size
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6942	6969	clientCmdBottomPrint	%message, %time, %hideBar
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6971	6974	BottomPrintText::onResize	%this, %width, %height
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6976	6979	CenterPrintText::onResize	%this, %width, %height
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6981	6990	clientCmdClearCenterPrint	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	6992	7001	clientCmdclearBottomPrint	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7003	7005	clientCmdGameStart	%seq
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7007	7011	clientCmdGameEnd	%seq
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7014	7018	handleYourDeath	%msgType, %msgString, %yourName, %killerName, %respawnTime
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7020	7042	respawnCountDownTick	%time
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7044	7047	clientCmdCancelAutoBrickBuy	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7050	7103	handleYourSpawn	%msgType, %msgString
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7106	7109	handleError	%msgType, %msgString
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7112	7115	handleAdminForce	%msgType, %msgString
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7118	7122	handleClearBricks	%msgType, %msgString
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7135	7202	handlePlantError	%msgType, %msgString
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7205	7255	handleItemPickup	%msgType, %msgString, %slot, %itemData, %silent
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7258	7260	handleDropItem	%msgType, %string, %slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7263	7284	handleClearInv	%msgType
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7287	7357	handleHilightInv	%msgType, %msgString, %slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7360	7362	handleEquipInv	%msgType, %msgString, %slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7365	7367	handleDeEquipInv	%msgType, %msgString, %slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7370	7393	handleSetInvData	%msgType, %msgString, %slot, %data
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7396	7409	handleStartTalking	%msgType, %msgString, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7412	7424	handleStopTalking	%msgType, %msgString, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7429	7432	handleUploadStart	%msgType, %msgString, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7434	7437	handleUploadEnd	%msgType, %msgString, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7439	7442	handleProcessComplete	%msgType, %msgString, %clientId
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7444	7501	startMissionGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7503	7505	startMissionGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7507	7523	getMissionPreviewImage	%missionFile
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7525	7552	SM_StartMission	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7554	7595	getMissionDisplayName	%missionFile
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7597	7630	getMissionDescription	%missionFile
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7632	7672	SM_missionList::select	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7674	7679	startMissionGui::ClickSinglePlayer	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7681	7686	startMissionGui::ClickLAN	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7688	7693	startMissionGui::ClickInternet	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7695	7785	clientIsValidMap	%file
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7787	7792	clientCmdUpdatePrefs	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7794	7801	clientCmdTimeScale	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7803	7806	clientCmdSetFocalPoint	%point
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7808	7811	clientCmdShowBricks	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7813	7816	secureClientCmd_SetMaxPlayersDisplay	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7818	7834	secureClientCmd_SetServerNameDisplay	%ownerName, %serverName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7836	7858	MJ_connect	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7860	7863	ManualJoin::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7865	7878	JoinServerGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7880	7910	JoinServerGui::queryWebMaster	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7912	7922	queryMasterTCPObj::onConnected	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7924	7928	queryMasterTCPObj::onDNSFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7930	7934	queryMasterTCPObj::onConnectFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	7936	8084	queryMasterTCPObj::onLine	%this, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8086	8096	JoinServerGui::queryLan	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8098	8103	JoinServerGui::cancel	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8105	8222	JoinServerGui::join	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8224	8248	handlePunchConnect	%address, %clientNonce
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8250	8255	JoinServerGui::exit	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8257	8295	JoinServerGui::update	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8297	8324	onServerQueryStatus	%status, %msg, %value
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8326	8347	JS_sortList	%col, %defaultDescending
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8349	8370	JS_sortNumList	%col, %defaultDescending
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8372	8384	ServerInfoSO_ClearAll	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8386	8418	ServerInfoSO_Add	%ip, %pass, %ded, %name, %currPlayers, %maxPlayers, %mods, %map, %brickCount, %demoPlayers
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8420	8482	ServerInfoSO_DisplayAll	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8484	8507	ServerInfoSO_StartPingAll	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8509	8524	ServerInfoSO_PingNext	%slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8526	8535	onSimplePingReceived	%ip, %ping, %slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8537	8546	onSimplePingTimeout	%ip, %slot
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8548	8568	ServerInfoSO_UpdatePing	%ip, %ping
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8570	8601	ServerSO::serialize	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8603	8617	ServerSO::Display	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8619	8701	JoinServerPassGui::enterPass	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8703	8708	JoinServerPassGui::cancel	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8710	8724	filtersGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8726	8733	filtersGui::onSleep	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8735	8742	noHudGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8744	8747	noHudGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8749	8756	changeMapGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8758	8760	changeMapGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8762	8796	changeMapList::select	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8798	8809	changeMapButton::click	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8811	8816	clientCmdUpdateMapList	%entry
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8818	8825	clientCmdClearMapList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8827	8837	adminGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8839	8843	adminGui::kick	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8845	8849	adminGui::ban	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8851	8860	adminGui::spy	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8862	8864	adminGui::changeMap	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8866	8878	adminGui::ClickClearBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8880	8885	AdminGui_Wand	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8887	8889	AdminGui_ClearBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8891	8900	AdminGui_KickPlayer	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8902	8913	AdminGui_BanPlayer	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8915	8929	adminGui::sortList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8931	8945	adminGui::sortNumList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8947	8979	addBanGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8981	8983	addBanGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8985	8991	addBanGui::setVictim	%this, %name, %id, %bl_id
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	8993	9004	addBanGui::clickForever	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9006	9026	addBanGui::ban	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9028	9032	unBanGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9034	9036	unBanGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9038	9048	unBanGui::clickUnBan	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9050	9054	unBanGui::unBan	%this, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9056	9059	clientCmdClearUnBans	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9061	9092	clientCmdAddUnBanLine	%line, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9094	9108	unBanGui::sortList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9110	9124	unBanGui::sortNumList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9126	9130	BrickManGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9132	9134	BrickManGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9136	9139	clientCmdClearBrickMan	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9141	9151	clientCmdAddBrickManLine	%bl_id, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9153	9164	BrickManGui::clickClear	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9166	9170	BrickManGui::clearBrickGroup	%this, %bl_id
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9172	9175	BrickManGui::clickClearAll	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9177	9181	BrickManGui::clearAllBricks	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9183	9187	BrickManGui::clickHilight	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9189	9201	BrickManGui::clickBan	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9203	9217	BrickManGui::sortList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9219	9233	BrickManGui::sortNumList	%this, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9235	9249	escapeMenu::toggle	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9251	9275	escapeMenu::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9277	9288	escapeMenu::clickAdmin	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9290	9301	escapeMenu::clickLoadBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9303	9313	escapeMenu::clickSaveBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9315	9326	escapeMenu::clickMinigames	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9328	9334	EM_Options::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9336	9342	EM_PlayerList::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9344	9350	EM_MiniGames::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9352	9358	EM_AdminMenu::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9360	9366	EM_SaveBricks::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9368	9374	EM_LoadBricks::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9376	9382	EM_Disconnect::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9384	9390	EM_Quit::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9392	9395	AdminLoginGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9397	9400	AdminLoginGui::onSleep	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9402	9405	sendAdminLogin	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9407	9456	clientCmdSetAdminLevel	%newAdminLevel
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9458	9464	clientCmdAdminFailure	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9466	9470	clientCmdSetLetterPrintInfo	%start, %numLetters
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9472	9498	clientCmdOpenPrintSelectorDlg	%aspectRatio, %startPrint, %numPrints
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9500	9508	PrintSelectorDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9510	9528	PrintSelectorDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9530	9533	ClientCmdPSD_KillPrints	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9535	9545	PSD_KillPrints	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9547	9551	PSD_click	%number
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9553	9558	PSD_LettersTab	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9560	9565	PSD_PrintsTab	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9567	9703	PSD_LoadPrints	%aspectRatio, %startPrint, %numPrints
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9705	9719	BrickSelectorDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9721	9739	BrickSelectorDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9741	9744	clientCmdBSD_Open	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9746	9771	clientCmdBSD_LoadBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9773	9880	BSD_LoadBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9882	9892	BSD_DumpCategories	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9894	9923	BSD_KillBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9925	9937	BSD_category::onRemove	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9939	9955	BSD_addCategory	%newcat
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9957	9991	BSD_addSubCategory	%cat, %newSubCat
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	9993	10002	BSD_findCategory	%catName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10004	10013	BSD_findSubCategory	%catObj, %subCatName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10015	10049	BSD_createSubHeadings	%cat
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10051	10113	BSD_CreateBrickButton	%data
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10115	10121	BSD_KillInventoryButtons	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10123	10170	BSD_CreateInventoryButtons	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10172	10179	BSD_ClickClear	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10181	10252	BSD_ClickInv	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10254	10322	BSD_ClickIcon	%data
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10324	10333	BSD_RightClickIcon	%data
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10335	10351	BSD_ShowTab	%catID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10353	10361	BSD_NextTab	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10363	10372	BSD_BuyBricks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10374	10385	BSD_SetFavs	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10387	10400	BSD_ClickFav	%idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10402	10433	BSD_SaveFavorites	%idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10435	10464	BSD_BuyFavorites	%idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10466	10473	BSD_LoadFavorites	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10475	10487	listAllDataBlocks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10489	10503	BrickSelectorDlg::updateFavButtons	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10505	10524	clientCmdUseBrickControls	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10526	10536	clientCmdStopBrickControls	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10538	10551	mouseMoveBrickX	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10553	10566	mouseMoveBrickY	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10568	10571	mouseMoveBrickZ	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10573	10821	saveBricks_ProcessWrenchExtras	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10823	10977	saveBricks	%filename, %description
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10979	10986	dumpPrints	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	10988	11097	SaveBricks_WriteSingleBrick	%file, %obj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11099	11157	LoadBricks_GetColorDifference	%filename
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11159	11179	LoadBricks_ClientServerCheck	%filename, %colorMethod
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11181	11200	clientCmdLoadBricksConfirmHandshake	%val, %allowColorLoads
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11202	11224	clientCmdLoadBricksHandshake	%val, %allowColorLoads
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11226	11276	createUiNameTable	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11278	11329	LoadBricksGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11331	11336	LoadBricksGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11338	11349	LoadBricks_AddMapFolder	%name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11351	11391	LoadBricks_MapClick	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11393	11423	LoadBricks_FileClick	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11425	11455	LoadBricks_ClickLoadButton	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11457	11486	LoadBricks_ColorCheck	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11488	11545	saveBricksGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11547	11553	saveBricksGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11555	11571	SaveBricks_ClickFileList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11573	11594	isValidFileName	%filename
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11596	11650	SaveBricks_Save	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11652	11685	SaveBricks_GetFileDescription	%filename
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11687	11697	colorMatch	%colorA, %colorB
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11699	11716	LoadBricks_SendLineToServer	%line, %i
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11718	11857	LoadBricks_CreateFromLine	%line, %i
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11859	11865	LoadBricks_ClickFastLoad	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11867	11888	sortList	%obj, %col, %defaultDescending
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11890	11911	sortNumList	%obj, %col
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11913	11929	updateListSort	%obj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11931	11937	ColorWarning_ClickMatch	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11939	11945	ColorWarning_ClickReplace	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11947	11953	ColorWarning_ClickAppend	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11955	11959	ColorWarning_ClickCancel	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11961	11968	UploadSaveFile_Start	%filename
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	11970	12018	UploadSaveFile_Tick	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12020	12025	UploadSaveFile_End	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12027	12032	ClientCmdTransmitBrickName	%ghostID, %name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12034	12051	ClientCmdTransmitEvent	%ghostID, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12053	12058	ClientCmdTransmitEmitterDirection	%ghostID, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12060	12067	ClientCmdTransmitItemDirection	%ghostID, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12069	12074	ClientCmdTransmitBrickOwner	%ghostID, %ownerBL_ID
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12076	12081	ClientCmdTransmitAllBrickNamesDone	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12083	12105	SaveBricks_StartInfoDownload	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12107	12113	SaveBricks_DownloadWindowClose	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12115	12278	AvatarGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12280	12315	AvatarGui::ClickX	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12317	12322	AvatarGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12324	12354	AvatarGui_LoadAccentInfo	%arrayName, %filename
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12356	12421	AvatarGui_CreatePartMenu	%name, %cmdString, %filename, %xPos, %yPos
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12423	12488	AvatarGui_CreatePartMenuFACE	%name, %cmdString, %filename, %xPos, %yPos
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12490	12548	AvatarGui_CreateSubPartMenu	%name, %cmdString, %subPartList, %xPos, %yPos
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12550	12618	AvatarGui_CreateColorMenu	%prefString, %colorList, %xPos, %yPos, %symmetryPrefString, %allowTrans
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12620	12634	Avatar_AssignColor	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12636	12649	Avatar_ClickTorsoColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12651	12664	Avatar_ClickPackColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12666	12679	Avatar_ClickSecondPackColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12681	12694	Avatar_ClickHatColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12696	12729	Avatar_ClickAccentColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12731	12736	Avatar_ClickHeadColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12738	12750	Avatar_ClickHipColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12752	12764	Avatar_ClickRightLegColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12766	12778	Avatar_ClickRightArmColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12780	12792	Avatar_ClickRightHandColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12794	12806	Avatar_ClickLeftLegColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12808	12820	Avatar_ClickLeftArmColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12822	12834	Avatar_ClickLeftHandColor	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12836	12841	Avatar_TogglePartMenu	%obj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12843	12864	Avatar_HideAllPartMenus	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12866	12872	Avatar_SetFace	%index, %imageObj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12874	12880	Avatar_SetDecal	%index, %imageObj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12882	12887	Avatar_SetPack	%index, %imageObj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12889	12894	Avatar_SetSecondPack	%index, %imageObj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12896	12904	Avatar_SetHat	%index, %imageObj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12906	12911	Avatar_SetAccent	%index, %imageObj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12913	12918	Avatar_SetChest	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12920	12925	Avatar_SetHip	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12927	12936	Avatar_SetLArm	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12938	12947	Avatar_SetRArm	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12949	12954	Avatar_SetLHand	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12956	12961	Avatar_SetRHand	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12963	12968	Avatar_SetLLeg	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12970	12975	Avatar_SetRLeg	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	12977	13236	Avatar_UpdatePreview	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13238	13249	Avatar_ColorAllIcons	%box, %color
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13251	13371	Avatar_Randomize	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13373	13389	Avatar_GetRandomColor	%allowTrans
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13391	13396	Avatar_Done	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13398	13407	Avatar_Clean	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13409	13412	AvatarGui::clickSetFavs	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13414	13459	AvatarGui::ClickFav	%this, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13461	13525	transferOldAvatarPrefs	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13527	13541	AvatarGui::updateFavButtons	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13543	13549	clientCmdDoUpdates	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13551	13583	AutoUpdateGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13585	13594	AutoUpdateGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13596	13606	AutoUpdateGui::done	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13608	13611	AU_Text::echo	%this, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13613	13626	AU_start	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13628	13632	verTCPobj::onConnected	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13634	13638	verTCPobj::onDNSFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13640	13644	verTCPobj::onConnectFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13646	13677	verTCPobj::onLine	%this, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13679	13695	AU_GetUpdate	%newVersion
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13697	13701	patchTCPobj::onConnected	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13703	13707	patchTCPobj::onDNSFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13709	13713	patchTCPobj::onConnectFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13715	13755	patchTCPobj::onLine	%this, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13757	13768	roundMegs	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13770	13809	getTimeString	%timeS
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13811	13863	patchTCPobj::onBinChunk	%this, %buffSize
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	13865	14068	MainMenuGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14070	14080	MainMenuGui::hideButtons	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14082	14092	MainMenuGui::showButtons	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14094	14115	getOldSaves	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14117	14135	copyTextFile	%source, %destination
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14137	14140	MainMenuGui::onSleep	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14142	14149	MainMenuGui::PlayMusic	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14151	14167	MainMenuGui::buildScreenshotList	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14169	14172	mm_Fade::OnWait	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14174	14184	mm_Fade::onDone	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14186	14224	buildIFLs	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14226	14232	MM_TutorialButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14234	14240	MM_StartButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14242	14248	MM_JoinButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14250	14256	MM_PlayerButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14258	14264	MM_OptionsButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14266	14272	MM_DemoButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14274	14280	MM_QuitButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14282	14288	MM_AboutButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14290	14296	MM_CreditsButton::onMouseEnter	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14298	14327	MM_UpdateDemoDisplay	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14329	14354	MM_BuyNowBlink	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14356	14367	MM_Tutorial	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14369	14430	isValidDecal	%file
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14432	14444	WhoTalk_Init	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14446	14453	WhoTalk_Kill	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14455	14462	WhoTalk_addID	%client
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14464	14471	WhoTalk_removeID	%client
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14473	14482	WhoTalkSO::addID	%this, %client
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14484	14499	WhoTalkSO::removeID	%this, %client
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14501	14511	WhoTalkSO::HasID	%this, %client
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14513	14529	WhoTalkSO::Display	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14531	14547	newMessageHud::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14549	14553	newMessageHud::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14555	14586	newMessageHud::open	%this, %channel
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14588	14602	newMessageHud::updateTypePosition	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14604	14616	newMessageHud::updatePosition	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14618	14628	NMH_Type::type	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14630	14691	NMH_Type::send	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14697	14703	onChatMessage	%message, %voice, %pitch
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14705	14711	onServerMessage	%message
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14713	14722	newChatHud_UpdateMaxLines	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14724	14771	newChatHud_Init	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14773	14784	newChatHud_UpdateScrollDownIndicator	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14786	14793	newChatHud_UpdateIndicatorPosition	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14795	14816	newChatHud_AddLine	%line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14818	14835	getCensor	%word
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14837	14876	censorString	%line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14878	14970	NewChatSO::displayLatest	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	14972	15017	NewChatSO::addLine	%this, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15019	15074	NewChatSO::pageUp	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15076	15106	NewChatSO::pageDown	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15108	15179	NewChatSO::displayPage	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15181	15191	NewChatSO::update	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15193	15212	NewChatSO::dumpLines	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15214	15216	SelectNetworkGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15218	15227	SelectNetworkGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15229	15237	defaultControlsGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15239	15270	defaultControlsGui::onSleep	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15272	15496	defaultControlsGui::apply	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15498	15508	defaultControlsGui::clickClose	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15510	15512	SavingGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15514	15520	SavingGui::onRender	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15522	15530	SavingGui::save	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15532	15546	clientCmdOpenWrenchDlg	%id, %allowNamedTargets, %adminOverride, %adminOnlyEvents
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15548	15730	clientCmdSetWrenchData	%data
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15732	15735	clientCmdWrenchLoadingDone	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15737	15740	clientCmdWrench_LoadMenus	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15742	15822	wrenchDlg::LoadDataBlocks	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15824	15833	wrenchDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15835	15838	wrenchDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15840	15899	wrenchDlg::send	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15901	15915	clientCmdOpenWrenchSoundDlg	%id, %allowNamedTargets, %adminOverride, %adminOnlyEvents
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15917	15925	wrenchSoundDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15927	15930	wrenchSoundDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15932	15949	wrenchSoundDlg::send	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15951	15965	clientCmdOpenWrenchVehicleSpawnDlg	%id, %allowNamedTargets, %adminOverride, %adminOnlyEvents
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15967	15975	wrenchVehicleSpawnDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15977	15980	wrenchVehicleSpawnDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15982	15986	wrenchVehicleSpawnDlg::Respawn	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	15988	16010	wrenchVehicleSpawnDlg::send	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16012	16022	keyGui::changePrompt	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16024	16087	keyGui::done	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16089	16098	keyGui::cancel	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16100	16118	keyGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16120	16130	keyGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16132	16143	keyGui::type	%index
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16145	16148	keyText0::onPaste	%this, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16150	16153	keyText1::onPaste	%this, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16155	16158	keyText2::onPaste	%this, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16160	16163	keyText3::onPaste	%this, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16165	16178	keyGui::pasteAuthKey	%this, %text
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16180	16206	auth_Init_Client	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16208	16220	authTCPobj_Client::onDNSFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16222	16234	authTCPobj_Client::onConnectFailed	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16236	16240	authTCPobj_Client::onConnected	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16242	16244	authTCPobj_Client::onDisconnect	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16246	16497	authTCPobj_Client::onLine	%this, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16499	16506	appendCrapOnCache	%line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16508	16516	MM_AuthBar::blinkFail	%obj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16518	16524	MM_AuthBar::blinkSuccess	%obj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16526	16530	regNameGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16532	16534	regNameGui::onSleep	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16536	16565	regNameGui::register	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16569	16576	colorGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16578	16580	colorGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16582	16584	colorGui::activate	%this, %val, %callback
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16586	16627	colorGui::setMode	%this, %mode
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16629	16661	colorGui::update	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16663	16676	ColorSetGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16678	16680	ColorSetGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16682	16685	ColorSetGui::save	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16687	16698	ColorSetGui::load	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16700	16742	ColorSetGui::defaults	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16744	16788	ColorSetGui::Display	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16790	16803	ColorSetGui::AddColor	%this, %color
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16805	16826	ColorSetGui::deleteColor	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16828	16855	ColorSetGui::selectColor	%this, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16857	16904	ColorSetGui::setMode	%this, %mode
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16906	16941	ColorSetGui::update	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16943	16954	IColorToFColor	%IColor
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16956	16995	RGBtoHSV	%r, %g, %b
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	16997	17052	HSVtoRGB	%h, %s, %v
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17054	17102	MusicFilesGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17104	17122	MusicFilesGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17124	17133	MusicFilesGui::ClickNone	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17135	17141	MusicFilesGui::ClickDefaults	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17143	17194	clientUpdateMusicList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17196	17215	clientIsValidMusicFilename	%filename
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17217	17272	AddOnsGui::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17274	17292	AddOnsGui::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17294	17337	clientUpdateAddOnsList	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17339	17488	clientIsValidAddOn	%dirName, %verbose
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17490	17499	AddOnsGui::ClickNone	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17501	17519	AddOnsGui::ClickDefaults	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17521	17548	ToggleBuildMacroRecording	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17550	17560	PlayBackBuildMacro	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17562	17584	BuildMacroSO::pushEvent	%this, %eventType, %event, %arg1, %arg2, %arg3, %arg4, %arg5, %arg6
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17586	17702	BuildMacroSO::compress	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17704	17711	BuildMacroSO::deleteEvent	%this, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17713	17737	BuildMacroSO::PlayBack	%this, %line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17739	17760	BuildMacroSO::PlayEvent	%this, %eventNum
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17762	17780	BuildMacroSO::dump	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17782	17785	demoBrickLimitGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17787	17859	wrenchEventsDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17861	17876	wrenchEventsDlg::clear	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17878	17884	wrenchEventsDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17886	17892	WrenchEvents_ClickLock	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17894	17914	ClientCmdRegisterInputEvent	%class, %name, %targetList
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17916	17936	ClientCmdRegisterOutputEvent	%class, %name, %parameterList
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17938	17951	ClientCmdRegisterEventsDone	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	17953	18007	wrenchEventsDlg::newEvent	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18009	18052	wrenchEventsDlg::reshuffleScrollbox	%this, %target
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18054	18103	wrenchEventsDlg::createTargetList	%this, %box, %inputMenu
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18105	18149	wrenchEventsDlg::CreateNamedBrickList	%this, %box, %targetMenu, %inputEventIdx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18151	18226	wrenchEventsDlg::createOutputList	%this, %box, %targetMenu, %inputEventIdx, %outputClass
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18228	18246	wrenchEventsDlg::VerifyInt	%this, %textBox, %min, %max
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18248	18512	wrenchEventsDlg::createOutputParameters	%this, %box, %outputMenu, %outputClass
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18514	18594	wrenchEventsDlg::send	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18596	18679	clientCmdAddEvent	%line
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18681	18683	clientCmdAddEventsDone	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18685	18688	ClientCmdAddNTName	%name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18690	18699	ClientCmdRemoveNTName	%name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18701	18713	SimGroup::CLIENTaddNTName	%obj, %name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18715	18731	SimGroup::CLIENTremoveNTName	%obj, %name
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18733	18746	SimGroup::CLIENTDumpNTNames	%obj
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18748	18756	wrenchEventsDlg::pickColor	%this, %gui, %idx
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18758	18764	wrenchEventsDlg::closeColorMenu	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18766	18838	wrenchEventsDlg::CreateColorMenu	%this, %gui
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18840	18843	fpsMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18845	18848	terrainMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18850	18853	videoMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18855	18858	interiorMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18860	18863	textureMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18865	18868	waterMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18870	18873	timeMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18875	18878	vehicleMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18880	18883	audioMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18885	18888	debugMetricsCallback	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18890	18949	metrics	%expr
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18951	18955	MessageCallback	%dlg, %callback
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18957	18967	MBSetText	%text, %frame, %msg
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18969	18975	MessageBoxOK	%title, %message, %callback
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18977	18980	clientCmdMessageBoxOK	%title, %message
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18982	18985	MessageBoxOKDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18987	18994	messageBoxOKCancel	%title, %message, %callback, %cancelCallback
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	18996	19012	clientCmdMessageBoxOKCancel	%title, %message, %okServerCmd, %cancelServerCmd
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19014	19017	MessageBoxOKCancelDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19019	19026	messageBoxYesNo	%title, %message, %yesCallback, %noCallback
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19028	19044	clientCmdMessageBoxYesNo	%title, %message, %okServerCmd, %cancelServerCmd
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19046	19050	MessageBoxYesNoDlg::onSleep	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19052	19061	MessagePopup	%title, %message, %delay
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19063	19066	CloseMessagePopup	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19068	19087	formatImageNumber	%number
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19089	19093	recordMovie	%movieName, %fps
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19095	19099	movieGrabScreen	%movieName, %frameNumber
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19101	19105	stopMovie	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19108	19154	doScreenShot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19156	19199	doHudScreenshot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19201	19264	doDofScreenShot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19266	19284	doPanoramaScreenShot	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19286	19304	dofPreview	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19307	19314	cursorOff	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19316	19324	cursorOn	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19328	19352	GuiCanvas::checkCursor	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19354	19366	GuiCanvas::checkTabFocus	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19368	19372	GuiCanvas::setContent	%this, %ctrl
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19374	19378	GuiCanvas::pushDialog	%this, %ctrl
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19380	19384	GuiCanvas::popDialog	%this, %ctrl
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19386	19390	GuiCanvas::popLayer	%this, %layer
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19394	19406	HelpDlg::onWake	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19408	19417	HelpFileList::onSelect	%this, %row
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19419	19427	getHelp	%helpName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19429	19442	contextHelp	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19444	19447	GuiControl::getHelpPage	%this
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19449	19452	GuiMLTextCtrl::onURL	%this, %url
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19454	19480	recordingsDlg::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19482	19512	StartSelectedDemo	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19514	19561	startDemoRecord	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19563	19570	stopDemoRecord	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	19572	19577	demoPlaybackComplete	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20674	20688	escapeFromGame	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20690	20693	quitGame	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20695	20702	doQuitGame	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20705	20711	setSpeed	%speed
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20713	20716	moveleft	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20718	20721	moveright	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20723	20726	moveforward	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20728	20731	movebackward	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20733	20736	moveup	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20738	20741	movedown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20743	20746	turnLeft	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20748	20751	turnRight	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20753	20756	panUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20758	20761	panDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20763	20766	getMouseAdjustAmount	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20768	20771	getMouseAdjustAmount	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20773	20777	yaw	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20779	20799	pitch	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20801	20808	Jump	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20811	20837	Walk	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20839	20842	Crouch	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20844	20847	Jet	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20849	20852	mouseFire	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20854	20857	altTrigger	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20863	20869	setZoomFOV	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20871	20883	toggleZoom	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20885	20895	toggleFreeLook	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20897	20911	toggleFirstPerson	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20913	20919	toggleCamera	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20921	20927	pageMessageHudUp	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20929	20935	pageMessageHudDown	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20937	20939	resizeMessageHud	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20941	20948	startRecordingDemo	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20950	20957	stopRecordingDemo	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20959	20965	dropCameraAtPlayer	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20967	20973	dropPlayerAtCamera	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	20976	21008	cycleDebugRenderMode	%val
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21017	21081	loadClientAddOns	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21083	21097	ClientVerifyAddOnScripts	%dirName
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21099	21111	applyPhysicsPrefs	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21113	21125	onPhysicsDisabled	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21127	21131	reEnablePhysics	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21133	21135	serverConfigGui::onWake	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21137	21152	serverConfigGui::onSleep	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21154	21159	serverConfigGui::ClickDefaults	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21473	21523	addAllFilesToCache_Tick	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21525	21547	addAllFilesToCache	
+.research/v20-dso/client/scripts/allClientScripts-Vanilla.cs	21549	21552	onSqliteError	%errorCode
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	74	87	ConsoleEntry::eval	
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	89	117	toggleConsole	%make
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	283	294	inspect	%obj
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	296	299	InspectApply	
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	301	304	InspectTreeView::onSelect	%this, %obj
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	306	311	Tree	%obj
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	313	317	GuiInspector::toggleDynamicGroupScript	%this, %obj
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	319	323	GuiInspector::toggleGroupScript	%this, %obj, %fieldName
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	325	329	GuiInspector::setAllGroupStateScript	%this, %obj, %groupState
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	331	338	GuiInspector::addDynamicField	%this, %obj
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	340	348	InspectAddFieldDlg::doAction	%this
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	567	583	fillFileList	%filespec, %ctrl
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	585	590	getLoadFilename	%filespec, %callback
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	728	768	getSaveFilename	%filespec, %callback, %currentFile
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	770	778	doSACallback	
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	780	792	SA_directoryList::onSelect	%this, %id
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	794	797	SA_fileList::onSelect	%this, %id
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	1434	1452	NetGraph::ToggleNetGraph	
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	1454	1486	NetGraph::updateStats	
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	1488	1508	NetGraph::toggleKey	
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	1510	1519	NetGraph::CANCEL	
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	5026	5030	aboutDlg::onWake	%this
+.research/v20-dso/client/ui/allClientGuis-Vanilla.gui	5032	5035	aboutText::onURL	%this, %url
+.research/v20-dso/server/init.cs	1	17	initServer	
+.research/v20-dso/server/init.cs	19	68	initDedicated	
+.research/v20-dso/server/init.cs	70	115	initDedicatedLAN	
+.research/v20-dso/server/init.cs	117	138	dedicatedKeyCheck	
+.research/v20-dso/server/init.cs	140	156	dedicatedKeyPrompt	
+.research/v20-dso/server/init.cs	158	176	setKey	%val
+.research/v20-dso/server/init.cs	178	240	serverPart2	
+.research/v20-dso/server/mainServer.cs	2	100	WebCom_PostServer	
+.research/v20-dso/server/mainServer.cs	102	116	WebCom_PostServerUpdateLoop	
+.research/v20-dso/server/mainServer.cs	118	145	getMainMod	
+.research/v20-dso/server/mainServer.cs	147	150	postServerTCPObj::onConnected	%this
+.research/v20-dso/server/mainServer.cs	152	157	postServerTCPObj::onDNSFailed	%this
+.research/v20-dso/server/mainServer.cs	159	164	postServerTCPObj::onConnectFailed	%this
+.research/v20-dso/server/mainServer.cs	166	168	postServerTCPObj::onDisconnect	%this
+.research/v20-dso/server/mainServer.cs	170	196	postServerTCPObj::onLine	%this, %line
+.research/v20-dso/server/mainServer.cs	198	253	GameConnection::authCheck	%client
+.research/v20-dso/server/mainServer.cs	255	353	GameConnection::startLoad	%client
+.research/v20-dso/server/mainServer.cs	355	389	GameConnection::autoAdminCheck	%client
+.research/v20-dso/server/mainServer.cs	391	416	GameConnection::killDupes	%client
+.research/v20-dso/server/mainServer.cs	418	446	servAuthTCPobj::onDNSFailed	%this
+.research/v20-dso/server/mainServer.cs	448	479	servAuthTCPobj::onConnectFailed	%this
+.research/v20-dso/server/mainServer.cs	481	484	servAuthTCPobj::onConnected	%this
+.research/v20-dso/server/mainServer.cs	486	571	servAuthTCPobj::onLine	%this, %line
+.research/v20-dso/server/mainServer.cs	573	579	ServerPlay2D	%profile
+.research/v20-dso/server/mainServer.cs	581	587	ServerPlay3D	%profile, %transform
+.research/v20-dso/server/mainServer.cs	589	606	portInit	%port
+.research/v20-dso/server/mainServer.cs	608	673	createServer	%serverType, %mission
+.research/v20-dso/server/mainServer.cs	675	689	onUPnPFailure	%errorCode
+.research/v20-dso/server/mainServer.cs	691	694	onUPnPDiscoveryFailed	
+.research/v20-dso/server/mainServer.cs	696	758	destroyServer	
+.research/v20-dso/server/mainServer.cs	760	766	resetServerDefaults	
+.research/v20-dso/server/mainServer.cs	768	779	addToServerGuidList	%guid
+.research/v20-dso/server/mainServer.cs	781	792	removeFromServerGuidList	%guid
+.research/v20-dso/server/mainServer.cs	794	797	onServerInfoQuery	
+.research/v20-dso/server/mainServer.cs	799	802	messageClient	%client, %msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10, %a11, %a12, %a13
+.research/v20-dso/server/mainServer.cs	804	815	messageTeam	%team, %msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10, %a11, %a12, %a13
+.research/v20-dso/server/mainServer.cs	817	829	messageTeamExcept	%client, %msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10, %a11, %a12, %a13
+.research/v20-dso/server/mainServer.cs	831	839	MessageAll	%msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10, %a11, %a12, %a13
+.research/v20-dso/server/mainServer.cs	841	852	messageAllExcept	%client, %team, %msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10, %a11, %a12, %a13
+.research/v20-dso/server/mainServer.cs	858	864	GameConnection::spamMessageTimeout	%this
+.research/v20-dso/server/mainServer.cs	866	870	GameConnection::spamReset	%this
+.research/v20-dso/server/mainServer.cs	872	893	spamAlert	%client
+.research/v20-dso/server/mainServer.cs	895	901	chatMessageClient	%client, %sender, %voiceTag, %voicePitch, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/server/mainServer.cs	903	928	chatMessageTeam	%sender, %team, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/server/mainServer.cs	930	949	chatMessageAll	%sender, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/server/mainServer.cs	951	1022	serverCmdSAD	%client, %password
+.research/v20-dso/server/mainServer.cs	1024	1027	GameConnection::sendPlayerListUpdate	%client
+.research/v20-dso/server/mainServer.cs	1029	1035	serverCmdSADSetPassword	%client, %password
+.research/v20-dso/server/mainServer.cs	1037	1100	serverCmdTeamMessageSent	%client, %text
+.research/v20-dso/server/mainServer.cs	1102	1178	serverCmdMessageSent	%client, %text
+.research/v20-dso/server/mainServer.cs	1180	1218	chatFilter	%client, %text, %badList, %failMessage
+.research/v20-dso/server/mainServer.cs	1220	1226	clearLoadInfo	
+.research/v20-dso/server/mainServer.cs	1228	1259	buildLoadInfo	%mission
+.research/v20-dso/server/mainServer.cs	1261	1270	dumpLoadInfo	
+.research/v20-dso/server/mainServer.cs	1272	1301	sendLoadInfoToClient	%client
+.research/v20-dso/server/mainServer.cs	1304	1335	loadMission	%missionName, %isFirstMission
+.research/v20-dso/server/mainServer.cs	1337	1475	loadMissionStage2	
+.research/v20-dso/server/mainServer.cs	1477	1500	endMission	
+.research/v20-dso/server/mainServer.cs	1502	1532	resetMission	
+.research/v20-dso/server/mainServer.cs	1534	1546	GameConnection::loadMission	%this
+.research/v20-dso/server/mainServer.cs	1548	1562	serverCmdMissionStartPhase1Ack	%client, %seq
+.research/v20-dso/server/mainServer.cs	1564	1567	serverCmdBlobDownloadFinished	%client
+.research/v20-dso/server/mainServer.cs	1569	1581	GameConnection::onDataBlocksDone	%this, %missionSequence
+.research/v20-dso/server/mainServer.cs	1583	1597	serverCmdMissionStartPhase2Ack	%client, %seq
+.research/v20-dso/server/mainServer.cs	1599	1605	GameConnection::clientWantsGhostAlwaysRetry	%client
+.research/v20-dso/server/mainServer.cs	1607	1609	GameConnection::onGhostAlwaysFailed	%client
+.research/v20-dso/server/mainServer.cs	1611	1614	GameConnection::onGhostAlwaysObjectsReceived	%client
+.research/v20-dso/server/mainServer.cs	1616	1629	serverCmdMissionStartPhase3Ack	%client, %seq
+.research/v20-dso/server/mainServer.cs	1631	1664	GameConnection::onConnectRequest	%client, %netAddress, %LANname, %netName, %clanPrefix, %clanSuffix, %clientNonce
+.research/v20-dso/server/mainServer.cs	1666	1683	AIConnection::onConnect	%client
+.research/v20-dso/server/mainServer.cs	1685	1692	GameConnection::onConnect	%client
+.research/v20-dso/server/mainServer.cs	1694	1710	isNameUnique	%client, %name
+.research/v20-dso/server/mainServer.cs	1712	1734	GameConnection::onDrop	%client, %reason
+.research/v20-dso/server/mainServer.cs	1736	1739	GameConnection::startMission	%this
+.research/v20-dso/server/mainServer.cs	1741	1744	GameConnection::endMission	%this
+.research/v20-dso/server/mainServer.cs	1746	1749	GameConnection::syncClock	%client, %time
+.research/v20-dso/server/mainServer.cs	1751	1755	GameConnection::incScore	%client, %delta
+.research/v20-dso/server/mainServer.cs	1757	1772	GameConnection::setScore	%client, %val
+.research/v20-dso/server/mainServer.cs	1774	1783	serverCmdOpenPlayerList	%client
+.research/v20-dso/server/mainServer.cs	1785	1788	serverCmdClosePlayerList	%client
+.research/v20-dso/server/mainServer.cs	1790	1795	onServerCreated	
+.research/v20-dso/server/mainServer.cs	1797	1800	onServerDestroyed	
+.research/v20-dso/server/mainServer.cs	1802	1810	onMissionLoaded	
+.research/v20-dso/server/mainServer.cs	1812	1815	onMissionEnded	
+.research/v20-dso/server/mainServer.cs	1817	1819	onMissionReset	
+.research/v20-dso/server/mainServer.cs	1821	1823	GameConnection::onClientEnterGame	%this
+.research/v20-dso/server/mainServer.cs	1825	1827	GameConnection::onClientLeaveGame	%this
+.research/v20-dso/server/mainServer.cs	1829	1831	createGame	
+.research/v20-dso/server/mainServer.cs	1833	1835	destroyGame	
+.research/v20-dso/server/mainServer.cs	1837	1839	startGame	
+.research/v20-dso/server/mainServer.cs	1841	1843	endGame	
+.research/v20-dso/server/mainServer.cs	1845	1870	auth_Init_Server	
+.research/v20-dso/server/mainServer.cs	1872	1877	authTCPobj_Server::onDNSFailed	%this
+.research/v20-dso/server/mainServer.cs	1879	1884	authTCPobj_Server::onConnectFailed	%this
+.research/v20-dso/server/mainServer.cs	1886	1890	authTCPobj_Server::onConnected	%this
+.research/v20-dso/server/mainServer.cs	1892	1894	authTCPobj_Server::onDisconnect	%this
+.research/v20-dso/server/mainServer.cs	1896	1997	authTCPobj_Server::onLine	%this, %line
+.research/v20-dso/server/scripts/DamageTypes.cs	1	58	AddDamageType	%name, %deathMessageSuicide, %deathMessageMurder, %vehicleDamageScale, %direct
+.research/v20-dso/server/scripts/DamageTypes.cs	60	71	initDefaultDamageTypes	
+.research/v20-dso/server/scripts/DamageTypes.cs	73	81	dumpDamageTypes	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1	28	registerInputEvent	%class, %name, %targetList
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	30	50	unRegisterInputEvent	%class, %name
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	52	63	inputEvent_GetInputEventIdx	%inputEventName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	65	78	inputEvent_GetTargetIndex	%class, %i, %targetName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	80	86	inputEvent_GetTargetClass	%class, %idx, %targetIdx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	88	94	inputEvent_GetTargetName	%class, %idx, %targetIdx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	96	109	dumpInputEvents	%class
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	111	408	SimObject::ProcessInputEvent	%obj, %EventName, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	410	436	SimObject::SetEventEnabled	%obj, %idxList, %val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	438	463	SimObject::ToggleEventEnabled	%obj, %idxList
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	465	481	SimObject::addScheduledEvent	%obj, %scheduleID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	483	493	SimObject::cancelEvents	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	495	531	registerOutputEvent	%class, %name, %parameterList, %appendClient
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	533	555	unRegisterOutputEvent	%class, %name
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	557	567	outputEvent_GetOutputEventIdx	%targetClass, %outputName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	569	572	outputEvent_GetOutputName	%class, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	574	577	outputEvent_GetNumParametersFromIdx	%class, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	579	722	verifyOutputParameterList	%class, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	724	738	dumpOutputEvents	%class
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	740	1139	serverCmdAddEvent	%client, %enabled, %inputEventIdx, %delay, %targetIdx, %NTNameIdx, %outputEventIdx, %par1, %par2, %par3, %par4
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1141	1150	fxDTSBrick::addEvent	%obj, %enabled, %delay, %inputEvent, %target, %outputEvent, %par1, %par2, %par3, %par4
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1152	1162	SimObject::dumpEvents	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1164	1182	serverCmdClearEvents	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1184	1193	SimObject::clearEvents	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1195	1213	ServerCmdRequestWrenchEvents	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1215	1238	SimObject::serializeEvent	%obj, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1240	1319	SimObject::serializeEventToString	%obj, %idx, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1321	1346	serverCmdRequestEventTables	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1348	1384	SimObject::setNTObjectName	%obj, %name
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1386	1411	SimObject::clearNTObjectName	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1413	1440	SimGroup::addNTName	%obj, %name
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1442	1473	SimGroup::removeNTName	%obj, %name
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1475	1488	SimGroup::DumpNTNames	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1490	1504	SimGroup::ClearAllNTNames	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1506	1515	ServerCmdRequestNamedTargets	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1517	1520	ServerCmdRequestExtendedBrickInfo	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1522	1528	ServerCmdCancelExtendedBrickInfoRequest	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1530	1594	GameConnection::TransmitExtendedBrickInfo	%client, %groupIdx, %brickIdx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1596	1621	SimGroup::getClient	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1623	1639	SimGroup::hasUser	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1641	1661	New_QueueSO	%size
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1663	1672	QueueSO::push	%obj, %val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1674	1691	QueueSO::pop	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1693	1708	QueueSO::dumpVals	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1710	1724	serverCmdClearColors	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1726	1744	serverCmdSetColorMethod	%client, %val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1746	1759	serverCmdSetSaveUploadDirName	%client, %dirName, %doOwnership
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1761	1812	serverCmdInitUploadHandshake	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1814	1888	serverCmdStartSaveFileUpload	%client, %colorMethod
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1890	1907	serverCmdUploadSaveFileLine	%client, %line
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1909	1932	serverLoadBricks_Timeout	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1934	1971	ServerLoadSaveFile_Start	%filename
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	1973	2123	ServerLoadSaveFile_ProcessColorData	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2125	2555	ServerLoadSaveFile_Tick	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2557	2582	ServerLoadSaveFile_End	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2584	2594	colorMatch	%colorA, %colorB
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2596	2686	createUiNameTable	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2688	2701	calcSaveOffset	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2703	2733	serverDirectSaveFileLoad	%filename, %colorMethod, %dirName, %doOwnership, %silent
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2735	2764	serverCmdCancelSaveFileUpload	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2766	2791	serverCmdEndSaveFileUpload	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2793	2823	serverCmdReloadBricks	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2889	2900	eulerToMatrix	%euler
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2902	2912	eulerToQuat	%euler
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2914	2925	eulerToQuat_degrees	%euler
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2927	2955	getLine	%phrase, %lineNum
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2957	2965	getLineCount	%phrase
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2967	2971	posFromTransform	%transform
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2973	2977	rotFromTransform	%transform
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2979	2983	posFromRaycast	%transform
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2985	2989	normalFromRaycast	%transform
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2991	2997	round	%val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	2999	3038	getTimeString	%timeS
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3040	3051	isListenServer	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3053	3133	serverCmdKick	%client, %victim
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3135	3282	serverCmdBan	%client, %victimID, %victimBL_ID, %banTime, %reason
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3284	3295	CreateBanManager	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3297	3362	BanManagerSO::addBan	%this, %adminID, %victimID, %victimBL_ID, %reason, %banTime
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3364	3374	BanManagerSO::RemoveBanBL_ID	%this, %testBL_ID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3376	3404	BanManagerSO::removeBan	%this, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3406	3437	BanManagerSO::saveBans	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3439	3458	BanManagerSO::loadBans	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3460	3477	BanManagerSO::dumpBans	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3479	3504	BanManagerSO::sendBanList	%this, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3506	3546	BanManagerSO::isBanned	%this, %testBL_ID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3548	3551	getCurrentYear	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3553	3566	getCurrentMinuteOfYear	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3568	3583	getLongNumberString	%val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3585	3592	serverCmdRequestBanList	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3594	3603	serverCmdUnBan	%client, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3605	3614	serverCmdMagicWand	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3616	3633	serverCmdWand	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3635	3651	serverLoadAvatarNames	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3653	3671	serverLoadAvatarName	%arrayName, %filename
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3673	3703	serverLoadAccentInfo	%arrayName, %filename
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3705	3759	ServerCmdUpdateBodyParts	%client, %hat, %accent, %pack, %secondPack, %chest, %hip, %LLeg, %RLeg, %LArm, %RArm, %LHand, %RHand
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3761	3794	ServerCmdUpdateBodyColors	%client, %headColor, %hatColor, %accentColor, %packColor, %secondPackColor, %chestColor, %hipColor, %LLegColor, %RLegColor, %LArmColor, %RArmColor, %LHandColor, %RHandColor, %decalName, %faceName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3796	3864	GameConnection::applyBodyParts	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3866	3962	GameConnection::ApplyBodyColors	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	3964	4003	AvatarColorCheck	%color
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4005	4044	AvatarColorCheckT	%color
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4046	4054	applyCharacterPrefs	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4056	4106	applyDefaultCharacterPrefs	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4108	4198	hideAllNodes	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4200	4259	GameConnection::validateAvatarPrefs	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4261	4307	serverCmdChangeMap	%client, %mapName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4309	4326	generateMapList	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4328	4348	serverCmdGetMapList	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4350	4391	serverGetMissionDisplayName	%missionFile
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4393	4409	serverGetMissionPreviewImage	%missionFile
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4411	4427	ServerCmdListAllDataBlocks	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4429	4450	serverCmdGetID	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4452	4473	serverCmdGetTransform	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4475	4509	findClientByName	%partialName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4511	4555	serverCmdFetch	%client, %victimName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4557	4601	serverCmdFind	%client, %victimName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4603	4611	serverCmdRet	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4613	4654	serverCmdSpy	%client, %victimName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4656	4681	serverCmdWarp	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4683	4699	serverCmdTimeScale	%client, %val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4701	4728	serverCmdRealBrickCount	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4730	4740	serverCmdBrickCount	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4742	4758	serverCmdTripOut	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4760	4790	serverCmdLight	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4792	4799	serverCmdColorTest	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4801	4873	serverCmdDropPlayerAtCamera	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4875	4889	serverCmdDropCameraAtPlayer	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4891	4897	serverCmdSuicide	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4899	4908	ServerCmdSetFocalPoint	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4910	4937	ServerCmdClearBricks	%client, %confirm
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4939	4965	serverCmdCancelAllEvents	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4967	4996	serverCmdCancelEvents	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	4998	5010	GameConnection::ClearEventSchedules	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5012	5031	GameConnection::ClearEventObjects	%client, %mask
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5033	5063	ServerCmdResetVehicles	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5065	5087	ServerCmdClearVehicles	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5089	5133	ServerCmdClearBots	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5135	5163	serverCmdDFG	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5165	5179	serverCmdGetPZ	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5181	5198	serverCmdRayPZ	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5200	5220	serverCmdSetPreviewCenter	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5222	5250	ServerCmdUseInventory	%client, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5252	5276	serverCmdInstantUseBrick	%client, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5278	5297	ServerCmdUseTool	%client, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5299	5318	ServerCmdUnUseTool	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5320	5364	ServerCmdDropTool	%client, %position
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5366	5450	ServerCmdShiftBrick	%client, %x, %y, %z
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5452	5549	ServerCmdSuperShiftBrick	%client, %x, %y, %z
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5551	5559	shift	%obj, %x, %y, %z
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5561	5687	ServerCmdRotateBrick	%client, %dir
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5689	5782	ServerCmdUndoBrick	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5784	5971	ServerCmdPlantBrick	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5973	5984	ServerCmdCancelBrick	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	5986	6020	serverCmdUsePrintGun	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6022	6086	serverCmdUseFXCan	%client, %index
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6088	6222	serverCmdUseSprayCan	%client, %index
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6224	6261	serverCmdUseHammer	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6263	6301	serverCmdSetPrint	%client, %index
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6303	6315	serverCmdClearInventory	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6317	6363	serverCmdBuyBrick	%client, %position, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6365	6377	serverCmdStartTalking	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6379	6391	serverCmdStopTalking	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6393	6474	serverCmdNextSeat	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6476	6557	serverCmdPrevSeat	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6559	6569	serverCmdIconInit	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6571	6579	serverCmdDoAllIcons	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6581	6600	serverCmdDoIcon	%client, %brickName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6602	6620	doIconScreenshot	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6622	6648	serverCmdDoItemIcon	%client, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6655	6687	serverCmdDoPackIcons	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6689	6721	serverCmdDoSecondPackIcons	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6723	6827	serverCmdDoPlayerIcons	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6829	6841	schedulePlayerIcon	%meshName, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6843	6874	doAllIcons	%pos
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	6949	7003	Observer::onTrigger	%this, %obj, %trigger, %state
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7005	7018	Observer::setMode	%this, %obj, %mode, %arg1, %arg2, %arg3
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7020	7023	Camera::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7025	7028	Camera::setMode	%this, %mode, %arg1, %arg2, %arg3
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7045	7064	MissionMarkerData::create	%block
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7066	7068	TriggerData::onEnterTrigger	%this, %trigger, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7070	7072	TriggerData::onLeaveTrigger	%this, %trigger, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7074	7076	TriggerData::onTickTrigger	%this, %trigger, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7078	7085	ShapeBase::use	%this, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7087	7099	ShapeBase::throw	%this, %data, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7101	7105	ShapeBase::pickup	%this, %obj, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7107	7110	ShapeBase::maxInventory	%this, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7112	7126	ShapeBase::incInventory	%this, %data, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7128	7141	ShapeBase::decInventory	%this, %data, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7143	7151	ShapeBase::getInventory	%this, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7153	7175	ShapeBase::setInventory	%this, %data, %value
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7177	7179	ShapeBase::clearInventory	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7181	7202	ShapeBase::throwObject	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7204	7206	ShapeBase::onInventory	%this, %data, %value
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7208	7211	ShapeBaseData::onUse	%this, %user
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7213	7216	ShapeBaseData::onThrow	%this, %user, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7218	7221	ShapeBaseData::onPickup	%this, %obj, %user, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7223	7225	ShapeBaseData::onInventory	%this, %user, %value
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7227	7230	ShapeBase::Damage	%this, %sourceObject, %position, %damage, %damageType
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7232	7234	ShapeBaseData::Damage	%this, %obj, %position, %source, %amount, %damageType
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7238	7251	Item::fadeOut	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7253	7275	Item::fadeIn	%obj, %delay
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7277	7288	Item::Respawn	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7290	7311	Item::schedulePop	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7313	7340	ItemData::onThrow	%this, %user, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7342	7434	ItemData::onPickup	%this, %obj, %user, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7436	7446	ItemData::create	%data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7448	7456	ItemData::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7458	7460	ItemImage::onMount	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7462	7464	ItemImage::onUnMount	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7466	7475	ItemData::onUse	%this, %player, %invPosition
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7477	7480	Item::setThrower	%this, %newThrower
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7482	7484	ItemData::OnCollision	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7486	7493	StaticShapeData::create	%data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7495	7498	StaticShapeData::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7500	7518	StaticShapeData::Damage	%this, %obj, %sourceObject, %position, %damage, %damageType
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7520	7537	StaticShape::explode	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7606	7617	glassA::OnCollision	%this, %obj, %col, %vec, %speed
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7619	7622	glassA::onImpact	%this, %obj, %collidedObject, %vec, %vecLen
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7664	7667	Explosion::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7669	7672	ExplosionData::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7681	7710	Weapon::onUse	%this, %player, %invPosition
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7712	7817	Weapon::onPickup	%this, %obj, %shape, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7819	7825	Weapon::onInventory	%this, %obj, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7827	7925	WeaponImage::onFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7927	7953	WeaponImage::onMount	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7955	7972	WeaponImage::onUnMount	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7974	7986	ammo::onInventory	%this, %obj, %amount
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	7988	8012	radiusDamage	%sourceObject, %position, %radius, %damage, %damageType, %impulse
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8014	8111	ProjectileData::OnCollision	%this, %obj, %col, %fade, %pos, %normal, %velocity
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8113	8273	ProjectileData::onExplode	%this, %obj, %pos
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8275	8296	ProjectileData::Damage	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8298	8337	ProjectileData::radiusDamage	%this, %obj, %col, %distanceFactor, %pos, %damageAmt
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8339	8392	ProjectileData::radiusImpulse	%this, %obj, %col, %distanceFactor, %pos, %impulseAmt, %verticalAmt
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8394	8410	ProjectileData::impactImpulse	%this, %obj, %col, %vector
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8412	8415	Projectile::onAdd	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8833	8838	Armor::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8840	8853	Armor::onRemove	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8855	8915	Armor::onNewDataBlock	%this, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8917	8938	Armor::onMount	%this, %obj, %vehicle, %node
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8940	8952	Armor::onUnMount	%this, %obj, %vehicle, %node
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	8954	9008	Armor::doDismount	%this, %obj, %forced
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9010	9155	Armor::OnCollision	%this, %obj, %col, %vec, %speed
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9157	9209	Armor::onImpact	%this, %obj, %collidedObject, %vec, %vecLen
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9211	9343	Armor::Damage	%data, %obj, %sourceObject, %position, %damage, %damageType
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9345	9360	Armor::onDamage	%this, %obj, %delta
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9362	9401	Armor::onDisabled	%this, %obj, %state
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9403	9428	Player::RemoveBody	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9430	9436	Armor::onLeaveMissionArea	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9438	9444	Armor::onEnterMissionArea	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9446	9448	Armor::onEnterLiquid	%this, %obj, %coverage, %type
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9450	9452	Armor::onLeaveLiquid	%this, %obj, %type
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9454	9470	Armor::onTrigger	%this, %obj, %triggerNum, %val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9472	9535	Player::ActivateStuff	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9537	9544	Player::kill	%player, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9546	9549	Player::mountVehicles	%this, %bool
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9551	9562	Player::isPilot	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9564	9574	Player::playDeathAnimation	%this
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9576	9582	Player::playCelAnimation	%this, %anim
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9584	9599	Player::playDeathCry	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9601	9616	Player::playPain	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9618	9651	fixArmReady	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9653	9684	Player::updateArm	%player, %newImage
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9686	9689	Player::onDriverLeave	%obj, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9691	9693	PlayerData::onDriverLeave	%obj, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9695	9711	Player::GiveDefaultEquipment	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9713	9857	Player::SetTempColor	%player, %color, %time, %position, %projectileData
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9859	9884	Player::ClearTempColor	%player, %projectileData
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9886	9906	Player::burn	%player, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9908	9911	Player::BurnPlayer	%player, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9913	9934	Player::clearBurn	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	9936	9949	Player::teleportEffect	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10022	10024	Armor::onStuck	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10026	10028	Armor::onReachDestination	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10030	10032	Armor::onTargetEnterLOS	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10034	10036	Armor::onTargetExitLOS	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10475	10478	hammerImage::onPreFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10480	10483	hammerImage::onStopFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10485	10534	hammerImage::onFire	%this, %player, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10536	10625	hammerImage::onHitObject	%this, %player, %slot, %hitObj, %hitPos, %hitNormal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10814	10817	wrenchImage::onPreFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10819	10822	wrenchImage::onStopFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10824	10851	wrenchImage::onFire	%this, %player, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10853	10968	wrenchImage::onHitObject	%this, %player, %slot, %hitObj, %hitPos, %hitNormal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10970	10990	serverCmdVehicleSpawn_Respawn	%client, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	10992	11113	serverCmdSetWrenchData	%client, %data
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11115	11175	fxDTSBrick::setLight	%obj, %data, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11177	11254	fxDTSBrick::setEmitter	%obj, %data, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11256	11332	fxDTSBrick::setEmitterDirection	%obj, %dir
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11334	11388	fxDTSBrick::setItem	%obj, %data, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11390	11421	fxDTSBrick::setItemDirection	%obj, %dir
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11423	11476	fxDTSBrick::setItemPosition	%obj, %dir
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11478	11493	fxDTSBrick::setItemRespawntime	%obj, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11495	11498	fxDTSBrick::setMusic	%obj, %data, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11500	11535	fxDTSBrick::setSound	%obj, %data, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11537	11671	fxDTSBrick::setVehicle	%obj, %data, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11673	11688	fxDTSBrick::setReColorVehicle	%obj, %val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11690	11726	fxDTSBrick::sendWrenchVehicleSpawnData	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11728	11752	fxDTSBrick::sendWrenchSoundData	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11754	11818	fxDTSBrick::sendWrenchData	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	11915	11930	WandItem::onUse	%this, %player, %invPosition
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12058	12061	WandImage::onPreFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12063	12066	WandImage::onStopFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12068	12118	WandImage::onFire	%this, %player, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12120	12158	WandImage::onHitObject	%this, %player, %slot, %hitObj, %hitPos, %hitNormal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12347	12463	paintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12465	12568	setSprayCanColors	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12570	12586	setSprayCanColorI	%id, %color
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12588	12652	setSprayCanColor	%id, %color
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12858	12861	AdminWandImage::onPreFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12863	12866	AdminWandImage::onStopFire	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12868	12919	AdminWandImage::onFire	%this, %player, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	12921	12945	AdminWandImage::onHitObject	%this, %player, %slot, %hitObj, %hitPos, %hitNormal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	13096	13124	flatPaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	13312	13340	pearlPaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	13528	13556	chromePaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	13744	13772	glowPaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	13963	13991	blinkPaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	14179	14207	swirlPaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	14409	14437	rainbowPaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	14625	14653	stablePaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	14841	14869	jelloPaintProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	14976	15008	getAngleIDFromPlayer	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	15010	15156	brickDeployProjectile::OnCollision	%this, %obj, %col, %fade, %pos, %normal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	15196	15198	brickImage::onDeploy	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16413	16536	fxDTSBrickData::onUse	%this, %player, %InvSlot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16538	16542	brickVehicleSpawnData::onColorChange	%data, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16544	16547	fxDTSBrick::explode	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16549	16552	fxDTSBrick::onAdd	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16554	16556	fxDTSBrickData::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16558	16601	fxDTSBrick::onDeath	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16603	16638	fxDTSBrick::onRemove	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16640	16642	fxDTSBrickData::onRemove	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16644	16646	fxDTSBrickData::onDeath	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16648	16652	fxDTSBrick::onPlant	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16654	16658	fxDTSBrick::onLoadPlant	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16660	16662	fxDTSBrickData::onPlant	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16664	16666	fxDTSBrickData::onLoadPlant	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16670	16673	fxDTSBrick::PlantedTrustCheck	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16675	16691	fxDTSBrick::TrustCheckFinished	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16693	16702	fxDTSBrick::TrustCheckFailed	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16704	16706	fxDTSBrickData::onTrustCheckFinished	%data, %brick
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16708	16710	fxDTSBrickData::onTrustCheckFailed	%data, %brick
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16712	16735	fxDTSBrick::chainTrustCheckDown	%obj, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16737	16767	fxDTSBrick::ChainTrustCheckUp	%obj, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16769	16789	fxDTSBrick::ChainTrustCheckVolume	%obj, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16791	16794	fxDTSBrick::undoTrustCheck	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16796	16818	fxDTSBrick::chainUndoTrustCheckDown	%obj, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16820	16842	fxDTSBrick::ChainUndoTrustCheckUp	%obj, %idx
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16844	16964	fxDTSBrick::spawnVehicle	%obj, %delay
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16966	16994	fxDTSBrick::colorVehicle	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	16996	17003	fxDTSBrick::unColorVehicle	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17005	17026	fxDTSBrick::isBlocked	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17028	17044	fxDTSBrick::vehicleMinigameEject	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17046	17056	fxDTSBrick::onDisappear	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17058	17067	fxDTSBrick::onReappear	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17069	17073	fxDTSBrick::onColorChange	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17075	17081	fxDTSBrickData::onColorChange	%data, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17083	17087	fxDTSBrick::onFakeDeath	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17089	17106	fxDTSBrickData::onFakeDeath	%data, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17108	17112	fxDTSBrick::onClearFakeDeath	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17114	17124	fxDTSBrickData::onClearFakeDeath	%data, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17126	17132	updateDemoBrickCount	%val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17143	17161	fxDTSBrick::onActivate	%obj, %player, %client, %pos, %vec
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17163	17167	fxDTSBrick::onPlayerTouch	%obj, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17169	17251	fxDTSBrickData::onPlayerTouch	%data, %obj, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17253	17273	fxDTSBrick::onBlownUp	%obj, %client, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17275	17283	fxDTSBrick::onRespawn	%obj, %client, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17285	17289	fxDTSBrick::onRelay	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17291	17336	fxDTSBrick::onProjectileHit	%obj, %projectile, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17338	17347	fxDTSBrick::onPrintCountOverFlow	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17349	17358	fxDTSBrick::onPrintCountUnderFlow	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17360	17378	fxDTSBrick::onToolBreak	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17417	17421	fxDTSBrick::disappear	%obj, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17423	17452	fxDTSBrickData::disappear	%data, %obj, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17454	17458	fxDTSBrick::reappear	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17460	17469	fxDTSBrickData::reappear	%data, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17471	17488	fxDTSBrick::fakeKillBrick	%obj, %vector, %time, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17490	17497	fxDTSBrick::Respawn	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17499	17522	fxDTSBrick::playSound	%obj, %soundData
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17524	17608	fxDTSBrick::spawnItem	%obj, %vector, %itemData
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17610	17668	fxDTSBrick::spawnProjectile	%obj, %velocity, %projectileData, %variance, %scale, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17670	17720	fxDTSBrick::spawnExplosion	%obj, %projectileData, %scale, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17722	17731	fxDTSBrick::fireRelay	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17733	17746	fxDTSBrick::fireRelayUp	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17748	17761	fxDTSBrick::fireRelayDown	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17763	17776	fxDTSBrick::fireRelayNorth	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17778	17791	fxDTSBrick::fireRelaySouth	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17793	17806	fxDTSBrick::fireRelayEast	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17808	17821	fxDTSBrick::fireRelayWest	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17823	17844	fxDTSBrick::fireRelayFromBox	%obj, %pos, %size, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17846	17849	fxDTSBrick::respawnVehicle	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17851	17878	fxDTSBrick::recoverVehicle	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17880	17940	fxDTSBrick::radiusImpulse	%obj, %radius, %force, %verticalForce, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	17942	18050	generatePrintCountTable	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18052	18072	fxDTSBrick::getPrintCount	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18074	18085	fxDTSBrick::incrementPrintCount	%obj, %amt, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18087	18098	fxDTSBrick::decrementPrintCount	%obj, %amt, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18100	18105	fxDTSBrick::setPrintCount	%obj, %count, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18107	18125	fxDTSBrick::eventFloodCheck	%obj, %maxFlood
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18127	18145	GameConnection::eventFloodCheck	%obj, %maxFlood
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18152	18160	GameConnection::CenterPrint	%client, %message, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18162	18170	GameConnection::BottomPrint	%client, %message, %time
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18172	18175	GameConnection::ChatMessage	%client, %message
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18177	18196	GameConnection::playSound	%client, %soundData
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18212	18220	Player::InstantRespawn	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18222	18235	Player::ClearTools	%player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18237	18260	Player::spawnExplosion	%player, %projectileData, %scale, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18262	18294	Player::spawnProjectile	%player, %speed, %projectileData, %variance, %scale, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18296	18299	Player::Dismount	%player, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18301	18304	Player::SetPlayerScale	%player, %val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18306	18311	Player::AddVelocity	%player, %vector
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18313	18344	Player::ChangeDataBlock	%player, %data, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18346	18360	Player::AddHealth	%player, %amt
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18362	18381	Player::SetHealth	%player, %health
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18392	18418	Projectile::Bounce	%obj, %factor, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18420	18452	Projectile::Redirect	%obj, %vector, %normalized, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18454	18457	Vehicle::onDriverLeave	%obj, %player
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18459	18461	Vehicle::onRemove	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18463	18518	Vehicle::onActivate	%vehicle, %activatingObj, %activatingClient, %pos, %vec
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18520	18523	Vehicle::OnCollision	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18525	18528	VehicleData::OnCollision	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18530	18537	WheeledVehicleData::create	%block
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18561	18623	WheeledVehicleData::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18625	18628	FlyingVehicleData::OnCollision	%this, %obj, %col, %vec, %speed
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18630	18807	WheeledVehicleData::OnCollision	%this, %obj, %col, %vec, %speed
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18809	18811	VehicleData::onDriverLeave	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18813	18815	WheeledVehicleData::onDriverLeave	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18817	18819	WheeledVehicleData::onDamage	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18821	18908	WheeledVehicleData::Damage	%this, %obj, %sourceObject, %position, %damage, %damageType
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18910	18986	FlyingVehicleData::Damage	%this, %obj, %sourceObject, %position, %damage, %damageType
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	18988	19027	Vehicle::finalExplosion	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19029	19047	Vehicle::teleportEffect	%vehicle
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19049	19070	VehicleSpawnMarker::onAdd	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19072	19093	VehicleSpawnMarker::onRemove	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19151	19160	LCD::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19162	19178	StaticShape::advanceTime	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19180	19186	explodeClock	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19188	19198	StaticShape::clockExplode	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19205	19209	LCDColon::onAdd	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19322	19341	changeMap	%mapName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19343	19346	announce	%text
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19348	19361	kickBLID	%blid
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19363	19371	banBLID	%victimBL_ID, %banTime, %reason
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19373	19379	talk	%text
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19381	19399	shutDown	%text
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19401	19416	listClients	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19418	19428	profileJazz	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19430	19439	transmitDataBlocks	%text
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19441	19463	E	%val
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19465	19528	dumpCRCValues	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19530	19552	writeFuncOffCheck	%file, %fnNamespace, %fnName, %protectANY
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19554	19584	removeEmptyBrickGroups	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19618	19620	fxLight::onRemove	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19877	19880	PlayerTeleportImage::onDone	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19882	19884	ParticleEmitterNode::onRemove	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19892	19898	serverCmdAlarm	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19900	19906	serverCmdBSD	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19908	19914	serverCmdZombie	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19916	19922	serverCmdHug	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19924	19939	serverCmdSit	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	19941	19982	Player::emote	%player, %data, %skipSpam
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20089	20092	PainLowImage::onDone	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20139	20142	PainMidImage::onDone	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20189	20192	PainHighImage::onDone	%this, %obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20255	20310	createMusicDatablocks	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20312	20348	updateMusicList	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20350	20369	isValidMusicFilename	%filename
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20371	20374	brickSpawnPointData::onLoadPlant	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20376	20384	brickSpawnPointData::onPlant	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20386	20393	brickSpawnPointData::onRemove	%this, %obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20395	20400	SimGroup::addSpawnBrick	%group, %brick
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20402	20414	SimGroup::removeSpawnBrick	%group, %brick
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20416	20434	SimGroup::getBrickSpawnPoint	%group
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20436	20458	fxDTSBrick::getSpawnPoint	%brick
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20460	20477	SimGroup::dumpSpawnPoints	%group
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20479	20501	ServerCmdRequestBrickManList	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20503	20564	ServerCmdHilightBrickGroup	%client, %bl_id
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20566	20637	SimGroup::chainBlink	%group, %idx, %count, %firstPass, %timeBetween
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20639	20669	ServerCmdClearBrickGroup	%client, %bl_id
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20671	20707	ServerCmdClearAllBricks	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20709	20760	SimGroup::chainDeleteAll	%group
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20762	20846	serverCmdTrust_Invite	%client, %targetClient, %targetBL_ID, %level
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20848	20881	serverCmdAcceptTrustInvite	%client, %invitingBL_ID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20883	20922	serverCmdRejectTrustInvite	%client, %targetBL_ID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20924	20945	serverCmdIgnoreTrustInvite	%client, %targetBL_ID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20947	20955	serverCmdUnIgnore	%client, %targetClient
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20957	20965	GameConnection::StartInvitationTimeout	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20967	20976	GameConnection::ClearInvitePending	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	20978	21021	serverCmdTrust_Demote	%client, %targetBL_ID, %level
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21023	21055	GameConnection::getBL_IDTrustLevel	%client, %targetBL_ID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21057	21081	SetMutualBrickGroupTrust	%bl_idA, %bl_idB, %level
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21083	21098	SimGroup::addPotentialTrust	%this, %bl_id, %level
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21100	21138	GameConnection::InitializeTrustListUpload	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21140	21160	serverCmdTrustListUpload_Line	%client, %line
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21162	21209	serverCmdTrustListUpload_Done	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21211	21230	updateTrustGui	%client, %targetClient
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21255	21264	TrustListCheck	%obj1, %obj2, %interactionType
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21266	21305	getTrustLevel	%obj1, %obj2
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21307	21323	getBL_IDFromObject	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21325	21397	getBrickGroupFromObject	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21399	21414	serverCmdRequestMiniGameList	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21416	21451	serverCmdJoinMiniGame	%client, %miniGameID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21453	21462	serverCmdLeaveMiniGame	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21464	21481	serverCmdRemoveFromMiniGame	%client, %victim
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21483	21534	serverCmdInviteToMiniGame	%client, %victim
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21536	21553	serverCmdAcceptMiniGameInvite	%client, %miniGameID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21555	21564	serverCmdRejectMiniGameInvite	%client, %miniGameID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21566	21585	serverCmdIgnoreMiniGameInvite	%client, %miniGameID
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21587	21636	InitMinigameColors	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21638	21647	colorItoColorF	%intColor
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21649	21658	serverCmdRequestMiniGameColorList	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21660	21697	serverCmdCreateMiniGame	%client, %gameTitle, %gameColorIdx, %useSpawnBricks
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21699	21718	serverCmdEndMiniGame	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21720	21920	ServerCmdSetMiniGameData	%client, %line
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21922	21938	serverCmdResetMiniGame	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21940	21985	CreateMiniGameSO	%client, %title, %colorIdx, %useSpawnBricks
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	21987	22062	MiniGameSO::addMember	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22064	22074	MiniGameSO::isMember	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22076	22133	MiniGameSO::removeMember	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22135	22183	MiniGameSO::Report	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22185	22257	MiniGameSO::endGame	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22259	22351	MiniGameSO::Reset	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22353	22385	MiniGameSO::RespawnAll	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22387	22416	MiniGameSO::forceEquip	%obj, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22418	22449	MiniGameSO::updatePlayerDataBlock	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22451	22478	MiniGameSO::updateEnableBuilding	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22480	22499	MiniGameSO::updateEnablePainting	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22501	22538	MiniGameSO::BottomPrintAll	%obj, %text, %time, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22540	22577	MiniGameSO::CenterPrintAll	%obj, %text, %time, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22579	22607	MiniGameSO::ChatMsgAll	%obj, %text, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22609	22616	MiniGameSO::chatMessageAll	%obj, %sender, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22618	22625	MiniGameSO::MessageAll	%obj, %msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22627	22637	MiniGameSO::messageAllExcept	%obj, %exception, %msgType, %msgString, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %a8, %a9, %a10
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22639	22709	MiniGameSO::pickSpawnPoint	%obj, %client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22711	22715	MiniGameSO::getLine	%mg
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22717	22731	endAllMinigames	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22733	22813	miniGameCanUse	%player, %thing
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22815	22959	miniGameCanDamage	%client, %victimObject
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	22961	23103	getMiniGameFromObject	%obj
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23108	23188	getMiniGameLevel	%obj1, %obj2
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23190	23250	updateAddOnList	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23252	23332	loadAddOns	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23334	23348	VerifyAddOnScripts	%dirName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23354	23385	LoadRequiredAddOn	%dirName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23387	23424	ForceRequiredAddOn	%dirName
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23426	23599	isValidAddOn	%dirName, %verbose
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23601	23695	isValidMap	%file
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23703	23767	loadPrintedBrickTextures	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23769	23822	loadDefaultLetterPrints	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23824	23892	loadPrintedBrickTexture	%aspectRatio
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23894	23897	sendLetterPrintInfo	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	23992	24007	printGunImage::onFire	%this, %player, %slot
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24009	24027	printGunImage::onHitObject	%this, %player, %slot, %hitObj, %hitPos, %hitNormal
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24029	24044	CenterPrintAll	%message, %time, %lines
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24046	24061	BottomPrintAll	%message, %time, %lines
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24063	24070	CenterPrint	%client, %message, %time, %lines
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24072	24079	BottomPrint	%client, %message, %time, %lines
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24081	24084	clearCenterPrint	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24086	24089	clearBottomPrint	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24091	24102	clearCenterPrintAll	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24104	24115	clearBottomPrintAll	
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24117	24121	getQuotaObjectFromBrick	%brick
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24123	24127	getQuotaObjectFromClient	%client
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24129	24140	verifyQuotaNumber	%val, %min, %max, %default
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24142	24214	getQuotaObjectFromBrickGroup	%brickGroup
+.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs	24751	24779	pingMatchMakerLoop	
+.research/v20-dso/server/scripts/game.cs	3	9	makePadString	%char, %num
+.research/v20-dso/server/scripts/game.cs	11	13	onNeedRelight	
+.research/v20-dso/server/scripts/game.cs	15	147	onServerCreated	
+.research/v20-dso/server/scripts/game.cs	149	151	onServerDestroyed	
+.research/v20-dso/server/scripts/game.cs	153	179	verifyBrickUINames	
+.research/v20-dso/server/scripts/game.cs	181	202	onMissionLoaded	
+.research/v20-dso/server/scripts/game.cs	204	209	onMissionEnded	
+.research/v20-dso/server/scripts/game.cs	211	229	startGame	
+.research/v20-dso/server/scripts/game.cs	231	254	endGame	
+.research/v20-dso/server/scripts/game.cs	256	262	onGameDurationEnd	
+.research/v20-dso/server/scripts/game.cs	264	271	cycleGame	
+.research/v20-dso/server/scripts/game.cs	273	277	onCycleExec	
+.research/v20-dso/server/scripts/game.cs	279	296	onCyclePauseEnd	
+.research/v20-dso/server/scripts/game.cs	298	356	GameConnection::onClientEnterGame	%client
+.research/v20-dso/server/scripts/game.cs	358	361	GameConnection::setCanRespawn	%client, %val
+.research/v20-dso/server/scripts/game.cs	363	464	GameConnection::onClientLeaveGame	%client
+.research/v20-dso/server/scripts/game.cs	466	499	cleanUpBrickEmptyGroups	
+.research/v20-dso/server/scripts/game.cs	501	503	GameConnection::onLeaveMissionArea	%client
+.research/v20-dso/server/scripts/game.cs	505	507	GameConnection::onEnterMissionArea	%client
+.research/v20-dso/server/scripts/game.cs	509	680	GameConnection::onDeath	%client, %sourceObject, %sourceClient, %damageType, %damLoc
+.research/v20-dso/server/scripts/game.cs	682	698	GameConnection::InstantRespawn	%client, %clientagain
+.research/v20-dso/server/scripts/game.cs	700	722	GameConnection::spawnPlayer	%client
+.research/v20-dso/server/scripts/game.cs	724	735	GameConnection::getSpawnPoint	%client
+.research/v20-dso/server/scripts/game.cs	737	835	GameConnection::createPlayer	%client, %spawnPoint
+.research/v20-dso/server/scripts/game.cs	837	912	pickSpawnPoint	
+.research/v20-dso/server/scripts/game.cs	914	922	GameConnection::Cheat	%client
+.research/v20-dso/server/scripts/game.cs	924	936	findLocalClient	
+.research/v20-dso/server/scripts/game.cs	938	950	findClientByBL_ID	%bl_id
+.research/v20-dso/server/scripts/game.cs	952	981	GameConnection::resetVehicles	%client
+.research/v20-dso/server/scripts/game.cs	983	986	GameConnection::setLoadingIndicator	%client, %val
+.research/v20-dso/server/scripts/game.cs	988	1092	GameConnection::getSimpleName	%client
+.research/v20-dso/server/scripts/game.cs	1094	1138	GameConnection::onInfiniteLag	%client
+.research/v20-dso/server/scripts/game.cs	1140	1143	GameConnection::transmitMaxPlayers	%client
+.research/v20-dso/server/scripts/game.cs	1145	1148	GameConnection::transmitServerName	%client
+.research/v20-dso/main-Vanilla.cs	1	6	initCommon	
+.research/v20-dso/main-Vanilla.cs	8	14	initBaseClient	
+.research/v20-dso/main-Vanilla.cs	16	36	initBaseServer	
+.research/v20-dso/main-Vanilla.cs	38	41	onDatablockLimitExceeded	
+.research/v20-dso/main-Vanilla.cs	43	46	onDatablocksDeleted	

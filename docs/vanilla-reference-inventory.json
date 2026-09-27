@@ -1,0 +1,1380 @@
+{
+  "schema_version": 1,
+  "designated_by": "Maxwell, 2026-09-26",
+  "reference_root": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20",
+  "summary": {
+    "old_assets": 3295,
+    "reference_assets": 2843,
+    "comparison": {
+      "identical": 2843,
+      "changed": 0,
+      "new_only": 0,
+      "ambiguous": 0,
+      "old_only": 452
+    },
+    "reference_packages": 79,
+    "reference_missions": 14,
+    "package_families": {
+      "Brick": 8,
+      "Decal": 4,
+      "Emote": 4,
+      "Face": 3,
+      "Item": 3,
+      "Light": 2,
+      "Map": 14,
+      "Particle": 5,
+      "Player": 5,
+      "Print": 6,
+      "Projectile": 4,
+      "Script": 1,
+      "Sound": 3,
+      "System": 1,
+      "Vehicle": 8,
+      "Weapon": 8
+    },
+    "old_errors": 2,
+    "reference_errors": 0
+  },
+  "scope": [
+    "base",
+    "Add-Ons",
+    "saves"
+  ],
+  "note": "User-designated baseline; presence alone does not establish historical official distribution. Settings, launcher modules, cache, logs and screenshots excluded.",
+  "maps": [
+    {
+      "package": "Map_Bedroom",
+      "mission": "Add-Ons/Map_Bedroom/bedroom.mis",
+      "sha256": "69527fc433222d8707236386bd279c7451076dfa8abd75926cbcbc98336ef224",
+      "fields": {
+        "name": "Bedroom",
+        "saveName": "Bedroom",
+        "materialList": "base/data/skies/Sky_Blue2/resource.dml",
+        "fogDistance": "500",
+        "visibleDistance": "900"
+      },
+      "conversion_output": "de2b3763cc76daa7fff1df9da8aa75b76c332d45b3f692007505c88b4b8b394e.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 28,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": true
+    },
+    {
+      "package": "Map_BedroomDark",
+      "mission": "Add-Ons/Map_BedroomDark/bedroomDark.mis",
+      "sha256": "b248573cf3848fbb033f4158542c73c58aa336061fa4940311013d630b3efe35",
+      "fields": {
+        "name": "Bedroom - Dark",
+        "saveName": "Bedroom",
+        "materialList": "base/data/skies/Sky_Blue2/resource.dml",
+        "fogDistance": "300",
+        "visibleDistance": "500"
+      },
+      "conversion_output": "35d71857a49c072e365652c63a905669b9c7df6fb64815b94d4649a7b4b1f0bd.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 26,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": true
+    },
+    {
+      "package": "Map_Construct",
+      "mission": "Add-Ons/Map_Construct/construct.mis",
+      "sha256": "58170b22481735cf6bf43502143c5bd9a75f3f33bd3005d8a57c3e8538c346aa",
+      "fields": {
+        "name": "Construct",
+        "saveName": "Slate",
+        "materialList": "base/data/skies/Sky_Spooky1/resource.dml",
+        "fogDistance": "500",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "7febf448c6f92ce13e91d34d31e70ecb443598bfc0e98f6c02e230db4c45fe1c.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 8,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Destruct",
+      "mission": "Add-Ons/Map_Destruct/destruct.mis",
+      "sha256": "916816d4748713753612fd3315eadb475dc5bf976d07cb6b2cc2176ade62acf3",
+      "fields": {
+        "name": "Destruct",
+        "saveName": "Slate",
+        "materialList": "",
+        "fogDistance": "500",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "2ae682701af76a4ab7f0f990a64109a15aa7337691819d9b1ade7e5c24200e82.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 8,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Halloween_Slate",
+      "mission": "Add-Ons/Map_Halloween_Slate/HalloweenSlate.mis",
+      "sha256": "42ff776afa40dfeeb08f8efb4606adc52c8a415b83f6234d424367defb5dcbd9",
+      "fields": {
+        "name": "Halloween Slate",
+        "saveName": "Slate",
+        "materialList": "./resource.dml",
+        "fogDistance": "255",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "50b4e3beb3df07393d015ebd688ece0621841660711eb3e94fcbc43735fe7ca7.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 9,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Kitchen",
+      "mission": "Add-Ons/Map_Kitchen/kitchen.mis",
+      "sha256": "961ecfa6a0c22ea89cab9f499c6e0d30be0d37ea112f19f3b4293a04183b6f3c",
+      "fields": {
+        "name": "Kitchen",
+        "saveName": "Kitchen",
+        "materialList": "base/data/skies/sunset/resource.dml",
+        "fogDistance": "500",
+        "visibleDistance": "900"
+      },
+      "conversion_output": "6975ef52e149d3ccc81c88b221af81e930f20094cf151ad8b534eb110539f57a.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 35,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": true
+    },
+    {
+      "package": "Map_KitchenDark",
+      "mission": "Add-Ons/Map_KitchenDark/kitchenDark.mis",
+      "sha256": "90c9b1cc9f8e7fc9e0c30e4d5e64248b68c33198130ca27e97bd8e37ae6e3359",
+      "fields": {
+        "name": "Kitchen - Dark",
+        "saveName": "Kitchen",
+        "materialList": "base/data/skies/sunset/resource.dml",
+        "fogDistance": "500",
+        "visibleDistance": "900"
+      },
+      "conversion_output": "521a687a3935c4a7259434c2dc9402bdb3773e996a0ec01083be134e76ece23d.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 34,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": true
+    },
+    {
+      "package": "Map_Skylands",
+      "mission": "Add-Ons/Map_Skylands/skylands.mis",
+      "sha256": "e6c10f5b20d992e2f0c9f7c1b6564463c34a516fa061e295ac82fbf8d064c396",
+      "fields": {
+        "name": "Skylands",
+        "saveName": "Slate",
+        "materialList": "./resource.dml",
+        "fogDistance": "500",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "a2dfe8ad86250563339e2027edc4d24cf72bea982314e586f0db43f1486ef444.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 9,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Slate",
+      "mission": "Add-Ons/Map_Slate/slate.mis",
+      "sha256": "0c9c227065555b1e09951da6b139b0342d9b6c73e3951c9b1211ed7218016905",
+      "fields": {
+        "name": "Slate",
+        "saveName": "Slate",
+        "materialList": "base/data/skies/Sky_Spooky1/resource.dml",
+        "fogDistance": "500",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "880337b955955b4a7fd6d2c86849aa5edeffc0db74b3dc81380d981c177b0881.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 9,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Slate_Desert",
+      "mission": "Add-Ons/Map_Slate_Desert/slateDesert.mis",
+      "sha256": "9b78058f25e7a5614c511f1011fe3752f0150984316cfe0b0992a3948f317b1c",
+      "fields": {
+        "name": "Slate Desert",
+        "saveName": "Slate",
+        "materialList": "./cloudy02.dml",
+        "fogDistance": "500",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "4e7812bb84b61c5fe51052b92050590e077ed98604125b00cba33be5f63a3012.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 9,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Slate_Sea_Revised",
+      "mission": "Add-Ons/Map_Slate_Sea_Revised/slateSeaRevised.mis",
+      "sha256": "3fba57fa34b671d2605512c42325a17da4046040d2a1aa6e02e223410e2a57f2",
+      "fields": {
+        "name": "Slate Sea Revised",
+        "saveName": "Slate",
+        "materialList": "Base/data/skies/sunset/resource.dml",
+        "fogDistance": "0",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "6779b740bfb59338e816a1cc5a83bdcc40cd1dc8fbae480fe5ee200d6d850592.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 10,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Slate_Storm_Revised",
+      "mission": "Add-Ons/Map_Slate_Storm_Revised/slateStormRevised.mis",
+      "sha256": "1717d2fcb376199b2890f456c1f890e373c86e23089069d1e8119a3738750bb5",
+      "fields": {
+        "name": "Slate Storm Revised",
+        "saveName": "Slate",
+        "materialList": "./storm.dml",
+        "fogDistance": "0",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "0dd869de91fafc9d5d044e924f2d502a483e2d193c610f17e64a1df45dc7a0c7.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [
+        {
+          "section": "before",
+          "first_line": 1,
+          "last_line": 1,
+          "sha256": "12cd06d774c241900263e82780c5031a4bf8052281e06ac8866a1caad0d55058"
+        }
+      ],
+      "native_scene_nodes": 11,
+      "native_cloud_layers": 3,
+      "lighting_mission_crc_verified": null
+    },
+    {
+      "package": "Map_Slopes",
+      "mission": "Add-Ons/Map_Slopes/slopes.mis",
+      "sha256": "deaef72e8c572132a495a0f66d7e32327f2280c9da690f58a224f1632db45a23",
+      "fields": {
+        "name": "The Slopes",
+        "saveName": "Slopes",
+        "materialList": "base/data/skies/sky_spooky3/resource.dml",
+        "fogDistance": "800",
+        "visibleDistance": "1000"
+      },
+      "conversion_output": "6617fd57b56337a02e57f10b0f3aa5e664e41770cbf3388b741f6c530d5727f3.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [],
+      "native_scene_nodes": 10,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": true
+    },
+    {
+      "package": "Map_Tutorial",
+      "mission": "Add-Ons/Map_Tutorial/tutorial.mis",
+      "sha256": "b4684d00050610d0417c878667cf4aafd3036b7df2d6e137a60c0138c8f96886",
+      "fields": {
+        "name": "Tutorial",
+        "saveName": "Tutorial",
+        "materialList": "base/data/skies/Sky_Spooky1/resource.dml",
+        "fogDistance": "500",
+        "visibleDistance": "600"
+      },
+      "conversion_output": "3b350d3e895e79709293608bf5b09bf6d7e095b01ad114676aebb1b53d316c8f.scene.json",
+      "conversion_error": null,
+      "runtime_status": "Native client loading, collision construction and offscreen architecture render verified; full gameplay/environment acceptance pending",
+      "pending_scripts": [
+        {
+          "section": "before",
+          "first_line": 1,
+          "last_line": 6,
+          "sha256": "bca386751c08614be6c6bd0ad672b54e9bc2ef0ee4b71af5d07d2361de74cc67"
+        }
+      ],
+      "native_scene_nodes": 51,
+      "native_cloud_layers": 0,
+      "lighting_mission_crc_verified": true
+    }
+  ],
+  "packages": [
+    {
+      "path": "Add-Ons/Brick_Arch.zip",
+      "bytes": 87635,
+      "sha256": "b3359e7febb45f5305c84703276a3ba5b9725421faddd4142902094f16052826",
+      "archive_identical": true,
+      "members": {
+        "identical": 39,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Brick_Checkpoint.zip",
+      "bytes": 7933,
+      "sha256": "fed72eab0e3711befc532b92dcdff2d2c84153400fab208ce077a3a8a30fae67",
+      "archive_identical": true,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Brick_Christmas_Tree.zip",
+      "bytes": 22638,
+      "sha256": "9e4ba59c9be2b783af55d82c1b541328b95ef7e8d7038af8cb3b5f268770771c",
+      "archive_identical": true,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Brick_Halloween.zip",
+      "bytes": 40526,
+      "sha256": "2817b65f675366f48376da679ff359ec4426009cedc986face34e6ba7bca3660",
+      "archive_identical": true,
+      "members": {
+        "identical": 10,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Brick_Large_Cubes.zip",
+      "bytes": 48503,
+      "sha256": "667b0850f7433c464b7d5cf781f36985508a531fdbc6521a0947de558572d3a8",
+      "archive_identical": true,
+      "members": {
+        "identical": 21,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Brick_Teledoor.zip",
+      "bytes": 8679,
+      "sha256": "9703202caf5a96183a5e1d5e78f175f34265d9be03f418b0e3e0944fe73a3f92",
+      "archive_identical": true,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Brick_Treasure_Chest.zip",
+      "bytes": 21578,
+      "sha256": "1715a778146072aabdaefc7881ca41e2f2dc374f8a283b9bc733d5f4ad822345",
+      "archive_identical": true,
+      "members": {
+        "identical": 7,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Brick_V15.zip",
+      "bytes": 30457,
+      "sha256": "d343dd89d907280d4942c56789235d3af7bbc8eda03848f6fc383ac50fc86f30",
+      "archive_identical": true,
+      "members": {
+        "identical": 11,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Decal_Default.zip",
+      "bytes": 600845,
+      "sha256": "9fa6fbf926d08bc3de077e13d6aa2558c817acc211cc1fdb795509f5177d087b",
+      "archive_identical": true,
+      "members": {
+        "identical": 32,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Decal_Hoodie.zip",
+      "bytes": 17616,
+      "sha256": "620445141941655e1c6b0374e57e6340db44d840e68893fd31f30993a4936d05",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Decal_Jirue.zip",
+      "bytes": 243284,
+      "sha256": "cd49da2671c2e3483b5295f4c8a891eae7e2ad7a53b3f33975cdbd0da9a7b5d4",
+      "archive_identical": true,
+      "members": {
+        "identical": 16,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Decal_WORM.zip",
+      "bytes": 42030,
+      "sha256": "83a7c4e49d4cf25fb1d0ae84c50f80d47e5bc124f38f177bc8d953355038265e",
+      "archive_identical": true,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Emote_Alarm.zip",
+      "bytes": 38783,
+      "sha256": "551807e5b8c968576bc99d383f0be527daac7bc7e8ddb5fa2e2942a311546533",
+      "archive_identical": true,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Emote_Confusion.zip",
+      "bytes": 1165,
+      "sha256": "1a7cbeb9ef2d580f77209dde09b69c812f3701f9ad55e91749c9cbf432d9f753",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Emote_Hate.zip",
+      "bytes": 1135,
+      "sha256": "99fab8548e672902c5a5353de9e7a65f954c38414e59f1bc7befae5b6a6417c3",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Emote_Love.zip",
+      "bytes": 1147,
+      "sha256": "0db22ffc26aa4facc28a15de8848e6c47b38d71651e12613b2fc2f2787a0862b",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Face_Default.zip",
+      "bytes": 400747,
+      "sha256": "85c79b3715bb4f72de09caddae872c2a11a38a2b8ad1085ddade269311d4b2fa",
+      "archive_identical": true,
+      "members": {
+        "identical": 38,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Face_Jirue.zip",
+      "bytes": 39382,
+      "sha256": "d82b15108a3e4a972fd7bc5bd20f5c3ed9915cdde5bfb12b8b2a420f27f36de1",
+      "archive_identical": true,
+      "members": {
+        "identical": 10,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Face_Mythbusters.zip",
+      "bytes": 84461,
+      "sha256": "4c61b7aa6a99699340333cc6768899796a8853903fabdf2d31517fc16eff3181",
+      "archive_identical": true,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Item_Key.zip",
+      "bytes": 51255,
+      "sha256": "6e36bdb20abf6341943029befaeec1a85ba2a7f1224761229db43583a86a11cc",
+      "archive_identical": true,
+      "members": {
+        "identical": 17,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Item_Skis.zip",
+      "bytes": 71619,
+      "sha256": "1606418f9c8d4c0c7589629336b87247808c0e04b283504cf125175ee99bdd5a",
+      "archive_identical": true,
+      "members": {
+        "identical": 13,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Item_Sports.zip",
+      "bytes": 117778,
+      "sha256": "2dbeb5a0998197e97b7c6a9882fc5c3a74e9c483ab9bffe9e11facc5d0f63ca0",
+      "archive_identical": true,
+      "members": {
+        "identical": 23,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Light_Animated.zip",
+      "bytes": 1184,
+      "sha256": "40fc7f60cee74e67d7da1c7e344040dd8822952baad1e866589a450110c81591",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Light_Basic.zip",
+      "bytes": 1072,
+      "sha256": "755f0836591dd06739a1a983159616fbc9ef2db4b72e0058714bb74eb2f04422",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Bedroom.zip",
+      "bytes": 1585857,
+      "sha256": "8c0ea6743258340a46992453ac9b74602900013fe1375e5aa1d62810df6957e1",
+      "archive_identical": false,
+      "members": {
+        "identical": 26,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 1
+    },
+    {
+      "path": "Add-Ons/Map_BedroomDark.zip",
+      "bytes": 63208,
+      "sha256": "969f80a1c7e7f5ba6166f1a87edb1013ea6e1ee11d07c1736b11c0473bbd3f99",
+      "archive_identical": false,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 1
+    },
+    {
+      "path": "Add-Ons/Map_Construct.zip",
+      "bytes": 1487,
+      "sha256": "259aed11174180c5c4c667a9ea477f61a7dd6edb34e4b4274fe79a2b9e69b1ca",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Destruct.zip",
+      "bytes": 1414,
+      "sha256": "5ed4919edcfa6c011bdd5aeab046a28b23e43996912ffaa78fd870b24a67d211",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Halloween_Slate.zip",
+      "bytes": 791146,
+      "sha256": "a7c1620cb498e8558ebe79132b752f1de7474e9edd51bb703c334ad0ea853b75",
+      "archive_identical": true,
+      "members": {
+        "identical": 11,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Kitchen.zip",
+      "bytes": 2701032,
+      "sha256": "364b73c124419a9d1bb69a7803e51196976b76d05619f81744c9c91488680dd4",
+      "archive_identical": false,
+      "members": {
+        "identical": 34,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 1
+    },
+    {
+      "path": "Add-Ons/Map_KitchenDark.zip",
+      "bytes": 66123,
+      "sha256": "5721e5ad301d0e74159739f5855bb9f785d52ad521866a8e850ba52050abcd9c",
+      "archive_identical": false,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 1
+    },
+    {
+      "path": "Add-Ons/Map_Skylands.zip",
+      "bytes": 555460,
+      "sha256": "e6541ca6bed39e57ec49d475f52a7b55e45ff762cc2bda7bc8e6a40a1097c874",
+      "archive_identical": true,
+      "members": {
+        "identical": 12,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Slate.zip",
+      "bytes": 46569,
+      "sha256": "2315c6768e29c6d82504719ccaa0ac681b617fc26035f58571ae5e815dc02064",
+      "archive_identical": true,
+      "members": {
+        "identical": 6,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Slate_Desert.zip",
+      "bytes": 722542,
+      "sha256": "ba7c2d42d1e94c50ffb8dc5135a9dce7efbc81e97d6168c2c503785e1ab3980c",
+      "archive_identical": true,
+      "members": {
+        "identical": 11,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Slate_Sea_Revised.zip",
+      "bytes": 58227,
+      "sha256": "c41d7ba7cf1ff24977292e0052c3dc98d918402cb5f1efdaea685ce834adcacb",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Slate_Storm_Revised.zip",
+      "bytes": 665740,
+      "sha256": "16d2c12ad31fdb2e91897b8ea7f769eb5dec2d4e9084337569e7fd5f478212c3",
+      "archive_identical": true,
+      "members": {
+        "identical": 14,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Map_Slopes.zip",
+      "bytes": 389489,
+      "sha256": "f290843b20de4863723860e9e2175157fb6093f83781e02dbf904a1110fd1eea",
+      "archive_identical": false,
+      "members": {
+        "identical": 11,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 1
+    },
+    {
+      "path": "Add-Ons/Map_Tutorial.zip",
+      "bytes": 1913548,
+      "sha256": "28e3d1e0135ac89f59a2792a5c7c4265587e6a55adedeb89a84b6b0350afd45e",
+      "archive_identical": false,
+      "members": {
+        "identical": 39,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 1
+    },
+    {
+      "path": "Add-Ons/Particle_Basic.zip",
+      "bytes": 1565,
+      "sha256": "9ebf26632b50cfb09ece62d45083547fcf168500b38f6a4fa9146d9960e4ce8d",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Particle_FX_Cans.zip",
+      "bytes": 969,
+      "sha256": "15a67d712cdc62114ad0c774f2547fdba79e66b3cc7bf0fce50f120eedb29644",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Particle_Grass.zip",
+      "bytes": 850,
+      "sha256": "858941ddf0a80fa4e14fa0e04b702fa534a965f06d489bad3a0213cdb7f41928",
+      "archive_identical": true,
+      "members": {
+        "identical": 2,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Particle_Player.zip",
+      "bytes": 779,
+      "sha256": "bc586ea90c1b71642790e89ccaf93bd4fa4cea3caea7f9fbc81bc07379e77c35",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Particle_Tools.zip",
+      "bytes": 589,
+      "sha256": "090c9c57eada241005dca676a93b7291d11b851991111f3e57fc2e5ca3758a14",
+      "archive_identical": true,
+      "members": {
+        "identical": 2,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Player_Fuel_Jet.zip",
+      "bytes": 743,
+      "sha256": "e0edb296ec05fc3b7f95ec90a735ffc3626ca0b9fe862ab9cefdc6badba5540a",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Player_Jump_Jet.zip",
+      "bytes": 749,
+      "sha256": "8400220e2a938546f298711a85cc34eea79e2b345daa2abdfeade0cdf848fbeb",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Player_Leap_Jet.zip",
+      "bytes": 759,
+      "sha256": "0ca12dc9ee2d2fd5fb0c401f68dd1b6d6dac2349ab616278575c5e7de3fea5ca",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Player_No_Jet.zip",
+      "bytes": 687,
+      "sha256": "8695d962cbaaa267fdc35ffd0db8e60a5a2431b0351508f61d15788f9fba8f0a",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Player_Quake.zip",
+      "bytes": 774,
+      "sha256": "2cdc8084f9f826f221e400b268460a7b91d8b0afcaf5b0c956bff6d7246366fb",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Print_1x2f_BLPRemote.zip",
+      "bytes": 116395,
+      "sha256": "8fa4f2cc4441974cc913938ae861f6a6a826a10b73c39c24a8a14f94e12d513d",
+      "archive_identical": true,
+      "members": {
+        "identical": 6,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Print_1x2f_Default.zip",
+      "bytes": 224794,
+      "sha256": "ae51c7a694c6bf4bb7d785f029c210e8af7770aa56d22e0acf7525a708d6e4e4",
+      "archive_identical": true,
+      "members": {
+        "identical": 18,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Print_2x2f_Default.zip",
+      "bytes": 252522,
+      "sha256": "0d5d63351ef20791119f597aca69af38d97c29ae30e783c073a868d549d21df6",
+      "archive_identical": true,
+      "members": {
+        "identical": 16,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Print_2x2r_Default.zip",
+      "bytes": 2455821,
+      "sha256": "254d7269e871b0e3f44845776482a4e16d5ed2932ef74d6816b365f9519db5ab",
+      "archive_identical": true,
+      "members": {
+        "identical": 14,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Print_2x2r_Monitor3.zip",
+      "bytes": 555446,
+      "sha256": "5dc92d58577caaf8075454589cd9bb5189d9f14ea399a74d1a8225f53aa806de",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Print_Letters_Default.zip",
+      "bytes": 407018,
+      "sha256": "dc5351380be1b22ca72398b02467d2299d6a45c64730273b40a8c1003f1459e2",
+      "archive_identical": true,
+      "members": {
+        "identical": 108,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Projectile_GravityRocket.zip",
+      "bytes": 167740,
+      "sha256": "4675c18a6b1ef349ccf03e22e1a462b13901dfe0d5873b7a47856b90ba0a101c",
+      "archive_identical": true,
+      "members": {
+        "identical": 14,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Projectile_Pinball.zip",
+      "bytes": 36363,
+      "sha256": "fba0a6d79622d9c7c3912470cd90becce217e48da66003d8f88f31a883e4da2d",
+      "archive_identical": true,
+      "members": {
+        "identical": 5,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Projectile_Pong.zip",
+      "bytes": 30922,
+      "sha256": "d7d50d11df1454a97a993e22e901049507ba004ccbf64cb88edd1cf112fcdc8a",
+      "archive_identical": true,
+      "members": {
+        "identical": 9,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Projectile_Radio_Wave.zip",
+      "bytes": 14788,
+      "sha256": "ccf42f3f93e2f87cbd8d69e2f5ae3faeb92c2408070a3337ade41910fceaa60a",
+      "archive_identical": true,
+      "members": {
+        "identical": 6,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Script_Player_Persistence.zip",
+      "bytes": 3824,
+      "sha256": "8f60da1e49d90116531c775b1e2410fe0d73311435d6857412547ad6f5ef16d1",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Sound_Beeps.zip",
+      "bytes": 330445,
+      "sha256": "30022bad5fb60ff0c775ac1c61b8dc0ef2143841a8da98d067791ed8dbb887d0",
+      "archive_identical": true,
+      "members": {
+        "identical": 12,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Sound_Phone.zip",
+      "bytes": 442002,
+      "sha256": "d38b0c868e92bd44676c71285883165361cc399d5676980019890380df60169f",
+      "archive_identical": true,
+      "members": {
+        "identical": 11,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Sound_Synth4.zip",
+      "bytes": 691,
+      "sha256": "a6214cb052311ad8c990e19ddf0e9514e9709cd0473580187235d7e80ec87d7a",
+      "archive_identical": true,
+      "members": {
+        "identical": 3,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/System_ReturnToBlockland.zip",
+      "bytes": 1985463,
+      "sha256": "a29829287ed4d2d384f8421ed9a1826763ad12f73ab5ca52b033ad81d25d89f4",
+      "archive_identical": true,
+      "members": {
+        "identical": 949,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Ball.zip",
+      "bytes": 8946,
+      "sha256": "309195dab2bf0c21c0878eb6dd5c26a887b3ce25a4fa0853a8afe758b31ac9be",
+      "archive_identical": true,
+      "members": {
+        "identical": 7,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Flying_Wheeled_Jeep.zip",
+      "bytes": 2819,
+      "sha256": "1ef3c469c8d0fb67dcc179f0cecdbfa0c412a63638e33f3715f25ccfc39c5372",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Horse.zip",
+      "bytes": 31588,
+      "sha256": "cf51a71966c54e67c13aa0a4355d9e80eaea939c93de208abb047adb82e47801",
+      "archive_identical": true,
+      "members": {
+        "identical": 25,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Jeep.zip",
+      "bytes": 48477,
+      "sha256": "239eeedcbf5f40d3b1f1290aef7b3bffc42d9cb3e57fe53e3f2bcc7b6b70f4ff",
+      "archive_identical": true,
+      "members": {
+        "identical": 16,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Magic_Carpet.zip",
+      "bytes": 11782,
+      "sha256": "ddcd4d19e39851159960175d1b76111a37313b06065dbbaf3253bec8b1735cd9",
+      "archive_identical": true,
+      "members": {
+        "identical": 12,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Pirate_Cannon.zip",
+      "bytes": 262876,
+      "sha256": "3c853e6c44e02b2be185accba8688576aa6331f868a702db23d1e88f93ca0690",
+      "archive_identical": true,
+      "members": {
+        "identical": 14,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Rowboat.zip",
+      "bytes": 17234,
+      "sha256": "5929808b675d2e89a3f7fd5f92d4694448df48a36b94f2edad83b15ef8f47dc6",
+      "archive_identical": true,
+      "members": {
+        "identical": 7,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Vehicle_Tank.zip",
+      "bytes": 358169,
+      "sha256": "46879c173094cae0ad450c7de8402f202227bb4d821c2581f45ff959c3c89f4f",
+      "archive_identical": true,
+      "members": {
+        "identical": 22,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Bow.zip",
+      "bytes": 38712,
+      "sha256": "9234ddf272aefa223bdd9bd349fdaa6fe773fe6be75e6cc61b26527f04d940e1",
+      "archive_identical": true,
+      "members": {
+        "identical": 14,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Gun.zip",
+      "bytes": 64537,
+      "sha256": "5a5f3176e1a0d4ac097c69122b3a7f74028a93e4d24decb907a989c558367943",
+      "archive_identical": true,
+      "members": {
+        "identical": 16,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Guns_Akimbo.zip",
+      "bytes": 17518,
+      "sha256": "c8463020f11f540ece51dc9c11687472ca0e0c6d67feb52e4234c58d1355626c",
+      "archive_identical": true,
+      "members": {
+        "identical": 6,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Horse_Ray.zip",
+      "bytes": 3811,
+      "sha256": "b42c7e5690c9bff3ece3a4a87e911132afcb691b94fec4ab6928645f588127b2",
+      "archive_identical": true,
+      "members": {
+        "identical": 4,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Push_Broom.zip",
+      "bytes": 38969,
+      "sha256": "a710b0721a75e39fe0569f932eb33434dddd7481b50e606cc3e2c7a02977cc5f",
+      "archive_identical": true,
+      "members": {
+        "identical": 11,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Rocket_Launcher.zip",
+      "bytes": 224142,
+      "sha256": "e8dcbc8884a8ba67f509280b19f67f91b647336b92198dc9539e8428f51d4a9b",
+      "archive_identical": true,
+      "members": {
+        "identical": 23,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Spear.zip",
+      "bytes": 103094,
+      "sha256": "b79469ced962931f78bb34034fed1f2364110721f2401412088e3ffb7d97ecbc",
+      "archive_identical": true,
+      "members": {
+        "identical": 13,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    },
+    {
+      "path": "Add-Ons/Weapon_Sword.zip",
+      "bytes": 47840,
+      "sha256": "225601b0976a581f7c4468898a9e90a3ffbdb688f863ea715fbad9e9f7b18452",
+      "archive_identical": true,
+      "members": {
+        "identical": 11,
+        "changed": 0,
+        "new_only": 0,
+        "ambiguous": 0
+      },
+      "old_only_members": 0
+    }
+  ],
+  "conversion": {
+    "pack": "content/maps-pass-006",
+    "map_bundle": "content/map-bundle-009",
+    "converted": 385,
+    "failed": 2,
+    "errors": [
+      {
+        "path": "base/data/bricks/rounds/1x1x5spike.blb",
+        "error": "Missing BLB dimensions (possibly a non-standalone fragment): invalid float literal"
+      },
+      {
+        "path": "base/data/shapes/markers/octahedron.dts",
+        "error": "Unsupported DTS version 18"
+      }
+    ]
+  },
+  "secondary_lighting_caches": [
+    "add-ons/map_bedroom/bedroom_ce7dd2f0.ml",
+    "add-ons/map_bedroomdark/bedroomdark_70d1cce7.ml",
+    "add-ons/map_kitchen/kitchen_1be18cd5.ml",
+    "add-ons/map_kitchendark/kitchendark_54702814.ml",
+    "add-ons/map_slopes/slopes_a5f210cb.ml",
+    "add-ons/map_tutorial/tutorial_382e27f0.ml"
+  ],
+  "historical_provenance_caveat": "System_ReturnToBlockland and launcher/service features are not alpha gameplay requirements merely by presence. Map set is the user-designated baseline, not a claim that all variants shipped in every official v20 distribution."
+}

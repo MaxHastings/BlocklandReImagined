@@ -1,0 +1,1587 @@
+//! Retained control tree built from an authored layout (`schema::Control`),
+//! laid out with Torque's resize rules, drawn with the original skins, and
+//! driven by input. Screens own a `View` and react to its `ViewEvent`s.
+
+use crate::draw::{DrawList, Filter};
+use crate::geom::{self, Rect, Rgba, WHITE};
+use crate::input::{Chord, Key, Modifiers, MouseButton};
+use crate::pack::{Pack, TexKey};
+use crate::schema::{Control, HSizing, Justify, Style, VSizing};
+use crate::text::{self, Font};
+use std::collections::HashMap;
+
+pub type NodeId = usize;
+
+/// Window skin piece indices (Torque GuiWindowCtrl bitmap array).
+mod win {
+    pub const CLOSE: usize = 0;
+    pub const TOP_LEFT: usize = 12;
+    pub const TOP_RIGHT: usize = 13;
+    pub const TOP: usize = 14;
+    pub const LEFT: usize = 18;
+    pub const RIGHT: usize = 19;
+    pub const BOTTOM_LEFT: usize = 20;
+    pub const BOTTOM: usize = 21;
+    pub const BOTTOM_RIGHT: usize = 22;
+}
+/// Scroll skin parts × 3 states (Torque GuiScrollCtrl bitmap array).
+mod scroll {
+    pub const UP: usize = 0;
+    pub const DOWN: usize = 1;
+    pub const THUMB_TOP: usize = 2;
+    pub const THUMB: usize = 3;
+    pub const THUMB_BOTTOM: usize = 4;
+    pub const PAGE: usize = 5;
+    pub const STATES: usize = 3;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    None,
+    Bool(bool),
+    Num(f32),
+    Text(String),
+    /// Selected item id (popups, lists); `None` = nothing selected.
+    Selected(Option<i64>),
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeState {
+    pub visible: bool,
+    pub active: bool,
+    pub text: Option<String>,
+    pub bitmap: Option<String>,
+    /// Host texture, sampled over its complete normalized UV rectangle.
+    pub external_texture: Option<u64>,
+    /// mColor for bitmap buttons, colour for swatches, setColor tint for bitmaps.
+    pub tint: Option<Rgba>,
+    pub value: Value,
+    /// Popup/list items: (text, id). List text uses `\t` to separate columns.
+    pub items: Vec<(String, i64)>,
+    /// Vertical scroll offset (scroll controls).
+    pub scroll_y: i32,
+    pub cursor: usize,
+    /// Animation frame (animated bitmaps).
+    pub frame: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub ctrl: Control,
+    pub parent: Option<NodeId>,
+    pub children: Vec<NodeId>,
+    /// Absolute rectangle in logical pixels after layout.
+    pub rect: Rect,
+    pub state: NodeState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventKind {
+    Click,
+    RightClick,
+    DoubleClick,
+    /// Value changed by the user (checkbox, radio, slider, popup, list, edit).
+    Changed,
+    /// Enter pressed in a text edit (`altCommand`) or list double-click.
+    Submit,
+    /// Mouse entered the control (menu hover sounds).
+    Hover,
+    /// Window close button.
+    Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewEvent {
+    pub node: NodeId,
+    pub kind: EventKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct View {
+    pub nodes: Vec<Node>,
+    pub root: NodeId,
+    pub names: HashMap<String, NodeId>,
+    pub hover: Option<NodeId>,
+    pub pressed: Option<(NodeId, MouseButton)>,
+    pub focus: Option<NodeId>,
+    pub open_popup: Option<NodeId>,
+    last_click: Option<(NodeId, u64)>,
+    pub time_ms: u64,
+    canvas: (i32, i32),
+    /// Last mouse position (logical pixels).
+    pub mouse: (i32, i32),
+    close_hot: bool,
+    popup_hover: Option<usize>,
+    popup_rect_cached: Option<Rect>,
+    popup_row_cached: i32,
+    /// Text-list row height used for scroll extents (set from the pack by
+    /// the owning screen; 16 is Torque's default for 14px fonts).
+    pub row_height_hint: i32,
+}
+
+fn authored_rect(c: &Control) -> Rect {
+    Rect::new(c.position[0], c.position[1], c.extent[0], c.extent[1])
+}
+
+fn initial_value(c: &Control) -> Value {
+    match c.class.as_str() {
+        "GuiCheckBoxCtrl" | "GuiRadioCtrl" => {
+            Value::Bool(c.field("value").is_some_and(|v| v == "1"))
+        }
+        "GuiSliderCtrl" => Value::Num(c.field("value").and_then(|v| v.parse().ok()).unwrap_or(0.0)),
+        "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => Value::Text(c.text.clone().unwrap_or_default()),
+        "GuiPopUpMenuCtrl" | "GuiTextListCtrl" => Value::Selected(None),
+        "GuiProgressCtrl" => Value::Num(0.0),
+        _ => Value::None,
+    }
+}
+
+impl View {
+    pub fn new(layout: &Control) -> View {
+        let mut v = View {
+            nodes: Vec::new(),
+            root: 0,
+            names: HashMap::new(),
+            hover: None,
+            pressed: None,
+            focus: None,
+            open_popup: None,
+            last_click: None,
+            time_ms: 0,
+            canvas: (640, 480),
+            mouse: (-1, -1),
+            close_hot: false,
+            popup_hover: None,
+            popup_rect_cached: None,
+            popup_row_cached: 16,
+            row_height_hint: 16,
+        };
+        v.root = v.insert(layout, None);
+        v
+    }
+
+    fn insert(&mut self, c: &Control, parent: Option<NodeId>) -> NodeId {
+        let id = self.nodes.len();
+        let mut ctrl = c.clone();
+        ctrl.children = Vec::new();
+        self.nodes.push(Node {
+            state: NodeState {
+                visible: c.visible,
+                active: true,
+                text: None,
+                bitmap: None,
+                external_texture: None,
+                tint: None,
+                value: initial_value(c),
+                items: Vec::new(),
+                scroll_y: 0,
+                cursor: 0,
+                frame: 0,
+            },
+            ctrl,
+            parent,
+            children: Vec::new(),
+            rect: authored_rect(c),
+        });
+        if let Some(n) = &c.name {
+            self.names.entry(n.clone()).or_insert(id);
+        }
+        for ch in &c.children {
+            let cid = self.insert(ch, Some(id));
+            self.nodes[id].children.push(cid);
+        }
+        id
+    }
+
+    /// Add a runtime-created control (script-built HUD, brick tiles, …).
+    pub fn add(&mut self, parent: NodeId, c: Control) -> NodeId {
+        let id = self.insert(&c, Some(parent));
+        self.nodes[parent].children.push(id);
+        id
+    }
+
+    /// Remove all children of `parent` (nodes stay allocated but detached).
+    pub fn clear_children(&mut self, parent: NodeId) {
+        let kids = std::mem::take(&mut self.nodes[parent].children);
+        for k in kids {
+            self.detach(k);
+        }
+    }
+
+    fn detach(&mut self, id: NodeId) {
+        let kids = std::mem::take(&mut self.nodes[id].children);
+        for k in kids {
+            self.detach(k);
+        }
+        self.nodes[id].parent = None;
+        self.nodes[id].state.visible = false;
+        if let Some(n) = self.nodes[id].ctrl.name.clone()
+            && self.names.get(&n) == Some(&id)
+        {
+            self.names.remove(&n);
+        }
+        if self.focus == Some(id) {
+            self.focus = None;
+        }
+        if self.hover == Some(id) {
+            self.hover = None;
+        }
+    }
+
+    /// Move a child to the end of its parent's list (drawn last / on top),
+    /// like Torque `pushToBack`.
+    pub fn push_to_back(&mut self, id: NodeId) {
+        if let Some(p) = self.nodes[id].parent {
+            let kids = &mut self.nodes[p].children;
+            kids.retain(|k| *k != id);
+            kids.push(id);
+        }
+    }
+
+    pub fn id(&self, name: &str) -> Option<NodeId> {
+        self.names.get(name).copied()
+    }
+    /// Find a control by its original command string.
+    pub fn by_command(&self, command: &str) -> Option<NodeId> {
+        self.walk()
+            .find(|&n| self.nodes[n].ctrl.command.as_deref() == Some(command))
+    }
+    /// Find a control by displayed/authored text within a class.
+    pub fn by_text(&self, class: &str, text: &str) -> Option<NodeId> {
+        self.walk()
+            .find(|&n| self.nodes[n].ctrl.class == class && self.text_of(n) == text)
+    }
+    pub fn node(&self, id: NodeId) -> &Node {
+        &self.nodes[id]
+    }
+    pub fn state(&mut self, id: NodeId) -> &mut NodeState {
+        &mut self.nodes[id].state
+    }
+    pub fn text_of(&self, id: NodeId) -> String {
+        let n = &self.nodes[id];
+        n.state
+            .text
+            .clone()
+            .or_else(|| n.ctrl.text.clone())
+            .unwrap_or_default()
+    }
+    pub fn set_text(&mut self, id: NodeId, t: impl Into<String>) {
+        let t = t.into();
+        let n = &mut self.nodes[id];
+        if matches!(n.state.value, Value::Text(_)) {
+            n.state.cursor = t.chars().count();
+            n.state.value = Value::Text(t.clone());
+        }
+        n.state.text = Some(t);
+    }
+    pub fn set_visible(&mut self, id: NodeId, v: bool) {
+        self.nodes[id].state.visible = v;
+    }
+    pub fn set_active(&mut self, id: NodeId, v: bool) {
+        self.nodes[id].state.active = v;
+    }
+    pub fn bool_value(&self, id: NodeId) -> bool {
+        matches!(self.nodes[id].state.value, Value::Bool(true))
+    }
+    pub fn set_bool(&mut self, id: NodeId, v: bool) {
+        self.nodes[id].state.value = Value::Bool(v);
+    }
+    pub fn edit_text(&self, id: NodeId) -> String {
+        match &self.nodes[id].state.value {
+            Value::Text(t) => t.clone(),
+            _ => self.text_of(id),
+        }
+    }
+    pub fn selected(&self, id: NodeId) -> Option<i64> {
+        match self.nodes[id].state.value {
+            Value::Selected(s) => s,
+            _ => None,
+        }
+    }
+    pub fn select(&mut self, id: NodeId, sel: Option<i64>) {
+        self.nodes[id].state.value = Value::Selected(sel);
+    }
+    pub fn selected_text(&self, id: NodeId) -> Option<String> {
+        let s = self.selected(id)?;
+        self.nodes[id]
+            .state
+            .items
+            .iter()
+            .find(|(_, i)| *i == s)
+            .map(|(t, _)| t.clone())
+    }
+    pub fn num(&self, id: NodeId) -> f32 {
+        match self.nodes[id].state.value {
+            Value::Num(v) => v,
+            _ => 0.0,
+        }
+    }
+    pub fn set_num(&mut self, id: NodeId, v: f32) {
+        self.nodes[id].state.value = Value::Num(v);
+    }
+
+    /// Visible = this node and all ancestors visible.
+    pub fn is_shown(&self, mut id: NodeId) -> bool {
+        loop {
+            let n = &self.nodes[id];
+            if !n.state.visible {
+                return false;
+            }
+            match n.parent {
+                Some(p) => id = p,
+                None => return id == self.root,
+            }
+        }
+    }
+
+    /// Depth-first ids in tree (draw) order.
+    pub fn walk(&self) -> impl Iterator<Item = NodeId> + '_ {
+        let mut stack = vec![self.root];
+        std::iter::from_fn(move || {
+            let id = stack.pop()?;
+            stack.extend(self.nodes[id].children.iter().rev());
+            Some(id)
+        })
+    }
+
+    // ---------------------------------------------------------------- layout
+
+    /// Lay out for a logical canvas. The root always fills the canvas
+    /// (GuiCanvas::maintainSizing); children follow GuiControl::parentResized
+    /// from their authored extents.
+    pub fn layout(&mut self, w: i32, h: i32) {
+        self.canvas = (w, h);
+        let root = self.root;
+        let authored = authored_rect(&self.nodes[root].ctrl);
+        self.nodes[root].rect = Rect::new(0, 0, w, h);
+        self.layout_children(root, (authored.w, authored.h), Rect::new(0, 0, w, h));
+    }
+
+    fn layout_children(&mut self, id: NodeId, old_parent: (i32, i32), parent_rect: Rect) {
+        let is_scroll = self.nodes[id].ctrl.class == "GuiScrollCtrl";
+        let scroll_y = self.nodes[id].state.scroll_y;
+        let kids = self.nodes[id].children.clone();
+        for k in kids {
+            let c = &self.nodes[k].ctrl;
+            let a = authored_rect(c);
+            let r = resize(
+                a,
+                c.h_sizing,
+                c.v_sizing,
+                c.min_extent,
+                old_parent,
+                (parent_rect.w, parent_rect.h),
+            );
+            let mut abs = r.offset(parent_rect.x, parent_rect.y);
+            if is_scroll {
+                abs = abs.offset(0, -scroll_y);
+            }
+            self.nodes[k].rect = abs;
+            self.layout_children(k, (a.w, a.h), abs);
+        }
+    }
+
+    // ------------------------------------------------------------- rendering
+
+    pub fn draw(&self, pack: &Pack, dl: &mut DrawList) {
+        self.draw_node(pack, dl, self.root);
+        if let Some(p) = self.open_popup {
+            self.draw_popup_list(pack, dl, p);
+        }
+    }
+
+    fn style<'a>(&self, pack: &'a Pack, id: NodeId) -> Option<&'a Style> {
+        pack.data.styles.get(&self.nodes[id].ctrl.style)
+    }
+
+    /// Profile font, falling back to GuiDefaultProfile's and then Arial 14
+    /// (Torque's GuiControlProfile defaults for profiles without fontType).
+    fn font_id<'a>(pack: &'a Pack, style: &'a Style) -> Option<&'a str> {
+        style
+            .font
+            .as_deref()
+            .or_else(|| {
+                pack.data
+                    .styles
+                    .get("GuiDefaultProfile")
+                    .and_then(|d| d.font.as_deref())
+            })
+            .or_else(|| {
+                pack.data
+                    .fonts
+                    .contains_key("arial_14")
+                    .then_some("arial_14")
+            })
+    }
+
+    fn draw_node(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let n = &self.nodes[id];
+        if !n.state.visible {
+            return;
+        }
+        if !dl.push_clip(n.rect) {
+            return;
+        }
+        self.draw_self(pack, dl, id);
+        let skip_children = matches!(n.ctrl.class.as_str(), "GuiShapeNameHud");
+        if !skip_children {
+            if n.ctrl.class == "GuiScrollCtrl" {
+                let inner = self.scroll_content_rect(pack, id);
+                if dl.push_clip(inner) {
+                    for &k in &n.children {
+                        self.draw_node(pack, dl, k);
+                    }
+                    dl.pop_clip();
+                }
+            } else {
+                for &k in &n.children {
+                    self.draw_node(pack, dl, k);
+                }
+            }
+        }
+        dl.pop_clip();
+    }
+
+    fn skin_piece(&self, pack: &Pack, image: &str, idx: usize) -> Option<[f32; 4]> {
+        let s = pack.data.skins.get(image)?;
+        let p = s.pieces.get(idx)?;
+        Some([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32])
+    }
+
+    fn blit(&self, pack: &Pack, dl: &mut DrawList, image: &str, r: Rect, tint: Rgba) {
+        if let Some((w, h)) = pack.image_size(image) {
+            dl.image(
+                TexKey::Image(image.to_string()),
+                [0.0, 0.0, w as f32, h as f32],
+                [r.x as f32, r.y as f32, r.w as f32, r.h as f32],
+                tint,
+                Filter::Linear,
+            );
+        }
+    }
+
+    fn blit_tiled(&self, pack: &Pack, dl: &mut DrawList, image: &str, r: Rect, tint: Rgba) {
+        let Some((w, h)) = pack.image_size(image) else {
+            return;
+        };
+        if !dl.push_clip(r) {
+            return;
+        }
+        let (w, h) = (w as i32, h as i32);
+        let mut y = r.y;
+        while y < r.bottom() {
+            let mut x = r.x;
+            while x < r.right() {
+                dl.image(
+                    TexKey::Image(image.to_string()),
+                    [0.0, 0.0, w as f32, h as f32],
+                    [x as f32, y as f32, w as f32, h as f32],
+                    tint,
+                    Filter::Linear,
+                );
+                x += w;
+            }
+            y += h;
+        }
+        dl.pop_clip();
+    }
+
+    fn piece(&self, dl: &mut DrawList, image: &str, src: [f32; 4], dst: Rect) {
+        dl.image(
+            TexKey::Image(image.to_string()),
+            src,
+            [dst.x as f32, dst.y as f32, dst.w as f32, dst.h as f32],
+            WHITE,
+            Filter::Nearest,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_in(
+        &self,
+        pack: &Pack,
+        dl: &mut DrawList,
+        id: NodeId,
+        r: Rect,
+        text: &str,
+        justify: Option<Justify>,
+        color: Option<Rgba>,
+    ) {
+        let Some(style) = self.style(pack, id) else {
+            return;
+        };
+        let Some(fid) = Self::font_id(pack, style) else {
+            return;
+        };
+        let Some(font) = Font::get(pack, fid) else {
+            return;
+        };
+        let just = justify.unwrap_or(style.justify);
+        let color =
+            color.unwrap_or_else(|| text::style_color(style, false, !self.nodes[id].state.active));
+        let lines: Vec<&str> = text.split('\n').collect();
+        let total = font.line_height() * lines.len() as i32;
+        let mut y = r.y + (r.h - total) / 2;
+        for line in lines {
+            let w = font.width(line);
+            let x = match just {
+                Justify::Left => r.x,
+                Justify::Center => r.x + (r.w - w) / 2,
+                Justify::Right => r.right() - w,
+            };
+            font.draw_outlined(
+                dl,
+                x as f32,
+                y as f32,
+                line,
+                color,
+                style.font_outline,
+                &style.font_colors,
+            );
+            y += font.line_height();
+        }
+    }
+
+    fn draw_ml(&self, pack: &Pack, dl: &mut DrawList, id: NodeId, r: Rect, text: &str) {
+        let Some(style) = self.style(pack, id) else {
+            return;
+        };
+        let Some(fid) = Self::font_id(pack, style) else {
+            return;
+        };
+        let Some(font) = Font::get(pack, fid) else {
+            return;
+        };
+        let color = style.font_color.unwrap_or(geom::BLACK);
+        let mut y = r.y;
+        for line in text::layout_ml(&font, text, r.w, Justify::Left) {
+            let x = match line.justify {
+                Justify::Left => r.x,
+                Justify::Center => r.x + (r.w - line.width) / 2,
+                Justify::Right => r.right() - line.width,
+            };
+            font.draw_outlined(
+                dl,
+                x as f32,
+                y as f32,
+                &line.text,
+                color,
+                style.font_outline,
+                &style.font_colors,
+            );
+            y += font.line_height();
+        }
+    }
+
+    fn draw_self(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let n = &self.nodes[id];
+        let r = n.rect;
+        let style = self.style(pack, id);
+        let hovered = self.hover == Some(id);
+        let down = matches!(self.pressed, Some((p, MouseButton::Left)) if p == id) && hovered;
+        let text = self.text_of(id);
+        match n.ctrl.class.as_str() {
+            "GuiWindowCtrl" => self.draw_window(pack, dl, id),
+            "GuiBitmapCtrl"
+            | "GuiChunkedBitmapCtrl"
+            | "GuiFadeinBitmapCtrl"
+            | "GuiCrossHairHud" => {
+                let bmp = n.state.bitmap.clone().or_else(|| n.ctrl.bitmap.clone());
+                if let Some(id) = n.state.external_texture {
+                    dl.image(
+                        TexKey::External(id),
+                        [0.0, 0.0, 1.0, 1.0],
+                        [r.x as f32, r.y as f32, r.w as f32, r.h as f32],
+                        n.state.tint.unwrap_or(WHITE),
+                        Filter::Linear,
+                    );
+                } else if let Some(b) = bmp {
+                    let tint = n.state.tint.unwrap_or(WHITE);
+                    if n.ctrl.field("wrap") == Some("1") {
+                        self.blit_tiled(pack, dl, &b, r, tint);
+                    } else {
+                        self.blit(pack, dl, &b, r, tint);
+                    }
+                }
+            }
+            "GuiAnimatedBitmapCtrl" => {
+                if let Some(b) = &n.ctrl.bitmap {
+                    self.blit(pack, dl, &format!("{b}_{:02}", n.state.frame), r, WHITE);
+                }
+            }
+            "GuiBitmapButtonCtrl" => {
+                let base = n.state.bitmap.clone().or_else(|| n.ctrl.bitmap.clone());
+                if let Some(b) = base {
+                    let st = if !n.state.active {
+                        "_i"
+                    } else if down {
+                        "_d"
+                    } else if hovered {
+                        "_h"
+                    } else {
+                        "_n"
+                    };
+                    let img = [format!("{b}{st}"), format!("{b}_n"), b.clone()]
+                        .into_iter()
+                        .find(|i| pack.has_image(i));
+                    if let Some(img) = img {
+                        let tint = n.state.tint.or(n.ctrl.color).unwrap_or(WHITE);
+                        self.blit(pack, dl, &img, r, tint);
+                    }
+                }
+                if !text.trim().is_empty()
+                    && let Some(s) = style
+                {
+                    let color = text::style_color(s, hovered && n.state.active, !n.state.active);
+                    self.draw_text_in(pack, dl, id, r, &text, Some(Justify::Center), Some(color));
+                }
+            }
+            "GuiButtonCtrl" => {
+                if let Some(s) = style {
+                    let fill = if down { s.fill_color_hl } else { s.fill_color }
+                        .unwrap_or([200, 200, 200, 255]);
+                    dl.fill(r, fill);
+                    dl.frame(r, s.border_color.unwrap_or(geom::BLACK));
+                    self.draw_text_in(pack, dl, id, r, &text, Some(Justify::Center), None);
+                }
+            }
+            "GuiSwatchCtrl" => {
+                if let Some(c) = n.state.tint.or(n.ctrl.color) {
+                    dl.fill(r, c);
+                }
+            }
+            "GuiTextCtrl" => {
+                if style.is_some() {
+                    self.draw_text_in(pack, dl, id, r, &text, None, None);
+                }
+            }
+            "GuiMLTextCtrl" => self.draw_ml(pack, dl, id, r, &text),
+            "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => {
+                if let Some(s) = style {
+                    if s.opaque {
+                        dl.fill(r, s.fill_color.unwrap_or(WHITE));
+                    }
+                    if s.border != 0 {
+                        dl.frame(r, s.border_color.unwrap_or(geom::BLACK));
+                    }
+                    let t = self.edit_text(id);
+                    let shown = if n.ctrl.field("password") == Some("1") {
+                        "*".repeat(t.chars().count())
+                    } else {
+                        t
+                    };
+                    let inner = Rect::new(r.x + s.text_offset[0] + 2, r.y, r.w - 4, r.h);
+                    if n.ctrl.class == "GuiMLTextEditCtrl" {
+                        self.draw_ml(pack, dl, id, inner.offset(0, 2), &shown);
+                    } else {
+                        self.draw_text_in(pack, dl, id, inner, &shown, Some(Justify::Left), None);
+                    }
+                    if self.focus == Some(id)
+                        && (self.time_ms / 500).is_multiple_of(2)
+                        && let Some(f) = s.font.as_deref().and_then(|f| Font::get(pack, f))
+                    {
+                        let before: String = shown.chars().take(n.state.cursor).collect();
+                        let cx = inner.x + f.width(&before);
+                        let lh = f.line_height();
+                        dl.fill(
+                            Rect::new(cx, r.y + (r.h - lh) / 2, 1, lh),
+                            s.font_color.unwrap_or(geom::BLACK),
+                        );
+                    }
+                }
+            }
+            "GuiCheckBoxCtrl" | "GuiRadioCtrl" => {
+                if let Some(s) = style
+                    && let Some(bmp) = s.bitmap.as_deref()
+                {
+                    let on = matches!(n.state.value, Value::Bool(true));
+                    let idx = match (n.state.active, on) {
+                        (true, false) => 0,
+                        (true, true) => 1,
+                        (false, false) => 2,
+                        (false, true) => 3,
+                    };
+                    if let Some(src) = self.skin_piece(pack, bmp, idx) {
+                        let (pw, ph) = (src[2] as i32, src[3] as i32);
+                        self.piece(dl, bmp, src, Rect::new(r.x, r.y + (r.h - ph) / 2, pw, ph));
+                        let tr = Rect::new(r.x + pw + 3, r.y, r.w - pw - 3, r.h);
+                        self.draw_text_in(pack, dl, id, tr, &text, Some(Justify::Left), None);
+                    }
+                }
+            }
+            "GuiPopUpMenuCtrl" => {
+                if let Some(s) = style {
+                    dl.fill(
+                        r,
+                        if hovered {
+                            s.fill_color_hl
+                        } else {
+                            s.fill_color
+                        }
+                        .unwrap_or([149, 152, 166, 255]),
+                    );
+                    dl.frame(r, s.border_color.unwrap_or(geom::BLACK));
+                    let label = self.selected_text(id).unwrap_or_else(|| text.clone());
+                    let inner = Rect::new(r.x + 4, r.y, r.w - 20, r.h);
+                    let color = s.font_color.unwrap_or(geom::BLACK);
+                    if dl.push_clip(inner) {
+                        self.draw_text_in(
+                            pack,
+                            dl,
+                            id,
+                            inner,
+                            &label,
+                            Some(Justify::Left),
+                            Some(color),
+                        );
+                        dl.pop_clip();
+                    }
+                    self.draw_scroll_arrow(
+                        pack,
+                        dl,
+                        Rect::new(r.right() - 16, r.y + (r.h - 14) / 2, 14, 14),
+                        scroll::DOWN,
+                    );
+                }
+            }
+            "GuiScrollCtrl" => self.draw_scroll(pack, dl, id),
+            "GuiTextListCtrl" => self.draw_list(pack, dl, id),
+            "GuiSliderCtrl" => {
+                let (lo, hi) = self.range(id);
+                let v = self.num(id);
+                let t = if hi > lo {
+                    ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let mid = r.y + r.h / 2;
+                dl.fill(Rect::new(r.x + 4, mid - 1, r.w - 8, 2), geom::BLACK);
+                if let Some(ticks) = n
+                    .ctrl
+                    .field("ticks")
+                    .and_then(|t| t.parse::<i32>().ok())
+                    .filter(|t| *t > 0)
+                {
+                    for i in 0..=ticks + 1 {
+                        let x = r.x + 4 + (r.w - 8) * i / (ticks + 1);
+                        dl.fill(Rect::new(x, mid + 3, 1, 3), geom::BLACK);
+                    }
+                }
+                let tx = r.x + 4 + ((r.w - 8) as f32 * t) as i32;
+                let thumb = Rect::new(tx - 4, mid - 8, 8, 16);
+                dl.fill(thumb, [149, 152, 166, 255]);
+                dl.frame(thumb, geom::BLACK);
+            }
+            "GuiProgressCtrl" => {
+                if let Some(s) = style {
+                    let f = self.num(id).clamp(0.0, 1.0);
+                    dl.fill(
+                        Rect::new(r.x, r.y, (r.w as f32 * f) as i32, r.h),
+                        s.fill_color.unwrap_or([0, 0, 128, 128]),
+                    );
+                    if s.border != 0 {
+                        dl.frame(r, s.border_color.unwrap_or(geom::BLACK));
+                    }
+                }
+            }
+            _ => {
+                // Containers (GuiControl, GameTSCtrl, GuiObjectView host views …)
+                // draw only an opaque fill when their profile asks for one.
+                if let Some(s) = style
+                    && s.opaque
+                    && n.ctrl.class == "GuiControl"
+                    && n.parent.is_some()
+                {
+                    dl.fill(r, s.fill_color.unwrap_or([200, 200, 200, 255]));
+                }
+            }
+        }
+    }
+
+    fn draw_window(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let n = &self.nodes[id];
+        let r = n.rect;
+        let Some(style) = self.style(pack, id) else {
+            return;
+        };
+        let Some(img) = style.bitmap.as_deref() else {
+            dl.fill(r, style.fill_color.unwrap_or([200, 200, 200, 255]));
+            return;
+        };
+        let Some(skin) = pack.data.skins.get(img) else {
+            return;
+        };
+        if skin.pieces.len() < 23 {
+            return;
+        }
+        let p = |i: usize| {
+            let q = skin.pieces[i];
+            (
+                [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32],
+                q[2] as i32,
+                q[3] as i32,
+            )
+        };
+        let (tl, tlw, tlh) = p(win::TOP_LEFT);
+        let (tr, trw, trh) = p(win::TOP_RIGHT);
+        let (t, _, th) = p(win::TOP);
+        let (l, lw, _) = p(win::LEFT);
+        let (rt, rw, _) = p(win::RIGHT);
+        let (bl, blw, blh) = p(win::BOTTOM_LEFT);
+        let (b, _, bh) = p(win::BOTTOM);
+        let (br, brw, brh) = p(win::BOTTOM_RIGHT);
+        dl.fill(
+            Rect::new(r.x + lw, r.y + th, r.w - lw - rw, r.h - th - bh),
+            style.fill_color.unwrap_or([200, 200, 200, 255]),
+        );
+        self.piece(dl, img, tl, Rect::new(r.x, r.y, tlw, tlh));
+        self.piece(dl, img, tr, Rect::new(r.right() - trw, r.y, trw, trh));
+        self.piece(dl, img, t, Rect::new(r.x + tlw, r.y, r.w - tlw - trw, th));
+        self.piece(dl, img, l, Rect::new(r.x, r.y + tlh, lw, r.h - tlh - blh));
+        self.piece(
+            dl,
+            img,
+            rt,
+            Rect::new(r.right() - rw, r.y + trh, rw, r.h - trh - brh),
+        );
+        self.piece(dl, img, bl, Rect::new(r.x, r.bottom() - blh, blw, blh));
+        self.piece(
+            dl,
+            img,
+            br,
+            Rect::new(r.right() - brw, r.bottom() - brh, brw, brh),
+        );
+        self.piece(
+            dl,
+            img,
+            b,
+            Rect::new(r.x + blw, r.bottom() - bh, r.w - blw - brw, bh),
+        );
+        if n.ctrl.field("canClose") != Some("0") {
+            let state = if self.pressed.map(|p| p.0) == Some(id) && self.hover_close(id) {
+                2
+            } else if self.hover == Some(id) && self.hover_close(id) {
+                1
+            } else {
+                0
+            };
+            let (c, cw, ch) = p(win::CLOSE + state);
+            self.piece(dl, img, c, self.close_rect(id, cw, ch));
+        }
+        let title = self.text_of(id);
+        if let Some(f) = style.font.as_deref().and_then(|f| Font::get(pack, f)) {
+            let x = r.x + style.text_offset[0] + 4;
+            let y = r.y + style.text_offset[1];
+            f.draw_outlined(
+                dl,
+                x as f32,
+                y as f32,
+                &title,
+                style.font_color.unwrap_or(WHITE),
+                style.font_outline,
+                &style.font_colors,
+            );
+        }
+    }
+
+    fn close_rect(&self, id: NodeId, cw: i32, ch: i32) -> Rect {
+        let r = self.nodes[id].rect;
+        Rect::new(r.right() - cw - 4, r.y + 3, cw, ch)
+    }
+
+    fn hover_close(&self, _id: NodeId) -> bool {
+        self.close_hot
+    }
+
+    fn range(&self, id: NodeId) -> (f32, f32) {
+        let r: Vec<f32> = self.nodes[id]
+            .ctrl
+            .field("range")
+            .unwrap_or("0 1")
+            .split_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        if r.len() == 2 {
+            (r[0], r[1])
+        } else {
+            (0.0, 1.0)
+        }
+    }
+
+    fn scroll_bitmap<'a>(&self, pack: &'a Pack, id: NodeId) -> Option<&'a str> {
+        let s = self.style(pack, id)?;
+        s.bitmap.as_deref().filter(|b| {
+            pack.data
+                .skins
+                .get(*b)
+                .is_some_and(|k| k.pieces.len() >= 18)
+        })
+    }
+
+    fn scroll_bar_width(&self, pack: &Pack, id: NodeId) -> i32 {
+        let n = &self.nodes[id];
+        let mode = n.ctrl.field("vScrollBar").unwrap_or("dynamic");
+        if mode == "alwaysOff" {
+            return 0;
+        }
+        if mode == "dynamic" && self.content_height(id) <= n.rect.h {
+            return 0;
+        }
+        self.scroll_bitmap(pack, id)
+            .and_then(|b| self.skin_piece(pack, b, scroll::UP * scroll::STATES))
+            .map_or(12, |p| p[2] as i32)
+    }
+
+    pub fn content_height(&self, id: NodeId) -> i32 {
+        self.nodes[id]
+            .children
+            .iter()
+            .map(|&k| {
+                let c = &self.nodes[k];
+                if c.ctrl.class == "GuiTextListCtrl" {
+                    c.ctrl.position[1] + self.list_height(k)
+                } else {
+                    c.ctrl.position[1] + c.rect.h
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn scroll_content_rect(&self, pack: &Pack, id: NodeId) -> Rect {
+        let r = self.nodes[id].rect;
+        Rect::new(r.x, r.y, r.w - self.scroll_bar_width(pack, id), r.h)
+    }
+
+    fn draw_scroll_arrow(&self, pack: &Pack, dl: &mut DrawList, r: Rect, part: usize) {
+        let img = "base/client/ui/blockscroll";
+        if let Some(src) = self.skin_piece(pack, img, part * scroll::STATES) {
+            self.piece(dl, img, src, r);
+        }
+    }
+
+    fn draw_scroll(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let n = &self.nodes[id];
+        let r = n.rect;
+        if let Some(s) = self.style(pack, id)
+            && s.opaque
+        {
+            dl.fill(r, s.fill_color.unwrap_or(WHITE));
+        }
+        let bw = self.scroll_bar_width(pack, id);
+        let Some(img) = self.scroll_bitmap(pack, id) else {
+            return;
+        };
+        if bw == 0 {
+            return;
+        }
+        let get = |part: usize| self.skin_piece(pack, img, part * scroll::STATES);
+        let (Some(up), Some(dn), Some(page)) =
+            (get(scroll::UP), get(scroll::DOWN), get(scroll::PAGE))
+        else {
+            return;
+        };
+        let x = r.right() - bw;
+        let uh = up[3] as i32;
+        let dh = dn[3] as i32;
+        self.piece(dl, img, page, Rect::new(x, r.y + uh, bw, r.h - uh - dh));
+        self.piece(dl, img, up, Rect::new(x, r.y, bw, uh));
+        self.piece(dl, img, dn, Rect::new(x, r.bottom() - dh, bw, dh));
+        let content = self.content_height(id).max(1);
+        let track = r.h - uh - dh;
+        if content > r.h && track > 12 {
+            let th = ((track as i64 * r.h as i64) / content as i64).max(16) as i32;
+            let max_scroll = content - r.h;
+            let ty = r.y
+                + uh
+                + ((track - th) as i64 * n.state.scroll_y as i64 / max_scroll.max(1) as i64) as i32;
+            if let (Some(t0), Some(t1), Some(t2)) = (
+                get(scroll::THUMB_TOP),
+                get(scroll::THUMB),
+                get(scroll::THUMB_BOTTOM),
+            ) {
+                let (h0, h2) = (t0[3] as i32, t2[3] as i32);
+                self.piece(dl, img, t0, Rect::new(x, ty, bw, h0));
+                self.piece(
+                    dl,
+                    img,
+                    t1,
+                    Rect::new(x, ty + h0, bw, (th - h0 - h2).max(0)),
+                );
+                self.piece(dl, img, t2, Rect::new(x, ty + th - h2, bw, h2));
+            }
+        }
+    }
+
+    fn list_row_height(&self, pack: &Pack, id: NodeId) -> i32 {
+        self.style(pack, id)
+            .and_then(|s| Self::font_id(pack, s))
+            .and_then(|f| pack.font(f))
+            .map_or(16, |f| f.line_height as i32 + 2)
+    }
+
+    fn list_height(&self, id: NodeId) -> i32 {
+        // Row height is only known with a pack; approximate with 16 for layout.
+        self.nodes[id].state.items.len() as i32 * self.row_height_hint
+    }
+
+    fn draw_list(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let n = &self.nodes[id];
+        let r = n.rect;
+        let rh = self.list_row_height(pack, id);
+        let Some(style) = self.style(pack, id) else {
+            return;
+        };
+        let cols: Vec<i32> = n
+            .ctrl
+            .field("columns")
+            .unwrap_or("0")
+            .split_whitespace()
+            .filter_map(|c| c.parse().ok())
+            .collect();
+        let sel = self.selected(id);
+        for (i, (text, item)) in n.state.items.iter().enumerate() {
+            let row = Rect::new(r.x, r.y + i as i32 * rh, r.w, rh);
+            if Some(*item) == sel {
+                dl.fill(row, style.fill_color_hl.unwrap_or([128, 128, 255, 255]));
+            }
+            for (c, field) in text.split('\t').enumerate() {
+                let x = cols.get(c).copied().unwrap_or(0);
+                if x >= 9999 {
+                    continue;
+                }
+                let next = cols.get(c + 1).copied().unwrap_or(r.w);
+                let cell = Rect::new(r.x + x + 2, row.y, (next - x - 2).max(0), rh);
+                if dl.push_clip(cell) {
+                    self.draw_text_in(pack, dl, id, cell, field, Some(Justify::Left), None);
+                    dl.pop_clip();
+                }
+            }
+        }
+    }
+
+    fn draw_popup_list(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let r = self.popup_rect(pack, id);
+        let n = &self.nodes[id];
+        let Some(style) = self.style(pack, id) else {
+            return;
+        };
+        dl.fill(r, [255, 255, 255, 255]);
+        dl.frame(r, geom::BLACK);
+        let rh = self.popup_row_height(pack, id);
+        let sel = self.selected(id);
+        for (i, (text, item)) in n.state.items.iter().enumerate() {
+            let row = Rect::new(r.x + 1, r.y + 1 + i as i32 * rh, r.w - 2, rh);
+            if Some(i) == self.popup_hover || (self.popup_hover.is_none() && Some(*item) == sel) {
+                dl.fill(row, style.fill_color_hl.unwrap_or([171, 171, 171, 255]));
+            }
+            let t = Rect::new(row.x + 3, row.y, row.w - 6, rh);
+            self.draw_text_in(
+                pack,
+                dl,
+                id,
+                t,
+                text,
+                Some(Justify::Left),
+                Some(geom::BLACK),
+            );
+        }
+    }
+
+    fn popup_row_height(&self, pack: &Pack, id: NodeId) -> i32 {
+        self.list_row_height(pack, id)
+            .max(self.nodes[id].rect.h - 2)
+    }
+
+    fn popup_rect(&self, pack: &Pack, id: NodeId) -> Rect {
+        let n = &self.nodes[id];
+        let rh = self.popup_row_height(pack, id);
+        let max_rows = n
+            .ctrl
+            .field("maxPopupHeight")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(200)
+            / rh.max(1);
+        let rows = (n.state.items.len() as i32).min(max_rows.max(8)).max(1);
+        let h = rows * rh + 2;
+        let mut y = n.rect.bottom();
+        if y + h > self.canvas.1 {
+            y = (n.rect.y - h).max(0);
+        }
+        Rect::new(n.rect.x, y, n.rect.w.max(100), h)
+    }
+
+    // ------------------------------------------------------------------ input
+
+    fn clickable(&self, id: NodeId) -> bool {
+        matches!(
+            self.nodes[id].ctrl.class.as_str(),
+            "GuiBitmapButtonCtrl"
+                | "GuiButtonCtrl"
+                | "GuiCheckBoxCtrl"
+                | "GuiRadioCtrl"
+                | "GuiPopUpMenuCtrl"
+                | "GuiTextEditCtrl"
+                | "GuiMLTextEditCtrl"
+                | "GuiTextListCtrl"
+                | "GuiSliderCtrl"
+                | "GuiScrollCtrl"
+                | "GuiWindowCtrl"
+        )
+    }
+
+    /// Deepest visible control containing the point (respecting parent clips).
+    pub fn hit(&self, x: i32, y: i32) -> Option<NodeId> {
+        self.hit_in(
+            self.root,
+            x,
+            y,
+            Rect::new(0, 0, self.canvas.0, self.canvas.1),
+        )
+    }
+
+    fn hit_in(&self, id: NodeId, x: i32, y: i32, clip: Rect) -> Option<NodeId> {
+        let n = &self.nodes[id];
+        if !n.state.visible {
+            return None;
+        }
+        let c = clip.intersect(&n.rect)?;
+        if !c.contains(x, y) {
+            return None;
+        }
+        if n.ctrl.class != "GuiShapeNameHud" {
+            for &k in n.children.iter().rev() {
+                if let Some(h) = self.hit_in(k, x, y, c) {
+                    return Some(h);
+                }
+            }
+        }
+        Some(id)
+    }
+
+    /// Nearest clickable ancestor-or-self of the hit control.
+    fn target(&self, x: i32, y: i32) -> Option<NodeId> {
+        let mut id = self.hit(x, y)?;
+        loop {
+            if self.clickable(id) && self.nodes[id].state.active {
+                return Some(id);
+            }
+            id = self.nodes[id].parent?;
+        }
+    }
+
+    /// Another modal view (or another application) owns the pointer. Reset
+    /// hover so a later real entry produces exactly one new Hover event.
+    pub fn mouse_leave(&mut self) {
+        self.hover = None;
+        self.close_hot = false;
+        self.popup_hover = None;
+    }
+
+    pub fn mouse_move(&mut self, x: i32, y: i32, out: &mut Vec<ViewEvent>) {
+        self.mouse = (x, y);
+        if let Some(p) = self.open_popup {
+            let pr = self.popup_rect_cached;
+            self.popup_hover = pr
+                .filter(|r| r.contains(x, y))
+                .map(|r| ((y - r.y - 1) / self.popup_row_cached.max(1)) as usize)
+                .filter(|i| *i < self.nodes[p].state.items.len());
+            return;
+        }
+        if let Some((id, MouseButton::Left)) = self.pressed
+            && self.nodes[id].ctrl.class == "GuiSliderCtrl"
+        {
+            self.slide_to(id, x);
+            out.push(ViewEvent {
+                node: id,
+                kind: EventKind::Changed,
+            });
+        }
+        let t = self.target(x, y);
+        if t != self.hover {
+            self.hover = t;
+            if let Some(h) = t {
+                out.push(ViewEvent {
+                    node: h,
+                    kind: EventKind::Hover,
+                });
+            }
+        }
+        self.close_hot = self.hover.is_some_and(|h| {
+            self.nodes[h].ctrl.class == "GuiWindowCtrl" && self.close_rect(h, 16, 16).contains(x, y)
+        });
+    }
+
+    fn slide_to(&mut self, id: NodeId, x: i32) {
+        let r = self.nodes[id].rect;
+        let (lo, hi) = self.range(id);
+        let t = ((x - r.x - 4) as f32 / (r.w - 8).max(1) as f32).clamp(0.0, 1.0);
+        let mut v = lo + t * (hi - lo);
+        if let Some(ticks) = self.nodes[id]
+            .ctrl
+            .field("snap")
+            .filter(|s| *s == "1")
+            .and(self.nodes[id].ctrl.field("ticks"))
+            .and_then(|t| t.parse::<f32>().ok())
+        {
+            let step = (hi - lo) / (ticks + 1.0);
+            v = lo + ((v - lo) / step).round() * step;
+        }
+        self.nodes[id].state.value = Value::Num(v);
+    }
+
+    pub fn mouse_down(
+        &mut self,
+        b: MouseButton,
+        x: i32,
+        y: i32,
+        pack: &Pack,
+        out: &mut Vec<ViewEvent>,
+    ) {
+        self.mouse = (x, y);
+        if let Some(p) = self.open_popup.take() {
+            let r = self.popup_rect(pack, p);
+            if r.contains(x, y) {
+                let rh = self.popup_row_height(pack, p);
+                let i = ((y - r.y - 1) / rh) as usize;
+                if let Some((_, item)) = self.nodes[p].state.items.get(i).cloned() {
+                    self.nodes[p].state.value = Value::Selected(Some(item));
+                    out.push(ViewEvent {
+                        node: p,
+                        kind: EventKind::Changed,
+                    });
+                }
+            }
+            self.popup_hover = None;
+            return;
+        }
+        let Some(t) = self.target(x, y) else {
+            self.focus = None;
+            return;
+        };
+        self.pressed = Some((t, b));
+        let class = self.nodes[t].ctrl.class.clone();
+        match class.as_str() {
+            "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => {
+                self.focus = Some(t);
+                let len = self.edit_text(t).chars().count();
+                self.nodes[t].state.cursor = len;
+            }
+            "GuiSliderCtrl" if b == MouseButton::Left => {
+                self.slide_to(t, x);
+                out.push(ViewEvent {
+                    node: t,
+                    kind: EventKind::Changed,
+                });
+            }
+            "GuiScrollCtrl" if b == MouseButton::Left => {
+                let r = self.nodes[t].rect;
+                let bw = self.scroll_bar_width(pack, t);
+                if x >= r.right() - bw {
+                    let page = if y < r.y + r.h / 2 { -r.h / 2 } else { r.h / 2 };
+                    self.scroll_by(t, page);
+                }
+            }
+            "GuiTextListCtrl" if b == MouseButton::Left => {
+                let r = self.nodes[t].rect;
+                let rh = self.list_row_height(pack, t);
+                let i = ((y - r.y) / rh.max(1)) as usize;
+                if let Some((_, item)) = self.nodes[t].state.items.get(i).cloned() {
+                    let double = self.last_click.is_some_and(|(n, when)| {
+                        n == t
+                            && self.time_ms.saturating_sub(when) < 400
+                            && self.selected(t) == Some(item)
+                    });
+                    self.nodes[t].state.value = Value::Selected(Some(item));
+                    out.push(ViewEvent {
+                        node: t,
+                        kind: EventKind::Changed,
+                    });
+                    if double {
+                        out.push(ViewEvent {
+                            node: t,
+                            kind: EventKind::Submit,
+                        });
+                    }
+                    self.last_click = Some((t, self.time_ms));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn mouse_up(
+        &mut self,
+        b: MouseButton,
+        x: i32,
+        y: i32,
+        pack: &Pack,
+        out: &mut Vec<ViewEvent>,
+    ) {
+        self.mouse = (x, y);
+        let Some((p, pb)) = self.pressed.take() else {
+            return;
+        };
+        if pb != b {
+            return;
+        }
+        let over = self.target(x, y) == Some(p);
+        if !over {
+            return;
+        }
+        let class = self.nodes[p].ctrl.class.clone();
+        match (class.as_str(), b) {
+            ("GuiWindowCtrl", MouseButton::Left) if self.close_rect(p, 16, 16).contains(x, y) => {
+                out.push(ViewEvent {
+                    node: p,
+                    kind: EventKind::Close,
+                });
+            }
+            ("GuiCheckBoxCtrl", MouseButton::Left) => {
+                let v = !self.bool_value(p);
+                self.set_bool(p, v);
+                out.push(ViewEvent {
+                    node: p,
+                    kind: EventKind::Changed,
+                });
+                out.push(ViewEvent {
+                    node: p,
+                    kind: EventKind::Click,
+                });
+            }
+            ("GuiRadioCtrl", MouseButton::Left) => {
+                self.select_radio(p);
+                out.push(ViewEvent {
+                    node: p,
+                    kind: EventKind::Changed,
+                });
+                out.push(ViewEvent {
+                    node: p,
+                    kind: EventKind::Click,
+                });
+            }
+            ("GuiPopUpMenuCtrl", MouseButton::Left) if !self.nodes[p].state.items.is_empty() => {
+                self.open_popup = Some(p);
+                self.popup_rect_cached = Some(self.popup_rect(pack, p));
+                self.popup_row_cached = self.popup_row_height(pack, p);
+                self.popup_hover = None;
+            }
+            ("GuiBitmapButtonCtrl" | "GuiButtonCtrl", MouseButton::Left) => {
+                let double = self
+                    .last_click
+                    .is_some_and(|(n, when)| n == p && self.time_ms.saturating_sub(when) < 400);
+                out.push(ViewEvent {
+                    node: p,
+                    kind: EventKind::Click,
+                });
+                if double {
+                    out.push(ViewEvent {
+                        node: p,
+                        kind: EventKind::DoubleClick,
+                    });
+                }
+                self.last_click = Some((p, self.time_ms));
+            }
+            ("GuiBitmapButtonCtrl" | "GuiButtonCtrl", MouseButton::Right) => {
+                out.push(ViewEvent {
+                    node: p,
+                    kind: EventKind::RightClick,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Radio buttons: exclusive within the same parent and `groupNum`.
+    pub fn select_radio(&mut self, id: NodeId) {
+        let group = self.nodes[id].ctrl.group;
+        if let Some(parent) = self.nodes[id].parent {
+            for k in self.nodes[parent].children.clone() {
+                if self.nodes[k].ctrl.class == "GuiRadioCtrl" && self.nodes[k].ctrl.group == group {
+                    self.nodes[k].state.value = Value::Bool(k == id);
+                }
+            }
+        }
+    }
+
+    pub fn scroll_by(&mut self, id: NodeId, dy: i32) {
+        let max = (self.content_height(id) - self.nodes[id].rect.h).max(0);
+        let s = &mut self.nodes[id].state.scroll_y;
+        *s = (*s + dy).clamp(0, max);
+    }
+
+    /// Mouse wheel: scroll the innermost scroll control under the cursor.
+    /// Returns true if consumed.
+    pub fn wheel(&mut self, delta: i32) -> bool {
+        let Some(mut id) = self.hit(self.mouse.0, self.mouse.1) else {
+            return false;
+        };
+        loop {
+            if self.nodes[id].ctrl.class == "GuiScrollCtrl" {
+                let step = self.nodes[id]
+                    .ctrl
+                    .field("rowHeight")
+                    .and_then(|r| r.parse::<i32>().ok())
+                    .unwrap_or(32);
+                self.scroll_by(id, -delta * step);
+                return true;
+            }
+            match self.nodes[id].parent {
+                Some(p) => id = p,
+                None => return false,
+            }
+        }
+    }
+
+    /// Keyboard for the focused edit control. Returns true if consumed.
+    pub fn key(&mut self, key: Key, mods: Modifiers, out: &mut Vec<ViewEvent>) -> bool {
+        if self.open_popup.is_some() && key == Key::Escape {
+            self.open_popup = None;
+            return true;
+        }
+        let Some(f) = self.focus else { return false };
+        if !self.is_shown(f) {
+            self.focus = None;
+            return false;
+        }
+        let mut t: Vec<char> = self.edit_text(f).chars().collect();
+        let cur = self.nodes[f].state.cursor.min(t.len());
+        match key {
+            Key::Backspace if cur > 0 => {
+                t.remove(cur - 1);
+                self.nodes[f].state.cursor = cur - 1;
+            }
+            Key::Delete if cur < t.len() => {
+                t.remove(cur);
+            }
+            Key::Left => self.nodes[f].state.cursor = cur.saturating_sub(1),
+            Key::Right => self.nodes[f].state.cursor = (cur + 1).min(t.len()),
+            Key::Home => self.nodes[f].state.cursor = 0,
+            Key::End => self.nodes[f].state.cursor = t.len(),
+            Key::Return | Key::NumpadEnter => {
+                out.push(ViewEvent {
+                    node: f,
+                    kind: EventKind::Submit,
+                });
+                return true;
+            }
+            Key::Tab => {
+                self.focus_next(f, mods.shift);
+                return true;
+            }
+            Key::Backspace | Key::Delete => {}
+            _ => return false,
+        }
+        let s: String = t.into_iter().collect();
+        self.nodes[f].state.value = Value::Text(s);
+        out.push(ViewEvent {
+            node: f,
+            kind: EventKind::Changed,
+        });
+        true
+    }
+
+    fn focus_next(&mut self, from: NodeId, back: bool) {
+        let edits: Vec<NodeId> = self
+            .walk()
+            .filter(|&n| {
+                matches!(self.nodes[n].ctrl.class.as_str(), "GuiTextEditCtrl")
+                    && self.is_shown(n)
+                    && self.nodes[n].state.active
+            })
+            .collect();
+        if let Some(i) = edits.iter().position(|&e| e == from) {
+            let j = if back {
+                (i + edits.len() - 1) % edits.len()
+            } else {
+                (i + 1) % edits.len()
+            };
+            self.focus = Some(edits[j]);
+            let len = self.edit_text(edits[j]).chars().count();
+            self.nodes[edits[j]].state.cursor = len;
+        }
+    }
+
+    /// Typed character for the focused edit control.
+    pub fn char(&mut self, c: char, out: &mut Vec<ViewEvent>) -> bool {
+        let Some(f) = self.focus else { return false };
+        if c.is_control() || text::to_cp1252(c).is_none() {
+            return self.focus.is_some();
+        }
+        let max = self.nodes[f]
+            .ctrl
+            .field("maxLength")
+            .and_then(|m| m.parse::<usize>().ok())
+            .unwrap_or(255);
+        let mut t: Vec<char> = self.edit_text(f).chars().collect();
+        if t.len() >= max {
+            return true;
+        }
+        let cur = self.nodes[f].state.cursor.min(t.len());
+        t.insert(cur, c);
+        self.nodes[f].state.cursor = cur + 1;
+        self.nodes[f].state.value = Value::Text(t.into_iter().collect());
+        out.push(ViewEvent {
+            node: f,
+            kind: EventKind::Changed,
+        });
+        true
+    }
+
+    /// Accelerator lookup: first visible, active control (tree order) whose
+    /// `accelerator` matches (GuiCanvas accelerator map semantics).
+    pub fn accelerator(&self, key: Key, mods: Modifiers) -> Option<NodeId> {
+        let pressed = Chord { mods, key };
+        self.walk().find(|&n| {
+            let c = &self.nodes[n].ctrl;
+            c.accelerator
+                .as_deref()
+                .and_then(Chord::parse)
+                .is_some_and(|a| {
+                    a == pressed
+                        || (a.key == Key::Return && key == Key::NumpadEnter && a.mods == mods)
+                })
+                && self.is_shown(n)
+                && self.nodes[n].state.active
+        })
+    }
+
+    pub fn tick(&mut self, dt_ms: u64) {
+        self.time_ms += dt_ms;
+    }
+}
+
+/// GuiControl::parentResized for one control (Torque3D guiControl.cpp:1348).
+pub fn resize(
+    a: Rect,
+    h: HSizing,
+    v: VSizing,
+    min: [i32; 2],
+    old: (i32, i32),
+    new: (i32, i32),
+) -> Rect {
+    let (dx, dy) = (new.0 - old.0, new.1 - old.1);
+    let (mut x, mut y, mut w, mut hh) = (a.x, a.y, a.w, a.h);
+    match h {
+        HSizing::Center => x = (new.0 - a.w) >> 1,
+        HSizing::Width => w = a.w + dx,
+        HSizing::Left => x = a.x + dx,
+        HSizing::Relative if old.0 != 0 => {
+            x = (a.x as f32 / old.0 as f32 * new.0 as f32).round() as i32;
+            w = (a.w as f32 / old.0 as f32 * new.0 as f32).round() as i32;
+        }
+        _ => {}
+    }
+    match v {
+        VSizing::Center => y = (new.1 - a.h) >> 1,
+        VSizing::Height => hh = a.h + dy,
+        VSizing::Top => y = a.y + dy,
+        VSizing::Relative if old.1 != 0 => {
+            y = (a.y as f32 / old.1 as f32 * new.1 as f32).round() as i32;
+            hh = (a.h as f32 / old.1 as f32 * new.1 as f32).round() as i32;
+        }
+        _ => {}
+    }
+    // GuiControl::resize clamps the extent to minExtent.
+    Rect::new(x, y, w.max(min[0]), hh.max(min[1]))
+}

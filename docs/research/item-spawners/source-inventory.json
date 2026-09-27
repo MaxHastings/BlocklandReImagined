@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "source_hashes": [
+    {
+      "path": ".research\\v20-dso\\server\\scripts\\allGameScripts-Vanilla.cs",
+      "sha256": "a720f7a188a615276befa34409eda68585ec9abbc629b7a8107f37dcf7b33a9b"
+    },
+    {
+      "path": ".research\\v20-dso\\client\\scripts\\allClientScripts-Vanilla.cs",
+      "sha256": "d5fe78d5f7015903deb880acfc27828c4bab3540fdc4b18cda86fd3d1bcf1772"
+    },
+    {
+      "path": "content\\weapons-pack-003\\weapons.json",
+      "sha256": "aa7a0f5f50a725d3b94b8cc33f36fc3677c652d92a89b68523348f22b8415cdc"
+    }
+  ],
+  "items": [
+    {
+      "id": "v20.weapon.akimbogunitem",
+      "name": "Guns Akimbo",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.basketballitem",
+      "name": "Ball Basketball",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.bluekeyitem",
+      "name": "Key Blue",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.bowitem",
+      "name": "Bow",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.dodgeballitem",
+      "name": "Ball Dodgeball",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.footballitem",
+      "name": "Ball Football",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.greenkeyitem",
+      "name": "Key Green",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.gunitem",
+      "name": "Gun",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.hammeritem",
+      "name": "Hammer ",
+      "evidence": ".research/v20-dso/server/scripts/allGameScripts-Vanilla.cs:10408"
+    },
+    {
+      "id": "v20.weapon.horserayitem",
+      "name": "Horse Ray",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.printgun",
+      "name": "Printer",
+      "evidence": ".research/v20-dso/server/scripts/allGameScripts-Vanilla.cs:23935"
+    },
+    {
+      "id": "v20.weapon.pushbroomitem",
+      "name": "Push Broom",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.redkeyitem",
+      "name": "Key Red",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.rocketlauncheritem",
+      "name": "Rocket L.",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.skiitem",
+      "name": "Skis",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.soccerballitem",
+      "name": "Ball Soccer Ball",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.spearitem",
+      "name": "Spear",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.sworditem",
+      "name": "Sword",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    },
+    {
+      "id": "v20.weapon.wanditem",
+      "name": "Wand",
+      "evidence": ".research/v20-dso/server/scripts/allGameScripts-Vanilla.cs:11900"
+    },
+    {
+      "id": "v20.weapon.wrenchitem",
+      "name": "Wrench",
+      "evidence": ".research/v20-dso/server/scripts/allGameScripts-Vanilla.cs:10748"
+    },
+    {
+      "id": "v20.weapon.yellowkeyitem",
+      "name": "Key Yellow",
+      "evidence": "content/weapons-pack-003/weapons.json"
+    }
+  ],
+  "properties": {
+    "default_item": null,
+    "default_position": 0,
+    "default_direction": 2,
+    "default_respawn_ms": 4000,
+    "positions": {
+      "0": "Up",
+      "1": "Down",
+      "2": "North",
+      "3": "East",
+      "4": "South",
+      "5": "West"
+    },
+    "directions": {
+      "2": "North",
+      "3": "East",
+      "4": "South",
+      "5": "West"
+    },
+    "min_respawn_ms": 1000,
+    "max_respawn_ms": 300000,
+    "wrench_display_unit": "seconds"
+  }
+}

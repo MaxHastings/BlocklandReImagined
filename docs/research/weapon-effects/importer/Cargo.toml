@@ -1,0 +1,17 @@
+[package]
+name = "bri-weapon-effects-import"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+serde_json = "1.0"
+zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+bri-content = { path = "../../../../crates/content" }
+bri-convert = { path = "../../../../crates/convert" }
+bri-weapons = { path = "../../../../crates/weapons" }
+bri-fx-runtime = { path = "../../../../crates/fx-runtime" }

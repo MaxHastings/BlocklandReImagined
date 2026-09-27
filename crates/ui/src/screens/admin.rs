@@ -1,0 +1,1056 @@
+//! Original administration layouts with native typed dispatch, never script eval.
+use super::*;
+use crate::{models::admin::*, view::EventKind};
+
+pub struct AdminScreen {
+    id: ScreenId,
+    view: View,
+    ids: Vec<u64>,
+    map_ids: Vec<String>,
+    sort: usize,
+    descending: bool,
+    options: Option<AdminOptions>,
+}
+fn set(v: &mut View, name: &str, value: impl Into<String>) {
+    if let Some(n) = v.id(name) {
+        v.set_text(n, value.into());
+    }
+}
+fn edit(v: &View, name: &str) -> String {
+    v.id(name).map(|n| v.edit_text(n)).unwrap_or_default()
+}
+fn check(v: &View, name: &str) -> bool {
+    v.id(name).is_some_and(|n| v.bool_value(n))
+}
+fn add_named(v: &mut View, parent: NodeId, mut c: Control, name: &str) {
+    c.name = Some(name.into());
+    v.add(parent, c);
+}
+fn native_dialog(title: &str) -> View {
+    let mut root = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
+    let mut win = ctrl(
+        "GuiWindowCtrl",
+        "GuiWindowProfile",
+        Rect::new(110, 55, 420, 370),
+    );
+    win.text = Some(title.into());
+    win.h_sizing = HSizing::Center;
+    win.v_sizing = VSizing::Center;
+    root.children.push(win);
+    View::new(&root)
+}
+fn option_pairs(o: &AdminOptions) -> Vec<(&'static str, String)> {
+    let mut p = vec![
+        ("Port", o.port.to_string()),
+        ("BrickLimit", o.brick_limit.to_string()),
+        ("MaxBricksPerSecond", o.bricks_per_second.to_string()),
+        ("MaxChatLen", o.max_chat_length.to_string()),
+        ("MaxPhysVehicles_Total", o.physics_vehicles.to_string()),
+        ("MaxPlayerVehicles_Total", o.player_vehicles.to_string()),
+        (
+            "RandomBrickColor",
+            u8::from(o.random_brick_color).to_string(),
+        ),
+        ("ETardFilter", u8::from(o.chat_filter).to_string()),
+        ("FallingDamage", u8::from(o.falling_damage).to_string()),
+        (
+            "BrickPublicDomainTimeout",
+            o.public_domain_timeout_minutes.to_string(),
+        ),
+        ("TooFarDistance", o.too_far_distance.to_string()),
+    ];
+    for (q, keys) in [
+        (
+            &o.per_player,
+            [
+                "Quota::Schedules",
+                "Quota::Misc",
+                "Quota::Projectile",
+                "Quota::Item",
+                "Quota::Environment",
+                "Quota::Player",
+                "Quota::Vehicle",
+            ],
+        ),
+        (
+            &o.lan,
+            [
+                "QuotaLAN::Schedules",
+                "QuotaLAN::Misc",
+                "QuotaLAN::Projectile",
+                "QuotaLAN::Item",
+                "QuotaLAN::Environment",
+                "QuotaLAN::Player",
+                "QuotaLAN::Vehicle",
+            ],
+        ),
+    ] {
+        for (k, n) in keys.into_iter().zip([
+            q.schedules,
+            q.misc,
+            q.projectiles,
+            q.items,
+            q.environment,
+            q.players,
+            q.vehicles,
+        ]) {
+            p.push((k, n.to_string()));
+        }
+    }
+    p
+}
+impl AdminScreen {
+    pub fn new(id: ScreenId, core: &Core) -> Self {
+        let layout = match id {
+            ScreenId::Admin => "adminGui",
+            ScreenId::AdminLogin => "AdminLoginGui",
+            ScreenId::AdminBan => "addBanGui",
+            ScreenId::AdminUnban => "unBanGui",
+            ScreenId::AdminBricks => "BrickManGui",
+            ScreenId::AdminMaps => "changeMapGui",
+            ScreenId::AdminOptions => "serverConfigGui",
+            ScreenId::AdminConfirm => "MessageBoxYesNoDlg",
+            _ => "",
+        };
+        let mut view = if id == ScreenId::AdminCredentials {
+            native_dialog("Native Server Credentials")
+        } else {
+            layout_view(core, layout)
+        };
+        let parent = window(&view).unwrap_or(view.root);
+        // Stable native names identify unnamed source buttons for internal tests.
+        for n in view.walk().collect::<Vec<_>>() {
+            if let Some(var) = view.nodes[n].ctrl.variable.clone()
+                && let Some(suffix) = var.to_ascii_lowercase().strip_prefix("$pref::server::")
+            {
+                let name = format!("AdminOption_{suffix}");
+                view.names.insert(name.clone(), n);
+                view.nodes[n].ctrl.name = Some(name);
+            }
+        }
+        if id == ScreenId::Admin {
+            for (name, label, y) in [
+                ("NativeHostOptions", "Host Options", 246),
+                ("NativeAdminCredentials", "Passwords", 282),
+            ] {
+                let b = button(
+                    "BlockButtonProfile",
+                    Rect::new(205, y, 98, 28),
+                    "base/client/ui/button1",
+                    label,
+                    name,
+                );
+                add_named(&mut view, parent, b, name);
+            }
+            for n in view.walk().collect::<Vec<_>>() {
+                if view.nodes[n].ctrl.text.as_deref() == Some("BL_ID") {
+                    view.set_text(n, "Identity");
+                }
+            }
+        }
+        if id == ScreenId::AdminCredentials {
+            for (name, label, y, password) in [
+                ("AdminServerName", "Server name", 45, false),
+                ("AdminMaxPlayers", "Max players", 83, false),
+                ("AdminNewPassword", "New password", 190, true),
+            ] {
+                view.add(
+                    parent,
+                    text("GuiTextProfile", Rect::new(15, y, 125, 22), label),
+                );
+                let mut c = ctrl(
+                    "GuiTextEditCtrl",
+                    "GuiTextEditProfile",
+                    Rect::new(145, y, 250, 22),
+                );
+                if password {
+                    c.fields.insert("password".into(), "1".into());
+                }
+                add_named(&mut view, parent, c, name);
+            }
+            view.add(
+                parent,
+                text(
+                    "GuiTextProfile",
+                    Rect::new(15, 152, 125, 22),
+                    "Password type",
+                ),
+            );
+            add_named(
+                &mut view,
+                parent,
+                ctrl(
+                    "GuiPopUpMenuCtrl",
+                    "GuiPopUpMenuProfile",
+                    Rect::new(145, 152, 250, 22),
+                ),
+                "AdminPasswordSlot",
+            );
+            for (name, label, x, y) in [
+                ("AdminApplyIdentity", "Apply name / capacity", 145, 115),
+                ("AdminApplyPassword", "Set password", 145, 225),
+                ("AdminClearPassword", "Clear password", 275, 225),
+                ("AdminCloseCredentials", "Close", 295, 300),
+            ] {
+                add_named(
+                    &mut view,
+                    parent,
+                    button(
+                        "BlockButtonProfile",
+                        Rect::new(x, y, 125, 28),
+                        "base/client/ui/button1",
+                        label,
+                        name,
+                    ),
+                    name,
+                );
+            }
+            view.add(
+                parent,
+                text(
+                    "GuiTextProfile",
+                    Rect::new(15, 266, 390, 22),
+                    "Native controls; changes require host acknowledgement.",
+                ),
+            );
+        }
+        if id == ScreenId::AdminOptions {
+            if let Some(n) = view.by_command("canvas.popDialog(ServerConfigGui);") {
+                view.set_text(n, "Apply");
+            }
+            // Defaults require a verified host reset adapter; no hidden local-pref write.
+            if let Some(n) = view.by_command("ServerConfigGui.clickDefaults();") {
+                view.set_active(n, false);
+                view.set_text(n, "Host defaults");
+            }
+        }
+        if id != ScreenId::AdminConfirm {
+            let r = if id == ScreenId::Admin {
+                Rect::new(205, 158, 98, 83)
+            } else {
+                let h = view.nodes[parent].ctrl.extent[1];
+                view.nodes[parent].ctrl.extent[1] = h + 29;
+                Rect::new(12, h, view.nodes[parent].ctrl.extent[0] - 24, 27)
+            };
+            let mut c = text("GuiMLTextProfile", r, "");
+            c.class = "GuiMLTextCtrl".into();
+            add_named(&mut view, parent, c, "NativeAdminStatus");
+        }
+        let options = core.admin.snapshot.as_ref().and_then(|s| s.options.clone());
+        let mut screen = Self {
+            id,
+            view,
+            ids: Vec::new(),
+            map_ids: Vec::new(),
+            sort: 0,
+            descending: false,
+            options,
+        };
+        if id == ScreenId::AdminBan {
+            for (name, max, label) in [
+                ("AddBan_Days", 15, "Days"),
+                ("AddBan_Hours", 23, "Hours"),
+                ("AddBan_Minutes", 59, "Minutes"),
+            ] {
+                if let Some(n) = screen.view.id(name) {
+                    screen.view.state(n).items =
+                        (0..=max).map(|v| (format!("{v} {label}"), v)).collect();
+                    screen.view.select(n, Some(0));
+                }
+            }
+            if let Some(n) = screen.view.id("AddBan_Forever") {
+                screen.view.set_bool(n, false);
+            }
+        }
+        screen.populate_options();
+        screen.refresh(core);
+        screen
+    }
+    fn populate_options(&mut self) {
+        if let Some(o) = &self.options {
+            for (k, value) in option_pairs(o) {
+                if let Some(n) = self
+                    .view
+                    .id(&format!("AdminOption_{}", k.to_ascii_lowercase()))
+                {
+                    if self.view.node(n).ctrl.class == "GuiCheckBoxCtrl" {
+                        self.view.set_bool(n, value == "1");
+                    } else {
+                        self.view.set_text(n, value);
+                    }
+                }
+            }
+            set(&mut self.view, "AdminServerName", o.name.clone());
+            set(&mut self.view, "AdminMaxPlayers", o.max_players.to_string());
+        }
+    }
+    fn status(&mut self, core: &Core) {
+        let message = if !core.admin.status.is_empty() {
+            core.admin.status.clone()
+        } else if core.admin.busy() {
+            "Waiting for host...".into()
+        } else if core.admin.snapshot.is_none() {
+            "Administration information is unavailable.".into()
+        } else {
+            "Permissions and actions are checked by the host.".into()
+        };
+        set(
+            &mut self.view,
+            "NativeAdminStatus",
+            message.replace(['<', '>'], ""),
+        );
+    }
+    fn refresh(&mut self, core: &Core) {
+        let busy = core.admin.busy();
+        let m = &core.admin;
+        if self.id == ScreenId::Admin {
+            let mut rows = m
+                .snapshot
+                .as_ref()
+                .map(|s| s.players.clone())
+                .unwrap_or_default();
+            rows.sort_by(|a, b| {
+                if self.sort == 1 {
+                    a.identity_label
+                        .cmp(&b.identity_label)
+                        .then(a.connection.cmp(&b.connection))
+                } else {
+                    a.name
+                        .to_lowercase()
+                        .cmp(&b.name.to_lowercase())
+                        .then(a.connection.cmp(&b.connection))
+                }
+            });
+            if self.descending {
+                rows.reverse();
+            }
+            self.ids = rows.iter().map(|p| p.connection).collect();
+            if let Some(n) = self.view.id("lstAdminPlayerList") {
+                self.view.state(n).items = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (format!("{}\t{}", p.name, p.identity_label), i as i64))
+                    .collect();
+                self.view.select(
+                    n,
+                    m.selected_player
+                        .and_then(|id| self.ids.iter().position(|x| *x == id))
+                        .map(|i| i as i64),
+                );
+            }
+            if let Some(n) = self.view.id("adminGui_banBlocker") {
+                self.view
+                    .set_visible(n, m.snapshot.as_ref().is_some_and(|s| s.legacy_lan));
+            }
+            let t = m.selected_player.unwrap_or(0);
+            for (cmd, a) in [
+                ("AdminGui_KickPlayer();", AdminAction::Kick { target: t }),
+                (
+                    "AdminGui_BanPlayer();",
+                    AdminAction::Ban {
+                        target: t,
+                        minutes: None,
+                        reason: String::new(),
+                    },
+                ),
+                ("adminGui::spy();", AdminAction::Spy { target: t }),
+                ("AdminGui_Wand();", AdminAction::Wand),
+                ("canvas.pushDialog(unBanGui);", AdminAction::RequestBans),
+                ("canvas.pushdialog(changeMapGui);", AdminAction::RequestMaps),
+                (
+                    "AdminGui.ClickClearBricks();",
+                    AdminAction::RequestBrickGroups,
+                ),
+            ] {
+                if let Some(n) = self.view.by_command(cmd) {
+                    self.view.set_active(n, !busy && m.allowed(&a));
+                }
+            }
+            if let Some(n) = self.view.id("NativeHostOptions") {
+                self.view
+                    .set_visible(n, m.snapshot.as_ref().is_some_and(|s| s.local_host));
+                self.view.set_active(
+                    n,
+                    !busy
+                        && m.available(AdminFeature::HostOptions)
+                        && m.snapshot.as_ref().is_some_and(|s| s.options.is_some()),
+                );
+            }
+            if let Some(n) = self.view.id("NativeAdminCredentials") {
+                self.view.set_visible(
+                    n,
+                    m.snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.local_host || s.role == AdminRole::SuperAdmin),
+                );
+                self.view.set_active(
+                    n,
+                    !busy
+                        && (m.available(AdminFeature::AdminPassword)
+                            || m.available(AdminFeature::HostOptions)),
+                );
+            }
+        } else if self.id == ScreenId::AdminLogin {
+            if let Some(n) = self.view.by_command("SAD(txtAdminPass.getValue());") {
+                self.view
+                    .set_active(n, !busy && m.available(AdminFeature::Login));
+            }
+            if let Some(n) = self.view.id("txtAdminPass") {
+                self.view
+                    .set_active(n, !busy && m.available(AdminFeature::Login));
+            }
+        } else if self.id == ScreenId::AdminBan {
+            let t = m.selected_player.unwrap_or(0);
+            if let Some(p) = m.player(t) {
+                set(
+                    &mut self.view,
+                    "addBan_Window",
+                    format!("BAN {} ({})", p.name, p.identity_label),
+                );
+            }
+            let forever = check(&self.view, "AddBan_Forever");
+            if let Some(n) = self.view.id("AddBan_TimeBlocker") {
+                self.view.set_visible(n, forever);
+            }
+            for name in ["AddBan_Days", "AddBan_Hours", "AddBan_Minutes"] {
+                if let Some(n) = self.view.id(name) {
+                    self.view.set_active(n, !busy && !forever);
+                }
+            }
+            if let Some(n) = self.view.by_command("addBanGui.ban();") {
+                self.view.set_active(
+                    n,
+                    !busy
+                        && m.allowed(&AdminAction::Ban {
+                            target: t,
+                            minutes: None,
+                            reason: String::new(),
+                        }),
+                );
+            }
+        } else if self.id == ScreenId::AdminUnban {
+            let mut rows = m.bans.clone();
+            rows.sort_by(|a, b| {
+                match self.sort {
+                    0 => a.administrator.cmp(&b.administrator),
+                    2 => a.identity_label.cmp(&b.identity_label),
+                    3 => a.address.cmp(&b.address),
+                    4 => a.reason.cmp(&b.reason),
+                    6 => a
+                        .remaining_minutes
+                        .unwrap_or(u64::MAX)
+                        .cmp(&b.remaining_minutes.unwrap_or(u64::MAX)),
+                    _ => a.name.cmp(&b.name),
+                }
+                .then(a.id.cmp(&b.id))
+            });
+            if self.descending {
+                rows.reverse();
+            }
+            self.ids = rows.iter().map(|r| r.id).collect();
+            if let Some(n) = self.view.id("unBan_list") {
+                self.view.state(n).items = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        (
+                            format!(
+                                "{}\t{}\t{}\t{}\t{}\t{}",
+                                r.administrator,
+                                r.name,
+                                r.identity_label,
+                                r.address.as_deref().unwrap_or("Unavailable"),
+                                r.reason,
+                                r.remaining_minutes.map_or("Forever".into(), |v| format!(
+                                    "{}d {:02}:{:02}",
+                                    v / 1440,
+                                    v % 1440 / 60,
+                                    v % 60
+                                ))
+                            ),
+                            i as i64,
+                        )
+                    })
+                    .collect();
+                self.view.select(
+                    n,
+                    m.selected_ban
+                        .and_then(|id| self.ids.iter().position(|x| *x == id))
+                        .map(|i| i as i64),
+                );
+            }
+            if let Some(n) = self.view.by_command("unBanGui.clickUnBan();") {
+                self.view.set_active(
+                    n,
+                    !busy
+                        && m.allowed(&AdminAction::Unban {
+                            ban: m.selected_ban.unwrap_or(0),
+                        }),
+                );
+            }
+        } else if self.id == ScreenId::AdminBricks {
+            let mut rows = m.groups.clone();
+            rows.sort_by(|a, b| {
+                match self.sort {
+                    0 => a.identity_label.cmp(&b.identity_label),
+                    2 => a.bricks.cmp(&b.bricks),
+                    _ => a.name.cmp(&b.name),
+                }
+                .then(a.id.cmp(&b.id))
+            });
+            if self.descending {
+                rows.reverse();
+            }
+            self.ids = rows.iter().map(|r| r.id).collect();
+            if let Some(n) = self.view.id("BrickMan_list") {
+                self.view.state(n).items = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        (
+                            format!("{}\t{}\t{}", r.identity_label, r.name, r.bricks),
+                            i as i64,
+                        )
+                    })
+                    .collect();
+                self.view.select(
+                    n,
+                    m.selected_group
+                        .and_then(|id| self.ids.iter().position(|x| *x == id))
+                        .map(|i| i as i64),
+                );
+            }
+            for (cmd, a) in [
+                (
+                    "BrickManGui.clickClear();",
+                    AdminAction::ClearBrickGroup {
+                        group: m.selected_group.unwrap_or(0),
+                    },
+                ),
+                (
+                    "BrickManGui.clickHilight();",
+                    AdminAction::HighlightBrickGroup {
+                        group: m.selected_group.unwrap_or(0),
+                    },
+                ),
+                ("BrickManGui.clickClearAll();", AdminAction::ClearAllBricks),
+            ] {
+                if let Some(n) = self.view.by_command(cmd) {
+                    let selected =
+                        matches!(a, AdminAction::ClearAllBricks) || m.selected_group.is_some();
+                    self.view.set_active(n, !busy && selected && m.allowed(&a));
+                }
+            }
+            if let Some(n) = self.view.by_command("BrickManGui.clickBan();") {
+                self.view.set_active(n, false);
+            }
+        } else if self.id == ScreenId::AdminMaps {
+            self.map_ids = m.maps.iter().map(|r| r.id.clone()).collect();
+            if let Some(n) = self.view.id("changeMapList") {
+                self.view.state(n).items = m
+                    .maps
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| (r.name.clone(), i as i64))
+                    .collect();
+                self.view.select(
+                    n,
+                    m.selected_map
+                        .as_ref()
+                        .and_then(|id| self.map_ids.iter().position(|x| x == id))
+                        .map(|i| i as i64),
+                );
+            }
+            if let Some(n) = self.view.id("changeMapButton") {
+                self.view.set_active(
+                    n,
+                    !busy
+                        && m.allowed(&AdminAction::ChangeMap {
+                            map: m.selected_map.clone().unwrap_or_default(),
+                        }),
+                );
+            }
+            set(
+                &mut self.view,
+                "changeMapName",
+                m.maps
+                    .iter()
+                    .find(|r| Some(&r.id) == m.selected_map.as_ref())
+                    .map(|r| r.name.clone())
+                    .unwrap_or_default(),
+            );
+            set(
+                &mut self.view,
+                "changeMapDescription",
+                "Only host-supplied native maps are available.",
+            );
+        } else if self.id == ScreenId::AdminOptions {
+            for n in self.view.walk().collect::<Vec<_>>() {
+                if self.view.nodes[n].ctrl.variable.is_some() {
+                    self.view.set_active(
+                        n,
+                        !busy && m.available(AdminFeature::HostOptions) && self.options.is_some(),
+                    );
+                }
+            }
+            if let Some(n) = self.view.by_command("canvas.popDialog(ServerConfigGui);") {
+                self.view.set_active(
+                    n,
+                    !busy && m.available(AdminFeature::HostOptions) && self.options.is_some(),
+                );
+            }
+        } else if self.id == ScreenId::AdminCredentials {
+            let host = m.available(AdminFeature::HostOptions);
+            for name in ["AdminServerName", "AdminMaxPlayers", "AdminApplyIdentity"] {
+                if let Some(n) = self.view.id(name) {
+                    self.view.set_visible(n, host);
+                    self.view
+                        .set_active(n, !busy && host && self.options.is_some());
+                }
+            }
+            if let Some(n) = self.view.id("AdminPasswordSlot") {
+                let selected = self.view.selected(n);
+                self.view.state(n).items = if host {
+                    vec![
+                        ("Join".into(), 0),
+                        ("Admin".into(), 1),
+                        ("Super Admin".into(), 2),
+                    ]
+                } else {
+                    vec![("Admin".into(), 1)]
+                };
+                self.view
+                    .select(n, selected.filter(|x| host || *x == 1).or(Some(1)));
+            }
+            for name in [
+                "AdminApplyPassword",
+                "AdminClearPassword",
+                "AdminNewPassword",
+            ] {
+                if let Some(n) = self.view.id(name) {
+                    self.view.set_active(
+                        n,
+                        !busy && (host || m.available(AdminFeature::AdminPassword)),
+                    );
+                }
+            }
+        } else if self.id == ScreenId::AdminConfirm {
+            if let Some(c) = &m.confirmation {
+                set(&mut self.view, "MBYesNoFrame", &c.title);
+                set(
+                    &mut self.view,
+                    "MBYesNoText",
+                    c.text.replace(['<', '>'], ""),
+                );
+            } else {
+                set(
+                    &mut self.view,
+                    "MBYesNoText",
+                    "The target or permission changed. Close this confirmation.",
+                );
+            }
+        }
+        self.status(core);
+    }
+    fn confirm(&mut self, core: &mut Core, title: &str, message: String, action: AdminAction) {
+        if !core.admin.allowed(&action) || core.admin.busy() {
+            return;
+        }
+        core.admin.confirmation = Some(AdminConfirmation {
+            title: title.into(),
+            text: message,
+            action,
+        });
+        core.push(ScreenId::AdminConfirm);
+    }
+    fn submit_ban(&mut self, core: &mut Core) {
+        let mut minutes = 0u32;
+        for (name, mult, max) in [
+            ("AddBan_Days", 1440, 15),
+            ("AddBan_Hours", 60, 23),
+            ("AddBan_Minutes", 1, 59),
+        ] {
+            let n = self
+                .view
+                .id(name)
+                .and_then(|n| self.view.selected(n))
+                .unwrap_or(-1);
+            if !(0..=max).contains(&n) {
+                core.admin.status = "Select a valid ban duration.".into();
+                return;
+            }
+            minutes += n as u32 * mult;
+        }
+        let forever = check(&self.view, "AddBan_Forever");
+        if !forever && minutes == 0 {
+            core.admin.status = "Choose a duration greater than zero or Forever.".into();
+            return;
+        }
+        let reason = edit(&self.view, "addBan_reason");
+        if reason.len() > 512 || reason.chars().any(char::is_control) {
+            core.admin.status =
+                "Reason must be at most 512 bytes without control characters.".into();
+            return;
+        }
+        let Some(target) = core.admin.selected_player else {
+            return;
+        };
+        core.admin_request(AdminAction::Ban {
+            target,
+            minutes: if forever { None } else { Some(minutes) },
+            reason,
+        });
+    }
+    fn collect_options(&self) -> Result<AdminOptions, String> {
+        let mut o = self.options.clone().ok_or("Host settings unavailable")?;
+        let val = |key: &str| {
+            edit(
+                &self.view,
+                &format!("AdminOption_{}", key.to_ascii_lowercase()),
+            )
+        };
+        let number = |key: &str| {
+            val(key)
+                .parse::<u32>()
+                .map_err(|_| format!("Invalid {key}"))
+        };
+        o.port = u16::try_from(number("Port")?).map_err(|_| "Invalid port")?;
+        if o.port < 1024 {
+            return Err("Port must be 1024–65535.".into());
+        }
+        o.brick_limit = number("BrickLimit")?;
+        o.bricks_per_second = number("MaxBricksPerSecond")?;
+        o.max_chat_length = number("MaxChatLen")?;
+        o.physics_vehicles = number("MaxPhysVehicles_Total")?;
+        o.player_vehicles = number("MaxPlayerVehicles_Total")?;
+        o.public_domain_timeout_minutes = val("BrickPublicDomainTimeout")
+            .parse()
+            .map_err(|_| "Invalid public-domain timeout")?;
+        o.too_far_distance = val("TooFarDistance")
+            .parse()
+            .map_err(|_| "Invalid distance")?;
+        if !o.too_far_distance.is_finite()
+            || o.too_far_distance < 0.
+            || o.public_domain_timeout_minutes < -1
+        {
+            return Err("Invalid distance or timeout.".into());
+        }
+        for (field, key) in [
+            (&mut o.random_brick_color, "RandomBrickColor"),
+            (&mut o.chat_filter, "ETardFilter"),
+            (&mut o.falling_damage, "FallingDamage"),
+        ] {
+            *field = check(
+                &self.view,
+                &format!("AdminOption_{}", key.to_ascii_lowercase()),
+            );
+        }
+        for (q, prefix) in [(&mut o.per_player, "Quota"), (&mut o.lan, "QuotaLAN")] {
+            q.schedules = number(&format!("{prefix}::Schedules"))?;
+            q.misc = number(&format!("{prefix}::Misc"))?;
+            q.projectiles = number(&format!("{prefix}::Projectile"))?;
+            q.items = number(&format!("{prefix}::Item"))?;
+            q.environment = number(&format!("{prefix}::Environment"))?;
+            q.players = number(&format!("{prefix}::Player"))?;
+            q.vehicles = number(&format!("{prefix}::Vehicle"))?;
+        }
+        Ok(o)
+    }
+}
+impl Screen for AdminScreen {
+    fn id(&self) -> ScreenId {
+        self.id
+    }
+    fn view(&self) -> &View {
+        &self.view
+    }
+    fn view_mut(&mut self) -> &mut View {
+        &mut self.view
+    }
+    fn on_wake(&mut self, core: &mut Core) {
+        if self.id == ScreenId::AdminLogin {
+            set(&mut self.view, "txtAdminPass", "");
+            self.view.focus = self.view.id("txtAdminPass");
+        }
+        let query = match self.id {
+            ScreenId::AdminUnban => Some(AdminAction::RequestBans),
+            ScreenId::AdminBricks => Some(AdminAction::RequestBrickGroups),
+            ScreenId::AdminMaps => Some(AdminAction::RequestMaps),
+            _ => None,
+        };
+        if let Some(a) = query {
+            core.admin_request(a);
+        }
+        self.refresh(core);
+    }
+    fn on_sleep(&mut self, _core: &mut Core) {
+        set(&mut self.view, "txtAdminPass", "");
+        set(&mut self.view, "AdminNewPassword", "");
+    }
+    fn on_update(&mut self, core: &mut Core) {
+        if self.id == ScreenId::AdminLogin && core.admin.is_admin() {
+            core.pop(self.id);
+            core.push(ScreenId::Admin);
+        }
+        if self.id == ScreenId::Admin && core.admin.snapshot.is_some() && !core.admin.is_admin() {
+            for id in [
+                ScreenId::Admin,
+                ScreenId::AdminBan,
+                ScreenId::AdminUnban,
+                ScreenId::AdminBricks,
+                ScreenId::AdminMaps,
+                ScreenId::AdminOptions,
+                ScreenId::AdminCredentials,
+                ScreenId::AdminConfirm,
+            ] {
+                core.pop(id);
+            }
+            core.push(ScreenId::AdminLogin);
+        }
+        self.refresh(core);
+    }
+    fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
+        if key == Key::Escape {
+            if self.id == ScreenId::AdminConfirm {
+                core.admin.confirmation = None;
+            }
+            core.pop(self.id);
+            return true;
+        }
+        if self.id == ScreenId::AdminConfirm && matches!(key, Key::Return | Key::NumpadEnter) {
+            if let Some(c) = core.admin.confirmation.take() {
+                core.admin_request(c.action);
+            }
+            core.pop(self.id);
+            return true;
+        }
+        false
+    }
+    fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
+        if !self.view.node(ev.node).state.active {
+            return;
+        }
+        if ev.kind == EventKind::Close {
+            core.pop(self.id);
+            return;
+        }
+        if ev.kind == EventKind::Changed {
+            let selected = self
+                .view
+                .selected(ev.node)
+                .and_then(|i| usize::try_from(i).ok());
+            match self.view.node(ev.node).ctrl.name.as_deref() {
+                Some("lstAdminPlayerList") => {
+                    core.admin.selected_player = selected.and_then(|i| self.ids.get(i).copied())
+                }
+                Some("unBan_list") => {
+                    core.admin.selected_ban = selected.and_then(|i| self.ids.get(i).copied())
+                }
+                Some("BrickMan_list") => {
+                    core.admin.selected_group = selected.and_then(|i| self.ids.get(i).copied())
+                }
+                Some("changeMapList") => {
+                    core.admin.selected_map = selected.and_then(|i| self.map_ids.get(i).cloned())
+                }
+                _ => {}
+            }
+            self.refresh(core);
+            return;
+        }
+        if !matches!(ev.kind, EventKind::Click | EventKind::Submit) {
+            return;
+        }
+        let cmd = command_of(&self.view, ev.node).to_ascii_lowercase();
+        if self.id == ScreenId::AdminConfirm {
+            if !cmd.contains("nocallback") {
+                if let Some(c) = core.admin.confirmation.take() {
+                    core.admin_request(c.action);
+                }
+            } else {
+                core.admin.confirmation = None;
+            }
+            core.pop(self.id);
+            return;
+        }
+        if cmd.contains("sortlist(") || cmd.contains("sortnumlist(") {
+            if let Some(c) = cmd
+                .split('(')
+                .nth(1)
+                .and_then(|s| s.split(')').next())
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                self.descending = if c == self.sort {
+                    !self.descending
+                } else {
+                    false
+                };
+                self.sort = c;
+                self.refresh(core);
+            }
+            return;
+        }
+        let target = core.admin.selected_player.unwrap_or(0);
+        match cmd.as_str() {
+            "sad(txtadminpass.getvalue());" => {
+                let password = edit(&self.view, "txtAdminPass");
+                set(&mut self.view, "txtAdminPass", "");
+                if !password.is_empty() && password.len() <= 256 {
+                    core.admin_request(AdminAction::Login {
+                        password: AdminSecret(password),
+                    });
+                }
+            }
+            "admingui_kickplayer();" => {
+                if let Some(p) = core.admin.player(target) {
+                    self.confirm(
+                        core,
+                        "Kick Player?",
+                        format!("Kick {} ({})?", p.name, p.identity_label),
+                        AdminAction::Kick { target },
+                    );
+                }
+            }
+            "admingui_banplayer();" => core.push(ScreenId::AdminBan),
+            "admingui::spy();" => {
+                core.admin_request(AdminAction::Spy { target });
+            }
+            "admingui_wand();" => {
+                core.admin_request(AdminAction::Wand);
+            }
+            "canvas.pushdialog(unbangui);" => core.push(ScreenId::AdminUnban),
+            "canvas.pushdialog(changemapgui);" => core.push(ScreenId::AdminMaps),
+            "admingui.clickclearbricks();" => {
+                if core.admin.snapshot.as_ref().is_some_and(|s| s.legacy_lan) {
+                    self.confirm(
+                        core,
+                        "Clear Bricks?",
+                        "Delete all bricks?".into(),
+                        AdminAction::ClearAllBricks,
+                    );
+                } else {
+                    core.push(ScreenId::AdminBricks);
+                }
+            }
+            "addbangui.ban();" => self.submit_ban(core),
+            "unbangui.clickunban();" => {
+                if let Some(b) = core
+                    .admin
+                    .bans
+                    .iter()
+                    .find(|b| Some(b.id) == core.admin.selected_ban)
+                {
+                    self.confirm(
+                        core,
+                        "Un-Ban Player?",
+                        format!("Un-ban {} ({})?", b.name, b.identity_label),
+                        AdminAction::Unban { ban: b.id },
+                    );
+                }
+            }
+            "brickmangui.clickclear();" => {
+                if let Some(g) = core
+                    .admin
+                    .groups
+                    .iter()
+                    .find(|g| Some(g.id) == core.admin.selected_group)
+                {
+                    self.confirm(
+                        core,
+                        "Clear Bricks?",
+                        format!(
+                            "Destroy all {} bricks belonging to {} ({})?",
+                            g.bricks, g.name, g.identity_label
+                        ),
+                        AdminAction::ClearBrickGroup { group: g.id },
+                    );
+                }
+            }
+            "brickmangui.clickclearall();" => self.confirm(
+                core,
+                "Clear ALL Bricks?",
+                "Destroy ALL bricks?".into(),
+                AdminAction::ClearAllBricks,
+            ),
+            "brickmangui.clickhilight();" => {
+                if let Some(group) = core.admin.selected_group {
+                    core.admin_request(AdminAction::HighlightBrickGroup { group });
+                }
+            }
+            "changemapbutton.click();" => {
+                if let Some(m) = core
+                    .admin
+                    .maps
+                    .iter()
+                    .find(|m| Some(&m.id) == core.admin.selected_map.as_ref())
+                {
+                    self.confirm(
+                        core,
+                        "Change Map?",
+                        format!("Change to {}? The current mission will be cleared.", m.name),
+                        AdminAction::ChangeMap { map: m.id.clone() },
+                    );
+                }
+            }
+            "nativehostoptions" => core.push(ScreenId::AdminOptions),
+            "nativeadmincredentials" => core.push(ScreenId::AdminCredentials),
+            "canvas.popdialog(serverconfiggui);" => match self.collect_options() {
+                Ok(options) => {
+                    core.admin_request(AdminAction::ConfigureHost {
+                        options: Box::new(options),
+                    });
+                }
+                Err(e) => core.admin.status = e,
+            },
+            "adminapplyidentity" => {
+                if let Some(mut options) = self.options.clone() {
+                    options.name = edit(&self.view, "AdminServerName");
+                    if let Ok(n) = edit(&self.view, "AdminMaxPlayers").parse::<u16>() {
+                        if !options.name.is_empty()
+                            && options.name.len() <= 128
+                            && n > 0
+                            && n <= 1024
+                        {
+                            options.max_players = n;
+                            core.admin_request(AdminAction::ConfigureHost {
+                                options: Box::new(options),
+                            });
+                        } else {
+                            core.admin.status = "Use a server name and capacity of 1–1024.".into();
+                        }
+                    } else {
+                        core.admin.status = "Invalid player capacity.".into();
+                    }
+                }
+            }
+            "adminapplypassword" | "adminclearpassword" => {
+                let password = if cmd == "adminclearpassword" {
+                    String::new()
+                } else {
+                    edit(&self.view, "AdminNewPassword")
+                };
+                set(&mut self.view, "AdminNewPassword", "");
+                if password.len() <= 256 {
+                    let slot = match self
+                        .view
+                        .id("AdminPasswordSlot")
+                        .and_then(|n| self.view.selected(n))
+                    {
+                        Some(0) => AdminPasswordSlot::Join,
+                        Some(2) => AdminPasswordSlot::SuperAdmin,
+                        _ => AdminPasswordSlot::Admin,
+                    };
+                    core.admin_request(AdminAction::SetPassword {
+                        slot,
+                        password: AdminSecret(password),
+                    });
+                } else {
+                    core.admin.status = "Password must be at most 256 bytes.".into();
+                }
+            }
+            "adminclosecredentials" => core.pop(self.id),
+            _ if cmd.starts_with("canvas.popdialog(") => core.pop(self.id),
+            _ => {}
+        }
+        self.refresh(core);
+    }
+}

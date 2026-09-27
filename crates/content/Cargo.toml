@@ -1,0 +1,10 @@
+[package]
+name = "bri-content"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+anyhow.workspace = true
+glam = "0.33"

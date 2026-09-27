@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-26",
+  "scope": "Native weapon catalog setup, content identity and headless startup; not gameplay acceptance",
+  "identity_tests_passed": 10,
+  "actual_weapon_pack_test_passed": 1,
+  "content_tests_passed": 6,
+  "app_startup_host_test_passed": 1,
+  "check_all_targets": "passed",
+  "clippy_all_targets_warnings_denied": "passed",
+  "dedicated_host": {
+    "address": "127.0.0.1:63081",
+    "certificate": "server-cert.der",
+    "content_id": "e41aa1cdd9163453acdcd7c8f07221d49bbcae7323317e0d2d3e4f1c68bca203",
+    "content_identity_version": 8,
+    "pending_map_objects": [
+      ": Static object damage, destruction and repair",
+      ": Static object damage, destruction and repair",
+      ": Static object damage, destruction and repair",
+      "hours: Clock minute advancement and timed explosions",
+      "minutes: Clock minute advancement and timed explosions",
+      "tenMinutes: Clock minute advancement and timed explosions",
+      "tenHours: Clock minute advancement and timed explosions",
+      ": Static object damage, destruction and repair",
+      ": Clock colon blinking",
+      ": Static object damage, destruction and repair"
+    ],
+    "schema_version": 1,
+    "terrain_region": [
+      -64,
+      -64,
+      384,
+      384
+    ],
+    "tool_catalog": {
+      "default_print": "print/print_letters_default/a",
+      "emitters": 102,
+      "items": 21,
+      "lights": 13,
+      "printable_definitions": 7,
+      "prints": 77
+    },
+    "unresolved_item_references": 0
+  },
+  "dedicated_run": {
+    "commands": 0,
+    "dropped_cues": 0,
+    "dropped_ticks": 0,
+    "joins": 0,
+    "notices": [],
+    "rejected": 0,
+    "resumes": 0,
+    "saved_world": "world-1790478256994.json",
+    "ticks": 240
+  },
+  "boundaries": {
+    "visible_window": false,
+    "gpu_render": false,
+    "audio_device": false,
+    "original_writes": false,
+    "os_input": false
+  }
+}

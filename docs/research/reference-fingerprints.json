@@ -1,0 +1,13 @@
+{
+  "algorithm": "sha256",
+  "root": "C:\\Users\\Maxwell\\Desktop\\Games\\B4v21-Launcher-Release\\versions\\Blockland v20",
+  "files": {
+    "blocklandv20.exe": "d9e5a593b289f80e26aea75633234fe37bbc1ebcc130570a20c17b969c5077ac",
+    "BlocklandLoader.dll": "355e0ba736d3a4734a1dcb816e4e30d5957e9e6deb0207bb3e7697da16f96f02",
+    "B4v21Patch.ver": "d411800ff3eae7b9d67ee22e2679eb5ff0388a1bf2d9b98015508d84e688ce58",
+    "base/server/scripts/allGameScripts.cs": "66ca95decb93265cbdcd7e0448c2955e52b8174ad81bea1e1262a0703b2c62c9",
+    "Add-Ons/Map_Bedroom.zip": "ae03e88e8a72d00c7971f9526ab66f6faaaff3aa3924410974c9fac5cc99d1cd",
+    "Add-Ons/Map_Kitchen.zip": "71ced33209bbc5dbedb59d843c424c925f78cf45e1c34c6b25a88cd5a41b0882",
+    "Add-Ons/Map_Slopes.zip": "e578e0a4c9a005a6113a656780c4c533da5bf1b8323a0c07bc625f4a46cd042a"
+  }
+}

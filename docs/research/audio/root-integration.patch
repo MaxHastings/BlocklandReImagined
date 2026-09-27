@@ -1,0 +1,86 @@
+diff -ru a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,5 +1,5 @@
+ [workspace]
+-members = ["crates/render", "crates/physics", "crates/content", "crates/convert", "crates/world", "crates/sim", "crates/net", "crates/ui", "crates/ui-import", "crates/client"]
++members = ["crates/render", "crates/physics", "crates/content", "crates/convert", "crates/world", "crates/sim", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/audio", "crates/audio-import"]
+ resolver = "2"
+ 
+ [workspace.package]
+diff -ru a/crates/audio/Cargo.toml b/crates/audio/Cargo.toml
+--- a/crates/audio/Cargo.toml
++++ b/crates/audio/Cargo.toml
+@@ -1,23 +1,19 @@
+ [package]
+ name = "bri-audio"
+-version = "0.1.0"
+-edition = "2024"
+-rust-version = "1.93"
+-publish = false
++version.workspace = true
++edition.workspace = true
++rust-version.workspace = true
++publish.workspace = true
+ description = "Native audio runtime for Blockland ReImagined: typed commands, bounded voices, Torque-faithful attenuation, hardware-free test output."
+ 
+-# Standalone until Astra integrates it into the root workspace
+-# (see docs/research/audio/integration.md for the exact root patch).
+-[workspace]
+-
+ [features]
+ default = []
+ # Real device output through cpal. Off by default so tests never touch hardware.
+ cpal-output = ["dep:cpal"]
+ 
+ [dependencies]
+-serde = { version = "1.0", features = ["derive"] }
+-serde_json = "1.0"
++serde.workspace = true
++serde_json.workspace = true
+ sha2 = "0.10"
+ rtrb = "0.3"
+ symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "ogg", "vorbis"] }
+diff -ru a/crates/audio-import/Cargo.toml b/crates/audio-import/Cargo.toml
+--- a/crates/audio-import/Cargo.toml
++++ b/crates/audio-import/Cargo.toml
+@@ -1,22 +1,19 @@
+ [package]
+ name = "bri-audio-import"
+-version = "0.1.0"
+-edition = "2024"
+-rust-version = "1.93"
+-publish = false
++version.workspace = true
++edition.workspace = true
++rust-version.workspace = true
++publish.workspace = true
+ description = "Offline converter: vanilla Blockland v20 sounds/music + authored audio profiles -> native audio pack. Never executes scripts."
+ 
+-# Standalone until integrated into the root workspace (docs/research/audio/integration.md).
+-[workspace]
+-
+ [[bin]]
+ name = "bri-audio-import"
+ path = "src/main.rs"
+ 
+ [dependencies]
+ bri-audio = { path = "../audio" }
+-serde = { version = "1.0", features = ["derive"] }
+-serde_json = "1.0"
++serde.workspace = true
++serde_json.workspace = true
+ sha2 = "0.10"
+ zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+ 
+diff -ru a/crates/client/Cargo.toml b/crates/client/Cargo.toml
+--- a/crates/client/Cargo.toml
++++ b/crates/client/Cargo.toml
+@@ -16,6 +16,7 @@
+ bri-render = { path = "../render" }
+ bri-ui = { path = "../ui" }
+ bri-physics = { path = "../physics" }
++bri-audio = { path = "../audio", features = ["cpal-output"] }
+ rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+ glam = "0.33"
+ winit = "0.30"

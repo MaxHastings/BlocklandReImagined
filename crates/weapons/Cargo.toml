@@ -1,0 +1,15 @@
+[package]
+name = "bri-weapons"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+glam = { version = "0.33", features = ["serde"] }
+[dev-dependencies]
+rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+bri-physics = { path = "../physics", version = "0.1.0" }
+bri-content = { path = "../content", version = "0.1.0" }

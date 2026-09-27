@@ -1,0 +1,107 @@
+use anyhow::{Result, ensure};
+use bri_client::network::{Connected, Event, Worker};
+use bri_net::{
+    client::Client,
+    server::{self, ServerOptions},
+};
+use bri_sim::{
+    definitions::Definitions,
+    player::MoveInput,
+    session::{Command, Reply, Session},
+    simulation::Simulation,
+};
+use bri_world::World;
+use glam::Vec3;
+use std::time::Duration;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_host() -> Result<()>
+{
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let session = Session::new(Simulation::new(
+            World::new("Test".into(), "fixture".into(), vec![[1.0; 4]]),
+            Definitions::default(),
+            vec![],
+        )?);
+        let host = server::start_with_limit(
+            session,
+            ServerOptions {
+                bind: "127.0.0.1:0".parse()?,
+                content_id: "fixture".into(),
+                spawn_points: vec![Vec3::new(0.0, 100.0, 0.0)],
+            },
+            1,
+        )?;
+        let address = host.address;
+        let certificate = host.certificate.clone();
+        let pin = certificate.clone();
+        let mut worker = Worker::start(&tokio::runtime::Handle::current(), async move {
+            let client =
+                Client::connect(address, &pin, "Builder".into(), "fixture".into(), None).await?;
+            Ok(Connected {
+                client,
+                host: Some(host),
+            })
+        });
+        ensure!(
+            matches!(worker.events.recv().await, Some(Event::Ready)),
+            "No ready event"
+        );
+        let initial = worker.view.borrow().clone().unwrap();
+        assert!(
+            Client::connect(
+                address,
+                &certificate,
+                "Extra".into(),
+                "fixture".into(),
+                None
+            )
+            .await
+            .is_err()
+        );
+        worker.movement(MoveInput {
+            forward: 1.0,
+            ..Default::default()
+        })?;
+        worker.request(101, Command::Chat("one".into()))?;
+        worker.request(102, Command::Chat("two".into()))?;
+        let mut replies = Vec::new();
+        while replies.len() < 2 {
+            match worker.events.recv().await.context("Worker closed")? {
+                Event::Reply { request, result } => {
+                    ensure!(matches!(result, Ok(Reply::Accepted)), "Rejected chat");
+                    replies.push(request);
+                }
+                Event::Failed(e) => anyhow::bail!(e),
+                Event::Ready => anyhow::bail!("Duplicate ready"),
+                Event::Presentation { cues, dropped } => {
+                    assert!(cues.is_empty());
+                    assert_eq!(dropped, 0);
+                }
+            }
+        }
+        assert_eq!(replies, vec![101, 102]);
+        loop {
+            worker.view.changed().await?;
+            let current = worker.view.borrow().clone().unwrap();
+            if current.tick > initial.tick + 12 && current.chat.len() == 2 {
+                assert!(
+                    current.poses[&current.owner].player.feet[2]
+                        < initial.poses[&initial.owner].player.feet[2]
+                );
+                // Motion-only updates retain the world Arc rather than copying all bricks.
+                assert!(std::sync::Arc::ptr_eq(&initial.world, &current.world));
+                break;
+            }
+        }
+        worker.cancel();
+        while let Some(event) = worker.events.recv().await {
+            if let Event::Failed(e) = event {
+                anyhow::bail!(e);
+            }
+        }
+        Ok(())
+    })
+    .await?
+}
+use anyhow::Context;

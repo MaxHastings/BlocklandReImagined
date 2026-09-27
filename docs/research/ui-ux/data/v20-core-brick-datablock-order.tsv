@@ -1,0 +1,137 @@
+line	category	subCategory	uiName
+15208	Bricks	1x	1x1
+15216	Bricks	1x	1x2
+15224	Bricks	1x	1x3
+15232	Bricks	1x	1x4
+15240	Bricks	1x	1x6
+15248	Bricks	1x	1x8
+15256	Bricks	1x	1x10
+15264	Bricks	1x	1x12
+15272	Bricks	1x	1x16
+15280	Bricks	2x	2x2
+15288	Bricks	2x	2x3
+15296	Bricks	2x	2x4
+15304	Bricks	2x	2x6
+15312	Bricks	2x	2x8
+15320	Bricks	2x	2x10
+15328	Bricks	4x	4x4
+15336	Bricks	4x	4x6
+15344	Bricks	4x	4x8
+15352	Bricks	4x	4x10
+15360	Bricks	4x	4x12
+15368	Bricks	4x	4x16
+15376	Bricks	8x	8x8
+15384	Bricks	8x	8x16
+15392	Bricks	10x	10x10
+15400	Bricks	10x	10x20
+15408	Bricks	12x	12x24
+15416	Bricks	3x Height	2x2x3
+15424	Bricks	3x Height	2x4x3
+15432	Bricks	3x Height	2x6x3
+15440	Bricks	5x Height	1x1x5
+15448	Bricks	5x Height	1x2x5
+15456	Bricks	5x Height	1x3x5
+15464	Bricks	5x Height	1x4x5
+15472	Bricks	5x Height	1x6x5
+15480	Bricks	5x Height	1x12x5
+15488	Bricks	5x Height	2x2x5
+15496	Bricks	5x Height	2x3x5
+15504	Bricks	5x Height	2x4x5
+15512	Bricks	5x Height	2x6x5
+15520	Bricks	5x Height	2x12x5
+15528	Plates	1x	1x1F
+15536	Plates	1x	1x2F
+15544	Plates	1x	1x3F
+15552	Plates	1x	1x4F
+15560	Plates	1x	1x6F
+15568	Plates	1x	1x8F
+15576	Plates	1x	1x10F
+15584	Plates	1x	1x12F
+15592	Plates	1x	1x16F
+15600	Plates	2x	2x2F
+15608	Plates	2x	2x3F
+15616	Plates	2x	2x4F
+15624	Plates	2x	2x6F
+15632	Plates	2x	2x8F
+15640	Plates	2x	2x10F
+15648	Plates	4x	4x4F
+15656	Plates	4x	4x6F
+15664	Plates	4x	4x8F
+15672	Plates	4x	4x10F
+15680	Plates	4x	4x12F
+15688	Plates	4x	4x16F
+15696	Plates	6x	6x6F
+15704	Plates	6x	6x8F
+15712	Plates	6x	6x10F
+15720	Plates	6x	6x12F
+15728	Plates	6x	6x16F
+15736	Plates	6x	6x24F
+15744	Plates	8x	8x8F
+15752	Plates	8x	8x16F
+15760	Rounds	Bricks	1x1 Round
+15770	Rounds	Bricks	1x1 Cone
+15780	Rounds	Bricks	2x2 Round
+15790	Rounds	Bricks	2x2x2 Cone
+15800	Rounds	Plates	1x1F Round
+15810	Rounds	Plates	2x2F Round
+15820	Rounds	Bricks	2x2 Disc
+15830	Special	Walls	Castle Wall
+15839	Special	Walls	1x4x5 Window
+15848	Special	Walls	2x2x5 Lattice
+15856	Special	Misc	Pine Tree
+15865	Special	Walls	1x4x2 Fence
+15874	Ramps	25 Degree	25° Ramp 1x
+15884	Ramps	25 Degree	25° Ramp 2x
+15894	Ramps	25 Degree	25° Ramp 4x
+15904	Ramps	25 Degree	-25° Ramp 1x
+15914	Ramps	25 Degree	-25° Ramp 2x
+15924	Ramps	25 Degree	25° Ramp Corner
+15934	Ramps	25 Degree	-25° Ramp Corner
+15944	Ramps	25 Degree Crest	25° Crest 4x
+15954	Ramps	25 Degree Crest	25° Crest 2x
+15964	Ramps	25 Degree Crest	25° Crest 1x
+15974	Ramps	25 Degree Crest	25° Crest End
+15984	Ramps	25 Degree Crest	25° Crest Corner
+15994	Ramps	45 Degree	45° Ramp 1x
+16004	Ramps	45 Degree	45° Ramp 2x
+16014	Ramps	45 Degree	45° Ramp 4x
+16024	Ramps	45 Degree	-45° Ramp 1x
+16034	Ramps	45 Degree	-45° Ramp 2x
+16044	Ramps	45 Degree	45° Ramp Corner
+16054	Ramps	45 Degree	-45° Ramp Corner
+16064	Ramps	45 Degree Crest	45° Crest 4x
+16074	Ramps	45 Degree Crest	45° Crest 2x
+16084	Ramps	45 Degree Crest	45° Crest 1x
+16094	Ramps	45 Degree Crest	45° Crest End
+16104	Ramps	45 Degree Crest	45° Crest Corner
+16114	Ramps	72 Degree	72° Ramp 1x
+16124	Ramps	72 Degree	72° Ramp 2x
+16134	Ramps	72 Degree	72° Ramp Corner
+16144	Ramps	72 Degree	-72° Ramp 1x
+16154	Ramps	72 Degree	-72° Ramp 2x
+16164	Ramps	72 Degree	-72° Ramp Corner
+16174	Ramps	80 Degree	80° Ramp 1x
+16184	Ramps	80 Degree	80° Ramp 2x
+16194	Ramps	80 Degree	80° Ramp Corner
+16204	Ramps	80 Degree	-80° Ramp 1x
+16214	Ramps	80 Degree	-80° Ramp 2x
+16224	Ramps	80 Degree	-80° Ramp Corner
+16234	Baseplates	Plain	16x16 Base
+16242	Baseplates	Plain	16x32 Base
+16250	Baseplates	Plain	32x32 Base
+16258	Baseplates	Plain	48x48 Base
+16266	Baseplates	Plain	64x64 Base
+16274	Baseplates	Road	32x32 Road
+16282	Baseplates	Road	32x32 Road T
+16290	Baseplates	Road	32x32 Road C
+16298	Baseplates	Road	32x32 Road X
+16306	Ramps	Prints	45° Ramp 2x Print
+16317	Ramps	Prints	-45° Ramp 2x Print
+16328	Plates	Prints	2x2F Print
+16338	Plates	Prints	1x2F Print
+16348	Plates	Prints	1x1F Print
+16358	Bricks	Prints	1x1 Print
+16368	Bricks	Prints	1x4x4 Print
+16378	Special	Interactive	Music Brick
+16388	Special	Interactive	Spawn Point
+16400	Special	Interactive	Vehicle Spawn

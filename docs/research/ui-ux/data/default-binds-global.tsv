@@ -1,0 +1,5 @@
+line	map	device	key	command	conditions
+21012	GlobalActionMap	keyboard	"F9"	cycleDebugRenderMode	getBuildString() $= "Debug"
+21014	GlobalActionMap	keyboard	"tilde"	toggleConsole	always
+21015	GlobalActionMap	keyboard	"alt enter"	"", "toggleFullScreen();"	always
+21016	GlobalActionMap	keyboard	"F1"	"", "contextHelp();"	always

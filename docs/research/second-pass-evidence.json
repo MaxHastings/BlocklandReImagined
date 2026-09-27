@@ -1,0 +1,1307 @@
+{
+  "scope": "header probes and source-text analysis; not complete geometry/behavior validation",
+  "dif_headers": [
+    {
+      "path": "Add-Ons/Map_ArcticChallenge3/BasicChallenge3.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Artic/Artic.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_AvP/new03.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Bedroom/bedroom.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Creek/interior/blackwall/blackwall.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Creek/interior/dock/dock.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Kitchen/kitchen.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_MaxwellChallenge/Challenge.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_MaxwellDM1/MaxwellDM1.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_MyChallenge/MyChallenge.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/airport.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/aquarium.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/army.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/armybase.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/bank.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/bar.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/bhee.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/billboard.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/bridge.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/bridge1.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/bridge2.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/club.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/docks.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/ee.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/fishstore.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/floatingcity.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/floatingvillage.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/foodplace.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/foodplace2.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/foodplace3.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/gasstation.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/gunstore.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/hospital.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/house1.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/houses1.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/houses2.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/houses3.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/housetest.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/housetest2.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/housetest3.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/housetest4.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/housetest5.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/housetest6.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/housetest7.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/lighthouse.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/maincity3.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/maincity4.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/motel.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/museum.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/null.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/oilrig.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/paradise.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/pier.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/playground.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/police.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/radiotower.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/room.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/scitytest.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/set1.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/set2.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/ship.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/shop.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/shop2.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/shop3.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/smallbridge.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/statue.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/tc.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/venice.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/village1.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/village2.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/village3.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/village4.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/map_paradise/welcome.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Slate/slate.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Tutorial/buildPlatform.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    },
+    {
+      "path": "Add-Ons/Map_Tutorial/tutorial.dif",
+      "outer_version": 44,
+      "preview": 0,
+      "details": 1,
+      "first_inner_version": 0
+    }
+  ],
+  "ml_headers": [
+    {
+      "path": "Add-Ons/Map_Artic/Artic_52992bde.ml",
+      "source": "loose",
+      "first_u32": 16,
+      "sha256": "31ea3b076f275c8a1efa673a081454c0493539c38b6df7265bbe55aa7211ba65"
+    },
+    {
+      "path": "Add-Ons/Map_AvP/AvP_a621f448.ml",
+      "source": "loose",
+      "first_u32": 16,
+      "sha256": "b92ea7276a6ee106486fa27d76ebe6159687a8ff4d8206ad8efbf89d6270c930"
+    },
+    {
+      "path": "Add-Ons/Map_Bedroom/bedroom_ce7dd2f0.ml",
+      "source": "loose",
+      "first_u32": 16,
+      "sha256": "79d96f19fbc073b33527367fc40a587d5a42a17a57af36ad77db789c55126a07"
+    },
+    {
+      "path": "Add-Ons/Map_Bedroom/Bedroom_ce7dd2f0.ml",
+      "source": "Add-Ons/Map_Bedroom.zip",
+      "first_u32": 16,
+      "sha256": "88bc0f6ba9bc81e6d878226b1ccc69f795248ccdc5819dc3037a228c6a7afef0"
+    },
+    {
+      "path": "Add-Ons/Map_BedroomDark/BedroomDark_70d1cce7.ml",
+      "source": "Add-Ons/Map_BedroomDark.zip",
+      "first_u32": 16,
+      "sha256": "b2ef7fb09c76e1e199208b2e59467d359a3295e93b13e4396699d3b4cc7fc382"
+    },
+    {
+      "path": "Add-Ons/Map_EmeraldIsles4/VH_EmeraldIsles4_46d9e805.ml",
+      "source": "Add-Ons/Map_EmeraldIsles4.zip",
+      "first_u32": 16,
+      "sha256": "e4f2b3c5a8d9d16516ef542f84c9023605d1a88e336f03d192268e86a50b8f90"
+    },
+    {
+      "path": "Add-Ons/Map_Kitchen/Kitchen_1be18cd5.ml",
+      "source": "Add-Ons/Map_Kitchen.zip",
+      "first_u32": 16,
+      "sha256": "a93ef6f92e41c88aa2080752d7c5f119798e410637037ed5269730b0f1a8c1c5"
+    },
+    {
+      "path": "Add-Ons/Map_KitchenDark/kitchenDark_54702814.ml",
+      "source": "loose",
+      "first_u32": 16,
+      "sha256": "2c4f846ed93bac9af721128886623a63dd47da6a16f06bdf51774ef695ad6793"
+    },
+    {
+      "path": "Add-Ons/Map_KitchenDark/KitchenDark_54702814.ml",
+      "source": "Add-Ons/Map_KitchenDark.zip",
+      "first_u32": 16,
+      "sha256": "6d248e50120536fa757660ddd06d6cd386bee17111c15cdad7ad81cadd7ce220"
+    },
+    {
+      "path": "Add-Ons/Map_MaxwellChallenge/MaxwellChallenge_276d13bb.ml",
+      "source": "loose",
+      "first_u32": 16,
+      "sha256": "848d94933cb8e250b8e277faca5b0b9b55a9c8d07d7fa0343ac31321fb6d41c0"
+    },
+    {
+      "path": "Add-Ons/map_paradise/gsf_paradise_3897977b.ml",
+      "source": "Add-Ons/map_paradise.zip",
+      "first_u32": 16,
+      "sha256": "b6cf06173f4f1ba2d05b9e80821645b9803c97726d68aa809b12775c6831af5d"
+    },
+    {
+      "path": "Add-Ons/map_paradise/gsf_paradise_night_ecc17cd7.ml",
+      "source": "Add-Ons/map_paradise.zip",
+      "first_u32": 16,
+      "sha256": "3d61cedbbbf9970995eec5dcf0558309c890e3e396f5daba3dee415885430892"
+    },
+    {
+      "path": "Add-Ons/Map_Slopes/Slopes_a5f210cb.ml",
+      "source": "Add-Ons/Map_Slopes.zip",
+      "first_u32": 16,
+      "sha256": "c305e1bd09065e4e95252524d6e24d947879719d44d432648e88a3a30146a999"
+    },
+    {
+      "path": "Add-Ons/Map_Tutorial/Tutorial_382e27f0.ml",
+      "source": "Add-Ons/Map_Tutorial.zip",
+      "first_u32": 16,
+      "sha256": "37977206f75a24c148d52d7ddd2c0539b1c1fc18f7d4d88ceeb2923fd1b6703f"
+    }
+  ],
+  "blb_kinds": {
+    "BRICK": 80,
+    "SPECIAL": 86,
+    "TEX:SIDE": 1,
+    "SPECIALBRICK": 7
+  },
+  "maps": [
+    {
+      "path": "base/client/editor/newMission.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_ArcticChallenge3/ArcticChallenge3.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "Precipitation": 1,
+        "Trigger": 19,
+        "FileObject": 90
+      },
+      "datablock_refs": [
+        "ArticChallenge",
+        "SnowA",
+        "SpawnSphereMarker",
+        "buildzone"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Artic/Artic.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_AvP/AvP.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 2
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Bedroom/bedroom.mis",
+      "classes": {
+        "SimGroup": 3,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "StaticShape": 10,
+        "TSStatic": 6,
+        "fxGrassReplicator": 1,
+        "fxFoliageReplicator": 1
+      },
+      "datablock_refs": [
+        "LCD",
+        "LCDColon",
+        "SpawnSphereMarker",
+        "glassA",
+        "lightBulbA"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_BedroomDark/bedroomDark.mis",
+      "classes": {
+        "SimGroup": 3,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "StaticShape": 10,
+        "TSStatic": 6
+      },
+      "datablock_refs": [
+        "LCD",
+        "LCDColon",
+        "SpawnSphereMarker",
+        "glassA",
+        "lightBulbA"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Construct/construct.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Creek/creek.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "fxSunLight": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "WaterBlock": 1,
+        "fxGrassReplicator": 1,
+        "fxShapeReplicator": 1,
+        "InteriorInstance": 2,
+        "AudioEmitter": 3,
+        "ParticleEmitterNode": 4,
+        "TSStatic": 13
+      },
+      "datablock_refs": [
+        "GenericEmitterNode",
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Destruct/destruct.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_EmeraldIsles4/VH_EmeraldIsles4.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 10,
+        "WaterBlock": 1,
+        "fxShapeReplicator": 6
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Forest/Forest.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "fxShapeReplicator": 1,
+        "fxFoliageReplicator": 2
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Forest/ForestNight.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "fxShapeReplicator": 1,
+        "fxFoliageReplicator": 2,
+        "fxSunLight": 1,
+        "AudioEmitter": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Halloween_Slate/HalloweenSlate.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "fxSunLight": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Kitchen/kitchen.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 2,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "StaticShape": 16,
+        "InteriorInstance": 1,
+        "TSStatic": 9
+      },
+      "datablock_refs": [
+        "LCD",
+        "LCDColon",
+        "SpawnSphereMarker",
+        "fluorescentLight",
+        "glassA"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_KitchenDark/kitchenDark.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "StaticShape": 16,
+        "InteriorInstance": 1,
+        "TSStatic": 9
+      },
+      "datablock_refs": [
+        "LCD",
+        "LCDColon",
+        "SpawnSphereMarker",
+        "fluorescentLight",
+        "glassA"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_MaxwellChallenge/MaxwellChallenge.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "fxSunLight": 1,
+        "InteriorInstance": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_MyChallenge/MyChallenge.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "fxSunLight": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/map_paradise/gsf_paradise.mis",
+      "classes": {
+        "SimGroup": 18,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "InteriorInstance": 120,
+        "ParticleEmitterNode": 2,
+        "fxSunLight": 1,
+        "SpawnSphere": 8,
+        "TSStatic": 89,
+        "WaterBlock": 3,
+        "Item": 3,
+        "PhysicalZone": 1,
+        "fxFoliageReplicator": 7,
+        "MessageVector": 1
+      },
+      "datablock_refs": [
+        "GSFgassignItem",
+        "GenericEmitterNode",
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/map_paradise/gsf_paradise_night.mis",
+      "classes": {
+        "SimGroup": 18,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "TSStatic": 98,
+        "ParticleEmitterNode": 2,
+        "SpawnSphere": 8,
+        "WaterBlock": 4,
+        "InteriorInstance": 124,
+        "Item": 3,
+        "PhysicalZone": 1,
+        "fxFoliageReplicator": 7,
+        "fxSunLight": 3,
+        "fxLight": 4
+      },
+      "datablock_refs": [
+        "GSFgassignItem",
+        "GenericEmitterNode",
+        "PlayerLight",
+        "RedLight",
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Skylands/skylands.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "fxSunLight": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Slate/slate.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "fxSunLight": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Slate_Death_valley/SlateDeathValley.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "WaterBlock": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Slate_Desert/slateDesert.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "WaterBlock": 1
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Slate_Sea_Revised/slateSeaRevised.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "WaterBlock": 2
+      },
+      "datablock_refs": [
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Slate_Storm_Revised/slateStormRevised.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 1,
+        "WaterBlock": 2,
+        "Precipitation": 1
+      },
+      "datablock_refs": [
+        "HeavyRain",
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Slopes/slopes.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "Precipitation": 1,
+        "WaterBlock": 1
+      },
+      "datablock_refs": [
+        "SnowA",
+        "SpawnSphereMarker"
+      ]
+    },
+    {
+      "path": "Add-Ons/Map_Tutorial/tutorial.mis",
+      "classes": {
+        "SimGroup": 2,
+        "ScriptObject": 1,
+        "MissionArea": 1,
+        "Sky": 1,
+        "Sun": 1,
+        "TerrainBlock": 1,
+        "SpawnSphere": 1,
+        "InteriorInstance": 2,
+        "fxSunLight": 1,
+        "WaterBlock": 3,
+        "Trigger": 33,
+        "Marker": 1,
+        "VehicleBlocker": 2,
+        "ParticleEmitterNode": 1
+      },
+      "datablock_refs": [
+        "GenericEmitterNode",
+        "SpawnSphereMarker",
+        "TutorialBreakTipTrigger",
+        "TutorialBrickTipTrigger",
+        "TutorialBuildTipTrigger",
+        "TutorialDriveTipTrigger",
+        "TutorialFullWinTrigger",
+        "TutorialJeepCheckTrigger",
+        "TutorialLookTipTrigger",
+        "TutorialPrintTipTrigger",
+        "TutorialRideTipTrigger",
+        "TutorialSecretTipTrigger",
+        "TutorialSprayTipTrigger",
+        "TutorialTargetsTrigger",
+        "TutorialTipTrigger",
+        "TutorialWandTipTrigger",
+        "TutorialWaterTrigger",
+        "TutorialWinTrigger",
+        "TutorialWrenchTipTrigger"
+      ]
+    }
+  ],
+  "decompiled": [
+    {
+      "path": "main-Vanilla.cs",
+      "bytes": 851,
+      "functions": 5,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/actionMap.cs",
+      "bytes": 853,
+      "functions": 2,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/audio.cs",
+      "bytes": 770,
+      "functions": 2,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/canvas.cs",
+      "bytes": 1073,
+      "functions": 4,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/init.cs",
+      "bytes": 5866,
+      "functions": 8,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/message.cs",
+      "bytes": 1022,
+      "functions": 4,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/mission.cs",
+      "bytes": 182,
+      "functions": 2,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/missionDownload.cs",
+      "bytes": 3340,
+      "functions": 16,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "client/scripts/allClientScripts-Vanilla.cs",
+      "bytes": 505109,
+      "functions": 878,
+      "datablock_types": {
+        "TSShapeConstructor": 1
+      },
+      "gui_controls": 224,
+      "matches_published_after_newline_normalization": false
+    },
+    {
+      "path": "client/ui/allClientGuis-Vanilla.gui",
+      "bytes": 574391,
+      "functions": 23,
+      "datablock_types": {},
+      "gui_controls": 1610,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "server/defaultMusicList.cs",
+      "bytes": 323,
+      "functions": 0,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "server/init.cs",
+      "bytes": 4909,
+      "functions": 7,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "server/mainServer.cs",
+      "bytes": 60814,
+      "functions": 90,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "server/scripts/allGameScripts-Vanilla.cs",
+      "bytes": 577170,
+      "functions": 566,
+      "datablock_types": {
+        "StaticShapeData": 6,
+        "AudioDescription": 9,
+        "CameraData": 1,
+        "MissionMarkerData": 3,
+        "ParticleData": 78,
+        "ParticleEmitterData": 78,
+        "ExplosionData": 26,
+        "AudioProfile": 25,
+        "TSShapeConstructor": 1,
+        "SplashData": 1,
+        "PlayerData": 1,
+        "ProjectileData": 25,
+        "ItemData": 4,
+        "ShapeBaseImageData": 24,
+        "fxDTSBrickData": 136,
+        "WheeledVehicleTire": 1,
+        "WheeledVehicleSpring": 1,
+        "PrecipitationData": 2,
+        "ParticleEmitterNodeData": 6,
+        "fxLightData": 1
+      },
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": false
+    },
+    {
+      "path": "server/scripts/DamageTypes.cs",
+      "bytes": 3147,
+      "functions": 3,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    },
+    {
+      "path": "server/scripts/game.cs",
+      "bytes": 31823,
+      "functions": 34,
+      "datablock_types": {},
+      "gui_controls": 0,
+      "matches_published_after_newline_normalization": true
+    }
+  ]
+}

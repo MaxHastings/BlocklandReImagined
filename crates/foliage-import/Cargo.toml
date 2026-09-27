@@ -1,0 +1,12 @@
+[package]
+name = "bri-foliage-import"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+[dependencies]
+bri-foliage = { path = "../foliage" }
+anyhow = "1"
+serde_json = "1"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -1,0 +1,9 @@
+/target/
+/.research/
+/content/
+/artifacts/
+/dist/
+/client-state/
+__pycache__/
+*.tmp
+/docs/research/brick-fx/*.png

@@ -1,0 +1,12 @@
+[package]
+name = "bri-physics"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bri-content = { path = "../content" }
+glam = "0.33"
+serde_json.workspace = true
+rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }

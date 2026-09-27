@@ -1,0 +1,15 @@
+[package]
+name = "bri-weather-import"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+serde_json = "1.0"
+regex = "1.12"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+bri-weather = { path = "../weather", default-features = false }
+

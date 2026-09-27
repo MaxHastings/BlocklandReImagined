@@ -1,0 +1,305 @@
+//! Versioned native weapon content. No legacy parser is linked into this crate.
+use anyhow::{Result, ensure};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+pub mod runtime;
+pub use runtime::*;
+pub const SCHEMA: u32 = 1;
+pub const TICK_HZ: u32 = 120;
+/// Authored DTS object bounds converted offline to native coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ItemBounds {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+impl ItemBounds {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (0..3).all(|a| self.min[a].is_finite()
+                && self.max[a].is_finite()
+                && self.min[a] <= self.max[a]
+                && self.min[a].abs() <= 1000.
+                && self.max[a].abs() <= 1000.),
+            "Invalid authored item bounds"
+        );
+        Ok(())
+    }
+    pub fn transformed(&self, position: glam::Vec3, rotation: glam::Quat) -> Self {
+        let mut min = glam::Vec3::splat(f32::INFINITY);
+        let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+        for bits in 0..8 {
+            let p = glam::Vec3::from_array(std::array::from_fn(|axis| {
+                if bits & (1 << axis) == 0 {
+                    self.min[axis]
+                } else {
+                    self.max[axis]
+                }
+            }));
+            let p = position + rotation * p;
+            min = min.min(p);
+            max = max.max(p);
+        }
+        Self {
+            min: min.to_array(),
+            max: max.to_array(),
+        }
+    }
+    pub fn overlaps(&self, other: &Self) -> bool {
+        (0..3).all(|a| self.min[a] <= other.max[a] && self.max[a] >= other.min[a])
+    }
+}
+pub fn native_id(kind: &str, name: &str) -> String {
+    format!("v20.{kind}.{}", name.to_ascii_lowercase())
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Evidence {
+    pub path: String,
+    pub sha256: String,
+    pub line: usize,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Definition {
+    pub name: String,
+    pub class: String,
+    pub parent: Option<String>,
+    pub source: Evidence,
+    pub fields: BTreeMap<String, String>,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct State {
+    pub name: String,
+    pub ticks: u32,
+    pub wait: bool,
+    pub allow_change: bool,
+    pub timeout: Option<usize>,
+    pub down: Option<usize>,
+    pub up: Option<usize>,
+    pub ammo: Option<usize>,
+    pub no_ammo: Option<usize>,
+    pub script: String,
+    pub sequence: String,
+    pub sound: String,
+    pub emitter: String,
+    pub emitter_node: String,
+    pub emitter_seconds: f32,
+    pub eject_shell: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Image {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub projectile: Option<String>,
+    pub mount_point: u32,
+    pub offset: [f32; 3],
+    pub eye_offset: [f32; 3],
+    /// Euler XYZ degrees in the original Z-up frame, explicitly transformed by presentation.
+    pub source_rotation_degrees: [f32; 3],
+    pub correct_muzzle: bool,
+    pub melee: bool,
+    pub color: [f32; 4],
+    pub color_shift: bool,
+    pub arm_ready: bool,
+    pub casing: String,
+    pub min_shot_ticks: u32,
+    pub states: Vec<State>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Item {
+    pub id: String,
+    pub name: String,
+    pub ui_name: String,
+    pub image: String,
+    pub model: String,
+    pub icon: String,
+    pub can_drop: bool,
+    pub sport: bool,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Explosion {
+    pub effect: String,
+    pub damage: f32,
+    pub radius: f32,
+    pub impulse: f32,
+    pub impulse_radius: f32,
+    pub burn_seconds: f32,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BrickImpact {
+    pub radius: f32,
+    pub direct: bool,
+    pub force: f32,
+    pub max_volume: f32,
+    pub max_floating_volume: f32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectileDef {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub speed: f32,
+    pub inherit: f32,
+    pub gravity: f32,
+    pub lifetime_ticks: u32,
+    pub fade_ticks: u32,
+    pub arm_ticks: u32,
+    pub ballistic: bool,
+    pub elasticity: f32,
+    pub friction: f32,
+    pub damage: f32,
+    pub damage_type: String,
+    pub radius_damage_type: String,
+    pub impulse: f32,
+    pub vertical: f32,
+    pub explode_player: bool,
+    pub explode_death: bool,
+    pub collide_players: bool,
+    pub explosion: Explosion,
+    pub brick: BrickImpact,
+    pub bounce_effect: String,
+    pub stick_effect: String,
+    pub blood_effect: String,
+    pub bounce_angle: f32,
+    pub min_stick_speed: f32,
+    pub trail: String,
+    pub sound: String,
+    pub light_radius: f32,
+    pub light_color: [f32; 3],
+    pub sport_image: Option<String>,
+    pub rest_speed: f32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resource {
+    pub path: String,
+    pub sha256: String,
+    pub native_file: Option<String>,
+    pub diagnostics: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pack {
+    pub schema_version: u32,
+    pub id: String,
+    pub items: BTreeMap<String, Item>,
+    pub images: BTreeMap<String, Image>,
+    pub projectiles: BTreeMap<String, ProjectileDef>,
+    pub definitions: Vec<Definition>,
+    pub resources: Vec<Resource>,
+    pub diagnostics: Vec<String>,
+}
+impl Pack {
+    pub fn from_json(bytes: &[u8]) -> Result<Self> {
+        ensure!(
+            bytes.len() <= 32 * 1024 * 1024,
+            "Weapon pack exceeds byte limit"
+        );
+        let pack: Self = serde_json::from_slice(bytes)?;
+        pack.validate()?;
+        Ok(pack)
+    }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == SCHEMA, "Unknown weapon schema");
+        ensure!(
+            self.items.len() <= 1024 && self.images.len() <= 4096 && self.projectiles.len() <= 4096,
+            "Definition budget exceeded"
+        );
+        for (id, item) in &self.items {
+            ensure!(
+                id == &item.id && self.images.contains_key(&item.image),
+                "Invalid item/image {id}"
+            );
+        }
+        for (id, image) in &self.images {
+            ensure!(
+                id == &image.id && image.states.len() <= 64,
+                "Invalid image {id}"
+            );
+            ensure!(
+                image
+                    .offset
+                    .into_iter()
+                    .chain(image.eye_offset)
+                    .chain(image.source_rotation_degrees)
+                    .chain(image.color)
+                    .all(f32::is_finite),
+                "Invalid image transform/color"
+            );
+            ensure!(
+                image.min_shot_ticks <= 36000 && image.mount_point < 32,
+                "Invalid image mount/timing"
+            );
+            for state in &image.states {
+                ensure!(
+                    state.ticks <= 36000
+                        && state.emitter_seconds.is_finite()
+                        && (0.0..=300.0).contains(&state.emitter_seconds),
+                    "Invalid state duration"
+                );
+                for index in [
+                    state.timeout,
+                    state.down,
+                    state.up,
+                    state.ammo,
+                    state.no_ammo,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    ensure!(index < image.states.len(), "Invalid state target");
+                }
+            }
+            if let Some(p) = &image.projectile {
+                ensure!(self.projectiles.contains_key(p), "Missing projectile {p}");
+            }
+        }
+        for (id, p) in &self.projectiles {
+            ensure!(
+                id == &p.id && p.lifetime_ticks > 0 && p.lifetime_ticks <= 36000,
+                "Invalid projectile lifetime"
+            );
+            ensure!(
+                [
+                    p.speed,
+                    p.inherit,
+                    p.gravity,
+                    p.elasticity,
+                    p.friction,
+                    p.damage,
+                    p.impulse,
+                    p.vertical,
+                    p.explosion.damage,
+                    p.explosion.radius,
+                    p.explosion.impulse,
+                    p.explosion.impulse_radius,
+                    p.rest_speed,
+                    p.explosion.burn_seconds,
+                    p.brick.radius,
+                    p.brick.force,
+                    p.brick.max_volume,
+                    p.brick.max_floating_volume,
+                    p.light_radius,
+                    p.bounce_angle,
+                    p.min_stick_speed
+                ]
+                .iter()
+                .all(|n| n.is_finite() && *n >= 0.0 && *n <= 100000.0),
+                "Invalid projectile scalar"
+            );
+            ensure!(
+                p.elasticity <= 1.0 && p.friction <= 1.0 && p.speed <= 10000.0,
+                "Invalid trajectory"
+            );
+        }
+        for resource in &self.resources {
+            if let Some(path) = &resource.native_file {
+                ensure!(
+                    !path.starts_with('/')
+                        && !path.contains(':')
+                        && !path.contains('\\')
+                        && !path.split('/').any(|part| part == ".."),
+                    "Unsafe native resource path"
+                );
+            }
+        }
+        Ok(())
+    }
+}

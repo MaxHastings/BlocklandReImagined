@@ -1,0 +1,35 @@
+[package]
+name = "bri-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bri-content = { path = "../content" }
+bri-world = { path = "../world" }
+bri-weapons = { path = "../weapons" }
+bri-sim = { path = "../sim" }
+bri-admin.workspace = true
+bri-identity = { path = "../identity" }
+bri-net = { path = "../net" }
+bri-render = { path = "../render" }
+bri-ui = { path = "../ui" }
+bri-physics = { path = "../physics" }
+bri-fx-runtime = { path = "../fx-runtime" }
+bri-audio = { path = "../audio", features = ["cpal-output"] }
+rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+glam = "0.33"
+winit = "0.30"
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
+pollster = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+bri-weather = { path = "../weather" }
+
+bri-foliage = { path = "../foliage" }

@@ -1,0 +1,29 @@
+[package]
+name = "bri-ui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+description = "Blockland ReImagined native UI: layout, skins, cached fonts, widgets, screens and interaction state machines"
+
+[features]
+default = ["gpu"]
+# wgpu renderer for the UI draw list (offscreen and swapchain targets).
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1.25", features = ["derive"], optional = true }
+
+[[bin]]
+name = "ui_gallery"
+required-features = ["gpu"]
+
+[[bin]]
+name = "ui_runtime_probe"
+required-features = ["gpu"]

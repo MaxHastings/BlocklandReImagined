@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "snowa": {
+    "drops_per_side": 2,
+    "evidence": "Primary snow.png contains four complete snowflake silhouettes in a 2x2 grid. Alpha at x=127,128 is zero, and y=127,128 is zero; 4x4 subdivision cuts opaque flake centers. SnowA does not declare dropsPerSide. This explicit visual-data adaptation is qualified until exact v20 runtime/default behavior is compared."
+  }
+}

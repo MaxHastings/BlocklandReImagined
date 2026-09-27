@@ -1,0 +1,15 @@
+[package]
+name = "bri-events"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+glam = { version = "0.33", features = ["serde"] }
+sha2 = "0.10"

@@ -1,0 +1,319 @@
+//! Fixed-tick host binding. Player damage/minigames and remaining event adapters
+//! are tracked explicitly; this module does not grant free-build PvP authority.
+use super::*;
+use bri_weapons::{ActorId, Event as WeaponEvent, Frame, TargetId};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MountedImage {
+    pub image: String,
+    pub state: String,
+    pub hand: u8,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponView {
+    pub static_items: Vec<crate::item_spawners::StaticItem>,
+    pub images: BTreeMap<OwnerId, Vec<MountedImage>>,
+    pub projectiles: Vec<bri_weapons::Projectile>,
+    pub drops: Vec<bri_weapons::Drop>,
+}
+impl WeaponView {
+    pub fn validate(&self, names: &BTreeMap<OwnerId, String>) -> Result<()> {
+        ensure!(
+            self.static_items.len() <= crate::item_spawners::MAX_STATIC_ITEMS
+                && self.images.len() <= 64
+                && self.images.keys().all(|id| names.contains_key(id))
+                && self.projectiles.len() <= bri_weapons::MAX_PROJECTILES
+                && self.drops.len() <= bri_weapons::MAX_DROPS,
+            "Weapon view bounds/owners"
+        );
+        let text = |s: &str| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control);
+        let vector = |v: Vec3| v.is_finite() && v.abs().max_element() < 1e7;
+        for images in self.images.values() {
+            ensure!(images.len() <= 2, "Too many mounted images");
+            let mut hands = BTreeSet::new();
+            for image in images {
+                ensure!(
+                    image.hand < 2
+                        && hands.insert(image.hand)
+                        && text(&image.image)
+                        && text(&image.state),
+                    "Invalid mounted image"
+                );
+            }
+        }
+        let mut ids = BTreeSet::new();
+        for item in &self.static_items {
+            item.validate()?;
+            ensure!(ids.insert(item.brick), "Duplicate static item brick");
+        }
+        ids.clear(); // Brick identities are a different namespace from runtime entities.
+        for p in &self.projectiles {
+            ensure!(
+                p.id > 0
+                    && ids.insert(p.id)
+                    && p.source.0 > 0
+                    && text(&p.definition)
+                    && vector(p.position)
+                    && vector(p.origin)
+                    && vector(p.velocity)
+                    && p.velocity.length() <= 10000.
+                    && (0.01..=100.).contains(&p.scale),
+                "Invalid projectile view"
+            );
+        }
+        for d in &self.drops {
+            ensure!(
+                d.id > 0
+                    && ids.insert(d.id)
+                    && d.source.0 > 0
+                    && text(&d.item)
+                    && vector(d.position)
+                    && vector(d.velocity)
+                    && d.rotation.is_finite()
+                    && (d.rotation.length_squared() - 1.).abs() < 0.001
+                    && (0.01..=100.).contains(&d.scale)
+                    && d.velocity.length() <= 10000.,
+                "Invalid item drop view"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Trigger {
+    down: bool,
+    direction: Vec3,
+}
+
+impl Session {
+    pub fn weapon_view(&self) -> WeaponView {
+        WeaponView {
+            static_items: self.item_spawners.items.values().cloned().collect(),
+            images: self
+                .peers
+                .keys()
+                .filter_map(|owner| {
+                    let images: Vec<_> = (0..2)
+                        .filter_map(|hand| {
+                            self.weapons
+                                .image_state(ActorId(*owner), hand)
+                                .map(|(image, state)| MountedImage {
+                                    image: image.id.clone(),
+                                    state: state.name.clone(),
+                                    hand,
+                                })
+                        })
+                        .collect();
+                    (!images.is_empty()).then_some((*owner, images))
+                })
+                .collect(),
+            projectiles: self.weapons.projectiles().cloned().collect(),
+            drops: self.weapons.drops().cloned().collect(),
+        }
+    }
+    /// Counts unfinished gameplay/presentation adapters instead of pretending
+    /// that emitted intentions have already changed authoritative game state.
+    pub fn weapon_adapter_gaps(&self) -> &BTreeMap<String, u64> {
+        &self.weapon_gaps
+    }
+
+    pub(super) fn weapon_trigger(
+        &mut self,
+        owner: OwnerId,
+        down: bool,
+        direction: Vec3,
+    ) -> Result<()> {
+        if !down && self.weapons.image_state(ActorId(owner), 0).is_none() {
+            // A successful equip can overtake a release already in transit.
+            // Releasing an unmounted image is harmless and must be idempotent.
+            self.weapon_triggers.remove(&owner);
+            self.weapons.trigger(ActorId(owner), false)?;
+            return Ok(());
+        }
+        ensure!(
+            self.weapons.image_state(ActorId(owner), 0).is_some(),
+            "No weapon image equipped"
+        );
+        let queue = self.weapon_triggers.entry(owner).or_default();
+        if queue.len() >= 32 {
+            ensure!(!down, "Weapon trigger queue full");
+            let cancelled = queue.len() as u64;
+            queue.clear();
+            queue.push_back(Trigger {
+                down: false,
+                direction,
+            });
+            self.note_weapon_gap("trigger backlog cancelled for release", cancelled);
+            return Ok(());
+        }
+        queue.push_back(Trigger { down, direction });
+        Ok(())
+    }
+
+    pub(super) fn step_weapons(&mut self) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        for (owner, peer) in &self.peers {
+            let actor = ActorId(*owner);
+            let expired = tick.saturating_sub(peer.last_input_tick) > 60;
+            let queue = self.weapon_triggers.entry(*owner).or_default();
+            let trigger = if expired {
+                queue.clear();
+                None
+            } else {
+                queue.pop_front()
+            };
+            let state = peer.player.state();
+            let direction = trigger.map_or_else(|| state.forward(), |t| t.direction);
+            let eye = peer.player.eye();
+            // Temporary host mount origin until original animated mount poses
+            // are bound. This is not claimed to reproduce authored muzzle offsets.
+            self.weapons.set_frame(
+                actor,
+                Frame {
+                    body_yaw: state.yaw,
+                    position: Vec3::from(state.feet),
+                    eye,
+                    muzzle: [eye; 2],
+                    direction,
+                    velocity: Vec3::from(state.velocity),
+                    grounded: state.grounded,
+                    ..Frame::default()
+                },
+            )?;
+            if expired {
+                self.weapons.trigger(actor, false)?;
+            } else if let Some(trigger) = trigger {
+                self.weapons.trigger(actor, trigger.down)?;
+            }
+        }
+        let world = self.simulation.state();
+        let affect = |source: ActorId, target| match target {
+            TargetId::Brick(id) => world
+                .bricks
+                .get(&id)
+                .is_some_and(|b| b.owner == source.0 || b.owner == 0),
+            _ => false, // outside-minigame players have no damage permission
+        };
+        let catch = |_: ActorId, _: ActorId| false; // pending minigame/sports host policy
+        let mut query = crate::weapon_query::WeaponQuery {
+            simulation: &self.simulation,
+            affect: &affect,
+            catch: &catch,
+            truncated_targets: 0,
+        };
+        let events = self.weapons.step(&mut query);
+        let truncated = query.truncated_targets;
+        if truncated > 0 {
+            self.note_weapon_gap("radius targets truncated", truncated as u64);
+        }
+        for event in events {
+            match event {
+                WeaponEvent::Sound {
+                    profile, position, ..
+                } => {
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponSound { profile },
+                        position.to_array(),
+                    );
+                }
+                WeaponEvent::Mounted { .. }
+                | WeaponEvent::Unmounted { .. }
+                | WeaponEvent::ImageState { .. }
+                | WeaponEvent::Spawned { .. }
+                | WeaponEvent::Removed { .. }
+                | WeaponEvent::Bounced { .. }
+                | WeaponEvent::Dropped { .. }
+                | WeaponEvent::DropRemoved { .. } => {} // authoritative view
+                WeaponEvent::Diagnostic { message, .. } => {
+                    if self.notices.len() == 64 {
+                        self.notices.pop_front();
+                    }
+                    self.notices.push_back(format!("Weapon runtime: {message}"));
+                }
+                WeaponEvent::Contact { impact } if matches!(impact.target, TargetId::Brick(_)) => {
+                    self.note_weapon_gap("projectile brick event hook", 1)
+                }
+                WeaponEvent::Contact { .. } => {}
+                WeaponEvent::Effect {
+                    source,
+                    definition,
+                    position,
+                    node,
+                    seconds,
+                    image,
+                    hand,
+                    direction,
+                    scale,
+                } => self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::WeaponEffect {
+                        source,
+                        definition,
+                        node,
+                        seconds,
+                        image,
+                        hand,
+                        direction: direction.map(|v| v.to_array()),
+                        scale,
+                    },
+                    position.to_array(),
+                ),
+                WeaponEvent::Animation {
+                    actor,
+                    thread,
+                    sequence,
+                    image_hand,
+                } => {
+                    let position = self
+                        .peers
+                        .get(&actor.0)
+                        .map_or([0.; 3], |p| p.player.state().feet);
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponAnimation {
+                            actor: actor.0,
+                            thread,
+                            sequence,
+                            image_hand,
+                        },
+                        position,
+                    );
+                }
+                WeaponEvent::Shell { actor, image, hand } => {
+                    let position = self
+                        .weapons
+                        .actor(actor)
+                        .map_or([0.; 3], |a| a.frame.muzzle[usize::from(hand)].to_array());
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponShell {
+                            actor: actor.0,
+                            image,
+                            hand,
+                        },
+                        position,
+                    );
+                }
+                WeaponEvent::BrickImpact { .. } => self.note_weapon_gap("brick weapon damage", 1),
+                WeaponEvent::SportMovement { locked: false, .. } => {}
+                _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
+            }
+        }
+        Ok(())
+    }
+    fn note_weapon_gap(&mut self, name: &str, count: u64) {
+        let entry = self.weapon_gaps.entry(name.into()).or_default();
+        if *entry == 0 {
+            if self.notices.len() == 64 {
+                self.notices.pop_front();
+            }
+            self.notices
+                .push_back(format!("Weapon integration pending: {name}"));
+        }
+        *entry = entry.saturating_add(count);
+    }
+}

@@ -1,0 +1,1078 @@
+{
+  "schema_version": 1,
+  "scope": "Stock default-enabled package baseline and literal core/add-on event registration candidates. Not a complete vanilla inventory or proof of activation/behavior.",
+  "default_list_sha256": "153e7ed6ee66d542f6e5be469085704b4f30b360c3d549e0a969e96d2adfd750",
+  "core_script_sha256": "a720f7a188a615276befa34409eda68585ec9abbc629b7a8107f37dcf7b33a9b",
+  "packages": [
+    {
+      "name": "Brick_Large_Cubes",
+      "family": "brick",
+      "default_list_line": 1,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "667b0850f7433c464b7d5cf781f36985508a531fdbc6521a0947de558572d3a8"
+    },
+    {
+      "name": "Brick_Arch",
+      "family": "brick",
+      "default_list_line": 2,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "b3359e7febb45f5305c84703276a3ba5b9725421faddd4142902094f16052826"
+    },
+    {
+      "name": "Brick_V15",
+      "family": "brick",
+      "default_list_line": 3,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "d343dd89d907280d4942c56789235d3af7bbc8eda03848f6fc383ac50fc86f30"
+    },
+    {
+      "name": "Emote_Alarm",
+      "family": "emote",
+      "default_list_line": 4,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "551807e5b8c968576bc99d383f0be527daac7bc7e8ddb5fa2e2942a311546533"
+    },
+    {
+      "name": "Emote_Confusion",
+      "family": "emote",
+      "default_list_line": 5,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "1a7cbeb9ef2d580f77209dde09b69c812f3701f9ad55e91749c9cbf432d9f753"
+    },
+    {
+      "name": "Emote_Hate",
+      "family": "emote",
+      "default_list_line": 6,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "99fab8548e672902c5a5353de9e7a65f954c38414e59f1bc7befae5b6a6417c3"
+    },
+    {
+      "name": "Emote_Love",
+      "family": "emote",
+      "default_list_line": 7,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "0db22ffc26aa4facc28a15de8848e6c47b38d71651e12613b2fc2f2787a0862b"
+    },
+    {
+      "name": "Item_Skis",
+      "family": "item",
+      "default_list_line": 8,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "1606418f9c8d4c0c7589629336b87247808c0e04b283504cf125175ee99bdd5a"
+    },
+    {
+      "name": "Light_Animated",
+      "family": "light",
+      "default_list_line": 9,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "40fc7f60cee74e67d7da1c7e344040dd8822952baad1e866589a450110c81591"
+    },
+    {
+      "name": "Light_Basic",
+      "family": "light",
+      "default_list_line": 10,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "755f0836591dd06739a1a983159616fbc9ef2db4b72e0058714bb74eb2f04422"
+    },
+    {
+      "name": "Particle_Basic",
+      "family": "particle",
+      "default_list_line": 11,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "9ebf26632b50cfb09ece62d45083547fcf168500b38f6a4fa9146d9960e4ce8d"
+    },
+    {
+      "name": "Particle_FX_Cans",
+      "family": "particle",
+      "default_list_line": 12,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "15a67d712cdc62114ad0c774f2547fdba79e66b3cc7bf0fce50f120eedb29644"
+    },
+    {
+      "name": "Particle_Grass",
+      "family": "particle",
+      "default_list_line": 13,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "858941ddf0a80fa4e14fa0e04b702fa534a965f06d489bad3a0213cdb7f41928"
+    },
+    {
+      "name": "Particle_Player",
+      "family": "particle",
+      "default_list_line": 14,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "bc586ea90c1b71642790e89ccaf93bd4fa4cea3caea7f9fbc81bc07379e77c35"
+    },
+    {
+      "name": "Particle_Tools",
+      "family": "particle",
+      "default_list_line": 15,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "090c9c57eada241005dca676a93b7291d11b851991111f3e57fc2e5ca3758a14"
+    },
+    {
+      "name": "Player_Fuel_Jet",
+      "family": "player",
+      "default_list_line": 16,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "e0edb296ec05fc3b7f95ec90a735ffc3626ca0b9fe862ab9cefdc6badba5540a"
+    },
+    {
+      "name": "Player_Jump_Jet",
+      "family": "player",
+      "default_list_line": 17,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "8400220e2a938546f298711a85cc34eea79e2b345daa2abdfeade0cdf848fbeb"
+    },
+    {
+      "name": "Player_Leap_Jet",
+      "family": "player",
+      "default_list_line": 18,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "0ca12dc9ee2d2fd5fb0c401f68dd1b6d6dac2349ab616278575c5e7de3fea5ca"
+    },
+    {
+      "name": "Player_No_Jet",
+      "family": "player",
+      "default_list_line": 19,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "8695d962cbaaa267fdc35ffd0db8e60a5a2431b0351508f61d15788f9fba8f0a"
+    },
+    {
+      "name": "Player_Quake",
+      "family": "player",
+      "default_list_line": 20,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "2cdc8084f9f826f221e400b268460a7b91d8b0afcaf5b0c956bff6d7246366fb"
+    },
+    {
+      "name": "Projectile_GravityRocket",
+      "family": "projectile",
+      "default_list_line": 21,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "4675c18a6b1ef349ccf03e22e1a462b13901dfe0d5873b7a47856b90ba0a101c"
+    },
+    {
+      "name": "Projectile_Pinball",
+      "family": "projectile",
+      "default_list_line": 22,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "fba0a6d79622d9c7c3912470cd90becce217e48da66003d8f88f31a883e4da2d"
+    },
+    {
+      "name": "Projectile_Pong",
+      "family": "projectile",
+      "default_list_line": 23,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "d7d50d11df1454a97a993e22e901049507ba004ccbf64cb88edd1cf112fcdc8a"
+    },
+    {
+      "name": "Projectile_Radio_Wave",
+      "family": "projectile",
+      "default_list_line": 24,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "ccf42f3f93e2f87cbd8d69e2f5ae3faeb92c2408070a3337ade41910fceaa60a"
+    },
+    {
+      "name": "Sound_Synth4",
+      "family": "sound",
+      "default_list_line": 25,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "a6214cb052311ad8c990e19ddf0e9514e9709cd0473580187235d7e80ec87d7a"
+    },
+    {
+      "name": "Sound_Beeps",
+      "family": "sound",
+      "default_list_line": 26,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "30022bad5fb60ff0c775ac1c61b8dc0ef2143841a8da98d067791ed8dbb887d0"
+    },
+    {
+      "name": "Sound_Phone",
+      "family": "sound",
+      "default_list_line": 27,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "d38b0c868e92bd44676c71285883165361cc399d5676980019890380df60169f"
+    },
+    {
+      "name": "Vehicle_Ball",
+      "family": "vehicle",
+      "default_list_line": 28,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "309195dab2bf0c21c0878eb6dd5c26a887b3ce25a4fa0853a8afe758b31ac9be"
+    },
+    {
+      "name": "Vehicle_Flying_Wheeled_Jeep",
+      "family": "vehicle",
+      "default_list_line": 29,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "1ef3c469c8d0fb67dcc179f0cecdbfa0c412a63638e33f3715f25ccfc39c5372"
+    },
+    {
+      "name": "Vehicle_Horse",
+      "family": "vehicle",
+      "default_list_line": 30,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "cf51a71966c54e67c13aa0a4355d9e80eaea939c93de208abb047adb82e47801"
+    },
+    {
+      "name": "Vehicle_Jeep",
+      "family": "vehicle",
+      "default_list_line": 31,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "239eeedcbf5f40d3b1f1290aef7b3bffc42d9cb3e57fe53e3f2bcc7b6b70f4ff"
+    },
+    {
+      "name": "Vehicle_Magic_Carpet",
+      "family": "vehicle",
+      "default_list_line": 32,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "ddcd4d19e39851159960175d1b76111a37313b06065dbbaf3253bec8b1735cd9"
+    },
+    {
+      "name": "Vehicle_Tank",
+      "family": "vehicle",
+      "default_list_line": 33,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "46879c173094cae0ad450c7de8402f202227bb4d821c2581f45ff959c3c89f4f"
+    },
+    {
+      "name": "Weapon_Bow",
+      "family": "weapon",
+      "default_list_line": 34,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "9234ddf272aefa223bdd9bd349fdaa6fe773fe6be75e6cc61b26527f04d940e1"
+    },
+    {
+      "name": "Weapon_Gun",
+      "family": "weapon",
+      "default_list_line": 35,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "5a5f3176e1a0d4ac097c69122b3a7f74028a93e4d24decb907a989c558367943"
+    },
+    {
+      "name": "Weapon_Guns_Akimbo",
+      "family": "weapon",
+      "default_list_line": 36,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "c8463020f11f540ece51dc9c11687472ca0e0c6d67feb52e4234c58d1355626c"
+    },
+    {
+      "name": "Weapon_Horse_Ray",
+      "family": "weapon",
+      "default_list_line": 37,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "b42c7e5690c9bff3ece3a4a87e911132afcb691b94fec4ab6928645f588127b2"
+    },
+    {
+      "name": "Weapon_Push_Broom",
+      "family": "weapon",
+      "default_list_line": 38,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "a710b0721a75e39fe0569f932eb33434dddd7481b50e606cc3e2c7a02977cc5f"
+    },
+    {
+      "name": "Weapon_Rocket_Launcher",
+      "family": "weapon",
+      "default_list_line": 39,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "e8dcbc8884a8ba67f509280b19f67f91b647336b92198dc9539e8428f51d4a9b"
+    },
+    {
+      "name": "Weapon_Spear",
+      "family": "weapon",
+      "default_list_line": 40,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "b79469ced962931f78bb34034fed1f2364110721f2401412088e3ffb7d97ecbc"
+    },
+    {
+      "name": "Weapon_Sword",
+      "family": "weapon",
+      "default_list_line": 41,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "225601b0976a581f7c4468898a9e90a3ffbdb688f863ea715fbad9e9f7b18452"
+    },
+    {
+      "name": "Print_1x2f_Default",
+      "family": "print",
+      "default_list_line": 42,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "ae51c7a694c6bf4bb7d785f029c210e8af7770aa56d22e0acf7525a708d6e4e4"
+    },
+    {
+      "name": "Print_2x2f_Default",
+      "family": "print",
+      "default_list_line": 43,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "0d5d63351ef20791119f597aca69af38d97c29ae30e783c073a868d549d21df6"
+    },
+    {
+      "name": "Print_2x2r_Default",
+      "family": "print",
+      "default_list_line": 44,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "254d7269e871b0e3f44845776482a4e16d5ed2932ef74d6816b365f9519db5ab"
+    },
+    {
+      "name": "Print_Letters_Default",
+      "family": "print",
+      "default_list_line": 45,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "dc5351380be1b22ca72398b02467d2299d6a45c64730273b40a8c1003f1459e2"
+    },
+    {
+      "name": "Print_2x2r_Monitor3",
+      "family": "print",
+      "default_list_line": 46,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "5dc92d58577caaf8075454589cd9bb5189d9f14ea399a74d1a8225f53aa806de"
+    },
+    {
+      "name": "Print_1x2f_BLPRemote",
+      "family": "print",
+      "default_list_line": 47,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "8fa4f2cc4441974cc913938ae861f6a6a826a10b73c39c24a8a14f94e12d513d"
+    },
+    {
+      "name": "Vehicle_Pirate_Cannon",
+      "family": "vehicle",
+      "default_list_line": 48,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "3c853e6c44e02b2be185accba8688576aa6331f868a702db23d1e88f93ca0690"
+    },
+    {
+      "name": "Vehicle_Rowboat",
+      "family": "vehicle",
+      "default_list_line": 49,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "5929808b675d2e89a3f7fd5f92d4694448df48a36b94f2edad83b15ef8f47dc6"
+    },
+    {
+      "name": "Item_Key",
+      "family": "item",
+      "default_list_line": 50,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "6e36bdb20abf6341943029befaeec1a85ba2a7f1224761229db43583a86a11cc"
+    },
+    {
+      "name": "Brick_Checkpoint",
+      "family": "brick",
+      "default_list_line": 51,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "fed72eab0e3711befc532b92dcdff2d2c84153400fab208ce077a3a8a30fae67"
+    },
+    {
+      "name": "Brick_Treasure_Chest",
+      "family": "brick",
+      "default_list_line": 52,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "1715a778146072aabdaefc7881ca41e2f2dc374f8a283b9bc733d5f4ad822345"
+    },
+    {
+      "name": "Brick_Halloween",
+      "family": "brick",
+      "default_list_line": 53,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "2817b65f675366f48376da679ff359ec4426009cedc986face34e6ba7bca3660"
+    },
+    {
+      "name": "Brick_Teledoor",
+      "family": "brick",
+      "default_list_line": 54,
+      "status": "pending",
+      "present": true,
+      "archive_sha256": "9703202caf5a96183a5e1d5e78f175f34265d9be03f418b0e3e0944fe73a3f92"
+    }
+  ],
+  "event_registrations": [
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onActivate",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17133,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onPlayerTouch",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17135,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onBotTouch",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17136,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onProjectileHit",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17137,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onBlownUp",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17138,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onRespawn",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17139,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onRelay",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17140,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onPrintCountOverFlow",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17141,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onPrintCountUnderFlow",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17142,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setColor",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17379,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setColorFX",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17381,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setShapeFX",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17382,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setColliding",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17383,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setRendering",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17384,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setRayCasting",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17385,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "disappear",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17386,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fakeKillBrick",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17387,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "respawn",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17388,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setEmitter",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17389,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setEmitterDirection",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17390,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setLight",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17391,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setItem",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17392,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setItemDirection",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17393,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setItemPosition",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17394,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setMusic",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17395,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "playSound",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17396,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "spawnItem",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17397,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "spawnProjectile",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17398,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "spawnExplosion",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17399,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fireRelay",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17400,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fireRelayUp",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17401,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fireRelayDown",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17402,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fireRelayNorth",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17403,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fireRelayEast",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17404,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fireRelaySouth",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17405,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "fireRelayWest",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17406,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "cancelEvents",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17407,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setEventEnabled",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17408,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "toggleEventEnabled",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17409,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setVehicle",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17410,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "respawnVehicle",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17411,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "recoverVehicle",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17412,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "radiusImpulse",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17413,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "incrementPrintCount",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17414,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "decrementPrintCount",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17415,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "fxDTSBrick",
+      "name": "setPrintCount",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 17416,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "GameConnection",
+      "name": "CenterPrint",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18146,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "GameConnection",
+      "name": "BottomPrint",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18148,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "GameConnection",
+      "name": "ChatMessage",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18149,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "GameConnection",
+      "name": "IncScore",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18150,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "GameConnection",
+      "name": "playSound",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18151,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "Kill",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18197,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "BurnPlayer",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18199,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "ClearBurn",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18200,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "SetVelocity",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18201,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "AddVelocity",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18202,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "SetPlayerScale",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18203,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "AddHealth",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18204,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "SetHealth",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18205,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "ChangeDataBlock",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18206,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "Dismount",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18207,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "SpawnProjectile",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18208,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "SpawnExplosion",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18209,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "ClearTools",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18210,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Player",
+      "name": "InstantRespawn",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18211,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "MiniGame",
+      "name": "ChatMsgAll",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18382,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "MiniGame",
+      "name": "CenterPrintAll",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18384,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "MiniGame",
+      "name": "BottomPrintAll",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18385,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "MiniGame",
+      "name": "Reset",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18386,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "MiniGame",
+      "name": "RespawnAll",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18387,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Projectile",
+      "name": "Explode",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18388,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Projectile",
+      "name": "Delete",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18389,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Projectile",
+      "name": "Bounce",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18390,
+      "status": "pending"
+    },
+    {
+      "kind": "output",
+      "target_class": "Projectile",
+      "name": "Redirect",
+      "source": "core/allGameScripts-Vanilla.cs",
+      "line": 18391,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "OnKeyMatch",
+      "source": "Add-Ons/Item_Key/server.cs",
+      "line": 285,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "OnKeyMismatch",
+      "source": "Add-Ons/Item_Key/server.cs",
+      "line": 290,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onTeledoorEnter",
+      "source": "Add-Ons/Brick_Teledoor/server.cs",
+      "line": 186,
+      "status": "pending"
+    },
+    {
+      "kind": "input",
+      "target_class": "fxDTSBrick",
+      "name": "onTeledoorExit",
+      "source": "Add-Ons/Brick_Teledoor/server.cs",
+      "line": 190,
+      "status": "pending"
+    }
+  ],
+  "missing_packages": [],
+  "core_event_counts": {
+    "input": 9,
+    "output": 65
+  },
+  "unindexed": [
+    "shipped-but-disabled stock packages",
+    "core built-in content and engine behavior",
+    "dynamic registration",
+    "maps and Tutorial availability",
+    "full UI/workflow coverage"
+  ]
+}

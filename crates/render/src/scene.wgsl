@@ -1,0 +1,191 @@
+override OUTPUT_ENCODED: u32 = 0u;
+fn output_color(display:vec3<f32>)->vec3<f32> {
+    if OUTPUT_ENCODED == 1u { return display; }
+    return linear_color(display);
+}
+struct Camera {
+    view_projection:mat4x4<f32>, eye:vec4<f32>, sun_direction:vec4<f32>,
+    sun_color:vec4<f32>, ambient:vec4<f32>, fog_color:vec4<f32>, atmosphere:vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> camera:Camera;
+struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
+struct PointLights { count:vec4<u32>, values:array<PointLight,256> };
+@group(0) @binding(1) var<uniform> lights:PointLights;
+// Smooth finite-radius native falloff; shadowing and exact v20 falloff remain separate.
+fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    var result=vec3<f32>(0.0);
+    let n=normal/max(length(normal),0.0001);
+    for(var i=0u;i<min(lights.count.x,256u);i+=1u) {
+        let light=lights.values[i];
+        let delta=light.position_radius.xyz-position;
+        let distance=length(delta);
+        let falloff=max(1.0-distance/max(light.position_radius.w,0.0001),0.0);
+        result+=light.color.rgb*falloff*falloff*max(dot(n,delta/max(distance,0.0001)),0.0);
+    }
+    return result;
+}
+@group(1) @binding(0) var layer0:texture_2d<f32>;
+@group(1) @binding(1) var layer1:texture_2d<f32>;
+@group(1) @binding(2) var layer2:texture_2d<f32>;
+@group(1) @binding(3) var layer3:texture_2d<f32>;
+@group(1) @binding(4) var layer4:texture_2d<f32>;
+@group(1) @binding(5) var layer5:texture_2d<f32>;
+@group(1) @binding(6) var layer6:texture_2d<f32>;
+@group(1) @binding(7) var layer7:texture_2d<f32>;
+@group(1) @binding(8) var lightmap:texture_2d<f32>;
+@group(1) @binding(9) var weights0:texture_2d<f32>;
+@group(1) @binding(10) var weights1:texture_2d<f32>;
+@group(1) @binding(11) var tiled:sampler;
+@group(1) @binding(12) var clamped:sampler;
+@group(1) @binding(13) var<uniform> material:array<vec4<f32>,4>;
+// Brick FX IDs come from recovered v20 output registrations. Numerical visual
+// parameters below are explicit native approximations, not recovered engine code.
+fn brick_fx(uv:vec2<f32>)->vec2<u32> {
+ if (material[0].x==2.0 || material[0].x==3.0) && uv.y==-4096.0 {
+  let code=uv.x-1024.0;
+  if code>=0.0 && code<=22.0 && floor(code)==code {
+   let bits=u32(code);if bits%8u<=6u {return vec2<u32>(bits%8u,bits/8u);}
+  }
+ }
+ return vec2<u32>(0u);
+}
+fn rainbow(h:f32)->vec3<f32>{let p=abs(fract(vec3<f32>(h)+vec3<f32>(0.,0.6666667,0.3333333))*6.-3.);return clamp(p-1.,vec3<f32>(0.),vec3<f32>(1.));}
+struct VertexOut {
+    @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>,
+    @location(1) lightmap_uv:vec2<f32>, @location(2) color:vec4<f32>, @location(3) normal:vec3<f32>,
+    @location(4) world_position:vec3<f32>,
+    @location(5) @interpolate(flat) fx:vec2<u32>,
+};
+@vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
+    @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>)->VertexOut {
+    let model=mat4x4<f32>(m0,m1,m2,m3);
+    let position=(model*vec4<f32>(local_position,1.0)).xyz;
+    // Cofactor matrix is det(M)*inverse-transpose(M). Positive affine
+    // determinants are validated on the CPU; preserve nonuniform scale normals.
+    let cofactor=mat3x3<f32>(cross(m1.xyz,m2.xyz),cross(m2.xyz,m0.xyz),cross(m0.xyz,m1.xyz));
+    let normal=(cofactor*local_normal)/dot(m0.xyz,cross(m1.xyz,m2.xyz));
+    let color=local_color*tint;
+    var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
+    out.uv=uv;out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
+    let fx=brick_fx(lightmap_uv);out.fx=fx;let time=camera.atmosphere.z;
+    if fx.y==1u {
+        let phase=position.yzx*2.+vec3<f32>(time*2.);
+        out.world_position+=sin(phase)*0.1;
+        let c=cos(phase)*0.2;
+        let j0=vec3<f32>(1.,0.,c.z);let j1=vec3<f32>(c.x,1.,0.);let j2=vec3<f32>(0.,c.y,1.);
+        out.normal=normalize(cross(j1,j2)*normal.x+cross(j2,j0)*normal.y+cross(j0,j1)*normal.z);
+        out.position=camera.view_projection*vec4<f32>(out.world_position,1.);
+    } else if fx.y==2u {
+        let phase=position.xz*1.4+vec2<f32>(time*1.6);
+        out.world_position.y+=(sin(phase.x)+sin(phase.y))*0.05;
+        out.normal=normalize(vec3<f32>(normal.x-normal.y*cos(phase.x)*0.07,normal.y,normal.z-normal.y*cos(phase.y)*0.07));
+        out.position=camera.view_projection*vec4<f32>(out.world_position,1.);
+    }
+    if material[0].x==6.0 {
+        let phase=vec2<f32>(position.x+1024.0,1024.0-position.z)*0.05+vec2<f32>(camera.atmosphere.z);
+        out.world_position.y+=(sin(phase.x)+sin(phase.y))*material[1].z*0.25;
+        out.normal=normalize(vec3<f32>(-cos(phase.x)*material[1].z*0.0125,1.0,cos(phase.y)*material[1].z*0.0125));
+        out.position=camera.view_projection*vec4<f32>(out.world_position,1.0);
+    }
+    if (material[0].x==4.0 || material[0].x==5.0) {
+        out.position=camera.view_projection*vec4<f32>(camera.eye.xyz+position,1.0);
+        out.position.z=out.position.w;
+        if material[0].x==5.0 {out.uv=uv+fract(normal.xy*camera.atmosphere.z);}
+    }
+    return out;
+}
+fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
+    let distance=length(position-camera.eye.xyz);
+    let t=clamp((distance-camera.atmosphere.x)/max(camera.atmosphere.y-camera.atmosphere.x,0.001),0.0,1.0);
+    let amount=(1.0-(1.0-t)*(1.0-t))*camera.atmosphere.w;
+    return output_color(mix(display,camera.fog_color.rgb,amount));
+}
+@fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    if material[0].x==6.0 {
+        let time=camera.atmosphere.z;
+        let phase=vec2<f32>(v.world_position.x+1024.0,1024.0-v.world_position.z)*material[2].x+vec2<f32>(time/material[2].z);
+        let distortion=vec2<f32>(cos(phase.x),sin(phase.y))*material[2].y;
+        var drift=vec2<f32>(time*0.02,cos(time*0.785398163)*0.03);
+        if material[2].w>0.5 {drift=material[1].xy*time;}
+        let base=v.uv*material[3].x+distortion;
+        let second=mat2x2<f32>(vec2<f32>(0.8660254,0.5),vec2<f32>(-0.5,0.8660254))*(base+drift*material[3].w);
+        let first_rgb=display_color(textureSample(layer0,tiled,base+drift).rgb);
+        let second_rgb=display_color(textureSample(layer0,tiled,second).rgb);
+        let masks=textureSample(lightmap,clamped,v.lightmap_uv);
+        let a=masks.r;
+        // Collapse the two classic straight-alpha surface passes into one.
+        var alpha=1.0-(1.0-a)*(1.0-a);
+        var rgb=(first_rgb*a*(1.0-a)+second_rgb*a)/max(alpha,0.00001);
+        let shore=display_color(textureSample(layer1,tiled,v.uv*material[3].y+distortion+drift).rgb);
+        let sa=masks.g;
+        let combined=sa+alpha*(1.0-sa);
+        rgb=(shore*sa+rgb*alpha*(1.0-sa))/max(combined,0.00001);
+        alpha=combined;
+        let reflected=reflect(normalize(v.world_position-camera.eye.xyz),normalize(v.normal));
+        let reflection_uv=vec2<f32>(atan2(reflected.x,reflected.z)*0.159154943+0.5,acos(clamp(reflected.y,-1.0,1.0))*0.318309886);
+        let reflection=display_color(textureSample(layer2,clamped,reflection_uv).rgb);
+        rgb=mix(rgb,reflection,clamp(material[3].z*(0.5+0.15*(cos(phase.x)+sin(phase.y))),0.0,1.0));
+        if alpha<=0.00001 {discard;}
+        return vec4<f32>(fogged(rgb,v.world_position),alpha);
+    }
+    if (material[0].x==4.0 || material[0].x==5.0) {
+        var sky=textureSample(layer0,clamped,v.uv);
+        if material[0].x==5.0 {sky=textureSample(layer0,tiled,v.uv);}
+        return vec4<f32>(output_color(display_color(sky.rgb)*v.color.rgb),sky.a*v.color.a);
+    }
+    if material[0].x==1.0 {
+        let weight_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(weights0));
+        let a=textureSample(weights0,tiled,weight_uv);let b=textureSample(weights1,tiled,weight_uv);
+        let diffuse=display_color(textureSample(layer0,tiled,v.uv).rgb)*a.r
+            +display_color(textureSample(layer1,tiled,v.uv).rgb)*a.g
+            +display_color(textureSample(layer2,tiled,v.uv).rgb)*a.b
+            +display_color(textureSample(layer3,tiled,v.uv).rgb)*a.a
+            +display_color(textureSample(layer4,tiled,v.uv).rgb)*b.r
+            +display_color(textureSample(layer5,tiled,v.uv).rgb)*b.g
+            +display_color(textureSample(layer6,tiled,v.uv).rgb)*b.b
+            +display_color(textureSample(layer7,tiled,v.uv).rgb)*b.a;
+        let light_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(lightmap));
+        return vec4<f32>(fogged(diffuse*v.color.rgb*(textureSample(lightmap,tiled,light_uv).rgb+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
+    }
+    let fx=v.fx;let time=camera.atmosphere.z;
+    let albedo=textureSample(layer0,tiled,v.uv);
+    var base_color=v.color.rgb;
+    if fx.x==6u {base_color=rainbow(fract(time/5.))*max(max(base_color.r,base_color.g),base_color.b);}
+    if fx.x==5u {let swirl=0.7+0.3*sin(v.world_position.y*3.+atan2(v.world_position.z,v.world_position.x)*2.-time*3.);base_color*=swirl;}
+    var alpha=albedo.a*v.color.a;
+    var pigment=display_color(albedo.rgb)*base_color;
+    if material[0].x==3.0 || material[0].x==7.0 {
+        // Original brick masks have low coverage alpha (e.g. TOP <=46/255).
+        // They overlay pigment on an opaque painted surface, not cut holes.
+        // These images use raw UNORM to preserve authored display-space mixing.
+        pigment=mix(base_color,albedo.rgb,albedo.a);
+        alpha=v.color.a;
+    }
+    if fx.x==4u {alpha*=0.5+0.5*cos(time*3.14159265);}
+    if alpha<=material[0].y {discard;}
+    if material[0].x==7.0 || material[0].x==8.0 {
+        return vec4<f32>(fogged(pigment,v.world_position),alpha);
+    }
+    var illumination=textureSample(lightmap,clamped,v.lightmap_uv).rgb;
+    if material[0].x==2.0 || material[0].x==3.0 {
+        let normal=v.normal/max(length(v.normal),0.0001);
+        let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+        illumination=camera.ambient.rgb+camera.sun_color.rgb*max(dot(normal,-direction),0.0);
+    }
+    illumination+=point_illumination(v.world_position,v.normal);
+    if fx.x==3u {illumination=max(illumination,vec3<f32>(1.));}
+    var display=pigment*illumination;
+    if fx.x==1u || fx.x==2u {
+        let n=normalize(v.normal);let view=normalize(camera.eye.xyz-v.world_position);
+        let reflection=reflect(-view,n);
+        let fresnel=pow(1.-clamp(dot(n,view),0.,1.),3.);
+        // Host environment colors provide a bounded analytical sheen. This is
+        // not an actual v20 sphere-map or scene reflection capture.
+        let horizon=0.35+0.65*pow(0.5+0.5*reflection.y,2.);
+        let half_vector=normalize(view-normalize(camera.sun_direction.xyz));
+        let specular=pow(max(dot(n,half_vector),0.),select(24.,80.,fx.x==2u));
+        if fx.x==1u {display+=pigment*(0.12+0.25*fresnel)+camera.sun_color.rgb*specular*0.35;}
+        else {display=pigment*(0.25+0.65*horizon)+camera.sun_color.rgb*specular*0.65+vec3<f32>(fresnel*0.12);}
+    }
+    return vec4<f32>(fogged(display,v.world_position),alpha);
+}

@@ -1,0 +1,18 @@
+{
+  "acceptance_open": true,
+  "ambient": 0.08,
+  "anomalous_native_vertices": 40,
+  "changed_pixels_against_raw": [
+    2055,
+    2055
+  ],
+  "left_to_right": [
+    "unchanged raw finite RGBA",
+    "diagnostic RGB divided by255",
+    "diagnostic RGB clamped before lighting"
+  ],
+  "runtime_policy": "preserve prior raw values with diagnostic",
+  "schema_version": 1,
+  "selected_interpretation": null,
+  "sun": 0
+}

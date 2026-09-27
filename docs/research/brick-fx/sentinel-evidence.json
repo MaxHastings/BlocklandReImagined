@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "source_archive_sha256": "2817b65f675366f48376da679ff359ec4426009cedc986face34e6ba7bca3660",
+  "records": [
+    {
+      "archive": "Brick_Halloween.zip",
+      "member": "pumpkin_ascii.blb",
+      "sha256": "28267a50a24c98467b89de0459ffe0432b9e95abdd66f5193859cf7fb77f56bd",
+      "rgba": [
+        200,
+        150,
+        0,
+        1
+      ],
+      "row_count": 60,
+      "first_source_line": 3153
+    },
+    {
+      "archive": "Brick_Halloween.zip",
+      "member": "pumpkin_face.blb",
+      "sha256": "e5c1f5046cc198de98df2c6f04a31457aa4ce971be78b422146a11990738a070",
+      "rgba": [
+        200,
+        150,
+        0,
+        1
+      ],
+      "row_count": 40,
+      "first_source_line": 2966
+    },
+    {
+      "archive": "Brick_Halloween.zip",
+      "member": "pumpkin_scared.blb",
+      "sha256": "49d8ad563ab0f08b03e63c10f4bf19f3be3fefa2d853a3eac415bc42671664bc",
+      "rgba": [
+        200,
+        150,
+        0,
+        1
+      ],
+      "row_count": 36,
+      "first_source_line": 2406
+    }
+  ],
+  "interpretation": "Unresolved: no original brick-reader implementation establishes byte normalization, clamping stage or special sentinel semantics. Preserve raw finite RGBA.",
+  "negative_alpha": "Observed stock alpha=-1 selects signed RGB paint offsets. Other negative magnitudes and transparent-paint interactions unproven."
+}

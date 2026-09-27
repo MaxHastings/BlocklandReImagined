@@ -1,0 +1,317 @@
+//! Native runtime-built inventory HUD. Geometry/art follow createInvHud,
+//! createPaintHud and createToolHud in the recovered v20 client scripts.
+use super::*;
+use crate::api::{IconRef, PlantError};
+use crate::geom::WHITE;
+use crate::models::hud::{FX_ART, ScrollMode};
+
+pub struct Play {
+    view: View,
+}
+impl Play {
+    pub fn new(core: &Core) -> Self {
+        let mut view = layout_view(core, "PlayGui");
+        // These authored controls are old loading/inventory placeholders replaced
+        // by script at runtime; the native HUD builds its own current controls.
+        for name in ["HUD_Ghosting", "HudInvBox", "HUD_PaintNameBG"] {
+            if let Some(n) = view.id(name) {
+                view.set_visible(n, false);
+            }
+        }
+        Self { view }
+    }
+}
+fn named_text(v: &mut View, style: &str, rect: Rect, label: &str) {
+    v.add(v.root, text(style, rect, label));
+}
+fn art(v: &mut View, rect: Rect, name: &str, tint: Rgba) {
+    let n = v.add(v.root, bitmap("HUDBitmapProfile", rect, name));
+    v.state(n).tint = Some(tint);
+}
+fn icon(v: &mut View, rect: Rect, image: &IconRef, tint: Rgba) {
+    match image {
+        IconRef::Pack(id) => art(v, rect, id, tint),
+        IconRef::External(id) => {
+            let n = v.add(v.root, ctrl("GuiBitmapCtrl", "HUDBitmapProfile", rect));
+            v.state(n).external_texture = Some(*id);
+            v.state(n).tint = Some(tint);
+        }
+        IconRef::None => art(v, rect, "base/client/ui/brickicons/unknown", tint),
+    }
+}
+fn fill(v: &mut View, rect: Rect, color: Rgba) {
+    v.add(v.root, swatch(rect, color));
+}
+fn title_bar(v: &mut View, r: Rect, label: &str) {
+    art(
+        v,
+        Rect::new(r.x, r.y, 10, 18),
+        "base/client/ui/bluehudleftcorner",
+        WHITE,
+    );
+    art(
+        v,
+        Rect::new(r.right() - 10, r.y, 10, 18),
+        "base/client/ui/bluehudrightcorner",
+        WHITE,
+    );
+    fill(v, Rect::new(r.x + 10, r.y, r.w - 20, 18), [0, 0, 128, 128]);
+    named_text(v, "HUDBrickNameProfile", r, label);
+}
+fn markup(v: &mut View, r: Rect, label: &str, style: &str) {
+    let mut c = text(style, r, label);
+    c.class = "GuiMLTextCtrl".into();
+    v.add(v.root, c);
+}
+
+/// Rebuilt in a bounded temporary view: no detached controls accumulate as
+/// inventory, paint or chat changes. The authored PlayGui remains persistent.
+fn hud(core: &Core) -> View {
+    let (w, h) = core.logical;
+    let m = &core.hud;
+    let mut v = View::new(&ctrl(
+        "GuiControl",
+        "GuiDefaultProfile",
+        Rect::new(0, 0, w, h),
+    ));
+    if m.boxes_visible {
+        let cell = (w / 10).clamp(1, 64);
+        let width = cell * 10;
+        let (x, y) = ((w - width) / 2, h - cell + m.brick_slide.offset);
+        fill(&mut v, Rect::new(x, y, width, cell), [0, 0, 0, 64]);
+        let mut color = m
+            .paint
+            .iter()
+            .flat_map(|d| d.colors.iter())
+            .nth(m.spray_index as usize)
+            .copied()
+            .unwrap_or([1.0; 4]);
+        color[3] = color[3].clamp(0.1, 1.0);
+        let tint = if m.prefs.recolor_brick_icons {
+            rgba(color)
+        } else {
+            WHITE
+        };
+        for (i, b) in m.bricks.iter().take(10).enumerate() {
+            let r = Rect::new(x + i as i32 * cell, y, cell, cell);
+            if m.brick_active && m.cur_brick == Some(i) {
+                art(
+                    &mut v,
+                    r,
+                    "base/client/ui/brickicons/brickiconactive",
+                    WHITE,
+                );
+            }
+            fill(
+                &mut v,
+                Rect::new(r.x + 2, r.y + 4, cell - 4, cell - 8),
+                [0, 0, 0, 64],
+            );
+            if let Some(b) = b {
+                icon(&mut v, r, &b.icon, tint);
+            }
+            if m.prefs.show_slot_numbers {
+                named_text(
+                    &mut v,
+                    "HUDBrickNameProfile",
+                    Rect::new(r.x, r.y + 2, 16, 18),
+                    &((i + 1) % 10).to_string(),
+                );
+            }
+        }
+        title_bar(&mut v, Rect::new(x, y - 18, width, 18), &m.brick_name);
+        if m.prefs.show_tooltips && m.mode != ScrollMode::Bricks {
+            named_text(
+                &mut v,
+                "HUDRightTextProfile",
+                Rect::new(x, y - 18, width, 18),
+                &format!("Press {} for more bricks   ", core.key_name("openBSD")),
+            );
+            named_text(
+                &mut v,
+                "HUDLeftTextProfile",
+                Rect::new(x, y - 18, width, 18),
+                &format!("  Press {} to use bricks", core.key_name("useBricks")),
+            );
+        }
+        let ty = -m.tool_slide.offset;
+        let tx = w - cell;
+        for (i, t) in m.tools.iter().take(64).enumerate() {
+            let r = Rect::new(tx, ty + i as i32 * cell, cell, cell);
+            art(&mut v, r, "base/client/ui/itemicons/toolbg", WHITE);
+            if m.tool_active && m.cur_tool == Some(i) {
+                art(&mut v, r, "base/client/ui/itemicons/itemactive", WHITE);
+            }
+            if let Some(t) = t {
+                icon(&mut v, r, &t.icon, t.tint.unwrap_or(WHITE));
+            }
+        }
+        let label = Rect::new(tx, ty + m.tools.len().min(64) as i32 * cell, cell, 18);
+        art(&mut v, label, "base/client/ui/itemicons/toollabelbg", WHITE);
+        let tools_label = if m.mode == ScrollMode::Tools {
+            m.tool_name.clone()
+        } else if m.prefs.show_tooltips {
+            format!("{} = tools", core.key_name("useTools"))
+        } else {
+            String::new()
+        };
+        named_text(&mut v, "HUDCenterTextProfile", label, &tools_label);
+        let px = -m.paint_slide.offset;
+        let rows = m.paint_rows.iter().copied().max().unwrap_or(9).max(9) as i32;
+        let py = h - (rows * 17 + 1) - 18;
+        let pw = m.paint_box_width();
+        art(
+            &mut v,
+            Rect::new(px + pw - 14, py, 100, 100),
+            "base/client/ui/paintlabelbg",
+            WHITE,
+        );
+        art(
+            &mut v,
+            Rect::new(px + pw - 14, py + 100, 100, (rows * 17 + 1 - 100).max(0)),
+            "base/client/ui/paintlabelbgloop",
+            WHITE,
+        );
+        art(
+            &mut v,
+            Rect::new(px + pw - 14, py, 100, 100),
+            "base/client/ui/paintlabel",
+            WHITE,
+        );
+        for (col, division) in m.paint.iter().enumerate() {
+            for (row, c) in division.colors.iter().enumerate() {
+                fill(
+                    &mut v,
+                    Rect::new(px + col as i32 * 17 + 1, py + row as i32 * 17 + 1, 16, 16),
+                    rgba(*c),
+                );
+            }
+        }
+        for (row, name) in FX_ART.iter().enumerate() {
+            let r = Rect::new(
+                px + m.paint.len() as i32 * 17 + 1,
+                py + row as i32 * 17 + 1,
+                16,
+                16,
+            );
+            fill(&mut v, r, [64, 64, 64, 255]);
+            if !name.is_empty() {
+                art(&mut v, r, &format!("base/client/ui/{name}"), WHITE);
+            }
+        }
+        if m.paint_active {
+            art(
+                &mut v,
+                Rect::new(
+                    px + m.paint_row as i32 * 17,
+                    py + m.paint_swatch as i32 * 17,
+                    18,
+                    18,
+                ),
+                "base/client/ui/paintactive",
+                WHITE,
+            );
+        }
+        title_bar(&mut v, Rect::new(px, py - 18, pw + 100, 18), &m.paint_name);
+    }
+    if core
+        .plant_error
+        .is_some_and(|(e, _)| e == PlantError::Forbidden)
+    {
+        named_text(
+            &mut v,
+            "HUDBrickNameProfile",
+            Rect::new(0, h * 2 / 3, w, 30),
+            "You do not have permission to build here.",
+        );
+    }
+    // Original cached font + ML markup, with chat fade/page rules from ChatModel.
+    let chat = core
+        .chat
+        .visible(core.time_ms)
+        .iter()
+        .map(|l| format!("\u{E006}{}", l.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    markup(
+        &mut v,
+        Rect::new(4, 4, (w - 80).max(1), (h / 2).max(1)),
+        &chat,
+        "BlockChatTextProfile",
+    );
+    if let Some((message, _)) = &core.center_print {
+        markup(
+            &mut v,
+            Rect::new(0, h / 3, w, h / 3),
+            message,
+            "HUDBrickNameProfile",
+        );
+    }
+    if let Some((message, _, hide_bar)) = &core.bottom_print {
+        if !hide_bar {
+            fill(&mut v, Rect::new(0, h - 80, w, 40), [0, 0, 0, 100]);
+        }
+        markup(
+            &mut v,
+            Rect::new(0, h - 80, w, 40),
+            message,
+            "HUDBrickNameProfile",
+        );
+    }
+    v.layout(w, h);
+    v
+}
+impl Screen for Play {
+    fn id(&self) -> ScreenId {
+        ScreenId::Play
+    }
+    fn view(&self) -> &View {
+        &self.view
+    }
+    fn view_mut(&mut self) -> &mut View {
+        &mut self.view
+    }
+    fn modal(&self) -> bool {
+        false
+    }
+    fn cursor(&self) -> bool {
+        false
+    }
+    fn on_wake(&mut self, core: &mut Core) {
+        core.hud.reset_layout();
+        self.on_update(core);
+    }
+    fn on_update(&mut self, core: &mut Core) {
+        if let Some(n) = self.view.id("LagIcon") {
+            self.view.set_visible(n, core.lagging);
+        }
+        if let Some(n) = self.view.id("HUD_PlantError") {
+            self.view.set_visible(
+                n,
+                core.plant_error
+                    .is_some_and(|(e, _)| e != PlantError::Forbidden),
+            );
+            if let Some((e, _)) = core.plant_error {
+                let name = match e {
+                    PlantError::Overlap => "overlap",
+                    PlantError::Float => "float",
+                    PlantError::Stuck => "stuck",
+                    PlantError::Unstable => "unstable",
+                    PlantError::Buried => "buried",
+                    PlantError::Forbidden => "stuck",
+                    PlantError::TooFar => "toofar",
+                    PlantError::Limit => "limit",
+                };
+                self.view.state(n).bitmap =
+                    Some(format!("base/client/ui/planterrors/planterror_{name}"));
+            }
+        }
+    }
+    fn tick(&mut self, _dt: u64, core: &mut Core) {
+        self.on_update(core);
+    }
+    fn draw(&self, pack: &Pack, dl: &mut DrawList, core: &Core) {
+        self.view.draw(pack, dl);
+        hud(core).draw(pack, dl);
+    }
+}

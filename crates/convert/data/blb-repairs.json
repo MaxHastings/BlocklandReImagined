@@ -1,0 +1,740 @@
+[
+  {
+    "path": "base/data/bricks/baseplates/32x32FRoadC.blb",
+    "sha256": "90d48ecf3ab14f6974160eaf1ec47b212f375674a3e1fe8b5a0598437e0038b5",
+    "edits": [
+      {
+        "line": 235,
+        "before": "-16 -6.3 0.5",
+        "after": "-16 -6.3",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 236,
+        "before": "-16 -7 0.5",
+        "after": "-16 -7",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 237,
+        "before": "-13.67 -7.31 0.5",
+        "after": "-13.67 -7.31",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 238,
+        "before": "-13.49 -6.63 0.5",
+        "after": "-13.49 -6.63",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 389,
+        "before": "-11.78 -0.26 0.5",
+        "after": "-11.78 -0.26",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 390,
+        "before": "-11.94 -0.83 0.5",
+        "after": "-11.94 -0.83",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 391,
+        "before": "-8.15 -2.4 0.5",
+        "after": "-8.15 -2.4",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 392,
+        "before": "-7.85 -1.88 0.5",
+        "after": "-7.85 -1.88",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 411,
+        "before": "-7.85 -1.88 0.5",
+        "after": "-7.85 -1.88",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 412,
+        "before": "-8.15 -2.4 0.5",
+        "after": "-8.15 -2.4",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 413,
+        "before": "-4.9 -4.9 0.5 ",
+        "after": "-4.9 -4.9",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 414,
+        "before": "-4.47 -4.47 0.5",
+        "after": "-4.47 -4.47",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 455,
+        "before": "-1.88 -7.85 0.5",
+        "after": "-1.88 -7.85",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 456,
+        "before": "-2.4 -8.15 0.5",
+        "after": "-2.4 -8.15",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 457,
+        "before": "-0.83 -11.94 0.5",
+        "after": "-0.83 -11.94",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 458,
+        "before": "-0.26 -11.78 0.5",
+        "after": "-0.26 -11.78",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 477,
+        "before": "-0.26 -11.78 0.5",
+        "after": "-0.26 -11.78",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 478,
+        "before": "-0.83 -11.94 0.5",
+        "after": "-0.83 -11.94",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 479,
+        "before": "-0.3 -16 0.5",
+        "after": "-0.3 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 480,
+        "before": "0.3 -16 0.5",
+        "after": "0.3 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 499,
+        "before": "-16 7 0.5",
+        "after": "-16 7",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 500,
+        "before": "-16 6.3 0.5",
+        "after": "-16 6.3",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 501,
+        "before": "-10.23 5.54 0.5",
+        "after": "-10.23 5.54",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 502,
+        "before": "-10.05 6.22 0.5",
+        "after": "-10.05 6.22",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 521,
+        "before": "-10.05 6.22 0.5",
+        "after": "-10.05 6.22",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 522,
+        "before": "-10.23 5.54 0.5",
+        "after": "-10.23 5.54",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 523,
+        "before": "-4.85 3.31 0.5",
+        "after": "-4.85 3.31",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 524,
+        "before": "-4.5 3.92 0.5",
+        "after": "-4.5 3.92",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 543,
+        "before": "-4.5 3.92 0.5",
+        "after": "-4.5 3.92",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 544,
+        "before": "-4.85 3.31 0.5",
+        "after": "-4.85 3.31",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 545,
+        "before": "-0.23 -0.23 0.5",
+        "after": "-0.23 -0.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 546,
+        "before": "0.26 0.26 0.5",
+        "after": "0.26 0.26",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 565,
+        "before": "0.26 0.26 0.5",
+        "after": "0.26 0.26",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 566,
+        "before": "-0.23 -0.23 0.5",
+        "after": "-0.23 -0.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 567,
+        "before": "3.31 -4.85 0.5",
+        "after": "3.31 -4.85",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 568,
+        "before": "3.92 -4.5 0.5",
+        "after": "3.92 -4.5",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 587,
+        "before": "3.92 -4.5 0.5",
+        "after": "3.92 -4.5",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 588,
+        "before": "3.31 -4.85 0.5",
+        "after": "3.31 -4.85",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 589,
+        "before": "5.54 -10.23 0.5",
+        "after": "5.54 -10.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 590,
+        "before": "6.22 -10.05 0.5",
+        "after": "6.22 -10.05",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 609,
+        "before": "6.22 -10.05 0.5",
+        "after": "6.22 -10.05",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 610,
+        "before": "5.54 -10.23 0.5",
+        "after": "5.54 -10.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 611,
+        "before": "6.3 -16 0.5",
+        "after": "6.3 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 612,
+        "before": "7 -16 0.5",
+        "after": "7 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 631,
+        "before": "-16 -0.3 0.5",
+        "after": "-16 -0.3",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 632,
+        "before": "-16 -6.3 0.5",
+        "after": "-16 -6.3",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 633,
+        "before": "-13.49 -6.63 0.5",
+        "after": "-13.49 -6.63",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 634,
+        "before": "-11.94 -0.83 0.5",
+        "after": "-11.94 -0.83",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 653,
+        "before": "-11.94 -0.83 0.5",
+        "after": "-11.94 -0.83",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 654,
+        "before": "-13.49 -6.63 0.5",
+        "after": "-13.49 -6.63",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 655,
+        "before": "-11.15 -7.6 0.5",
+        "after": "-11.15 -7.6",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 656,
+        "before": "-8.15 -2.4 0.5",
+        "after": "-8.15 -2.4",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 675,
+        "before": "-8.15 -2.4 0.5",
+        "after": "-8.15 -2.4",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 676,
+        "before": "-11.15 -7.6 0.5",
+        "after": "-11.15 -7.6",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 677,
+        "before": "-9.14 -9.14 0.5",
+        "after": "-9.14 -9.14",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 678,
+        "before": "-4.9 -4.9 0.5",
+        "after": "-4.9 -4.9",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 697,
+        "before": "-4.9 -4.9 0.5",
+        "after": "-4.9 -4.9",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 698,
+        "before": "-9.14 -9.14 0.5",
+        "after": "-9.14 -9.14",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 699,
+        "before": "-7.6 -11.15 0.5",
+        "after": "-7.6 -11.15",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 700,
+        "before": "-2.4 -8.15 0.5",
+        "after": "-2.4 -8.15",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 719,
+        "before": "-2.4 -8.15 0.5",
+        "after": "-2.4 -8.15",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 720,
+        "before": "-7.6 -11.15 0.5",
+        "after": "-7.6 -11.15",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 721,
+        "before": "-6.63 -13.49 0.5",
+        "after": "-6.63 -13.49",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 722,
+        "before": "-0.83 -11.94 0.5",
+        "after": "-0.83 -11.94",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 741,
+        "before": "-0.83 -11.94 0.5",
+        "after": "-0.83 -11.94",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 742,
+        "before": "-6.63 -13.49 0.5",
+        "after": "-6.63 -13.49",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 743,
+        "before": "-6.3 -16 0.5",
+        "after": "-6.3 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 744,
+        "before": "-0.3 -16 0.5",
+        "after": "-0.3 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 763,
+        "before": "-16 6.3 0.5",
+        "after": "-16 6.3",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 764,
+        "before": "-16 0.3 0.5",
+        "after": "-16 0.3",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 765,
+        "before": "-11.78 -0.26 0.5",
+        "after": "-11.78 -0.26",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 766,
+        "before": "-10.23 5.54 0.5",
+        "after": "-10.23 5.54",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 785,
+        "before": "-10.23 5.54 0.5",
+        "after": "-10.23 5.54",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 786,
+        "before": "-11.78 -0.26 0.5",
+        "after": "-11.78 -0.26",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 787,
+        "before": "-7.85 -1.88 0.5",
+        "after": "-7.85 -1.88",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 788,
+        "before": "-4.85 3.31 0.5",
+        "after": "-4.85 3.31",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 807,
+        "before": "-4.85 3.31 0.5",
+        "after": "-4.85 3.31",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 808,
+        "before": "-7.85 -1.88 0.5",
+        "after": "-7.85 -1.88",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 809,
+        "before": "-4.47 -4.47 0.5",
+        "after": "-4.47 -4.47",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 810,
+        "before": "-0.23 -0.23 0.5",
+        "after": "-0.23 -0.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 829,
+        "before": "-0.23 -0.23 0.5",
+        "after": "-0.23 -0.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 830,
+        "before": "-4.47 -4.47 0.5",
+        "after": "-4.47 -4.47",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 831,
+        "before": "-1.88 -7.85 0.5",
+        "after": "-1.88 -7.85",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 832,
+        "before": "3.31 -4.85 0.5",
+        "after": "3.31 -4.85",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 851,
+        "before": "3.31 -4.85 0.5",
+        "after": "3.31 -4.85",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 852,
+        "before": "-1.88 -7.85 0.5",
+        "after": "-1.88 -7.85",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 853,
+        "before": "-0.26 -11.78 0.5",
+        "after": "-0.26 -11.78",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 854,
+        "before": "5.54 -10.23 0.5",
+        "after": "5.54 -10.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 873,
+        "before": "5.54 -10.23 0.5",
+        "after": "5.54 -10.23",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 874,
+        "before": "-0.26 -11.78 0.5",
+        "after": "-0.26 -11.78",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 875,
+        "before": "0.3 -16 0.5",
+        "after": "0.3 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      },
+      {
+        "line": 876,
+        "before": "6.3 -16 0.5",
+        "after": "6.3 -16",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/special/4x1x5window.blb",
+    "sha256": "44e1467e4efd0994c4619dd0555d1f93d0d9525e3fdfb63a3e280c75c1b58ee2",
+    "edits": [
+      {
+        "line": 200,
+        "before": "0.2 0.2 0.8",
+        "after": "0.2 0.2",
+        "reason": "Keep the first two UV components, matching legacy line-based Vec2 reads; extra authored component retained in provenance."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/ramps/2x2rampPrint.blb",
+    "sha256": "0888fb6d77260256f7214915eb0738e9354c52086bb31cf1290f85071b621998",
+    "edits": [
+      {
+        "line": 4,
+        "before": "XXX",
+        "after": "XX",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 5,
+        "before": "XXX",
+        "after": "XX",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 6,
+        "before": "ddd",
+        "after": "dd",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 8,
+        "before": "uuu",
+        "after": "uu",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 9,
+        "before": "XXX",
+        "after": "XX",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 10,
+        "before": "ddd",
+        "after": "dd",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/ramps/2x3rampUp.blb",
+    "sha256": "adda0a6bbec40c4882f27ae98903a966149aafd0bb8f5fcacf6b6a33540121af",
+    "edits": [
+      {
+        "line": 4,
+        "before": "uuu",
+        "after": "uu",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 5,
+        "before": "XXX",
+        "after": "XX",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 6,
+        "before": "---",
+        "after": "--",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 8,
+        "before": "uuu",
+        "after": "uu",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 9,
+        "before": "XXX",
+        "after": "XX",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 10,
+        "before": "XXX",
+        "after": "XX",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 12,
+        "before": "uuu",
+        "after": "uu",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 13,
+        "before": "XXX",
+        "after": "XX",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      },
+      {
+        "line": 14,
+        "before": "ddd",
+        "after": "dd",
+        "reason": "Grid rows exceed declared width 2; retain first two cells to match bounded grid reading. Requires attachment fidelity review."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/ramps/2x2rampUpCorner.blb",
+    "sha256": "7ae06cdc6b4f036a1369bdc3179e7d7882ce7b4c8fc6e5e0d1f7548b272910ee",
+    "edits": [
+      {
+        "line": 219,
+        "before": "1---------------omni quads:",
+        "after": "---------------omni quads:",
+        "reason": "Remove stray digit before section heading; the following line already declares two omni quads, matching the two following authored faces."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/ramps/2x2x3rampUpCorner.blb",
+    "sha256": "8ecfc32f14125c3f987b7500073044ec23f1cf5b45d99698713de32fa079a993",
+    "edits": [
+      {
+        "line": 231,
+        "before": "1---------------omni quads:",
+        "after": "---------------omni quads:",
+        "reason": "Remove stray digit before section heading; the following line already declares two omni quads, matching the two following authored faces."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/ramps/2x2x3rampCorner.blb",
+    "sha256": "00c35b8fa3e7cc22089f93d2054c1187bedd036b99fc0d6035b4fa89a39d6d26",
+    "edits": [
+      {
+        "line": 283,
+        "before": "0.957508 0 0.288406",
+        "after": "",
+        "reason": "Remove fifth duplicate normal after the final four-vertex quad; four identical normals remain."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/ramps/2x2x5rampUp.blb",
+    "sha256": "a81272e66606788a0dd64d905971f59f290614511fd47101a653238238a0f9ed",
+    "edits": [
+      {
+        "line": 220,
+        "before": "1 v",
+        "after": "1 -0.007",
+        "reason": "Known ramp UV typo; counterpart cap and existing Blockland2 importer indicate -0.007. Requires visual fidelity review."
+      }
+    ]
+  },
+  {
+    "path": "base/data/bricks/ramps/2x2x5rampUpCorner.blb",
+    "sha256": "c90e00bfe441b769cf0edc43e016fad9ee1def53d308148fdbeb490f3d0ef57b",
+    "edits": [
+      {
+        "line": 220,
+        "before": "1 v",
+        "after": "1 -0.007",
+        "reason": "Known ramp UV typo; counterpart cap and existing Blockland2 importer indicate -0.007. Requires visual fidelity review."
+      },
+      {
+        "line": 243,
+        "before": "1---------------omni quads:",
+        "after": "---------------omni quads:",
+        "reason": "Remove stray digit before section heading; the following line already declares two omni quads, matching the two following authored faces."
+      }
+    ]
+  }
+]

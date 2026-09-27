@@ -1,0 +1,719 @@
+//! Loader for already converted native bundles. This module cannot read Torque
+//! assets and never searches the original installation for missing resources.
+use crate::scene::*;
+use anyhow::{Context, Result, ensure};
+use bri_content::{
+    Terrain,
+    interior::Interior,
+    scene::{Kind, Node, Scene},
+};
+use glam::{Mat4, Vec3};
+use serde_json::Value;
+use std::{
+    collections::BTreeMap,
+    io::{Cursor, Read},
+    path::{Component, Path, PathBuf},
+};
+
+#[derive(Clone, Copy, Debug)]
+pub struct MapLoadOptions {
+    /// Finite periodic terrain patch [column,row,width,height] in cells.
+    /// Extending/recentering it is explicit; no dominant-layer approximation.
+    pub terrain_region: [i32; 4],
+}
+impl Default for MapLoadOptions {
+    fn default() -> Self {
+        Self {
+            terrain_region: [-64, -64, 384, 384],
+        }
+    }
+}
+
+fn file(root: &Path, name: &str) -> Result<PathBuf> {
+    let path = Path::new(name);
+    ensure!(
+        !path.is_absolute()
+            && path
+                .components()
+                .all(|p| matches!(p, Component::Normal(_) | Component::CurDir)),
+        "Bundle path escapes native content: {name}"
+    );
+    let path = root
+        .join(path)
+        .canonicalize()
+        .with_context(|| format!("Missing native bundle resource {name}"))?;
+    ensure!(
+        path.starts_with(root),
+        "Native bundle resource escapes content root: {name}"
+    );
+    Ok(path)
+}
+fn read(root: &Path, name: &str) -> Result<Vec<u8>> {
+    Ok(std::fs::read(file(root, name)?)?)
+}
+fn transform(node: &Node) -> Result<Mat4> {
+    ensure!(
+        node.transform.iter().all(|v| v.is_finite()),
+        "Nonfinite placement for {}",
+        node.name
+    );
+    let matrix = Mat4::from_cols_array(&node.transform);
+    ensure!(
+        matrix.determinant().abs() > 0.0000001,
+        "Singular placement for {}",
+        node.name
+    );
+    Ok(matrix)
+}
+fn decode(bytes: &[u8], label: &str, srgb: bool) -> Result<SceneImage> {
+    let (width, height) = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_dimensions()
+        .with_context(|| format!("Reading native image dimensions {label}"))?;
+    ensure!(
+        width > 0 && height > 0 && width <= 8192 && height <= 8192,
+        "Native image dimensions exceed scene limit: {label}"
+    );
+    let image = image::load_from_memory(bytes)
+        .with_context(|| format!("Decoding native image {label}"))?
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    ensure!(
+        width > 0 && height > 0 && width <= 8192 && height <= 8192,
+        "Native image dimensions exceed scene limit: {label}"
+    );
+    Ok(SceneImage {
+        label: label.into(),
+        width,
+        height,
+        rgba: image.into_raw(),
+        srgb,
+    })
+}
+fn texture(
+    root: &Path,
+    name: &str,
+    srgb: bool,
+    out: &mut SceneData,
+    cache: &mut BTreeMap<(String, bool), usize>,
+) -> Result<usize> {
+    let key = (name.to_string(), srgb);
+    if let Some(&index) = cache.get(&key) {
+        return Ok(index);
+    }
+    let index = out.images.len();
+    out.images.push(decode(&read(root, name)?, name, srgb)?);
+    cache.insert(key, index);
+    Ok(index)
+}
+fn alpha(image: &SceneImage) -> AlphaMode {
+    if image.rgba.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255) {
+        AlphaMode::Blend
+    } else if image.rgba.chunks_exact(4).any(|p| p[3] == 0) {
+        AlphaMode::Mask(0.5)
+    } else {
+        AlphaMode::Opaque
+    }
+}
+fn centroid(vertices: &[SceneVertex], indices: &[u32]) -> [f32; 3] {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for &index in indices {
+        let p = Vec3::from(vertices[index as usize].position);
+        min = min.min(p);
+        max = max.max(p);
+    }
+    if indices.is_empty() {
+        [0.0; 3]
+    } else {
+        ((min + max) * 0.5).to_array()
+    }
+}
+fn rgb(value: Option<&String>, default: [f32; 3]) -> [f32; 3] {
+    let values: Vec<_> = value
+        .into_iter()
+        .flat_map(|s| s.split_whitespace())
+        .take(3)
+        .map(str::parse::<f32>)
+        .collect();
+    match values.as_slice() {
+        [Ok(r), Ok(g), Ok(b)] if r.is_finite() && g.is_finite() && b.is_finite() => [*r, *g, *b],
+        _ => default,
+    }
+}
+
+/// `map_id` is the stable native mission ID from bundle.json, never a display
+/// name or an original install path. Missing bound materials are hard errors.
+pub fn load_map_bundle(root: &Path, map_id: &str, options: MapLoadOptions) -> Result<SceneData> {
+    let root = root.canonicalize().context("Opening native map bundle")?;
+    let bundle: Value = serde_json::from_slice(&read(&root, "bundle.json")?)?;
+    ensure!(
+        bundle["schema_version"].as_u64() == Some(1),
+        "Unsupported native map bundle schema"
+    );
+    let record = bundle["maps"]
+        .as_array()
+        .context("Bundle maps missing")?
+        .iter()
+        .find(|m| m["id"].as_str() == Some(map_id))
+        .with_context(|| format!("Map {map_id} not present in native bundle"))?;
+    let scene: Scene = serde_json::from_slice(&read(
+        &root,
+        record["file"]
+            .as_str()
+            .context("Native scene filename missing")?,
+    )?)?;
+    ensure!(
+        scene.schema_version == 1 && scene.id == map_id,
+        "Invalid native map scene identity/schema"
+    );
+    let bindings = bundle["bindings"]
+        .as_array()
+        .context("Native texture bindings missing")?;
+    let mut out = SceneData {
+        id: scene.id.clone(),
+        name: scene.name.clone(),
+        ..Default::default()
+    };
+    out.omissions
+        .extend(scene.pending_scripts.iter().map(|p| p.diagnostic()));
+    if let Some(spawn) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Spawn)) {
+        out.spawn = transform(spawn)?.transform_point3(Vec3::ZERO).to_array();
+    } else {
+        out.omissions
+            .push("Map has no authored spawn; host must choose a valid spawn explicitly".into());
+    }
+    if let Some(sun) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sun)) {
+        let d = rgb(
+            sun.properties.get("direction"),
+            [0.57735, 0.57735, -0.57735],
+        );
+        out.sun_direction = [d[0], d[2], -d[1]]; // original Z-up to native Y-up
+        out.sun_color = rgb(sun.properties.get("color"), out.sun_color);
+        out.ambient = rgb(sun.properties.get("ambient"), out.ambient);
+    }
+    if let Some(sky) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sky)) {
+        let c = rgb(sky.properties.get("skysolidcolor"), [0.05, 0.08, 0.12]);
+        out.clear_color = [c[0], c[1], c[2], 1.0];
+    }
+    let mut cache = BTreeMap::new();
+    if let Some(environment) = bundle.get("environments").and_then(|e| e.get(&scene.id)) {
+        use sha2::{Digest, Sha256};
+        let environment: bri_content::environment::Environment =
+            serde_json::from_value(environment.clone())?;
+        environment.validate()?;
+        let mut images = vec![];
+        for image in environment
+            .faces
+            .iter()
+            .chain(environment.clouds.iter().map(|c| &c.image))
+        {
+            let mut bytes = Vec::new();
+            std::fs::File::open(file(&root, &image.file)?)?
+                .take(32 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() <= 32 * 1024 * 1024
+                    && format!("{:x}", Sha256::digest(&bytes)) == image.sha256,
+                "Sky image checksum mismatch: {}",
+                image.source
+            );
+            let decoded = decode(&bytes, &image.source, true)?;
+            ensure!(
+                decoded.width == image.width && decoded.height == image.height,
+                "Sky image dimensions changed"
+            );
+            let index = out.images.len();
+            out.images.push(decoded);
+            images.push(index);
+        }
+        let face_count = environment.faces.len();
+        crate::environment_scene::append(
+            &mut out,
+            &environment,
+            &images[..face_count],
+            &images[face_count..],
+        )?;
+    } else {
+        out.omissions
+            .push("Native environment binding missing: authored sky/cloud/fog not rendered".into());
+    }
+    let water_bound = load_waters(&root, &bundle, &scene, &mut out, &mut cache)?;
+    for (node_index, node) in scene.nodes.iter().enumerate() {
+        match node.kind {
+            Kind::Interior=>load_interior(&root,&bundle,bindings,&scene,node_index,node,&mut out,&mut cache)?,
+            Kind::Terrain=>load_terrain(&root,&bundle,bindings,&scene,node_index,node,options,&mut out,&mut cache)?,
+            Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?,
+            Kind::StaticModel=>anyhow::bail!("Static model {} has no native asset",node.name),
+            Kind::Water if water_bound=>{},
+            Kind::DatablockModel|Kind::Foliage|Kind::Water|Kind::Precipitation|Kind::Unadapted=>out.omissions.push(format!("Node {node_index} {:?} '{}' is retained in the bundle but not drawn by this static architecture pass",node.kind,node.name)),
+            _=>{},
+        }
+    }
+    out.omissions.push("Storm transitions/fog volumes, dynamic lighting and texture mip/anisotropic filtering remain incomplete".into());
+    out.omissions.push("Translucent geometry sorts by mesh-batch center; intersecting translucent surfaces need finer sorting".into());
+    out.validate()?;
+    Ok(out)
+}
+
+fn load_waters(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    out: &mut SceneData,
+    cache: &mut BTreeMap<(String, bool), usize>,
+) -> Result<bool> {
+    let Some(records) = bundle.get("waters").and_then(|w| w.get(&scene.id)) else {
+        return Ok(false);
+    };
+    let waters: Vec<bri_content::water::Water> = serde_json::from_value(records.clone())?;
+    let expected: Vec<_> = scene
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| matches!(n.kind, Kind::Water))
+        .map(|(i, _)| i)
+        .collect();
+    ensure!(
+        waters.iter().map(|w| w.node).collect::<Vec<_>>() == expected,
+        "Native water placements disagree with scene"
+    );
+    let mut terrains = vec![];
+    for node in scene
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::Terrain))
+    {
+        let id = node
+            .asset
+            .as_ref()
+            .context("Missing water terrain reference")?;
+        let terrain: Terrain = serde_json::from_slice(&read(
+            root,
+            bundle["assets"][id]
+                .as_str()
+                .context("Missing water terrain asset")?,
+        )?)?;
+        terrain.validate()?;
+        let spacing: f32 = node
+            .properties
+            .get("squaresize")
+            .context("Missing terrain spacing")?
+            .parse()?;
+        ensure!(
+            spacing.is_finite() && spacing > 0.,
+            "Invalid terrain spacing"
+        );
+        let placement = transform(node)?;
+        terrains.push((terrain, spacing, placement, placement.inverse()));
+    }
+    for water in &waters {
+        water.validate()?;
+        let mut textures = [0; 3];
+        for (slot, image) in [
+            Some(&water.surface),
+            Some(&water.shore),
+            water.reflection.as_ref(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Some(image) = image {
+                use sha2::{Digest, Sha256};
+                let mut bytes = vec![];
+                std::fs::File::open(file(root, &image.file)?)?
+                    .take(32 * 1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)?;
+                ensure!(
+                    bytes.len() <= 32 * 1024 * 1024
+                        && format!("{:x}", Sha256::digest(&bytes)) == image.sha256,
+                    "Water image checksum mismatch"
+                );
+                textures[slot] = texture(root, &image.file, true, out, cache)?;
+                ensure!(
+                    out.images[textures[slot]].width == image.width
+                        && out.images[textures[slot]].height == image.height,
+                    "Water image dimensions changed"
+                );
+            }
+        }
+        crate::water_scene::append(out, water, textures, |x, z| {
+            terrains
+                .iter()
+                .map(|(t, s, m, inverse)| {
+                    let local = inverse.transform_point3(Vec3::new(x, 0., z));
+                    let height = bri_content::terrain_mesh::height(t, *s, local.x, local.z);
+                    m.transform_point3(Vec3::new(local.x, height, local.z)).y
+                })
+                .max_by(f32::total_cmp)
+        })?;
+    }
+    Ok(true)
+}
+
+fn load_static_shape(
+    root: &Path,
+    bundle: &Value,
+    bindings: &[Value],
+    node: &Node,
+    out: &mut SceneData,
+    cache: &mut BTreeMap<(String, bool), usize>,
+) -> Result<()> {
+    let id = node
+        .asset
+        .as_deref()
+        .context("Static model has no native asset")?;
+    let shape: bri_content::shape::Shape = serde_json::from_slice(&read(
+        root,
+        bundle["assets"][id]
+            .as_str()
+            .context("Static model asset missing")?,
+    )?)?;
+    shape.validate()?;
+    let detail = shape
+        .details
+        .iter()
+        .position(|d| !d.collision && d.pixel_threshold >= 0.0)
+        .context("Static model has no visual detail")?;
+    let mut materials = Vec::new();
+    let skin = node.properties.get("skinname").map_or("", String::as_str);
+    for (slot, authored) in shape.materials.iter().enumerate() {
+        let candidates: Vec<_> = bindings
+            .iter()
+            .filter(|b| {
+                b["asset"].as_str() == Some(id)
+                    && b["shape_material"].as_u64() == Some(slot as u64)
+                    && b["skin"].as_str().unwrap_or("") == skin
+            })
+            .collect();
+        ensure!(
+            candidates.len() == 1,
+            "Missing/ambiguous static material binding {id}/{slot}"
+        );
+        let diffuse = texture(
+            root,
+            candidates[0]["texture"]
+                .as_str()
+                .context("Static texture unresolved")?,
+            true,
+            out,
+            cache,
+        )?;
+        let mut material = if authored.unlit {
+            Material::surface(format!("{id}/{}", authored.name), diffuse, 0)
+        } else {
+            Material::vertex_lit(format!("{id}/{}", authored.name), diffuse)
+        };
+        material.alpha = match authored.blend.as_str() {
+            "opaque" => AlphaMode::Opaque,
+            "alpha" => alpha(&out.images[diffuse]),
+            other => anyhow::bail!("Unsupported static material blend {other} for {id}"),
+        };
+        if authored.environment || authored.detail_map.is_some() || authored.bump_map.is_some() {
+            out.omissions.push(format!(
+                "Static material {id}/{} has unbound reflection/detail/bump effects",
+                authored.name
+            ));
+        }
+        materials.push(out.materials.len());
+        out.materials.push(material);
+    }
+    let fallback = out.materials.len();
+    out.materials
+        .push(Material::vertex_lit(format!("{id}/unassigned"), 0));
+    let initial_sequence = node
+        .properties
+        .get("native_initial_sequence")
+        .map(|name| {
+            shape
+                .animations
+                .iter()
+                .find(|a| a.name == *name)
+                .with_context(|| format!("Missing initial sequence {name} for {}", node.name))
+        })
+        .transpose()?;
+    let pose = bri_content::animation::sample(&shape, initial_sequence, 0.0)?;
+    out.append_shape(
+        crate::shape_scene::ShapeInstance {
+            shape: &shape,
+            pose: &pose,
+            detail,
+            transform: transform(node)?,
+            materials: &materials,
+            translucent_materials: None,
+            unassigned_material: fallback,
+        },
+        |_| Some([1.0; 4]),
+    )?;
+    if shape.details.iter().filter(|d| !d.collision).count() > 1 {
+        out.omissions.push(format!(
+            "Static model {id} currently uses highest detail; distance LOD remains required"
+        ));
+    }
+    if let Some(pending) = node.properties.get("native_behavior_pending") {
+        out.omissions.push(format!(
+            "Static object '{}' behavior pending: {pending}",
+            node.name
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_interior(
+    root: &Path,
+    bundle: &Value,
+    bindings: &[Value],
+    scene: &Scene,
+    node_index: usize,
+    node: &Node,
+    out: &mut SceneData,
+    cache: &mut BTreeMap<(String, bool), usize>,
+) -> Result<()> {
+    let id = node
+        .asset
+        .as_deref()
+        .context("Interior placement has no native asset")?;
+    let interior: Interior = serde_json::from_slice(&read(
+        root,
+        bundle["assets"][id]
+            .as_str()
+            .context("Interior asset missing from bundle")?,
+    )?)?;
+    interior.validate()?;
+    let detail = &interior.details[0];
+    let placement = transform(node)?;
+    let normal_transform = placement.inverse().transpose();
+    let mirrored = placement.determinant() < 0.0;
+    let baked = bundle["lighting"][&scene.id]["interiors"]
+        .as_array()
+        .context("Map is missing native interior mission-lighting bindings")?;
+    let mut lightmaps = vec![];
+    for (slot, lm) in detail.lightmaps.iter().enumerate() {
+        let replacement = baked.iter().find(|r| {
+            r["node"].as_u64() == Some(node_index as u64)
+                && r["detail"].as_u64() == Some(0)
+                && r["slot"].as_u64() == Some(slot as u64)
+        });
+        lightmaps.push(if let Some(record)=replacement {texture(root,record["file"].as_str().context("Baked interior lightmap filename missing")?,false,out,cache)?}
+            else {let index=out.images.len();out.images.push(decode(&lm.png,&format!("{id}/base-lightmap-{slot}"),false)?);out.omissions.push(format!("Interior node {node_index} lightmap {slot} uses the original embedded lightmap: composed mission replacement absent"));index});
+    }
+    let mut materials = BTreeMap::new();
+    for binding in bindings
+        .iter()
+        .filter(|b| b["asset"].as_str() == Some(id) && b["detail"].as_u64() == Some(0))
+    {
+        let material = binding["material"]
+            .as_u64()
+            .context("Interior material binding index missing")? as usize;
+        let image = texture(
+            root,
+            binding["texture"]
+                .as_str()
+                .context("Interior texture binding missing")?,
+            true,
+            out,
+            cache,
+        )?;
+        materials.insert(material, image);
+    }
+    let mut groups: BTreeMap<(usize, usize), Vec<u32>> = BTreeMap::new();
+    for surface in &detail.surfaces {
+        if surface.triangles.is_empty() {
+            continue;
+        }
+        let diffuse = *materials.get(&surface.material).with_context(|| {
+            format!(
+                "Unresolved native interior texture {id} material {}",
+                surface.material
+            )
+        })?;
+        let lightmap = surface.lightmap.map_or(0, |i| lightmaps[i]);
+        let group = groups.entry((diffuse, lightmap)).or_default();
+        let base = u32::try_from(out.vertices.len()).context("Too many scene vertices")?;
+        for vertex in &surface.vertices {
+            out.vertices.push(SceneVertex {
+                position: placement
+                    .transform_point3(Vec3::from(vertex.position))
+                    .to_array(),
+                normal: normal_transform
+                    .transform_vector3(Vec3::from(vertex.normal))
+                    .normalize_or_zero()
+                    .to_array(),
+                uv: vertex.uv,
+                lightmap_uv: vertex.lightmap_uv,
+                color: [1.0; 4],
+            });
+        }
+        for triangle in &surface.triangles {
+            let [a, b, c] = *triangle;
+            group.extend(if mirrored {
+                [base + a, base + c, base + b]
+            } else {
+                [base + a, base + b, base + c]
+            });
+        }
+    }
+    for ((diffuse, lightmap), indices) in groups {
+        let material = out.materials.len();
+        let mut m = Material::surface(format!("{id}/{diffuse}/{lightmap}"), diffuse, lightmap);
+        m.alpha = alpha(&out.images[diffuse]);
+        out.materials.push(m);
+        let center = centroid(&out.vertices, &indices);
+        let start = out.indices.len() as u32;
+        out.indices.extend(indices);
+        out.batches.push(MeshBatch {
+            indices: start..out.indices.len() as u32,
+            material,
+            center,
+        });
+    }
+    if !interior.subobjects.is_empty() {
+        out.omissions.push(format!(
+            "Interior {id} has {} subobjects not yet placed/rendered",
+            interior.subobjects.len()
+        ));
+    }
+    if detail.has_alarm {
+        out.omissions.push(format!(
+            "Interior {id} alarm lighting switching is not yet implemented"
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_terrain(
+    root: &Path,
+    bundle: &Value,
+    bindings: &[Value],
+    scene: &Scene,
+    node_index: usize,
+    node: &Node,
+    options: MapLoadOptions,
+    out: &mut SceneData,
+    cache: &mut BTreeMap<(String, bool), usize>,
+) -> Result<()> {
+    let id = node
+        .asset
+        .as_deref()
+        .context("Terrain placement has no native asset")?;
+    let terrain: Terrain = serde_json::from_slice(&read(
+        root,
+        bundle["assets"][id]
+            .as_str()
+            .context("Terrain asset missing from bundle")?,
+    )?)?;
+    terrain.validate()?;
+    let spacing: f32 = node
+        .properties
+        .get("squaresize")
+        .context("Terrain grid spacing missing")?
+        .parse()?;
+    let mesh = bri_content::terrain_mesh::mesh(&terrain, spacing, options.terrain_region)?;
+    let placement = transform(node)?;
+    let normal_transform = placement.inverse().transpose();
+    let mirrored = placement.determinant() < 0.0;
+    let mut images = [0; 11];
+    let mut bound = [false; 8];
+    for binding in bindings.iter().filter(|b| b["asset"].as_str() == Some(id)) {
+        let slot = binding["terrain_layer"]
+            .as_u64()
+            .context("Terrain material slot missing")? as usize;
+        ensure!(slot < 8, "Terrain exceeds eight authored texture layers");
+        images[slot] = texture(
+            root,
+            binding["texture"]
+                .as_str()
+                .context("Terrain texture filename missing")?,
+            true,
+            out,
+            cache,
+        )?;
+        bound[slot] = true;
+    }
+    for layer in &terrain.layers {
+        ensure!(
+            layer.slot < 8 && bound[layer.slot as usize],
+            "Terrain {id} layer {} has no native texture binding",
+            layer.slot
+        );
+    }
+    let light = bundle["lighting"][&scene.id]["terrain"]
+        .as_array()
+        .context("Map terrain mission lighting missing")?
+        .iter()
+        .find(|r| r["node"].as_u64() == Some(node_index as u64))
+        .context("Terrain placement has no native baked lightmap")?;
+    images[8] = texture(
+        root,
+        light["file"]
+            .as_str()
+            .context("Terrain lightmap filename missing")?,
+        false,
+        out,
+        cache,
+    )?;
+    for group in 0..2 {
+        let mut rgba = vec![0; terrain.side as usize * terrain.side as usize * 4];
+        for layer in terrain
+            .layers
+            .iter()
+            .filter(|l| l.slot as usize / 4 == group)
+        {
+            for (i, &weight) in layer.weights.iter().enumerate() {
+                rgba[i * 4 + layer.slot as usize % 4] = weight;
+            }
+        }
+        images[9 + group] = out.images.len();
+        out.images.push(SceneImage {
+            label: format!("{id}/weights-{group}"),
+            width: terrain.side,
+            height: terrain.side,
+            rgba,
+            srgb: false,
+        });
+    }
+    let base = u32::try_from(out.vertices.len()).context("Too many scene vertices")?;
+    for i in 0..mesh.positions.len() {
+        let uv = mesh.grid_uv[i];
+        let tiles = terrain.side as f32 / 8.0;
+        out.vertices.push(SceneVertex {
+            position: placement
+                .transform_point3(Vec3::from(mesh.positions[i]))
+                .to_array(),
+            normal: normal_transform
+                .transform_vector3(Vec3::from(mesh.normals[i]))
+                .normalize_or_zero()
+                .to_array(),
+            uv: [uv[0] * tiles, uv[1] * tiles],
+            lightmap_uv: uv,
+            color: [1.0; 4],
+        });
+    }
+    let start = out.indices.len() as u32;
+    for [a, b, c] in mesh.triangles {
+        out.indices.extend(if mirrored {
+            [base + a, base + c, base + b]
+        } else {
+            [base + a, base + b, base + c]
+        });
+    }
+    let center = centroid(&out.vertices, &out.indices[start as usize..]);
+    let material = out.materials.len();
+    out.materials.push(Material {
+        name: id.into(),
+        images,
+        kind: MaterialKind::Terrain,
+        alpha: AlphaMode::Opaque,
+        double_sided: false,
+        water_parameters: None,
+    });
+    out.batches.push(MeshBatch {
+        indices: start..out.indices.len() as u32,
+        material,
+        center,
+    });
+    out.omissions.push(format!("Terrain {id} is rendered as the explicit periodic patch {:?}; camera-following terrain streaming/LOD, authored detail/bump modulation and terrain holes are not yet implemented",options.terrain_region));
+    Ok(())
+}

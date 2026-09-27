@@ -1,0 +1,16 @@
+[package]
+name = "bri-fx-import"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.12"
+zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+bri-content = { path = "../content" }
+bri-fx-runtime = { path = "../fx-runtime" }

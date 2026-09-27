@@ -1,0 +1,16 @@
+[package]
+name = "bri-weapon-debris-import"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+bri-convert = { path = "../../../../crates/convert" }

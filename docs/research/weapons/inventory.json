@@ -1,0 +1,532 @@
+{
+  "schema_version": 1,
+  "reference": "E:/Downloads/B4v21Launcher/versions/Blockland v20",
+  "pack": "content/weapons-pack-003/weapons.json",
+  "pack_sha256": "aa7a0f5f50a725d3b94b8cc33f36fc3677c652d92a89b68523348f22b8415cdc",
+  "item_count": 17,
+  "image_count": 31,
+  "projectile_count": 25,
+  "declaration_count": 270,
+  "resource_count": 117,
+  "conversion_diagnostics": [],
+  "items": [
+    {
+      "id": "v20.weapon.akimbogunitem",
+      "label": "Guns Akimbo",
+      "image": "v20.image.akimbogunimage",
+      "projectile": "v20.projectile.akimbogunprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Guns_Akimbo/Weapon_AkimboGun.cs",
+        "sha256": "ec1e524e2b4b3e655d2ee69f11999180ccfb0933e6bf651226a1bd44c5092b2c",
+        "line": 46
+      }
+    },
+    {
+      "id": "v20.weapon.basketballitem",
+      "label": "Ball Basketball",
+      "image": "v20.image.basketballimage",
+      "projectile": "v20.projectile.basketballprojectile",
+      "source": {
+        "path": "Add-Ons/Item_Sports/basketball.cs",
+        "sha256": "477191068ded1984f4f3448c9fc148d20d2f7c4011c245f979563636f79842dd",
+        "line": 118
+      }
+    },
+    {
+      "id": "v20.weapon.bluekeyitem",
+      "label": "Key Blue",
+      "image": "v20.image.bluekeyimage",
+      "projectile": null,
+      "source": {
+        "path": "Add-Ons/Item_Key/blueKey.cs",
+        "sha256": "6b100fc653813bd663d9911a184de3bd5d0599ec4786f549f33529cdffc89e50",
+        "line": 1
+      }
+    },
+    {
+      "id": "v20.weapon.bowitem",
+      "label": "Bow",
+      "image": "v20.image.bowimage",
+      "projectile": "v20.projectile.arrowprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Bow/Weapon_Bow.cs",
+        "sha256": "d1409f7cb50d99f8668d09163b9f7d846e911f54a610b41f6c22c79d4b2fdc8b",
+        "line": 241
+      }
+    },
+    {
+      "id": "v20.weapon.dodgeballitem",
+      "label": "Ball Dodgeball",
+      "image": "v20.image.dodgeballimage",
+      "projectile": "v20.projectile.dodgeballprojectile",
+      "source": {
+        "path": "Add-Ons/Item_Sports/dodgeball.cs",
+        "sha256": "cd21c584ee27fc7a5747ae70873ca84729ee09040e8be65ec15cfc2adadd2512",
+        "line": 24
+      }
+    },
+    {
+      "id": "v20.weapon.footballitem",
+      "label": "Ball Football",
+      "image": "v20.image.footballimage",
+      "projectile": "v20.projectile.footballprojectile",
+      "source": {
+        "path": "Add-Ons/Item_Sports/football.cs",
+        "sha256": "ce74184b507fe04ca8814d08628afaf9452c19b9d1aa3394599756324783e171",
+        "line": 365
+      }
+    },
+    {
+      "id": "v20.weapon.greenkeyitem",
+      "label": "Key Green",
+      "image": "v20.image.greenkeyimage",
+      "projectile": null,
+      "source": {
+        "path": "Add-Ons/Item_Key/greenKey.cs",
+        "sha256": "b8156440f5b7a710b45e7a8b2968e8f0571803cfdb5363f3bd9ec6be6897e39f",
+        "line": 1
+      }
+    },
+    {
+      "id": "v20.weapon.gunitem",
+      "label": "Gun",
+      "image": "v20.image.gunimage",
+      "projectile": "v20.projectile.gunprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Gun/server.cs",
+        "sha256": "349f478c92f32224f2879d0f2adc95134151b42daa92b555533891f99bf04d7d",
+        "line": 257
+      }
+    },
+    {
+      "id": "v20.weapon.horserayitem",
+      "label": "Horse Ray",
+      "image": "v20.image.horserayimage",
+      "projectile": "v20.projectile.horserayprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Horse_Ray/Weapon_HorseRay.cs",
+        "sha256": "ab3e4c6ac79144eac3f4af4757da024e02f698252ffe4c75de22940a82085d1b",
+        "line": 249
+      }
+    },
+    {
+      "id": "v20.weapon.pushbroomitem",
+      "label": "Push Broom",
+      "image": "v20.image.pushbroomimage",
+      "projectile": "v20.projectile.pushbroomprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Push_Broom/server.cs",
+        "sha256": "6dba1d50f1c2e36cb9fe11ef58a23b7cccd2cb5ff70604a1caf113f62f6778a1",
+        "line": 178
+      }
+    },
+    {
+      "id": "v20.weapon.redkeyitem",
+      "label": "Key Red",
+      "image": "v20.image.redkeyimage",
+      "projectile": null,
+      "source": {
+        "path": "Add-Ons/Item_Key/server.cs",
+        "sha256": "46609a92c6cef0b741711105cf642eab0d5138e2477f566f2c3949b94232e514",
+        "line": 1
+      }
+    },
+    {
+      "id": "v20.weapon.rocketlauncheritem",
+      "label": "Rocket L.",
+      "image": "v20.image.rocketlauncherimage",
+      "projectile": "v20.projectile.rocketlauncherprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Rocket_Launcher/Weapon_Rocket Launcher.cs",
+        "sha256": "f49e09872e7a60b829333bf0e6b82af5595f609dfe713f52a07afc049307169f",
+        "line": 309
+      }
+    },
+    {
+      "id": "v20.weapon.skiitem",
+      "label": "Skis",
+      "image": "v20.image.skiweaponimage",
+      "projectile": null,
+      "source": {
+        "path": "Add-Ons/Item_Skis/Item_Skis.cs",
+        "sha256": "c75e0ea286e8bd08cd58d71820765f17d5f95f64371ef0abdca91d74687e3feb",
+        "line": 251
+      }
+    },
+    {
+      "id": "v20.weapon.soccerballitem",
+      "label": "Ball Soccer Ball",
+      "image": "v20.image.soccerballimage",
+      "projectile": "v20.projectile.soccerballprojectile",
+      "source": {
+        "path": "Add-Ons/Item_Sports/soccer.cs",
+        "sha256": "6dc623d95ad435718bc516bf4f76cec2f32f31bc4d0a71961a74f0bf83e81598",
+        "line": 69
+      }
+    },
+    {
+      "id": "v20.weapon.spearitem",
+      "label": "Spear",
+      "image": "v20.image.spearimage",
+      "projectile": "v20.projectile.spearprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Spear/server.cs",
+        "sha256": "6d2f54589cbbc30492c60d53ec638d0d48a8d1332459da62c86ec447701aae35",
+        "line": 245
+      }
+    },
+    {
+      "id": "v20.weapon.sworditem",
+      "label": "Sword",
+      "image": "v20.image.swordimage",
+      "projectile": "v20.projectile.swordprojectile",
+      "source": {
+        "path": "Add-Ons/Weapon_Sword/server.cs",
+        "sha256": "c6be278b7b68e02b1178bf631c0822b613f44653c2365ed1cff0b7988e8a5da6",
+        "line": 111
+      }
+    },
+    {
+      "id": "v20.weapon.yellowkeyitem",
+      "label": "Key Yellow",
+      "image": "v20.image.yellowkeyimage",
+      "projectile": null,
+      "source": {
+        "path": "Add-Ons/Item_Key/yellowKey.cs",
+        "sha256": "083da6696103791ff4955778693289fe92584f2609ca9927f43a29a53ea028dd",
+        "line": 1
+      }
+    }
+  ],
+  "projectiles": [
+    {
+      "id": "v20.projectile.akimbogunprojectile",
+      "speed": 90.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 480,
+      "damage": 30.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Guns_Akimbo/Weapon_AkimboGun.cs",
+        "sha256": "ec1e524e2b4b3e655d2ee69f11999180ccfb0933e6bf651226a1bd44c5092b2c",
+        "line": 7
+      }
+    },
+    {
+      "id": "v20.projectile.arrowprojectile",
+      "speed": 65.0,
+      "gravity": 0.25,
+      "lifetime_ticks": 480,
+      "damage": 30.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Bow/Weapon_Bow.cs",
+        "sha256": "d1409f7cb50d99f8668d09163b9f7d846e911f54a610b41f6c22c79d4b2fdc8b",
+        "line": 198
+      }
+    },
+    {
+      "id": "v20.projectile.basketballprojectile",
+      "speed": 15.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 1200,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Item_Sports/basketball.cs",
+        "sha256": "477191068ded1984f4f3448c9fc148d20d2f7c4011c245f979563636f79842dd",
+        "line": 197
+      }
+    },
+    {
+      "id": "v20.projectile.cannonballprojectile",
+      "speed": 120.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 1200,
+      "damage": 100.0,
+      "source": {
+        "path": "Add-Ons/Vehicle_Pirate_Cannon/Vehicle_Pirate_Cannon.cs",
+        "sha256": "44853fa6107890564bd8618a76ca0a4498f34d60ff5163f0067fc130ef46c339",
+        "line": 171
+      }
+    },
+    {
+      "id": "v20.projectile.cannonbaseexplosionprojectile",
+      "speed": 50.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 2,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Vehicle_Pirate_Cannon/Vehicle_Pirate_Cannon.cs",
+        "sha256": "44853fa6107890564bd8618a76ca0a4498f34d60ff5163f0067fc130ef46c339",
+        "line": 433
+      }
+    },
+    {
+      "id": "v20.projectile.clockprojectile",
+      "speed": 20.0,
+      "gravity": 0.8,
+      "lifetime_ticks": 120,
+      "damage": 22.0,
+      "source": {
+        "path": "base/server/scripts/allGameScripts.cs (recovered)",
+        "sha256": "a720f7a188a615276befa34409eda68585ec9abbc629b7a8107f37dcf7b33a9b",
+        "line": 19298
+      }
+    },
+    {
+      "id": "v20.projectile.dodgeballprojectile",
+      "speed": 15.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 1200,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Item_Sports/dodgeball.cs",
+        "sha256": "cd21c584ee27fc7a5747ae70873ca84729ee09040e8be65ec15cfc2adadd2512",
+        "line": 65
+      }
+    },
+    {
+      "id": "v20.projectile.footballprojectile",
+      "speed": 40.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 2400,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Item_Sports/football.cs",
+        "sha256": "ce74184b507fe04ca8814d08628afaf9452c19b9d1aa3394599756324783e171",
+        "line": 411
+      }
+    },
+    {
+      "id": "v20.projectile.gravityrocketprojectile",
+      "speed": 65.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 1440,
+      "damage": 30.0,
+      "source": {
+        "path": "Add-Ons/Projectile_GravityRocket/server.cs",
+        "sha256": "41cefc1a19d0a29c05eb4388229330a2b59537afdf70b278191d942e38950421",
+        "line": 235
+      }
+    },
+    {
+      "id": "v20.projectile.gunprojectile",
+      "speed": 90.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 480,
+      "damage": 30.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Gun/server.cs",
+        "sha256": "349f478c92f32224f2879d0f2adc95134151b42daa92b555533891f99bf04d7d",
+        "line": 218
+      }
+    },
+    {
+      "id": "v20.projectile.horserayprojectile",
+      "speed": 90.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 360,
+      "damage": 30.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Horse_Ray/Weapon_HorseRay.cs",
+        "sha256": "ab3e4c6ac79144eac3f4af4757da024e02f698252ffe4c75de22940a82085d1b",
+        "line": 207
+      }
+    },
+    {
+      "id": "v20.projectile.pinballprojectile",
+      "speed": 65.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 1200,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Projectile_Pinball/server.cs",
+        "sha256": "c8687c745445cd582f08ef8a2e2802cccf3b5a4166c2fadba49daad7dd8c6948",
+        "line": 46
+      }
+    },
+    {
+      "id": "v20.projectile.pongprojectile",
+      "speed": 65.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 3600,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Projectile_Pong/server.cs",
+        "sha256": "9a68a5a06501b904ccee6617e3d703921cdd284f6f42b45ad2c8fc60935e0ad0",
+        "line": 133
+      }
+    },
+    {
+      "id": "v20.projectile.pushbroomprojectile",
+      "speed": 50.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 12,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Push_Broom/server.cs",
+        "sha256": "6dba1d50f1c2e36cb9fe11ef58a23b7cccd2cb5ff70604a1caf113f62f6778a1",
+        "line": 147
+      }
+    },
+    {
+      "id": "v20.projectile.radiowaveprojectile",
+      "speed": 65.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 3600,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Projectile_Radio_Wave/server.cs",
+        "sha256": "b4861eac056aa666779bcbba15dd8ddd423870c91e353474a0b1f5e82f5cfe33",
+        "line": 133
+      }
+    },
+    {
+      "id": "v20.projectile.rocketlauncherprojectile",
+      "speed": 65.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 480,
+      "damage": 30.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Rocket_Launcher/Weapon_Rocket Launcher.cs",
+        "sha256": "f49e09872e7a60b829333bf0e6b82af5595f609dfe713f52a07afc049307169f",
+        "line": 269
+      }
+    },
+    {
+      "id": "v20.projectile.skiimpactaprojectile",
+      "speed": 50.0,
+      "gravity": 0.5,
+      "lifetime_ticks": 2,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Item_Skis/Item_Skis.cs",
+        "sha256": "c75e0ea286e8bd08cd58d71820765f17d5f95f64371ef0abdca91d74687e3feb",
+        "line": 211
+      }
+    },
+    {
+      "id": "v20.projectile.soccerballprojectile",
+      "speed": 15.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 1440,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Item_Sports/soccer.cs",
+        "sha256": "6dc623d95ad435718bc516bf4f76cec2f32f31bc4d0a71961a74f0bf83e81598",
+        "line": 120
+      }
+    },
+    {
+      "id": "v20.projectile.spearprojectile",
+      "speed": 50.0,
+      "gravity": 0.5,
+      "lifetime_ticks": 2400,
+      "damage": 50.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Spear/server.cs",
+        "sha256": "6d2f54589cbbc30492c60d53ec638d0d48a8d1332459da62c86ec447701aae35",
+        "line": 206
+      }
+    },
+    {
+      "id": "v20.projectile.swordprojectile",
+      "speed": 50.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 12,
+      "damage": 35.0,
+      "source": {
+        "path": "Add-Ons/Weapon_Sword/server.cs",
+        "sha256": "c6be278b7b68e02b1178bf631c0822b613f44653c2365ed1cff0b7988e8a5da6",
+        "line": 81
+      }
+    },
+    {
+      "id": "v20.projectile.tankexplosionprojectile",
+      "speed": 50.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 2,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Vehicle_Tank/Vehicle_Tank.cs",
+        "sha256": "2d7213d40af0354c49f6d43dcf0835cd53d221dd3949649164b018005fd173b3",
+        "line": 828
+      }
+    },
+    {
+      "id": "v20.projectile.tankfinalexplosionprojectile",
+      "speed": 50.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 2,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Vehicle_Tank/Vehicle_Tank.cs",
+        "sha256": "2d7213d40af0354c49f6d43dcf0835cd53d221dd3949649164b018005fd173b3",
+        "line": 981
+      }
+    },
+    {
+      "id": "v20.projectile.tankshellprojectile",
+      "speed": 120.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 480,
+      "damage": 100.0,
+      "source": {
+        "path": "Add-Ons/Vehicle_Tank/Vehicle_Tank.cs",
+        "sha256": "2d7213d40af0354c49f6d43dcf0835cd53d221dd3949649164b018005fd173b3",
+        "line": 1065
+      }
+    },
+    {
+      "id": "v20.projectile.tankturretexplosionprojectile",
+      "speed": 50.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 2,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Vehicle_Tank/Vehicle_Tank.cs",
+        "sha256": "2d7213d40af0354c49f6d43dcf0835cd53d221dd3949649164b018005fd173b3",
+        "line": 893
+      }
+    },
+    {
+      "id": "v20.projectile.tumbleimpactaprojectile",
+      "speed": 50.0,
+      "gravity": 0.5,
+      "lifetime_ticks": 2,
+      "damage": 0.0,
+      "source": {
+        "path": "Add-Ons/Item_Skis/Item_Skis.cs",
+        "sha256": "c75e0ea286e8bd08cd58d71820765f17d5f95f64371ef0abdca91d74687e3feb",
+        "line": 106
+      }
+    }
+  ],
+  "sources": {
+    "Add-Ons/Item_Key/blueKey.cs": "6b100fc653813bd663d9911a184de3bd5d0599ec4786f549f33529cdffc89e50",
+    "Add-Ons/Item_Key/greenKey.cs": "b8156440f5b7a710b45e7a8b2968e8f0571803cfdb5363f3bd9ec6be6897e39f",
+    "Add-Ons/Item_Key/server.cs": "46609a92c6cef0b741711105cf642eab0d5138e2477f566f2c3949b94232e514",
+    "Add-Ons/Item_Key/yellowKey.cs": "083da6696103791ff4955778693289fe92584f2609ca9927f43a29a53ea028dd",
+    "Add-Ons/Item_Skis/Item_Skis.cs": "c75e0ea286e8bd08cd58d71820765f17d5f95f64371ef0abdca91d74687e3feb",
+    "Add-Ons/Item_Sports/basketball.cs": "477191068ded1984f4f3448c9fc148d20d2f7c4011c245f979563636f79842dd",
+    "Add-Ons/Item_Sports/dodgeball.cs": "cd21c584ee27fc7a5747ae70873ca84729ee09040e8be65ec15cfc2adadd2512",
+    "Add-Ons/Item_Sports/football.cs": "ce74184b507fe04ca8814d08628afaf9452c19b9d1aa3394599756324783e171",
+    "Add-Ons/Item_Sports/horse.cs": "1ca5a08e847b8fa8419effe711b4bcaf014b147076fa6fbd5b4dc64d80378836",
+    "Add-Ons/Item_Sports/soccer.cs": "6dc623d95ad435718bc516bf4f76cec2f32f31bc4d0a71961a74f0bf83e81598",
+    "Add-Ons/Item_Sports/support.cs": "9fc0c02b3412c8e37b2ed607534f955658687e3289beae3fb71f709c2270f7c4",
+    "Add-Ons/Projectile_GravityRocket/server.cs": "41cefc1a19d0a29c05eb4388229330a2b59537afdf70b278191d942e38950421",
+    "Add-Ons/Projectile_Pinball/server.cs": "c8687c745445cd582f08ef8a2e2802cccf3b5a4166c2fadba49daad7dd8c6948",
+    "Add-Ons/Projectile_Pong/server.cs": "9a68a5a06501b904ccee6617e3d703921cdd284f6f42b45ad2c8fc60935e0ad0",
+    "Add-Ons/Projectile_Radio_Wave/server.cs": "b4861eac056aa666779bcbba15dd8ddd423870c91e353474a0b1f5e82f5cfe33",
+    "Add-Ons/Vehicle_Pirate_Cannon/player.cs": "7f672f4cb56e9ed08a7a5a40da3add7d5a2931f193d0a65c3677013444be0d0b",
+    "Add-Ons/Vehicle_Pirate_Cannon/Vehicle_Pirate_Cannon.cs": "44853fa6107890564bd8618a76ca0a4498f34d60ff5163f0067fc130ef46c339",
+    "Add-Ons/Vehicle_Tank/Vehicle_Tank.cs": "2d7213d40af0354c49f6d43dcf0835cd53d221dd3949649164b018005fd173b3",
+    "Add-Ons/Weapon_Bow/Weapon_Bow.cs": "d1409f7cb50d99f8668d09163b9f7d846e911f54a610b41f6c22c79d4b2fdc8b",
+    "Add-Ons/Weapon_Gun/server.cs": "349f478c92f32224f2879d0f2adc95134151b42daa92b555533891f99bf04d7d",
+    "Add-Ons/Weapon_Guns_Akimbo/Weapon_AkimboGun.cs": "ec1e524e2b4b3e655d2ee69f11999180ccfb0933e6bf651226a1bd44c5092b2c",
+    "Add-Ons/Weapon_Horse_Ray/Weapon_HorseRay.cs": "ab3e4c6ac79144eac3f4af4757da024e02f698252ffe4c75de22940a82085d1b",
+    "Add-Ons/Weapon_Push_Broom/server.cs": "6dba1d50f1c2e36cb9fe11ef58a23b7cccd2cb5ff70604a1caf113f62f6778a1",
+    "Add-Ons/Weapon_Rocket_Launcher/Weapon_Rocket Launcher.cs": "f49e09872e7a60b829333bf0e6b82af5595f609dfe713f52a07afc049307169f",
+    "Add-Ons/Weapon_Spear/server.cs": "6d2f54589cbbc30492c60d53ec638d0d48a8d1332459da62c86ec447701aae35",
+    "Add-Ons/Weapon_Sword/server.cs": "c6be278b7b68e02b1178bf631c0822b613f44653c2365ed1cff0b7988e8a5da6",
+    "base/server/scripts/allGameScripts.cs (recovered)": "a720f7a188a615276befa34409eda68585ec9abbc629b7a8107f37dcf7b33a9b"
+  }
+}

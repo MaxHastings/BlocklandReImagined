@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-26",
+  "assertions": {
+    "all_21_ids_survive_save": true,
+    "imported_aliases_resolved": true,
+    "all_21_static_items_initialized": true,
+    "original_source_records_unchanged": true
+  },
+  "host": {
+    "address": "127.0.0.1:54655",
+    "certificate": "server-cert.der",
+    "content_id": "de35bbf2db53ad446f7a4d27b49c195a2944ff04de6ebe1126b752356e639c1a",
+    "content_identity_version": 9,
+    "initial_static_items": 21,
+    "pending_map_objects": [
+      ": Static object damage, destruction and repair",
+      ": Static object damage, destruction and repair",
+      ": Static object damage, destruction and repair",
+      "hours: Clock minute advancement and timed explosions",
+      "minutes: Clock minute advancement and timed explosions",
+      "tenMinutes: Clock minute advancement and timed explosions",
+      "tenHours: Clock minute advancement and timed explosions",
+      ": Static object damage, destruction and repair",
+      ": Clock colon blinking",
+      ": Static object damage, destruction and repair"
+    ],
+    "schema_version": 1,
+    "terrain_region": [
+      -64,
+      -64,
+      384,
+      384
+    ],
+    "tool_catalog": {
+      "default_print": "print/print_letters_default/a",
+      "emitters": 102,
+      "items": 21,
+      "lights": 13,
+      "printable_definitions": 7,
+      "prints": 77
+    },
+    "unresolved_item_references": 0
+  },
+  "run": {
+    "commands": 0,
+    "dropped_cues": 0,
+    "dropped_ticks": 0,
+    "joins": 0,
+    "notices": [],
+    "rejected": 0,
+    "resumes": 0,
+    "saved_world": "world-1790479727954.json",
+    "ticks": 240,
+    "weapon_adapter_gaps": {}
+  }
+}

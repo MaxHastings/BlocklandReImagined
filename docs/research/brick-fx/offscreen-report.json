@@ -1,0 +1,75 @@
+{
+  "brick": "v20/brick/brick2x2fprintdata",
+  "not_parity_acceptance": true,
+  "offscreen": true,
+  "records": [
+    {
+      "color_fx": 0,
+      "material_count": 7,
+      "omissions": [
+        "Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass"
+      ],
+      "triangles": 20
+    },
+    {
+      "color_fx": 1,
+      "material_count": 7,
+      "omissions": [
+        "Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass",
+        "Brick FX IDs are source-backed; reflection, phase and displacement equations are native visual approximations pending original-engine calibration"
+      ],
+      "triangles": 20
+    },
+    {
+      "color_fx": 2,
+      "material_count": 7,
+      "omissions": [
+        "Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass",
+        "Brick FX IDs are source-backed; reflection, phase and displacement equations are native visual approximations pending original-engine calibration"
+      ],
+      "triangles": 20
+    },
+    {
+      "color_fx": 3,
+      "material_count": 7,
+      "omissions": [
+        "Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass",
+        "Brick FX IDs are source-backed; reflection, phase and displacement equations are native visual approximations pending original-engine calibration"
+      ],
+      "triangles": 20
+    },
+    {
+      "color_fx": 4,
+      "material_count": 11,
+      "omissions": [
+        "Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass",
+        "Brick FX IDs are source-backed; reflection, phase and displacement equations are native visual approximations pending original-engine calibration"
+      ],
+      "triangles": 20
+    },
+    {
+      "color_fx": 5,
+      "material_count": 7,
+      "omissions": [
+        "Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass",
+        "Brick FX IDs are source-backed; reflection, phase and displacement equations are native visual approximations pending original-engine calibration"
+      ],
+      "triangles": 20
+    },
+    {
+      "color_fx": 6,
+      "material_count": 7,
+      "omissions": [
+        "Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass",
+        "Brick FX IDs are source-backed; reflection, phase and displacement equations are native visual approximations pending original-engine calibration"
+      ],
+      "triangles": 20
+    }
+  ],
+  "row_times_seconds": [
+    0,
+    0.8
+  ],
+  "schema_version": 1,
+  "single_upload_per_phase_pair": true
+}

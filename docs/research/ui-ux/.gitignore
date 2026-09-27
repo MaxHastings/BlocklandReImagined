@@ -1,0 +1,7 @@
+# Local-only research outputs. These embed original Blockland v20 art/fonts or
+# transcribe decompiled original GUI/script content, which the project never
+# commits (AGENTS.md). Regenerate with the scripts in tools/ (see README.md).
+renders/
+data/gui-layouts/
+data/v20-static-objects.json
+data/v20-dynamic-scenes-*.json

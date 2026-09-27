@@ -1,0 +1,1282 @@
+//! UI adapters for implemented native tools. Unsupported event/source records
+//! remain read-only; these adapters never invent gameplay or execute scripts.
+use anyhow::{Context, Result, ensure};
+use bri_content::{brick::Catalog, brick_materials::Bundle, effects::Library};
+use bri_net::protocol::PublicWorld;
+use bri_sim::session::{Command, InspectMode, Reply, ToolAction, ToolCatalog, WrenchProperties};
+use bri_ui::{api::*, models::events::NAMED_BRICK, pack::Pack, schema::ParamSpec};
+use bri_world::{Action, Brick, ContentRef, Event, Input, ItemSpawn, Target};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+
+struct Inspection {
+    id: u64,
+    mode: InspectMode,
+    brick: Brick,
+    rows: Vec<EventRow>,
+    /// Native events outside the editable UI capability set are retained here.
+    retained: BTreeMap<String, Event>,
+    wrench_original: Option<Brick>,
+}
+
+pub struct ToolUi {
+    catalog: ToolCatalog,
+    prints: BTreeMap<String, Vec<PrintInfo>>,
+    print_aliases: BTreeMap<String, String>,
+    item_aliases: BTreeMap<String, String>,
+    datablocks: DatablockMenus,
+    variants: BTreeMap<String, WrenchVariant>,
+    inspection: Option<Inspection>,
+}
+
+impl ToolUi {
+    pub fn new(
+        catalog: &Catalog,
+        effects: &Library,
+        materials: &Bundle,
+        pack: &Pack,
+    ) -> Result<Self> {
+        let tool_catalog = ToolCatalog::from_native(catalog, effects, materials)?;
+        let print_aliases = materials
+            .prints
+            .iter()
+            .flat_map(|print| {
+                print
+                    .aliases
+                    .iter()
+                    .chain(std::iter::once(&print.id))
+                    .map(|alias| (alias.to_ascii_lowercase(), print.id.clone()))
+            })
+            .collect();
+        let mut prints: BTreeMap<String, Vec<PrintInfo>> = BTreeMap::new();
+        for print in &materials.prints {
+            let archive = print
+                .icon
+                .source
+                .archive
+                .as_deref()
+                .context("Print icon has no original package")?;
+            let archive = archive
+                .strip_suffix(".zip")
+                .context("Print icon package is not a ZIP")?;
+            let source = print
+                .icon
+                .source
+                .path
+                .strip_suffix(".png")
+                .context("Print icon is not a PNG")?;
+            let icon = format!("{archive}/{source}").to_ascii_lowercase();
+            ensure!(
+                pack.data.images.contains_key(&icon),
+                "UI pack lacks original print icon: {icon}"
+            );
+            prints
+                .entry(print.aspect.clone())
+                .or_default()
+                .push(PrintInfo {
+                    id: print.id.clone(),
+                    name: print.name.clone(),
+                    icon: IconRef::Pack(icon),
+                });
+        }
+        let datablocks = [
+            (
+                "FxLightData".into(),
+                effects
+                    .lights
+                    .iter()
+                    .filter(|e| tool_catalog.lights.contains(&e.id))
+                    .map(|e| Choice {
+                        id: e.id.clone(),
+                        name: e.name.clone(),
+                    })
+                    .collect(),
+            ),
+            (
+                "ParticleEmitterData".into(),
+                effects
+                    .emitters
+                    .iter()
+                    .filter(|e| tool_catalog.emitters.contains(&e.id))
+                    .map(|e| Choice {
+                        id: e.id.clone(),
+                        name: e.name.clone(),
+                    })
+                    .collect(),
+            ),
+        ]
+        .into();
+        let variants = catalog
+            .bricks
+            .iter()
+            .map(|b| {
+                let variant = match b.special_kind.as_deref() {
+                    Some("Sound") => WrenchVariant::Sound,
+                    Some("VehicleSpawn") => WrenchVariant::VehicleSpawn,
+                    _ => WrenchVariant::Normal,
+                };
+                (b.id.clone(), variant)
+            })
+            .collect();
+        Ok(Self {
+            catalog: tool_catalog,
+            prints,
+            print_aliases,
+            item_aliases: BTreeMap::new(),
+            datablocks,
+            variants,
+            inspection: None,
+        })
+    }
+    pub fn server_catalog(&self) -> ToolCatalog {
+        self.catalog.clone()
+    }
+    /// Install the same validated native item choices used by the authoritative
+    /// host. Root supplies weapons-pack items plus core Hammer/Wrench/Printer/Wand.
+    /// Existing inspection tokens are invalidated when the choice set changes.
+    pub fn install_items(
+        &mut self,
+        items: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<()> {
+        let mut choices = Vec::new();
+        let mut aliases = BTreeMap::new();
+        for (id, name) in items {
+            ensure!(choices.len() < 1024, "Too many native item choices");
+            ensure!(
+                !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
+                "Invalid native item display name"
+            );
+            let key = name.trim().to_ascii_lowercase();
+            ensure!(
+                aliases.insert(key, id.clone()).is_none(),
+                "Ambiguous native item display name"
+            );
+            choices.push(Choice { id, name });
+        }
+        let mut catalog = self.catalog.clone();
+        catalog.install_items(choices.iter().map(|c| c.id.clone()))?;
+        choices.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then(a.id.cmp(&b.id))
+        });
+        self.catalog = catalog;
+        self.item_aliases = aliases;
+        self.datablocks.insert("ItemData".into(), choices);
+        self.invalidate();
+        Ok(())
+    }
+    pub fn catalog_updates(&self) -> Vec<UiUpdate> {
+        let mut updates = vec![
+            UiUpdate::Events(event_catalog()),
+            UiUpdate::Datablocks(self.datablocks.clone()),
+        ];
+        updates.extend(self.prints.iter().map(|(aspect, prints)| UiUpdate::Prints {
+            aspect: aspect.clone(),
+            prints: prints.clone(),
+        }));
+        updates
+    }
+    pub fn invalidate(&mut self) {
+        self.inspection = None;
+    }
+    /// Events close only their nested dialog. Restore the base wrench while
+    /// retaining its original property snapshot; other writes finish editing.
+    pub fn command_accepted(&mut self, command: &Command) -> Result<()> {
+        if let Command::Tool(ToolAction::SetEvents { brick, events }) = command {
+            let inspection = self
+                .inspection
+                .as_mut()
+                .context("No active events inspection")?;
+            ensure!(
+                inspection.id == *brick && inspection.mode == InspectMode::Events,
+                "Accepted events do not match current inspection"
+            );
+            if let Some(original) = &mut inspection.wrench_original {
+                original.events = events.clone();
+                inspection.brick = original.clone();
+                inspection.mode = InspectMode::Wrench;
+                inspection.rows.clear();
+                inspection.retained.clear();
+            } else {
+                self.invalidate();
+            }
+        } else {
+            self.invalidate();
+        }
+        Ok(())
+    }
+
+    /// The caller must additionally reject replies from cancelled/replaced
+    /// requests and old connection tokens before calling this method.
+    pub fn accept_inspection(
+        &mut self,
+        reply: &Reply,
+        expected_mode: InspectMode,
+        expected_brick: Option<u64>,
+        world: &PublicWorld,
+        names: &BTreeMap<u64, String>,
+        local_owner: u64,
+    ) -> Result<Vec<UiUpdate>> {
+        let Reply::Inspected {
+            brick_id,
+            brick,
+            mode,
+        } = reply
+        else {
+            anyhow::bail!("Expected server tool inspection")
+        };
+        ensure!(
+            *mode == expected_mode && expected_brick.is_none_or(|id| id == *brick_id),
+            "Server inspection does not match requested tool/brick"
+        );
+        brick.validate(world.palette.len())?;
+        let definition = resolved(&brick.definition)?;
+        let variant = *self
+            .variants
+            .get(definition)
+            .context("Inspected brick definition is unavailable")?;
+        let mut rows = vec![];
+        let mut retained = BTreeMap::new();
+        let update = match mode {
+            InspectMode::Wrench => {
+                ensure!(
+                    variant == WrenchVariant::Normal,
+                    "This special wrench requires its native sound/vehicle behavior adapter"
+                );
+                let mut bound = (**brick).clone();
+                bound.item_spawn.resolve_item(&self.item_aliases)?;
+                let data = wrench_data(&bound)?;
+                validate_choice(data.light.as_deref(), &self.catalog.lights, "light")?;
+                validate_choice(data.emitter.as_deref(), &self.catalog.emitters, "emitter")?;
+                validate_choice(data.item.as_deref(), &self.catalog.items, "item")?;
+                UiUpdate::OpenWrench {
+                    brick: *brick_id,
+                    variant,
+                    owner: names.get(&brick.owner).cloned().unwrap_or_else(|| {
+                        if brick.owner == 0 {
+                            "World".into()
+                        } else {
+                            format!("Owner {}", brick.owner)
+                        }
+                    }),
+                    data,
+                    admin_override: brick.owner != local_owner,
+                    events_allowed: true,
+                }
+            }
+            InspectMode::Printer => {
+                let aspect = self
+                    .catalog
+                    .brick_print_aspects
+                    .get(definition)
+                    .context("Brick is not printable")?;
+                // UI keys retain original casing; compatibility itself is case-insensitive.
+                let aspect = self
+                    .prints
+                    .keys()
+                    .find(|s| s.eq_ignore_ascii_case(aspect))
+                    .unwrap_or(aspect)
+                    .clone();
+                let current = brick
+                    .print
+                    .as_ref()
+                    .map(|reference| {
+                        let token = match reference {
+                            ContentRef::Resolved(id) => id,
+                            ContentRef::Unresolved { namespace, name }
+                                if namespace.eq_ignore_ascii_case("print") =>
+                            {
+                                name
+                            }
+                            _ => anyhow::bail!(
+                                "Current brick print has an unsupported source namespace"
+                            ),
+                        };
+                        self.print_aliases
+                            .get(&token.to_ascii_lowercase())
+                            .cloned()
+                            .context("Current brick print is not bound to native content")
+                    })
+                    .transpose()?;
+                if let Some(id) = &current {
+                    ensure!(
+                        self.catalog.prints.contains_key(id),
+                        "Current brick print is not bound to native content"
+                    );
+                }
+                UiUpdate::OpenPrintSelector { aspect, current }
+            }
+            InspectMode::Events => {
+                (rows, retained) = event_rows(brick, &self.catalog)?;
+                let names: BTreeSet<_> = world
+                    .bricks
+                    .values()
+                    .filter(|b| b.owner == brick.owner)
+                    .filter_map(|b| b.name.clone())
+                    .collect();
+                UiUpdate::OpenEvents {
+                    brick: *brick_id,
+                    rows: rows.clone(),
+                    named_targets: names.into_iter().collect(),
+                    allow_named: true,
+                }
+            }
+        };
+        let wrench_original = if *mode == InspectMode::Wrench {
+            Some(*brick.clone())
+        } else if *mode == InspectMode::Events {
+            self.inspection
+                .as_ref()
+                .filter(|i| i.id == *brick_id)
+                .and_then(|i| i.wrench_original.clone())
+        } else {
+            None
+        };
+        self.inspection = Some(Inspection {
+            id: *brick_id,
+            mode: *mode,
+            brick: *brick.clone(),
+            rows,
+            retained,
+            wrench_original,
+        });
+        Ok(vec![update])
+    }
+
+    pub fn action_command(&mut self, action: &UiAction) -> Result<Option<Command>> {
+        let tool = match action {
+            UiAction::CancelWrench { brick } => {
+                if self.inspection.as_ref().is_some_and(|i| i.id == *brick) {
+                    self.invalidate();
+                }
+                return Ok(None);
+            }
+            UiAction::ClosePrintSelector => {
+                self.invalidate();
+                return Ok(None);
+            }
+            UiAction::RequestEvents { brick } => {
+                let inspection = self
+                    .inspection
+                    .as_ref()
+                    .context("No active server tool inspection")?;
+                ensure!(
+                    inspection.id == *brick,
+                    "Events request does not match inspected brick"
+                );
+                ToolAction::Inspect {
+                    mode: InspectMode::Events,
+                }
+            }
+            UiAction::SetPrint { print } => {
+                let inspection = self.inspection(InspectMode::Printer, None)?;
+                let aspect =
+                    &self.catalog.brick_print_aspects[resolved(&inspection.brick.definition)?];
+                let print_aspect = self.catalog.prints.get(print).context("Unknown print ID")?;
+                ensure!(
+                    print_aspect.eq_ignore_ascii_case(aspect)
+                        || print_aspect.eq_ignore_ascii_case("Letters"),
+                    "Print does not fit this brick"
+                );
+                ToolAction::SetPrint {
+                    brick: inspection.id,
+                    print: Some(print.clone()),
+                }
+            }
+            UiAction::SendWrench {
+                brick,
+                variant,
+                data,
+            } => {
+                self.inspection(InspectMode::Wrench, Some(*brick))?;
+                ensure!(
+                    *variant == WrenchVariant::Normal
+                        && data.sound.is_none()
+                        && data.vehicle.is_none()
+                        && !data.recolor_vehicle,
+                    "Sound and vehicle wrench properties require native behavior adapters"
+                );
+                validate_choice(data.light.as_deref(), &self.catalog.lights, "light")?;
+                validate_choice(data.emitter.as_deref(), &self.catalog.emitters, "emitter")?;
+                validate_choice(data.item.as_deref(), &self.catalog.items, "item")?;
+                let item_spawn = ItemSpawn {
+                    item: data.item.clone().map(ContentRef::Resolved),
+                    position: data.item_pos,
+                    direction: data.item_dir,
+                    respawn_ms: data.item_respawn_ms,
+                };
+                item_spawn.validate()?;
+                ensure!(data.emitter_dir <= 5, "Unknown emitter direction");
+                let name = data.name.trim();
+                ensure!(
+                    name.len() <= 128 && !name.chars().any(char::is_control),
+                    "Invalid brick name"
+                );
+                ToolAction::SetWrench {
+                    brick: *brick,
+                    properties: WrenchProperties {
+                        name: (!name.is_empty()).then(|| name.to_owned()),
+                        light: data.light.clone(),
+                        emitter: data.emitter.clone(),
+                        emitter_direction: data.emitter_dir,
+                        item_spawn,
+                        raycast: data.raycasting,
+                        colliding: data.colliding,
+                        visible: data.rendering,
+                    },
+                }
+            }
+            UiAction::SendEvents { brick, rows } => {
+                let inspection = self.inspection(InspectMode::Events, Some(*brick))?;
+                let original: Vec<_> = inspection
+                    .rows
+                    .iter()
+                    .filter(|r| matches!(r, EventRow::Preserved { .. }))
+                    .collect();
+                let submitted: Vec<_> = rows
+                    .iter()
+                    .filter(|r| matches!(r, EventRow::Preserved { .. }))
+                    .collect();
+                ensure!(
+                    original == submitted,
+                    "Preserved event rows were changed, removed or forged"
+                );
+                let mut events = vec![];
+                for row in rows {
+                    match row {
+                        EventRow::Editable(line) => events.push(native_event(line, &self.catalog)?),
+                        EventRow::Preserved { token, .. } => {
+                            if let Some(event) = inspection.retained.get(token) {
+                                events.push(event.clone());
+                            }
+                        }
+                    }
+                }
+                // Native authority performs the full world/event bound check.
+                let mut candidate = inspection.brick.clone();
+                candidate.events = events.clone();
+                // Palette-dependent validation is performed by the server.
+                candidate.validate(256)?;
+                ToolAction::SetEvents {
+                    brick: *brick,
+                    events,
+                }
+            }
+            UiAction::RespawnVehicle { .. } => {
+                anyhow::bail!("Vehicle respawn requires its native behavior adapter")
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(Command::Tool(tool)))
+    }
+    fn inspection(&self, mode: InspectMode, id: Option<u64>) -> Result<&Inspection> {
+        let inspection = self
+            .inspection
+            .as_ref()
+            .context("No active server tool inspection")?;
+        ensure!(
+            (inspection.mode == mode
+                || (mode == InspectMode::Wrench
+                    && inspection.mode == InspectMode::Events
+                    && inspection.wrench_original.is_some()))
+                && id.is_none_or(|id| id == inspection.id),
+            "Tool action does not match inspected brick/mode"
+        );
+        Ok(inspection)
+    }
+}
+
+fn resolved(reference: &ContentRef) -> Result<&str> {
+    match reference {
+        ContentRef::Resolved(id) => Ok(id),
+        ContentRef::Unresolved { .. } => {
+            anyhow::bail!("Original resource has no native content binding")
+        }
+    }
+}
+fn validate_choice(value: Option<&str>, choices: &BTreeSet<String>, kind: &str) -> Result<()> {
+    ensure!(
+        value.is_none_or(|v| choices.contains(v)),
+        "Unknown native {kind}"
+    );
+    Ok(())
+}
+fn wrench_data(brick: &Brick) -> Result<WrenchData> {
+    Ok(WrenchData {
+        name: brick.name.clone().unwrap_or_default(),
+        light: brick
+            .light
+            .as_ref()
+            .map(|l| resolved(&l.asset).map(str::to_owned))
+            .transpose()?,
+        emitter: brick
+            .emitter
+            .as_ref()
+            .and_then(|e| e.asset.as_ref())
+            .map(resolved)
+            .transpose()?
+            .map(str::to_owned),
+        emitter_dir: brick.emitter.as_ref().map_or(0, |e| e.direction),
+        item: brick
+            .item_spawn
+            .item
+            .as_ref()
+            .map(resolved)
+            .transpose()?
+            .map(str::to_owned),
+        item_pos: brick.item_spawn.position,
+        item_dir: brick.item_spawn.direction,
+        item_respawn_ms: brick.item_spawn.respawn_ms,
+        raycasting: brick.raycast,
+        colliding: brick.colliding,
+        rendering: brick.visible,
+        ..Default::default()
+    })
+}
+
+pub fn event_catalog() -> EventCatalog {
+    let bool_spec = || vec![ParamSpec::Bool];
+    let mut outputs = vec![
+        ("setColor", vec![ParamSpec::PaintColor { default: 0 }]),
+        (
+            "setColorFX",
+            vec![ParamSpec::List {
+                items: [
+                    "None", "Pearl", "Chrome", "Glow", "Blink", "Swirl", "Rainbow",
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| (s.into(), i as i64))
+                .collect(),
+            }],
+        ),
+        ("setColliding", bool_spec()),
+        ("setRendering", bool_spec()),
+        ("setRayCasting", bool_spec()),
+        (
+            "setLight",
+            vec![ParamSpec::Datablock {
+                class: "FxLightData".into(),
+            }],
+        ),
+        (
+            "setEmitter",
+            vec![ParamSpec::Datablock {
+                class: "ParticleEmitterData".into(),
+            }],
+        ),
+    ];
+    EventCatalog {
+        inputs: ["onActivate", "onPlayerTouch"]
+            .into_iter()
+            .map(|name| EventInputInfo {
+                name: name.into(),
+                targets: vec![("Self".into(), "fxDTSBrick".into())],
+                supported: true,
+            })
+            .collect(),
+        outputs: outputs
+            .drain(..)
+            .map(|(name, params)| EventOutputInfo {
+                class: "fxDTSBrick".into(),
+                name: name.into(),
+                params,
+                supported: true,
+            })
+            .collect(),
+    }
+}
+fn native_event(line: &EventLine, catalog: &ToolCatalog) -> Result<Event> {
+    ensure!(
+        line.delay_ms <= bri_ui::models::events::MAX_DELAY_MS,
+        "Event delay exceeds supported dialog range"
+    );
+    let input = match line.input.as_str() {
+        "onActivate" => Input::Activate,
+        "onPlayerTouch" => Input::Touch,
+        _ => anyhow::bail!("Unsupported native event input"),
+    };
+    let target = match (line.target.as_str(), line.named_target.as_deref()) {
+        ("Self", None) => Target::ThisBrick,
+        (NAMED_BRICK, Some(name))
+            if !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control) =>
+        {
+            Target::Named(name.into())
+        }
+        _ => anyhow::bail!("Unsupported native event target"),
+    };
+    ensure!(
+        line.params.len() == 1,
+        "Native event requires exactly one parameter"
+    );
+    let action = match (line.output.as_str(), &line.params[0]) {
+        ("setColor", ParamValue::PaintColor(n)) => {
+            Action::Color(u8::try_from(*n).context("Color exceeds palette index range")?)
+        }
+        ("setColorFX", ParamValue::List(n)) if (0..=6).contains(n) => Action::ColorEffect(*n as u8),
+        ("setColliding", ParamValue::Bool(v)) => Action::Colliding(*v),
+        ("setRendering", ParamValue::Bool(v)) => Action::Visible(*v),
+        ("setRayCasting", ParamValue::Bool(v)) => Action::Raycast(*v),
+        ("setLight", ParamValue::Datablock(id)) => {
+            validate_choice(id.as_deref(), &catalog.lights, "light")?;
+            Action::Light(id.clone().map(ContentRef::Resolved))
+        }
+        ("setEmitter", ParamValue::Datablock(id)) => {
+            validate_choice(id.as_deref(), &catalog.emitters, "emitter")?;
+            Action::Emitter(id.clone().map(ContentRef::Resolved))
+        }
+        _ => anyhow::bail!("Unsupported native output or parameter type"),
+    };
+    Ok(Event {
+        enabled: line.enabled,
+        input,
+        delay_ms: line.delay_ms,
+        target,
+        action,
+    })
+}
+fn ui_event(event: &Event) -> Result<EventLine> {
+    let (output, param) = match &event.action {
+        Action::Color(v) => ("setColor", ParamValue::PaintColor(u32::from(*v))),
+        Action::ColorEffect(v) => ("setColorFX", ParamValue::List(i64::from(*v))),
+        Action::Colliding(v) => ("setColliding", ParamValue::Bool(*v)),
+        Action::Visible(v) => ("setRendering", ParamValue::Bool(*v)),
+        Action::Raycast(v) => ("setRayCasting", ParamValue::Bool(*v)),
+        Action::Light(v) => (
+            "setLight",
+            ParamValue::Datablock(v.as_ref().map(resolved).transpose()?.map(str::to_owned)),
+        ),
+        Action::Emitter(v) => (
+            "setEmitter",
+            ParamValue::Datablock(v.as_ref().map(resolved).transpose()?.map(str::to_owned)),
+        ),
+    };
+    let (target, named_target) = match &event.target {
+        Target::ThisBrick => ("Self", None),
+        Target::Named(n) => (NAMED_BRICK, Some(n.clone())),
+    };
+    Ok(EventLine {
+        enabled: event.enabled,
+        delay_ms: event.delay_ms,
+        input: match event.input {
+            Input::Activate => "onActivate",
+            Input::Touch => "onPlayerTouch",
+        }
+        .into(),
+        target: target.into(),
+        named_target,
+        output: output.into(),
+        params: vec![param],
+    })
+}
+fn event_rows(
+    brick: &Brick,
+    catalog: &ToolCatalog,
+) -> Result<(Vec<EventRow>, BTreeMap<String, Event>)> {
+    let mut rows = vec![];
+    let mut retained = BTreeMap::new();
+    for (index, event) in brick.events.iter().enumerate() {
+        if let Ok(line) = ui_event(event)
+            && native_event(&line, catalog)
+                .as_ref()
+                .is_ok_and(|native| native == event)
+        {
+            rows.push(EventRow::Editable(line));
+        } else {
+            let text = serde_json::to_string(event)?;
+            let token = format!("native:{index}:{:x}", Sha256::digest(text.as_bytes()));
+            retained.insert(token.clone(), event.clone());
+            rows.push(EventRow::Preserved {
+                enabled: event.enabled,
+                text,
+                token,
+            });
+        }
+    }
+    for (index, record) in brick.source_records.iter().enumerate().filter(|(_, r)| {
+        r.text
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("+-EVENT")
+    }) {
+        let token = format!(
+            "source:{index}:{:x}",
+            Sha256::digest(serde_json::to_vec(record)?)
+        );
+        rows.push(EventRow::Preserved {
+            enabled: record.text.split_whitespace().nth(2) == Some("1"),
+            text: record.text.clone(),
+            token,
+        });
+    }
+    Ok((rows, retained))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture() -> ToolUi {
+        ToolUi {
+            catalog: ToolCatalog {
+                items: ["v20.weapon.gunitem".into(), "v20.weapon.hammeritem".into()].into(),
+                lights: ["light/red".into()].into(),
+                emitters: ["emitter/smoke".into()].into(),
+                prints: [
+                    ("print/A".into(), "Letters".into()),
+                    ("print/face".into(), "2x2f".into()),
+                    ("print/wide".into(), "2x1".into()),
+                ]
+                .into(),
+                brick_print_aspects: [("plate".into(), "2x2f".into())].into(),
+                default_print: Some("print/A".into()),
+            },
+            prints: BTreeMap::new(),
+            print_aliases: [
+                ("letters/a".into(), "print/A".into()),
+                ("print/a".into(), "print/A".into()),
+                ("2x2f/face".into(), "print/face".into()),
+            ]
+            .into(),
+            item_aliases: BTreeMap::new(),
+            datablocks: BTreeMap::new(),
+            variants: [("plate".into(), WrenchVariant::Normal)].into(),
+            inspection: None,
+        }
+    }
+    fn brick() -> Brick {
+        Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -2.25], 1)
+    }
+    fn world(brick: &Brick) -> PublicWorld {
+        let mut other = brick.clone();
+        other.owner = 2;
+        other.name = Some("private target".into());
+        let mut target = brick.clone();
+        target.name = Some("owned target".into());
+        PublicWorld {
+            name: "test".into(),
+            map_id: "test".into(),
+            palette: vec![[1.0; 4], [0.0; 4]],
+            bricks: [
+                (7, bri_net::protocol::public_brick(brick)),
+                (8, other),
+                (9, target),
+            ]
+            .into(),
+        }
+    }
+    fn open(ui: &mut ToolUi, brick: &Brick, mode: InspectMode) -> Vec<UiUpdate> {
+        ui.accept_inspection(
+            &Reply::Inspected {
+                brick_id: 7,
+                brick: Box::new(brick.clone()),
+                mode,
+            },
+            mode,
+            Some(7),
+            &world(brick),
+            &[(1, "Builder".into())].into(),
+            1,
+        )
+        .unwrap()
+    }
+    fn event(action: Action) -> Event {
+        Event {
+            enabled: true,
+            input: Input::Activate,
+            delay_ms: 0,
+            target: Target::ThisBrick,
+            action,
+        }
+    }
+    #[test]
+    fn item_choices_install_atomically_and_wrench_roundtrips_fields() {
+        let mut ui = fixture();
+        ui.install_items([
+            ("v20.weapon.gunitem".into(), "Gun".into()),
+            ("v20.weapon.hammeritem".into(), "Hammer ".into()),
+            ("v20.weapon.wrenchitem".into(), "Wrench".into()),
+            ("v20.weapon.printgun".into(), "Printer".into()),
+            ("v20.weapon.wanditem".into(), "Wand".into()),
+        ])
+        .unwrap();
+        assert_eq!(ui.server_catalog().items.len(), 5);
+        assert_eq!(ui.datablocks["ItemData"].len(), 5);
+        let before = ui.server_catalog();
+        assert!(ui.install_items([("id".into(), "".into())]).is_err());
+        assert_eq!(ui.server_catalog(), before);
+        let mut b = brick();
+        b.item_spawn = ItemSpawn {
+            item: Some(ContentRef::Resolved("v20.weapon.gunitem".into())),
+            position: 4,
+            direction: 5,
+            respawn_ms: 17000,
+        };
+        let updates = open(&mut ui, &b, InspectMode::Wrench);
+        let UiUpdate::OpenWrench { data, .. } = &updates[0] else {
+            panic!()
+        };
+        assert_eq!(
+            (data.item_pos, data.item_dir, data.item_respawn_ms),
+            (4, 5, 17000)
+        );
+        let Some(Command::Tool(ToolAction::SetWrench { properties, .. })) = ui
+            .action_command(&UiAction::SendWrench {
+                brick: 7,
+                variant: WrenchVariant::Normal,
+                data: data.clone(),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(properties.item_spawn, b.item_spawn);
+        let mut clear = data.clone();
+        clear.item = None;
+        let Some(Command::Tool(ToolAction::SetWrench { properties, .. })) = ui
+            .action_command(&UiAction::SendWrench {
+                brick: 7,
+                variant: WrenchVariant::Normal,
+                data: clear,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            properties.item_spawn,
+            ItemSpawn {
+                item: None,
+                ..b.item_spawn.clone()
+            }
+        );
+        let mut unknown = data.clone();
+        unknown.item = Some("unknown".into());
+        assert!(
+            ui.action_command(&UiAction::SendWrench {
+                brick: 7,
+                variant: WrenchVariant::Normal,
+                data: unknown
+            })
+            .is_err()
+        );
+        let mut invalid = data.clone();
+        invalid.item_respawn_ms = 999;
+        assert!(
+            ui.action_command(&UiAction::SendWrench {
+                brick: 7,
+                variant: WrenchVariant::Normal,
+                data: invalid
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn imported_item_name_resolves_without_rewriting_inspection_or_source_records() {
+        let mut ui = fixture();
+        ui.install_items([("v20.weapon.hammeritem".into(), "Hammer ".into())])
+            .unwrap();
+        let mut b = brick();
+        b.item_spawn.item = Some(ContentRef::Unresolved {
+            namespace: "item_ui".into(),
+            name: "hAmMeR".into(),
+        });
+        b.source_records.push(bri_world::SourceRecord {
+            line: 1,
+            text: "+-ITEM Hammer \" 0 2 4000".into(),
+            diagnostic: Some("Original imported name".into()),
+        });
+        let original = b.clone();
+        let updates = open(&mut ui, &b, InspectMode::Wrench);
+        assert!(
+            matches!(&updates[0],UiUpdate::OpenWrench {data,..} if data.item.as_deref()==Some("v20.weapon.hammeritem"))
+        );
+        assert_eq!(ui.inspection.as_ref().unwrap().brick, original);
+        let aliases = [("hammer".into(), "v20.weapon.hammeritem".into())].into();
+        assert!(b.item_spawn.resolve_item(&aliases).unwrap());
+        assert_eq!(b.source_records, original.source_records);
+        assert!(!b.item_spawn.resolve_item(&aliases).unwrap());
+    }
+
+    #[test]
+    #[ignore = "requires converted weapons-pack-003 native JSON; no window or original reads"]
+    fn native_weapon_pack_and_core_tools_expose_all_21_item_choices() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/weapons-pack-003/weapons.json");
+        let bytes = std::fs::read(root).unwrap();
+        let pack: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(pack["schema_version"], 1);
+        let mut rows: Vec<(String, String)> = pack["items"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, item)| {
+                assert_eq!(item["id"].as_str(), Some(id.as_str()));
+                (id.clone(), item["ui_name"].as_str().unwrap().to_owned())
+            })
+            .collect();
+        assert_eq!(rows.len(), 17);
+        rows.extend(
+            [
+                ("v20.weapon.hammeritem", "Hammer "),
+                ("v20.weapon.wrenchitem", "Wrench"),
+                ("v20.weapon.printgun", "Printer"),
+                ("v20.weapon.wanditem", "Wand"),
+            ]
+            .map(|(id, name)| (id.into(), name.into())),
+        );
+        let mut ui = fixture();
+        ui.install_items(rows.clone()).unwrap();
+        assert_eq!(ui.datablocks["ItemData"].len(), 21);
+        assert_eq!(ui.server_catalog().items.len(), 21);
+        for (id, _) in rows {
+            let mut b = brick();
+            b.item_spawn.item = Some(ContentRef::Resolved(id.clone()));
+            let updates = open(&mut ui, &b, InspectMode::Wrench);
+            let UiUpdate::OpenWrench { data, .. } = &updates[0] else {
+                panic!()
+            };
+            let Some(Command::Tool(ToolAction::SetWrench { properties, .. })) = ui
+                .action_command(&UiAction::SendWrench {
+                    brick: 7,
+                    variant: WrenchVariant::Normal,
+                    data: data.clone(),
+                })
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(properties.item_spawn.item, Some(ContentRef::Resolved(id)));
+        }
+    }
+    #[test]
+    fn native_event_capabilities_roundtrip_without_extra_targets_or_coercions() {
+        let ui = fixture();
+        let capabilities = event_catalog();
+        assert_eq!(capabilities.inputs.len(), 2);
+        assert_eq!(capabilities.outputs.len(), 7);
+        assert!(
+            capabilities
+                .inputs
+                .iter()
+                .all(|i| i.targets == [("Self".into(), "fxDTSBrick".into())])
+        );
+        for action in [
+            Action::Color(1),
+            Action::ColorEffect(6),
+            Action::Visible(false),
+            Action::Colliding(true),
+            Action::Raycast(false),
+            Action::Light(Some(ContentRef::Resolved("light/red".into()))),
+            Action::Emitter(None),
+        ] {
+            let mut original = event(action);
+            original.input = Input::Touch;
+            original.target = Target::Named("lamp".into());
+            let row = ui_event(&original).unwrap();
+            assert_eq!(native_event(&row, &ui.catalog).unwrap(), original);
+            let mut invalid = row.clone();
+            invalid.target = "Player".into();
+            assert!(native_event(&invalid, &ui.catalog).is_err());
+            let mut invalid = row.clone();
+            invalid.params.push(ParamValue::Int(0));
+            assert!(native_event(&invalid, &ui.catalog).is_err());
+        }
+        let mut line = ui_event(&event(Action::Color(1))).unwrap();
+        line.params = vec![ParamValue::Int(1)];
+        assert!(native_event(&line, &ui.catalog).is_err());
+        line.output = "relay".into();
+        assert!(native_event(&line, &ui.catalog).is_err());
+    }
+    #[test]
+    fn preserved_events_cannot_be_dropped_duplicated_or_modified() {
+        let mut ui = fixture();
+        let mut b = brick();
+        b.events = vec![
+            event(Action::Color(1)),
+            Event {
+                delay_ms: 60_000,
+                ..event(Action::Visible(false))
+            },
+        ];
+        b.source_records.push(bri_world::SourceRecord {
+            line: 10,
+            text: "+-EVENT\t2\t1\tonRelay\t0\tSelf\tfireRelay".into(),
+            diagnostic: Some("Unsupported relay".into()),
+        });
+        let updates = open(&mut ui, &b, InspectMode::Events);
+        let UiUpdate::OpenEvents {
+            rows,
+            named_targets,
+            ..
+        } = &updates[0]
+        else {
+            panic!()
+        };
+        assert_eq!(named_targets, &["owned target"]);
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[0], EventRow::Editable(_)));
+        assert!(matches!(rows[1], EventRow::Preserved { .. }));
+        for mutation in 0..4 {
+            let mut corrupted = rows.clone();
+            if mutation == 0 {
+                corrupted.pop();
+            } else if let EventRow::Preserved {
+                enabled,
+                text,
+                token,
+            } = &mut corrupted[2]
+            {
+                match mutation {
+                    1 => *enabled = false,
+                    2 => text.push_str(" forged"),
+                    _ => token.push_str(" forged"),
+                }
+            }
+            assert!(
+                ui.action_command(&UiAction::SendEvents {
+                    brick: 7,
+                    rows: corrupted
+                })
+                .is_err()
+            );
+        }
+        let mut duplicated = rows.clone();
+        duplicated.push(rows[2].clone());
+        assert!(
+            ui.action_command(&UiAction::SendEvents {
+                brick: 7,
+                rows: duplicated
+            })
+            .is_err()
+        );
+        let Some(Command::Tool(ToolAction::SetEvents { brick, events })) = ui
+            .action_command(&UiAction::SendEvents {
+                brick: 7,
+                rows: rows.clone(),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(brick, 7);
+        assert_eq!(events, b.events);
+    }
+    #[test]
+    fn tool_context_identity_wrench_rejection_and_print_compatibility() {
+        let mut ui = fixture();
+        let b = brick();
+        let reply = Reply::Inspected {
+            brick_id: 7,
+            brick: Box::new(b.clone()),
+            mode: InspectMode::Wrench,
+        };
+        assert!(
+            ui.accept_inspection(
+                &reply,
+                InspectMode::Events,
+                Some(7),
+                &world(&b),
+                &BTreeMap::new(),
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            ui.accept_inspection(
+                &reply,
+                InspectMode::Wrench,
+                Some(8),
+                &world(&b),
+                &BTreeMap::new(),
+                1
+            )
+            .is_err()
+        );
+        let updates = open(&mut ui, &b, InspectMode::Wrench);
+        let UiUpdate::OpenWrench { data, .. } = &updates[0] else {
+            panic!()
+        };
+        let action = UiAction::SendWrench {
+            brick: 7,
+            variant: WrenchVariant::Normal,
+            data: data.clone(),
+        };
+        assert!(matches!(
+            ui.action_command(&action).unwrap(),
+            Some(Command::Tool(ToolAction::SetWrench { .. }))
+        ));
+        let mut unsupported = data.clone();
+        unsupported.sound = Some("music/not-integrated".into());
+        assert!(
+            ui.action_command(&UiAction::SendWrench {
+                brick: 7,
+                variant: WrenchVariant::Normal,
+                data: unsupported
+            })
+            .is_err()
+        );
+        assert!(
+            ui.action_command(&UiAction::RequestEvents { brick: 8 })
+                .is_err()
+        );
+        open(&mut ui, &b, InspectMode::Printer);
+        assert!(
+            ui.action_command(&UiAction::SetPrint {
+                print: "print/wide".into()
+            })
+            .is_err()
+        );
+        for id in ["print/A", "print/face"] {
+            assert!(
+                ui.action_command(&UiAction::SetPrint { print: id.into() })
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        ui.action_command(&UiAction::ClosePrintSelector).unwrap();
+        assert!(
+            ui.action_command(&UiAction::SetPrint {
+                print: "print/A".into()
+            })
+            .is_err()
+        );
+        ui.variants.insert("plate".into(), WrenchVariant::Sound);
+        assert!(
+            ui.accept_inspection(
+                &reply,
+                InspectMode::Wrench,
+                None,
+                &world(&b),
+                &BTreeMap::new(),
+                1
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn nested_event_save_and_cancel_leave_base_wrench_usable() {
+        let mut ui = fixture();
+        let b = brick();
+        let data = wrench_data(&b).unwrap();
+        let wrench = UiAction::SendWrench {
+            brick: 7,
+            variant: WrenchVariant::Normal,
+            data,
+        };
+        open(&mut ui, &b, InspectMode::Wrench);
+        open(&mut ui, &b, InspectMode::Events);
+        // Cancelling just the nested UI emits no write or context invalidation.
+        assert!(ui.action_command(&wrench).unwrap().is_some());
+        let rows = vec![EventRow::Editable(
+            ui_event(&event(Action::Color(1))).unwrap(),
+        )];
+        let command = ui
+            .action_command(&UiAction::SendEvents { brick: 7, rows })
+            .unwrap()
+            .unwrap();
+        ui.command_accepted(&command).unwrap();
+        assert_eq!(ui.inspection.as_ref().unwrap().mode, InspectMode::Wrench);
+        assert_eq!(ui.inspection.as_ref().unwrap().brick.events.len(), 1);
+        let command = ui.action_command(&wrench).unwrap().unwrap();
+        ui.command_accepted(&command).unwrap();
+        assert!(ui.action_command(&wrench).is_err());
+    }
+    #[test]
+    fn more_than_100_event_rows_keep_zero_delay_and_order() {
+        let mut ui = fixture();
+        let mut b = brick();
+        b.events = (0..bri_world::MAX_EVENTS_PER_BRICK)
+            .map(|i| event(Action::Color((i % 2) as u8)))
+            .collect();
+        let updates = open(&mut ui, &b, InspectMode::Events);
+        let UiUpdate::OpenEvents { rows, .. } = &updates[0] else {
+            panic!()
+        };
+        assert_eq!(rows.len(), bri_world::MAX_EVENTS_PER_BRICK);
+        let Some(Command::Tool(ToolAction::SetEvents { events, .. })) = ui
+            .action_command(&UiAction::SendEvents {
+                brick: 7,
+                rows: rows.clone(),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(events, b.events);
+        assert!(events.iter().all(|e| e.delay_ms == 0));
+    }
+    #[test]
+    fn imported_bls_print_alias_is_bound_without_rewriting_source_state() {
+        let mut ui = fixture();
+        let mut b = brick();
+        b.print = Some(ContentRef::Unresolved {
+            namespace: "print".into(),
+            name: "Letters/A".into(),
+        });
+        let original = b.clone();
+        let updates = open(&mut ui, &b, InspectMode::Printer);
+        assert!(
+            matches!(&updates[0], UiUpdate::OpenPrintSelector { current: Some(id), .. } if id == "print/A")
+        );
+        assert_eq!(ui.inspection.as_ref().unwrap().brick, original);
+        assert!(
+            matches!(ui.action_command(&UiAction::SetPrint { print: "print/A".into() }).unwrap(), Some(Command::Tool(ToolAction::SetPrint { brick: 7, print: Some(id) })) if id == "print/A")
+        );
+        b.print = Some(ContentRef::Unresolved {
+            namespace: "print".into(),
+            name: "Community/unknown".into(),
+        });
+        assert!(
+            ui.accept_inspection(
+                &Reply::Inspected {
+                    brick_id: 7,
+                    brick: Box::new(b.clone()),
+                    mode: InspectMode::Printer
+                },
+                InspectMode::Printer,
+                None,
+                &world(&b),
+                &BTreeMap::new(),
+                1
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    #[ignore = "requires generated native stock content, no window"]
+    fn real_native_catalog_has_original_icons_and_default_letter() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let content = crate::content::ClientContent::load(&root).unwrap();
+        let materials: Bundle = serde_json::from_slice(
+            &std::fs::read(content.paths.brick_materials.join("brick-materials.json")).unwrap(),
+        )
+        .unwrap();
+        let ui = ToolUi::new(
+            &content.catalog,
+            &content.effects,
+            &materials,
+            &content.ui_pack,
+        )
+        .unwrap();
+        assert_eq!(ui.server_catalog().prints.len(), materials.prints.len());
+        assert_eq!(
+            ui.catalog.default_print.as_deref(),
+            Some(materials.resolve("Letters/A").unwrap().id.as_str())
+        );
+        assert_eq!(
+            ui.prints.values().map(Vec::len).sum::<usize>(),
+            materials.prints.len()
+        );
+        assert!(ui.prints.values().flatten().all(|p| matches!(&p.icon, IconRef::Pack(key) if content.ui_pack.data.images.contains_key(key))));
+        eprintln!(
+            "{} native prints, {} printable definitions, {} lights, {} emitters; every original UI icon resolves",
+            ui.catalog.prints.len(),
+            ui.catalog.brick_print_aspects.len(),
+            ui.catalog.lights.len(),
+            ui.catalog.emitters.len()
+        );
+    }
+}

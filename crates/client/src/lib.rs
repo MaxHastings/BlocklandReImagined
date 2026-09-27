@@ -1,0 +1,23 @@
+//! Native application boundary. No Torque readers or desktop automation.
+pub mod admin_ui;
+pub mod app;
+pub mod audio;
+pub mod avatar;
+pub mod building;
+pub mod content;
+pub mod controls;
+pub mod effects;
+pub mod foliage;
+pub mod item_ui;
+pub mod items;
+pub mod materials;
+pub mod network;
+pub mod platform;
+pub mod saves;
+pub mod settings;
+pub mod tool_ui;
+pub mod weapon_debris;
+pub mod weapon_effects;
+pub mod weather;
+pub mod world_items;
+pub mod world_scene;

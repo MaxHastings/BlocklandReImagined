@@ -1,0 +1,123 @@
+line	map	device	key	command	conditions
+15313	moveMap	keyboard	"escape"	"", "escapeMenu.toggle();"	always
+15314	moveMap	keyboard	"w"	moveforward	always
+15315	moveMap	keyboard	"s"	movebackward	always
+15316	moveMap	keyboard	"a"	moveleft	always
+15317	moveMap	keyboard	"d"	moveright	always
+15318	moveMap	keyboard	"space"	Jump	always
+15319	moveMap	keyboard	"lshift"	Crouch	always
+15320	moveMap	keyboard	"c"	Walk	always
+15321	moveMap	keyboard	"f"	toggleZoom	always
+15322	moveMap	keyboard	"z"	toggleFreeLook	always
+15323	moveMap	keyboard	"tab"	toggleFirstPerson	always
+15324	moveMap	keyboard	"f8"	dropCameraAtPlayer	always
+15325	moveMap	keyboard	"f7"	dropPlayerAtCamera	always
+15326	moveMap	keyboard	"t"	GlobalChat	always
+15327	moveMap	keyboard	"y"	TeamChat	always
+15328	moveMap	keyboard	"pageup"	PageUpNewChatHud	always
+15329	moveMap	keyboard	"pagedown"	PageDownNewChatHud	always
+15330	moveMap	keyboard	"m"	ToggleCursor	always
+15331	moveMap	keyboard	1	useBricks	always
+15332	moveMap	keyboard	"q"	useTools	always
+15333	moveMap	keyboard	"e"	useSprayCan	always
+15334	moveMap	keyboard	"ctrl w"	dropTool	always
+15335	moveMap	keyboard	2	useSecondSlot	always
+15336	moveMap	keyboard	3	useThirdSlot	always
+15337	moveMap	keyboard	4	useFourthSlot	always
+15338	moveMap	keyboard	5	useFifthSlot	always
+15339	moveMap	keyboard	6	useSixthSlot	always
+15340	moveMap	keyboard	7	useSeventhSlot	always
+15341	moveMap	keyboard	8	useEighthSlot	always
+15342	moveMap	keyboard	9	useNinthSlot	always
+15343	moveMap	keyboard	0	useTenthSlot	always
+15346	moveMap	keyboard	"ctrl z"	undoBrick	isWindows()
+15350	moveMap	keyboard	"cmd z"	undoBrick	!(isWindows())
+15354	moveMap	keyboard	"lalt"	toggleSuperShift	isWindows()
+15355	moveMap	keyboard	"ctrl a"	openAdminWindow	isWindows()
+15356	moveMap	keyboard	"ctrl o"	openOptionsWindow	isWindows()
+15357	moveMap	keyboard	"ctrl p"	doScreenShot	isWindows()
+15358	moveMap	keyboard	"ctrl k"	Suicide	isWindows()
+15359	moveMap	keyboard	"shift p"	doHudScreenshot	isWindows()
+15360	moveMap	keyboard	"shift-ctrl p"	doDofScreenShot	isWindows()
+15364	moveMap	keyboard	"ropt"	toggleSuperShift	!(isWindows())
+15365	moveMap	keyboard	"cmd a"	openAdminWindow	!(isWindows())
+15366	moveMap	keyboard	"cmd o"	openOptionsWindow	!(isWindows())
+15367	moveMap	keyboard	"cmd p"	doScreenShot	!(isWindows())
+15368	moveMap	keyboard	"cmd k"	Suicide	!(isWindows())
+15369	moveMap	keyboard	"shift p"	doHudScreenshot	!(isWindows())
+15370	moveMap	keyboard	"shift-cmd p"	doDofScreenShot	!(isWindows())
+15372	moveMap	keyboard	"f2"	showPlayerList	always
+15373	moveMap	keyboard	"ctrl n"	toggleNetGraph	always
+15374	moveMap	mouse0	"xaxis"	yaw	always
+15375	moveMap	mouse0	"yaxis"	pitch	always
+15376	moveMap	mouse0	"button0"	mouseFire	always
+15377	moveMap	keyboard	"b"	openBSD	always
+15378	moveMap	keyboard	"f5"	ToggleShapeNameHud	always
+15381	moveMap	keyboard	"period"	NextSeat	%keyboard == 0
+15382	moveMap	keyboard	"comma"	PrevSeat	%keyboard == 0
+15383	moveMap	keyboard	"numpad8"	shiftBrickAway	%keyboard == 0
+15384	moveMap	keyboard	"numpad2"	shiftBrickTowards	%keyboard == 0
+15385	moveMap	keyboard	"numpad4"	shiftBrickLeft	%keyboard == 0
+15386	moveMap	keyboard	"numpad6"	shiftBrickRight	%keyboard == 0
+15389	moveMap	keyboard	"+"	shiftBrickUp	%keyboard == 0 && isWindows()
+15393	moveMap	keyboard	"numpadadd"	shiftBrickUp	%keyboard == 0 && !(isWindows())
+15395	moveMap	keyboard	"numpad5"	shiftBrickDown	%keyboard == 0
+15396	moveMap	keyboard	"numpad3"	shiftBrickThirdUp	%keyboard == 0
+15397	moveMap	keyboard	"numpad1"	shiftBrickThirdDown	%keyboard == 0
+15398	moveMap	keyboard	"numpad9"	RotateBrickCW	%keyboard == 0
+15399	moveMap	keyboard	"numpad7"	RotateBrickCCW	%keyboard == 0
+15400	moveMap	keyboard	"numpadenter"	plantBrick	%keyboard == 0
+15401	moveMap	keyboard	"numpad0"	cancelBrick	%keyboard == 0
+15404	moveMap	keyboard	"ctrl numpad0"	ToggleBuildMacroRecording	%keyboard == 0 && isWindows()
+15405	moveMap	keyboard	"ctrl numpadenter"	PlayBackBuildMacro	%keyboard == 0 && isWindows()
+15409	moveMap	keyboard	"cmd numpad0"	ToggleBuildMacroRecording	%keyboard == 0 && !(isWindows())
+15410	moveMap	keyboard	"cmd numpadenter"	PlayBackBuildMacro	%keyboard == 0 && !(isWindows())
+15412	moveMap	keyboard	"l"	useLight	%keyboard == 0
+15413	moveMap	keyboard	"alt numpad8"	superShiftBrickAwayProxy	%keyboard == 0
+15414	moveMap	keyboard	"alt numpad2"	superShiftBrickTowardsProxy	%keyboard == 0
+15415	moveMap	keyboard	"alt numpad4"	superShiftBrickLeftProxy	%keyboard == 0
+15416	moveMap	keyboard	"alt numpad6"	superShiftBrickRightProxy	%keyboard == 0
+15417	moveMap	keyboard	"alt +"	superShiftBrickUpProxy	%keyboard == 0
+15418	moveMap	keyboard	"alt numpad5"	superShiftBrickDownProxy	%keyboard == 0
+15424	moveMap	keyboard	"ctrl period"	NextSeat	!(%keyboard == 0) && isWindows()
+15425	moveMap	keyboard	"ctrl comma"	PrevSeat	!(%keyboard == 0) && isWindows()
+15429	moveMap	keyboard	"cmd period"	NextSeat	!(%keyboard == 0) && !(isWindows())
+15430	moveMap	keyboard	"cmd comma"	PrevSeat	!(%keyboard == 0) && !(isWindows())
+15432	moveMap	keyboard	"i"	shiftBrickAway	!(%keyboard == 0)
+15433	moveMap	keyboard	"k"	shiftBrickTowards	!(%keyboard == 0)
+15434	moveMap	keyboard	"j"	shiftBrickLeft	!(%keyboard == 0)
+15435	moveMap	keyboard	"l"	shiftBrickRight	!(%keyboard == 0)
+15436	moveMap	keyboard	"p"	shiftBrickUp	!(%keyboard == 0)
+15437	moveMap	keyboard	";"	shiftBrickDown	!(%keyboard == 0)
+15438	moveMap	keyboard	"period"	shiftBrickThirdUp	!(%keyboard == 0)
+15439	moveMap	keyboard	"comma"	shiftBrickThirdDown	!(%keyboard == 0)
+15440	moveMap	keyboard	"o"	RotateBrickCW	!(%keyboard == 0)
+15441	moveMap	keyboard	"u"	RotateBrickCCW	!(%keyboard == 0)
+15442	moveMap	keyboard	"return"	plantBrick	!(%keyboard == 0)
+15443	moveMap	keyboard	"/"	cancelBrick	!(%keyboard == 0)
+15446	moveMap	keyboard	"ctrl /"	ToggleBuildMacroRecording	!(%keyboard == 0) && isWindows()
+15447	moveMap	keyboard	"ctrl return"	PlayBackBuildMacro	!(%keyboard == 0) && isWindows()
+15451	moveMap	keyboard	"cmd /"	ToggleBuildMacroRecording	!(%keyboard == 0) && !(isWindows())
+15452	moveMap	keyboard	"cmd return"	PlayBackBuildMacro	!(%keyboard == 0) && !(isWindows())
+15454	moveMap	keyboard	"lbracket"	useLight	!(%keyboard == 0)
+15455	moveMap	keyboard	"alt i"	superShiftBrickAwayProxy	!(%keyboard == 0)
+15456	moveMap	keyboard	"alt k"	superShiftBrickTowardsProxy	!(%keyboard == 0)
+15457	moveMap	keyboard	"alt j"	superShiftBrickLeftProxy	!(%keyboard == 0)
+15458	moveMap	keyboard	"alt l"	superShiftBrickRightProxy	!(%keyboard == 0)
+15459	moveMap	keyboard	"alt p"	superShiftBrickUpProxy	!(%keyboard == 0)
+15460	moveMap	keyboard	"alt ;"	superShiftBrickDownProxy	!(%keyboard == 0)
+15465	moveMap	keyboard	"up"	invUp	%mouse == 0
+15466	moveMap	keyboard	"down"	invDown	%mouse == 0
+15467	moveMap	keyboard	"left"	invLeft	%mouse == 0
+15468	moveMap	keyboard	"right"	invRight	%mouse == 0
+15472	moveMap	mouse0	"button1"	Jet	!(%mouse == 0) && %mouse == 1
+15473	moveMap	keyboard	"up"	invUp	!(%mouse == 0) && %mouse == 1
+15474	moveMap	keyboard	"down"	invDown	!(%mouse == 0) && %mouse == 1
+15475	moveMap	keyboard	"left"	invLeft	!(%mouse == 0) && %mouse == 1
+15476	moveMap	keyboard	"right"	invRight	!(%mouse == 0) && %mouse == 1
+15480	moveMap	mouse0	"button1"	Jet	!(%mouse == 0) && !(%mouse == 1) && %mouse == 2
+15481	moveMap	mouse0	"zaxis"	scrollInventory	!(%mouse == 0) && !(%mouse == 1) && %mouse == 2
+15482	moveMap	keyboard	"ctrl E"	invLeft	!(%mouse == 0) && !(%mouse == 1) && %mouse == 2
+15486	moveMap	mouse0	"button1"	Jet	!(%mouse == 0) && !(%mouse == 1) && !(%mouse == 2) && %mouse == 3
+15487	moveMap	mouse0	"zaxis"	scrollInventory	!(%mouse == 0) && !(%mouse == 1) && !(%mouse == 2) && %mouse == 3
+15488	moveMap	keyboard	"ctrl E"	invLeft	!(%mouse == 0) && !(%mouse == 1) && !(%mouse == 2) && %mouse == 3

@@ -1,0 +1,264 @@
+pref	stock_value	stock_lines	installed_value	installed_lines	differs
+$Favorite::Brick1_0	"32x32 Base"	252	"32x32 Base"	254	
+$Favorite::Brick1_1	"2x4"	253	"2x4"	255	
+$Favorite::Brick1_2	"2x2"	254	"2x2"	256	
+$Favorite::Brick1_3	"1x4"	255	"1x4"	257	
+$Favorite::Brick1_4	"1x2"	256	"1x2"	258	
+$Favorite::Brick1_5	"1x1"	257	"1x1"	259	
+$Favorite::Brick1_6	"1x16"	258	"1x16"	260	
+$Favorite::Brick1_7	"6x12F"	259	"6x12F"	261	
+$Favorite::Brick1_8	"1x4x5 Window"	260	"1x4x5 Window"	262	
+$Favorite::Brick1_9	"Vehicle Spawn"	261	"Vehicle Spawn"	263	
+$Favorite::Brick2_0	"32x32 Road"	262	"32x32 Road"	264	
+$Favorite::Brick2_1	"32x32 Road T"	263	"32x32 Road T"	265	
+$Favorite::Brick2_2	"32x32 Road C"	264	"32x32 Road C"	266	
+$Favorite::Brick2_3	"32x32 Road X"	265	"32x32 Road X"	267	
+$Favorite::Brick2_4	"32x32 Base"	266	"32x32 Base"	268	
+$Favorite::Brick2_5	"Pine Tree"	267	"Pine Tree"	269	
+$Favorite::Brick2_6	"1x4x2 Fence"	268	"1x4x2 Fence"	270	
+$Favorite::Brick2_7	"2x2x5 Lattice"	269	"2x2x5 Lattice"	271	
+$Favorite::Brick2_8	"Castle Wall"	270	"Castle Wall"	272	
+$Favorite::Brick2_9	"1x4x5 Window"	271	"1x4x5 Window"	273	
+$pref::Audio::channelVolume1	1	33	1	37	
+$pref::Audio::channelVolume2	1	34	1	38	
+$pref::Audio::channelVolume3	1	35	1	39	
+$pref::Audio::channelVolume4	1	36	1	40	
+$pref::Audio::channelVolume5	1	37	1	41	
+$pref::Audio::channelVolume6	1	38	1	42	
+$pref::Audio::channelVolume7	1	39	1	43	
+$pref::Audio::channelVolume8	1	40	1	44	
+$pref::Audio::driver	"OpenAL"	41	"OpenAL"	45	
+$pref::Audio::environmentEnabled	0	42	0	46	
+$pref::Audio::forceMaxDistanceUpdate	0	43	0	47	
+$pref::Audio::masterVolume	1	44	0.9	48	YES
+$Pref::Audio::MenuSounds	1	49	1	53	
+$Pref::Audio::PlantErrorSound	0	45,52	0	49,56	
+$Pref::Audio::PlayBrickMoveSound	1	46,51	1	50,55	
+$Pref::Audio::PlayBrickPlantSound	1	47,53	1	51,57	
+$Pref::Audio::PlayMusic	1	48,54	1	52,58	
+$pref::AutoEnableAddOns			0	289	
+$pref::autoVisibleDistance	1	32	1	36	
+$pref::Avatar::Accent	0	210	0	212	
+$pref::Avatar::AccentColor	"0.000 0.200 0.640 0.700"	211	"0.000 0.200 0.640 0.700"	213	
+$pref::Avatar::Authentic	0	212	0	214	
+$Pref::Avatar::Chest	0	213	0	215	
+$pref::Avatar::ChestColor	7	214	7	216	
+$pref::Avatar::DecalColor	15	215	15	217	
+$Pref::Avatar::DecalName	"AAA-None"	216	"AAA-None"	218	
+$pref::Avatar::FaceColor	11	217	11	219	
+$Pref::Avatar::FaceName	"smiley"	218	"smiley"	220	
+$pref::Avatar::Hat	0	219	0	221	
+$pref::Avatar::HatColor	"1 1 0 1"	220	"1 1 0 1"	222	
+$pref::Avatar::HeadColor	"1 0.878431 0.611765 1"	221	"1 0.878431 0.611765 1"	223	
+$Pref::Avatar::Hip	0	222	0	224	
+$pref::Avatar::HipColor	"0 0 1 1"	223	"0 0 1 1"	225	
+$Pref::Avatar::LArm	0	224	0	226	
+$pref::Avatar::LArmColor	"0.9 0 0 1"	225	"0.9 0 0 1"	227	
+$Pref::Avatar::LHand	0	226	0	228	
+$pref::Avatar::LHandColor	"1 0.878431 0.611765 1"	227	"1 0.878431 0.611765 1"	229	
+$Pref::Avatar::LLeg	0	228	0	230	
+$pref::Avatar::LLegColor	"0 0 1 1"	229	"0 0 1 1"	231	
+$pref::Avatar::Pack	0	230	0	232	
+$pref::Avatar::PackColor	"0 0.435323 0.831776 1"	231	"0 0.435323 0.831776 1"	233	
+$Pref::Avatar::RArm	0	232	0	234	
+$pref::Avatar::RArmColor	"0.9 0 0 1"	233	"0.9 0 0 1"	235	
+$Pref::Avatar::RHand	0	234	0	236	
+$pref::Avatar::RHandColor	"1 0.878431 0.611765 1"	235	"1 0.878431 0.611765 1"	237	
+$Pref::Avatar::RLeg	0	236	0	238	
+$pref::Avatar::RLegColor	"0 0 1 1"	237	"0 0 1 1"	239	
+$Pref::Avatar::SecondPack	0	238	0	240	
+$pref::Avatar::SecondPackColor	"0 1 0 1"	239	"0 1 0 1"	241	
+$pref::Avatar::TorsoColor	"0.9 0.9 0.9 1"	240	"0.9 0.9 0.9 1"	242	
+$Pref::BrickFX::Color	1	281	1	283	
+$Pref::BrickFX::Shape	1	282	1	284	
+$pref::BrickFXQuality	0	280	0	282	
+$Pref::Chat::CacheLines	1000	71	1000	75	
+$pref::Chat::ChatBufferSize	200	72	"200.000000"	76	YES
+$pref::Chat::ChatRepeat	0	79	1	83	YES
+$Pref::Chat::CurseFilter	1	77	0	81	YES
+$Pref::Chat::CurseList	"bitch,shit,fuck,fuk,cunt,nigger,niglet,asshole, ass ,faggot, fag , fags ,suck my, dick, cock , kike ,"	78	""	82	YES
+$Pref::Chat::FontSize	14	73	"14.000000"	77	
+$Pref::Chat::LineTime	6500	74	6500	78	
+$Pref::Chat::MaxDisplayLines	8	75	8	79	
+$Pref::Chat::ShowAllLines	0	76	0	80	
+$pref::ChatHudLength	1	13,80	1	17,84	
+$pref::CloudOutline	0	81	0	85	
+$pref::CloudsOn	1	82	1	86	
+$pref::Debug::ShowFXGrassMessages	0	83	0	87	
+$pref::Debug::ShowShapeMessages	0	84	0	88	
+$pref::Debug::ShowStringMessages	0	85	0	89	
+$pref::Decal::decalTimeout	5000	86	5000	90	
+$pref::Decal::maxNumDecals	256	87	256	91	
+$pref::decalsOn	1	88	1	92	
+$pref::dofSamples	64	89	64	93	
+$pref::Editor::visibleDistance	5	101	5	105	
+$pref::environmentMaps	1	102	1	106	
+$Pref::Filter::CurrentVersion	0	90	0	94	
+$Pref::Filter::Dedicated	0	91	0	95	
+$Pref::Filter::LinuxServer	0	92	0	96	
+$pref::Filter::maxPing	999	93	999	97	
+$pref::Filter::minCpu	100	94	100	98	
+$pref::Filter::minPlayers	0	95	0	99	
+$Pref::Filter::NoPassword	0	96	0	100	
+$Pref::Filter::NotEmpty	0	97	0	101	
+$Pref::Filter::NotFull	0	98	0	102	
+$Pref::Filter::TeamDamageOff	0	99	0	103	
+$Pref::Filter::TeamDamageOn	0	100	0	104	
+$pref::Grass::replicationRatio	1	275	1	277	
+$pref::Gui::AutoQueryMasterServer	1	103	1	107	
+$Pref::Gui::ChatSize	4	104	4	108	
+$Pref::Gui::ColorEscapeMenu	1	105	1	109	
+$Pref::Gui::IgnoreFastLoadWarning	0	106	0	110	
+$Pref::Gui::IgnorePortForwardWarning	0	109	0	113	
+$Pref::Gui::IgnoreRemoteSaveWarning	0	107	0	111	
+$pref::Gui::ShowBrickSlotNumbers	1	50,108	1	54,112	
+$Pref::Gui::ShowDemosButton	0	110	0	114	
+$Pref::Gui::ShowPlayerListBLIDs	0	111	1	115	YES
+$pref::HUD::HideBrickBox	1	67	1	71	
+$pref::HUD::HidePaintBox	1	68	1	72	
+$pref::HUD::HideToolBox	1	69	1	73	
+$pref::Hud::RecolorBrickIcons	1	66	1	70	
+$pref::HUD::showToolTips	1	70	1	74	
+$pref::HUD::tempBrickFlashoffset	0.3	55	0.3	59	
+$pref::HUD::tempBrickFlashRange	0.3	56	0.3	60	
+$pref::HUD::tempBrickFlashTime	800	57	800	61	
+$pref::HUD::tempBrickInsideBlue	0	65	0	69	
+$pref::HUD::tempBrickInsideGreen	0	64	0	68	
+$pref::HUD::tempBrickInsideRed	0	63	0	67	
+$pref::HUD::tempBrickInsideUsePaintColor	0	62	0	66	
+$pref::HUD::tempBrickOutsideBlue	1	61	1	65	
+$pref::HUD::tempBrickOutsideGreen	1	60	1	64	
+$pref::HUD::tempBrickOutsideRed	1	59	1	63	
+$pref::HUD::tempBrickOutsideUsePaintColor	1	58	1	62	
+$pref::HudMessageLogSize	40	12	40	16	
+$pref::Input::AutoLight	1	128	1	132	
+$Pref::Input::brickFirstRepeatTime			200	288	YES
+$Pref::Input::brickRepeatTime			50	287	YES
+$Pref::Input::DefaultKeyboard	0	112	0	116	
+$pref::Input::FastFirstThirdPerson	0	113	0	117	
+$pref::Input::JoystickEnabled	0	17,114	0	21,118	
+$pref::Input::KeyboardEnabled	1	15,115	1	19,119	
+$pref::Input::KeyboardTurnSpeed	0.5	18,116	0.5	22,120	
+$pref::Input::LinkMouseSensitivity	1	14,117	1	18,121	
+$pref::Input::MacroRate	110	129	110	133	
+$pref::Input::MouseEnabled	0	16,118	0	20,122	
+$pref::Input::MouseInvert	0	119	0	123	
+$pref::Input::MouseSensitivity	0.75	121	0.75	125	
+$pref::Input::noobjet	0	122	0	126	
+$pref::Input::QueueBrickBuying	1	123	1	127	
+$pref::Input::ReverseBrickScroll	0	124	0	128	
+$Pref::Input::SelectedDefaults	0	125	0	129	
+$pref::Input::UseAutoReturnSteering	1	20	0	24	YES
+$pref::Input::UseStrafeSteering	1	19	0	23	YES
+$pref::Input::UseSuperShiftSmartToggle	1	126	1	130	
+$pref::Input::UseSuperShiftToggle	1	127	1	131	
+$Pref::Input::VehicleMouseInvert	1	120	0	124	YES
+$pref::Interior::detailAdjust	1	130	1	134	
+$pref::Interior::DynamicLights	1	131	1	135	
+$pref::Interior::LightUpdatePeriod	66	132	66	136	
+$pref::Interior::lockArrays	1	133	1	137	
+$pref::interior::showdetailmaps	0	134	0	138	
+$pref::Interior::ShowEnvironmentMaps	0	135	0	139	
+$pref::Interior::TexDetail	0	136	0	140	
+$pref::Interior::TexturedFog	1	26,137	1	30,141	
+$pref::Interior::VertexLighting	0	138	0	142	
+$pref::LightingQuality	1	276	0	278	YES
+$pref::LoadBrickOwnership	1	274	1	276	
+$Pref::Net::ConnectionType			4	3	YES
+$Pref::Net::DownloadDebris	0	9	0	13	
+$Pref::Net::DownloadExplosions	0	10	0	14	
+$Pref::Net::DownloadItems	0	8	0	12	
+$Pref::Net::DownloadMusic	0	5	1	9	YES
+$Pref::Net::DownloadProjectiles	0	7	0	11	
+$Pref::Net::DownloadSounds	0	4	1	8	YES
+$Pref::Net::DownloadTextures	0	6	1	10	YES
+$Pref::Net::LagThreshold	400	3	400	4	
+$Pref::Net::MaxSimultaneousPings	10	139	10	143	
+$pref::Net::PacketRateToClient			32	5	YES
+$pref::Net::PacketRateToServer			32	6	YES
+$pref::Net::PacketSize			1023	7	YES
+$pref::NumCloudLayers	3	140	3	144	
+$pref::OpenGL::allowCompression	0	142	0	146	
+$pref::OpenGL::allowTexGen	1	143	1	147	
+$pref::OpenGL::anisotropy	0	144	1	148	YES
+$pref::OpenGL::disableARBMultitexture	0	145	0	149	
+$pref::OpenGL::disableARBTextureCompression	0	146	0	150	
+$pref::OpenGL::disableEXTCompiledVertexArray	0	147	0	151	
+$pref::OpenGL::disableEXTFogCoord	0	148	0	152	
+$pref::OpenGL::disableEXTPalettedTexture	0	149	0	153	
+$pref::OpenGL::disableEXTTexEnvCombine	0	150	0	154	
+$pref::OpenGL::disableSubImage	0	151	0	155	
+$pref::OpenGL::doAnimatedLights	1	152	1	156	
+$pref::OpenGL::force16BitTexture	0	28,153	0	32,157	
+$pref::OpenGL::forcePalettedTexture	0	29,154	0	33,158	
+$pref::OpenGL::gammaCorrection	0.5	155	0.5	159	
+$pref::OpenGL::interiorMipReduction	50	156	50	160	
+$pref::OpenGL::maxDynLights	5	157	10	161	YES
+$pref::OpenGL::maxHardwareLights	8	30,158	8	34,162	
+$pref::OpenGL::noDrawArraysAlpha	0	159	0	163	
+$pref::OpenGL::noEnvColor	0	160	0	164	
+$pref::OpenGL::noVertexBufferObjects	0	27,141	0	31,145	
+$pref::OpenGL::numFSAASamples	16	161	16	165	
+$pref::OpenGL::skyTexDetail	0	162	0	166	
+$pref::OpenGL::texDetail	0	163	0	167	
+$pref::OpenGL::textureAnisotropy	0	164	0	168	
+$pref::OpenGL::textureTrilinear	1	165	1	169	
+$pref::OpenGL::useGLNearest	0	166	0	170	
+$pref::ParticleDetail	1	167	1	171	
+$pref::ParticleFalloffMaxLevel	3	168	3	172	
+$pref::ParticleFalloffMinDistance	35	169	100	173	YES
+$pref::ParticleQuality	0	170	0	174	
+$pref::Physics::Enabled	1	278	1	280	
+$pref::Physics::MaxBricks	100	279	100	281	
+$pref::PhysicsQuality	1	277	0	279	YES
+$Pref::Player::ClanPrefix	""	242	""	244	
+$Pref::Player::ClanSuffix	""	243	""	245	
+$Pref::player::CurrentFOV	10	244	10	246	
+$pref::Player::defaultFov	90	1,245	90	1,247	
+$pref::Player::LANName	"Blockhead"	246	"Blockhead"	248	
+$pref::Player::NetName	""	247	""	249	
+$pref::Player::renderMyItems	1	248	1	250	
+$pref::Player::renderMyJets	0	250	0	252	
+$pref::Player::renderMyPlayer	1	249	1	251	
+$pref::Player::Symmetry	1	241	1	243	
+$pref::Player::zoomSpeed	5	2,251	5	2,253	
+$pref::precipitationOn	1	171	1	175	
+$pref::SaveExtendedBrickInfo	1	272	1	274	
+$pref::SaveOwnership	1	273	1	275	
+$pref::sceneLighting::cacheLighting	1	23,172	1	27,176	
+$pref::sceneLighting::cacheSize	20000	21,173	20000	25,177	
+$pref::sceneLighting::purgeMethod	"lastCreated"	22,174	"lastCreated"	26,178	
+$pref::sceneLighting::terrainGenerateLevel	1	24,175	1	28,179	
+$pref::ShadowQuality	0	176	0	180	
+$pref::ShadowResolution	0	177	0	181	
+$pref::shadows	1	11,178	1	15,182	
+$pref::SkyOn	1	179	1	183	
+$pref::Terrain::dynamicLights	1	25,180	1	29,184	
+$pref::Terrain::enableDetails	1	181	1	185	
+$pref::Terrain::enableEmbossBumps	1	182	1	186	
+$pref::Terrain::screenError	5	183	5	187	
+$pref::Terrain::texDetail	0	184	0	188	
+$pref::Terrain::textureCacheSize	220	185	220	189	
+$pref::TS::autoDetail	1	186	1	190	
+$pref::TS::detailAdjust	1	187	1	191	
+$pref::TS::fogTexture	0	188	0	192	
+$pref::TS::screenError	0.001	189	0.001	193	
+$pref::TS::skipFirstFog	0	190	0	194	
+$pref::TS::skipLoadDLs	0	191	0	195	
+$pref::TS::skipRenderDLs	0	192	0	196	
+$pref::TS::UseTriangles	0	193	0	197	
+$pref::Video::allowD3D	0	194,208	0	210	
+$pref::Video::allowOpenGL	1	195,207	1	209	
+$pref::Video::disableVerticalSync	1	201	0	203	YES
+$pref::Video::displayDevice	"OpenGL"	202	"OpenGL"	204	
+$pref::Video::fullScreen	0	203	0	205	
+$pref::Video::monitorNum	0	204	0	206	
+$pref::Video::only16	0	205	0	207	
+$pref::Video::preferOpenGL	1	206	1	208	
+$pref::Video::resolution	"800 600 32"	196	"1280 720 32"	198	YES
+$pref::Video::safeModeOn	1	197	1	199	
+$pref::Video::screenShotFormat	"JPG"	198	"PNG"	200	YES
+$pref::Video::useSmallPlantErrors	0	199	0	201	
+$pref::Video::windowedRes	"800 600"	200	"1280 720"	202	YES
+$pref::visibleDistanceMax	1000	31	1000	35	
+$pref::visibleDistanceMod	1	209	1	211	

@@ -1,0 +1,6811 @@
+{
+ "install_root_note": "read-only; paths are install-relative",
+ "summary": {
+  "ok": 241,
+  "missing": 18,
+  "missing-editor-help": 8,
+  "ok-frames": 1,
+  "ok-states": 20,
+  "directory": 1,
+  "compiled-script": 1,
+  "runtime-file": 3
+ },
+ "entries": [
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Medieval-Eagle",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17678"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Medieval-Eagle.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Medieval-Eagle.png",
+    "bytes": 6225,
+    "sha256": "a9e984deb3be0a98e86981a37f6a3da2367907794f802016633ac52070a141a6",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Medieval-Lion",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17642"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Medieval-Lion.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Medieval-Lion.png",
+    "bytes": 6160,
+    "sha256": "4f387b1b2fd2c9bd1ef862349add1e05a87e52f56e7afda50d33446d73824916",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Medieval-ORLY",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17606"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Medieval-ORLY.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Medieval-ORLY.png",
+    "bytes": 5569,
+    "sha256": "88ad453e4d4146aee91da6d804d022c3b82840aec39adac79d0cbc448a70979d",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Medieval-Rider",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17570"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Medieval-Rider.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Medieval-Rider.png",
+    "bytes": 6173,
+    "sha256": "9d98860ced45e1393cec9c044cbb598ddf49ff14b6e406de21cd04e172f6d4b5",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Medieval-Tunic",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17534"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Medieval-Tunic.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Medieval-Tunic.png",
+    "bytes": 2405,
+    "sha256": "9bda05a65e4deebe665d61bb7e773ae4306058c3e04349a1f4d49bccb08c9c4f",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Medieval-YARLY",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17498"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Medieval-YARLY.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Medieval-YARLY.png",
+    "bytes": 6025,
+    "sha256": "b5a26e58d443cefab3123828bd719903a4515a04e3c39e15d0c327c165315ff7",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Meme-Mongler",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17462"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Meme-Mongler.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Meme-Mongler.png",
+    "bytes": 5283,
+    "sha256": "6858f22982baa9d58a3ea0799b2e94d29278f32fdd95aea179b435e4020807e5",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Mod-Army",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17426"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Mod-Army.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Mod-Army.png",
+    "bytes": 4925,
+    "sha256": "c3a7424a21e340722c6298e7bab005f237c077e52ff8b6146890e332b5f2336e",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Mod-DareDevil",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17390"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Mod-DareDevil.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Mod-DareDevil.png",
+    "bytes": 7196,
+    "sha256": "6287944d815e8d72e5993e4bce1e350f49fc96829444a58ba08441c612521337",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Mod-Pilot",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17354"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Mod-Pilot.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Mod-Pilot.png",
+    "bytes": 2483,
+    "sha256": "6020696902af429a94976c39d629f1e24742718cf7233b3eb4635e86584d59a3",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Mod-Police",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17318"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Mod-Police.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Mod-Police.png",
+    "bytes": 2267,
+    "sha256": "86bd56265caaacc160a2a5fba7d32c1cc375e0b18518054694f8b106469fe52f",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Mod-Prisoner",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17282"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Mod-Prisoner.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Mod-Prisoner.png",
+    "bytes": 4243,
+    "sha256": "c160e73c535f4b9070da4b3ddbfd2eda0d4f964ca1545567626ac56b2911eb6b",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Mod-Suit",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17246"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Mod-Suit.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Mod-Suit.png",
+    "bytes": 4705,
+    "sha256": "be2d31720845d35a5b9696181f0110922dfc1173f3436d0afcefec1c19d92a6f",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Space-Nasa",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17210"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Space-Nasa.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Space-Nasa.png",
+    "bytes": 6636,
+    "sha256": "f3da9743c0934408d7ee73cc69226a04f44f287f030e744650438cb5bcb45f19",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Space-New",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17174"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Space-New.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Space-New.png",
+    "bytes": 4911,
+    "sha256": "5aff61fdbd3f65df75d4bc0bcb876975202e93234db5dd7640b076e5cc7a0cea",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Default/thumbs/Space-Old",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17138"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Default/thumbs/Space-Old.png",
+    "zip": "Add-Ons/Decal_Default.zip",
+    "member": "thumbs/Space-Old.png",
+    "bytes": 4739,
+    "sha256": "9b83ec761b312bb22c8e674a2986c0ce7f4576500d24211e96eaf85cb16b006d",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Hoodie/thumbs/Hoodie",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17102"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Hoodie/thumbs/Hoodie.png",
+    "zip": "Add-Ons/Decal_Hoodie.zip",
+    "member": "thumbs/Hoodie.png",
+    "bytes": 5171,
+    "sha256": "b74e6cf01a5f0009fa2911f438a907d1ae12b901faae5a27fe1fa3b76388de15",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/Knight.png",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14389"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/Knight.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Knight.png",
+    "bytes": 34418,
+    "sha256": "d4686b2a19aee451771b9b9e9b74ae4f4ada32b99e6594158598f3b3588b2dd0",
+    "size": [
+     256,
+     256
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/Alyx",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17066"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/Alyx.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/Alyx.png",
+    "bytes": 2623,
+    "sha256": "3cefe975aeab88960dfda543386c1293c0798afa66c95ff26f98c3b28a354808",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/Archer",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17030"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/Archer.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/Archer.png",
+    "bytes": 6771,
+    "sha256": "c872a6a2a9ead26568c00362f33a28830bd56d673a70f173a5ef29f060db0f24",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/Chef",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16994"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/Chef.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/Chef.png",
+    "bytes": 2434,
+    "sha256": "dbe33a1bc3cc015e7ea0ff66e79e25c96d527a6c4df0ec6288976a0b592e6b70",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/DKnight",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16958"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/DKnight.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/DKnight.png",
+    "bytes": 8707,
+    "sha256": "59a31bc3d3b24de9312b50a125d6d3c310534a7f0d826d0dcc4cb685051a6410",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/DrKleiner",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16922"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/DrKleiner.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/DrKleiner.png",
+    "bytes": 2989,
+    "sha256": "3ff2ea3aff75db7a3012f19767ed01be33cd6a15a332f5b1385c0d4c66d9f193",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/HCZombie",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16886"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/HCZombie.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/HCZombie.png",
+    "bytes": 3213,
+    "sha256": "57019968b1db6054f2479aa3ef098f9b657cfd55fd5d639c9afb235782196ada",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/Knight",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16850"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/Knight.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/Knight.png",
+    "bytes": 7328,
+    "sha256": "d36b36347dc26860c4f59ed77c5ed57b8d71d6324697652e644c40e9e7270e8d",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_Jirue/thumbs/LinkTunic",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16814"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_Jirue/thumbs/LinkTunic.png",
+    "zip": "Add-Ons/Decal_Jirue.zip",
+    "member": "Thumbs/LinkTunic.png",
+    "bytes": 6161,
+    "sha256": "0993dd5e7970329b8d6f1cd811e274df2a18615a340653be0bd54e13d4e0a3ea",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_WORM/thumbs/worm-sweater",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16778"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_WORM/thumbs/worm-sweater.png",
+    "zip": "Add-Ons/Decal_WORM.zip",
+    "member": "thumbs/worm-sweater.png",
+    "bytes": 6101,
+    "sha256": "7357705d72c2a201536a77726c11b7177a82a62db481d52f87bdffa296c7656d",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Decal_WORM/thumbs/worm_engineer",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16742"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Decal_WORM/thumbs/worm_engineer.png",
+    "zip": "Add-Ons/Decal_WORM.zip",
+    "member": "thumbs/worm_engineer.png",
+    "bytes": 5530,
+    "sha256": "88b70223c8c4571dd294a9b4b1e706e03fc4f743e3bd4007f9f15e1bd160382e",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/asciiTerror",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16635"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/asciiTerror.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/asciiTerror.png",
+    "bytes": 610,
+    "sha256": "90f2e690e839b9a1aed26c39c80ac90218e352e277fa75edff26a1248f25bb6d",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/memeBlockMongler",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16599"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/memeBlockMongler.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/memeBlockMongler.png",
+    "bytes": 1275,
+    "sha256": "830a36fe9e73b0c460492183acfc05d7037ab082c609b95658185fa3eb1e9438",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/memeCats",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16563"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/memeCats.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/memeCats.png",
+    "bytes": 2236,
+    "sha256": "2f2463765075f2af8b0c4710b188ed62a36765bb03d44bc5f60d296a90d2ba19",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/memeDesu",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16527"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/memeDesu.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/memeDesu.png",
+    "bytes": 1168,
+    "sha256": "b1571285ef4b8b016446df508b009d533bb57593c423fcf31eed7f95c8ff893c",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/memeGrinMan",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16491"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/memeGrinMan.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/memeGrinMan.png",
+    "bytes": 1594,
+    "sha256": "70afa9f964e16e78e81da66cc2e3cf4ba112c2bb6c81eb38c9eda8797964e5a7",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/memeHappy",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16455"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/memeHappy.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/memeHappy.png",
+    "bytes": 790,
+    "sha256": "81f5f007362ad4aa615b8dcbc5335c1e4c17979c5aaf1a0c2677ad12cb87b2b0",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/memePBear",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16419"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/memePBear.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/memePBear.png",
+    "bytes": 1285,
+    "sha256": "7435ad4e8ce2eb3a161e63366d4fb2f61f776de8b6d39325c85f2e923f42dbc6",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/memeYaranika",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16383"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/memeYaranika.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/memeYaranika.png",
+    "bytes": 1295,
+    "sha256": "6eea4ea9c55cec0a50d374758a8b7000a598108a8f0869ce796b3fa8d306b860",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyBlonde",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16347"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyBlonde.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyBlonde.png",
+    "bytes": 6017,
+    "sha256": "2a96ad7a74443f231dbaea5f24029fdf5b1f81672353b378e94d127196196a8e",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyCreepy",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16311"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyCreepy.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyCreepy.png",
+    "bytes": 503,
+    "sha256": "a5aebc3c7635a6ce520d6d3b8e166473f2ddd546a2ab4cbd31180e4fa4b133aa",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyEvil1",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16275"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyEvil1.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyEvil1.png",
+    "bytes": 3692,
+    "sha256": "cbbffb9dded58ba1914588c061381af349053842e7b30f5bd6259b40bb316847",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyEvil2",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16239"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyEvil2.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyEvil2.png",
+    "bytes": 1569,
+    "sha256": "e5eadd8226a73e5f5099ddd0552321f6a4cdf400fb1fa7bc35f4d4d3cdae8116",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyFemale1",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16203"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyFemale1.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyFemale1.png",
+    "bytes": 7804,
+    "sha256": "c4ef6320c663d3c78bc5d03532e936594d93e43f7445bf404e1125ee3225d59f",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyOld",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16167"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyOld.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyOld.png",
+    "bytes": 5421,
+    "sha256": "081b66070f8e5620ace50f0661099ef4bf12189954cf668755933d04babed906",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyPirate1",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16131"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyPirate1.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyPirate1.png",
+    "bytes": 3781,
+    "sha256": "5720fc0e6c1d6e0c56f41321447d4806ea819824565885168a4e7539ba2c18ad",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyPirate2",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16095"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyPirate2.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyPirate2.png",
+    "bytes": 4526,
+    "sha256": "9fd605a9811af61e0032af814e94b195f7cc67e69bbd91d0daf26b75a21c829a",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyPirate3",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16059"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyPirate3.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyPirate3.png",
+    "bytes": 4162,
+    "sha256": "8057f907c03566ee7108af9b9ca948923cc3a61fe3f74e859bbcbed80ffb8d26",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyRedBeard",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16023"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyRedBeard.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyRedBeard.png",
+    "bytes": 2052,
+    "sha256": "a1be32d7b4069d093db0ff1ace120d0653fc7fbcdde3311820f3fe0439430692",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Default/thumbs/smileyRedBeard2",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15987"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Default/thumbs/smileyRedBeard2.png",
+    "zip": "Add-Ons/Face_Default.zip",
+    "member": "thumbs/smileyRedBeard2.png",
+    "bytes": 3276,
+    "sha256": "dd9e5d0edc42307ab696dbf469f04c6732271f098a93827f8cc0ed1a5481aa6a",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_FMJ/thumbs/breathin",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15951"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "Add-Ons/Face_FMJ/thumbs/finalScream",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15915"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "Add-Ons/Face_Jirue/thumbs/BrownSmiley",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15879"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Jirue/thumbs/BrownSmiley.png",
+    "zip": "Add-Ons/Face_Jirue.zip",
+    "member": "Thumbs/BrownSmiley.png",
+    "bytes": 2228,
+    "sha256": "7f9723093210dd3b09d2c7b1e649d73e9ecc2964f9a634b4ec162297b894057d",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Jirue/thumbs/ChefSmiley",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14421",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15843"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Jirue/thumbs/ChefSmiley.png",
+    "zip": "Add-Ons/Face_Jirue.zip",
+    "member": "Thumbs/ChefSmiley.png",
+    "bytes": 1010,
+    "sha256": "e530dbeb1c6f2e5698cdf800fcf80e6da5b5d6fc25da779165f1f7157e75511b",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Jirue/thumbs/KleinerSmiley",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15807"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Jirue/thumbs/KleinerSmiley.png",
+    "zip": "Add-Ons/Face_Jirue.zip",
+    "member": "Thumbs/KleinerSmiley.png",
+    "bytes": 1109,
+    "sha256": "6ffc6af17595aa9c1e20cf505f96a43cb6f2c9f112a2db26b76288fa065be3a5",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Jirue/thumbs/Male07Smiley",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15771"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Jirue/thumbs/Male07Smiley.png",
+    "zip": "Add-Ons/Face_Jirue.zip",
+    "member": "Thumbs/Male07Smiley.png",
+    "bytes": 1882,
+    "sha256": "f735fd3caad2049105737ddcb70005fe4448e41b7d9473f318d25614b311b808",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Jirue/thumbs/Orc",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15735"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Jirue/thumbs/Orc.png",
+    "zip": "Add-Ons/Face_Jirue.zip",
+    "member": "Thumbs/Orc.png",
+    "bytes": 1261,
+    "sha256": "17592df5aa679aa2a238a675ecb861e4392f7a942ff17586769286f263d10232",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Mythbusters/thumbs/AdamSavage",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15699"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Mythbusters/thumbs/AdamSavage.png",
+    "zip": "Add-Ons/Face_Mythbusters.zip",
+    "member": "thumbs/AdamSavage.png",
+    "bytes": 2773,
+    "sha256": "30bbd4636471ac5453e635a6cedd4a55fc9e398dcedcf3a5e26b11a8c0283fe1",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Face_Mythbusters/thumbs/Jamie",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15663"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Face_Mythbusters/thumbs/Jamie.png",
+    "zip": "Add-Ons/Face_Mythbusters.zip",
+    "member": "thumbs/Jamie.png",
+    "bytes": 4536,
+    "sha256": "55bed2c23c9aa83fbce93e4ef7fbc8d842e3dda7c10f963360f5af5e2471ce35",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/Map_Tutorial/tutorial.mis",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14359"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/Map_Tutorial/tutorial.mis",
+    "zip": "Add-Ons/Map_Tutorial.zip",
+    "member": "tutorial.mis",
+    "bytes": 23090,
+    "sha256": "b4684d00050610d0417c878667cf4aafd3036b7df2d6e137a60c0138c8f96886"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "Add-Ons/System_ReturnToBlockland/client.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:21027"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "zip:Add-Ons/System_ReturnToBlockland/client.cs",
+    "zip": "Add-Ons/System_ReturnToBlockland.zip",
+    "member": "client.cs",
+    "bytes": 11072,
+    "sha256": "df7d8b3c4685f1ec1d8a4961b39993766cc2a4f2869f603b8a5dfa8e612505b6"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/help/1. Credits.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1118"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/client/ui/BlockWindow",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19605"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/BlockWindow.png",
+    "bytes": 3255,
+    "sha256": "30e41122c952506e250e17be398e16c62fcc7aad320dd13b0cbc44758b795ce9",
+    "size": [
+     61,
+     158
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/BlueHudLeftCorner",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6129",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6516",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2037"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/BlueHudLeftCorner.png",
+    "bytes": 150,
+    "sha256": "79e40902aa0db221729de04ddf29b24805ef7e99234b68def04077d7fcb6262a",
+    "size": [
+     10,
+     18
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/BlueHudRightCorner",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6134",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6521",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2053"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/BlueHudRightCorner.png",
+    "bytes": 165,
+    "sha256": "a25b09dd4598217f40aeda1565bc80b51fa9e7a583094deb32e33907ffe1fafb",
+    "size": [
+     10,
+     18
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/CUR_3darrow",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20078"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/CUR_3darrow.png",
+    "bytes": 615,
+    "sha256": "19b42e72b7556deeddbd69d0d37b861b45e13539a6ac0a516da9ecf3704e46c0",
+    "size": [
+     16,
+     32
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXblink.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6438"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXblink.png",
+    "bytes": 3159,
+    "sha256": "4bf470a1a606ae7493ab53cb48ccef52602c092021b4352df45640ac8d0c48b8",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXchrome.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6414"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXchrome.png",
+    "bytes": 3462,
+    "sha256": "bde1771285c91693ebd45f9d5e4f68e5cc154f98668571f32103e6adca629d50",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXglow.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6426"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXglow.png",
+    "bytes": 3275,
+    "sha256": "e2b837d66afe304e35328d871bab34ddc68348946172f3165f06fd8636b3dd6f",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXjello.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6486"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXjello.png",
+    "bytes": 3139,
+    "sha256": "395de2bef7cd8dafd22ec9e884a40ef72f43d49433af9c585cde50922f01b60f",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXpearl.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6402"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXpearl.png",
+    "bytes": 3295,
+    "sha256": "d47a9bc94a7d99e5ab3ee4a202d949289be3499ceb12ed23c4477daf6e8a670e",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXrainbow.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6462"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXrainbow.png",
+    "bytes": 3167,
+    "sha256": "c30be1b8bf653ffb663be74de7d52e67028643f3b3f3eefcb4947534bea7c613",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGB"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXstable.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6474"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXstable.png",
+    "bytes": 3011,
+    "sha256": "5693856221dbe54a52824bf5e13a27a6d9fe0518a6b23721a944e98dbe7b019b",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/FXswirl.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6450"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/FXswirl.png",
+    "bytes": 3269,
+    "sha256": "7d81a06845468c7de97c431b5874595733f2063ebadb6d7cf2b98f4394b9a43e",
+    "size": [
+     16,
+     16
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/GUIBrickSide.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7302",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7306",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7310",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7314",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7318",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7322",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7326"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/GUIBrickSideHilight.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7330",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7334",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7338",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7342",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7346",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7350",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7354"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/Ghosting",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2237"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "frames": [
+    {
+     "path": "base/client/ui/Ghosting_00.png",
+     "bytes": 1643,
+     "sha256": "4f0c38ad44c8a34d7954bc38e4d57f23c3d9a02afc0210098aec690aa9692f74",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_01.png",
+     "bytes": 1635,
+     "sha256": "cce135de66a5383ee6e02c1b6b61b3e563ebe70462a4f350df5edc5b171738a2",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_02.png",
+     "bytes": 1650,
+     "sha256": "426608dec9ac10b0140138e3764dd1a496b4f1994f268c3e822ec69cc68be91a",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_03.png",
+     "bytes": 1641,
+     "sha256": "97a15a374d5168b86b417c6772ece9872200f3a837601666c21540bb9f86a8a7",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_04.png",
+     "bytes": 1641,
+     "sha256": "c6303d37794db1deea4ec57b574852f6472a3bc8ba2455fbb621368a87817cba",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_05.png",
+     "bytes": 1640,
+     "sha256": "a3cc3bd8b8e8bb4b513ddd96bfc6b67ebde22ae0b1d6456ed46ada08eb44e2dd",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_06.png",
+     "bytes": 1640,
+     "sha256": "d16864116daa33e33b56bba25c3219d3c98c9c1e6a16e173c7928bc537166f96",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_07.png",
+     "bytes": 1640,
+     "sha256": "783f19040f5ab1a34d21e2a3f9d562e2176d3bdc75ab4003d223ed57519eb130",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_08.png",
+     "bytes": 1641,
+     "sha256": "9aaf27a52e5e5b17a4a3bf3432e84a8dc438892b137d2764410b1061a7d622a8",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_09.png",
+     "bytes": 1641,
+     "sha256": "448a9310b4de7c9a97d454eb108a2fea438b9212be2cc0a12661d20a16aaa400",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_10.png",
+     "bytes": 1639,
+     "sha256": "8f18ed0a0e33b76417bda633ab7966af59c8f447f42a60ddc72442bbe05b7f5a",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_11.png",
+     "bytes": 1633,
+     "sha256": "279a9433e370606a9c6becca1d6577c9108db1330637ef558abcc7f3e851522a",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    },
+    {
+     "path": "base/client/ui/Ghosting_12.png",
+     "bytes": 1640,
+     "sha256": "5d52fcacf6c0206bebcf508ad801463627f98c88ac1547d50ce00640266adec7",
+     "size": [
+      128,
+      128
+     ],
+     "mode": "RGBA"
+    }
+   ],
+   "status": "ok-frames"
+  },
+  {
+   "ref": "base/client/ui/ItemIcons/toolLabelBG",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6544",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6784"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/ItemIcons/toolLabelBG.png",
+    "bytes": 324,
+    "sha256": "906daaf0b503b0574fe6ec3e8cd463520292a2eff4eb1298898c32bde7eaf45f",
+    "size": [
+     64,
+     18
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/PlantErrors/PlantError_Overlap",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1559"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/PlantErrors/PlantError_Overlap.png",
+    "bytes": 5468,
+    "sha256": "974418cfe01fb1e5f76a26d1fe42cff75fce9f17cd094ae4911493683f2faf98",
+    "size": [
+     400,
+     110
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/PlantErrors_Small/PlantError_Overlap",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1664"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/PlantErrors_Small/PlantError_Overlap.png",
+    "bytes": 1458,
+    "sha256": "314e755cbea87d33066e974684906fe8970ef174a0b8af51c296a60c9c075be4",
+    "size": [
+     150,
+     110
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/authBar",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16513",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16515",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16523",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4810"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/authBar.png",
+    "bytes": 775,
+    "sha256": "3eed098109025dd4cfd67d8547d7a8c3c5af94b3968883a9e30bd5df809b2b45",
+    "size": [
+     312,
+     48
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/authBarFail",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16512",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16514"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/authBarFail.png",
+    "bytes": 699,
+    "sha256": "17e1c0db6356469d10a7711ffeaf70050065535269855e0a2091c9272e5cec41",
+    "size": [
+     312,
+     48
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/authBarWin",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16522"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/authBarWin.png",
+    "bytes": 701,
+    "sha256": "06a545f84d4da1bc7fda8531c85fb3e5d4a666d314e21bdc1be981291f64ee79",
+    "size": [
+     312,
+     48
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarBG",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13990"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarBG.png",
+    "bytes": 36616,
+    "sha256": "5b414757a21d47c65ec27431a3ab4d3402254154c76dc20833bcaacaf0c241de",
+    "size": [
+     159,
+     339
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Accent/none",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14549",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15448"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Accent/plume",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15484"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Accent/plume.png",
+    "bytes": 3741,
+    "sha256": "81bc5f32ca87ba82e09121528b36694a72b38bf5eb39c20d25bca72675ea10d9",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Accent/septplume",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15556"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Accent/septplume.png",
+    "bytes": 5975,
+    "sha256": "abe156ff953c832b5193cf43d7d89645ee933a722ce56d6059139f361c89ef70",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Accent/triplume",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15520"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Accent/triplume.png",
+    "bytes": 5136,
+    "sha256": "06120deed64e44f7cddba27be549333963e582b6946572e9bc8091a1ff260e06",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Chest/chest",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14218",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18646"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Chest/chest.png",
+    "bytes": 4136,
+    "sha256": "cb3ec7d6b0f7b667ead0999b227814c470e917741e0b9a1fb80dbc53da84e80c",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Chest/femchest",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18682"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Chest/femchest.png",
+    "bytes": 4732,
+    "sha256": "8fc715fbd58e9a39df0b39f3b8d95220b0e756544af3a6e5f54f747874af3884",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/bicorn",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18503"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Hat/bicorn.png",
+    "bytes": 4826,
+    "sha256": "d856a06c7d2f98f05415138e1432abcd444f07a5958f8bf22ec6d84f2ca40f07",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/copHat",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14513",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18539"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Hat/copHat.png",
+    "bytes": 4307,
+    "sha256": "08296f4ab0d4317f8d7c378a4b42e277b1a3a14d9e15bf8469f3060935f19091",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/flareHelmet",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18431"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Hat/flareHelmet.png",
+    "bytes": 4747,
+    "sha256": "6961bfea934399af9fc6a8ea355eece3b591abc7839dba654d65b5b745b8bdef",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/helmet",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18359"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Hat/helmet.png",
+    "bytes": 4470,
+    "sha256": "6a15d87be9e6f51b090f2f0fc6ecdd5c1515c207e5970e3e9c10e4696eaa03e5",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/knitHat",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18575"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Hat/knitHat.png",
+    "bytes": 4930,
+    "sha256": "69e8cc8388beeefb6c7c42cce4e1cbe77ad882d5946e98ebba4e4c58d929c380",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/none",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18323"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/pointyHelmet",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18395"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Hat/pointyHelmet.png",
+    "bytes": 4896,
+    "sha256": "cdee05b09726640de8668473b092b0943a519a9bc12a62d41df698134ce596de",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Hat/scoutHat",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18467"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Hat/scoutHat.png",
+    "bytes": 4259,
+    "sha256": "0ff3bc456dccfa1dd3a742c8bc9320cfe3df293d06383c548eaf33628a959f01",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/LArm/LArm",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14341",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19181"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/LArm/LArm.png",
+    "bytes": 4130,
+    "sha256": "e30b0847c021c1a016db44f69b8c04b051b72bb75eeb433522675d17826d979f",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/LArm/LArmSlim",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19217"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/LArm/LArmSlim.png",
+    "bytes": 4072,
+    "sha256": "17187d5ebf79fe63b7e119a995128954361ba8b6ec36f338f63f1c6fd0cd3b93",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/LHand/LHand",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14373",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19395"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/LHand/LHand.png",
+    "bytes": 5162,
+    "sha256": "6140c481ee7e0781bf8652a141e46171d517ccf22577776f64ca703545851fa8",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/LHand/LHook",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19431"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/LHand/LHook.png",
+    "bytes": 4646,
+    "sha256": "9476480790fa1320735a8cc962480574515c8df1f657737cfa3f68efaa3ff74a",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/LLeg/LPeg",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19003"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/LLeg/LPeg.png",
+    "bytes": 3945,
+    "sha256": "dfbb759161a6c2e0c20da043dc02d9c653aadbf43f47519b3b86e909c51eb865",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/LLeg/LShoe",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14234",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18967"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/LLeg/LShoe.png",
+    "bytes": 5276,
+    "sha256": "99325714534b156384ec5b98377fff520c48c7b124dca1034e8d6b72dd3123fe",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/None",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14437"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/None.png",
+    "bytes": 3840,
+    "sha256": "bae1620da08a137b2e5428915129c57e073983f860ac17a5787ba89fac46de8d",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Pack/armor",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17785"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Pack/armor.png",
+    "bytes": 5716,
+    "sha256": "e800cf18dcdb329baf8e98468c816cc9d6a49794039b891fea217661b5420829",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Pack/bucket",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17821"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Pack/bucket.png",
+    "bytes": 4793,
+    "sha256": "1969e52f8681cdfd5e1bf2b99d53fad76303b347c9ed79618591e2eba00e7371",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Pack/cape",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17857"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Pack/cape.png",
+    "bytes": 4748,
+    "sha256": "6fd21017f223e718a30626da52829436270a644524c6c34ba207084e41461702",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Pack/none",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17749"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Pack/pack",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17893"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Pack/pack.png",
+    "bytes": 6036,
+    "sha256": "61eb3764de0ad616776b930c39ae2558964a6c3030a679402ff974d8b55e18ea",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Pack/quiver",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17929"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Pack/quiver.png",
+    "bytes": 5354,
+    "sha256": "677f8755259ad5a054c60b59d01896d137bd907dc1ae548dc6c36e7188a23988",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/Pack/tank",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17965"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/Pack/tank.png",
+    "bytes": 4932,
+    "sha256": "59020a92e89555ba5254d7cd66f731de196c06f54550f0c4a81ab7ee07b19cdb",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/RArm/RArm",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14309",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19074"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/RArm/RArm.png",
+    "bytes": 4482,
+    "sha256": "4515408a3994c2436dbd67f43268a52c6487b751f330143b2e0577f9601cca17",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/RArm/RArmSlim",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19110"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/RArm/RArmSlim.png",
+    "bytes": 4597,
+    "sha256": "78d0f3291c6f3eb47a2b9409b65d4db209396f6960313801d7526887b3b78ec2",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/RHand/RHand",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14405",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19288"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/RHand/RHand.png",
+    "bytes": 4744,
+    "sha256": "d305ff5c4710f72366e5ccd2974351d1f7985407cc2897c573ff26e59875229a",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/RHand/RHook",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19324"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/RHand/RHook.png",
+    "bytes": 4502,
+    "sha256": "b0a699202907deb798804cdf6c88bea3eb346ec4174f08ba10d6e4e3a6d7fc1f",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/RLeg/RPeg",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18896"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/RLeg/RPeg.png",
+    "bytes": 4007,
+    "sha256": "bd51b3c17e1c932895bcc16099552a02b9e6999981ac7314a14db9aa0a9337ba",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/RLeg/RShoe",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14325",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18860"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/RLeg/RShoe.png",
+    "bytes": 5262,
+    "sha256": "1f5cc833005c20062d6ff23bd1c237f5ca453ec3cdff3235c53f5fc31e36ccf0",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/SecondPack/ShoulderPads",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18252"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/SecondPack/ShoulderPads.png",
+    "bytes": 4362,
+    "sha256": "968145e96bf55c705568c60df01e97323b330930808de017b91784b8bd13d30b",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/SecondPack/epaulets",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14585",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18072"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/SecondPack/epaulets.png",
+    "bytes": 4421,
+    "sha256": "451ae7818b76eca2ae58bdf2aebd1f25a519002a987cead24a225602ff6791a1",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/SecondPack/epauletsRankA",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18108"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/SecondPack/epauletsRankA.png",
+    "bytes": 3697,
+    "sha256": "d7ad2d498e7cb691761170b9053d07002bd1da1f6036a6594d1be54e705debb1",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/SecondPack/epauletsRankB",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18144"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/SecondPack/epauletsRankB.png",
+    "bytes": 4208,
+    "sha256": "2dc3383548cc1cdd94dcf45ff2356a081c80b3d86b7831c17ea6e9c1412da67a",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/SecondPack/epauletsRankC",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18180"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/SecondPack/epauletsRankC.png",
+    "bytes": 3983,
+    "sha256": "ae8b5fa2d408ef8d20ea46374f9971c59ab35578165d430f34484e4de31bfbff",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/SecondPack/epauletsRankD",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18216"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/SecondPack/epauletsRankD.png",
+    "bytes": 3842,
+    "sha256": "f9e6775ba48a8d758bb0a6fc0c6a37c0287d6ef4f392ac7ad44fcdf4401a547e",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/SecondPack/none",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18036"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/hip/pants",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14357",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18753"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/hip/pants.png",
+    "bytes": 4373,
+    "sha256": "bcf17c3238de83fc53cf962391d15095a550aef974e9d6a5ebc996c4174f69e6",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/avatarIcons/hip/skirtHip",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18789"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/avatarIcons/hip/skirtHip.png",
+    "bytes": 4440,
+    "sha256": "5ec14fb34f5de3156b06cd484a8de59c2028a5c37efd3a0a9b878d49acbd1403",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/bar1",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12554",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12663"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/bar1.png",
+    "bytes": 79,
+    "sha256": "a121253f9a33c3e6bb3cd5ea619dde55aa86d243ca250a12aeb77e28b29c1610",
+    "size": [
+     16,
+     4
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/blockRadio.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20177"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/blockScroll",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19768",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19845",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19886",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19950",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19967"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/blockScroll.png",
+    "bytes": 2232,
+    "sha256": "470e81948ea3591f46b1af92199c11a500b3b96cac7423b0a0b26027ef50353e",
+    "size": [
+     48,
+     177
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/blockScroll.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20140",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20153",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20194"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/blockScroll.png",
+    "bytes": 2232,
+    "sha256": "470e81948ea3591f46b1af92199c11a500b3b96cac7423b0a0b26027ef50353e",
+    "size": [
+     48,
+     177
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/blockWindow",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19653"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/blockWindow.png",
+    "bytes": 3255,
+    "sha256": "30e41122c952506e250e17be398e16c62fcc7aad320dd13b0cbc44758b795ce9",
+    "size": [
+     61,
+     158
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/blockWindow.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20100",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20126"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/blockWindow.png",
+    "bytes": 3255,
+    "sha256": "30e41122c952506e250e17be398e16c62fcc7aad320dd13b0cbc44758b795ce9",
+    "size": [
+     61,
+     158
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/brickActive",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6055"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/brickActive.png",
+    "bytes": 229,
+    "sha256": "6c2eb2e6157db28f34d5e14e93fe423279418355d19a94d6835fa75eb8503285",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/brickIcons/brickIconActive",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6056"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/brickIcons/brickIconActive.png",
+    "bytes": 5782,
+    "sha256": "97e7e03d4c9f028986f1c1ff6212f461f498cdc5e7e464b0c5f0c03a1ed77406",
+    "size": [
+     96,
+     96
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/brickIcons/unknown",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10070",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10200",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10215",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10236",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10273",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10287",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10297",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10452"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/brickIcons/unknown.png",
+    "bytes": 1510,
+    "sha256": "116c9ecf9d24a3d601f8a75d771f44ec38827ace378d603ff76fb7df4c191c4b",
+    "size": [
+     96,
+     96
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/brickIcons/unknown.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6082",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6758",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7226",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7377"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/brickIcons/unknown.png",
+    "bytes": 1510,
+    "sha256": "116c9ecf9d24a3d601f8a75d771f44ec38827ace378d603ff76fb7df4c191c4b",
+    "size": [
+     96,
+     96
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/brickicons/brickIconActive",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10092",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1711",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1742",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1773",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1804",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1835",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1866",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1897",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1928",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1959",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1990"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/brickicons/brickIconActive.png",
+    "bytes": 5782,
+    "sha256": "97e7e03d4c9f028986f1c1ff6212f461f498cdc5e7e464b0c5f0c03a1ed77406",
+    "size": [
+     96,
+     96
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/brickicons/brickIconBtn",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10099",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10164"
+   ],
+   "kinds": [
+    "button?"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/brickicons/brickIconBtn_n.png",
+     "bytes": 290,
+     "sha256": "0f0d0f99dd09254fdb4c177bb67f61d0758412ea7fc57ad6d6075984ad8fb721",
+     "size": [
+      96,
+      96
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/brickicons/brickIconBtn_h.png",
+     "bytes": 2958,
+     "sha256": "28e0a89106323890bf021b4deda3420580e7cd5d7d1ef67524995b7b822fba37",
+     "size": [
+      96,
+      96
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/brickicons/brickIconBtn_d.png",
+     "bytes": 2643,
+     "sha256": "14ed14eb0e262ddcdad07d2db1774e84965329d79c3a0066337ba940c315814b",
+     "size": [
+      96,
+      96
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/brickicons/brickIconBtn_i.png",
+     "bytes": 290,
+     "sha256": "0f0d0f99dd09254fdb4c177bb67f61d0758412ea7fc57ad6d6075984ad8fb721",
+     "size": [
+      96,
+      96
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/brickicons/brickiconActive",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10158"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/brickicons/brickiconActive.png",
+    "bytes": 5782,
+    "sha256": "97e7e03d4c9f028986f1c1ff6212f461f498cdc5e7e464b0c5f0c03a1ed77406",
+    "size": [
+     96,
+     96
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/brickicons/brickiconbg",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10080",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10147"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/brickicons/brickiconbg.png",
+    "bytes": 1837,
+    "sha256": "91c47ce59f7dbd4848d5a357fa51af0ef5b6bb8e12fd9ba3ab7de0c56886c191",
+    "size": [
+     96,
+     96
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/btnAbout",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4646"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnAbout_n.png",
+     "bytes": 2951,
+     "sha256": "d276951840afc474fe11bd59acfa98e689cec570e88512e5ca9ff45b8c62725a",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnAbout_h.png",
+     "bytes": 5038,
+     "sha256": "8c27e7ae5ac9168301efd466890c8461a562e0b2a284864fd1263a8b437bb5f9",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnAbout_d.png",
+     "bytes": 2858,
+     "sha256": "8765b490b37edc180526b8a7a05fb6b14f43041be65774fa288070d595ae4a06",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnAbout_i.png",
+     "bytes": 69,
+     "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e",
+     "size": [
+      1,
+      1
+     ],
+     "mode": "RGB"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnColor",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12596",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16772",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:18494",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:18815",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22132",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22159",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22186",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22213",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22240",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22267",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22294",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22321",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22348",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22375",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22402",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22429",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22456",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22483",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22510",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22537",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22564",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22591",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22618",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22645",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22672",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22699",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22726",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22753",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22780",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22807",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22834",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22861",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22888",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22915",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22942",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22969",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:22996",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23023"
+   ],
+   "kinds": [
+    "button",
+    "button?"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnColor_n.png",
+     "bytes": 199,
+     "sha256": "2c23c09d6d4ffd234b790fb6130d0603d9fc85b690faf235d6002d8030c1833a",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnColor_h.png",
+     "bytes": 189,
+     "sha256": "9c086ed0530380d09b8dd7a9992a708ba91092f0a920cbecb2936a9fa9ffd1f8",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnColor_d.png",
+     "bytes": 196,
+     "sha256": "16212b60e11b9e7e5b0dd43f736f63a6802a457594ade7f20457518d380d293b",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnColor_i.png",
+     "bytes": 199,
+     "sha256": "2c23c09d6d4ffd234b790fb6130d0603d9fc85b690faf235d6002d8030c1833a",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnCredits",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4666"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnCredits_n.png",
+     "bytes": 4157,
+     "sha256": "e8021dfb77ddc632df4b4535255c75fc984e64793a9900c90fefa22530aa58de",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnCredits_h.png",
+     "bytes": 6715,
+     "sha256": "b879d65210a38d37bac076cf58e7a9574ebce1c49eafe1a5c5fe7d274904713c",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnCredits_d.png",
+     "bytes": 3974,
+     "sha256": "27579a7728eb3c4708795c1bd585cf9a2bf2b1111c77436718d69dc700c81ea6",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnCredits_i.png",
+     "bytes": 69,
+     "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e",
+     "size": [
+      1,
+      1
+     ],
+     "mode": "RGB"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnDecal",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12394",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12461",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12526",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15468",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15504",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15540",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15576",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15647",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15683",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15719",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15755",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15791",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15827",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15863",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15899",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15935",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15971",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16007",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16043",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16079",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16115",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16151",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16187",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16223",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16259",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16295",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16331",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16367",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16403",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16439",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16475",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16511",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16547",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16583",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16619",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16655",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16726",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16762",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16798",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16834",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16870",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16906",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16942",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16978",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17014",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17050",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17086",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17122",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17158",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17194",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17230",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17266",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17302",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17338",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17374",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17410",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17446",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17482",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17518",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17554",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17590",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17626",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17662",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17698",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17769",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17805",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17841",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17877",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17913",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17949",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17985",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18056",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18092",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18128",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18164",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18200",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18236",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18272",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18343",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18379",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18415",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18451",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18487",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18523",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18559",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18595",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18666",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18702",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18773",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18809",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18880",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18916",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18987",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19023",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19094",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19130",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19201",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19237",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19308",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19344",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19415",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19451"
+   ],
+   "kinds": [
+    "button",
+    "button?"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnDecal_n.png",
+     "bytes": 3154,
+     "sha256": "840a075b802977dd3f3550f48d3c3f71938571f4581e636d97dc7ab16e400753",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnDecal_h.png",
+     "bytes": 3160,
+     "sha256": "dc667f11383df4c6b792092bccf2235bb1f6f18f18f6c799436b24d01d51dce2",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnDecal_d.png",
+     "bytes": 3128,
+     "sha256": "a086ac06173358cdb0eb023f6f3bc9a5afcb7222c6f19ea98b0c9830135b756e",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnDecal_i.png",
+     "bytes": 2933,
+     "sha256": "9a0233ff5ae4bf884d58cf053c0a539431eb7a66f015272c1532cd1524ac6e57",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnDecalBG",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12374",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12441",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12509",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13787",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13803",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13819",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13835",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13851",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13867",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13883",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13899",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13915",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13931",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13947",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13963",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14164",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14191",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14250",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15115",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15432",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15611",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16690",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:17733",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18020",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18307",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18630",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18737",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18844",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:18951",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19058",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19165",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19272",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19379"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/btnDecalBG.png",
+    "bytes": 5834,
+    "sha256": "51e0215827b228f4d2b467c268c1367ab4193adfb4bd662d941cadb5c5dff136",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/btnJoinGame",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4606"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnJoinGame_n.png",
+     "bytes": 4201,
+     "sha256": "644669064f9fef188453b4d597fb53be9a34d0af4100dcbe0000802ae096fe69",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnJoinGame_h.png",
+     "bytes": 7510,
+     "sha256": "38c295069a73804e396cd75e9f7cb9eb115f29f68226f4fe45c423b1abc98751",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnJoinGame_d.png",
+     "bytes": 4111,
+     "sha256": "ffcf5083d1df46f46e6dac3bc03d9849f1c03b14d9d97fdb62d93d5c3f97cca2",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnJoinGame_i.png",
+     "bytes": 69,
+     "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e",
+     "size": [
+      1,
+      1
+     ],
+     "mode": "RGB"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnOptions",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4626"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnOptions_n.png",
+     "bytes": 4065,
+     "sha256": "bc4b428c141f1b49ce38632926fa1b4b5ea64e2dc6accdb491631fae0245a6fa",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnOptions_h.png",
+     "bytes": 6759,
+     "sha256": "4b7ede54023fec55b4ba7460f7b3f85b781072db3b7e3c593fd3369cbd3f9c45",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnOptions_d.png",
+     "bytes": 3877,
+     "sha256": "f04da2a09f46c9c796f0d6f91532848d9d6c3aa415b5395ad6afe0afba667711",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnOptions_i.png",
+     "bytes": 69,
+     "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e",
+     "size": [
+      1,
+      1
+     ],
+     "mode": "RGB"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnPartColor",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14859",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14879",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14899",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14919",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14939",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14959",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14979",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14999",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15019",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15039",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15059",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15079",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15099"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnPartColor_n.png",
+     "bytes": 3040,
+     "sha256": "9970c2d29a80d409a0e8edfc8bcfab15e7e496a3f5cf7b4e57ab2d4dd29f2a6f",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnPartColor_h.png",
+     "bytes": 3035,
+     "sha256": "b75ec55d97f1bb576469ba52a60ee8788ac3c58c555f4514d3fc761f5e004b8c",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnPartColor_d.png",
+     "bytes": 3037,
+     "sha256": "0b9125c6572fa62cc0a50839dd76a8c515cd2ff0a43492da06687f5df7587806",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnPartColor_i.png",
+     "bytes": 3039,
+     "sha256": "bb2cda3ed415a0be0da0c42372192da158f581f3492779ab83ec78da0ea6f5e9",
+     "size": [
+      32,
+      32
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnPlayer",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4717"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnPlayer_n.png",
+     "bytes": 6328,
+     "sha256": "12d01a0882a12fe3802e32e2908c82c2604e74c0915f2ff05f3545e6f0071838",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnPlayer_h.png",
+     "bytes": 8666,
+     "sha256": "4d60bd06b4c34747b8ab28fafbf015c7935631296c60ae7c44de0fdc41ebc34c",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnPlayer_d.png",
+     "bytes": 6138,
+     "sha256": "533ad23faaa9cb91bf412012e6b6991178cb0d6a2e912290ef5a942e04481614",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnPlayer_i.png",
+     "bytes": 69,
+     "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e",
+     "size": [
+      1,
+      1
+     ],
+     "mode": "RGB"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnPrint",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:9609"
+   ],
+   "kinds": [
+    "button?"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnPrint_n.png",
+     "bytes": 212,
+     "sha256": "098c3aff3ce2551c10f2662698552163fadd4a7c40b451c2fdec947540e27e60",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnPrint_h.png",
+     "bytes": 935,
+     "sha256": "7263d60c37eaa0881d1945e38011976bae100281969811153c46b2549505a9e4",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnPrint_d.png",
+     "bytes": 522,
+     "sha256": "81a7a91845883cfab5f6c1f2f8c61d7618fb01e60581b85d36ff54c44d9da72b",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnPrint_i.png",
+     "bytes": 212,
+     "sha256": "03f6a4b1933ce0475211aa442613d93669b43ae3f58c62dd84f2f035170e1000",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnQuit",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4586"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnQuit_n.png",
+     "bytes": 2260,
+     "sha256": "75e7749029c79f75386adee5f574b161b2d561cfe29208d911fcb1a56bef2253",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnQuit_h.png",
+     "bytes": 3752,
+     "sha256": "e6fb3a1202b7d36a3d0f02e6080f24bc4dc640665a5a96482509fec6f49cac3c",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnQuit_d.png",
+     "bytes": 2142,
+     "sha256": "4cd751e8a0a1bbfac68b695791a5e102d27ae41c1c76e55c4521446a176c323d",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnQuit_i.png",
+     "bytes": 69,
+     "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e",
+     "size": [
+      1,
+      1
+     ],
+     "mode": "RGB"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnStartServer",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4686"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnStartServer_n.png",
+     "bytes": 4909,
+     "sha256": "9f793a5d1171134432e92fdb39b08795cdfd0827dae03cdf83ac11bade1b1db1",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnStartServer_h.png",
+     "bytes": 8512,
+     "sha256": "121a3ac95a9d7ae62758ec07affd496f42068d1e01431e5d0e835ba9b6ed079b",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnStartServer_d.png",
+     "bytes": 4769,
+     "sha256": "93eade10238ab307c0c5008a76f258841f18df88298adfb893d645f24a2ffb60",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnStartServer_i.png",
+     "bytes": 2729,
+     "sha256": "f0c1c3945cf4e1cef23dd87f9ebf26a3dc5592b36b233770afe4ea881ebede7e",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btnTutorial",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4943"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btnTutorial_n.png",
+     "bytes": 6430,
+     "sha256": "c8d3c07f67464498900e6bc4318fa9748fb13e617d34cec16dd76fa914b866bd",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btnTutorial_h.png",
+     "bytes": 8799,
+     "sha256": "694d11631e5d823e277eb97b6d86189d022aa6119d64c415d118556fb39dc7fc",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btnTutorial_d.png",
+     "bytes": 6004,
+     "sha256": "1a2a6f335bc653ba4757195f6e239c6a1347e81a0d8638b6ce7e11c76aa5ee48",
+     "size": [
+      499,
+      72
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btnTutorial_i.png",
+     "bytes": 69,
+     "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e",
+     "size": [
+      1,
+      1
+     ],
+     "mode": "RGB"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/btndecalA",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14457",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14477",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14497",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14533",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14569",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14605",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14625",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14645",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14665",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14685",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14705",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14725",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14745",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14765"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/btndecalA_n.png",
+     "bytes": 3138,
+     "sha256": "50b7b92aa9fdaac1e54beee40f8c0466fb64e622e55f54adc1f8b88b01289cfb",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/btndecalA_h.png",
+     "bytes": 3134,
+     "sha256": "61283cd00ef1451c5a9aafb2157ec1f0305d12284fdf2227fdff2f3925d94a7f",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/btndecalA_d.png",
+     "bytes": 3136,
+     "sha256": "fad4f01aa7fcf8541e6b1943cf4788f7759384d6c55edd714ae327917785ee5e",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/btndecalA_i.png",
+     "bytes": 3137,
+     "sha256": "34fce4050d80e49647e85ae4afbc48766c8f483da57a57bbac1bf38bf0e37da8",
+     "size": [
+      64,
+      64
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/button1",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:10372",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:10389",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11315",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11381",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11401",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11421",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11477",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11497",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11517",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11558",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11579",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11859",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11893",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11910",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11927",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11944",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11977",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12070",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12088",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12106",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12176",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12242",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12260",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12278",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12296",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12314",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12332",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12350",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12368",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1254",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12605",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1270",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12923",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13148",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13185",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13347",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13402",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13592",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13609",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13626",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13771",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14785",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14805",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:14825",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15165",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:20782",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21078",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21394",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2292",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2312",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23347",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23368",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2377",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2398",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2419",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24396",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2440",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24417",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24563",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24581",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24599",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2461",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2483",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2527",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2547",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2623",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2643",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2685",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3154",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3171",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3236",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3254",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3272",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3290",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3307",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4481",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5278",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5373",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5433",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5454",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5475",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5562",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5654",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5675",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5697",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5771",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5793",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5824",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5845",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5866",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5888",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5909",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5930",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5951",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:7531"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/button1_n.png",
+     "bytes": 5065,
+     "sha256": "41fde9393b96ac74b69ece77a60caa010ef4e2f175e027e37ee87b7b8d0f6e9b",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/button1_h.png",
+     "bytes": 7745,
+     "sha256": "d0c342954ea8402ca7c3d663a99c1a233986515d850144baebebdbfab14f4e77",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/button1_d.png",
+     "bytes": 5571,
+     "sha256": "b4101e68445fbe02f0a63fdd3b74294ae44f1faf9ec7bf684ee02fdbf2014185",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/button1_i.png",
+     "bytes": 4958,
+     "sha256": "2fb014db0622da5923ef98cece8f89ad524f7c521ece0bed5737b1f35b7138e9",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/button2",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:10051",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1007",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:10107",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:10196",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:10470",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11538",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11742",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11763",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11877",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:11961",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12124",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12141",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12159",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12193",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12436",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12626",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12647",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12684",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12705",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12726",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12747",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12768",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12789",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12810",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12831",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12852",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13041",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13062",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13082",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13480",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13501",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13644",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13707",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15210",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15231",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15252",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15273",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15294",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15315",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15336",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15357",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15378",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15399",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:165",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19515",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19635",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:19946",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:20122",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:20142",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:20333",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:20378",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:20950",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:20970",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21142",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21162",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21259",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21589",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21609",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21724",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21741",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21779",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21879",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:21895",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23052",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23068",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23085",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23101",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23261",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:23327",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24376",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24499",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24693",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24714",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24904",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:24997",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2783",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2799",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2815",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2975",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2991",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3007",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3390",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3410",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3431",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3452",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3473",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3494",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:3515",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4326",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4346",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4378",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4399",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4420",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4441",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4461",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:448",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:465",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4842",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4862",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4882",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5020",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:547",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:563",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5728",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:6049",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:6077",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:6151",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:8019",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:8039",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:8059",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:854",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:8784",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:914",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:931",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:9907",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:991"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/button2_n.png",
+     "bytes": 2749,
+     "sha256": "d5b8e5224d052bcb5a10280bdb7fce6f3422170576a01af568317eace7c4a05a",
+     "size": [
+      91,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/button2_h.png",
+     "bytes": 5184,
+     "sha256": "960851492c3af19fa9f7d5744ba349894cf56ceb691e9f0bb42ffc663d9e07e2",
+     "size": [
+      91,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/button2_d.png",
+     "bytes": 2991,
+     "sha256": "6700a4bccbd2f9855e3898d023a5bfc262ffb4226253971b6658ed20fe806f47",
+     "size": [
+      91,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/button2_i.png",
+     "bytes": 5186,
+     "sha256": "ab8ccd71f10ee9aeca7f0842f63c90731da4dc0a6709d8992d1fef5d39dafd39",
+     "size": [
+      91,
+      38
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/buynowb",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4923"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/buynowb_n.png",
+     "bytes": 4039,
+     "sha256": "6e6eebec769a804024bb2ff29a5f5b335765161084a35ab04b399d03f6f00a43",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/buynowb_h.png",
+     "bytes": 10414,
+     "sha256": "053a76c3480d48a4104994771c53afc03bf0bcbaca308ca6a0bd92bd464c3b42",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/buynowb_d.png",
+     "bytes": 4039,
+     "sha256": "6e6eebec769a804024bb2ff29a5f5b335765161084a35ab04b399d03f6f00a43",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/buynowb_i.png",
+     "bytes": 4039,
+     "sha256": "6e6eebec769a804024bb2ff29a5f5b335765161084a35ab04b399d03f6f00a43",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/buynoww",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4903"
+   ],
+   "kinds": [
+    "button"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/buynoww_n.png",
+     "bytes": 4076,
+     "sha256": "84e7b99b5e64f5e8d960768f2ec9caeb621b20bfecbf30db79bf6cda6ddefe7f",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/buynoww_h.png",
+     "bytes": 10937,
+     "sha256": "a7c82eb6cc6208619d168e4e51cd112a397d3a50db1c1cff8b5099e3402d44ff",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/buynoww_d.png",
+     "bytes": 4131,
+     "sha256": "a26f216659ed7fcadc8cfd194aa2e0c6437bef49e7aae861cdac71a7972104e4",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/buynoww_i.png",
+     "bytes": 3887,
+     "sha256": "e5e9f3819665e5f1db0545f22580d253f0d2811809b26aecbffe68289f3816a6",
+     "size": [
+      300,
+      100
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/cache",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19579"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "directory"
+  },
+  {
+   "ref": "base/client/ui/cache/clipboard.gui",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19580"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/colorRadio.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20376"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/client/ui/crossHair",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1596"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/crossHair.png",
+    "bytes": 3373,
+    "sha256": "ea794bdcafa538a6f82357b28431dbb46065342b5ba5a0e1d2eb14c0eab6636d",
+    "size": [
+     32,
+     32
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/decalRadio.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20398"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/decalRadio.png",
+    "bytes": 3758,
+    "sha256": "def65afc5745e95413709cea63ee00e9c8820a3eaa1b17898da4c2980ba6e261",
+    "size": [
+     64,
+     260
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/demobanner",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13326",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4794",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5492",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5508",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5616",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5968"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/demobanner.png",
+    "bytes": 16398,
+    "sha256": "f1ce8ca4315601c7f9c6367d1778f0ee199ed170baebdab3ad14366e5e4798c9",
+    "size": [
+     284,
+     178
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/gglogo150.png",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5028"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/gglogo150.png",
+    "bytes": 12578,
+    "sha256": "e3d2e6f1243b3e0433203e8bd81ad0f20c2db112b5c9293b65730a0409c0261a",
+    "size": [
+     150,
+     150
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/halfScroll.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20388"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/halfScroll.png",
+    "bytes": 4909,
+    "sha256": "159a7a1671fe0483fb16529043b01bed27e30a1a8437b9feb4c2df6287c25e4f",
+    "size": [
+     47,
+     156
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/itemIcons/ItemActive",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6733"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/itemIcons/ItemActive.png",
+    "bytes": 10005,
+    "sha256": "f74d13ad90db008425b26ead6d5de5ae826896c19a35f385efae0d7b68ee9475",
+    "size": [
+     96,
+     96
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/itemIcons/ToolBG",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6723"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/itemIcons/ToolBG.png",
+    "bytes": 972,
+    "sha256": "e71c048b0e181283539a2f98b0d6233cf86fad3f8df2703e9b5c1dfa2f303a8c",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/lagIcon.png",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1543"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/lagIcon.png",
+    "bytes": 3021,
+    "sha256": "03aded2335f8dc6a4d106c6d22543c41ffdb4130bf483a3296e312a90c579a17",
+    "size": [
+     32,
+     32
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/paintActive",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6496"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/paintActive.png",
+    "bytes": 2986,
+    "sha256": "9e89ce035409c1805b01f78bd075b9979d0d5334129bedeea4bb574265248814",
+    "size": [
+     18,
+     18
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/paintLabel",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6318"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/paintLabel.png",
+    "bytes": 9160,
+    "sha256": "57375c5397aafe51fbc9df62c1f4fb49f67cfa5e65b4f1631e5d291c95988810",
+    "size": [
+     100,
+     100
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/paintLabelBG",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6299"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/paintLabelBG.png",
+    "bytes": 3804,
+    "sha256": "dd2aefff92dc3f4fdb8050b51bcf435d72b17a5f15524f7945bbfe134c99b0ee",
+    "size": [
+     100,
+     100
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/paintLabelBGLoop",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6308"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/paintLabelBGLoop.png",
+    "bytes": 3023,
+    "sha256": "92c437bdb32fe01202f0d5fab0fc47ac74ee766a5a28a8d0bb0b522b0f2ff383",
+    "size": [
+     100,
+     5
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/paintLabelTop",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:6335"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/paintLabelTop.png",
+    "bytes": 8735,
+    "sha256": "33af06f303382c780380dafbe4fbc758488e599479c4cd35f5f45229d324016d",
+    "size": [
+     100,
+     100
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/supershift",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:2107"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/supershift.png",
+    "bytes": 4212,
+    "sha256": "2f652896b44fc54c0f673f0d4668a90214f0bf40ab732a144586f632411ceb1b",
+    "size": [
+     184,
+     37
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/tab1",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10348",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:9829",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12528",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:12543",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:7451",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:7471",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:7491",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:7511",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:9886"
+   ],
+   "kinds": [
+    "button",
+    "button?",
+    "direct"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/tab1_n.png",
+     "bytes": 8098,
+     "sha256": "fb57d3d9247e503012d54610fe5723c3678fa5157d58ffb05a5970ccdbfc9e8d",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/tab1_h.png",
+     "bytes": 7616,
+     "sha256": "3339f5369df27f022fabcf1a06d8ba07826676fe5f919a8c975fe449dd018d08",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/tab1_d.png",
+     "bytes": 8280,
+     "sha256": "c0e6b0bae8463074fdb02f543eff7232bfcc2ab479b25678932ecae3dd7bfbf1",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/tab1_i.png",
+     "bytes": 7831,
+     "sha256": "8c4a300f70256c393d4274f215777b7ba041256485238c1d8f0ca26cc0554b13",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/tab1use",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10343"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "states": {
+    "_n": {
+     "path": "base/client/ui/tab1use_n.png",
+     "bytes": 8930,
+     "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_h": {
+     "path": "base/client/ui/tab1use_h.png",
+     "bytes": 8930,
+     "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_d": {
+     "path": "base/client/ui/tab1use_d.png",
+     "bytes": 8930,
+     "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    },
+    "_i": {
+     "path": "base/client/ui/tab1use_i.png",
+     "bytes": 8930,
+     "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356",
+     "size": [
+      211,
+      38
+     ],
+     "mode": "RGBA"
+    }
+   },
+   "status": "ok-states"
+  },
+  {
+   "ref": "base/client/ui/title.png",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:4733"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/title.png",
+    "bytes": 71097,
+    "sha256": "12c86a60e9b2643865b1bdb05c880de2f3439a1080b89def2002a37dc2ad52ad",
+    "size": [
+     1065,
+     195
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/torqueCheck",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19930"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/torqueCheck.png",
+    "bytes": 2914,
+    "sha256": "e5785108761b0492ac12a165cba06c659bb6c91cba8e63c2c4bd9a6e6cbb1b4e",
+    "size": [
+     13,
+     56
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/torqueCheck.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20168"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/torqueCheck.png",
+    "bytes": 2914,
+    "sha256": "e5785108761b0492ac12a165cba06c659bb6c91cba8e63c2c4bd9a6e6cbb1b4e",
+    "size": [
+     13,
+     56
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/torqueMenu",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19734"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/torqueMenu.png",
+    "bytes": 1923,
+    "sha256": "55670a68cc74cd11ff48c0ecace75923ce5ef80a0d0a0f9b39401f28a09031fb",
+    "size": [
+     64,
+     128
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/torqueRadio",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19753"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/client/ui/torqueRadio.png",
+    "bytes": 3725,
+    "sha256": "247c25e0849b5864129f2dc4a6ca88a0b4f862646eb744f60713db6bf68e51fd",
+    "size": [
+     12,
+     52
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/client/ui/torqueToolWindow",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:19672"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/data/Sound/Music/musicList.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17150"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/data/missions/default",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2232",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:7646",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:8776",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:10293",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:5229",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:6186"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/missions/default.jpg",
+    "bytes": 42663,
+    "sha256": "f3346598fb2ddb97a5c284bd994aec838502e6e4b2707abf4e0a9801100342cd",
+    "size": [
+     1024,
+     768
+    ],
+    "mode": "RGB"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/missions/default.jpg",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:11327",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:11334",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:11421",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:11520",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:11552",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:11569",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13165",
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:13310"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/missions/default.jpg",
+    "bytes": 42663,
+    "sha256": "f3346598fb2ddb97a5c284bd994aec838502e6e4b2707abf4e0a9801100342cd",
+    "size": [
+     1024,
+     768
+    ],
+    "mode": "RGB"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/bricks/brickTop.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10999"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/data/shapes/player/Chest.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12185"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/Chest.txt",
+    "bytes": 15,
+    "sha256": "5e64fea9cd8168ba272250f408ffea27a794ef0da9618c4aab85161d00c99cb4"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/Hat.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12179"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/Hat.txt",
+    "bytes": 67,
+    "sha256": "1e2bb529b206f08c0df19e64f7f83e5d2600b6212985a3031f08a374a319cb8c"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/LArm.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12200"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/LArm.txt",
+    "bytes": 14,
+    "sha256": "365219607dd48e22a25224001b9d22a62da1db5adc8342ec1f043770b79c8b28"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/LHand.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12206"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/LHand.txt",
+    "bytes": 12,
+    "sha256": "6c4e6f2f39d67552dd19f5d41ef8ae55f47b7f3690d29fcf927eb28bf58b134d"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/LLeg.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12194"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/LLeg.txt",
+    "bytes": 11,
+    "sha256": "4a76925c463d9ddf2812c7b4ce0db127ce77cb5c000651de857f663244f63c18"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/Pack.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12173"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/Pack.txt",
+    "bytes": 39,
+    "sha256": "bf1528817aefa32676ec69765f9ff369addda5bd71ddae01cfd2e2b6830cd8a0"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/RArm.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12197"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/RArm.txt",
+    "bytes": 14,
+    "sha256": "b9ab9912c2e69c8b70f13d7ea1ce405f8faeffbb33d8811e49feac1373348f32"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/RHand.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12203"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/RHand.txt",
+    "bytes": 12,
+    "sha256": "f32b47894f9033ee0efea36bb5453629ef327fb040f69192f641e12fc998c088"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/RLeg.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12191"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/RLeg.txt",
+    "bytes": 11,
+    "sha256": "4edcfc4ed25fd811a0d9efee9cc37ba06b21f05ee36d14ec9e5ff3d2f4e2d14c"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/SecondPack.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12176"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/SecondPack.txt",
+    "bytes": 83,
+    "sha256": "3cd88a20c7e529803762fc9b97c1fb3f9f712b3cfbf73da5cca7297b3a7088a4"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/accent.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12164"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/accent.txt",
+    "bytes": 265,
+    "sha256": "60febe4af7bc296d48d1cf73fc07dae79145558183620183fd291503229ebfe5"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/decal.ifl",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12170",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14189"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/decal.ifl",
+    "bytes": 1044,
+    "sha256": "8bff283ee87d31434d00f37bd955f05a338d75961a1a17ffb30585dd2ca1a216"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/decals/AAA-None.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14190"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/decals/AAA-None.png",
+    "bytes": 3396,
+    "sha256": "2f80bfb64fcc45c90c9709e0ba0ded7bf9e7fed211f4209d54c51f5f362d0736",
+    "size": [
+     256,
+     256
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/decals/thumbs/AAA-None",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:16706"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/decals/thumbs/AAA-None.png",
+    "bytes": 2891,
+    "sha256": "ed622345c067f60d894d2d9240af4c47c5f37670f2c6649ed5092e179047a4aa",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/face.ifl",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12167",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14206"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/face.ifl",
+    "bytes": 1026,
+    "sha256": "2b33278b17b1cd434a4023fc76b18abec7eb0008b72c217c2b0bd5d4ec7ecdba"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/faces/smiley.png",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14207"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/faces/smiley.png",
+    "bytes": 817,
+    "sha256": "8e830ecb1a4563718309347f06f040f99c7ab3071bbb2df0588147a9ac39d2ea",
+    "size": [
+     256,
+     256
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/faces/thumbs/smiley",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:15627"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/faces/thumbs/smiley.png",
+    "bytes": 282,
+    "sha256": "af63a3793a97fdaad188cf822ed9583f679d98ec211df52c7eb81f2c6e4676e6",
+    "size": [
+     64,
+     64
+    ],
+    "mode": "RGBA"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/hip.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12188"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/hip.txt",
+    "bytes": 15,
+    "sha256": "ee9e5ecd0f99c2735fd178d0c81f46932b91a9727036a9a30b6b8a86bad3c918"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m.dts",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12211",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12253"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m.dts",
+    "bytes": 230023,
+    "sha256": "279b2852b248ccc0b7242e528723b1395c0947c037d31a6e918283b184037844"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_activate.dsq activate",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12248"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_activate.dsq",
+    "bytes": 2759,
+    "sha256": "fcfb6d7f7944ccb99cba8fa63abf2bf1e735095df2dff405f7b86471a75efba2"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_activate2.dsq activate2",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12249"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_activate2.dsq",
+    "bytes": 3923,
+    "sha256": "9434b11c42a374c45b36c07cdb1373e006f9d864490e86c998024978320dcd18"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_armAttack.dsq armAttack",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12228"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_armAttack.dsq",
+    "bytes": 1595,
+    "sha256": "21a2835a03f952c2de5ddd2d3ebde18abe318f4a5a2f5553de3796d49309582b"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_armReadyBoth.dsq armReadyBoth",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12231"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_armReadyBoth.dsq",
+    "bytes": 490,
+    "sha256": "6fa3f1356f794f72018381bb114cce918d16862ecec4bd9fc31234e4e392991e"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_armReadyLeft.dsq armReadyLeft",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12229"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_armReadyLeft.dsq",
+    "bytes": 458,
+    "sha256": "78c1daf81e840a035fe8f99d79b1504567e476703a5c9b143fce7225000fd024"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_armReadyRight.dsq armReadyRight",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12230"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_armReadyRight.dsq",
+    "bytes": 458,
+    "sha256": "af95b103be7599ab49f2b43c2a57c44a5e991851b08260a41c9e2732cde37596"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_back.dsq back",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12215"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_back.dsq",
+    "bytes": 468,
+    "sha256": "ac4e10107493c423b7cfd4e5218356254ccc2b9b91551c866cd60981b9462447"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_crouch.dsq crouch",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12217"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_crouch.dsq",
+    "bytes": 684,
+    "sha256": "db53d67f8e80c77005a2600870354803ccad6b71b4f175afb03a82d3bb615742"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_crouchBack.dsq crouchBack",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12219"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_crouchBack.dsq",
+    "bytes": 410,
+    "sha256": "d30d5427aa5b6038c0726a8cff0e59ec45d6d03ba7df2b31a7f51b6a3deca99f"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_crouchRun.dsq crouchRun",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12218"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_crouchRun.dsq",
+    "bytes": 341,
+    "sha256": "6f9c2ade22725b0e9bce796d3b2bdf291d81a36447fa4d3df762311f5afa8abf"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_crouchSide.dsq crouchSide",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12220"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_crouchSide.dsq",
+    "bytes": 362,
+    "sha256": "a163fa43ab6f4e47f8b6d4caa802906cb265ccdb3d39146383810278c60354bf"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_death1.dsq death1",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12235"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_death1.dsq",
+    "bytes": 1513,
+    "sha256": "f65259f08b1120001f8a422b13a36570653670185d32c67a561991662697cec9"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_fall.dsq fall",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12226"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_fall.dsq",
+    "bytes": 344,
+    "sha256": "e0146131438fa07588e0344e082437ce55b4c19597c5e80e4ba6e9d594d8efbc"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_headSide.dsq headside",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12222"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_headSide.dsq",
+    "bytes": 3598,
+    "sha256": "c0a16f33a1172bd9a3d47860b0339a9a314ced129560af9d6e3610815222476a"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_headup.dsq headUp",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12223"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_headup.dsq",
+    "bytes": 1107,
+    "sha256": "9be28f299fd4044df89538373fff2e3cc73aa52dfe2bb0bdd58d383e7062ef00"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_leftrecoil.dsq leftrecoil",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12250"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_leftrecoil.dsq",
+    "bytes": 1983,
+    "sha256": "1d72442c0b0dadd823cf001e43eb80e463c97417ff4f9a2cc51d74424728e85e"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_look.dsq look",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12221"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_look.dsq",
+    "bytes": 6209,
+    "sha256": "d2a9dd9eafc9580c78af3e20174abf6d96f6f48b9439c356c80ea4f42a1012e9"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_plant.dsq plant",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12245"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_plant.dsq",
+    "bytes": 3663,
+    "sha256": "77a16d6032eb5518d5204a67173b4661564f858ad96c26bc44f5b8ec7bb27dcb"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_root.dsq land",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12227"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_root.dsq",
+    "bytes": 292,
+    "sha256": "47d9ca8ebe936537178420fa4023bce7dbcd4184051bf381c9e651207a69bf3d"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_root.dsq root",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12212"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_root.dsq",
+    "bytes": 292,
+    "sha256": "47d9ca8ebe936537178420fa4023bce7dbcd4184051bf381c9e651207a69bf3d"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_rotCCW.dsq rotCCW",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12243"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_rotCCW.dsq",
+    "bytes": 1983,
+    "sha256": "8f1d2451036385da7f8d751f7a8531d5fb3725c34b85d01ea0dc6d9a5deae7a0"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_rotCW.dsq rotCW",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12242"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_rotCW.dsq",
+    "bytes": 1983,
+    "sha256": "6d6b11b3bc76d75d12ef514e41d4507f3686a47ab63730d3452aca4de98a5878"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_run.dsq run",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12213"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_run.dsq",
+    "bytes": 1582,
+    "sha256": "9b0d1d51ecf537008b3856fc7d942de724f005c1fc58c816aeda1d9abd8f63d0"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_run.dsq walk",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12214"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_run.dsq",
+    "bytes": 1582,
+    "sha256": "9b0d1d51ecf537008b3856fc7d942de724f005c1fc58c816aeda1d9abd8f63d0"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_shiftAway.dsq shiftAway",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12238"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_shiftAway.dsq",
+    "bytes": 1983,
+    "sha256": "a38fddbd85ce3c41f320c907702db371f256f387e1008a3e2ff8b1b75e8bfd3c"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_shiftDown.dsq shiftDown",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12237"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_shiftDown.dsq",
+    "bytes": 3147,
+    "sha256": "7534bb347b68e27d88593296396a63545d321f52c5f23c6f5f5b91292346c97c"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_shiftLeft.dsq shiftLeft",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12240"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_shiftLeft.dsq",
+    "bytes": 1983,
+    "sha256": "491cf46f2dad7a23dc6d43ca0605c703e074973e0ea6fc916109019f8ede34af"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_shiftRight.dsq shiftRight",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12241"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_shiftRight.dsq",
+    "bytes": 1983,
+    "sha256": "95ac273185bd79088fadee3c3ab746760c9fdc2d7f8a09d3d6ac5f514436f6fe"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_shiftTo.dsq shiftTo",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12239"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_shiftTo.dsq",
+    "bytes": 1983,
+    "sha256": "21adb928d33e194f0631054c91af0a235bef6309f019776268b46060c6cd5e6f"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_shiftUp.dsq shiftUp",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12236"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_shiftUp.dsq",
+    "bytes": 3147,
+    "sha256": "b8f00c1cdad34b8fc9d149c770e4f19557757a65cb1c4560377da52e38a2a352"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_side.dsq side",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12216"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_side.dsq",
+    "bytes": 360,
+    "sha256": "ec92c740cd6e0745229db2e7cea4e64f91c5ee05b554d25a16473b219757ce84"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_sit.dsq sit",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12246"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_sit.dsq",
+    "bytes": 1052,
+    "sha256": "ff162def96175785b8625ff3f47fe0b42938a8628e1f47b9d9385020dd861f16"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_spearReady.dsq spearready",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12232"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_spearReady.dsq",
+    "bytes": 9744,
+    "sha256": "bfc6fedca9210b0248c33af72bc092948ecb47f7b7cd2f791d9a83da1c8980ba"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_spearThrow.dsq spearThrow",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12233"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_spearThrow.dsq",
+    "bytes": 3924,
+    "sha256": "a7b315c14936044814f9cffb7d53c9c7067c64445c8d7f320b355a0bcdfb9c50"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_standjump.dsq jump",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12224"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_standjump.dsq",
+    "bytes": 1548,
+    "sha256": "d0128dfc50f26b2232c4012ef3782b2f89302bafacb24fa812faa311ff67dc42"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_standjump.dsq standjump",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12225"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_standjump.dsq",
+    "bytes": 1548,
+    "sha256": "d0128dfc50f26b2232c4012ef3782b2f89302bafacb24fa812faa311ff67dc42"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_talk.dsq talk",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12234"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_talk.dsq",
+    "bytes": 2276,
+    "sha256": "1ab52b6f5534296d90eb6db871044f11dcf522909781cf865076a0fd11792116"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_undo.dsq undo",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12244"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_undo.dsq",
+    "bytes": 3599,
+    "sha256": "4f2ae8475400a20ae1dd6c518c219acd20c08d311bb9ddde220a3133f70c1ecc"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/shapes/player/m_wrench.dsq wrench",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:12247"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/shapes/player/m_wrench.dsq",
+    "bytes": 3147,
+    "sha256": "bcb27cf434b88157b768331cd1a8d25c92bd77a00327dce3b7fc22f1e533888c"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/admin.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:38"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/admin.wav",
+    "bytes": 44950,
+    "sha256": "f06ddcdaa86ffa115bfd22e8efdfa6efef99536b8c286aaf5ac93569b1858cf8"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/breakBrick.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:154"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/breakBrick.wav",
+    "bytes": 5744,
+    "sha256": "7bf409d3b9b5aa7bfb4ce3753d31eaf66865cc8c0c06fc89c85d64a46cde6ca8"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/brickClear.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:44"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/brickClear.wav",
+    "bytes": 190888,
+    "sha256": "cf9c592a67c1eb35e42802a0e8de5d44cc490c2d1aa52491485f839cf1b354b9"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/buttonOver.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:20"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/data/sound/clickChange.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:178"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/clickChange.wav",
+    "bytes": 714,
+    "sha256": "aad5dd89a2d5da5aead883c36c7fd05f38654552e4a93ae4e1e8197e53a8624a"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/clickMove.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:160"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/clickMove.wav",
+    "bytes": 1302,
+    "sha256": "01d083e36b36de046205d190ffbf98e876565ed3a4b1182b272c2aba6e747b7f"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/clickPlant.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:166"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/clickPlant.wav",
+    "bytes": 6434,
+    "sha256": "01a2b7bf9b50050f64143110bfdcd5758bb339c4931d00333c60072f250ee105"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/clickRotate.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:172"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/clickRotate.wav",
+    "bytes": 4482,
+    "sha256": "3d756cc6c2820fb9b704e3f944972b5935c18d9f2a41bf8ecb462d772db927b6"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/error.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:26",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:32"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/error.wav",
+    "bytes": 8500,
+    "sha256": "dfb8849236457f27c4cd1e3b003aa04be454abaf668357be5add371872a8168b"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/lightOn.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:3623",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:3642"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/lightOn.wav",
+    "bytes": 10578,
+    "sha256": "f017a7697b705bdb324026ea769667f74fd7818e3f58d2d10862748e42166254"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/music/Ambient Deep.ogg",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:139"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/data/sound/music/musicList.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17146"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_00.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:80"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_00.wav",
+    "bytes": 25930,
+    "sha256": "a2d7f2817f4af9a98b15010b9ed6ed25360f74d01e6366d0ac19ac588d635f25"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_01.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:86"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_01.wav",
+    "bytes": 27864,
+    "sha256": "b88899835a8d44d62904cd76bfe798319cd6a4d66eed65762273c8ffd21aedf1"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_02.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:90"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_02.wav",
+    "bytes": 25382,
+    "sha256": "128a8125a3783c52d0373315abf19da9764d51cea66eb2a71dfda86e3f2a3efa"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_03.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:94"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_03.wav",
+    "bytes": 27384,
+    "sha256": "33304cd7d745f6b96f9a503284dbf63f05af3b68f876007edd5b8f976e6c40ba"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_04.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:98"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_04.wav",
+    "bytes": 26660,
+    "sha256": "fa20149d394ced179e428db758fba2c685cb26f18f0047ffb28d575973cec4ac"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_05.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:102"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_05.wav",
+    "bytes": 23656,
+    "sha256": "37dc7d405eee66850d5ff3a2d41dfb8dfca24a235cd82afb90025a0123a66ab4"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_06.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:106"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_06.wav",
+    "bytes": 30200,
+    "sha256": "6ff05eeef622d7a10dca7b5f54a8fcdda30eaea1af213a736c97f541805e57f5"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_07.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:110"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_07.wav",
+    "bytes": 23086,
+    "sha256": "b9a892f1879125670d5051fa1871dc64daf507960fd87ded223b47cff91727f1"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_08.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:114"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_08.wav",
+    "bytes": 26124,
+    "sha256": "254ea46bf0dbcec1cf1989da3742f95131965a039d24db6e08c44a5f04bd6bfb"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_09.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:118"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_09.wav",
+    "bytes": 27600,
+    "sha256": "777a6542c8a689a60689eab7a1c22d743b43d51b30b26eacf9e507a04013d419"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_10.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:122"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_10.wav",
+    "bytes": 20998,
+    "sha256": "0f61ac81a7b93da8c43286716388cb3e6783551eaef8e6a0a0f91403c12710ec"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/notes/Synth 4/Synth4_11.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:126"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/notes/Synth 4/Synth4_11.wav",
+    "bytes": 27324,
+    "sha256": "6a5bfde52a0811878d8e2929cfc489a9f0ae4a70e14e8c2361a56d0bac64a808"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/playerConnect.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:50"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/playerConnect.wav",
+    "bytes": 23596,
+    "sha256": "426b01641c79d45cf221084efc775e28aa7599bc4d7e3d365c416236a8d1e2e5"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/playerLeave.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:56"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/playerLeave.wav",
+    "bytes": 27236,
+    "sha256": "b784ba653c89c89f92f0afde94a2cba50ce12eef2a516f247671bb4bf5518a24"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/processComplete.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:74"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/processComplete.wav",
+    "bytes": 47082,
+    "sha256": "6084b67db6470ff7031a716702d4dfcad7da3d9956e4f46d24c7f309ca2243e8"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/uploadEnd.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:68"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/uploadEnd.wav",
+    "bytes": 64602,
+    "sha256": "344a0316433ed134a439144586e90b61749c23864be178176d72338f4266f09d"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/data/sound/uploadStart.wav",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:62"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/data/sound/uploadStart.wav",
+    "bytes": 47178,
+    "sha256": "a11ece01bdc36a2696b2168b604b1aee2b63053e7160f025361e3459d7b2a135"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/help/0. Credits.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1117"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/help/0. Credits.hfl",
+    "bytes": 3448,
+    "sha256": "afa44399503295418f7b86a3390a427ac27677559a515b723ce09838c1eeb5a4"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/help/1. Controls.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1121"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/help/1. Controls.hfl",
+    "bytes": 2145,
+    "sha256": "a9b3a83c7ef086efd833e05db607c7c837035ab3791bcfbafafebc86c527fd50"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/help/10. Terrain Texture Painter.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1122"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/help/2. License.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1120"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/help/3. Gui Editor.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1119"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/help/4. Mission Editor Overview.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1123"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/help/5. World Editor.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1116"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/help/6. Mission Area Editor.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1125"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/help/7. Terrain Editor.hfl",
+   "sources": [
+    ".research/v20-dso/client/ui/allClientGuis-Vanilla.gui:1124"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing-editor-help"
+  },
+  {
+   "ref": "base/server/crapOns_Cache.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16431",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16502",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17305",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17307",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:21019",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:21021"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "missing"
+  },
+  {
+   "ref": "base/server/defaultAddOnList.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17303",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17504"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/server/defaultAddOnList.cs",
+    "bytes": 1713,
+    "sha256": "faa903e5a5b5114876dabd1bac3d09ac04bf7939fd2d9e3a343fa6310526bc62"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "base/server/defaultMusicList.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17138",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17167"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "compiled-script"
+  },
+  {
+   "ref": "base/server/defaults.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:21157"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "base/server/defaults.cs",
+    "bytes": 2494,
+    "sha256": "eba817e8dce7b6160a80d79e508a3e565fb60030880dda7c51b2fbb539485c57"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "config/client/Favorites.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10430",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10468",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:10470"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "runtime-file"
+  },
+  {
+   "ref": "config/client/avatarColors.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16684",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16689",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:16691"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "runtime-file"
+  },
+  {
+   "ref": "config/client/config.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:13890",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:15236",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:15241",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:15256",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:15500",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2697"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "config/client/config.cs",
+    "bytes": 3521,
+    "sha256": "16389aa96dbc3be81d7d7772d2a7f773cbd7233a28ce7174f80851b441500527"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "config/client/prefs-trustList.txt",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:1064",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:1079",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:1086"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": null,
+   "status": "runtime-file"
+  },
+  {
+   "ref": "config/client/prefs.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:15252",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:15258",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2765"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "config/client/prefs.cs",
+    "bytes": 9344,
+    "sha256": "3bc210558264868532bf15610b8164d9fdbd585650ee36d1177430c8d69acc6f"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "config/server/ADD_ON_LIST.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:13962",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:13964",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:13981",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14008",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14010",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14012",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14018",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14020",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14023",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14029",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14031",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14034",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14044",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14046",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:14048",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17291",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17297",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17299",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17336"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "config/server/ADD_ON_LIST.cs",
+    "bytes": 1760,
+    "sha256": "db8f0195cfd51e93c319553622b83d77a63fbde7e173309edbaba3f28e19674e"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "config/server/musicList.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17121",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17139",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17146",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17151",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17161",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17163",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:17193"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "config/server/musicList.cs",
+    "bytes": 338,
+    "sha256": "d58093f23a23351320fcf426473f5848cc2bd918f323f6bb4a65573722d81142"
+   },
+   "status": "ok"
+  },
+  {
+   "ref": "config/server/prefs.cs",
+   "sources": [
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2759",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2760",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2761",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2762",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2763",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2766",
+    ".research/v20-dso/client/scripts/allClientScripts-Vanilla.cs:2768"
+   ],
+   "kinds": [
+    "direct"
+   ],
+   "resolved": {
+    "path": "config/server/prefs.cs",
+    "bytes": 1948,
+    "sha256": "3130f64c49c4224eec229da010709c99d680665dc4f582d7feb8385a04eea2cf"
+   },
+   "status": "ok"
+  }
+ ],
+ "unreferenced_ui_files": [
+  "base/client/ui/ArrowLeft_d.png",
+  "base/client/ui/ArrowLeft_h.png",
+  "base/client/ui/ArrowLeft_i.png",
+  "base/client/ui/ArrowLeft_n.png",
+  "base/client/ui/ArrowRight_d.png",
+  "base/client/ui/ArrowRight_h.png",
+  "base/client/ui/ArrowRight_i.png",
+  "base/client/ui/ArrowRight_n.png",
+  "base/client/ui/CI/blueRibbon.png",
+  "base/client/ui/CI/bomb.png",
+  "base/client/ui/CI/car.png",
+  "base/client/ui/CI/carExplosion.png",
+  "base/client/ui/CI/crater.png",
+  "base/client/ui/CI/generic.png",
+  "base/client/ui/CI/hammer.png",
+  "base/client/ui/CI/skull.png",
+  "base/client/ui/CI/splat.png",
+  "base/client/ui/CI/star.png",
+  "base/client/ui/CI/trophy.png",
+  "base/client/ui/avatarIcons/accent/visor.png",
+  "base/client/ui/brickIcons/-25 Ramp 1x.png",
+  "base/client/ui/brickIcons/-25 Ramp 2x.png",
+  "base/client/ui/brickIcons/-25 Ramp Corner.png",
+  "base/client/ui/brickIcons/-45 Ramp 1x.png",
+  "base/client/ui/brickIcons/-45 Ramp 2x Print.png",
+  "base/client/ui/brickIcons/-45 Ramp 2x.png",
+  "base/client/ui/brickIcons/-45 Ramp Corner.png",
+  "base/client/ui/brickIcons/-72 Ramp 1x.png",
+  "base/client/ui/brickIcons/-72 Ramp 2x.png",
+  "base/client/ui/brickIcons/-72 Ramp Corner.png",
+  "base/client/ui/brickIcons/-80 Ramp 1x.png",
+  "base/client/ui/brickIcons/-80 Ramp 2x.png",
+  "base/client/ui/brickIcons/-80 Ramp Corner.png",
+  "base/client/ui/brickIcons/10x10.png",
+  "base/client/ui/brickIcons/10x20.png",
+  "base/client/ui/brickIcons/12x24.png",
+  "base/client/ui/brickIcons/16x16 Base.png",
+  "base/client/ui/brickIcons/16x32 Base.png",
+  "base/client/ui/brickIcons/1x1 Cone.png",
+  "base/client/ui/brickIcons/1x1 Print.png",
+  "base/client/ui/brickIcons/1x1 Round.png",
+  "base/client/ui/brickIcons/1x1.png",
+  "base/client/ui/brickIcons/1x10.png",
+  "base/client/ui/brickIcons/1x10F.png",
+  "base/client/ui/brickIcons/1x12.png",
+  "base/client/ui/brickIcons/1x12F.png",
+  "base/client/ui/brickIcons/1x12x5.png",
+  "base/client/ui/brickIcons/1x16.png",
+  "base/client/ui/brickIcons/1x16F.png",
+  "base/client/ui/brickIcons/1x1F Print.png",
+  "base/client/ui/brickIcons/1x1F Round.png",
+  "base/client/ui/brickIcons/1x1F.png",
+  "base/client/ui/brickIcons/1x1x5.png",
+  "base/client/ui/brickIcons/1x2.png",
+  "base/client/ui/brickIcons/1x2F Print.png",
+  "base/client/ui/brickIcons/1x2F.png",
+  "base/client/ui/brickIcons/1x2x5.png",
+  "base/client/ui/brickIcons/1x3.png",
+  "base/client/ui/brickIcons/1x3F.png",
+  "base/client/ui/brickIcons/1x3x5.png",
+  "base/client/ui/brickIcons/1x4.png",
+  "base/client/ui/brickIcons/1x4F.png",
+  "base/client/ui/brickIcons/1x4x2 Fence.png",
+  "base/client/ui/brickIcons/1x4x4 Print.png",
+  "base/client/ui/brickIcons/1x4x5 Window.png",
+  "base/client/ui/brickIcons/1x4x5.png",
+  "base/client/ui/brickIcons/1x6.png",
+  "base/client/ui/brickIcons/1x6F.png",
+  "base/client/ui/brickIcons/1x6x5.png",
+  "base/client/ui/brickIcons/1x8.png",
+  "base/client/ui/brickIcons/1x8F.png",
+  "base/client/ui/brickIcons/25 Crest 1x.png",
+  "base/client/ui/brickIcons/25 Crest 2x.png",
+  "base/client/ui/brickIcons/25 Crest 4x.png",
+  "base/client/ui/brickIcons/25 Crest Corner.png",
+  "base/client/ui/brickIcons/25 Crest End.png",
+  "base/client/ui/brickIcons/25 Ramp 1x.png",
+  "base/client/ui/brickIcons/25 Ramp 2x.png",
+  "base/client/ui/brickIcons/25 Ramp 4x.png",
+  "base/client/ui/brickIcons/25 Ramp Corner.png",
+  "base/client/ui/brickIcons/2x10.png",
+  "base/client/ui/brickIcons/2x10F.png",
+  "base/client/ui/brickIcons/2x12x5.png",
+  "base/client/ui/brickIcons/2x2 Disc.png",
+  "base/client/ui/brickIcons/2x2 Round.png",
+  "base/client/ui/brickIcons/2x2.png",
+  "base/client/ui/brickIcons/2x2F Print.png",
+  "base/client/ui/brickIcons/2x2F Round.png",
+  "base/client/ui/brickIcons/2x2F.png",
+  "base/client/ui/brickIcons/2x2x2 Cone.png",
+  "base/client/ui/brickIcons/2x2x3.png",
+  "base/client/ui/brickIcons/2x2x5 Lattice.png",
+  "base/client/ui/brickIcons/2x2x5.png",
+  "base/client/ui/brickIcons/2x3.png",
+  "base/client/ui/brickIcons/2x3F.png",
+  "base/client/ui/brickIcons/2x3x5.png",
+  "base/client/ui/brickIcons/2x4.png",
+  "base/client/ui/brickIcons/2x4F.png",
+  "base/client/ui/brickIcons/2x4x3.png",
+  "base/client/ui/brickIcons/2x4x5.png",
+  "base/client/ui/brickIcons/2x6.png",
+  "base/client/ui/brickIcons/2x6F.png",
+  "base/client/ui/brickIcons/2x6x3.png",
+  "base/client/ui/brickIcons/2x6x5.png",
+  "base/client/ui/brickIcons/2x8.png",
+  "base/client/ui/brickIcons/2x8F.png",
+  "base/client/ui/brickIcons/32x32 Base.png",
+  "base/client/ui/brickIcons/32x32 Road C.png",
+  "base/client/ui/brickIcons/32x32 Road T.png",
+  "base/client/ui/brickIcons/32x32 Road X.png",
+  "base/client/ui/brickIcons/32x32 Road.png",
+  "base/client/ui/brickIcons/45 Crest 1x.png",
+  "base/client/ui/brickIcons/45 Crest 2x.png",
+  "base/client/ui/brickIcons/45 Crest 4x.png",
+  "base/client/ui/brickIcons/45 Crest Corner.png",
+  "base/client/ui/brickIcons/45 Crest End.png",
+  "base/client/ui/brickIcons/45 Ramp 1x.png",
+  "base/client/ui/brickIcons/45 Ramp 2x Print.png",
+  "base/client/ui/brickIcons/45 Ramp 2x.png",
+  "base/client/ui/brickIcons/45 Ramp 4x.png",
+  "base/client/ui/brickIcons/45 Ramp Corner.png",
+  "base/client/ui/brickIcons/48x48 Base.png",
+  "base/client/ui/brickIcons/4x10.png",
+  "base/client/ui/brickIcons/4x10F.png",
+  "base/client/ui/brickIcons/4x12.png",
+  "base/client/ui/brickIcons/4x12F.png",
+  "base/client/ui/brickIcons/4x16.png",
+  "base/client/ui/brickIcons/4x16F.png",
+  "base/client/ui/brickIcons/4x4.png",
+  "base/client/ui/brickIcons/4x4F.png",
+  "base/client/ui/brickIcons/4x6.png",
+  "base/client/ui/brickIcons/4x6F.png",
+  "base/client/ui/brickIcons/4x8.png",
+  "base/client/ui/brickIcons/4x8F.png",
+  "base/client/ui/brickIcons/64x64 Base.png",
+  "base/client/ui/brickIcons/6x10F.png",
+  "base/client/ui/brickIcons/6x12F.png",
+  "base/client/ui/brickIcons/6x16F.png",
+  "base/client/ui/brickIcons/6x24F.png",
+  "base/client/ui/brickIcons/6x6F.png",
+  "base/client/ui/brickIcons/6x8F.png",
+  "base/client/ui/brickIcons/72 Ramp 1x.png",
+  "base/client/ui/brickIcons/72 Ramp 2x.png",
+  "base/client/ui/brickIcons/72 Ramp Corner.png",
+  "base/client/ui/brickIcons/80 Ramp 1x.png",
+  "base/client/ui/brickIcons/80 Ramp 2x.png",
+  "base/client/ui/brickIcons/80 Ramp Corner.png",
+  "base/client/ui/brickIcons/8x16.png",
+  "base/client/ui/brickIcons/8x16F.png",
+  "base/client/ui/brickIcons/8x8.png",
+  "base/client/ui/brickIcons/8x8F.png",
+  "base/client/ui/brickIcons/Castle Wall.png",
+  "base/client/ui/brickIcons/Music Brick.png",
+  "base/client/ui/brickIcons/Pine Tree.png",
+  "base/client/ui/brickIcons/Spawn Point.png",
+  "base/client/ui/brickIcons/Vehicle Spawn.png",
+  "base/client/ui/btnDemos_d.png",
+  "base/client/ui/btnDemos_h.png",
+  "base/client/ui/btnDemos_i.png",
+  "base/client/ui/btnDemos_n.png",
+  "base/client/ui/cache/Arial Bold Italic_16.gft",
+  "base/client/ui/cache/Arial Bold_14.gft",
+  "base/client/ui/cache/Arial Bold_16.gft",
+  "base/client/ui/cache/Arial Bold_18.gft",
+  "base/client/ui/cache/Arial Bold_20.gft",
+  "base/client/ui/cache/Arial Bold_26.gft",
+  "base/client/ui/cache/Arial_12.gft",
+  "base/client/ui/cache/Arial_13.gft",
+  "base/client/ui/cache/Arial_14.gft",
+  "base/client/ui/cache/Arial_16.gft",
+  "base/client/ui/cache/Arial_18.gft",
+  "base/client/ui/cache/Arial_24.gft",
+  "base/client/ui/cache/Arial_28.gft",
+  "base/client/ui/cache/Arial_32.gft",
+  "base/client/ui/cache/Arial_34.gft",
+  "base/client/ui/cache/Arial_36.gft",
+  "base/client/ui/cache/Book Antiqua_22.gft",
+  "base/client/ui/cache/Impact_18.gft",
+  "base/client/ui/cache/Lucida Console_12.gft",
+  "base/client/ui/cache/Palatino Linotype_16.gft",
+  "base/client/ui/cache/Palatino Linotype_18.gft",
+  "base/client/ui/cache/Palatino Linotype_20.gft",
+  "base/client/ui/cache/Palatino Linotype_22.gft",
+  "base/client/ui/cache/Palatino Linotype_24.gft",
+  "base/client/ui/cache/Palatino Linotype_26.gft",
+  "base/client/ui/cache/Palatino Linotype_28.gft",
+  "base/client/ui/cache/Palatino Linotype_30.gft",
+  "base/client/ui/cache/Palatino Linotype_32.gft",
+  "base/client/ui/cache/Palatino Linotype_34.gft",
+  "base/client/ui/cache/Palatino Linotype_36.gft",
+  "base/client/ui/cache/Verdana Bold_10.gft",
+  "base/client/ui/cache/Verdana Bold_12.gft",
+  "base/client/ui/cache/Verdana Bold_13.gft",
+  "base/client/ui/cache/Verdana Bold_14.gft",
+  "base/client/ui/cache/Verdana Bold_15.gft",
+  "base/client/ui/cache/Verdana Bold_18.gft",
+  "base/client/ui/cache/Verdana Italic_12.gft",
+  "base/client/ui/cache/Verdana_12.gft",
+  "base/client/ui/cache/Verdana_13.gft",
+  "base/client/ui/colorFrame.png",
+  "base/client/ui/decalFrame.png",
+  "base/client/ui/itemIcons/Printer.png",
+  "base/client/ui/itemIcons/Wand.png",
+  "base/client/ui/itemIcons/Wrench.png",
+  "base/client/ui/itemIcons/hammer.png",
+  "base/client/ui/plantErrors/plantError_buried.png",
+  "base/client/ui/plantErrors/plantError_float.png",
+  "base/client/ui/plantErrors/plantError_flood.png",
+  "base/client/ui/plantErrors/plantError_limit.png",
+  "base/client/ui/plantErrors/plantError_stuck.png",
+  "base/client/ui/plantErrors/plantError_tooLoud.png",
+  "base/client/ui/plantErrors/plantError_toofar.png",
+  "base/client/ui/plantErrors/plantError_unstable.png",
+  "base/client/ui/plantErrors_small/plantError_buried.png",
+  "base/client/ui/plantErrors_small/plantError_float.png",
+  "base/client/ui/plantErrors_small/plantError_flood.png",
+  "base/client/ui/plantErrors_small/plantError_limit.png",
+  "base/client/ui/plantErrors_small/plantError_stuck.png",
+  "base/client/ui/plantErrors_small/plantError_teams.png",
+  "base/client/ui/plantErrors_small/plantError_tooLoud.png",
+  "base/client/ui/plantErrors_small/plantError_toofar.png",
+  "base/client/ui/plantErrors_small/plantError_unstable.png"
+ ]
+}
