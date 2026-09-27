@@ -959,7 +959,7 @@ impl WeaponsWorld {
                 if !state.emitter.is_empty() {
                     self.events.push(Event::Effect {
                         source: TargetId::Actor(id),
-                        definition: state.emitter.clone(),
+                        definition: crate::paint_effect(&state.emitter, e.paint),
                         position: a.frame.muzzle[e.hand as usize],
                         node: state.emitter_node.clone(),
                         seconds: state.emitter_seconds,
@@ -1533,7 +1533,7 @@ impl WeaponsWorld {
         if !definition.is_empty() {
             self.events.push(Event::Effect {
                 source: TargetId::Actor(p.source),
-                definition: definition.into(),
+                definition: crate::paint_effect(definition, p.paint),
                 position: p.position,
                 node: String::new(),
                 seconds: 0.0,

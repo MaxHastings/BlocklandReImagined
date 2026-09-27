@@ -2754,6 +2754,7 @@ impl PlatformApp for App {
             };
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
             self.world_items.set_palette(&view.world.palette);
+            self.weapon_effects.set_palette(&view.world.palette);
             self.world_items.sync(
                 &view.weapons,
                 crate::world_items::WorldItemFrame {

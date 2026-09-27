@@ -289,12 +289,23 @@ fn spray_cans_mount_in_hand_and_paint_by_projectile() {
     assert_eq!(held.paint, Some(1));
     assert_eq!(s.tool_inventories()[&owner].selected, None);
     hold_still(&mut s, owner);
+    s.take_cues();
     s.command(owner, 4, Command::WeaponTrigger { down: true })
         .unwrap();
     for _ in 0..40 {
         s.step().unwrap();
     }
     assert_eq!(s.simulation().state().bricks[&id].color, 1);
+    // `setSprayCanColor`'s colour copies: the mist and splash name the paint.
+    let cues = s.take_cues();
+    for effect in ["color1PaintEmitter", "color1PaintExplosion"] {
+        assert!(
+            cues.iter().any(|c| matches!(&c.kind,
+                bri_sim::presentation::CueKind::WeaponEffect { definition, .. }
+                    if definition == effect)),
+            "{effect}"
+        );
+    }
     s.command(owner, 5, Command::WeaponTrigger { down: false })
         .unwrap();
     // Someone else's brick is refused with a centre print.

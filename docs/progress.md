@@ -1706,6 +1706,20 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `crates/sim/tests/player.rs` cover a plate under a five-brick ceiling, a brick
   step under 3.4, a crouched plate under 1.4, a one-plate-short ceiling that
   still blocks, and jumping under a 2.8 lintel. `cargo test -p bri-sim` passed.
+- 2026-09-27 Spray can particles take the selected colour. Every colour can
+  showed the blue can's navy mist and splash. v20 `setSprayCanColor` copies
+  the `bluePaint*` explosion/droplet particles per palette index as
+  `color<N>Paint*` (palette RGB, 8/255 floor and additive blend when
+  translucent), and the nozzle's `bluePaintEmitter` has `useEmitterColors`,
+  fed by the image's colour shift. The weapons runtime now names the can's
+  effects `color<N>PaintEmitter`/`color<N>PaintExplosion`; the client resolves
+  them to the blue originals with an `fx-runtime` `Recolor` (palette RGB,
+  authored alpha keys). The mist keeping its authored 0.5 to 0 alpha is
+  inferred: the engine's emitter-colour path is closed source. No protocol
+  change. Evidence: `cargo test -p bri-client --test spray_paint_render --
+  --ignored` renders `artifacts/spray-paint/spray-paint-colors.png` (red,
+  green, yellow, white, translucent blue and black) and checks every particle's
+  RGB; sim `spray_cans_mount_in_hand_and_paint_by_projectile` checks the cues.
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.

@@ -51,6 +51,31 @@ impl ItemBounds {
 pub fn native_id(kind: &str, name: &str) -> String {
     format!("v20.{kind}.{}", name.to_ascii_lowercase())
 }
+/// `setSprayCanColor` copies each `bluePaint*` datablock as
+/// `color<N>Paint*` for palette index N. Effects carry that name so the
+/// presentation tints the blue can's particles with the palette colour.
+pub fn paint_effect(definition: &str, paint: Option<u8>) -> String {
+    match (paint, definition.get(..9)) {
+        (Some(paint), Some(prefix)) if prefix.eq_ignore_ascii_case("bluepaint") => {
+            format!("color{paint}Paint{}", &definition[9..])
+        }
+        _ => definition.to_owned(),
+    }
+}
+/// Inverse of [`paint_effect`]: the palette index and the `bluePaint*` base.
+pub fn paint_effect_base(definition: &str) -> Option<(u8, String)> {
+    let rest = definition
+        .get(..5)?
+        .eq_ignore_ascii_case("color")
+        .then(|| &definition[5..])?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let paint = rest[..digits].parse().ok()?;
+    let suffix = rest[digits..]
+        .get(..5)?
+        .eq_ignore_ascii_case("paint")
+        .then(|| &rest[digits + 5..])?;
+    Some((paint, format!("bluePaint{suffix}")))
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     pub path: String,

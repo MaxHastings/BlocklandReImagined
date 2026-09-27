@@ -877,3 +877,31 @@ fn synchronous_brick_output_redirects_before_explosion() {
     )));
     assert!(events.iter().any(|e| matches!(e, Event::Bounced { .. })));
 }
+#[test]
+fn spray_paint_effects_carry_the_palette_index() {
+    assert_eq!(
+        paint_effect("bluePaintEmitter", Some(12)),
+        "color12PaintEmitter"
+    );
+    assert_eq!(
+        paint_effect("bluePaintExplosion", None),
+        "bluePaintExplosion"
+    );
+    assert_eq!(paint_effect("gunExplosion", Some(3)), "gunExplosion");
+    assert_eq!(
+        paint_effect_base("color12PaintEmitter"),
+        Some((12, "bluePaintEmitter".into()))
+    );
+    assert_eq!(
+        paint_effect_base("color0PaintExplosion"),
+        Some((0, "bluePaintExplosion".into()))
+    );
+    for name in [
+        "colorPaintEmitter",
+        "color999PaintEmitter",
+        "color3Spray",
+        "gunExplosion",
+    ] {
+        assert_eq!(paint_effect_base(name), None, "{name}");
+    }
+}
