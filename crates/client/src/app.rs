@@ -2666,7 +2666,14 @@ impl PlatformApp for App {
     }
     fn tick(&mut self, elapsed: Duration) -> Result<()> {
         let mut listener = bri_audio::Listener::default();
-        self.animation_time += elapsed.as_secs_f64().min(0.25);
+        // `setTimeScale` slows or speeds the whole game, not the interface.
+        let scale = self
+            .attempt
+            .as_ref()
+            .and_then(|a| a.view.as_ref())
+            .map_or(1.0, |v| v.time_scale);
+        let game_elapsed = elapsed.mul_f32(scale);
+        self.animation_time += game_elapsed.as_secs_f64().min(0.25);
         self.poll_network()?;
         self.poll_files();
         let alive = self.local_alive();
@@ -2685,7 +2692,7 @@ impl PlatformApp for App {
                 }
             };
             if let Some((newest, inputs)) = self.motion.advance(
-                elapsed.as_secs_f32(),
+                game_elapsed.as_secs_f32(),
                 input,
                 bri_net::protocol::MOVEMENT_REDUNDANCY,
             )? {
@@ -3533,9 +3540,24 @@ impl PlatformApp for App {
                     }
                     result
                 }
-                UiAction::ChatCommand { ref name, .. } => {
+                UiAction::ChatCommand { ref name, ref args } => {
+                    let snapshot = self
+                        .attempt
+                        .as_ref()
+                        .and_then(|a| a.view.as_ref())
+                        .and_then(|v| v.admin_snapshot.as_ref());
+                    let admin = match snapshot {
+                        Some(snapshot) => crate::admin_ui::chat_command(name, args, snapshot),
+                        None => Ok(None),
+                    };
                     // Vanilla slash commands that map to existing requests.
-                    let command = match name.to_ascii_lowercase().as_str() {
+                    let command = match admin {
+                        Err(error) => {
+                            self.answer(id, Err(error));
+                            continue;
+                        }
+                        Ok(Some(command)) => Some(command),
+                        Ok(None) => match name.to_ascii_lowercase().as_str() {
                         "suicide" | "kill" => Some(Command::Suicide),
                         "light" => Some(Command::ToggleLight),
                         "clearcheckpoint" => Some(Command::ClearCheckpoint),
@@ -3545,6 +3567,7 @@ impl PlatformApp for App {
                             Some(Command::Emote(name.to_ascii_lowercase()))
                         }
                         _ => None,
+                        },
                     };
                     match command {
                         Some(command) => {

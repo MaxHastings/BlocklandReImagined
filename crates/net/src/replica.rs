@@ -20,6 +20,11 @@ pub struct Replica {
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
+    pub time_scale: f32,
+}
+fn validate_time_scale(scale: f32) -> Result<()> {
+    ensure!((0.2..=2.0).contains(&scale), "Invalid time scale");
+    Ok(())
 }
 fn validate_vehicles(vehicles: &[bri_sim::session::VehicleInfo]) -> Result<()> {
     ensure!(
@@ -94,6 +99,7 @@ impl Replica {
         validate_vitals(&checkpoint.vitals, &checkpoint.names)?;
         validate_minigames(&checkpoint.minigames)?;
         validate_vehicles(&checkpoint.vehicles)?;
+        validate_time_scale(checkpoint.time_scale)?;
         for pose in &checkpoint.vehicle_poses {
             validate_vehicle_pose(pose)?;
         }
@@ -120,6 +126,7 @@ impl Replica {
                 .into_iter()
                 .map(|p| (p.id, p))
                 .collect(),
+            time_scale: checkpoint.time_scale,
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -192,6 +199,9 @@ impl Replica {
         if let Some(vehicles) = &delta.vehicles {
             validate_vehicles(vehicles)?;
         }
+        if let Some(scale) = delta.time_scale {
+            validate_time_scale(scale)?;
+        }
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -246,6 +256,9 @@ impl Replica {
         }
         if let Some(games) = delta.minigames {
             self.minigames = games;
+        }
+        if let Some(scale) = delta.time_scale {
+            self.time_scale = scale;
         }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();

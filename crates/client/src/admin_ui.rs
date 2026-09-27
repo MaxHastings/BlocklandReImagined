@@ -44,7 +44,8 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
         supported: snapshot
             .supported
             .iter()
-            .map(|capability| match capability {
+            .filter_map(|capability| {
+                Some(match capability {
                 Capability::Login => ui::AdminFeature::Login,
                 Capability::Kick => ui::AdminFeature::Kick,
                 Capability::Ban => ui::AdminFeature::Ban,
@@ -55,6 +56,11 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::WorldCommands => ui::AdminFeature::ClearBricks,
                 Capability::DestructoWand => ui::AdminFeature::Wand,
                 Capability::Spy => ui::AdminFeature::Spy,
+                // Chat commands only; the Admin menu has no buttons for them.
+                Capability::Teleport | Capability::Vehicles | Capability::TimeScale => {
+                    return None;
+                }
+                })
             })
             .collect(),
         players: snapshot
@@ -146,6 +152,56 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
         _ => snapshot.role.is_admin(),
     };
     ensure!(allowed, "Administration permission has changed");
+    let request = Request::new(action);
+    request.validate()?;
+    Ok(Some(Command::Admin(request)))
+}
+
+/// v20 `findClientByName`: the name that contains `partial` earliest.
+fn find_player(snapshot: &AdminSnapshot, partial: &str) -> Result<ConnectionId> {
+    let partial = partial.to_lowercase();
+    snapshot
+        .players
+        .iter()
+        .filter(|p| !p.bot)
+        .filter_map(|p| p.name.to_lowercase().find(&partial).map(|at| (at, p)))
+        .min_by_key(|(at, _)| *at)
+        .map(|(_, p)| ConnectionId(p.connection))
+        .ok_or_else(|| anyhow::anyhow!("No player named {partial}"))
+}
+
+/// Administrator chat commands (`/fetch`, `/find`, `/warp`, `/timeScale`,
+/// `/resetVehicles`, `/clearVehicles`, `/realBrickCount`, `/cancelAllEvents`,
+/// `/clearBots`). `None` when `name` is not one of them.
+pub fn chat_command(
+    name: &str,
+    args: &[String],
+    snapshot: &AdminSnapshot,
+) -> Result<Option<Command>> {
+    let joined = args.join(" ");
+    let (capability, action) = match name.to_ascii_lowercase().as_str() {
+        "fetch" => (Capability::Teleport, Action::Fetch { target: find_player(snapshot, &joined)? }),
+        "find" => (Capability::Teleport, Action::Find { target: find_player(snapshot, &joined)? }),
+        "warp" => (Capability::Teleport, Action::Warp),
+        "timescale" => (
+            Capability::TimeScale,
+            Action::TimeScale {
+                // `mClampF` of a non-number is 0, clamped up to 0.2.
+                scale: args.first().and_then(|a| a.parse().ok()).unwrap_or(0.0),
+            },
+        ),
+        "resetvehicles" => (Capability::Vehicles, Action::ResetVehicles),
+        "clearvehicles" => (Capability::Vehicles, Action::ClearVehicles),
+        "realbrickcount" => (Capability::WorldCommands, Action::RealBrickCount),
+        "cancelallevents" => (Capability::WorldCommands, Action::CancelAllEvents),
+        "clearbots" => (Capability::WorldCommands, Action::ClearBots),
+        _ => return Ok(None),
+    };
+    // Stock servers ignore these from non-administrators.
+    ensure!(
+        snapshot.role.is_admin() && snapshot.supported.contains(&capability),
+        "You are not an administrator"
+    );
     let request = Request::new(action);
     request.validate()?;
     Ok(Some(Command::Admin(request)))

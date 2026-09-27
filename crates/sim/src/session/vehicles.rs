@@ -1245,6 +1245,28 @@ impl Session {
         }
         self.vehicles.mounted.remove(&owner);
     }
+    /// Spawn bricks that currently have a vehicle (`/resetVehicles`).
+    pub(super) fn vehicle_spawn_bricks(&self) -> Vec<BrickId> {
+        self.vehicles.by_brick.keys().copied().collect()
+    }
+    /// `/clearVehicles`: riders get off and the brick keeps its setting
+    /// without spawning again until it changes.
+    pub(super) fn clear_brick_vehicle(&mut self, brick: BrickId) -> Result<()> {
+        let Some(id) = self.vehicles.by_brick.get(&brick).copied() else {
+            return Ok(());
+        };
+        let riders: Vec<OwnerId> = self
+            .vehicles
+            .mounted
+            .iter()
+            .filter(|(_, m)| m.vehicle == id)
+            .map(|(owner, _)| *owner)
+            .collect();
+        for owner in riders {
+            self.eject(owner);
+        }
+        self.remove_vehicle(id)
+    }
     pub fn switch_seat(&mut self, owner: OwnerId, step: i32) -> Result<()> {
         let mount = self
             .vehicles

@@ -1003,3 +1003,65 @@ fn chat_talks_on_thread_three_for_fifty_ms_per_character() {
     }
     assert_eq!(talk(&mut s), ["root"]);
 }
+#[test]
+fn admin_fetch_find_warp_and_time_scale_follow_v20() {
+    use bri_admin::{Action, ConnectionId, Request};
+    let mut s = session();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(20.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    let connection = |s: &Session, name: &str| {
+        ConnectionId(
+            s.admin_state(admin)
+                .unwrap()
+                .players
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .connection,
+        )
+    };
+    let admin_cmd = |action| Command::Admin(Request::new(action));
+    let target = connection(&s, "Admin");
+    assert!(s.command(guest, 1, admin_cmd(Action::Fetch { target })).is_err());
+    assert!(s.command(guest, 2, admin_cmd(Action::TimeScale { scale: 0.5 })).is_err());
+    let near = |a: [f32; 3], b: [f32; 3]| Vec3::from(a).distance(Vec3::from(b)) < 0.2;
+
+    let target = connection(&s, "Guest");
+    s.command(admin, 1, admin_cmd(Action::Fetch { target })).unwrap();
+    assert!(near(body(&s, guest).feet, body(&s, admin).feet));
+
+    s.command(guest, 3, Command::Suicide).unwrap();
+    assert!(s.command(admin, 2, admin_cmd(Action::Find { target })).is_err());
+
+    // Look down at the floor ahead and warp onto it.
+    let before = body(&s, admin);
+    s.movement(
+        admin,
+        1,
+        MoveInput {
+            yaw: 0.0,
+            pitch: -0.5,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.step().unwrap();
+    s.command(admin, 3, admin_cmd(Action::Warp)).unwrap();
+    let after = body(&s, admin);
+    let moved = Vec3::from(after.feet) - Vec3::from(before.feet);
+    assert!(moved.length() > 1.0, "{moved}");
+    assert!(after.feet[1].abs() < 0.2);
+
+    s.command(admin, 4, admin_cmd(Action::TimeScale { scale: 5.0 })).unwrap();
+    assert_eq!(s.time_scale(), 2.0);
+    s.command(admin, 5, admin_cmd(Action::TimeScale { scale: 0.5 })).unwrap();
+    assert_eq!(s.time_scale(), 0.5);
+    assert!(s.chat().iter().any(|l| l.text == "Admin changed the timescale to 0.5"));
+}

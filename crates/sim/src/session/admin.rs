@@ -24,6 +24,12 @@ pub enum AdminCapability {
     WorldCommands,
     DestructoWand,
     Spy,
+    /// `/fetch`, `/find`, `/warp`.
+    Teleport,
+    /// `/resetVehicles`, `/clearVehicles`.
+    Vehicles,
+    /// `/timeScale`.
+    TimeScale,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +206,9 @@ impl AdminRuntime {
             supported.insert(AdminCapability::WorldCommands);
             supported.insert(AdminCapability::DestructoWand);
             supported.insert(AdminCapability::Spy);
+            supported.insert(AdminCapability::Teleport);
+            supported.insert(AdminCapability::Vehicles);
+            supported.insert(AdminCapability::TimeScale);
             if rows.iter().any(|row| {
                 row.durable_identity_available
                     && !row.is_owner
@@ -220,6 +229,13 @@ impl AdminRuntime {
             supported,
             players,
         })
+    }
+
+    fn target_owner(&self, target: ConnectionId) -> Result<OwnerId> {
+        self.connection_to_owner
+            .get(&target)
+            .copied()
+            .context("That player is no longer connected")
     }
 
     fn request(
@@ -253,6 +269,12 @@ impl AdminRuntime {
                 | Action::DestructoWand
                 | Action::Spy { .. }
                 | Action::DropCameraAtPlayer
+                | Action::Fetch { .. }
+                | Action::Find { .. }
+                | Action::Warp
+                | Action::ResetVehicles
+                | Action::ClearVehicles
+                | Action::TimeScale { .. }
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
                 | Action::HostSetPassword {
@@ -417,6 +439,24 @@ impl AdminRuntime {
                                 .get(&target)
                                 .context("That player has no body to spy on")?;
                             session.set_control(actor_owner, ControlObject::Spy(target))?;
+                        }
+                        GameplayCommand::Fetch(target) => {
+                            let victim = self.target_owner(target)?;
+                            session.admin_fetch(actor_owner, victim)?;
+                        }
+                        GameplayCommand::Find(target) => {
+                            let victim = self.target_owner(target)?;
+                            session.admin_find(actor_owner, victim)?;
+                        }
+                        GameplayCommand::Warp => session.admin_warp(actor_owner)?,
+                        GameplayCommand::ResetVehicles => {
+                            session.admin_reset_vehicles(actor_owner)?
+                        }
+                        GameplayCommand::ClearVehicles => {
+                            session.admin_clear_vehicles(actor_owner)?
+                        }
+                        GameplayCommand::TimeScale(scale) => {
+                            session.admin_time_scale(actor_owner, scale)?
                         }
                         GameplayCommand::DropCameraAtPlayer => {
                             session.set_control(actor_owner, ControlObject::Camera)?;

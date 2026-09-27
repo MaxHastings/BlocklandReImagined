@@ -5,7 +5,7 @@ use bri_sim::{
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-pub const VERSION: u32 = 19;
+pub const VERSION: u32 = 20;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Unreliable datagram payload bound (fits a conservative QUIC path MTU).
@@ -171,6 +171,8 @@ pub struct Checkpoint {
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     pub vehicles: Vec<bri_sim::session::VehicleInfo>,
     pub vehicle_poses: Vec<bri_sim::session::VehiclePose>,
+    /// Admin `/timeScale`.
+    pub time_scale: f32,
 }
 impl Checkpoint {
     pub fn from_session(session: &Session, cursor: u64) -> Self {
@@ -200,6 +202,7 @@ impl Checkpoint {
             minigames: session.minigame_views(),
             vehicles: session.vehicle_infos(),
             vehicle_poses: session.vehicle_poses(),
+            time_scale: session.time_scale(),
         }
     }
 }
@@ -231,6 +234,7 @@ pub struct Delta {
     pub vitals: Option<BTreeMap<OwnerId, bri_sim::session::Vitals>>,
     pub minigames: Option<Vec<bri_sim::session::MiniGameView>>,
     pub vehicles: Option<Vec<bri_sim::session::VehicleInfo>>,
+    pub time_scale: Option<f32>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {

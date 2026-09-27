@@ -20,6 +20,7 @@ pub use control::ControlObject;
 mod debris;
 mod events;
 mod admin_world;
+mod admin_players;
 mod inventory;
 mod special;
 mod tutorial;
@@ -385,6 +386,8 @@ pub struct Session {
     lan_host: bool,
     /// The save being loaded brick batch by brick batch.
     loading: Option<Box<build_load::Loading>>,
+    /// Admin `/timeScale` (`setTimeScale`), 0.2 to 2.
+    time_scale: f32,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -436,6 +439,7 @@ impl Session {
             admin_disconnects: VecDeque::new(),
             lan_host: false,
             loading: None,
+            time_scale: 1.0,
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).

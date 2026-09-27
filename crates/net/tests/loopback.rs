@@ -1887,3 +1887,40 @@ async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<(
     server.stop().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minigame_listing_replicates_to_other_clients_and_late_joiners() -> Result<()> {
+    use bri_sim::session::MiniGameRequest;
+    let server = server::start(session(), options())?;
+    let connect = |name: &str| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            name.into(),
+            "fixture-v1".into(),
+            None,
+        )
+    };
+    let mut owner = connect("Owner").await?;
+    let mut other = connect("Other").await?;
+    let settings = bri_minigames::Settings {
+        title: "Deathmatch".into(),
+        ..Default::default()
+    };
+    owner
+        .command(Command::MiniGame(MiniGameRequest::Create { color: 2, settings }))
+        .await?;
+    wait(&mut other, |c| c.replica.minigames.len() == 1).await?;
+    assert_eq!(other.replica.minigames[0].owner, owner.owner);
+    let late = connect("Late").await?;
+    assert_eq!(late.replica.minigames.len(), 1);
+    other
+        .command(Command::MiniGame(MiniGameRequest::Join {
+            game: other.replica.minigames[0].id,
+        }))
+        .await?;
+    let other_id = other.owner;
+    wait(&mut owner, |c| c.replica.minigames.first().is_some_and(|g| g.members.contains(&other_id))).await?;
+    server.stop().await?;
+    Ok(())
+}

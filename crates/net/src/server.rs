@@ -487,6 +487,7 @@ async fn run(
     let mut vitals = BTreeMap::new();
     let mut minigames = Vec::new();
     let mut vehicles = Vec::new();
+    let mut time_scale = session.time_scale();
     let mut last_chat = 0;
     let mut joins = 0;
     let mut resumes = 0;
@@ -559,7 +560,7 @@ async fn run(
         _=ticker.tick()=>{
             players.store(peers.len() as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
-            let steps=clock.advance(now.duration_since(previous));previous=now;
+            let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             for _ in 0..steps {
             session.step()?;let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
@@ -575,11 +576,11 @@ async fn run(
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
                 let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
-                let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
+                let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles}))?);cursor=next;
+                let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale}))?);cursor=next;
                 for peer in peers.values(){if peer.out.try_send(bytes.clone()).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){let bytes=Arc::new(codec::encode(&Message::Notice(notice))?);if peer.out.try_send(bytes).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}}
             }

@@ -473,6 +473,7 @@ dependencies = [
  "bri-content",
  "bri-events",
  "bri-identity",
+ "bri-minigames",
  "bri-physics",
  "bri-sim",
  "bri-vehicles",
