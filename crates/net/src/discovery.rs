@@ -62,13 +62,19 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Answer discovery queries until the returned task is aborted. The live
-/// player count comes from the running host.
-pub async fn respond(beacon: Beacon, players: Arc<AtomicU32>) -> Result<tokio::task::JoinHandle<()>> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT))
+/// Answer discovery queries on `port` (normally [`DISCOVERY_PORT`]; 0 picks a
+/// free one) until the returned task is aborted. The live player count comes
+/// from the running host. Returns the task and the bound port.
+pub async fn respond(
+    beacon: Beacon,
+    players: Arc<AtomicU32>,
+    port: u16,
+) -> Result<(tokio::task::JoinHandle<()>, u16)> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))
         .await
         .context("Could not open the LAN discovery port")?;
-    Ok(tokio::spawn(async move {
+    let port = socket.local_addr()?.port();
+    let task = tokio::spawn(async move {
         let mut buffer = [0u8; 64];
         loop {
             let Ok((len, from)) = socket.recv_from(&mut buffer).await else {
@@ -85,7 +91,8 @@ pub async fn respond(beacon: Beacon, players: Arc<AtomicU32>) -> Result<tokio::t
                 let _ = socket.send_to(&bytes, from).await;
             }
         }
-    }))
+    });
+    Ok((task, port))
 }
 
 /// Broadcast (or unicast to `targets`) a query and collect listings until

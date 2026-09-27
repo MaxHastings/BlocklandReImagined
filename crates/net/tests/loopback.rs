@@ -1848,12 +1848,12 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<()> {
     let mut server = server::start(session(), options())?;
-    server
-        .advertise("LAN Host".into(), "Fixture".into(), 8, "fixture-v1".into())
+    // A free port, so a running host on the real discovery port cannot collide.
+    let port = server
+        .advertise_on(0, "LAN Host".into(), "Fixture".into(), 8, "fixture-v1".into())
         .await?;
-    let found =
-        bri_net::discovery::query(&["127.0.0.1:28050".parse()?], Duration::from_millis(1500))
-            .await?;
+    let responder = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let found = bri_net::discovery::query(&[responder], Duration::from_millis(1500)).await?;
     let (address, beacon) = found
         .into_iter()
         .next()
@@ -1874,9 +1874,7 @@ async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<(
     .await?;
     client.command(Command::Chat("found you".into())).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let found =
-        bri_net::discovery::query(&["127.0.0.1:28050".parse()?], Duration::from_millis(1500))
-            .await?;
+    let found = bri_net::discovery::query(&[responder], Duration::from_millis(1500)).await?;
     assert_eq!(found[0].1.players, 1, "listing reports connected players");
     drop(client);
     server.stop().await?;

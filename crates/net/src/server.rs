@@ -82,6 +82,20 @@ pub struct ServerReport {
 impl ServerHandle {
     /// Answer LAN discovery queries for this host until it stops.
     pub async fn advertise(&mut self, name: String, map: String, max_players: u32, content_id: String) -> Result<()> {
+        let discovery = crate::discovery::DISCOVERY_PORT;
+        self.advertise_on(discovery, name, map, max_players, content_id).await?;
+        Ok(())
+    }
+    /// Answer LAN queries on `discovery_port` (0 picks a free port, for tests
+    /// that must not collide with a running host). Returns the bound port.
+    pub async fn advertise_on(
+        &mut self,
+        discovery_port: u16,
+        name: String,
+        map: String,
+        max_players: u32,
+        content_id: String,
+    ) -> Result<u16> {
         let beacon = crate::discovery::Beacon {
             version: VERSION,
             name,
@@ -92,8 +106,10 @@ impl ServerHandle {
             content_id,
             certificate: crate::discovery::hex(&self.certificate),
         };
-        self.discovery = Some(crate::discovery::respond(beacon, self.players.clone()).await?);
-        Ok(())
+        let (task, port) =
+            crate::discovery::respond(beacon, self.players.clone(), discovery_port).await?;
+        self.discovery = Some(task);
+        Ok(port)
     }
     /// Internet hosts: ask the router (UPnP) to forward the game and
     /// certificate ports for as long as this host runs. Each outcome is sent
