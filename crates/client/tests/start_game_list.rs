@@ -36,7 +36,7 @@ fn start_game_lists_and_draws_every_loadable_map() -> Result<()> {
     );
     // Every row must lie inside the list control, or it is clipped away.
     let rect = view.node(list).rect;
-    let rows = names.len() as i32 * view.row_height_hint;
+    let rows = names.len() as i32 * view.node(list).state.row_height;
     ensure!(
         rect.h >= rows,
         "Mission list is {} px tall but its {} rows need {rows} px",
@@ -130,7 +130,7 @@ fn start_game_lists_and_draws_every_loadable_map() -> Result<()> {
             "content": content.display().to_string(),
             "maps": names,
             "list_height": rect.h,
-            "row_height": view.row_height_hint,
+            "row_height": view.node(list).state.row_height,
         }))?,
     )?;
     let _ = std::fs::remove_dir_all(&state);

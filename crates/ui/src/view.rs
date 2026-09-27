@@ -63,6 +63,8 @@ pub struct NodeState {
     pub cursor: usize,
     /// Animation frame (animated bitmaps).
     pub frame: usize,
+    /// Text-list row height from the profile font (`View::measure`).
+    pub row_height: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -181,9 +183,6 @@ pub struct View {
     /// Last mouse position (logical pixels).
     pub mouse: (i32, i32),
     close_hot: bool,
-    /// Text-list row height used for scroll extents (set from the pack by
-    /// the owning screen; 16 is Torque's default for 14px fonts).
-    pub row_height_hint: i32,
 }
 
 fn authored_rect(c: &Control) -> Rect {
@@ -219,7 +218,6 @@ impl View {
             canvas: (640, 480),
             mouse: (-1, -1),
             close_hot: false,
-            row_height_hint: 16,
         };
         v.root = v.insert(layout, None);
         v
@@ -242,6 +240,7 @@ impl View {
                 scroll_y: 0,
                 cursor: 0,
                 frame: 0,
+                row_height: 16,
             },
             ctrl,
             parent,
@@ -490,7 +489,7 @@ impl View {
         if !n.state.visible {
             return;
         }
-        if !dl.push_clip(n.rect) {
+        if !dl.push_clip(self.bounds(id)) {
             return;
         }
         self.draw_self(pack, dl, id);
@@ -1152,9 +1151,30 @@ impl View {
             .map_or(16, |f| f.line_height as i32 + 2)
     }
 
+    /// Cache every text list's row height from its profile font so layout,
+    /// scrolling and hit tests agree with drawing.
+    pub fn measure(&mut self, pack: &Pack) {
+        for id in 0..self.nodes.len() {
+            if self.nodes[id].ctrl.class == "GuiTextListCtrl" {
+                self.nodes[id].state.row_height = self.list_row_height(pack, id);
+            }
+        }
+    }
+
     fn list_height(&self, id: NodeId) -> i32 {
-        // Row height is only known with a pack; approximate with 16 for layout.
-        self.nodes[id].state.items.len() as i32 * self.row_height_hint
+        self.nodes[id].state.items.len() as i32 * self.nodes[id].state.row_height
+    }
+
+    /// A control's extent for drawing and hit tests. Text lists grow to hold
+    /// every row (GuiTextListCtrl sizes itself to its cells); authored lists
+    /// are often only a few pixels tall.
+    fn bounds(&self, id: NodeId) -> Rect {
+        let n = &self.nodes[id];
+        let mut r = n.rect;
+        if n.ctrl.class == "GuiTextListCtrl" {
+            r.h = r.h.max(self.list_height(id));
+        }
+        r
     }
 
     fn draw_list(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
@@ -1407,7 +1427,7 @@ impl View {
         if !n.state.visible {
             return None;
         }
-        let c = clip.intersect(&n.rect)?;
+        let c = clip.intersect(&self.bounds(id))?;
         if !c.contains(x, y) {
             return None;
         }

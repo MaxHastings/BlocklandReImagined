@@ -174,6 +174,20 @@ fn main() -> Result<()> {
         };
         render(&ui, "main-menu", &mut renderer, &mut report)?;
         ui.core.push(ScreenId::JoinServer);
+        ui.apply(UiUpdate::LanServers {
+            servers: vec![ServerInfo {
+                address: "192.168.1.20:28000".into(),
+                name: "Max's Server".into(),
+                password: false,
+                dedicated: false,
+                ping_ms: Some(12),
+                players: 2,
+                max_players: 8,
+                bricks: 1534,
+                map: "Bedroom".into(),
+            }],
+            querying: false,
+        });
         ui.update(0);
         render(&ui, "join-server", &mut renderer, &mut report)?;
         key(&mut ui, Key::Escape);

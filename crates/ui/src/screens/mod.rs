@@ -182,7 +182,7 @@ pub fn layout_view(core: &Core, name: &str) -> View {
             ..Default::default()
         });
     let mut v = View::new(&c);
-    v.row_height_hint = 16;
+    v.measure(&core.pack);
     v
 }
 
