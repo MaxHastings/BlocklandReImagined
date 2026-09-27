@@ -70,7 +70,7 @@ fn player(
         grounded: true,
         crouched: false,
         jetting: false,
-        jump_held: false,
+        jump: Default::default(),
     };
     if new_tick {
         *tick_state = Some(state.clone());
