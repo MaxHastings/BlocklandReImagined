@@ -3144,6 +3144,10 @@ impl PlatformApp for App {
             bri_ui::screens::options::default_fov(prefs),
             prefs.f32_or("$Pref::player::CurrentFOV", 10.0),
         );
+        self.controls.set_invert_prefs(
+            prefs.bool_or("$pref::Input::MouseInvert", false),
+            prefs.bool_or("$Pref::Input::VehicleMouseInvert", true),
+        );
         self.controls.advance_zoom(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             let input = if alive {

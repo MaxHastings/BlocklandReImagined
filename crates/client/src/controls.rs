@@ -37,6 +37,12 @@ pub struct Controls {
     /// takes the mount transform), so the view faces the seat and the
     /// mouse only tilts it; free look still turns the head.
     seat_yaw: Option<f32>,
+    /// `$pref::Input::MouseInvert` (already applied to look input) and
+    /// `$Pref::Input::VehicleMouseInvert`, which replaces it while driving a
+    /// mouse-steered vehicle without free look (`pitch()` in v20).
+    mouse_invert: bool,
+    /// `VehicleMouseInvert` turned off (v20 defaults it on).
+    vehicle_mouse_plain: bool,
 }
 /// The client's half of a replicated camera [`ControlObject`]: look and move
 /// keys steer it instead of the body.
@@ -115,6 +121,13 @@ impl Controls {
             self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
             self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.vehicle_view.is_some() {
+            // The vehicle reads an inverted mouse by default; the steering
+            // takes that into account, so only a changed pref flips it.
+            let pitch = if self.mouse_invert != self.vehicle_mouse_plain {
+                pitch
+            } else {
+                -pitch
+            };
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = wrap_half(self.pitch + pitch);
         } else if self.seat_yaw.is_some() {
@@ -134,6 +147,10 @@ impl Controls {
             self.pitch = 0.0;
         }
         self.vehicle_view = view;
+    }
+    pub fn set_invert_prefs(&mut self, mouse: bool, vehicle: bool) {
+        self.mouse_invert = mouse;
+        self.vehicle_mouse_plain = !vehicle;
     }
     /// Face the seat, or stop. Leaving keeps facing where the seat faced.
     pub fn set_seat_yaw(&mut self, yaw: Option<f32>) {
@@ -535,4 +552,26 @@ mod tests {
         });
         c.movement().validate().unwrap();
     }
+    #[test]
+    fn vehicle_mouse_invert_replaces_invert_mouse_while_mouse_steering() {
+        let steer = |mouse: bool, vehicle: bool| {
+            let mut c = Controls::default();
+            c.set_invert_prefs(mouse, vehicle);
+            c.set_vehicle_view(Some((0.0, 0.0)));
+            // The UI has already applied Invert Mouse to the raw pitch.
+            let raw = 0.1;
+            let input = if mouse { -raw } else { raw };
+            c.action(&GameAction::Look {
+                yaw: 0.0,
+                pitch: -input,
+            });
+            c.pitch
+        };
+        // v20 defaults: the vehicle's own inverted reading, whatever Invert
+        // Mouse says.
+        assert_eq!(steer(false, true), steer(true, true));
+        assert_eq!(steer(false, false), -steer(false, true));
+        assert_eq!(steer(true, false), steer(false, false));
+    }
+
 }
