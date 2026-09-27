@@ -6,15 +6,17 @@
 //! (projectiles, player placement, damage, respawns and presentation cues).
 use super::*;
 use bri_minigames::{self as mg, Decision};
-use bri_vehicles::{self as veh, Intent, OccupantId, SpawnId, VehicleId};
+use bri_vehicles::{self as veh, Intent, OccupantId, SpawnId, VehicleId, schema::SeatRole};
 use bri_weapons::ActorId;
 use rapier3d::prelude::*;
 
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
 /// Families that are not placed on spawn bricks (item/state vehicles).
-const INTERNAL_FAMILIES: [veh::Family; 3] =
-    [veh::Family::Skis, veh::Family::Tumble, veh::Family::Turret];
+const INTERNAL_FAMILIES: [veh::Family; 2] = [veh::Family::Skis, veh::Family::Tumble];
+/// `WheeledVehicleData::onCollision`/`Armor::onCollision`: a player mounts
+/// only from above, feet this far over the mount's origin.
+const MOUNT_ABOVE: f32 = 0.2;
 /// Collider tag namespace for vehicles (players use 1 << 64).
 pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 
@@ -29,6 +31,12 @@ pub(super) struct Vehicles {
     last_dismount: BTreeMap<OwnerId, u64>,
     jump_held: BTreeMap<OwnerId, bool>,
     fire_held: BTreeMap<OwnerId, bool>,
+    /// Look angles last fed to the vehicle, for mouse steering deltas.
+    last_look: BTreeMap<OwnerId, (f32, f32)>,
+    /// Skis spawned by the ski item wait to be boarded (`schedule(250, mountObject)`).
+    pending_skis: Vec<(OwnerId, VehicleId, u64)>,
+    /// Players riding a tumble vehicle, watched through the corpse camera.
+    tumbling: BTreeSet<OwnerId>,
     scanned: bool,
 }
 #[derive(Debug, Clone)]
@@ -64,6 +72,19 @@ pub struct VehiclePose {
     pub jetting: bool,
 }
 
+/// Heading (yaw, positive right) of a native rotation's forward axis.
+pub(super) fn heading(rotation: [f32; 4]) -> f32 {
+    let forward = glam::Quat::from_array(rotation) * Vec3::NEG_Z;
+    forward.x.atan2(-forward.z)
+}
+fn wrap(angle: f32) -> f32 {
+    (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+/// Mouse-steering pitch wraps with a half-turn period (see `Controls`).
+fn wrap_half(angle: f32) -> f32 {
+    (angle + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::PI)
+        - std::f32::consts::FRAC_PI_2
+}
 fn occupant(owner: OwnerId) -> veh::Occupant {
     veh::Occupant {
         id: OccupantId(owner),
@@ -74,6 +95,11 @@ fn occupant(owner: OwnerId) -> veh::Occupant {
 impl Vehicles {
     pub(super) fn is_mounted(&self, owner: OwnerId) -> bool {
         self.mounted.contains_key(&owner)
+    }
+    /// The family of the vehicle a player rides.
+    pub(super) fn mounted_family(&self, owner: OwnerId) -> Option<veh::Family> {
+        let mount = self.mounted.get(&owner)?;
+        Some(self.world.as_ref()?.definition_of(mount.vehicle)?.family)
     }
     /// Seated players' fire button drives the vehicle weapon, not items.
     pub(super) fn set_fire(&mut self, owner: OwnerId, down: bool) {
@@ -434,9 +460,11 @@ impl Session {
             );
         }
     }
-    /// Mounted players drive instead of walking. Jump leaves the vehicle
-    /// (`Armor::onTrigger` while mounted), except on the horse where jump
-    /// jumps and crouch dismounts.
+    /// Mounted players drive instead of walking, as their seat allows: the
+    /// strafe keys or the mouse steer, a player-type mount faces where its
+    /// rider looks, and a gunner aims relative to the hull. Jump leaves the
+    /// vehicle (`Armor::onTrigger` while mounted), except on the horse, where
+    /// jump jumps and crouch dismounts.
     pub(super) fn vehicle_input(&mut self, owner: OwnerId, input: MoveInput) -> Result<()> {
         let Some(mount) = self.vehicles.mounted.get(&owner).cloned() else {
             return Ok(());
@@ -449,14 +477,19 @@ impl Session {
             .jump_held
             .insert(owner, input.jump)
             .unwrap_or(true);
-        let family = world
-            .snapshot(&self.simulation.physics)
+        let (last_yaw, last_pitch) = self
             .vehicles
-            .iter()
-            .find(|v| v.id == mount.vehicle)
-            .and_then(|v| world.definition(&v.definition))
-            .map(|d| d.family);
-        let horse = family == Some(veh::Family::Horse);
+            .last_look
+            .insert(owner, (input.yaw, input.pitch))
+            .unwrap_or((input.yaw, input.pitch));
+        let snapshot = world.snapshot(&self.simulation.physics);
+        let Some(v) = snapshot.vehicles.iter().find(|v| v.id == mount.vehicle) else {
+            return Ok(());
+        };
+        let Some(d) = world.definition(&v.definition) else {
+            return Ok(());
+        };
+        let horse = d.family == veh::Family::Horse;
         let leave = if horse {
             input.crouch
         } else {
@@ -471,26 +504,47 @@ impl Session {
             );
             return Ok(());
         }
-        let controls = veh::Controls {
+        let fire = self
+            .vehicles
+            .fire_held
+            .get(&owner)
+            .copied()
+            .unwrap_or(false);
+        let mut controls = veh::Controls {
             throttle: input.forward,
-            steer: input.right,
-            pitch: 0.0,
-            roll: 0.0,
-            vertical: if input.jet { 1.0 } else { 0.0 },
-            strafe: 0.0,
             brake: input.crouch && !horse,
-            jump: horse && input.jump,
             jet: input.jet,
-            fire: self
-                .vehicles
-                .fire_held
-                .get(&owner)
-                .copied()
-                .unwrap_or(false),
-            aim_yaw: input.yaw,
-            aim_pitch: input.pitch,
+            vertical: if input.jet { 1.0 } else { 0.0 },
+            fire,
+            ..Default::default()
         };
-        // Passenger seats without controls reject; that is expected.
+        match d.seat_role(mount.seat) {
+            SeatRole::Passenger => return Ok(()),
+            SeatRole::StrafeDriver => controls.steer = input.right,
+            SeatRole::MouseDriver => {
+                controls.strafe = input.right;
+                controls.look_delta = [
+                    wrap(input.yaw - last_yaw),
+                    wrap_half(input.pitch - last_pitch),
+                ];
+            }
+            SeatRole::Actor => {
+                controls.strafe = input.right;
+                controls.jump = horse && input.jump;
+                controls.aim_yaw = input.yaw;
+                controls.aim_pitch = input.pitch;
+                controls.brake = false;
+            }
+            SeatRole::Gunner => {
+                controls = veh::Controls {
+                    fire,
+                    // Quaternion yaw turns left; look yaw turns right.
+                    aim_yaw: -wrap(input.yaw - heading(v.transform.rotation)),
+                    aim_pitch: input.pitch,
+                    ..Default::default()
+                };
+            }
+        }
         let _ = world.set_controls(veh::OwnerId(owner), OccupantId(owner), controls);
         Ok(())
     }
@@ -522,7 +576,7 @@ impl Session {
             );
             let feet = Vec3::from(peer.player.state().feet);
             for v in &snapshot.vehicles {
-                if v.destroyed {
+                if v.destroyed || feet.y <= v.transform.position[1] + MOUNT_ABOVE * v.scale {
                     continue;
                 }
                 let touching = world
@@ -538,33 +592,22 @@ impl Session {
             }
         }
         let world = self.vehicles.world.as_mut().unwrap();
-        for (owner, vehicle, seats, feet) in attempts {
-            for seat in 0..seats {
-                let mut position = feet;
-                // Seats are reachable from anywhere around the vehicle's hull;
-                // the rule engine still bounds the distance.
-                if let Some(v) = world
-                    .snapshot(&self.simulation.physics)
-                    .vehicles
-                    .into_iter()
-                    .find(|v| v.id == vehicle)
-                    && let Some(s) = v.seats.get(seat)
-                    && Vec3::from(s.transform.position).distance(feet) < 4.0
-                {
-                    position = Vec3::from(s.transform.position);
-                }
-                if world
-                    .mount(
-                        &self.simulation.physics,
-                        vehicle,
-                        seat,
-                        occupant(owner),
-                        position.to_array(),
-                    )
-                    .is_ok()
-                {
-                    break;
-                }
+        for (owner, vehicle, _, _) in attempts {
+            // The first free mount node takes the rider, wherever they touched.
+            let free = world
+                .snapshot(&self.simulation.physics)
+                .vehicles
+                .into_iter()
+                .find(|v| v.id == vehicle)
+                .and_then(|v| v.seats.into_iter().find(|s| s.occupant.is_none()));
+            if let Some(seat) = free {
+                let _ = world.mount(
+                    &self.simulation.physics,
+                    vehicle,
+                    seat.index,
+                    occupant(owner),
+                    seat.transform.position,
+                );
             }
         }
         Ok(())
@@ -589,10 +632,183 @@ impl Session {
         world.post_step(&mut self.simulation.physics)?;
         let intents = world.drain_intents();
         self.apply_vehicle_intents(intents)?;
+        self.board_skis()?;
         self.follow_seats()?;
         self.mount_contacts()?;
         Ok(())
     }
+    /// `Player::startSkiing`: an invisible ski vehicle at the skier's feet,
+    /// moving as they were, boarded a quarter second later.
+    pub(super) fn start_skis(
+        &mut self,
+        owner: OwnerId,
+        position: Vec3,
+        velocity: Vec3,
+        after_ticks: u32,
+    ) -> Result<()> {
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(());
+        };
+        let yaw = peer.player.state().yaw;
+        let id = self.spawn_transient(
+            owner,
+            "v20.vehicle.skivehicle",
+            veh::Transform {
+                position: position.to_array(),
+                rotation: glam::Quat::from_rotation_y(-yaw).to_array(),
+            },
+            velocity,
+            1.0,
+        );
+        match id {
+            Some(id) => {
+                let due = self.simulation.state().tick + u64::from(after_ticks);
+                self.vehicles.pending_skis.push((owner, id, due));
+            }
+            None => {
+                let _ = self.weapons.cancel_skis(ActorId(owner));
+            }
+        }
+        Ok(())
+    }
+    /// Firing the skis again while skiing steps off them.
+    pub(super) fn stop_skis(&mut self, owner: OwnerId) {
+        if self.vehicles.mounted_family(owner) == Some(veh::Family::Skis)
+            && let Some(world) = &mut self.vehicles.world
+        {
+            let _ = world.dismount(
+                &self.simulation.physics,
+                veh::OwnerId(owner),
+                OccupantId(owner),
+                true,
+            );
+        }
+    }
+    /// `tumble()`: ride an invisible tumbling body until it settles.
+    pub(super) fn start_tumble(
+        &mut self,
+        owner: OwnerId,
+        transform: veh::Transform,
+        velocity: Vec3,
+        scale: f32,
+    ) -> Result<()> {
+        let alive = self.peers.get(&owner).is_some_and(|p| p.combat.alive);
+        if !alive || self.vehicles.mounted.contains_key(&owner) {
+            return Ok(());
+        }
+        let Some(id) =
+            self.spawn_transient(owner, "v20.vehicle.deathvehicle", transform, velocity, scale)
+        else {
+            return Ok(());
+        };
+        let world = self.vehicles.world.as_mut().unwrap();
+        let seat = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .find(|v| v.id == id)
+            .and_then(|v| v.seats.first().map(|s| s.transform.position));
+        let mounted = seat.is_some_and(|seat| {
+            world
+                .mount(&self.simulation.physics, id, 0, occupant(owner), seat)
+                .is_ok()
+        });
+        if !mounted {
+            let _ = world.remove(&mut self.simulation.physics, id);
+            return Ok(());
+        }
+        let intents = world.drain_intents();
+        self.apply_vehicle_intents(intents)?;
+        self.vehicles.tumbling.insert(owner);
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            // The tumbling player watches through the corpse camera.
+            peer.control = super::ControlObject::Corpse;
+        }
+        Ok(())
+    }
+    /// A tackle or crash throws the player into a tumble.
+    pub(super) fn tumble_player(&mut self, owner: OwnerId, velocity: Vec3) -> Result<()> {
+        if let Some(mount) = self.vehicles.mounted.get(&owner).cloned() {
+            if self.vehicles.mounted_family(owner) == Some(veh::Family::Skis)
+                && let Some(world) = &mut self.vehicles.world
+            {
+                world.wreck_skis(&mut self.simulation.physics, mount.vehicle)?;
+                let intents = world.drain_intents();
+                self.apply_vehicle_intents(intents)?;
+            }
+            return Ok(());
+        }
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(());
+        };
+        let state = peer.player.state();
+        let transform = veh::Transform {
+            position: state.feet,
+            rotation: glam::Quat::from_rotation_y(-state.yaw).to_array(),
+        };
+        self.start_tumble(owner, transform, velocity, 1.0)
+    }
+    /// Spawn a helper vehicle no brick owns (skis, tumble) moving at `velocity`.
+    fn spawn_transient(
+        &mut self,
+        owner: OwnerId,
+        definition: &str,
+        transform: veh::Transform,
+        velocity: Vec3,
+        scale: f32,
+    ) -> Option<VehicleId> {
+        let world = self.vehicles.world.as_mut()?;
+        self.vehicles.next_id += 1;
+        let id = VehicleId(self.vehicles.next_id);
+        world
+            .spawn(
+                &mut self.simulation.physics,
+                veh::Spawn {
+                    id,
+                    owner: veh::OwnerId(owner),
+                    definition: definition.into(),
+                    transform,
+                    spawn_id: None,
+                    respawn_ticks: None,
+                    scale,
+                },
+            )
+            .ok()?;
+        let _ = world.set_velocity(&mut self.simulation.physics, id, velocity.to_array());
+        self.tag_vehicle(id);
+        Some(id)
+    }
+    /// Board skis whose quarter second has passed; drop them otherwise.
+    fn board_skis(&mut self) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.vehicles.pending_skis)
+            .into_iter()
+            .partition(|(_, _, at)| *at <= tick);
+        self.vehicles.pending_skis = waiting;
+        for (owner, vehicle, _) in due {
+            let eligible = self
+                .peers
+                .get(&owner)
+                .filter(|p| p.combat.alive && !self.vehicles.mounted.contains_key(&owner))
+                .map(|p| Vec3::from(p.player.state().feet));
+            let Some(world) = &mut self.vehicles.world else {
+                continue;
+            };
+            let boarded = eligible.is_some_and(|feet| {
+                world
+                    .mount(&self.simulation.physics, vehicle, 0, occupant(owner), feet.to_array())
+                    .is_ok()
+            });
+            if !boarded {
+                let _ = world.remove(&mut self.simulation.physics, vehicle);
+                let _ = self.weapons.cancel_skis(ActorId(owner));
+            }
+            let intents = world.drain_intents();
+            self.apply_vehicle_intents(intents)?;
+        }
+        Ok(())
+    }
+
     fn apply_vehicle_intents(&mut self, intents: Vec<Intent>) -> Result<()> {
         let tick = self.simulation.state().tick;
         for intent in intents {
@@ -619,6 +835,9 @@ impl Session {
                         self.weapon_triggers.remove(&owner);
                         self.vehicles.mounted.insert(owner, Mount { vehicle, seat });
                         self.vehicles.jump_held.insert(owner, true);
+                        self.vehicles
+                            .last_look
+                            .insert(owner, (peer.input.yaw, peer.input.pitch));
                         let feet = peer.player.state().feet;
                         self.cues.emit(
                             tick,
@@ -631,12 +850,29 @@ impl Session {
                     }
                 }
                 Intent::Dismounted {
+                    vehicle,
                     occupant,
                     transform,
                     velocity,
                     ..
                 } => {
                     let owner = occupant.owner.0;
+                    let family = self
+                        .vehicles
+                        .world
+                        .as_ref()
+                        .and_then(|w| w.definition_of(vehicle))
+                        .map(|d| d.family);
+                    if family == Some(veh::Family::Skis) {
+                        let _ = self.weapons.cancel_skis(ActorId(owner));
+                    }
+                    if self.vehicles.tumbling.remove(&owner)
+                        && let Some(peer) = self.peers.get_mut(&owner)
+                        && peer.combat.alive
+                        && peer.control == super::ControlObject::Corpse
+                    {
+                        peer.control = super::ControlObject::Player;
+                    }
                     self.vehicles.mounted.remove(&owner);
                     self.vehicles.last_dismount.insert(owner, tick);
                     if let Some(peer) = self.peers.get_mut(&owner) {
@@ -739,7 +975,17 @@ impl Session {
                         peer.player.push(Vec3::from(velocity));
                     }
                 }
-                Intent::TumbleRequested { .. } => {}
+                Intent::TumbleRequested {
+                    occupant,
+                    transform,
+                    velocity,
+                    scale,
+                    ..
+                } => {
+                    // skiVehicle::onWreck stops skiing before the tumble.
+                    let _ = self.weapons.cancel_skis(ActorId(occupant.owner.0));
+                    self.start_tumble(occupant.owner.0, transform, velocity.into(), scale)?
+                }
             }
         }
         Ok(())
@@ -761,14 +1007,21 @@ impl Session {
         };
         let snapshot = world.snapshot(&self.simulation.physics);
         for v in snapshot.vehicles {
+            let Some(d) = world.definition(&v.definition) else {
+                continue;
+            };
             for seat in &v.seats {
                 let Some(o) = seat.occupant else { continue };
                 let Some(peer) = self.peers.get_mut(&o.owner.0) else {
                     continue;
                 };
-                let rotation = glam::Quat::from_array(seat.transform.rotation);
-                let forward = rotation * Vec3::NEG_Z;
-                let yaw = forward.x.atan2(-forward.z);
+                // Whoever controls the vehicle sits fixed in the seat;
+                // passengers turn freely (`mRot.z` relative to the mount).
+                let yaw = if d.seat_role(seat.index) == SeatRole::Passenger {
+                    peer.input.yaw
+                } else {
+                    heading(seat.transform.rotation)
+                };
                 peer.player.place(
                     &mut self.simulation.physics,
                     Vec3::from(seat.transform.position),

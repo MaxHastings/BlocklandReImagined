@@ -184,6 +184,11 @@ impl Session {
                     direction,
                     velocity: Vec3::from(state.velocity),
                     grounded: state.grounded,
+                    mount: match self.vehicles.mounted_family(*owner) {
+                        None => bri_weapons::Mount::None,
+                        Some(bri_vehicles::Family::Skis) => bri_weapons::Mount::Skis,
+                        Some(_) => bri_weapons::Mount::Other,
+                    },
                     ..Frame::default()
                 },
             )?;
@@ -417,6 +422,18 @@ impl Session {
                     }
                 }
                 WeaponEvent::SportMovement { locked: false, .. } => {}
+                WeaponEvent::StartSkis {
+                    actor,
+                    position,
+                    velocity,
+                    mount_after_ticks,
+                } => self.start_skis(actor.0, position, velocity, mount_after_ticks)?,
+                WeaponEvent::StopSkis { actor } => self.stop_skis(actor.0),
+                // Ski nodes follow the ski vehicle the avatar rides.
+                WeaponEvent::SkiNodes { .. } => {}
+                WeaponEvent::Tumble {
+                    actor, velocity, ..
+                } => self.tumble_player(actor.0, velocity)?,
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
             }
         }

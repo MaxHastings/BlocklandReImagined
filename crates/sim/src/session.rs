@@ -755,7 +755,11 @@ impl Session {
                 self.drop_tool(owner, slot, direction)?;
                 Ok(Reply::Accepted)
             }
-            Command::WeaponTrigger { down } if self.vehicles.is_mounted(owner) => {
+            // Skiers keep their hands: the ski item stops skiing.
+            Command::WeaponTrigger { down }
+                if self.vehicles.is_mounted(owner)
+                    && self.vehicles.mounted_family(owner) != Some(bri_vehicles::Family::Skis) =>
+            {
                 self.vehicles.set_fire(owner, down);
                 Ok(Reply::Accepted)
             }
