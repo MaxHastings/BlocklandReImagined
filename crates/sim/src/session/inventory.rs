@@ -84,6 +84,11 @@ impl Session {
         if previous != slot {
             self.peers.get_mut(&owner).unwrap().inspection = None;
         }
+        // Choosing a brick puts tools away; the brick stays in hand whichever
+        // of the two requests lands first.
+        if slot.is_none() && self.brick_equipped(owner) {
+            self.hold_brick(owner)?;
+        }
         Ok(())
     }
     /// Called during host setup, before accepting connections. Item grants are

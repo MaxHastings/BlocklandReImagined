@@ -37,7 +37,7 @@ fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
         vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
     )?);
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-008/weapons.json"),
+        root.join("content/weapons-pack-009/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
         root.join("content/vehicles-pack-011/vehicles.json"),
@@ -165,7 +165,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
         vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
     )?);
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-008/weapons.json"),
+        root.join("content/weapons-pack-009/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
         root.join("content/vehicles-pack-011/vehicles.json"),

@@ -69,8 +69,6 @@ pub struct Vitals {
     pub control: super::ControlObject,
     /// Typing in the chat box (`MsgStartTalking`).
     pub talking: bool,
-    /// Bricks are in hand: the builder raises the right arm.
-    pub brick_in_hand: bool,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -291,7 +289,6 @@ impl Session {
                         mounted: self.mounted(*owner),
                         control: peer.control,
                         talking: peer.talking,
-                        brick_in_hand: self.brick_in_hand(*owner),
                     },
                 )
             })
@@ -980,6 +977,10 @@ impl Session {
             peer.control = super::ControlObject::Player;
         }
         self.give_loadout(owner, equipment.as_ref())?;
+        // The client keeps its brick selected through death.
+        if self.brick_equipped(owner) {
+            self.hold_brick(owner)?;
+        }
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
         let center = feet
             + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;

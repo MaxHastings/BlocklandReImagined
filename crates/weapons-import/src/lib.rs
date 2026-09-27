@@ -511,7 +511,9 @@ const CORE_PRESENTATION: [&str; 8] = [
 /// building tools, both wands and the spray cans are ordinary v20 images: the
 /// base colour can (`blueSprayCanImage`) is the template `setSprayCanColor`
 /// derives every palette can from, and the nine FX cans are literal.
-const CORE_ROOTS: [&str; 16] = [
+/// `brickImage` is the grey 2x2 `fxDTSBrickData::onUse` mounts in the right
+/// hand while bricks are in hand (and `horseBrickImage`'s parent).
+const CORE_ROOTS: [&str; 17] = [
     "clockProjectile",
     "hammerItem",
     "wrenchItem",
@@ -528,6 +530,7 @@ const CORE_ROOTS: [&str; 16] = [
     "rainbowSprayCanImage",
     "stableSprayCanImage",
     "jelloSprayCanImage",
+    "brickImage",
 ];
 /// `setSprayCanColor` swaps a translucent palette colour's can to this shape.
 /// No datablock names it literally, so it is imported explicitly.

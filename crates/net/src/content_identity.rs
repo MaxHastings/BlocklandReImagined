@@ -1001,9 +1001,9 @@ mod tests {
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
     }
     #[test]
-    #[ignore = "requires generated native weapons-pack-008; no window or audio"]
+    #[ignore = "requires generated native weapons-pack-009; no window or audio"]
     fn native_weapons_pack_identity_and_all_21_choices() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-008");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
         let content = WeaponContent::load(&root).unwrap();
         // 17 weapons plus the four core tools, which are v20 images too.
         assert_eq!(content.pack.items.len(), 21);
@@ -1189,9 +1189,9 @@ mod tests {
     #[ignore = "requires native weapons/presentation pack003; no renderer or original readers"]
     fn native_item_physics_covers_all_21_and_pins_authored_bounds() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let weapons = WeaponContent::load(&root.join("weapons-pack-008")).unwrap();
+        let weapons = WeaponContent::load(&root.join("weapons-pack-009")).unwrap();
         let physics =
-            ItemPhysicsContent::load(&root.join("item-presentation-pack-009"), &weapons).unwrap();
+            ItemPhysicsContent::load(&root.join("item-presentation-pack-010"), &weapons).unwrap();
         assert_eq!(physics.bounds.len(), 21);
         assert_eq!(
             physics

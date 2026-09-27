@@ -2226,3 +2226,21 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   changed (shared with the jeep, tank and skis): v20 applies
   `rotationalDrag` + `drag` damping, quadratic wheel steering and the same
   steering return to every WheeledVehicle.
+- 2026-09-27 held brick (protocol 24). Bricks in hand now mount v20's
+  `brickImage` (`base/data/shapes/brickWeapon.dts`, mount0, offset
+  `0 -0.05 0`, rotation/eyeRotation `0 180 0`, eyeOffset `0.7 1.2 -0.8`,
+  colour shift 0.647 grey, armReady) as a real server image, so it replicates
+  like any tool and raises the arm through the image. `Vitals.brick_in_hand`
+  is gone. The weapons importer now roots `brickImage`, which also fills
+  `horseBrickImage`'s inherited model. Content: weapons-pack-009 (008 plus
+  brickImage, brickDeployProjectile/Explosion and the brick trail emitter;
+  008 reproduces byte-exact from the same importer before the change) and
+  item-presentation-pack-010 built against it. Effects-runtime and
+  weapon-debris packs are unchanged; the image's Fire state (click-to-deploy
+  swing and `brickTrailEmitter`) is not driven yet because ghost deploy stays
+  client-side. Evidence: `cargo test --release --workspace`; `bri-sim --test
+  session -- --ignored bricks_in_hand`; `bri-client --test app_item_render --
+  --ignored bricks_in_hand` (first person 5548, third person 7001 changed
+  pixels; renders in artifacts/native-held-brick). Pre-existing failure:
+  `bri-weapons --test runtime inventory_drop_pickup_and_disconnect` fails on
+  weapons-pack-008 too.

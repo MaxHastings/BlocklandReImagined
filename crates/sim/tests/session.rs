@@ -268,7 +268,7 @@ fn release_after_core_switch_is_idempotent_but_cannot_start_a_weapon() {
 fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably() {
     let mut s = session();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-008/weapons.json");
+        .join("../../content/weapons-pack-009/weapons.json");
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap())
         .unwrap();
     let owner = s.join("Player".into(), Vec3::Y, false).unwrap();
@@ -301,7 +301,7 @@ fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably
 fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound() {
     use bri_sim::{presentation::CueKind, session::ActionAim};
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-008/weapons.json");
+        .join("../../content/weapons-pack-009/weapons.json");
     let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();
@@ -881,6 +881,55 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
 }
 
 #[test]
+#[ignore = "uses converted native weapons pack; headless server only"]
+fn bricks_in_hand_mount_the_grey_brick_image_in_the_right_hand() {
+    use bri_sim::session::BrickHand;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content/weapons-pack-009/weapons.json");
+    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let image = &pack.images["v20.image.brickimage"];
+    assert!(image.arm_ready && image.color_shift);
+    assert_eq!(image.color, [0.647, 0.647, 0.647, 1.0]);
+    assert_eq!(image.model, "base/data/shapes/brickWeapon.dts");
+    let mut s = session();
+    s.set_weapon_pack(pack).unwrap();
+    let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
+    let held = |s: &Session| {
+        s.weapon_view()
+            .images
+            .get(&a)
+            .map(|images| {
+                images
+                    .iter()
+                    .map(|i| (i.image.clone(), i.hand))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let brick = vec![("v20.image.brickimage".to_owned(), 0)];
+    let hand = |equipped| {
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped,
+            ghost: false,
+        })
+    };
+    // Choosing a brick sends both reports; either order leaves it in hand.
+    s.command(a, 1, hand(true)).unwrap();
+    s.command(a, 2, Command::EquipTool { slot: None }).unwrap();
+    assert_eq!(held(&s), brick);
+    // A tool replaces it, and putting bricks away then leaves the tool alone.
+    s.command(a, 3, Command::EquipTool { slot: Some(0) }).unwrap();
+    s.command(a, 4, hand(false)).unwrap();
+    assert_eq!(held(&s)[0].0, "v20.image.hammerimage");
+    s.command(a, 5, Command::EquipTool { slot: None }).unwrap();
+    s.command(a, 6, hand(true)).unwrap();
+    assert_eq!(held(&s), brick);
+    s.command(a, 7, hand(false)).unwrap();
+    assert!(held(&s).is_empty());
+}
+
+#[test]
 fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
     use bri_sim::{
         presentation::CueKind,
@@ -911,7 +960,6 @@ fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
             })
             .collect::<Vec<_>>()
     };
-    assert!(!s.vitals()[&a].brick_in_hand);
     run(
         &mut s,
         Command::BrickHand(BrickHand {
@@ -920,7 +968,6 @@ fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
             ghost: true,
         }),
     );
-    assert!(s.vitals()[&a].brick_in_hand);
     assert_eq!(
         run(&mut s, Command::BuildGesture(BuildGesture::ShiftTowards)),
         ["shiftTO"]

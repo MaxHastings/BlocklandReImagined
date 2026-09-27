@@ -3415,11 +3415,6 @@ impl PlatformApp for App {
                     .get_mut(owner)
                     .unwrap()
                     .set_skis(skiing.then_some([0.0, 0.2, 0.64, 1.0]));
-                // v20 mounts `brickImage` (`armReady`) in the right hand while
-                // bricks are in hand.
-                if view.vitals.get(owner).is_some_and(|v| v.brick_in_hand) {
-                    ready_hands.push((0, true));
-                }
                 let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.

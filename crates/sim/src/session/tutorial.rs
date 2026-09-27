@@ -33,6 +33,7 @@ const WRENCH_IMAGE: &str = "v20.image.wrenchimage";
 const PRINTER_IMAGE: &str = "v20.image.printgunimage";
 const GUN_IMAGE: &str = "v20.image.gunimage";
 const WAND_IMAGE: &str = "v20.image.wandimage";
+const BRICK_IMAGE: &str = "v20.image.brickimage";
 const HORSE: &str = "v20.vehicle.horsearmor";
 const JEEP: &str = "v20.vehicle.jeepvehicle";
 const REWARD_SOUND: &str = "v20/sound/rewardsound";
@@ -142,7 +143,8 @@ impl Abilities {
 
 /// Client-owned building state the server cannot see: whether the brick
 /// inventory holds bricks (`inventory[]`), bricks are in hand (`brickImage`)
-/// and a ghost brick exists (`tempBrick`). Only the tutorial's prompts read it.
+/// and a ghost brick exists (`tempBrick`). The tutorial's prompts read it and
+/// `equipped` mounts `brickImage`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrickHand {
@@ -237,21 +239,47 @@ impl Session {
         Ok(())
     }
 
-    /// Record a client's brick inventory state.
+    /// Record a client's brick inventory state. Taking bricks in hand mounts
+    /// the grey 2x2 `brickImage` in the right hand (`fxDTSBrickData::onUse`);
+    /// putting them away unmounts it unless a tool already replaced it.
     pub(super) fn set_brick_hand(&mut self, owner: OwnerId, hand: BrickHand) -> Result<()> {
-        self.peers
-            .get_mut(&owner)
-            .context("Unknown connection")?
-            .tutorial
-            .hand = hand;
-        Ok(())
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let was = std::mem::replace(&mut peer.tutorial.hand, hand).equipped;
+        let alive = peer.combat.alive;
+        if !alive || was == hand.equipped {
+            return Ok(());
+        }
+        if hand.equipped {
+            self.hold_brick(owner)
+        } else if self.holds_brick(owner) {
+            self.weapons.equip(ActorId(owner), None)
+        } else {
+            Ok(())
+        }
     }
 
-    /// v20 mounts `brickImage` (`armReady`) while bricks are in hand.
-    pub(super) fn brick_in_hand(&self, owner: OwnerId) -> bool {
+    /// Bricks are in hand on the client.
+    pub(super) fn brick_equipped(&self, owner: OwnerId) -> bool {
         self.peers
             .get(&owner)
             .is_some_and(|peer| peer.tutorial.hand.equipped)
+    }
+
+    /// `%player.mountImage(brickImage, 0)`. Packs without the image mount nothing.
+    pub(super) fn hold_brick(&mut self, owner: OwnerId) -> Result<()> {
+        if !self.weapons.pack.images.contains_key(BRICK_IMAGE) || self.holds_brick(owner) {
+            return Ok(());
+        }
+        self.weapons.drop_ball(ActorId(owner))?;
+        self.weapons.mount_image(ActorId(owner), BRICK_IMAGE, None)?;
+        self.weapon_triggers.remove(&owner);
+        Ok(())
+    }
+
+    fn holds_brick(&self, owner: OwnerId) -> bool {
+        self.weapons
+            .image_state(ActorId(owner), 0)
+            .is_some_and(|(image, _)| image.id == BRICK_IMAGE)
     }
 
     /// `noBreak` bricks and the vehicle pads' `vehicleLimit`.
