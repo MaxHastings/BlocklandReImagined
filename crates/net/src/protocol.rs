@@ -248,6 +248,8 @@ pub enum Message {
         checkpoint: Checkpoint,
     },
     Update(Delta),
+    /// The host changed maps: the full state of the new mission.
+    MapChanged(Checkpoint),
     AdminSnapshot(bri_sim::session::AdminSnapshot),
     /// Addressed to this client only (minigame chat, prints, invitations).
     Notice(bri_sim::session::Notice),

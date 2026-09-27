@@ -539,6 +539,7 @@ fn options() -> ServerOptions {
             Vec3::new(-3.0, 0.05, 0.0),
         ],
         certificate: None,
+        map_loader: None,
     }
 }
 
@@ -1921,6 +1922,85 @@ async fn minigame_listing_replicates_to_other_clients_and_late_joiners() -> Resu
         .await?;
     let other_id = other.owner;
     wait(&mut owner, |c| c.replica.minigames.first().is_some_and(|g| g.members.contains(&other_id))).await?;
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
+    use bri_admin::{Action, Request};
+    use bri_sim::session::{MapListing, Reply};
+    let maps = vec![
+        MapListing { id: "fixture".into(), name: "Fixture".into() },
+        MapListing { id: "other".into(), name: "Other".into() },
+    ];
+    let mut game = session();
+    game.set_spawn_points(options().spawn_points)?;
+    game.set_map_list(maps.clone())?;
+    let mut opts = options();
+    opts.map_loader = Some(std::sync::Arc::new(move |map: &str| {
+        let mut next = session();
+        next.set_spawn_points(vec![Vec3::new(10.0, 0.05, 10.0), Vec3::new(13.0, 0.05, 10.0)])?;
+        next.set_map_list(maps.clone())?;
+        anyhow::ensure!(map == "other", "unexpected map");
+        Ok(next)
+    }));
+    let server = server::start(game, opts)?;
+    let mut admin = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Admin".into(),
+        "fixture-v1".into(),
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let mut guest = Client::connect(
+        server.address,
+        &server.certificate,
+        "Guest".into(),
+        "fixture-v1".into(),
+        None,
+    )
+    .await?;
+    let guest_id = guest.owner;
+    guest.command(Command::Chat("before".into())).await?;
+    match admin
+        .command(Command::Admin(Request::new(Action::RequestMaps)))
+        .await?
+    {
+        Reply::Admin(reply) => assert!(matches!(
+            reply.data,
+            AdminData::Maps(ref rows) if rows.len() == 2
+        )),
+        other => anyhow::bail!("unexpected reply {other:?}"),
+    }
+    admin
+        .command(Command::Admin(Request::new(Action::ChangeMap {
+            map: "other".into(),
+        })))
+        .await?;
+    let moved = |c: &Client| {
+        c.replica
+            .chat
+            .iter()
+            .any(|l| l.text.contains("changed the map to"))
+            && c.replica.names.len() == 2
+    };
+    wait(&mut guest, moved).await?;
+    wait(&mut admin, moved).await?;
+    assert_eq!(guest.owner, guest_id);
+    // Players keep their identity and chat history and can act on the new map.
+    assert!(guest.replica.chat.iter().any(|l| l.text == "before"));
+    guest.command(Command::Chat("after".into())).await?;
+    wait(&mut admin, |c| c.replica.chat.iter().any(|l| l.text == "after")).await?;
+    wait(&mut admin, |c| {
+        c.replica
+            .poses
+            .get(&guest_id)
+            .is_some_and(|p| p.player.feet[2] > 5.0)
+    })
+    .await?;
     server.stop().await?;
     Ok(())
 }

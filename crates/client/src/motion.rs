@@ -65,6 +65,8 @@ pub struct Motion {
     ticked: BTreeMap<OwnerId, PlayerState>,
     local_eye: Option<Vec3>,
     mounted: bool,
+    /// Last input sequence sent before a map change reset prediction.
+    sent_sequence: u64,
 }
 
 impl Motion {
@@ -73,7 +75,9 @@ impl Motion {
     }
     /// Collision world for prediction, prepared off the UI thread with the map.
     pub fn install(&mut self, mirror: CollisionMirror) {
+        let sent = self.predictor.as_ref().map_or(self.sent_sequence, |p| p.sequence());
         self.reset();
+        self.sent_sequence = sent;
         self.mirror = Some(mirror);
     }
     pub fn predicting(&self) -> bool {
@@ -203,7 +207,8 @@ impl Motion {
                 }
             }
         } else if let Some(mirror) = self.mirror.take() {
-            let predictor = Predictor::new(mirror, pose.player.clone())?;
+            let mut predictor = Predictor::new(mirror, pose.player.clone())?;
+            predictor.continue_after(self.sent_sequence);
             self.previous = Some(predictor.state().clone());
             self.predictor = Some(predictor);
         }

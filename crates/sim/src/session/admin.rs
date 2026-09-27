@@ -30,6 +30,8 @@ pub enum AdminCapability {
     Vehicles,
     /// `/timeScale`.
     TimeScale,
+    /// Admin menu Change Map.
+    ChangeMap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +66,15 @@ pub enum AdminData {
         rows: Vec<BanRecord>,
         now_unix_seconds: u64,
     },
+    /// `serverCmdGetMapList`.
+    Maps(Vec<MapListing>),
+}
+
+/// A map the host can change to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MapListing {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +109,8 @@ pub(super) struct AdminRuntime {
     next_connection: u64,
     revision: u64,
     passwords: BTreeMap<PasswordSlot, Secret>,
+    /// The host installed a map list, so Change Map works.
+    pub(super) maps_available: bool,
 }
 
 impl AdminRuntime {
@@ -209,6 +222,9 @@ impl AdminRuntime {
             supported.insert(AdminCapability::Teleport);
             supported.insert(AdminCapability::Vehicles);
             supported.insert(AdminCapability::TimeScale);
+            if self.maps_available {
+                supported.insert(AdminCapability::ChangeMap);
+            }
             if rows.iter().any(|row| {
                 row.durable_identity_available
                     && !row.is_owner
@@ -275,6 +291,8 @@ impl AdminRuntime {
                 | Action::ResetVehicles
                 | Action::ClearVehicles
                 | Action::TimeScale { .. }
+                | Action::RequestMaps
+                | Action::ChangeMap { .. }
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
                 | Action::HostSetPassword {
@@ -446,6 +464,12 @@ impl AdminRuntime {
                             session.admin_find(actor_owner, victim)?;
                         }
                         GameplayCommand::Warp => session.admin_warp(actor_owner)?,
+                        GameplayCommand::RequestMaps => {
+                            data = AdminData::Maps(session.map_list.clone());
+                        }
+                        GameplayCommand::ChangeMap(map) => {
+                            session.request_map_change(actor_owner, map)?;
+                        }
                         GameplayCommand::ResetVehicles => {
                             session.admin_reset_vehicles(actor_owner)?
                         }

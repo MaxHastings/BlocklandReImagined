@@ -22,6 +22,7 @@ mod events;
 mod admin_world;
 mod admin_players;
 mod trust;
+mod map_change;
 mod inventory;
 mod special;
 mod tutorial;
@@ -36,6 +37,7 @@ mod tools;
 mod spray;
 pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
+    MapListing,
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, Vitals};
@@ -419,6 +421,9 @@ pub struct Session {
     /// Admin `/timeScale` (`setTimeScale`), 0.2 to 2.
     time_scale: f32,
     trust: trust::TrustBook,
+    /// Admin Change Map choices and the pending request.
+    map_list: Vec<MapListing>,
+    map_change: Option<(OwnerId, String)>,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -472,6 +477,8 @@ impl Session {
             loading: None,
             time_scale: 1.0,
             trust: Default::default(),
+            map_list: Vec::new(),
+            map_change: None,
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).

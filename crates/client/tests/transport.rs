@@ -30,6 +30,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 content_id: "fixture".into(),
                 spawn_points: vec![Vec3::new(0.0, 100.0, 0.0)],
                 certificate: None,
+                map_loader: None,
             },
             1,
         )?;
@@ -81,6 +82,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 }
                 Event::Failed(e) => anyhow::bail!(e),
                 Event::Ready => anyhow::bail!("Duplicate ready"),
+                Event::MapChanged(map) => anyhow::bail!("Unexpected map change to {map}"),
                 Event::Notice(_) => {}
                 Event::Presentation { cues, dropped } => {
                     assert!(cues.is_empty());

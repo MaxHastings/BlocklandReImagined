@@ -35,6 +35,8 @@ pub enum ClientEvent {
     },
     AdminSnapshot(bri_sim::session::AdminSnapshot),
     Notice(bri_sim::session::Notice),
+    /// The replica now holds a new map.
+    MapChanged,
 }
 pub struct Client {
     endpoint: quinn::Endpoint,
@@ -264,6 +266,10 @@ impl Client {
                         changed_bricks,
                         palette_changed,
                     })
+                }
+                Message::MapChanged(checkpoint) => {
+                    self.replica = Replica::new(checkpoint)?;
+                    Ok(ClientEvent::MapChanged)
                 }
                 Message::Reply { sequence, result } => Ok(ClientEvent::Reply { sequence, result }),
                 Message::Notice(notice) => Ok(ClientEvent::Notice(notice)),

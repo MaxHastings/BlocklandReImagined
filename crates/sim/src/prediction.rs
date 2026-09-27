@@ -186,6 +186,14 @@ impl Predictor {
     pub fn sequence(&self) -> u64 {
         self.sequence
     }
+    /// Keep numbering inputs after an earlier predictor's last one (a new
+    /// map): the server ignores sequences it has already seen.
+    pub fn continue_after(&mut self, sequence: u64) {
+        if self.pending.is_empty() {
+            self.sequence = self.sequence.max(sequence);
+            self.acknowledged = self.acknowledged.max(sequence);
+        }
+    }
     pub fn world(&self) -> &CollisionMirror {
         &self.world
     }

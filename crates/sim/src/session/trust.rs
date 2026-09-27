@@ -67,6 +67,10 @@ pub(super) struct TrustBook {
 }
 
 impl TrustBook {
+    /// Send every viewer its player list trust again (a new map).
+    pub(super) fn forget_published(&mut self) {
+        self.published.clear();
+    }
     fn level(&self, a: Principal, b: Principal) -> u8 {
         self.levels
             .get(&a)

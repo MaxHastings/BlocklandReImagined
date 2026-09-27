@@ -56,6 +56,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::WorldCommands => ui::AdminFeature::ClearBricks,
                 Capability::DestructoWand => ui::AdminFeature::Wand,
                 Capability::Spy => ui::AdminFeature::Spy,
+                Capability::ChangeMap => ui::AdminFeature::Maps,
                 // Chat commands only; the Admin menu has no buttons for them.
                 Capability::Teleport | Capability::Vehicles | Capability::TimeScale => {
                     return None;
@@ -131,6 +132,10 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
             Action::HighlightBrickGroup { group: *group },
         ),
         ui::AdminAction::Wand => (Capability::DestructoWand, Action::DestructoWand),
+        ui::AdminAction::RequestMaps => (Capability::ChangeMap, Action::RequestMaps),
+        ui::AdminAction::ChangeMap { map } => {
+            (Capability::ChangeMap, Action::ChangeMap { map: map.clone() })
+        }
         ui::AdminAction::SetPassword {
             slot: ui::AdminPasswordSlot::Admin,
             password,
@@ -268,6 +273,19 @@ pub fn reply_updates(
                     .collect(),
             }));
         }
+        (AdminData::Maps(rows), ui::AdminAction::RequestMaps) => {
+            updates.push(UiUpdate::Admin(ui::AdminUpdate::Maps {
+                request: id,
+                revision: reply.snapshot.revision,
+                rows: rows
+                    .iter()
+                    .map(|row| ui::AdminMap {
+                        id: row.id.clone(),
+                        name: plain(&row.name),
+                    })
+                    .collect(),
+            }));
+        }
         (AdminData::None, ui::AdminAction::Login { .. }) => ensure!(
             reply.snapshot.role.is_admin(),
             "Host did not grant administrator permission"
@@ -280,6 +298,7 @@ pub fn reply_updates(
             | ui::AdminAction::Unban { .. }
             | ui::AdminAction::ClearBrickGroup { .. }
             | ui::AdminAction::ClearAllBricks
+            | ui::AdminAction::ChangeMap { .. }
             | ui::AdminAction::SetPassword { .. },
         ) => {}
         _ => bail!("Host returned an unexpected administration reply"),

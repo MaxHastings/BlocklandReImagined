@@ -17,7 +17,11 @@ pub struct ServerOptions {
     /// A persistent host identity lets joiners keep trusting this host
     /// across restarts. None generates a throwaway certificate.
     pub certificate: Option<HostCertificate>,
+    /// Builds a configured, empty session for a map id (admin Change Map).
+    pub map_loader: Option<MapLoader>,
 }
+/// Loads a map for Change Map; runs on a blocking thread.
+pub type MapLoader = Arc<dyn Fn(&str) -> Result<Session> + Send + Sync>;
 /// Self-signed QUIC host certificate and its PKCS#8 private key.
 #[derive(Clone)]
 pub struct HostCertificate {
@@ -490,6 +494,8 @@ async fn run(
     let mut time_scale = session.time_scale();
     let mut last_chat = 0;
     let mut step_errors = 0_u64;
+    let mut spawn_points = options.spawn_points.clone();
+    let (map_tx, mut map_rx) = mpsc::channel::<(OwnerId, Result<Session>)>(1);
     let mut joins = 0;
     let mut resumes = 0;
     let mut commands = 0;
@@ -504,6 +510,21 @@ async fn run(
             if let Some(accepted)=accepted {if let Ok(permit)=permits.clone().try_acquire_owned(){let events=events.clone();let request_budget=request_budget.clone();tasks.spawn(async move{let _permit=permit;if let Ok(Ok(connection))=tokio::time::timeout(Duration::from_secs(10),accepted).await {let _=connection_task(connection,events,request_budget,server_fingerprint,require_identity).await;}});}else{accepted.refuse();}}
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
+        Some((admin,loaded))=map_rx.recv()=>{
+            match loaded {
+                Ok(new)=>{
+                    let old=std::mem::replace(&mut session,new);
+                    session.adopt(old,admin)?;
+                    spawn_points=session.spawn_points().to_vec();
+                    names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();
+                    let bytes=Arc::new(codec::encode(&Message::MapChanged(Checkpoint::from_session(&session,cursor)))?);
+                    for peer in peers.values(){if peer.out.try_send(bytes.clone()).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}
+                    broadcast_admin_snapshots(&session,&peers)?;
+                }
+                Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
+            }
+        },
         Some(event)=incoming.recv()=>{match event {
             Event::Join{hello,principal,connection,out,answer}=>{
                 let join:Result<OwnerId>= (||{
@@ -515,14 +536,14 @@ async fn run(
                         ensure!(!peers.contains_key(&owner),"Owner is still connected");
                         ensure!(ticket_principal==principal,"Resume identity does not match authenticated ticket");
                         let administrator=ticket_host || supplied_host;
-                        let mut error=None;let mut found=false;for spawn in &options.spawn_points {match session.resume_verified(owner,*spawn,administrator,principal){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
+                        let mut error=None;let mut found=false;for spawn in &spawn_points {match session.resume_verified(owner,*spawn,administrator,principal){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
                         tickets.insert(token_key(&token),(owner,administrator,principal));
                         resumes+=1;(owner,token)
                     }else{
                         ensure!(tickets.len()<4096,"Server identity capacity reached");
                         let mut bytes=[0;32];getrandom::fill(&mut bytes).map_err(|e|anyhow::anyhow!("OS randomness failed: {e}"))?;let token=ResumeToken(bytes);
                         let administrator=supplied_host;
-                        let mut owner=None;let mut error=None;for spawn in &options.spawn_points {match session.join_verified(hello.name.clone(),*spawn,administrator,principal){Ok(id)=>{owner=Some(id);break},Err(e)=>error=Some(e)}}
+                        let mut owner=None;let mut error=None;for spawn in &spawn_points {match session.join_verified(hello.name.clone(),*spawn,administrator,principal){Ok(id)=>{owner=Some(id);break},Err(e)=>error=Some(e)}}
                         let owner=owner.ok_or_else(||error.unwrap_or_else(||anyhow::anyhow!("No spawn points")))?;
                         tickets.insert(token_key(&token),(owner,administrator,principal));joins+=1;(owner,token)
                     };
@@ -551,6 +572,12 @@ async fn run(
                         }
                     }
                     if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers)?;}
+                    if let Some((admin,map))=session.take_map_change(){
+                        match options.map_loader.clone() {
+                            Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{let _=tx.blocking_send((admin,loader(&map)));});}
+                            None=>session.map_change_failed(admin,"This host cannot change maps"),
+                        }
+                    }
                     if admin_store.as_ref().is_some_and(AdminStore::poisoned) {
                         anyhow::bail!("Admin store commit durability is uncertain; host stopped without publishing the request")
                     }

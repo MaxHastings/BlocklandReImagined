@@ -75,8 +75,6 @@ impl Drop for WorldJob {
         self.abort.abort();
     }
 }
-/// Request id for the automatic trust list upload after joining.
-const TRUST_UPLOAD_REQUEST: RequestId = RequestId::MAX;
 struct Attempt {
     id: RequestId,
     worker: Worker,
@@ -95,6 +93,8 @@ struct Attempt {
     router: Option<mpsc::Receiver<String>>,
     /// How this player trusts each other player (`secureClientCmd_ClientTrust`).
     trust: BTreeMap<bri_world::OwnerId, bri_sim::session::PlayerTrust>,
+    /// Loading the map the host changed to failed.
+    map_failure: Option<mpsc::Receiver<String>>,
 }
 struct PendingAction {
     action: UiAction,
@@ -102,6 +102,97 @@ struct PendingAction {
     dialog_epoch: u64,
     inspection: Option<InspectMode>,
     dialog_request: bool,
+}
+/// Everything a client needs to show and predict on `map` (joins and map changes).
+fn prepare_map(
+    paths: &crate::content::ContentPaths,
+    map: &str,
+    selected: Vec<(String, u8)>,
+    catalog: &bri_sim::session::ToolCatalog,
+) -> Result<Prepared> {
+    let map = map.to_owned();
+    let visual = load_map_bundle(&paths.map_bundle, &map)?;
+    let definitions = Definitions::load(&paths.brick_catalog, &paths.geometry)?;
+    let meshes = Arc::new(
+        definitions
+            .entries
+            .iter()
+            .map(|(id, def)| (id.clone(), def.mesh.clone()))
+            .collect(),
+    );
+    let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
+    let materials = Arc::new(crate::materials::BrickMaterials::load(
+        &paths.brick_materials,
+    )?);
+    let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
+    let mut mirror = bri_sim::prediction::CollisionMirror::new(
+        definitions.clone(),
+        native_map.colliders.clone(),
+        native_map.waters.clone(),
+    );
+    mirror.attach_terrain(native_map.terrain.clone())?;
+    let mut building =
+        crate::building::Building::new(definitions, native_map.colliders)?;
+    building.attach_terrain(native_map.terrain);
+    building.set_catalog(selected)?;
+    if let Some(print) = &catalog.default_print {
+        building.set_default_prints(
+            catalog
+                .brick_print_aspects
+                .keys()
+                .map(|id| (id.clone(), print.clone()))
+                .collect(),
+        )?;
+    }
+    let foliage = crate::foliage::PreparedFoliage::load(
+        &paths.foliage,
+        &map,
+        &building,
+        &native_map.waters,
+    )?;
+    Ok(Prepared {
+        foliage,
+        map_id: map,
+        waters: native_map.waters,
+        scene: visual.scene,
+        terrain: visual.terrain.into_iter().map(Arc::new).collect(),
+        meshes,
+        materials,
+        palette,
+        building,
+        mirror,
+    })
+}
+/// Everything a host installs in a map's session; kept to build the next
+/// map's session when an administrator changes maps.
+struct HostSetup {
+    lan: bool,
+    catalog: bri_sim::session::ToolCatalog,
+    weapon_pack: bri_weapons::Pack,
+    item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
+    avatar_catalog: bri_content::avatar::Package,
+    vehicle_pack: bri_vehicles::Pack,
+    event_catalog: bri_events::Catalog,
+    event_sounds: Vec<String>,
+    maps: Vec<bri_sim::session::MapListing>,
+}
+impl HostSetup {
+    fn session(&self, loaded: crate::content::LoadedMap) -> Result<Session> {
+        let mut session = Session::new(loaded.simulation);
+        session.set_lan_host(self.lan);
+        session.set_tool_catalog(self.catalog.clone())?;
+        session.set_weapon_pack(self.weapon_pack.clone())?;
+        session.set_item_bounds(self.item_bounds.clone())?;
+        session.set_avatar_catalog(self.avatar_catalog.clone())?;
+        session.set_vehicle_pack(self.vehicle_pack.clone())?;
+        session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
+        session.set_spawn_points(loaded.spawn_points)?;
+        session.set_map_list(self.maps.clone())?;
+        if let Some(tutorial) = loaded.tutorial {
+            session.set_tutorial(tutorial)?;
+        }
+        Ok(session)
+    }
 }
 /// Request ID for unsolicited state reports; their replies are not awaited.
 const REPORT_REQUEST: RequestId = RequestId::MAX;
@@ -1097,6 +1188,18 @@ impl App {
             "This map has no usable native bundle yet"
         );
         let paths = self.content.paths.clone();
+        let paths_for_maps = paths.clone();
+        // Admin Change Map choices (the Tutorial has its own entry point).
+        let map_list: Vec<_> = self
+            .content
+            .maps
+            .iter()
+            .filter(|m| !m.id.contains("map_tutorial"))
+            .map(|m| bri_sim::session::MapListing {
+                id: m.id.clone(),
+                name: m.name.clone(),
+            })
+            .collect();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
         let selected: Vec<_> = self
@@ -1259,33 +1362,39 @@ impl App {
                 "0.0.0.0:28000"
             }
             .parse()?;
-            let mut session = Session::new(loaded.simulation);
-            // v20 `$Server::LAN`: single-player and LAN hosts keep the looser
-            // brick-damage rule; internet hosts use miniGameCanDamage.
-            session.set_lan_host(!internet);
+            let setup = HostSetup {
+                // v20 `$Server::LAN`: single-player and LAN hosts keep the looser
+                // brick-damage rule; internet hosts use miniGameCanDamage.
+                lan: !internet,
+                catalog,
+                weapon_pack,
+                item_bounds,
+                avatar_catalog,
+                vehicle_pack,
+                event_catalog,
+                event_sounds,
+                maps: map_list,
+            };
+            let spawn_points = loaded.spawn_points.clone();
+            let mut session = setup.session(loaded)?;
             session.set_admin_passwords(admin, super_admin)?;
-            session.set_tool_catalog(catalog)?;
-            session.set_weapon_pack(weapon_pack)?;
-            session.set_item_bounds(item_bounds)?;
-            session.set_avatar_catalog(avatar_catalog)?;
-            session.set_vehicle_pack(vehicle_pack)?;
-            session.set_event_catalog(event_catalog, event_sounds)?;
-            session.set_spawn_points(loaded.spawn_points.clone())?;
-            if let Some(tutorial) = loaded.tutorial {
-                session.set_tutorial(tutorial)?;
-            }
+            let map_loader: server::MapLoader = {
+                let paths = paths_for_maps.clone();
+                Arc::new(move |map: &str| setup.session(paths.load_map(map, None)?))
+            };
             let mut host = server::start_with_admin_store_and_limit(
                 session,
                 ServerOptions {
                     bind,
                     content_id: identity.clone(),
-                    spawn_points: loaded.spawn_points,
+                    spawn_points,
                     // LAN hosts keep one identity so joiners' saved trust stays valid.
                     certificate: if single {
                         None
                     } else {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
+                    map_loader: Some(map_loader),
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),
@@ -1331,6 +1440,7 @@ impl App {
             talking: Vec::new(),
             router: internet.then_some(router),
             trust: BTreeMap::new(),
+            map_failure: None,
         });
         Ok(())
     }
@@ -1472,57 +1582,7 @@ impl App {
             let permit = load_limit.acquire_owned().await?;
             let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
                 let _permit = permit;
-                let visual = load_map_bundle(&paths.map_bundle, &map)?;
-                let definitions = Definitions::load(&paths.brick_catalog, &paths.geometry)?;
-                let meshes = Arc::new(
-                    definitions
-                        .entries
-                        .iter()
-                        .map(|(id, def)| (id.clone(), def.mesh.clone()))
-                        .collect(),
-                );
-                let native_map = bri_sim::map::NativeMap::load(&paths.map_bundle, &map)?;
-                let materials = Arc::new(crate::materials::BrickMaterials::load(
-                    &paths.brick_materials,
-                )?);
-                let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
-                let mut mirror = bri_sim::prediction::CollisionMirror::new(
-                    definitions.clone(),
-                    native_map.colliders.clone(),
-                    native_map.waters.clone(),
-                );
-                mirror.attach_terrain(native_map.terrain.clone())?;
-                let mut building =
-                    crate::building::Building::new(definitions, native_map.colliders)?;
-                building.attach_terrain(native_map.terrain);
-                building.set_catalog(selected)?;
-                if let Some(print) = &catalog.default_print {
-                    building.set_default_prints(
-                        catalog
-                            .brick_print_aspects
-                            .keys()
-                            .map(|id| (id.clone(), print.clone()))
-                            .collect(),
-                    )?;
-                }
-                let foliage = crate::foliage::PreparedFoliage::load(
-                    &paths.foliage,
-                    &map,
-                    &building,
-                    &native_map.waters,
-                )?;
-                Ok(Prepared {
-                    foliage,
-                    map_id: map,
-                    waters: native_map.waters,
-                    scene: visual.scene,
-                    terrain: visual.terrain.into_iter().map(Arc::new).collect(),
-                    meshes,
-                    materials,
-                    palette,
-                    building,
-                    mirror,
-                })
+                prepare_map(&paths, &map, selected, &catalog)
             })
             .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
@@ -1543,6 +1603,7 @@ impl App {
             talking: Vec::new(),
             router: None,
             trust: BTreeMap::new(),
+            map_failure: None,
         });
         Ok(())
     }
@@ -1937,6 +1998,46 @@ impl App {
                     }
                 }
                 network::Event::Ready => a.ready = true,
+                network::Event::MapChanged(map) => {
+                    // Load the new map's scene and prediction world; the old
+                    // scene stays until it is ready.
+                    let paths = self.content.paths.clone();
+                    let selected: Vec<_> = self
+                        .content
+                        .catalog
+                        .bricks
+                        .iter()
+                        .filter(|b| b.selectable())
+                        .map(|b| (b.id.clone(), b.orientation_fix))
+                        .collect();
+                    let catalog = self.tool_ui.server_catalog();
+                    let load_limit = self.load_limit.clone();
+                    let (scene_tx, scene) = mpsc::sync_channel(1);
+                    a.scene = scene;
+                    self.world_items.reset();
+                    self.brick_debris.clear();
+                    let (failed_tx, failed_rx) = mpsc::sync_channel(1);
+                    a.map_failure = Some(failed_rx);
+                    self.runtime.spawn(async move {
+                        let prepared = async {
+                            let permit = load_limit.acquire_owned().await?;
+                            tokio::task::spawn_blocking(move || {
+                                let _permit = permit;
+                                prepare_map(&paths, &map, selected, &catalog)
+                            })
+                            .await?
+                        }
+                        .await;
+                        match prepared {
+                            Ok(prepared) => {
+                                let _ = scene_tx.send(prepared);
+                            }
+                            Err(error) => {
+                                let _ = failed_tx.send(format!("{error:#}"));
+                            }
+                        }
+                    });
+                }
                 network::Event::Notice(bri_sim::session::Notice::Inspected {
                     brick_id,
                     brick,
@@ -2023,11 +2124,6 @@ impl App {
                                 text: plain_chat(&text),
                             }
                         }
-                        bri_sim::session::Notice::Sound(profile) => {
-                            self.audio
-                                .profile(&profile, bri_audio::Placement::Listener);
-                            continue;
-                        }
                         bri_sim::session::Notice::TrustInvite {
                             from,
                             name,
@@ -2085,6 +2181,16 @@ impl App {
             self.ui.apply_session(
                 a.id,
                 UiUpdate::Connection(ConnectionState::Failed { reason }),
+            );
+            self.disconnect();
+            return Ok(());
+        }
+        if let Some(reason) = a.map_failure.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.ui.apply_session(
+                a.id,
+                UiUpdate::Connection(ConnectionState::Failed {
+                    reason: format!("Could not load the new map: {reason}"),
+                }),
             );
             self.disconnect();
             return Ok(());
@@ -2372,7 +2478,7 @@ impl App {
             // `clientCmdTrustListUpload_Start`; the reply needs no handling.
             let list = crate::trust_list::TrustList::load(&self.state_dir.join("trust-list.json"));
             a.worker
-                .request(TRUST_UPLOAD_REQUEST, Command::TrustList(list.entries()))?;
+                .request(REPORT_REQUEST, Command::TrustList(list.entries()))?;
         }
         if let Some(view) = &a.view {
             if let Some(snapshot) = &view.admin_snapshot

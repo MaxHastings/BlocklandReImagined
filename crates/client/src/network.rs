@@ -107,6 +107,8 @@ pub enum Event {
         result: std::result::Result<Reply, bri_sim::session::Rejection>,
     },
     Failed(String),
+    /// The host changed to this map.
+    MapChanged(String),
 }
 struct Request {
     id: u64,
@@ -293,6 +295,13 @@ async fn run(
                     }
                     ClientEvent::Pose(_)|ClientEvent::Vehicle(_)=>publish(client,&world,checkpoint_cue_cursor,view),
                     ClientEvent::AdminSnapshot(_)=>publish(client,&world,checkpoint_cue_cursor,view),
+                    ClientEvent::MapChanged=>{
+                        // No log entry: consumers compare the whole new world.
+                        world.revision+=1;
+                        world.world=Arc::new(client.replica.world.clone());
+                        publish(client,&world,checkpoint_cue_cursor,view);
+                        events.try_send(Event::MapChanged(client.replica.world.map_id.clone())).context("UI event queue is full or closed")?;
+                    }
                     ClientEvent::Notice(notice)=>events.try_send(Event::Notice(notice)).context("UI notice queue is full or closed")?,
                 }
             }

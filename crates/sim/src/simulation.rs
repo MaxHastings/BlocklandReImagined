@@ -283,6 +283,10 @@ impl Simulation {
         self.physics.detect_collisions(&(), &());
         Ok(())
     }
+    /// Continue an earlier world's clock (the host changed maps).
+    pub fn set_tick(&mut self, tick: u64) {
+        self.authority.set_tick(tick);
+    }
     pub fn step(&mut self) -> Result<()> {
         self.authority.step()?;
         self.physics.step();

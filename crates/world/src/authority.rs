@@ -255,6 +255,10 @@ impl Authority {
         self.world.revision = revision;
         Ok(())
     }
+    /// Continue an earlier world's clock (the host changed maps).
+    pub fn set_tick(&mut self, tick: u64) {
+        self.world.tick = tick;
+    }
     /// Advance the world clock one fixed tick.
     pub fn step(&mut self) -> Result<()> {
         self.world.tick = self.world.tick.checked_add(1).context("Tick exhausted")?;
