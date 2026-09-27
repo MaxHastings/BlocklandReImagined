@@ -104,6 +104,7 @@ impl Session {
         let actor = Actor {
             owner: loader,
             administrator: true,
+            ..Default::default()
         };
         let result = bri_world::build::LoadPlan::batch(
             self.simulation.state(),

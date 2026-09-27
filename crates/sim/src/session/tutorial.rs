@@ -499,6 +499,7 @@ impl Session {
         let actor = Actor {
             owner,
             administrator: true,
+            ..Default::default()
         };
         let existing: Vec<BrickId> = self.simulation.state().bricks.keys().copied().collect();
         for id in existing {
@@ -1296,6 +1297,7 @@ impl Session {
                 &Actor {
                     owner,
                     administrator: true,
+                    ..Default::default()
                 },
                 id,
             )?;

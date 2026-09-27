@@ -489,6 +489,7 @@ async fn run(
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
     let mut last_chat = 0;
+    let mut step_errors = 0_u64;
     let mut joins = 0;
     let mut resumes = 0;
     let mut commands = 0;
@@ -562,7 +563,9 @@ async fn run(
             let now=std::time::Instant::now();
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             for _ in 0..steps {
-            session.step()?;let tick=session.simulation().state().tick;
+            // A failing gameplay adapter must not stop the host for everyone.
+            if let Err(error)=session.step(){step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
+            let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
                 for pose in poses(&session){let bytes=serde_json::to_vec(&Datagram::Pose(pose))?;for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}
                 for pose in session.vehicle_poses(){let bytes=serde_json::to_vec(&Datagram::Vehicle(pose))?;if bytes.len()<=MAX_DATAGRAM{for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}}

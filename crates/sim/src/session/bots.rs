@@ -71,12 +71,12 @@ impl Session {
         let wants_bot = wanted.is_some_and(is_bot_kind);
         match (current, wants_bot) {
             (Some(bot), false) => {
-                self.bots.by_brick.remove(&brick_id);
-                self.bots.brains.remove(&bot);
                 if self.peers.contains_key(&bot) {
                     self.disconnect(bot)?;
                     self.departed.remove(&bot);
                 }
+                self.bots.by_brick.remove(&brick_id);
+                self.bots.brains.remove(&bot);
             }
             (None, true) if self.bots.brains.len() < MAX_BOTS => {
                 let Some(brick) = self.simulation.state().bricks.get(&brick_id) else {

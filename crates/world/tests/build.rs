@@ -78,7 +78,8 @@ fn append_remaps_ids_exact_colors_and_owners_and_rejects_stale_or_unprivileged_c
             .load_build(
                 &Actor {
                     owner: 1,
-                    administrator: false
+                    administrator: false,
+                    ..Default::default()
                 },
                 plan()
             )
@@ -91,7 +92,8 @@ fn append_remaps_ids_exact_colors_and_owners_and_rejects_stale_or_unprivileged_c
             .load_build(
                 &Actor {
                     owner: 1,
-                    administrator: true
+                    administrator: true,
+                    ..Default::default()
                 },
                 plan()
             )
@@ -114,7 +116,8 @@ fn append_remaps_ids_exact_colors_and_owners_and_rejects_stale_or_unprivileged_c
             .load_build(
                 &Actor {
                     owner: 1,
-                    administrator: true
+                    administrator: true,
+                    ..Default::default()
                 },
                 stale
             )

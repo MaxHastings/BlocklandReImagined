@@ -113,6 +113,26 @@ pub enum Notice {
     Abilities(super::Abilities),
     /// `GameConnection::play2D`: a sound profile only this client hears.
     Sound(String),
+    /// `MessageBoxOK` from the server.
+    MessageBox {
+        title: String,
+        text: String,
+    },
+    /// `clientCmdTrustInvite`.
+    TrustInvite {
+        from: OwnerId,
+        name: String,
+        principal: [u8; 32],
+        level: u8,
+    },
+    /// `updateClientTrustList`: save this level in the local trust list.
+    TrustSaved {
+        principal: [u8; 32],
+        level: u8,
+        name: String,
+    },
+    /// `secureClientCmd_ClientTrust` for every player, as this viewer sees them.
+    PlayerTrust(BTreeMap<OwnerId, super::PlayerTrust>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

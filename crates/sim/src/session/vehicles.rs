@@ -378,10 +378,14 @@ impl Session {
             membership: mg::Membership::Owner,
             spawn_brick: true,
         };
-        matches!(
-            self.minigames.can_use(peer.combat.player, target),
-            Decision::Allow | Decision::OutsideMinigames
-        )
+        match self.minigames.can_use(peer.combat.player, target) {
+            Decision::Allow => true,
+            // `$TrustLevel::RideVehicle` outside minigames.
+            Decision::OutsideMinigames => peer
+                .actor
+                .trusted(vehicle_owner, bri_world::authority::trust::BUILD),
+            _ => false,
+        }
     }
     /// `WheeledVehicle::damage`: vehicles outside minigames can be damaged;
     /// inside, the minigame's vehicle damage rule applies.

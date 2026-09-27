@@ -4,7 +4,7 @@ use bri_admin::{
     Action, Administration, BanRecord, ConnectionId, DurableState, Effect, GameplayCommand, Origin,
     PasswordSlot, Principal, Request, Role, Secret, TrustedConnection,
 };
-use bri_world::{OwnerId, authority::Actor};
+use bri_world::OwnerId;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -364,10 +364,7 @@ impl AdminRuntime {
                         .get(&actor_owner)
                         .context("Administration actor is not in the session")?
                         .actor;
-                    let session_actor = Actor {
-                        owner: actor_owner,
-                        administrator: peer_actor.administrator,
-                    };
+                    let session_actor = peer_actor.clone();
                     match command {
                         GameplayCommand::RequestBrickGroups => {
                             data = AdminData::BrickGroups(brick_groups(session));

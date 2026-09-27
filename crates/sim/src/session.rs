@@ -21,6 +21,7 @@ mod debris;
 mod events;
 mod admin_world;
 mod admin_players;
+mod trust;
 mod inventory;
 mod special;
 mod tutorial;
@@ -42,6 +43,7 @@ pub use inventory::{TOOL_SLOTS, ToolInventory};
 /// Stock emotes (`Emote_*` add-ons plus the built-in sit animation).
 pub const EMOTES: [&str; 5] = ["alarm", "confusion", "love", "hate", "sit"];
 pub use tools::{InspectMode, ToolAction, ToolCatalog, UNDO_PLANT_LIMIT};
+pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 
 /// The surface height of water covering any part of this player's body.
 fn water_surface(waters: &[bri_content::water::Water], state: &crate::player::PlayerState) -> Option<f32> {
@@ -152,6 +154,34 @@ pub enum Command {
     ClearCheckpoint,
     /// `/treasureStatus`: how many treasure chests this player has found.
     TreasureStatus,
+    /// `serverCmdTrust_Invite` (level 1 build, 2 full).
+    TrustInvite {
+        target: OwnerId,
+        level: u8,
+    },
+    /// `serverCmdAcceptTrustInvite`.
+    AcceptTrust {
+        from: OwnerId,
+    },
+    /// `serverCmdRejectTrustInvite`.
+    RejectTrust {
+        from: OwnerId,
+    },
+    /// `serverCmdIgnoreTrustInvite`.
+    IgnoreTrust {
+        from: OwnerId,
+    },
+    /// `serverCmdTrust_Demote` (level 0 none, 1 build).
+    DemoteTrust {
+        target: OwnerId,
+        level: u8,
+    },
+    /// `serverCmdUnIgnore`.
+    UnIgnore {
+        target: OwnerId,
+    },
+    /// `TrustListUpload`: the client's saved trust list, sent after joining.
+    TrustList(Vec<TrustEntry>),
     /// Admin `dropPlayerAtCamera`: move the player to the free camera's eye
     /// and return control to it.
     DropPlayerAt {
@@ -388,6 +418,7 @@ pub struct Session {
     loading: Option<Box<build_load::Loading>>,
     /// Admin `/timeScale` (`setTimeScale`), 0.2 to 2.
     time_scale: f32,
+    trust: trust::TrustBook,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -440,11 +471,13 @@ impl Session {
             lan_host: false,
             loading: None,
             time_scale: 1.0,
+            trust: Default::default(),
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).
     pub fn set_lan_host(&mut self, lan: bool) {
         self.lan_host = lan;
+        self.refresh_trust();
     }
     pub fn simulation(&self) -> &Simulation {
         &self.simulation
@@ -576,6 +609,7 @@ impl Session {
                 actor: Actor {
                     owner,
                     administrator: role.is_admin(),
+                    ..Default::default()
                 },
                 name: name.clone(),
                 principal,
@@ -603,9 +637,32 @@ impl Session {
             },
         );
         self.next_owner = next;
+        if !is_bot {
+            self.announce(owner, "connected.", "ClientJoinSound");
+        }
+        self.refresh_trust();
         Ok(owner)
     }
+    /// `MsgClientJoin` / `onDrop` lines and sounds for everyone else.
+    fn announce(&mut self, owner: OwnerId, what: &str, sound: &str) {
+        let Some(name) = self.peers.get(&owner).map(|p| p.name.clone()) else {
+            return;
+        };
+        let others: Vec<OwnerId> = self
+            .peers
+            .keys()
+            .copied()
+            .filter(|o| *o != owner && !self.bots.is_bot(*o))
+            .collect();
+        for other in others {
+            self.notify(other, Notice::Chat(format!("\u{E001}{name} {what}")));
+            self.notify(other, Notice::Sound(sound.into()));
+        }
+    }
     pub fn disconnect(&mut self, owner: OwnerId) -> Result<()> {
+        if !self.bots.is_bot(owner) {
+            self.announce(owner, "has left the game.", "ClientDropSound");
+        }
         self.eject(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
         self.admin_disconnect(owner);
@@ -624,6 +681,7 @@ impl Session {
         self.release_spies(owner);
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
+        self.trust_disconnect(owner);
         Ok(())
     }
     /// Call only after the transport authenticates its server-issued resume token.
@@ -696,6 +754,7 @@ impl Session {
                 actor: Actor {
                     owner,
                     administrator: role.is_admin(),
+                    ..Default::default()
                 },
                 name: name.clone(),
                 principal,
@@ -723,6 +782,8 @@ impl Session {
             },
         );
         self.departed.remove(&owner);
+        self.announce(owner, "connected.", "ClientJoinSound");
+        self.refresh_trust();
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the
@@ -1013,6 +1074,34 @@ impl Session {
             }
             Command::ClearCheckpoint => {
                 self.clear_checkpoint(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::TrustInvite { target, level } => {
+                self.trust_invite(owner, target, level)?;
+                Ok(Reply::Accepted)
+            }
+            Command::AcceptTrust { from } => {
+                self.trust_accept(owner, from)?;
+                Ok(Reply::Accepted)
+            }
+            Command::RejectTrust { from } => {
+                self.trust_reject(owner, from)?;
+                Ok(Reply::Accepted)
+            }
+            Command::IgnoreTrust { from } => {
+                self.trust_ignore(owner, from)?;
+                Ok(Reply::Accepted)
+            }
+            Command::DemoteTrust { target, level } => {
+                self.trust_demote(owner, target, level)?;
+                Ok(Reply::Accepted)
+            }
+            Command::UnIgnore { target } => {
+                self.trust_unignore(owner, target)?;
+                Ok(Reply::Accepted)
+            }
+            Command::TrustList(list) => {
+                self.trust_list(owner, list)?;
                 Ok(Reply::Accepted)
             }
             Command::TreasureStatus => {

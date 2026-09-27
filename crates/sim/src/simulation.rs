@@ -79,8 +79,9 @@ pub fn brick_collider(brick: &Brick, definition: &Definition, id: BrickId) -> Co
         .sensor(!brick.colliding || definition.special == Special::Water)
         .user_data(u128::from(id))
 }
+/// `$TrustLevel::BuildOn`.
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
-    actor.administrator || brick.owner == 0 || brick.owner == actor.owner
+    actor.trusted(brick.owner, bri_world::authority::trust::BUILD)
 }
 impl Simulation {
     pub fn new(world: World, definitions: Definitions, map: Vec<ColliderBuilder>) -> Result<Self> {

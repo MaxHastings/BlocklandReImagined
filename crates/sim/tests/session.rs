@@ -1065,3 +1065,67 @@ fn admin_fetch_find_warp_and_time_scale_follow_v20() {
     assert_eq!(s.time_scale(), 0.5);
     assert!(s.chat().iter().any(|l| l.text == "Admin changed the timescale to 0.5"));
 }
+#[test]
+fn trust_invites_uploads_demotion_and_lan_follow_v20() {
+    use bri_admin::Principal;
+    use bri_sim::session::{Notice, TrustEntry, TrustLevel};
+    let mut s = session();
+    s.set_lan_host(false);
+    let spawn = Vec3::new(0.0, 0.05, 0.0);
+    let a = s.join_verified("Ann".into(), spawn - Vec3::X * 4.0, false, Some(Principal([1; 32]))).unwrap();
+    let b = s.join_verified("Bob".into(), spawn, false, Some(Principal([2; 32]))).unwrap();
+    let notices = |s: &mut Session| s.take_private_notices();
+    let level = |n: &[(u64, Notice)], viewer: u64, other: u64| {
+        n.iter()
+            .rev()
+            .find_map(|(o, n)| match n {
+                Notice::PlayerTrust(rows) if *o == viewer => Some(rows[&other].level),
+                _ => None,
+            })
+    };
+    let first = notices(&mut s);
+    assert!(first.iter().any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob connected.".into())));
+    assert_eq!(level(&first, a, b), Some(TrustLevel::None));
+    assert_eq!(level(&first, a, a), Some(TrustLevel::You));
+
+    s.command(a, 1, Command::TrustInvite { target: b, level: 2 }).unwrap();
+    let invited = notices(&mut s);
+    assert!(invited.iter().any(|(o, n)| *o == b
+        && matches!(n, Notice::TrustInvite { from, level: 2, .. } if *from == a)));
+    // A second invite while the first is pending is refused with a message.
+    s.command(a, 2, Command::TrustInvite { target: b, level: 1 }).unwrap();
+    assert!(notices(&mut s).iter().any(|(o, n)| *o == a && matches!(n, Notice::MessageBox { .. })));
+
+    s.command(b, 1, Command::AcceptTrust { from: a }).unwrap();
+    let accepted = notices(&mut s);
+    assert_eq!(level(&accepted, a, b), Some(TrustLevel::Full));
+    assert_eq!(level(&accepted, b, a), Some(TrustLevel::Full));
+    assert!(accepted.iter().any(|(o, n)| *o == a
+        && matches!(n, Notice::TrustSaved { principal, level: 2, .. } if *principal == [2; 32])));
+
+    s.command(a, 3, Command::DemoteTrust { target: b, level: 1 }).unwrap();
+    assert_eq!(level(&notices(&mut s), b, a), Some(TrustLevel::Build));
+
+    // Saved lists: both sides listing each other become mutual trust at the
+    // uploader's level.
+    let c = s.join_verified("Cat".into(), spawn + Vec3::X * 4.0, false, Some(Principal([3; 32]))).unwrap();
+    s.command(c, 1, Command::TrustList(vec![TrustEntry { principal: [1; 32], level: 2 }])).unwrap();
+    assert_eq!(level(&notices(&mut s), a, c), Some(TrustLevel::None));
+    s.command(a, 4, Command::TrustList(vec![TrustEntry { principal: [3; 32], level: 1 }])).unwrap();
+    let uploaded = notices(&mut s);
+    assert_eq!(level(&uploaded, a, c), Some(TrustLevel::Build));
+    // A's upload replaced its earlier trust with Bob.
+    assert_eq!(level(&uploaded, a, b), Some(TrustLevel::None));
+
+    // Ignored invites are refused.
+    s.command(c, 2, Command::TrustInvite { target: b, level: 1 }).unwrap();
+    s.command(b, 2, Command::IgnoreTrust { from: c }).unwrap();
+    notices(&mut s);
+    s.command(c, 3, Command::TrustInvite { target: b, level: 1 }).unwrap();
+    assert!(!notices(&mut s).iter().any(|(o, n)| *o == b && matches!(n, Notice::TrustInvite { .. })));
+
+    s.set_lan_host(true);
+    assert_eq!(level(&notices(&mut s), a, b), Some(TrustLevel::Lan));
+    s.disconnect(b).unwrap();
+    assert!(notices(&mut s).iter().any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob has left the game.".into())));
+}

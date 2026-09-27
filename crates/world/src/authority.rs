@@ -1,10 +1,55 @@
 use crate::*;
 use anyhow::{Context, Result, ensure};
 
+/// v20 `$TrustLevel` values between a player and a brick group.
+pub mod trust {
+    pub const NONE: u8 = 0;
+    /// Build on their bricks, use the wrench on them, ride their vehicles.
+    pub const BUILD: u8 = 1;
+    /// Also paint, print, hammer, undo and edit events.
+    pub const FULL: u8 = 2;
+    /// The same brick group.
+    pub const YOU: u8 = 3;
+}
+
+/// Which brick groups trust an actor (v20 `getTrustLevel`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum Trust {
+    /// Only the actor's own bricks and public bricks.
+    #[default]
+    OwnerOnly,
+    /// `$Server::LAN`: everyone is trusted as if the bricks were their own.
+    Everyone,
+    /// Mutual trust levels with other owners; the actor's other owner IDs
+    /// (earlier sessions of the same identity) are listed as `YOU`.
+    Levels(std::sync::Arc<std::collections::BTreeMap<OwnerId, u8>>),
+}
+
 /// This context is constructed by the server, never trusted from a command packet.
+#[derive(Debug, Clone, Default)]
 pub struct Actor {
     pub owner: OwnerId,
     pub administrator: bool,
+    pub trust: Trust,
+}
+impl Actor {
+    /// v20 `getTrustLevel(actor, brick group)`.
+    pub fn trust_level(&self, group: OwnerId) -> u8 {
+        if group == self.owner && group != 0 {
+            return trust::YOU;
+        }
+        match &self.trust {
+            Trust::Everyone => trust::YOU,
+            // Public-domain bricks are fully trusted.
+            _ if group == 0 => trust::FULL,
+            Trust::OwnerOnly => trust::NONE,
+            Trust::Levels(levels) => levels.get(&group).copied().unwrap_or(trust::NONE),
+        }
+    }
+    /// Administrators may always edit; others need this much trust.
+    pub fn trusted(&self, group: OwnerId, level: u8) -> bool {
+        self.administrator || self.trust_level(group) >= level
+    }
 }
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -115,16 +160,32 @@ impl Authority {
         self.world.revision = revision;
         Ok(id)
     }
-    fn permission(actor: &Actor, brick: &Brick) -> Result<()> {
+    fn permission(actor: &Actor, brick: &Brick, level: u8) -> Result<()> {
         ensure!(
-            actor.administrator || (actor.owner != 0 && actor.owner == brick.owner),
+            actor.administrator
+                || (actor.owner != 0 && actor.trust_level(brick.owner) >= level),
             "Brick edit denied"
         );
         Ok(())
     }
+    /// Trust an edit needs: the wrench's basic settings need build trust,
+    /// rendering, collision, raycasting, events and paint need full trust.
+    fn edit_level(old: &Brick, edit: &Edit) -> u8 {
+        match edit {
+            Edit::Name(_) => trust::BUILD,
+            Edit::Properties(p)
+                if p.raycast == old.raycast
+                    && p.colliding == old.colliding
+                    && p.visible == old.visible =>
+            {
+                trust::BUILD
+            }
+            _ => trust::FULL,
+        }
+    }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         let old = self.world.bricks.get(&id).context("Unknown brick")?;
-        Self::permission(actor, old)?;
+        Self::permission(actor, old, Self::edit_level(old, &edit))?;
         let mut next = old.clone();
         match edit {
             Edit::Color(c) => next.color = c,
@@ -165,7 +226,11 @@ impl Authority {
         Ok(())
     }
     pub fn remove(&mut self, actor: &Actor, id: BrickId) -> Result<()> {
-        Self::permission(actor, self.world.bricks.get(&id).context("Unknown brick")?)?;
+        Self::permission(
+            actor,
+            self.world.bricks.get(&id).context("Unknown brick")?,
+            trust::FULL,
+        )?;
         let revision = self
             .world
             .revision
@@ -240,6 +305,7 @@ mod tests {
         let actor = Actor {
             owner: 7,
             administrator: false,
+            ..Default::default()
         };
         assert!(server.edit(&actor, 1, Edit::Events(too_many)).is_err());
         assert!(
@@ -255,6 +321,7 @@ mod tests {
         let actor = Actor {
             owner: 7,
             administrator: false,
+            ..Default::default()
         };
         let original = server.state().clone();
         assert!(server.edit(&actor, 3, Edit::Color(2)).is_err());
@@ -277,12 +344,34 @@ mod tests {
                 .remove(
                     &Actor {
                         owner: 0,
-                        administrator: false
+                        administrator: false,
+                        ..Default::default()
                     },
                     next
                 )
                 .is_err()
         );
+    }
+    #[test]
+    fn trust_levels_gate_edits_like_v20() {
+        let mut server = Authority::new(fixture()).unwrap();
+        let owner = server.state().bricks[&1].owner;
+        let levels = |level| Trust::Levels(std::sync::Arc::new([(owner, level)].into()));
+        let actor = |trust| Actor {
+            owner: 99,
+            administrator: false,
+            trust,
+        };
+        assert_eq!(actor(Trust::OwnerOnly).trust_level(0), trust::FULL);
+        assert_eq!(actor(Trust::Everyone).trust_level(owner), trust::YOU);
+        assert!(server.edit(&actor(Trust::OwnerOnly), 1, Edit::Name(None)).is_err());
+        let build = actor(levels(trust::BUILD));
+        server.edit(&build, 1, Edit::Name(Some("door".into()))).unwrap();
+        assert!(server.edit(&build, 1, Edit::Color(1)).is_err());
+        assert!(server.remove(&build, 1).is_err());
+        let full = actor(levels(trust::FULL));
+        server.edit(&full, 1, Edit::Color(1)).unwrap();
+        server.remove(&full, 1).unwrap();
     }
     #[test]
     fn trusted_mutation_validates_before_publishing() {

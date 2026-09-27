@@ -4,6 +4,7 @@
 //! identities or arbitrary source records cross this boundary.
 use super::*;
 use bri_weapons::{ActorId, TargetId};
+use bri_world::authority::trust as level;
 
 /// Original game.cs constructs New_QueueSO(512). This queue currently records
 /// planting only; vanilla paint/FX/print undo and chain-kill effects remain work.
@@ -261,10 +262,7 @@ fn paint_edit(definition: &str, paint: Option<u8>) -> Option<Edit> {
 }
 
 fn copy_actor(actor: &Actor) -> Actor {
-    Actor {
-        owner: actor.owner,
-        administrator: actor.administrator,
-    }
+    actor.clone()
 }
 
 /// `containerRayCast` type masks used by the stock tools.
@@ -416,7 +414,7 @@ impl Session {
                 match hit.target {
                     TargetId::Brick(id) => {
                         // Tutorial `noBreak` bricks survive tools.
-                        if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
+                        if self.trusted_brick_edit(owner, id, level::FULL) && !self.tutorial_protects(id) {
                             // `fxDTSBrick::onToolBreak` runs its rows before
                             // `killBrick` removes the brick and its program.
                             self.fire_input(id, "onToolBreak", Some(owner));
@@ -458,7 +456,7 @@ impl Session {
                 match hit.target {
                     TargetId::Brick(id) => {
                         // Tutorial `noBreak` bricks survive tools.
-                        if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
+                        if self.trusted_brick_edit(owner, id, level::YOU) && !self.tutorial_protects(id) {
                             // `fxDTSBrick::onToolBreak` runs its rows before
                             // `killBrick` removes the brick and its program.
                             self.fire_input(id, "onToolBreak", Some(owner));
@@ -525,7 +523,7 @@ impl Session {
                     self.tool_sound("wrenchMissSound", hit.position);
                     return Ok(());
                 };
-                if !self.trusted_brick_edit(owner, id) {
+                if !self.trusted_brick_edit(owner, id, level::BUILD) {
                     self.tool_sound("wrenchMissSound", hit.position);
                     return Ok(());
                 }
@@ -544,7 +542,7 @@ impl Session {
                 if self.tool_catalog.print_aspect(brick).is_err() {
                     return Ok(());
                 }
-                if self.trusted_brick_edit(owner, id) {
+                if self.trusted_brick_edit(owner, id, level::FULL) {
                     self.open_inspection(owner, id, InspectMode::Printer);
                 }
             }
@@ -572,7 +570,7 @@ impl Session {
             Edit::ShapeEffect(effect) => brick.shape_effect == *effect,
             _ => false,
         };
-        if unchanged || !self.trusted_brick_edit(owner, id) {
+        if unchanged || !self.trusted_brick_edit(owner, id, level::FULL) {
             return Ok(());
         }
         let actor = copy_actor(&self.peers[&owner].actor);
@@ -581,9 +579,9 @@ impl Session {
         Ok(())
     }
 
-    /// `getTrustLevel` for brick tools: a builder may edit their own bricks
-    /// and administrators may edit any. Refusals show v20's centre print.
-    fn trusted_brick_edit(&mut self, owner: OwnerId, id: BrickId) -> bool {
+    /// `getTrustLevel` for brick tools against `$TrustLevel` `level`;
+    /// administrators may edit any. Refusals show v20's centre print.
+    fn trusted_brick_edit(&mut self, owner: OwnerId, id: BrickId, level: u8) -> bool {
         let Some(brick) = self.simulation.state().bricks.get(&id) else {
             return false;
         };
@@ -591,7 +589,7 @@ impl Session {
         let Some(peer) = self.peers.get(&owner) else {
             return false;
         };
-        let allowed = peer.actor.administrator || (owner != 0 && brick_owner == owner);
+        let allowed = owner != 0 && peer.actor.trusted(brick_owner, level);
         if !allowed {
             let group = self.brick_group_name(brick_owner);
             self.center_print(
@@ -866,7 +864,7 @@ impl Session {
             anyhow::bail!("Brick no longer exists");
         };
         ensure!(
-            peer.actor.administrator || (owner != 0 && brick.owner == owner),
+            owner != 0 && peer.actor.trusted(brick.owner, level::BUILD),
             "Brick edit denied"
         );
         if let ToolAction::Inspect { mode } = action {

@@ -64,6 +64,7 @@ fn main() -> Result<()> {
     let administrator = Actor {
         owner: 1,
         administrator: true,
+        ..Default::default()
     };
     for name in ids {
         let definition = &catalog_sim.definitions.entries[&name];
@@ -131,6 +132,7 @@ fn main() -> Result<()> {
         let owner = Actor {
             owner: 1,
             administrator: false,
+            ..Default::default()
         };
         let builder = Builder {
             actor: &owner,
