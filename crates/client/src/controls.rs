@@ -390,7 +390,6 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jet_boost: 0.0,
             jump_held: false,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
