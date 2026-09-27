@@ -16,6 +16,14 @@ The earlier C: installation remains secondary evidence and stress-test input;
 its extra packages do not define alpha scope. Its generated mission-lighting
 caches are explicitly secondary derived inputs, absent from the new reference.
 
+## Platform principles
+Mod-ready foundations now, mod platform later. Read
+`docs/architecture/platform-principles.md` before changing content identity,
+save formats, the wire protocol, permissions or packaging. The engine owns
+mechanisms; packages own policy. No backward compatibility or migrations during
+alpha; schemas freeze at the first beta. Open door-closers and their priorities
+are in `docs/audits/platform-door-closers.md`.
+
 ## User's testing boundary
 Maxwell performs ALL interactive playtests. Do not move the user's mouse,
 send gameplay keystrokes, click menus, or automate an interactive play session.

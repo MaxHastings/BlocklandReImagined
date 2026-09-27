@@ -2247,3 +2247,18 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   pixels; renders in artifacts/native-held-brick). Pre-existing failure:
   `bri-weapons --test runtime inventory_drop_pickup_and_disconnect` fails on
   weapons-pack-008 too.
+
+
+- 2026-09-27 Platform principles and door-closer audit (docs only, no code
+  changes). `docs/architecture/platform-principles.md` records the north star,
+  the mechanism/policy boundary, fifteen principles, the alpha scope rule (no
+  migrations until the first beta), the definition of done for vanilla, the
+  modding spikes and a phased roadmap; awaiting Max's approval.
+  `docs/audits/platform-door-closers.md` grades the codebase against Max's
+  twelve platform contracts with file references. P0 items, all about shape:
+  owner identity by principal in saved worlds, avatar part names instead of
+  indices, one content id grammar with importer-set namespaces, a package
+  manifest read by client and server with a precise join mismatch report, and
+  partial build loads that report missing definitions instead of refusing the
+  whole build. The earlier save-format fix request was withdrawn in favour of
+  this review.
