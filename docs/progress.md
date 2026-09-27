@@ -1797,6 +1797,15 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   1.9-4.5 ms, overview 20 to 4-6 ms. Chunked renders match the whole-world
   render (0 and 9 of 2.07M pixels differ; PNGs beside the probe report).
 
+- 2026-09-27 Burning players turn black. v20 `Player::burn` calls
+  `SetTempColor("0 0 0 1", %time)` without a position: every node black and
+  no decal, restored by `ClearTempColor` when the burn ends. The explosion
+  burn path (`WeaponEvent::Burn`, which already starts the flames) now also
+  sets that overlay through `session/spray.rs`. A burn restore plays no paint
+  explosion, and a later spray hit takes over the timer as in v20. Evidence:
+  `spray::tests::burning_blackens_every_slot_until_the_burn_ends`;
+  `cargo test -p bri-sim` passed.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

@@ -416,6 +416,7 @@ impl Session {
                 } => {
                     if let Some(peer) = self.peers.get(&target.0).filter(|p| p.combat.alive) {
                         let feet = peer.player.state().feet;
+                        self.burn_player(target.0, seconds);
                         self.cues.emit(
                             tick,
                             crate::presentation::CueKind::Burn {
