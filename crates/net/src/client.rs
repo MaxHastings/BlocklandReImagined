@@ -206,9 +206,7 @@ impl Client {
         let datagram_connection = connection.clone();
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
-                if bytes.len() <= MAX_DATAGRAM
-                    && let Ok(datagram) = serde_json::from_slice::<Datagram>(&bytes)
-                {
+                if let Ok(datagram) = codec::decode_datagram::<Datagram>(&bytes) {
                     let _ = events.try_send(match datagram {
                         Datagram::Pose(pose) => Incoming::Pose(pose),
                         Datagram::Vehicle(pose) => Incoming::Vehicle(pose),
@@ -232,20 +230,33 @@ impl Client {
     }
     /// Send the most recent prediction inputs, oldest first, ending at `newest`.
     /// The server ignores inputs it already received, so every datagram can
-    /// repeat recent history and absorb isolated losses.
+    /// repeat recent history and absorb isolated losses. A slow frame that ran
+    /// more ticks than one datagram carries is split into several, oldest
+    /// first, so no input is skipped.
     pub fn movement(&mut self, newest: u64, inputs: &[MoveInput]) -> Result<()> {
+        ensure!(
+            inputs.len() <= MAX_MOVEMENT_BATCH && newest >= inputs.len() as u64,
+            "Invalid movement batch"
+        );
         for input in inputs {
             input.validate()?;
         }
-        let movement = Movement {
-            version: VERSION,
-            newest,
-            inputs: inputs.to_vec(),
-        };
-        movement.validate()?;
-        let bytes = serde_json::to_vec(&movement)?;
-        ensure!(bytes.len() <= MAX_DATAGRAM, "Movement exceeds datagram budget");
-        self.connection.send_datagram(bytes.into())?;
+        let mut end = inputs.len();
+        let mut datagrams = Vec::new();
+        while end > 0 {
+            let start = end.saturating_sub(MOVEMENT_REDUNDANCY);
+            let movement = Movement {
+                version: VERSION,
+                newest: newest - (inputs.len() - end) as u64,
+                inputs: inputs[start..end].to_vec(),
+            };
+            movement.validate()?;
+            datagrams.push(codec::encode_datagram(&movement)?);
+            end = start;
+        }
+        for bytes in datagrams.into_iter().rev() {
+            self.connection.send_datagram(bytes.into())?;
+        }
         Ok(())
     }
     pub async fn receive(&mut self) -> Result<ClientEvent> {

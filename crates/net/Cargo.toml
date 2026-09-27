@@ -25,6 +25,8 @@ sha2 = "0.10"
 ring = "0.17.14"
 tempfile = "3"
 zstd = "0.13"
+rmp-serde = "1"
+bytes = "1"
 igd-next = { version = "0.17", default-features = false }
 
 [dev-dependencies]

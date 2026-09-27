@@ -260,7 +260,12 @@ impl Motion {
         if steps == 0 {
             return Ok(None);
         }
-        let recent: Vec<_> = predictor.recent(redundancy).map(|(_, i)| *i).collect();
+        // Every input this frame produced plus recent history: a slow frame
+        // that ran more ticks than the redundancy window loses none of them.
+        let recent: Vec<_> = predictor
+            .recent(redundancy.max(steps as usize))
+            .map(|(_, i)| *i)
+            .collect();
         Ok(Some((predictor.sequence(), recent)))
     }
     /// Compute presented states for this frame. The local player uses its

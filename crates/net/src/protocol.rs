@@ -8,8 +8,12 @@ use std::collections::BTreeMap;
 pub const VERSION: u32 = 20;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
-/// Unreliable datagram payload bound (fits a conservative QUIC path MTU).
-pub const MAX_DATAGRAM: usize = 1200;
+/// Most inputs one frame may hand the transport (split across datagrams).
+pub const MAX_MOVEMENT_BATCH: usize = 48;
+/// Unreliable datagram payload bound. QUIC's minimum 1200-byte path MTU less
+/// packet and frame overhead still carries it, so an encodable datagram is
+/// always sendable.
+pub const MAX_DATAGRAM: usize = 1100;
 /// Server ticks between unreliable pose broadcasts (40 Hz at 120 Hz).
 pub const POSE_INTERVAL: u64 = 3;
 #[derive(Clone, Serialize, Deserialize)]
@@ -112,8 +116,12 @@ pub struct Movement {
     pub inputs: Vec<MoveInput>,
 }
 impl Movement {
+    /// Callers validate first; the arithmetic cannot overflow for any
+    /// `newest`, including a hostile `u64::MAX`.
     pub fn sequenced(&self) -> impl Iterator<Item = (u64, MoveInput)> + '_ {
-        let first = self.newest + 1 - self.inputs.len() as u64;
+        let first = self
+            .newest
+            .saturating_sub((self.inputs.len() as u64).saturating_sub(1));
         self.inputs
             .iter()
             .enumerate()

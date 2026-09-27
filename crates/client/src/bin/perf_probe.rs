@@ -244,7 +244,7 @@ fn main() -> Result<()> {
         if now.is_multiple_of(bri_net::protocol::POSE_INTERVAL) {
             let t = Instant::now();
             for (player, acknowledged_input) in session.motion_states() {
-                let bytes = serde_json::to_vec(&Datagram::Pose(Pose {
+                let bytes = bri_net::codec::encode_datagram(&Datagram::Pose(Pose {
                     tick: now,
                     acknowledged_input,
                     player,
@@ -254,7 +254,7 @@ fn main() -> Result<()> {
                 pose_datagrams += 1;
             }
             for pose in session.vehicle_poses() {
-                pose_bytes += serde_json::to_vec(&Datagram::Vehicle(pose))?.len();
+                pose_bytes += bri_net::codec::encode_datagram(&Datagram::Vehicle(pose))?.len();
                 pose_datagrams += 1;
             }
             replication_ms.push(ms(t.elapsed()));

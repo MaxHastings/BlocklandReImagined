@@ -190,6 +190,44 @@ struct Peer {
     out: mpsc::Sender<Arc<Vec<u8>>>,
     generation: usize,
 }
+impl Peer {
+    /// Queue an encoded reliable frame. A peer too far behind is disconnected
+    /// rather than buffered without bound.
+    fn send(&self, bytes: Arc<Vec<u8>>) {
+        if self.out.try_send(bytes).is_err() {
+            self.connection.close(1_u32.into(), b"Reliable backlog exceeded");
+        }
+    }
+    /// Encode and queue a message for this peer only.
+    fn send_message(&self, message: &Message) {
+        match codec::encode(message) {
+            Ok(bytes) => self.send(Arc::new(bytes)),
+            Err(error) => {
+                eprintln!("Server could not encode a message: {error:#}");
+                self.connection.close(2_u32.into(), b"Host state exceeds transfer budget");
+            }
+        }
+    }
+}
+/// Encode once and queue for every peer. A message that cannot be encoded
+/// disconnects the peers (their replicas would diverge) but never stops the
+/// host: one oversized world or report must not end the server for everyone.
+fn broadcast<'a>(peers: impl IntoIterator<Item = &'a Peer>, message: &Message) {
+    match codec::encode(message) {
+        Ok(bytes) => {
+            let bytes = Arc::new(bytes);
+            for peer in peers {
+                peer.send(bytes.clone());
+            }
+        }
+        Err(error) => {
+            eprintln!("Server could not encode a broadcast: {error:#}");
+            for peer in peers {
+                peer.connection.close(2_u32.into(), b"Host state exceeds transfer budget");
+            }
+        }
+    }
+}
 enum Event {
     Join {
         hello: Hello,
@@ -403,12 +441,16 @@ async fn connection_task(
         Result::<()>::Ok(())
     };
     let datagrams = async {
+        // Clients send at most one movement datagram per 120 Hz prediction
+        // tick. Excess is dropped here so one flooding peer cannot crowd the
+        // shared event queue that every other player's commands pass through.
+        let mut allowance = MovementAllowance::new(tokio::time::Instant::now());
         loop {
             let bytes = connection.read_datagram().await?;
-            if bytes.len() > MAX_DATAGRAM {
+            if !allowance.take(tokio::time::Instant::now()) {
                 continue;
             }
-            if let Ok(movement) = serde_json::from_slice::<Movement>(&bytes)
+            if let Ok(movement) = codec::decode_datagram::<Movement>(&bytes)
                 && movement.validate().is_ok()
             {
                 events
@@ -427,6 +469,32 @@ async fn connection_task(
     connection.close(0_u32.into(), b"Session ended");
     let _ = events.send(Event::Lost { owner, generation }).await;
     Ok(())
+}
+/// Token bucket for one peer's movement datagrams: twice the prediction tick
+/// rate sustained, with a burst for a stalled client's catch-up.
+struct MovementAllowance {
+    tokens: f64,
+    at: tokio::time::Instant,
+}
+impl MovementAllowance {
+    const RATE: f64 = 240.0;
+    const BURST: f64 = 60.0;
+    fn new(now: tokio::time::Instant) -> Self {
+        Self {
+            tokens: Self::BURST,
+            at: now,
+        }
+    }
+    fn take(&mut self, now: tokio::time::Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.at).as_secs_f64();
+        self.at = now;
+        self.tokens = (self.tokens + elapsed * Self::RATE).min(Self::BURST);
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
 }
 fn verify_identity(
     hello: &Hello,
@@ -450,16 +518,60 @@ fn verify_identity(
 fn token_key(token: &ResumeToken) -> [u8; 32] {
     Sha256::digest(token.0).into()
 }
-fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>) -> Result<()> {
+/// A server-issued resume capability. The host bit stays bound to the ticket
+/// so a reconnect cannot claim a role through its Hello payload.
+#[derive(Clone, Copy)]
+struct Ticket {
+    owner: OwnerId,
+    host: bool,
+    principal: Option<Principal>,
+    issued: u64,
+}
+/// Bounded resume tickets. A full table forgets the least recently issued
+/// ticket of a disconnected player (who then joins fresh) instead of
+/// refusing every new player for the rest of the host's life.
+#[derive(Default)]
+struct Tickets {
+    entries: BTreeMap<[u8; 32], Ticket>,
+    issued: u64,
+}
+impl Tickets {
+    const CAPACITY: usize = 4096;
+    fn get(&self, key: &[u8; 32]) -> Option<Ticket> {
+        self.entries.get(key).copied()
+    }
+    fn insert(
+        &mut self,
+        key: [u8; 32],
+        mut ticket: Ticket,
+        connected: impl Fn(OwnerId) -> bool,
+    ) -> Result<()> {
+        if !self.entries.contains_key(&key) && self.entries.len() >= Self::CAPACITY {
+            let stale = self
+                .entries
+                .iter()
+                .filter(|(_, t)| !connected(t.owner))
+                .min_by_key(|(_, t)| t.issued)
+                .map(|(key, _)| *key)
+                .context("Server identity capacity reached")?;
+            self.entries.remove(&stale);
+        }
+        self.issued += 1;
+        ticket.issued = self.issued;
+        self.entries.insert(key, ticket);
+        Ok(())
+    }
+}
+fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>) {
     for (owner, peer) in peers {
-        let snapshot = session.admin_state(*owner)?;
-        let bytes = Arc::new(codec::encode(&Message::AdminSnapshot(snapshot))?);
-        if peer.out.try_send(bytes).is_err() {
-            peer.connection
-                .close(1_u32.into(), b"Reliable backlog exceeded");
+        match session.admin_state(*owner) {
+            Ok(snapshot) => peer.send_message(&Message::AdminSnapshot(snapshot)),
+            Err(error) => {
+                eprintln!("Server could not build an admin snapshot: {error:#}");
+                peer.connection.close(2_u32.into(), b"Administration state unavailable");
+            }
         }
     }
-    Ok(())
 }
 #[allow(clippy::too_many_arguments)]
 async fn run(
@@ -481,7 +593,7 @@ async fn run(
     let mut peers = BTreeMap::<OwnerId, Peer>::new();
     // Resume tokens are server-issued capabilities. Retain the host bit bound to
     // the ticket so a reconnect cannot claim a role through its Hello payload.
-    let mut tickets = BTreeMap::<[u8; 32], (OwnerId, bool, Option<Principal>)>::new();
+    let mut tickets = Tickets::default();
     let mut cursor = 0_u64;
     let mut names = BTreeMap::new();
     let mut avatars = BTreeMap::new();
@@ -518,9 +630,8 @@ async fn run(
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();
-                    let bytes=Arc::new(codec::encode(&Message::MapChanged(Checkpoint::from_session(&session,cursor)))?);
-                    for peer in peers.values(){if peer.out.try_send(bytes.clone()).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}
-                    broadcast_admin_snapshots(&session,&peers)?;
+                    broadcast(peers.values(),&Message::MapChanged(Checkpoint::from_session(&session,cursor)));
+                    broadcast_admin_snapshots(&session,&peers);
                 }
                 Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
             }
@@ -532,46 +643,46 @@ async fn run(
                     ensure!(peers.len()<max_players,"Server is full");
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
                     let (owner,token)=if let Some(token)=hello.resume {
-                        let (owner,ticket_host,ticket_principal)=*tickets.get(&token_key(&token)).context("Invalid resume credential")?;
+                        let Ticket{owner,host:ticket_host,principal:ticket_principal,..}=tickets.get(&token_key(&token)).context("Invalid resume credential")?;
                         ensure!(!peers.contains_key(&owner),"Owner is still connected");
                         ensure!(ticket_principal==principal,"Resume identity does not match authenticated ticket");
                         let administrator=ticket_host || supplied_host;
                         let mut error=None;let mut found=false;for spawn in &spawn_points {match session.resume_verified(owner,*spawn,administrator,principal){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
-                        tickets.insert(token_key(&token),(owner,administrator,principal));
+                        tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o))?;
                         resumes+=1;(owner,token)
                     }else{
-                        ensure!(tickets.len()<4096,"Server identity capacity reached");
                         let mut bytes=[0;32];getrandom::fill(&mut bytes).map_err(|e|anyhow::anyhow!("OS randomness failed: {e}"))?;let token=ResumeToken(bytes);
                         let administrator=supplied_host;
                         let mut owner=None;let mut error=None;for spawn in &spawn_points {match session.join_verified(hello.name.clone(),*spawn,administrator,principal){Ok(id)=>{owner=Some(id);break},Err(e)=>error=Some(e)}}
                         let owner=owner.ok_or_else(||error.unwrap_or_else(||anyhow::anyhow!("No spawn points")))?;
-                        tickets.insert(token_key(&token),(owner,administrator,principal));joins+=1;(owner,token)
+                        if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
+                        joins+=1;(owner,token)
                     };
                     let checkpoint=Checkpoint::from_session(&session,cursor);
                     let encoded=match codec::encode(&Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint}){Ok(frame)=>frame,Err(error)=>{let _=session.disconnect(owner);return Err(error)}};
                     if out.try_send(Arc::new(encoded)).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     peers.insert(owner,Peer{generation:connection.stable_id(),connection,out});Ok(owner)
                 })();
-                if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers)?;}let _=answer.send(join.map_err(|e|e.to_string()));
+                if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|e.to_string()));
             },
-            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers)?;}},
+            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;
                     let old_admin_revision=session.admin_revision();
                     let result=session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")});
                     if result.is_err(){rejected+=1;}
-                    let bytes=match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {Ok(bytes)=>bytes,Err(error)=>codec::encode(&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))})?};
-                    let output=peer.out.clone();
-                    let connection=peer.connection.clone();
-                    if output.try_send(Arc::new(bytes)).is_err(){connection.close(1_u32.into(),b"Reliable backlog exceeded");}
+                    match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {
+                        Ok(bytes)=>peer.send(Arc::new(bytes)),
+                        Err(error)=>peer.send_message(&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
+                    }
                     for target in session.take_admin_disconnects(){
                         if let Some(target_peer)=peers.remove(&target){
                             target_peer.connection.close(0_u32.into(),b"Administration disconnect");
                             let _=session.disconnect(target);
                         }
                     }
-                    if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers)?;}
+                    if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers);}
                     if let Some((admin,map))=session.take_map_change(){
                         match options.map_loader.clone() {
                             Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{let _=tx.blocking_send((admin,loader(&map)));});}
@@ -594,8 +705,11 @@ async fn run(
             if let Err(error)=session.step(){step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
             let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
-                for pose in poses(&session){let bytes=serde_json::to_vec(&Datagram::Pose(pose))?;for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}
-                for pose in session.vehicle_poses(){let bytes=serde_json::to_vec(&Datagram::Vehicle(pose))?;if bytes.len()<=MAX_DATAGRAM{for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone().into());}}}
+                let datagrams=poses(&session).into_iter().map(Datagram::Pose).chain(session.vehicle_poses().into_iter().map(Datagram::Vehicle));
+                for datagram in datagrams {
+                    let bytes:bytes::Bytes=match codec::encode_datagram(&datagram){Ok(bytes)=>bytes.into(),Err(error)=>{eprintln!("Server dropped a state datagram: {error:#}");continue}};
+                    for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone());}
+                }
             }
             if tick.is_multiple_of(6) {
                 let mut bricks=BTreeMap::new();for id in session.take_dirty(){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
@@ -610,9 +724,8 @@ async fn run(
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                let bytes=Arc::new(codec::encode(&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale}))?);cursor=next;
-                for peer in peers.values(){if peer.out.try_send(bytes.clone()).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}
-                for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){let bytes=Arc::new(codec::encode(&Message::Notice(notice))?);if peer.out.try_send(bytes).is_err(){peer.connection.close(1_u32.into(),b"Reliable backlog exceeded");}}}
+                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale}));cursor=next;
+                for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(&Message::Notice(notice));}}
             }
             }
         },
@@ -634,4 +747,49 @@ async fn run(
         native_world: session.simulation().state().clone(),
         notices: session.take_notices(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn ticket(owner: OwnerId) -> Ticket {
+        Ticket {
+            owner,
+            host: false,
+            principal: None,
+            issued: 0,
+        }
+    }
+    #[test]
+    fn full_ticket_table_forgets_the_oldest_disconnected_player() {
+        let mut tickets = Tickets::default();
+        for n in 0..Tickets::CAPACITY as u64 {
+            let mut key = [0; 32];
+            key[..8].copy_from_slice(&n.to_le_bytes());
+            tickets.insert(key, ticket(n + 1), |_| false).unwrap();
+        }
+        // Owner 1 holds the oldest ticket but is still connected.
+        tickets.insert([0xff; 32], ticket(9999), |o| o == 1).unwrap();
+        assert_eq!(tickets.entries.len(), Tickets::CAPACITY);
+        assert!(tickets.get(&[0; 32]).is_some(), "connected owner kept");
+        let mut second = [0; 32];
+        second[0] = 1;
+        assert!(tickets.get(&second).is_none(), "oldest disconnected evicted");
+        assert_eq!(tickets.get(&[0xff; 32]).unwrap().owner, 9999);
+        // Refreshing an existing ticket never evicts.
+        tickets.insert([0xff; 32], ticket(9999), |_| true).unwrap();
+        assert!(tickets.insert([0xee; 32], ticket(1), |_| true).is_err());
+    }
+    #[test]
+    fn movement_allowance_bounds_a_flood_but_not_a_catch_up_burst() {
+        let start = tokio::time::Instant::now();
+        let mut allowance = MovementAllowance::new(start);
+        let burst = (0..1000).filter(|_| allowance.take(start)).count();
+        assert_eq!(burst, MovementAllowance::BURST as usize);
+        let later = start + Duration::from_millis(500);
+        let refill = (0..1000).filter(|_| allowance.take(later)).count();
+        assert_eq!(refill, MovementAllowance::BURST as usize, "capped refill");
+        let tick = later + Duration::from_secs_f64(1.0 / 120.0);
+        assert!(allowance.take(tick), "one datagram per tick always passes");
+    }
 }
