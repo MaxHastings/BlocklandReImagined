@@ -1636,12 +1636,11 @@ fn weapon_step(
     }
     if fire {
         let b = &mut world.bodies[v.body];
-        let aiming = Quat::from_rotation_y(c.aim_yaw) * Quat::from_rotation_x(c.aim_pitch);
-        let direction = *b.rotation() * aiming * (-Vec3::Z);
-        let pivot = Vec3::from_array(weapon.pivot);
-        let origin = b.position().transform_point(
-            (pivot + aiming * (Vec3::from_array(weapon.muzzle.position) - pivot)) * v.spawn.scale,
-        );
+        let Some((muzzle, aimed)) = d.muzzle([c.aim_yaw, c.aim_pitch]) else {
+            return;
+        };
+        let direction = *b.rotation() * aimed;
+        let origin = b.position().transform_point(muzzle * v.spawn.scale);
         let speed = weapon.speed * f32::from(v.charge.max(1)) * v.spawn.scale;
         intents.push(Intent::Fire(FireIntent {
             scale: v.spawn.scale,

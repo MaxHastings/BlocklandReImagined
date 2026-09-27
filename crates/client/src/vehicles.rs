@@ -3,7 +3,7 @@
 //! and turrets, plus seat transforms for riders and the driving camera.
 use crate::items::native_shape_scene;
 use anyhow::{Context, Result, ensure};
-use bri_content::shape::Shape;
+use bri_content::shape::{Animation, Shape};
 use bri_render::scene::{GpuInstances, GpuScene, SceneImage, SceneRenderer, SceneTransform};
 use bri_sim::session::{VehicleInfo, VehiclePose};
 use bri_vehicles::{Definition, Pack, schema::Wheel};
@@ -17,8 +17,6 @@ const HISTORY: usize = 16;
 /// Render other vehicles this many server ticks behind the newest pose.
 const INTERPOLATION_TICKS: f64 = 9.0;
 const TICK_RATE: f64 = 120.0;
-/// Poses sampled across a gunner's `look` clip; the barrel snaps between them.
-const LOOK_STEPS: usize = 13;
 
 struct Model {
     data: bri_render::scene::SceneData,
@@ -30,9 +28,38 @@ struct Model {
 pub struct VehicleAssets {
     pack: Pack,
     models: BTreeMap<String, Model>,
-    /// Models with a `look` clip (tank turret, pirate cannon): the barrel
-    /// pitch variants, keyed by the model's asset path.
-    looks: BTreeMap<String, Vec<String>>,
+    /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
+    /// by the model's asset path.
+    looks: BTreeMap<String, LookRig>,
+}
+
+/// A gunner model split into its fixed part and the parts its `look` clip
+/// moves (the barrel), so the barrel can follow any pitch exactly.
+struct LookRig {
+    shape: Shape,
+    clip: Animation,
+    /// Model key, node, and the inverse of the node's transform in that model.
+    parts: Vec<(String, usize, Mat4)>,
+}
+
+/// Draws of a model at `transform`: the model itself plus, for a gunner
+/// model, its barrel parts posed by the `look` clip at this pitch.
+fn posed(
+    looks: &BTreeMap<String, LookRig>,
+    model: &str,
+    pitch: f32,
+    transform: Mat4,
+) -> Vec<(String, Mat4)> {
+    let mut out = vec![(model.to_string(), transform)];
+    if let Some(rig) = looks.get(model) {
+        let time = bri_vehicles::muzzle::look_phase(pitch) * rig.clip.duration;
+        if let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(&rig.clip), time) {
+            for (key, node, inverse) in &rig.parts {
+                out.push((key.clone(), transform * pose.nodes[*node] * *inverse));
+            }
+        }
+    }
+    out
 }
 
 impl VehicleAssets {
@@ -60,23 +87,15 @@ impl VehicleAssets {
             .find(|(path, _)| path.ends_with("/blank.png"))
             .map(|(_, image)| image.clone())
             .context("Vehicle pack has no blank paint texture")?;
-        // Player-type gunners pitch their barrel with a `look` clip, as
+        // Gunners pitch their barrel with a `look` clip, as
         // `Player::updateLookAnimation` does from the head pitch.
-        let mut look_clips = Vec::new();
-        for asset in pack.assets.iter().filter(|a| a.kind == "animation") {
-            if !asset
-                .virtual_path
-                .to_ascii_lowercase()
-                .ends_with("look.dsq")
-            {
-                continue;
-            }
-            let bytes = crate::items::checked_read(&root, &asset.path, &asset.sha256, 8 << 20)?;
-            let clips: bri_content::shape::ClipSet = serde_json::from_slice(&bytes)?;
-            if let Some(look) = clips.animations.into_iter().find(|a| a.name == "look") {
-                look_clips.push(look);
-            }
-        }
+        let look_clips = bri_vehicles::muzzle::look_clips(&pack, &root)?;
+        let gunner_models: Vec<String> = pack
+            .definitions
+            .iter()
+            .filter(|d| d.weapon.is_some())
+            .map(|d| d.attachment_model.clone().unwrap_or(d.model.clone()))
+            .collect();
         let mut models = BTreeMap::new();
         let mut looks = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
@@ -107,63 +126,85 @@ impl VehicleAssets {
                 })
                 .collect();
             let refs: Vec<&SceneImage> = images.iter().collect();
-            let pose = bri_content::animation::sample(&shape, None, 0.0)?;
-            let data = native_shape_scene(
-                &asset.path,
-                &shape,
-                &refs,
-                [1.0; 4],
-                false,
-                Mat4::IDENTITY,
-                &pose,
-            )?;
-            models.insert(
+            let look = gunner_models
+                .contains(&asset.path)
+                .then(|| bri_vehicles::muzzle::look_clip(&look_clips, &shape))
+                .flatten();
+            let mut insert = |key: String, pose: &bri_content::animation::Pose| -> Result<()> {
+                let data =
+                    native_shape_scene(&key, &shape, &refs, [1.0; 4], false, Mat4::IDENTITY, pose)?;
+                models.insert(
+                    key,
+                    Model {
+                        data,
+                        gpu: None,
+                        instances: None,
+                        transforms: Vec::new(),
+                    },
+                );
+                Ok(())
+            };
+            let Some(look) = look else {
+                insert(
+                    asset.path.clone(),
+                    &bri_content::animation::sample(&shape, None, 0.0)?,
+                )?;
+                continue;
+            };
+            // Objects on nodes the clip moves are drawn apart and posed each
+            // frame; everything else is baked once.
+            let pose = bri_content::animation::sample(&shape, Some(look), 0.0)?;
+            let mut moving = std::collections::BTreeSet::new();
+            for t in [0.5, 1.0] {
+                let other = bri_content::animation::sample(&shape, Some(look), t * look.duration)?;
+                for (i, object) in shape.objects.iter().enumerate() {
+                    if let Some(node) = object.node
+                        && !other.nodes[node].abs_diff_eq(pose.nodes[node], 1e-5)
+                    {
+                        ensure!(
+                            object.meshes.iter().all(|m| shape
+                                .meshes
+                                .get(*m)
+                                .and_then(Option::as_ref)
+                                .is_none_or(|m| m.skin.is_none())),
+                            "Vehicle look clip moves a skinned mesh: {}",
+                            asset.path
+                        );
+                        moving.insert((node, i));
+                    }
+                }
+            }
+            let only = |keep: &dyn Fn(usize) -> bool| {
+                let mut part = bri_content::animation::sample(&shape, Some(look), 0.0)?;
+                for (i, v) in part.visibility.iter_mut().enumerate() {
+                    if !keep(i) {
+                        *v = 0.0;
+                    }
+                }
+                anyhow::Ok(part)
+            };
+            insert(
                 asset.path.clone(),
-                Model {
-                    data,
-                    gpu: None,
-                    instances: None,
-                    transforms: Vec::new(),
+                &only(&|i| !moving.iter().any(|(_, o)| *o == i))?,
+            )?;
+            let mut parts = Vec::new();
+            let nodes: std::collections::BTreeSet<usize> = moving.iter().map(|(n, _)| *n).collect();
+            for node in nodes {
+                let key = format!("{}#look{node}", asset.path);
+                insert(
+                    key.clone(),
+                    &only(&|i| shape.objects[i].node == Some(node))?,
+                )?;
+                parts.push((key, node, pose.nodes[node].inverse()));
+            }
+            looks.insert(
+                asset.path.clone(),
+                LookRig {
+                    shape: shape.clone(),
+                    clip: look.clone(),
+                    parts,
                 },
             );
-            // The look clip for this model is the one whose nodes it has.
-            let look = look_clips.iter().find(|clip| {
-                !clip.nodes.is_empty()
-                    && clip.nodes.iter().all(|channel| {
-                        shape
-                            .nodes
-                            .iter()
-                            .any(|n| n.name.eq_ignore_ascii_case(&channel.node))
-                    })
-            });
-            if let Some(look) = look {
-                let mut variants = Vec::new();
-                for step in 0..LOOK_STEPS {
-                    let time = look.duration * step as f32 / (LOOK_STEPS - 1) as f32;
-                    let pose = bri_content::animation::sample(&shape, Some(look), time)?;
-                    let key = format!("{}#look{step}", asset.path);
-                    let data = native_shape_scene(
-                        &key,
-                        &shape,
-                        &refs,
-                        [1.0; 4],
-                        false,
-                        Mat4::IDENTITY,
-                        &pose,
-                    )?;
-                    models.insert(
-                        key.clone(),
-                        Model {
-                            data,
-                            gpu: None,
-                            instances: None,
-                            transforms: Vec::new(),
-                        },
-                    );
-                    variants.push(key);
-                }
-                looks.insert(asset.path.clone(), variants);
-            }
         }
         for d in &pack.definitions {
             ensure!(
@@ -180,21 +221,6 @@ impl VehicleAssets {
     }
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         self.pack.definitions.iter().find(|d| d.id == id)
-    }
-    /// The model to draw for a gunner's barrel pitch: the `look` clip runs
-    /// from full up at its start to full down at its end.
-    fn look_model(&self, model: &str, d: &Definition, pitch: f32) -> String {
-        let Some(variants) = self.looks.get(model) else {
-            return model.to_string();
-        };
-        let [low, high] = d.look_pitch;
-        let t = if high > low {
-            ((high - pitch) / (high - low)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let step = (t * (variants.len() - 1) as f32).round() as usize;
-        variants[step.min(variants.len() - 1)].clone()
     }
 }
 
@@ -276,6 +302,24 @@ impl ClientVehicles {
             self.frames.insert(*id, frame);
         }
     }
+    /// Aim the local gunner's barrel from their own look this frame, as v20
+    /// clients do for the object they control, instead of waiting for the
+    /// server's copy. Mirrors the host's mapping in `vehicle_input`.
+    pub fn aim_locally(&mut self, vehicle: u64, d: &Definition, look_yaw: f32, look_pitch: f32) {
+        let Some(frame) = self.frames.get_mut(&vehicle) else {
+            return;
+        };
+        let yaw = if d.is_actor() {
+            0.0
+        } else {
+            let forward = frame.rotation * Vec3::NEG_Z;
+            let heading = forward.x.atan2(-forward.z);
+            // Quaternion yaw turns left; look yaw turns right.
+            -((look_yaw - heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI)
+        };
+        frame.turret_aim = [yaw, look_pitch.clamp(d.look_pitch[0], d.look_pitch[1])];
+    }
     /// World transform of a seat node (players' feet ride there).
     pub fn seat(
         &self,
@@ -335,23 +379,17 @@ impl ClientVehicles {
                 .and_then(|c| palette.get(usize::from(c)))
                 .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0]);
             let body = to_transform(frame.position, frame.rotation);
-            let body_model = if d.is_actor() && d.weapon.is_some() {
-                assets.look_model(&d.model, &d, frame.turret_aim[1])
-            } else {
-                d.model.clone()
-            };
-            let turret_model = d
-                .attachment_model
-                .as_ref()
-                .map(|m| assets.look_model(m, &d, frame.turret_aim[1]));
+            let pitch = frame.turret_aim[1];
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
-                if let Some(m) = assets.models.get_mut(model)
-                    && transform.is_finite()
-                {
-                    m.transforms.push(SceneTransform { transform, tint });
+                for (model, transform) in posed(&assets.looks, model, pitch, transform) {
+                    if let Some(m) = assets.models.get_mut(&model)
+                        && transform.is_finite()
+                    {
+                        m.transforms.push(SceneTransform { transform, tint });
+                    }
                 }
             };
-            push(&body_model, body, tint);
+            push(&d.model, body, tint);
             for (i, wheel) in d.wheels.iter().enumerate() {
                 let suspension = frame
                     .wheel_suspension
@@ -362,7 +400,7 @@ impl ClientVehicles {
                 let local = wheel_transform(wheel, suspension, spin, frame.steering);
                 push(&wheel.model, body * local, [1.0; 4]);
             }
-            if let (Some(model), Some(mount)) = (&turret_model, &d.attachment_mount) {
+            if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount) {
                 let local =
                     to_transform(Vec3::from(mount.position), Quat::from_array(mount.rotation))
                         * Mat4::from_rotation_y(frame.turret_aim[0]);
@@ -518,26 +556,56 @@ mod tests {
     }
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]
-    fn gunner_barrels_pose_their_look_clip_by_pitch() -> Result<()> {
+    fn gunner_barrels_follow_the_pitch_to_the_muzzle() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-011");
         let assets = VehicleAssets::load(&root)?;
         for id in ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"] {
             let d = assets.definition(id).unwrap().clone();
             let model = d.attachment_model.clone().unwrap_or(d.model.clone());
-            assert_eq!(
-                assets.looks[&model].len(),
-                LOOK_STEPS,
-                "{id} has a look clip"
-            );
-            let up = assets.look_model(&model, &d, d.look_pitch[1]);
-            let down = assets.look_model(&model, &d, d.look_pitch[0]);
-            assert!(up.ends_with("#look0") && down.ends_with(&format!("#look{}", LOOK_STEPS - 1)));
+            let rig = &assets.looks[&model];
+            assert_eq!(rig.parts.len(), 1, "{id} draws its barrel apart");
+            let muzzle = rig
+                .shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case(d.muzzle_node()))
+                .unwrap();
+            let rest = bri_content::animation::sample(&rig.shape, Some(&rig.clip), 0.0)?;
+            let rest = rest.nodes[muzzle].w_axis.truncate();
+            let (mount, turn) = d
+                .attachment_mount
+                .as_ref()
+                .map_or((Vec3::ZERO, Quat::IDENTITY), |t| {
+                    (Vec3::from(t.position), Quat::from_array(t.rotation))
+                });
+            let mut last = None;
+            for step in 0..=40 {
+                let pitch =
+                    d.look_pitch[0] + (d.look_pitch[1] - d.look_pitch[0]) * step as f32 / 40.0;
+                let draws = posed(&assets.looks, &model, pitch, Mat4::IDENTITY);
+                assert_eq!(draws.len(), 2);
+                let barrel = draws[1].1.transform_point3(rest);
+                let (origin, _) = d.muzzle([0.0, pitch]).unwrap();
+                let expected = turn.inverse() * (origin - mount);
+                assert!(
+                    barrel.distance(expected) < 0.01,
+                    "{id}: drawn barrel mouth {barrel} vs shot origin {expected} at {pitch}"
+                );
+                // Every pitch step moves the barrel: no snapping between poses.
+                if let Some(last) = last {
+                    assert!(
+                        barrel.distance(last) > 1e-4,
+                        "{id}: barrel stuck at {pitch}"
+                    );
+                }
+                last = Some(barrel);
+            }
         }
-        assert!(
-            !assets
-                .looks
-                .contains_key(&assets.definition("v20.vehicle.jeepvehicle").unwrap().model)
-        );
+        for id in ["v20.vehicle.jeepvehicle", "v20.vehicle.horsearmor"] {
+            if let Some(d) = assets.definition(id) {
+                assert!(!assets.looks.contains_key(&d.model), "{id}");
+            }
+        }
         Ok(())
     }
     #[test]
