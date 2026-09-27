@@ -49,7 +49,10 @@ fn axis_scale(v: [f32; 3]) -> [f32; 3] {
 }
 fn resource(d: &Definition, key: &str) -> String {
     let p = field(d, key);
-    if p.starts_with("./") {
+    if let Some(rest) = p.strip_prefix("~/") {
+        // Core datablocks resolve `~/` against the base game directory.
+        format!("base/{rest}")
+    } else if p.starts_with("./") {
         format!(
             "{}/{}",
             d.source
@@ -471,6 +474,31 @@ const CORE_PRESENTATION: [&str; 7] = [
     "spawnProjectile",
     "deathProjectile",
 ];
+/// Core datablocks imported by name, with everything they reference. The
+/// building tools, both wands and the spray cans are ordinary v20 images: the
+/// base colour can (`blueSprayCanImage`) is the template `setSprayCanColor`
+/// derives every palette can from, and the nine FX cans are literal.
+const CORE_ROOTS: [&str; 16] = [
+    "clockProjectile",
+    "hammerItem",
+    "wrenchItem",
+    "printGun",
+    "WandItem",
+    "AdminWandImage",
+    "blueSprayCanImage",
+    "flatSprayCanImage",
+    "pearlSprayCanImage",
+    "chromeSprayCanImage",
+    "glowSprayCanImage",
+    "blinkSprayCanImage",
+    "swirlSprayCanImage",
+    "rainbowSprayCanImage",
+    "stableSprayCanImage",
+    "jelloSprayCanImage",
+];
+/// `setSprayCanColor` swaps a translucent palette colour's can to this shape.
+/// No datablock names it literally, so it is imported explicitly.
+pub const EXTRA_MODELS: [&str; 1] = ["base/data/shapes/transspraycan.dts"];
 /// `core` is the recovered `allGameScripts.cs`; `core_damage_types` the
 /// recovered `DamageTypes.cs` holding `initDefaultDamageTypes`.
 pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -> Result<Pack> {
@@ -543,6 +571,9 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
                 CORE_PRESENTATION
                     .iter()
                     .any(|n| d.name.eq_ignore_ascii_case(n))
+                    || CORE_ROOTS
+                    .iter()
+                    .any(|root| d.name.eq_ignore_ascii_case(root))
             })
             .cloned(),
     );
@@ -617,6 +648,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
         .map(|i| i.model.clone())
         .chain(pack.projectiles.values().map(|p| p.model.clone()))
         .chain(pack.explosions.values().map(|e| e.shape.clone()))
+        .chain(EXTRA_MODELS.iter().map(|p| (*p).to_owned()))
         .filter(|p| !p.is_empty())
         .collect();
     let mut texture_references: Vec<(String, String)> = pack

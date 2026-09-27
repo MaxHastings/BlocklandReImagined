@@ -279,12 +279,12 @@ fn jets_burning_vehicles_and_splashes_follow_their_sources() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires generated effects-runtime-pack-002 and weapons-pack-004; CPU only"]
+#[ignore = "requires generated effects-runtime-pack-002 and weapons-pack-007; CPU only"]
 fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
     let pack = EffectsPack::load(root.join("effects-runtime-pack-002"))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("weapons-pack-004/weapons.json"),
+        root.join("weapons-pack-007/weapons.json"),
     )?)?);
     let mut fx = ActorEffects::new(pack, weapons, Default::default())?;
     let mut id = 0;

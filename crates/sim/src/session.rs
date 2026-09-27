@@ -99,14 +99,15 @@ pub enum Command {
         quarter_turns: u8,
         color: u8,
     },
-    Edit {
-        brick: BrickId,
-        edit: Edit,
-    },
-    Remove {
-        brick: BrickId,
-    },
     Tool(ToolAction),
+    /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
+    UseSprayCan {
+        color: u8,
+    },
+    /// `serverCmdUseFXCan`: hold an FX can (0-6 colour effects, 7-8 shape).
+    UseFxCan {
+        fx: u8,
+    },
     EquipTool {
         slot: Option<usize>,
     },
@@ -680,11 +681,7 @@ impl Session {
             self.admin_disconnects.extend(call.disconnects);
             return Ok(Reply::Admin(Box::new(call.reply)));
         }
-        if let Command::Edit {
-            edit: Edit::Events(rows),
-            ..
-        }
-        | Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command
+        if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command
         {
             self.validate_event_rows(rows)?;
         }
@@ -903,47 +900,15 @@ impl Session {
                     .emit(tick, crate::presentation::CueKind::Plant, position);
                 Ok(Reply::Planted(id))
             }
-            Command::Edit { brick, edit } => {
-                inventory::require_equipment(
-                    &self.weapons,
-                    owner,
-                    inventory::edit_equipment(&edit),
-                )?;
-                let hit = self.simulation.target(peer.player.eye(), direction, 10.0)?;
-                ensure!(
-                    hit.is_some_and(|h| h.brick == Some(brick)),
-                    "Tool target is out of reach or obstructed"
-                );
-                self.tool_catalog
-                    .validate_edit(&self.simulation.state().bricks[&brick], &edit)?;
-                self.item_spawners
-                    .validate_edit(self.simulation.state(), brick, &edit)?;
-                self.simulation.edit(&peer.actor, brick, edit)?;
-                self.dirty.insert(brick);
+            Command::UseSprayCan { color } => {
+                self.use_spray_can(owner, tools::SPRAY_CAN_IMAGE, Some(color))?;
                 Ok(Reply::Accepted)
             }
-            Command::Remove { brick } => {
-                inventory::require_equipment(
-                    &self.weapons,
-                    owner,
-                    Some(bri_weapons::CORE_TOOLS[0]),
-                )?;
-                // Stock hammer range is 5, extended to 5.5 when aiming nearly
-                // straight down. Player scaling/muzzle offsets remain adapters.
-                let hit = self.simulation.target(
-                    peer.player.eye(),
-                    direction,
-                    if direction.y < -0.9 { 5.5 } else { 5.0 },
-                )?;
-                ensure!(
-                    hit.is_some_and(|h| h.brick == Some(brick)),
-                    "Tool target is out of reach or obstructed"
-                );
-                let position = self.simulation.state().bricks[&brick].position;
-                self.simulation.remove(&peer.actor, brick)?;
-                self.dirty.insert(brick);
-                self.cues
-                    .emit(tick, crate::presentation::CueKind::Break, position);
+            Command::UseFxCan { fx } => {
+                let image = tools::FX_CAN_IMAGES
+                    .get(usize::from(fx))
+                    .context("Unknown FX can")?;
+                self.use_spray_can(owner, image, None)?;
                 Ok(Reply::Accepted)
             }
             Command::Activate => {
@@ -956,7 +921,7 @@ impl Session {
                 }
                 Ok(Reply::Activated(hit))
             }
-            Command::Tool(action) => self.tool_action(owner, action, direction),
+            Command::Tool(action) => self.tool_action(owner, action),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
                 ensure!(peer.chats <= 4, "Chat rate exceeded");

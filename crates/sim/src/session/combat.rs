@@ -97,6 +97,12 @@ pub enum Notice {
         owner_name: String,
         title: String,
     },
+    /// `openWrenchDlg` / `openPrintSelectorDlg` after a wrench or printer hit.
+    Inspected {
+        brick_id: bri_world::BrickId,
+        brick: Box<bri_world::Brick>,
+        mode: super::InspectMode,
+    },
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

@@ -17,11 +17,11 @@ fn root() -> PathBuf {
 fn packs() -> Result<(Arc<ItemAssets>, Arc<bri_weapons::Pack>)> {
     let root = root();
     let assets = ItemAssets::load(
-        &root.join("content/item-presentation-pack-005"),
-        &root.join("content/weapons-pack-004"),
+        &root.join("content/item-presentation-pack-008"),
+        &root.join("content/weapons-pack-007"),
     )?;
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-004/weapons.json"),
+        root.join("content/weapons-pack-007/weapons.json"),
     )?)?;
     Ok((Arc::new(assets), Arc::new(weapons)))
 }
@@ -53,14 +53,15 @@ fn model_instances_share_cpu_model_and_missing_mounts_never_guess() -> Result<()
         static_items: vec![static_item(1, [0., 0., 0.]), static_item(2, [2., 0., 0.])],
         ..Default::default()
     };
-    adapter.sync(&view, &BTreeMap::new(), frame(), |_| None)?;
+    adapter.sync(&view, frame(), |_| None)?;
     assert_eq!(adapter.instances().count(), 2);
     assert_eq!(adapter.diagnostics.cached_models, 1);
     assert_eq!(adapter.diagnostics.geometry_slots, 1);
     assert_eq!(adapter.diagnostics.model_builds, 1);
 
     let mounted_image = bri_sim::session::MountedImage {
-        image: "v20.image.gunimage".into(),
+        paint: None,
+image: "v20.image.gunimage".into(),
         state: "Fire".into(),
         hand: 0,
     };
@@ -69,7 +70,7 @@ fn model_instances_share_cpu_model_and_missing_mounts_never_guess() -> Result<()
         ..Default::default()
     };
     let poses = std::cell::Cell::new(0);
-    adapter.sync(&mounted, &BTreeMap::new(), frame(), |_| {
+    adapter.sync(&mounted, frame(), |_| {
         poses.set(poses.get() + 1);
         Some(MountPose {
             eye: Mat4::IDENTITY,
@@ -111,7 +112,6 @@ fn model_instances_share_cpu_model_and_missing_mounts_never_guess() -> Result<()
     };
     adapter.sync(
         &mounted,
-        &BTreeMap::new(),
         WorldItemFrame {
             tick: 121,
             seconds: 1.01,
@@ -146,7 +146,7 @@ fn shared_gpu_geometry_clears_and_recreates_without_cpu_loss() -> Result<()> {
         static_items: vec![static_item(1, [0., 0., 0.]), static_item(2, [2., 0., 0.])],
         ..Default::default()
     };
-    adapter.sync(&view, &BTreeMap::new(), frame(), |_| None)?;
+    adapter.sync(&view, frame(), |_| None)?;
     adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
     assert_eq!(adapter.model_scenes().count(), 1);
     assert_eq!(
@@ -203,10 +203,10 @@ fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<(
         static_items: vec![static_item(1, [0.; 3])],
         ..Default::default()
     };
-    adapter.sync(&view, &BTreeMap::new(), frame(), |_| None)?;
+    adapter.sync(&view, frame(), |_| None)?;
     assert_eq!(adapter.instances().count(), 1);
     view.static_items[0].item = "v20.weapon.bowitem".into();
-    adapter.sync(&view, &BTreeMap::new(), frame(), |_| None)?;
+    adapter.sync(&view, frame(), |_| None)?;
     assert_eq!(
         adapter.instances().count(),
         1,
@@ -218,7 +218,8 @@ fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<(
     view.images.insert(
         7,
         vec![bri_sim::session::MountedImage {
-            image: "v20.image.gunimage".into(),
+            paint: None,
+image: "v20.image.gunimage".into(),
             state: "Ready".into(),
             hand: 0,
         }],
@@ -227,7 +228,7 @@ fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<(
         local_owner: Some(7),
         ..frame()
     };
-    adapter.sync(&view, &BTreeMap::new(), local_frame, |_| {
+    adapter.sync(&view, local_frame, |_| {
         Some(MountPose {
             eye: Mat4::IDENTITY,
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
@@ -241,14 +242,13 @@ fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<(
     );
     assert_eq!(adapter.diagnostics.deferred, 1);
     view.images.clear();
-    adapter.sync(&view, &BTreeMap::new(), local_frame, |_| None)?;
+    adapter.sync(&view, local_frame, |_| None)?;
     assert_eq!(
         adapter.instances().map(|(id, _)| id).collect::<Vec<_>>(),
         vec![ItemIdentity::Static(1)]
     );
     adapter.sync(
         &WeaponView::default(),
-        &BTreeMap::new(),
         local_frame,
         |_| None,
     )?;
@@ -338,7 +338,6 @@ fn actual_item_instances_match_independently_baked_world_geometry() -> Result<()
             static_items: items.clone(),
             ..Default::default()
         },
-        &BTreeMap::new(),
         frame(),
         |_| None,
     )?;

@@ -146,7 +146,8 @@ fn weapons() -> Arc<Pack> {
 fn view() -> WeaponView {
     WeaponView {
         projectiles: vec![Projectile {
-            id: 1,
+            paint: None,
+id: 1,
             definition: "projectile".into(),
             source: ActorId(1),
             position: Vec3::ZERO,
@@ -448,7 +449,7 @@ fn actual_native_weapon_bindings_and_effects() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let pack = EffectsPack::load(root.join("content/effects-runtime-pack-002"))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-004/weapons.json"),
+        root.join("content/weapons-pack-007/weapons.json"),
     )?)?);
     let mut fx = WeaponEffects::new(pack, weapons.clone(), EffectsLimits::default())?;
     fx.cues(

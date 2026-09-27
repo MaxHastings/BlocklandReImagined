@@ -257,9 +257,9 @@ mod tests {
         assert_eq!(sample1(&[], 0.5), None);
     }
     #[test]
-    #[ignore = "requires generated native weapons-pack-004; CPU only"]
+    #[ignore = "requires generated native weapons-pack-007; CPU only"]
     fn rocket_explosion_sphere_expands_and_fades() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-004");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-007");
         let pack = bri_weapons::Pack::from_json(&std::fs::read(root.join("weapons.json"))?)?;
         let mut shapes = ExplosionShapes::load(&pack, &root)?;
         shapes.cue(&Cue {

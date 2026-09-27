@@ -131,10 +131,10 @@ mod tests {
     fn all_native_item_names_icons_and_source_tints() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let weapons =
-            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-004"))?;
+            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-007"))?;
         let assets = crate::items::ItemAssets::load(
-            &root.join("item-presentation-pack-005"),
-            &root.join("weapons-pack-004"),
+            &root.join("item-presentation-pack-008"),
+            &root.join("weapons-pack-007"),
         )?;
         let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;
         let ui = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
@@ -169,10 +169,10 @@ mod tests {
     fn original_hud_icons_upload_and_reregister_after_gpu_reset() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let weapons =
-            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-004"))?;
+            bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-007"))?;
         let assets = crate::items::ItemAssets::load(
-            &root.join("item-presentation-pack-005"),
-            &root.join("weapons-pack-004"),
+            &root.join("item-presentation-pack-008"),
+            &root.join("weapons-pack-007"),
         )?;
         let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;
         let mut icons = ItemUi::new(&assets, &weapons.item_choices, &pack)?;

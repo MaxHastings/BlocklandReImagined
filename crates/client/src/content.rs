@@ -81,8 +81,8 @@ impl Default for ContentConfig {
             audio: "audio-pack-001".into(),
             weather: "weather-pack-001".into(),
             foliage: "foliage-pack-001".into(),
-            weapons: "weapons-pack-004".into(),
-            item_presentation: "item-presentation-pack-005".into(),
+            weapons: "weapons-pack-007".into(),
+            item_presentation: "item-presentation-pack-008".into(),
             vehicles: "vehicles-pack-009".into(),
             events: "events-pack-002".into(),
         }
@@ -1067,8 +1067,8 @@ mod tests {
     #[test]
     fn old_content_config_defaults_native_item_presentation_path() {
         let config: ContentConfig =
-            serde_json::from_str(r#"{"schema_version":1,"weapons":"weapons-pack-004"}"#).unwrap();
-        assert_eq!(config.item_presentation, "item-presentation-pack-005");
+            serde_json::from_str(r#"{"schema_version":1,"weapons":"weapons-pack-007"}"#).unwrap();
+        assert_eq!(config.item_presentation, "item-presentation-pack-008");
         assert!(serde_json::from_str::<ContentConfig>(r#"{"item_presentaton":"typo"}"#).is_err());
     }
     #[test]

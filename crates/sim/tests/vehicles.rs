@@ -138,7 +138,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
         vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
     )?);
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-004/weapons.json"),
+        root.join("content/weapons-pack-007/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
         root.join("content/vehicles-pack-009/vehicles.json"),
@@ -234,8 +234,5 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     }
     assert_eq!(s.vitals()[&bot].minigame, s.vitals()[&human].minigame);
     assert!(hurt, "the bot shot its minigame opponent");
-    // Removing the brick removes its bot.
-    s.command_with_aim(human, 5, Command::Tool(ToolAction::Hammer), Some(aim))
-        .ok();
     Ok(())
 }

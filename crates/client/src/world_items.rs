@@ -7,7 +7,7 @@ use bri_render::scene::{
 };
 use bri_sim::{
     presentation::{Cue, CueKind},
-    session::{ToolInventory, WeaponView},
+    session::WeaponView,
 };
 use glam::{Mat3, Mat4, Quat, Vec3};
 use std::{
@@ -160,8 +160,13 @@ pub struct WorldItems {
     clocks: BTreeMap<(u64, u8), AnimationClock>,
     mounted: BTreeMap<(u64, u8), MountedPose>,
     last_seconds: Option<f64>,
+    /// World palette for colour spray cans.
+    palette: Vec<[f32; 4]>,
     pub diagnostics: WorldItemDiagnostics,
 }
+
+/// `setSprayCanColor`: a translucent palette colour uses the clear can.
+const TRANSLUCENT_SPRAY_CAN: &str = "base/data/shapes/transspraycan.dts";
 
 impl WorldItems {
     pub fn new(
@@ -189,6 +194,7 @@ impl WorldItems {
             clocks: BTreeMap::new(),
             mounted: BTreeMap::new(),
             last_seconds: None,
+            palette: Vec::new(),
             diagnostics: Default::default(),
         })
     }
@@ -226,6 +232,11 @@ impl WorldItems {
             .flat_map(|m| &m.slots)
             .flat_map(|s| s.identities.iter().copied().zip(&s.transforms))
     }
+    pub fn set_palette(&mut self, palette: &[[f32; 4]]) {
+        if self.palette != palette {
+            self.palette = palette.to_vec();
+        }
+    }
     pub fn model_scenes(&self) -> impl Iterator<Item = &bri_render::scene::SceneData> {
         self.models.values().map(|m| &m.mesh.data)
     }
@@ -233,7 +244,6 @@ impl WorldItems {
     pub fn sync(
         &mut self,
         view: &WeaponView,
-        tools: &BTreeMap<u64, ToolInventory>,
         frame: WorldItemFrame,
         mut host_pose: impl FnMut(u64) -> Option<MountPose>,
     ) -> Result<()> {
@@ -245,14 +255,9 @@ impl WorldItems {
             "Invalid/backward item render clock; reset on session change"
         );
         ensure!(
-            tools.len() <= 64
-                && tools.keys().all(|id| *id > 0)
-                && view.images.keys().all(|id| *id > 0),
+            view.images.keys().all(|id| *id > 0),
             "Invalid item owners"
         );
-        for inventory in tools.values() {
-            inventory.validate()?;
-        }
         let names = view.images.keys().map(|id| (*id, String::new())).collect();
         view.validate(&names)?;
         self.last_seconds = Some(frame.seconds);
@@ -372,45 +377,37 @@ impl WorldItems {
                 priority: false,
             });
         }
-        let mut mounted: BTreeMap<(u64, u8), (String, String)> = view
+        let mounted: BTreeMap<(u64, u8), (String, String, Option<u8>)> = view
             .images
             .iter()
             .flat_map(|(&owner, images)| {
                 images.iter().map(move |image| {
                     (
                         (owner, image.hand),
-                        (image.image.clone(), image.state.clone()),
+                        (image.image.clone(), image.state.clone(), image.paint),
                     )
                 })
             })
             .collect();
-        for (&owner, inventory) in tools {
-            if let Some(item) = inventory
-                .selected
-                .and_then(|i| inventory.slots.get(i))
-                .and_then(Option::as_deref)
-                && bri_weapons::CORE_TOOLS.contains(&item)
-            {
-                if let Some(binding) = self.assets.presentation.items.get(item) {
-                    mounted
-                        .entry((owner, 0))
-                        .or_insert_with(|| (binding.image.clone(), String::new()));
-                } else {
-                    self.missing(format!("Missing core tool presentation {item}"));
-                }
-            }
-        }
         self.clocks.retain(|id, _| mounted.contains_key(id));
         self.mounted.clear();
         let mut poses = BTreeMap::new();
-        for (&(owner, hand), (image_id, state_name)) in &mounted {
-            let Some(image) = self.assets.presentation.images.get(image_id).cloned() else {
+        for (&(owner, hand), (image_id, state_name, paint)) in &mounted {
+            let Some(mut image) = self.assets.presentation.images.get(image_id).cloned() else {
                 self.missing(format!("Missing mounted image {image_id}"));
                 continue;
             };
             if image.model.is_empty() {
                 self.diagnostics.model_less += 1;
                 continue;
+            }
+            if let Some(color) = paint.and_then(|p| self.palette.get(usize::from(p))) {
+                // The derived `color<N>SprayCanImage`: palette colour shift,
+                // alpha at least 10/255, clear can for translucent colours.
+                image.tint = [color[0], color[1], color[2], color[3].max(10. / 255.)];
+                if color[3] <= 0.99 {
+                    image.model = TRANSLUCENT_SPRAY_CAN.into();
+                }
             }
             let pose_key = self.image_pose(owner, hand, image_id, state_name, frame.seconds)?;
             let pose = poses.entry(owner).or_insert_with(|| host_pose(owner));

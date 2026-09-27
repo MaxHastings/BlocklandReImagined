@@ -333,15 +333,6 @@ impl App {
                         .map(|image| format!("{}:{}", image.hand, image.image)),
                 );
             }
-            if let Some(item) = view
-                .tools
-                .get(owner)
-                .and_then(|inventory| inventory.selected.and_then(|i| inventory.slots.get(i)))
-                .and_then(Option::as_deref)
-                .filter(|id| bri_weapons::CORE_TOOLS.contains(id))
-            {
-                parts.push(format!("tool:{item}"));
-            }
             (!parts.is_empty()).then(|| parts.join("|"))
         };
         for owner in view.poses.keys() {
@@ -384,14 +375,6 @@ impl App {
                     .images
                     .get(actor)
                     .is_some_and(|images| images.iter().any(|image| image.hand == hand))
-                    || (hand == 0
-                        && view.tools.get(actor).is_some_and(|inventory| {
-                            inventory
-                                .selected
-                                .and_then(|i| inventory.slots.get(i))
-                                .and_then(Option::as_deref)
-                                .is_some_and(|id| bri_weapons::CORE_TOOLS.contains(&id))
-                        }))
             });
             if current.is_none() || !hand_matches {
                 if age >= 0.5 {
@@ -1786,6 +1769,49 @@ impl App {
                     }
                 }
                 network::Event::Ready => a.ready = true,
+                network::Event::Notice(bri_sim::session::Notice::Inspected {
+                    brick_id,
+                    brick,
+                    mode,
+                }) => {
+                    // A wrench/printer hit opens its dialog only over plain
+                    // play, never over a newer modal or while typing.
+                    if self.ui.stack() != [ScreenId::Play] {
+                        continue;
+                    }
+                    let Some(view) = a.view.as_ref() else {
+                        continue;
+                    };
+                    self.invalidate_tool_dialogs();
+                    let reply = Reply::Inspected {
+                        brick_id,
+                        brick,
+                        mode,
+                    };
+                    match self.tool_ui.accept_inspection(
+                        &reply,
+                        mode,
+                        None,
+                        &view.world,
+                        &view.names,
+                        view.owner,
+                    ) {
+                        Ok(updates) => {
+                            for update in updates {
+                                self.ui.apply_session(a.id, update);
+                            }
+                        }
+                        Err(error) => {
+                            self.ui.apply_session(
+                                a.id,
+                                UiUpdate::CenterPrint {
+                                    text: format!("{error:#}"),
+                                    seconds: 2.0,
+                                },
+                            );
+                        }
+                    }
+                }
                 network::Event::Notice(notice) => {
                     let update = match notice {
                         bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
@@ -1815,6 +1841,7 @@ impl App {
                             owner_name: plain_chat(&owner_name),
                             owner_display_id: String::new(),
                         }),
+                        bri_sim::session::Notice::Inspected { .. } => unreachable!(),
                     };
                     self.ui.apply_session(a.id, update);
                 }
@@ -1856,6 +1883,14 @@ impl App {
         }
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
+        }
+        if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
+            building.set_held_image(
+                view.weapons
+                    .images
+                    .get(&view.owner)
+                    .is_some_and(|images| images.iter().any(|image| image.hand == 0)),
+            );
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view)
             && let Some(inventory) = view.tools.get(&view.owner)
@@ -2364,11 +2399,34 @@ impl PlatformApp for App {
                         );
                     }
                 }
-                self.vehicles.prepare(
-                    &mut self.vehicle_assets,
-                    &view.vehicles,
-                    &view.world.palette,
-                );
+                self.vehicles
+                    .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
+                let presented = self.motion.presented();
+                let mut loops = BTreeMap::new();
+                for (owner, images) in &view.weapons.images {
+                    let Some(player) = presented.get(owner) else {
+                        continue;
+                    };
+                    for mounted in images {
+                        let sound = self
+                            .content
+                            .weapons
+                            .pack
+                            .images
+                            .get(&mounted.image)
+                            .and_then(|image| {
+                                image.states.iter().find(|s| s.name == mounted.state)
+                            })
+                            .map(|state| state.sound.as_str())
+                            .filter(|sound| !sound.is_empty() && self.audio.is_looping(sound));
+                        if let Some(sound) = sound {
+                            let eye = Vec3::from(player.feet)
+                                + Vec3::Y * bri_sim::player::PlayerTuning::default().stand_eye;
+                            loops.insert((*owner, mounted.hand), (sound.to_string(), eye.to_array()));
+                        }
+                    }
+                }
+                self.audio.sync_image_loops(&loops);
                 if self
                     .music_world
                     .as_ref()
@@ -2459,12 +2517,6 @@ impl PlatformApp for App {
                     self.avatars
                         .insert(*owner, self.avatar_assets.mesh(appearance.clone())?);
                 }
-                let selected_core_tool = view
-                    .tools
-                    .get(owner)
-                    .and_then(|inventory| inventory.selected.and_then(|i| inventory.slots.get(i)))
-                    .and_then(Option::as_deref)
-                    .filter(|id| bri_weapons::CORE_TOOLS.contains(id));
                 let mut ready_hands = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
@@ -2472,11 +2524,6 @@ impl PlatformApp for App {
                             ready_hands.push((mounted.hand, image.arm_ready));
                         }
                     }
-                }
-                if let Some(item) = selected_core_tool {
-                    // Offline source audit: Hammer, Wrench, and Printer image
-                    // datablocks declare armReady=true. Wand remains unaudited.
-                    ready_hands.push((0, bri_weapons::CORE_TOOLS[..3].contains(&item)));
                 }
                 let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
                 let input = crate::avatar::AvatarAnimationInput {
@@ -2537,9 +2584,9 @@ impl PlatformApp for App {
                 up: Vec3::Y.to_array(),
             };
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
+            self.world_items.set_palette(&view.world.palette);
             self.world_items.sync(
                 &view.weapons,
-                &view.tools,
                 crate::world_items::WorldItemFrame {
                     tick: view.tick,
                     seconds: self.animation_time,
@@ -3470,6 +3517,7 @@ mod tests {
             .context("Native weapon pack has no projectile trails")?;
         let mut view = bri_sim::session::WeaponView::default();
         view.projectiles.push(bri_weapons::Projectile {
+            paint: None,
             id: 1,
             definition: trail.id.clone(),
             source: bri_weapons::ActorId(1),
@@ -3754,7 +3802,8 @@ mod tests {
         animation_view.weapons.images.insert(
             owner,
             vec![bri_sim::session::MountedImage {
-                image: "v20.image.gunimage".into(),
+                paint: None,
+image: "v20.image.gunimage".into(),
                 state: "Fire".into(),
                 hand: 0,
             }],

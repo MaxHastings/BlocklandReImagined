@@ -53,6 +53,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::AdminPassword => ui::AdminFeature::AdminPassword,
                 Capability::HighlightBricks => ui::AdminFeature::HighlightBricks,
                 Capability::WorldCommands => ui::AdminFeature::ClearBricks,
+                Capability::DestructoWand => ui::AdminFeature::Wand,
             })
             .collect(),
         players: snapshot
@@ -116,6 +117,7 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
             Capability::HighlightBricks,
             Action::HighlightBrickGroup { group: *group },
         ),
+        ui::AdminAction::Wand => (Capability::DestructoWand, Action::DestructoWand),
         ui::AdminAction::SetPassword {
             slot: ui::AdminPasswordSlot::Admin,
             password,

@@ -263,7 +263,7 @@ fn release_after_core_switch_is_idempotent_but_cannot_start_a_weapon() {
 fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably() {
     let mut s = session();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-004/weapons.json");
+        .join("../../content/weapons-pack-007/weapons.json");
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap())
         .unwrap();
     let owner = s.join("Player".into(), Vec3::Y, false).unwrap();
@@ -296,7 +296,7 @@ fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably
 fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound() {
     use bri_sim::{presentation::CueKind, session::ActionAim};
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-004/weapons.json");
+        .join("../../content/weapons-pack-007/weapons.json");
     let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();
@@ -465,28 +465,13 @@ fn two_players_build_edit_and_late_join_share_authoritative_state() {
     s.step().unwrap();
     let before = s.simulation().state().clone();
     assert!(
-        s.command(
-            b,
-            2,
-            Command::Edit {
-                brick: id,
-                edit: Edit::Color(1)
-            }
-        )
+        s.edit_brick(b, id, Edit::Color(1))
         .unwrap_err()
         .to_string()
         .contains("denied")
     );
     assert_eq!(*s.simulation().state(), before);
-    s.command(
-        a,
-        3,
-        Command::Edit {
-            brick: id,
-            edit: Edit::Color(1),
-        },
-    )
-    .unwrap();
+    s.edit_brick(a, id, Edit::Color(1)).unwrap();
     s.command(a, 4, Command::Chat("Hello".into())).unwrap();
     let c = s
         .join("Late join".into(), Vec3::new(-3.0, 0.05, 0.0), false)
@@ -498,10 +483,6 @@ fn two_players_build_edit_and_late_join_share_authoritative_state() {
     assert_eq!(late.players.len(), 3);
     assert_eq!(late.chat[0].owner, a);
     assert_eq!(late.names[&c], "Late join");
-    assert!(s.command(a, 3, Command::Remove { brick: id }).is_err());
-    s.equip_tool(a, Some(0)).unwrap();
-    s.command(a, 5, Command::Remove { brick: id }).unwrap();
-    assert!(s.snapshot().world.bricks.is_empty());
     s.disconnect(b).unwrap();
     assert!(
         s.command(b, 3, Command::Chat("stale connection".into()))
@@ -555,7 +536,7 @@ fn tool_actions_require_server_eye_visibility_and_chat_is_bounded() {
     let a = s
         .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
         .unwrap();
-    let Reply::Planted(id) = s
+    let Reply::Planted(_id) = s
         .command(
             a,
             1,
@@ -570,13 +551,6 @@ fn tool_actions_require_server_eye_visibility_and_chat_is_bounded() {
     else {
         panic!()
     };
-    s.equip_tool(a, Some(0)).unwrap();
-    assert!(
-        s.command(a, 2, Command::Remove { brick: id })
-            .unwrap_err()
-            .to_string()
-            .contains("out of reach or obstructed")
-    );
     for seq in 3..=6 {
         s.command(a, seq, Command::Chat("hello".into())).unwrap();
     }
@@ -665,12 +639,7 @@ fn physical_touch_enters_event_scheduler_once() {
     s.movement(a, 1, aim(&s, a)).unwrap();
     s.step().unwrap();
     s.equip_tool(a, Some(1)).unwrap();
-    s.command(
-        a,
-        3,
-        Command::Edit {
-            brick: id,
-            edit: Edit::Events(vec![EventRow {
+    s.edit_brick(a, id, Edit::Events(vec![EventRow {
                 preserved: None,
                 enabled: true,
                 input: "onPlayerTouch".into(),
@@ -678,10 +647,7 @@ fn physical_touch_enters_event_scheduler_once() {
                 target: EventTarget::Slot(bri_events::Slot::SelfBrick),
                 output: "setColor".into(),
                 params: vec![EventValue::Color(1)],
-            }]),
-        },
-    )
-    .unwrap();
+            }])).unwrap();
     s.join("Visitor".into(), Vec3::new(0.5, 0.25, -3.25), false)
         .unwrap();
     for _ in 0..120 {

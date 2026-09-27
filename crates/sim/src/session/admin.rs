@@ -22,6 +22,7 @@ pub enum AdminCapability {
     HighlightBricks,
     /// `/realBrickCount`, `/cancelAllEvents`, `/clearBots`.
     WorldCommands,
+    DestructoWand,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +195,7 @@ impl AdminRuntime {
             supported.insert(AdminCapability::Unban);
             supported.insert(AdminCapability::HighlightBricks);
             supported.insert(AdminCapability::WorldCommands);
+            supported.insert(AdminCapability::DestructoWand);
             if rows.iter().any(|row| {
                 row.durable_identity_available
                     && !row.is_owner
@@ -244,6 +246,7 @@ impl AdminRuntime {
                 | Action::RealBrickCount
                 | Action::CancelAllEvents
                 | Action::ClearBots
+                | Action::DestructoWand
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
                 | Action::HostSetPassword {
@@ -376,6 +379,9 @@ impl AdminRuntime {
                             session.admin_cancel_all_events(actor_owner)
                         }
                         GameplayCommand::ClearBots => session.admin_clear_bots(actor_owner)?,
+                        GameplayCommand::DestructoWand => {
+                            session.use_admin_wand(actor_owner)?;
+                        }
                         other => {
                             anyhow::bail!("Administration action is not implemented: {other:?}")
                         }
