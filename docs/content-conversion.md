@@ -1,5 +1,8 @@
 # Native content conversion
 
+To rebuild every pack the client loads from a v20 install in one step, see
+[content-regeneration.md](content-regeneration.md).
+
 Runtime dependencies must consume `bri-content`, never `bri-convert`. Native
 schema versions reject unknown layouts. Conversion outputs are editable local
 JSON for now; runtime packaging/compression comes after correctness.

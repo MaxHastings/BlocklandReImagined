@@ -92,6 +92,10 @@ pub struct Weapon {
     pub charge_steps: u8,
     pub sound: String,
     pub effect: String,
+    /// Weapon-frame muzzle node positions from full up to full down, sampled
+    /// from the model's `look` clip at load (see `muzzle`). Empty without one.
+    #[serde(skip)]
+    pub look_muzzle: Vec<[f32; 3]>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnergySettings {
@@ -255,8 +259,9 @@ impl Pack {
             std::fs::metadata(path)?.len() < 16 * 1024 * 1024,
             "vehicle pack too large"
         );
-        let pack: Self = serde_json::from_slice(&std::fs::read(path)?)?;
+        let mut pack: Self = serde_json::from_slice(&std::fs::read(path)?)?;
         pack.validate()?;
+        pack.attach_muzzle_tracks(path.parent().unwrap_or(Path::new(".")))?;
         Ok(pack)
     }
     pub fn validate(&self) -> Result<()> {

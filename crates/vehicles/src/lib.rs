@@ -1,4 +1,5 @@
 //! Host-driven native vehicle simulation. Host owns and steps shared physics at 120 Hz.
+pub mod muzzle;
 pub mod schema;
 pub mod world;
 pub use schema::{Definition, Family, Pack, Transform};

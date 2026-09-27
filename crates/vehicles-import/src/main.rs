@@ -511,6 +511,7 @@ fn main() -> Result<()> {
                     "TankSmokeImage"
                 }
                 .into(),
+                look_muzzle: Vec::new(),
             })
         } else {
             None

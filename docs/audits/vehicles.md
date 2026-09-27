@@ -68,6 +68,8 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Accepted adaptation, feel for Maxwell's playtest |
 | 29 | Flying Wheeled lift and surfaces | Blockland code in `WheeledVehicle::updateForces`, decoded from blocklandv20.exe (see below) | Invented model: lift grew without limit, jets pushed straight up, surfaces and stall ignored | Fixed |
 | 30 | HoverVehicle | No v20 content uses it | Not implemented | Not needed |
+| 35 | Barrel pitch motion | The `look` thread is set every frame to `(mHead.x + pi/2) / pi` (`Player::updateLookAnimation`, 0x5A53B0), independent of `min/maxLookAngle`, so the barrel points exactly where the gunner looks and moves continuously; the controlling client poses it from its own head pitch | Model baked at 13 poses spread over the look limits, so the barrel moved in ~10 degree steps, didn't match the aim, and waited for the server | Fixed: the barrel is drawn as its own part posed from the clip at any pitch; the local gunner's barrel follows their own look |
+| 36 | Shell spawn point | Tank: `getSlotTransform(1)`, the posed `mount1` node on the barrel; Cannon: `getEyeTransform()`, the posed `eye` node. Direction is `getMuzzleVector`: with no image in the slot, Player::getMuzzleTransform (0x5A6EE0) returns the body facing tipped by the head pitch | Rest-pose muzzle turned about the turret's yaw pivot (Tank) or the model origin (Turret, Cannon), so shells left from beside or below the barrel | Fixed: `Pack::load` samples the muzzle node along the look clip and shots start at the posed barrel mouth |
 
 ## How the fixes work
 
@@ -131,6 +133,12 @@ weapons-pack-008 (schema 3) adds `Explosion::impulse_vertical` and
 `DamageType::vehicle_scale`; apart from those two fields it is identical to
 weapons-pack-007.
 
+**Barrel pitch and muzzle.** `bri_vehicles::muzzle` samples each gunner's
+muzzle node (`mount1`, or `eye` for the cannon) at 65 points along its look
+clip when the pack loads; `Definition::muzzle` interpolates it for the server's
+shots and the client's muzzle smoke. The client splits gunner models into the
+fixed part and the clip-moved barrel and poses the barrel per frame.
+
 ## Verification
 
 - `cargo test -p bri-vehicles`: 28 native tests, including the run-over
@@ -144,4 +152,8 @@ weapons-pack-007.
 - `seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun`:
   a seated driver stays facing the seat against mouse yaw and shoots a held
   gun; the gunner's fire puts the gun away.
+- `cargo test -p bri-vehicles --lib muzzle -- --ignored`: the shot origin stays
+  at the barrel mouth and the barrel turns one-for-one with the aim.
+- `cargo test -p bri-client --lib vehicles -- --include-ignored`: the drawn
+  barrel mouth matches the shot origin at 41 pitches and moves at every step.
 - None of this replaces Maxwell's interactive playtest of feel.

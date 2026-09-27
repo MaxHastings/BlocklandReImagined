@@ -404,14 +404,14 @@ impl App {
             crate::actor_effects::Anchor::Vehicle { vehicle } => body(vehicle),
             crate::actor_effects::Anchor::Muzzle { vehicle } => {
                 let info = view.vehicles.get(&vehicle)?;
-                let weapon = vehicle_assets.definition(&info.definition)?.weapon.as_ref()?;
+                let definition = vehicle_assets.definition(&info.definition)?;
                 let frame = vehicles.frame(vehicle)?;
-                Some(crate::actor_effects::muzzle(
+                crate::actor_effects::muzzle(
                     frame.position,
                     frame.rotation,
                     frame.turret_aim,
-                    weapon,
-                ))
+                    definition,
+                )
             }
         };
         actor_effects.advance(elapsed, pose, &jets, &burning)
@@ -3150,6 +3150,14 @@ impl PlatformApp for App {
                     self.motion.server_tick(),
                     driven,
                 );
+                if let Some((vehicle, seat)) = mounted
+                    && let Some(info) = view.vehicles.get(&vehicle)
+                    && let Some(d) = self.vehicle_assets.definition(&info.definition)
+                    && d.seats.get(usize::from(seat)).is_some_and(|s| s.weapon)
+                {
+                    self.vehicles
+                        .aim_locally(vehicle, d, self.controls.yaw, self.controls.pitch);
+                }
                 // The view rides along: it faces the seat, follows a
                 // mouse-steered vehicle, turns with the hull for a gunner, and
                 // stays put on a mount facing the look.
