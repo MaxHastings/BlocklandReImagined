@@ -1,0 +1,31 @@
+[package]
+name = "bri-addon-import"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Offline importer: one legacy Blockland Add-On to a native package plus a machine-readable report"
+
+[[bin]]
+name = "bri-import-addon"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bri-content = { path = "../content" }
+bri-convert = { path = "../convert" }
+bri-package = { path = "../package" }
+bri-package-runtime = { path = "../package-runtime" }
+bri-weapons = { path = "../weapons" }
+bri-weapons-import = { path = "../weapons-import" }
+bri-vehicles = { path = "../vehicles" }
+bri-vehicles-import = { path = "../vehicles-import" }
+regex = "1.12"
+sha2 = "0.10"
+zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+bri-physics = { path = "../physics" }
+glam = "0.33"
+rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }

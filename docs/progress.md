@@ -2397,3 +2397,26 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   map-bundle-016 (every Bedroom window and the bulb take a >30 impact from a
   thrown player), `bri-net --test replication`. The motor hits still come from
   Rapier contacts; they move to the Torque contacts when slides lands.
+- 2026-09-27 Spike (c), importing community Add-Ons. The new `bri-import-addon`
+  (`crates/addon-import`) takes one Add-On zip or folder and writes a package
+  directory: `package.json`, native weapons/vehicles/bricks data, converted
+  DTS and BLB files, copied textures and sounds, and `import-report.json` plus
+  `IMPORT-REPORT.md`. The report covers assets, datablocks, ids in
+  `namespace:kind/name`, dependencies, unsupported and ambiguous findings, and
+  "needs behaviour" entries (hook, operations with lines, capabilities present
+  and missing). Nothing is executed. Supporting changes:
+  - `bri_convert::tscript`: a static reader for datablocks, functions, packages
+    and calls.
+  - `bri_vehicles_import::lower`: vehicle lowering is now a library function;
+    the vanilla output is byte-identical (`diff -r` against `maps-pass-007`).
+  - `catalog::read_with_parents`.
+  - `bri_vehicles::Pack::validate` accepts namespaced vehicle ids.
+  Evidence: the Sawn-off Shotgun (Ephialtes), Blocko Car (Kaje) and Bot_Zombie
+  (Rotondo) import against the E: reference. The imported shotgun fires in
+  `WeaponsWorld` and the imported car drives in `VehiclesWorld`, both headless.
+  253 of 255 archive zips import (the other two are a non-archive and a
+  member-budget refusal). Tests: `cargo test -p bri-addon-import` runs a CC0
+  synthetic fixture everywhere and the real samples where the archive exists.
+  Open: a hosted game cannot load an imported package yet, because each system
+  reads one pack per role. That seam and 19 others are in
+  `docs/audits/spike-addon-import.md`.

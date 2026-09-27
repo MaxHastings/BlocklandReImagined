@@ -293,6 +293,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-addon-import"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-content",
+ "bri-convert",
+ "bri-package",
+ "bri-package-runtime",
+ "bri-physics",
+ "bri-vehicles",
+ "bri-vehicles-import",
+ "bri-weapons",
+ "bri-weapons-import",
+ "glam 0.33.10",
+ "rapier3d",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zip 6.0.0",
+]
+
+[[package]]
 name = "bri-admin"
 version = "0.1.0"
 dependencies = [
