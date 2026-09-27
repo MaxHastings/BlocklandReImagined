@@ -155,12 +155,25 @@ pub struct PublicWorld {
     pub name: String,
     pub map_id: String,
     pub palette: Vec<[f32; 4]>,
-    pub bricks: BTreeMap<BrickId, Brick>,
+    pub bricks: bri_world::Bricks,
 }
 pub fn public_brick(brick: &Brick) -> Brick {
     let mut brick = brick.clone();
     brick.source_records.clear();
     brick
+}
+/// The replicated view of a world's bricks: an O(1) snapshot of the
+/// persistent map, copying only the bricks that carry private source records.
+pub fn public_bricks(bricks: &bri_world::Bricks) -> bri_world::Bricks {
+    let mut public = bricks.clone();
+    for (id, brick) in bricks {
+        if !brick.source_records.is_empty()
+            && let Some(brick) = public.get_mut(id)
+        {
+            brick.source_records.clear();
+        }
+    }
+    public
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
@@ -196,11 +209,7 @@ impl Checkpoint {
                 name: world.name.clone(),
                 map_id: world.map_id.clone(),
                 palette: world.palette.clone(),
-                bricks: world
-                    .bricks
-                    .iter()
-                    .map(|(id, b)| (*id, public_brick(b)))
-                    .collect(),
+                bricks: public_bricks(&world.bricks),
             },
             names: session.names(),
             avatars: session.avatars(),

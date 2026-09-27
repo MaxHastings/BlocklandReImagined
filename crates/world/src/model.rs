@@ -11,6 +11,20 @@ pub const TICKS_PER_SECOND: u64 = 120;
 pub type BrickId = u64;
 /// Assigned by the server's identity service; zero is world-owned content.
 pub type OwnerId = u64;
+/// A world's bricks. A persistent (structurally shared) ordered map: a copy
+/// is O(1) and an edit copies O(log n), so snapshots handed to other threads
+/// (replication, rendering, collision) never deep-clone the world.
+pub type Bricks = imbl::OrdMap<BrickId, Brick>;
+/// Mutate every brick (a persistent map has no `values_mut`).
+pub fn update_bricks(bricks: &mut Bricks, mut f: impl FnMut(&mut Brick)) {
+    *bricks = std::mem::take(bricks)
+        .into_iter()
+        .map(|(id, mut brick)| {
+            f(&mut brick);
+            (id, brick)
+        })
+        .collect();
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -287,7 +301,7 @@ pub struct World {
     pub tick: u64,
     pub revision: u64,
     pub next_brick_id: BrickId,
-    pub bricks: BTreeMap<BrickId, Brick>,
+    pub bricks: Bricks,
     pub source_sha256: Option<String>,
     pub source_encoding: Option<String>,
 }
@@ -302,7 +316,7 @@ impl World {
             tick: 0,
             revision: 0,
             next_brick_id: 1,
-            bricks: BTreeMap::new(),
+            bricks: Bricks::new(),
             source_sha256: None,
             source_encoding: None,
         }

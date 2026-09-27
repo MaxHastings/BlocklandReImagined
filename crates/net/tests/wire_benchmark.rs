@@ -3,7 +3,7 @@
 //! Run: BRI_BENCH_WORLD=<path to .world.json> cargo test --release -p bri-net
 //!      --test wire_benchmark -- --ignored --nocapture
 use anyhow::{Context, Result};
-use bri_net::protocol::{PublicWorld, public_brick};
+use bri_net::protocol::{PublicWorld, public_bricks};
 use std::io::Read;
 use std::time::Instant;
 
@@ -16,16 +16,14 @@ fn ms(start: Instant) -> f64 {
 fn world_checkpoint_wire_cost() -> Result<()> {
     let path = std::env::var("BRI_BENCH_WORLD").context("Set BRI_BENCH_WORLD")?;
     let world = bri_world::persistence::load(std::path::Path::new(&path))?;
+    let start = Instant::now();
     let public = PublicWorld {
         name: world.name.clone(),
         map_id: world.map_id.clone(),
         palette: world.palette.clone(),
-        bricks: world
-            .bricks
-            .iter()
-            .map(|(id, b)| (*id, public_brick(b)))
-            .collect(),
+        bricks: public_bricks(&world.bricks),
     };
+    let snapshot = ms(start);
     let start = Instant::now();
     let json = serde_json::to_vec(&public)?;
     let json_packed = zstd::stream::encode_all(json.as_slice(), 3)?;
@@ -52,12 +50,22 @@ fn world_checkpoint_wire_cost() -> Result<()> {
     let _ = bri_net::codec::encode_request(&public, bri_net::codec::MAX_DECODED)?;
     let wire_raw = ms(start);
     eprintln!("  Serialization only: JSON {json_raw:.1} ms, MessagePack {wire_raw:.1} ms");
+    let mut replica = public.clone();
     let start = Instant::now();
-    let copy = public.clone();
-    let clone = ms(start);
-    drop(copy);
+    let mut copies = Vec::new();
+    for n in 0..20_u64 {
+        let brick = replica.bricks.get_min().unwrap().1.clone();
+        replica.bricks.insert(u64::MAX - n, brick);
+        copies.push(replica.clone());
+    }
+    let clone = ms(start) / 20.0;
+    drop(copies);
+    let start = Instant::now();
+    let visible = replica.bricks.values().filter(|b| b.visible).count();
+    let iterate = ms(start);
+    assert!(visible > 0);
     eprintln!(
-        "{} bricks\n  JSON: {} raw / {} zstd bytes, encode {json_encode:.1} ms, decode {json_decode:.1} ms\n  MessagePack: {} raw / {} zstd bytes, encode {wire_encode:.1} ms, decode {wire_decode:.1} ms\n  Replica world clone: {clone:.1} ms",
+        "{} bricks\n  JSON: {} raw / {} zstd bytes, encode {json_encode:.1} ms, decode {json_decode:.1} ms\n  MessagePack: {} raw / {} zstd bytes, encode {wire_encode:.1} ms, decode {wire_decode:.1} ms\n  Checkpoint snapshot: {snapshot:.2} ms, replica edit + snapshot: {clone:.3} ms, full iteration: {iterate:.2} ms",
         public.bricks.len(),
         json.len(),
         json_packed.len(),

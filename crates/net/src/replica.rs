@@ -217,12 +217,12 @@ impl Replica {
         let removed = delta
             .bricks
             .iter()
-            .filter(|(id, b)| b.is_none() && self.world.bricks.contains_key(id))
+            .filter(|(id, b)| b.is_none() && self.world.bricks.contains_key(*id))
             .count();
         let added = delta
             .bricks
             .iter()
-            .filter(|(id, b)| b.is_some() && !self.world.bricks.contains_key(id))
+            .filter(|(id, b)| b.is_some() && !self.world.bricks.contains_key(*id))
             .count();
         ensure!(
             self.world.bricks.len() - removed + added <= bri_world::MAX_BRICKS,

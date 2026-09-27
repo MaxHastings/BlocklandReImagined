@@ -552,7 +552,7 @@ fn build_look(
         name: "Brick debris".into(),
         map_id: "debris".into(),
         palette: palette.to_vec(),
-        bricks: [(0, brick)].into(),
+        bricks: bri_world::Bricks::unit(0, brick),
     };
     let data =
         crate::world_scene::build_world_scene_materials(&world, meshes, 200_000, Some(materials))?;

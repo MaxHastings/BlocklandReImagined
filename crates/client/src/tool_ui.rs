@@ -928,11 +928,12 @@ mod tests {
             map_id: "test".into(),
             palette: vec![[1.0; 4], [0.0; 4]],
             bricks: [
-                (7, bri_net::protocol::public_brick(brick)),
+                (7_u64, bri_net::protocol::public_brick(brick)),
                 (8, other),
                 (9, target),
             ]
-            .into(),
+            .into_iter()
+            .collect(),
         }
     }
     fn open(ui: &mut ToolUi, brick: &Brick, mode: InspectMode) -> Vec<UiUpdate> {

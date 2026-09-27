@@ -51,7 +51,10 @@ pub fn bind(world: &mut World, library: &Library) -> Result<Report> {
             }
         }
     };
-    for brick in world.bricks.values_mut() {
+    for id in world.bricks.keys().copied().collect::<Vec<_>>() {
+        let Some(brick) = world.bricks.get_mut(&id) else {
+            continue;
+        };
         if let Some(light) = &mut brick.light {
             resolve(&mut light.asset);
         }

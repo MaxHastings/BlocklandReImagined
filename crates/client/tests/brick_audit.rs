@@ -181,7 +181,7 @@ fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
         name: "Brick audit".into(),
         map_id: "audit".into(),
         palette: palette.clone(),
-        bricks: BTreeMap::new(),
+        bricks: Default::default(),
     };
     let mut records = vec![];
     for (index, entry) in layout.iter().enumerate() {

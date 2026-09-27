@@ -134,7 +134,10 @@ impl WeaponContent {
     /// Raw source records are preserved and never interpreted by this operation.
     pub fn resolve_world_items(&self, world: &mut bri_world::World) -> Result<usize> {
         let mut unresolved = 0;
-        for brick in world.bricks.values_mut() {
+        for id in world.bricks.keys().copied().collect::<Vec<_>>() {
+            let Some(brick) = world.bricks.get_mut(&id) else {
+                continue;
+            };
             brick.item_spawn.resolve_item(&self.aliases)?;
             unresolved += usize::from(matches!(
                 brick.item_spawn.item,

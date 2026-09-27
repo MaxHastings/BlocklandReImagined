@@ -114,7 +114,7 @@ impl Building {
             ghost_generation: 0,
             map,
             terrain: Vec::new(),
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
             index: Index::default(),
             camera_index: Index::default(),
             visibility_index: Index::default(),
@@ -275,13 +275,13 @@ impl Building {
             Some(known) => known
                 .bricks
                 .iter()
-                .filter(|id| self.bricks.contains_key(id) && !world.bricks.contains_key(id))
+                .filter(|id| self.bricks.contains_key(id) && !world.bricks.contains_key(*id))
                 .copied()
                 .collect(),
             None => self
                 .bricks
                 .keys()
-                .filter(|id| !world.bricks.contains_key(id))
+                .filter(|id| !world.bricks.contains_key(*id))
                 .copied()
                 .collect(),
         };
@@ -1218,7 +1218,7 @@ mod tests {
             name: "Test".into(),
             map_id: "map".into(),
             palette: vec![[1.0; 4]; 2],
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
         }
     }
     #[test]

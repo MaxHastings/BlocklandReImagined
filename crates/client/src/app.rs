@@ -4424,7 +4424,7 @@ impl PlatformApp for App {
                     name: "Local unplanted ghost".into(),
                     map_id: view.world.map_id.clone(),
                     palette,
-                    bricks: [(0, ghost.clone())].into(),
+                    bricks: bri_world::Bricks::unit(0, ghost.clone()),
                 };
                 let mut data = crate::world_scene::build_world_scene_materials(
                     &world,

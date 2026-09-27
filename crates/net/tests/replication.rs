@@ -21,7 +21,7 @@ fn checkpoint() -> Checkpoint {
             name: "Test".into(),
             map_id: "Fixture".into(),
             palette: vec![[1.0; 4]],
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
         },
         names: [(1, "Player".into())].into(),
         avatars: Default::default(),

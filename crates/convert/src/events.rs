@@ -315,7 +315,10 @@ pub fn bind(world: &mut World, catalog: &Catalog, aliases: &Aliases) -> Result<R
             .collect(),
     };
     let mut report = Report::default();
-    for brick in world.bricks.values_mut() {
+    for id in world.bricks.keys().copied().collect::<Vec<_>>() {
+        let Some(brick) = world.bricks.get_mut(&id) else {
+            continue;
+        };
         let mut rows = BTreeMap::new();
         for record in &brick.source_records {
             let text = record.text.as_str();

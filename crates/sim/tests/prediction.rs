@@ -188,7 +188,7 @@ fn plate_definitions() -> Definitions {
     }
 }
 /// `count` plates on a grid, keyed from 1.
-fn plates(count: u64) -> std::collections::BTreeMap<u64, bri_world::Brick> {
+fn plates(count: u64) -> bri_world::Bricks {
     (1..=count)
         .map(|id| {
             let (x, z) = ((id % 200) as f32, (id / 200) as f32);
