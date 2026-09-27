@@ -534,8 +534,9 @@ fn main() -> Result<()> {
                 12
             },
             initial_explosion: projectile("initialExplosionProjectile").or_else(|| {
+                // Vehicle_Pirate_Cannon.cs spawns CannonBaseExplosionProjectile on destruction.
                 (family == Family::Cannon)
-                    .then(|| "v20.projectile.cannonexplosionprojectile".into())
+                    .then(|| "v20.projectile.cannonbaseexplosionprojectile".into())
             }),
             final_explosion: projectile("finalExplosionProjectile"),
             initial_explosion_offset: number(b, "initialExplosionOffset", 0.),
