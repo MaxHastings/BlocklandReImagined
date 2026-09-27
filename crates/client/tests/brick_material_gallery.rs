@@ -221,7 +221,7 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
         special
             .omissions
             .iter()
-            .any(|s| s.contains("unverified out-of-range literal")),
+            .any(|s| s.contains("out-of-range literal input conversion remains unverified")),
         "Unverified pumpkin RGB interpretation must remain visible"
     );
     render(&gpu, &special, &out.join("paint-offset-special-bricks.png"))?;
