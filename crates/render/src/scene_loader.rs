@@ -100,6 +100,17 @@ fn texture(
     cache.insert(key, index);
     Ok(index)
 }
+/// A cutout texture with soft edges (tree leaves): a large share of fully clear
+/// and fully solid texels. Distinct from uniformly translucent glass.
+fn soft_cutout(image: &SceneImage) -> bool {
+    let (mut clear, mut solid, mut total) = (0usize, 0usize, 0usize);
+    for p in image.rgba.chunks_exact(4) {
+        total += 1;
+        clear += usize::from(p[3] == 0);
+        solid += usize::from(p[3] == 255);
+    }
+    total > 0 && clear * 10 >= total && solid * 10 >= total
+}
 fn alpha(image: &SceneImage) -> AlphaMode {
     if image.rgba.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255) {
         AlphaMode::Blend
@@ -410,6 +421,7 @@ fn load_static_shape(
         .position(|d| !d.collision && d.pixel_threshold >= 0.0)
         .context("Static model has no visual detail")?;
     let mut materials = Vec::new();
+    let mut soft_edges = BTreeMap::new();
     let skin = node.properties.get("skinname").map_or("", String::as_str);
     for (slot, authored) in shape.materials.iter().enumerate() {
         let candidates: Vec<_> = bindings
@@ -443,6 +455,19 @@ fn load_static_shape(
             "alpha" => alpha(&out.images[diffuse]),
             other => anyhow::bail!("Unsupported static material blend {other} for {id}"),
         };
+        // One blended batch holds a whole crown of leaves in mesh order, so
+        // back leaves painted over front ones. Solid texels now write depth in
+        // a cutout pass; a blended twin then adds only the soft edges.
+        if material.alpha == AlphaMode::Blend && soft_cutout(&out.images[diffuse]) {
+            let mut edges = material.clone();
+            edges.name = format!("{}/soft-edges", material.name);
+            material.alpha = AlphaMode::Mask(0.5);
+            soft_edges.insert(out.materials.len(), out.materials.len() + 1);
+            materials.push(out.materials.len());
+            out.materials.push(material);
+            out.materials.push(edges);
+            continue;
+        }
         if authored.environment || authored.detail_map.is_some() || authored.bump_map.is_some() {
             out.omissions.push(format!(
                 "Static material {id}/{} has unbound reflection/detail/bump effects",
@@ -467,6 +492,7 @@ fn load_static_shape(
         })
         .transpose()?;
     let pose = bri_content::animation::sample(&shape, initial_sequence, 0.0)?;
+    let first_batch = out.batches.len();
     out.append_shape(
         crate::shape_scene::ShapeInstance {
             shape: &shape,
@@ -479,6 +505,14 @@ fn load_static_shape(
         },
         |_| Some([1.0; 4]),
     )?;
+    for i in first_batch..out.batches.len() {
+        if let Some(&edges) = soft_edges.get(&out.batches[i].material) {
+            out.batches.push(MeshBatch {
+                material: edges,
+                ..out.batches[i].clone()
+            });
+        }
+    }
     if shape.details.iter().filter(|d| !d.collision).count() > 1 {
         out.omissions.push(format!(
             "Static model {id} currently uses highest detail; distance LOD remains required"

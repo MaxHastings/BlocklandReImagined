@@ -1762,3 +1762,20 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   announce themselves. Ranked open items (host stops on any step error, LAN
   and public-brick trust, duplicate loadout items, private PlaySound, Horse
   Ray, join/leave messages, shell casings) went to the coordinator.
+
+- 2026-09-27 map tree/shrub leaves (Kitchen palms, Bedroom maple/oak/pines).
+  Checked the Kitchen, Kitchen Dark and Bedroom TSStatic trees against the
+  v20 missions: DTS models, node/quaternion conventions, scale, rotation,
+  placement and count all match (the two Kitchen palm05 "shrubs" are sunk
+  about 20 units into the sand in the original mission). No replicators apply.
+  Defect: leaf textures are soft-edged cutouts (~40-53% clear, 28-48% solid),
+  so the loader made them Blend with no depth writes, and each tree's leaves
+  drew as one unsorted batch in mesh order; back fronds painted over front
+  fronds and the trunk showed through near fronds. Static-model soft cutouts
+  now draw solid texels in a Mask(0.5) depth pass plus a blended soft-edge
+  twin batch (`scene_loader::load_static_shape`). Glass stays Blend; the stove
+  burner texture also qualifies. Renderer-only; no pack regeneration.
+  `scene_snapshot` gained an eye position and streamed terrain. Evidence:
+  `artifacts/native-static-foliage/foliage_before_after.jpg`; `cargo test
+  --release -p bri-render` (incl. ignored GPU cases) passes. v20's own
+  translucent depth behaviour is closed-engine and not verified.
