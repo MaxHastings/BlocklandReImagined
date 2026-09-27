@@ -1,12 +1,10 @@
 use crate::{FIXED_DT, schema::*};
 use anyhow::{Context, Result, ensure};
-use glam::{Quat, Vec3};
 use bri_motor::player::{MoveInput, Player, PlayerTuning, TORQUE_TICK};
+use glam::{Quat, Vec3};
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::{
-    control::{
-        DynamicRayCastVehicleController, WheelTuning,
-    },
+    control::{DynamicRayCastVehicleController, WheelTuning},
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
@@ -320,7 +318,11 @@ pub(crate) fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
         min_jet_energy: 0.,
         jet_drain: 0.,
         // A floating rowboat rows at its underwater speeds.
-        swim_coverage: if d.family == Family::Rowboat { 0.05 } else { 0.9 },
+        swim_coverage: if d.family == Family::Rowboat {
+            0.05
+        } else {
+            0.9
+        },
         ..PlayerTuning::default()
     }
     .scaled(scale)
@@ -469,7 +471,13 @@ impl VehiclesWorld {
             prepared_turret.map(|collider| world.insert_collider(collider, Some(body)));
         let actor = if d.is_actor() {
             let (feet, yaw) = feet_and_yaw(&s.transform);
-            Some(Player::adopt(body, collider, feet, yaw, actor_tuning(d, s.scale))?)
+            Some(Player::adopt(
+                body,
+                collider,
+                feet,
+                yaw,
+                actor_tuning(d, s.scale),
+            )?)
         } else {
             None
         };
@@ -984,8 +992,7 @@ impl VehiclesWorld {
         world: &mut PhysicsWorld,
         waters: &[bri_content::water::Water],
     ) -> Result<()> {
-        let water_height =
-            |p: [f32; 3]| waters.iter().find_map(|w| w.surface_above(p));
+        let water_height = |p: [f32; 3]| waters.iter().find_map(|w| w.surface_above(p));
         ensure!(
             (world.integration_parameters.dt - FIXED_DT).abs() < 1e-6,
             "vehicles require shared 120Hz timestep"

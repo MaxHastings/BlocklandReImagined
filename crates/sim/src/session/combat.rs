@@ -741,8 +741,8 @@ impl Session {
                     if let Some(owner) = self.owner_of(player) {
                         // `MiniGameSO::updatePlayerDatablock` for live members.
                         if change_player_type && self.is_alive(owner) {
-                            let datablock = PlayerType::from_id(&equipment.player_type)
-                                .unwrap_or_default();
+                            let datablock =
+                                PlayerType::from_id(&equipment.player_type).unwrap_or_default();
                             self.set_player_datablock(owner, datablock)?;
                         }
                         if changed_slots.iter().any(|c| *c) {

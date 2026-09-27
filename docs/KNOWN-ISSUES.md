@@ -4,9 +4,8 @@ Crashes, missing content, unusable controls, disappearing saves or broken core
 flows are blockers: please report them. The items below are known gaps.
 
 - **Wrench events:** all vanilla inputs and outputs are listed. Not yet
-  applied: `setPlayerScale` and projectile outputs on delayed rows (immediate
-  `Delete`, `Bounce` and `Redirect` work). Rows using them are kept and shown
-  read-only.
+  applied: projectile outputs on delayed rows (immediate `Delete`, `Bounce` and
+  `Redirect` work). Rows using them are kept and shown read-only.
 - **Terrain:** terrain streams without bounds; distance LOD and detail/bump
   texturing are still missing.
 - **Vehicles:** physics is a native adaptation, not Torque-exact; driving feel

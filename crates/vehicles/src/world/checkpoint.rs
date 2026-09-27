@@ -241,9 +241,14 @@ impl VehiclesWorld {
             }
             let actor = if d.is_actor() {
                 let (feet, yaw) = super::feet_and_yaw(&saved.transform);
-                let mut actor =
-                    Player::adopt(body, collider, feet, yaw, super::actor_tuning(d, saved.spawn.scale))
-                        .expect("validated mount");
+                let mut actor = Player::adopt(
+                    body,
+                    collider,
+                    feet,
+                    yaw,
+                    super::actor_tuning(d, saved.spawn.scale),
+                )
+                .expect("validated mount");
                 actor.set_motion(Vec3::from_array(saved.velocity), saved.grounded);
                 Some(actor)
             } else {

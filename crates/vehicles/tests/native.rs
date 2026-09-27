@@ -984,5 +984,9 @@ fn restored_vehicles_join_an_island_even_before_their_first_pre_step() {
     for _ in 0..30 {
         bw.step();
     }
-    assert!(bw.bodies.iter().any(|(_, body)| body.is_dynamic() && body.linvel().y < -1.));
+    assert!(
+        bw.bodies
+            .iter()
+            .any(|(_, body)| body.is_dynamic() && body.linvel().y < -1.)
+    );
 }

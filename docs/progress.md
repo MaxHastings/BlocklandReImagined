@@ -2028,3 +2028,27 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   bri-audio`, `cargo test -p bri-client --lib --test transport`, two-client
   loopback `cargo test -p bri-client --test multiplayer --release -- --ignored`,
   `wire_benchmark` (ignored, BRI_BENCH_WORLD).
+
+- 2026-09-27 Protocol 22: v20 player types on one motor. The player motor
+  moved to a new `bri-motor` crate. `PlayerState` carries its datablock, scale
+  and jet energy, so the host and client prediction run the same constants
+  (prediction now adopts a changed datablock). Types: Standard, No-Jet,
+  Fuel-Jet, Jump-Jet, Leap-Jet, Quake-Like and Horse (plus the hidden
+  BallShootPlayer), from the stock Player_* and Vehicle_Horse datablocks:
+  `canJet`, `minJetEnergy`/`jetEnergyDrain`/`rechargeRate`, speeds, `runForce`,
+  `jumpForce`, `jumpDelay`, surface angles, boxes and `maxDamage`. Applied by
+  mini-game player type (spawn and live update), `ChangeDataBlock`,
+  `setPlayerScale` (box and eye scale, speeds unchanged) and the Horse Ray.
+  Horse players and spawned horses draw horse.dts with its sequences
+  (`ApplyBodyColors`: body in the chest colour, head black); horse.dts copies
+  of `h_root.dsq` for Blockhead-only sequences pose nothing. Horse, rowboat,
+  cannon and turret mounts adopt their kinematic body into the same motor with
+  constants from their PlayerData, replacing the vehicle actor motor;
+  `VehiclesWorld::pre_step` takes the map liquids. `HUD_EnergyBar` draws as
+  Torque's GuiHealthBarHud for Fuel-Jet and Leap-Jet. Evidence: `cargo test
+  -p bri-sim --test player_types --test vehicles -- --include-ignored`,
+  `cargo test -p bri-vehicles`, offscreen App probe `cargo test -p bri-client
+  --test player_types_render --release -- --ignored` (frames in
+  `artifacts/player-types/`). Open: horse `cameraVerticalOffset` (the camera
+  pivots at the horse's eye), energy carried across a datablock change is
+  clamped like v20 rather than refilled.

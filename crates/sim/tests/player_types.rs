@@ -138,8 +138,7 @@ fn session() -> bri_sim::session::Session {
             bri_world::World::new("Types".into(), "test".into(), vec![[1.0; 4]]),
             Definitions::default(),
             vec![
-                ColliderBuilder::cuboid(200.0, 0.5, 200.0)
-                    .translation(Vector::new(0.0, -0.5, 0.0)),
+                ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
             ],
         )
         .unwrap(),
@@ -181,8 +180,12 @@ fn mini_game_player_type_applies_on_spawn_and_on_update() {
         player_type: PlayerType::Horse.id().into(),
         ..Settings::default()
     };
-    s.command(a, 2, Command::MiniGame(MiniGameRequest::Configure { settings }))
-        .unwrap();
+    s.command(
+        a,
+        2,
+        Command::MiniGame(MiniGameRequest::Configure { settings }),
+    )
+    .unwrap();
     s.step().unwrap();
     assert_eq!(datablock(&s, a), PlayerType::Horse);
     assert_eq!(s.vitals()[&a].health, 250.0);

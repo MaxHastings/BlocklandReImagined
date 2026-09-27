@@ -157,7 +157,6 @@ pub fn encode_request<T: Serialize>(request: &T, limit: usize) -> Result<Vec<u8>
     Ok(writer.bytes)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +262,10 @@ mod tests {
                 crouched: true,
                 jetting: true,
                 jump: Default::default(),
+                // The longest datablock name.
+                datablock: bri_sim::player_types::PlayerType::BallShoot,
+                scale: f32::MAX,
+                energy: f32::MAX,
             },
         });
         let vehicle = Datagram::Vehicle(bri_sim::session::VehiclePose {
@@ -331,8 +334,7 @@ mod tests {
         let budget = Arc::new(Semaphore::new(0));
         let task_budget = budget.clone();
         let task = tokio::spawn(async move {
-            let result =
-                read_budgeted_request::<String>(&mut receive, &task_budget).await;
+            let result = read_budgeted_request::<String>(&mut receive, &task_budget).await;
             (receive, result)
         });
         // Body has arrived but cannot be allocated/parsed before admission.
