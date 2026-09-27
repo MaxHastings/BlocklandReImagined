@@ -11,5 +11,7 @@ serde_json = "1.0"
 glam = { version = "0.33", features = ["serde"] }
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 sha2 = "0.10"
+bri-content = { path = "../content" }
+bri-motor = { path = "../motor" }
 [dev-dependencies]
 bri-physics = { path = "../physics" }

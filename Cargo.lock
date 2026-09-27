@@ -588,6 +588,8 @@ name = "bri-vehicles"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-content",
+ "bri-motor",
  "bri-physics",
  "glam 0.33.10",
  "rapier3d",

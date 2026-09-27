@@ -802,12 +802,7 @@ impl Session {
         self.reconcile_vehicle_bricks()?;
         let waters = self.simulation.liquids();
         if let Some(world) = &mut self.vehicles.world {
-            world.pre_step(&mut self.simulation.physics, |p| {
-                waters
-                    .iter()
-                    .find(|w| w.footprint(p[0], p[2]).is_some() && p[1] > w.min[1])
-                    .map(|w| w.max[1])
-            })?;
+            world.pre_step(&mut self.simulation.physics, &waters)?;
         }
         Ok(())
     }

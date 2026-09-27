@@ -35,6 +35,46 @@ pub struct Water {
     pub current: [f32; 3],
 }
 impl Water {
+    /// A plain untextured still-water volume of density 1 and viscosity 40
+    /// (stock `WaterBlock` defaults), for probes and tests.
+    pub fn volume(min: [f32; 3], max: [f32; 3]) -> Self {
+        let image = crate::environment::Image {
+            file: "volume.png".into(),
+            source: "volume".into(),
+            sha256: "0".repeat(64),
+            width: 1,
+            height: 1,
+        };
+        Self {
+            schema_version: 1,
+            node: 0,
+            id: "volume".into(),
+            min,
+            max,
+            repeat_period: None,
+            liquid_type: "OceanWater".into(),
+            density: 1.0,
+            viscosity: 40.0,
+            surface: image.clone(),
+            shore: image,
+            reflection: None,
+            opacity: 0.25,
+            wave_amplitude: 0.0,
+            flow: [0.0; 2],
+            distortion: [0.0, 0.0, 1.0],
+            tiles: [1.0; 2],
+            depth_mask: false,
+            depth_alpha: [0.0; 4],
+            reflection_intensity: 0.0,
+            parallax: 0.0,
+            warnings: Vec::new(),
+            current: [0.0; 3],
+        }
+    }
+    /// The still surface height above a point inside this volume.
+    pub fn surface_above(&self, p: [f32; 3]) -> Option<f32> {
+        (self.footprint(p[0], p[2]).is_some() && p[1] > self.min[1]).then_some(self.max[1])
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema_version == 1 && !self.id.is_empty(),

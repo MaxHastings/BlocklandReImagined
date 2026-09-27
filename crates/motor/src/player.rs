@@ -186,6 +186,9 @@ pub struct PlayerTuning {
     pub min_jet_energy: f32,
     /// `jetEnergyDrain`, per second of jetting.
     pub jet_drain: f32,
+    /// Water coverage from which the underwater speeds apply. A floating
+    /// rowboat is always in the water.
+    pub swim_coverage: f32,
 }
 impl Default for PlayerTuning {
     fn default() -> Self {
@@ -240,6 +243,7 @@ impl Default for PlayerTuning {
             recharge: 0.8 / TORQUE_TICK,
             min_jet_energy: 0.0,
             jet_drain: 0.0,
+            swim_coverage: 0.9,
         }
     }
 }
@@ -288,7 +292,6 @@ impl PlayerTuning {
             self.air_control,
             self.drag,
             self.gravity,
-            self.jump_speed,
             self.jet_acceleration,
             self.jet_lift,
             self.horizontal_max_speed,
@@ -321,6 +324,7 @@ impl PlayerTuning {
                     self.crouch_backward,
                     self.crouch_sideways,
                     self.step_height,
+                    self.jump_speed,
                 ]
                 .iter()
                 .all(|n| n.is_finite() && (0.0..=1000.0).contains(n))
@@ -339,6 +343,9 @@ pub struct Player {
     body: RigidBodyHandle,
     collider: ColliderHandle,
     contacts: BTreeSet<BrickId>,
+    /// Mounts keep their body at the feet, turned to their heading, so
+    /// seats and weapons ride on its transform. Players centre it unturned.
+    mount: bool,
 }
 pub struct MotionEvents {
     pub jumped: bool,
@@ -398,7 +405,71 @@ impl Player {
             body,
             collider,
             contacts: BTreeSet::new(),
+            mount: false,
         })
+    }
+    /// Drive a player-type mount (horse, rowboat, cannon, turret) with the
+    /// motor. Its kinematic body sits at the feet, turned to `yaw`, with its
+    /// box collider raised by half its height.
+    pub fn adopt(
+        body: RigidBodyHandle,
+        collider: ColliderHandle,
+        feet: Vec3,
+        yaw: f32,
+        tuning: PlayerTuning,
+    ) -> Result<Self> {
+        tuning.validate()?;
+        ensure!(
+            feet.is_finite() && feet.abs().max_element() <= 1_000_000.0 && yaw.is_finite(),
+            "Invalid mount pose"
+        );
+        Ok(Self {
+            state: PlayerState {
+                owner: 1,
+                feet: feet.to_array(),
+                velocity: [0.0; 3],
+                yaw,
+                pitch: 0.0,
+                head_yaw: 0.0,
+                grounded: false,
+                crouched: false,
+                jetting: false,
+                jump: Default::default(),
+                datablock: Default::default(),
+                scale: 1.0,
+                energy: tuning.max_energy,
+            },
+            tuning,
+            body,
+            collider,
+            contacts: BTreeSet::new(),
+            mount: true,
+        })
+    }
+    /// Restored or scripted motion (`setVelocity`, checkpoints).
+    pub fn set_motion(&mut self, velocity: Vec3, grounded: bool) {
+        if velocity.is_finite() {
+            self.state.velocity = velocity.clamp_length_max(1000.0).to_array();
+            self.state.grounded = grounded;
+        }
+    }
+    pub fn body(&self) -> RigidBodyHandle {
+        self.body
+    }
+    pub fn collider(&self) -> ColliderHandle {
+        self.collider
+    }
+    /// The kinematic target for these feet: a player's box centre, or a
+    /// mount's feet turned to its heading.
+    fn body_pose(&self, feet: Vec3, crouched: bool) -> Pose {
+        if self.mount {
+            Pose::from_parts(
+                Vector::from_array(feet.to_array()),
+                glam::Quat::from_rotation_y(-self.state.yaw),
+            )
+        } else {
+            self.tuning.pose(feet, crouched)
+        }
     }
     /// Mirror an existing authoritative player (client prediction). Unlike
     /// `spawn`, the server already validated this position.
@@ -420,6 +491,7 @@ impl Player {
             body,
             collider,
             contacts: BTreeSet::new(),
+            mount: false,
         };
         player.restore(physics, state)?;
         requeue_new_body(physics, body);
@@ -498,9 +570,7 @@ impl Player {
     /// the next kinematic pose is set: the physics step moves the body, which
     /// keeps Rapier's island bookkeeping consistent across teleports.
     pub fn synchronize_pose(&self, physics: &mut PhysicsWorld) {
-        let pose = self
-            .tuning
-            .pose(Vec3::from(self.state.feet), self.state.crouched);
+        let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
         physics.bodies[self.body].set_next_kinematic_position(pose);
     }
     pub fn eye(&self) -> Vec3 {
@@ -555,8 +625,7 @@ impl Player {
     /// the physics step treats it like any other active kinematic body.
     pub fn hold(&self, physics: &mut PhysicsWorld) {
         physics.bodies[self.body].set_next_kinematic_position(
-            self.tuning
-                .pose(Vec3::from(self.state.feet), self.state.crouched),
+            self.body_pose(Vec3::from(self.state.feet), self.state.crouched),
         );
     }
     pub fn despawn(self, physics: &mut PhysicsWorld) {
@@ -620,7 +689,7 @@ impl Player {
             })
             .filter(|(_, coverage)| *coverage >= 0.1)
             .max_by(|a, b| a.1.total_cmp(&b.1));
-        let (fs, bs, ss) = if liquid.is_some_and(|(_, c)| c >= 0.9) {
+        let (fs, bs, ss) = if liquid.is_some_and(|(_, c)| c >= t.swim_coverage) {
             (
                 t.underwater_forward,
                 t.underwater_backward,
@@ -962,8 +1031,8 @@ impl Player {
         if was_crouched != self.state.crouched {
             physics.colliders[self.collider].set_shape(shape);
         }
-        physics.bodies[self.body]
-            .set_next_kinematic_position(t.pose(Vec3::from(self.state.feet), self.state.crouched));
+        let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
+        physics.bodies[self.body].set_next_kinematic_position(pose);
         let touched = contacts.difference(&self.contacts).copied().collect();
         self.contacts = contacts;
         Ok(MotionEvents {

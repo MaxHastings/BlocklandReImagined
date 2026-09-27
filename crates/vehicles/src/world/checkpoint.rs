@@ -141,7 +141,7 @@ impl VehiclesWorld {
                 fire_held: v.fire_held,
                 mounted_once: v.mounted_once,
                 mouse_steering: v.mouse_steering,
-                grounded: v.grounded,
+                grounded: v.actor.as_ref().is_some_and(|a| a.state().grounded),
             });
         }
         Ok(Checkpoint {
@@ -239,6 +239,16 @@ impl VehiclesWorld {
                     w.wheel_suspension_force = s.suspension_force;
                 }
             }
+            let actor = if d.is_actor() {
+                let (feet, yaw) = super::feet_and_yaw(&saved.transform);
+                let mut actor =
+                    Player::adopt(body, collider, feet, yaw, super::actor_tuning(d, saved.spawn.scale))
+                        .expect("validated mount");
+                actor.set_motion(Vec3::from_array(saved.velocity), saved.grounded);
+                Some(actor)
+            } else {
+                None
+            };
             let b = &mut world.bodies[body];
             b.set_linvel(Vec3::from_array(saved.velocity), true);
             b.set_angvel(Vec3::from_array(saved.angular_velocity), true);
@@ -284,8 +294,7 @@ impl VehiclesWorld {
                     jetting: saved.jetting,
                     energy_phase: saved.energy_phase,
                     mouse_steering: saved.mouse_steering,
-                    motion: Vec3::from_array(saved.velocity),
-                    grounded: saved.grounded,
+                    actor,
                 },
             );
         }

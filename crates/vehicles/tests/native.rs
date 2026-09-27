@@ -52,7 +52,11 @@ fn mount(v: &mut VehiclesWorld, w: &PhysicsWorld, seat: usize) {
 }
 fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize, water: Option<f32>) {
     for _ in 0..n {
-        v.pre_step(w, |_| water).unwrap();
+        let waters: Vec<_> = water
+            .map(|h| bri_content::water::Water::volume([-1e4, -1e4, -1e4], [1e4, h, 1e4]))
+            .into_iter()
+            .collect();
+        v.pre_step(w, &waters).unwrap();
         w.step();
         v.post_step(w).unwrap();
     }
@@ -468,7 +472,7 @@ fn rejects_invalid_native_data_and_fixed_rate() {
     assert!(p.validate().is_err());
     let (mut v, mut w) = setup();
     w.integration_parameters.dt = 1. / 60.;
-    assert!(v.pre_step(&mut w, |_| None).is_err());
+    assert!(v.pre_step(&mut w, &[]).is_err());
 }
 #[test]
 fn velocity_transfer_and_runover_intents() {
@@ -741,7 +745,7 @@ fn checkpoint_requires_completed_tick_and_consumed_intents() {
     mount(&mut v, &w, 0);
     assert!(v.checkpoint(&w).is_err());
     v.drain_intents();
-    v.pre_step(&mut w, |_| None).unwrap();
+    v.pre_step(&mut w, &[]).unwrap();
     assert!(v.checkpoint(&w).is_err());
     w.step();
     v.post_step(&mut w).unwrap();

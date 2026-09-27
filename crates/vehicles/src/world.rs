@@ -1,11 +1,11 @@
 use crate::{FIXED_DT, schema::*};
 use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
+use bri_motor::player::{MoveInput, Player, PlayerTuning, TORQUE_TICK};
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::{
     control::{
-        CharacterAutostep, CharacterLength, DynamicRayCastVehicleController,
-        KinematicCharacterController, WheelTuning,
+        DynamicRayCastVehicleController, WheelTuning,
     },
     prelude::*,
 };
@@ -56,7 +56,6 @@ pub struct Controls {
 /// ordinary bumps only raise ski impact puffs).
 const SKI_WRECK_SPEED: f32 = 20.;
 /// Torque's player step height (`maxStepHeight`) for player-type mounts.
-const ACTOR_STEP_HEIGHT: f32 = 1.0;
 /// Steering Auto-Return (on by default in v20): released mouse steering
 /// halves every quarter second.
 const STEERING_RETURN_PER_TICK: f32 = 0.977_15;
@@ -267,18 +266,69 @@ struct Instance {
     restored_contacts: Option<Vec<bool>>,
     /// Torque `mSteering`: accumulated mouse steering (yaw, pitch), radians.
     mouse_steering: [f32; 2],
-    /// Player-type mounts move kinematically with their own velocity.
-    motion: Vec3,
-    grounded: bool,
+    /// Player-type mounts run on the player motor with their datablock.
+    actor: Option<Player>,
 }
 impl Instance {
-    fn velocity(&self, d: &Definition, b: &RigidBody) -> Vec3 {
-        if d.is_actor() {
-            self.motion
-        } else {
-            b.linvel()
+    fn velocity(&self, _: &Definition, b: &RigidBody) -> Vec3 {
+        match &self.actor {
+            Some(actor) => Vec3::from(actor.state().velocity),
+            None => b.linvel(),
         }
     }
+}
+/// A player-type mount's `PlayerData` as motor constants: its box, speeds,
+/// `runForce`/mass, `jumpForce`/mass, surfaces, energy and density.
+pub(crate) fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
+    let (min, max) = d
+        .collision_hulls
+        .iter()
+        .flatten()
+        .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+            (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
+        });
+    let size = (max - min).max(Vec3::splat(0.1));
+    let authored = |key: &str| d.authored.get(key).and_then(|v| v.parse::<f32>().ok());
+    let slope = d.run_surface_angle.clamp(1., 89.);
+    let [uf, ub, us] = d.underwater_speeds;
+    PlayerTuning {
+        width: size.x.max(size.z),
+        stand_height: size.y,
+        crouch_height: size.y,
+        stand_eye: size.y * 0.9,
+        crouch_eye: size.y * 0.9,
+        forward: d.max_speed,
+        backward: d.reverse_speed,
+        sideways: d.max_side_speed,
+        crouch_forward: d.max_speed,
+        crouch_backward: d.reverse_speed,
+        crouch_sideways: d.max_side_speed,
+        underwater_forward: uf,
+        underwater_backward: ub,
+        underwater_sideways: us,
+        acceleration: (d.engine_force / d.mass.max(0.001)).max(0.001),
+        jump_speed: d.jump_speed.max(0.),
+        density: d.density.max(0.05),
+        drag: d.drag.max(0.001),
+        slope_degrees: slope,
+        jump_surface_degrees: authored("jumpsurfaceangle").unwrap_or(slope).clamp(1., 89.),
+        // `jumpDelay` in 32 ms ticks, at 120 Hz.
+        jump_delay_ticks: (authored("jumpdelay").unwrap_or(0.) * 3.75).clamp(0., 255.) as u8,
+        can_jet: false,
+        max_energy: d.energy.maximum.max(0.),
+        recharge: d.energy.recharge_per_32ms.max(0.) / TORQUE_TICK,
+        min_jet_energy: 0.,
+        jet_drain: 0.,
+        // A floating rowboat rows at its underwater speeds.
+        swim_coverage: if d.family == Family::Rowboat { 0.05 } else { 0.9 },
+        ..PlayerTuning::default()
+    }
+    .scaled(scale)
+}
+/// Feet and heading of a spawn transform.
+fn feet_and_yaw(t: &Transform) -> (Vec3, f32) {
+    let forward = Quat::from_array(t.rotation) * Vec3::NEG_Z;
+    (Vec3::from_array(t.position), forward.x.atan2(-forward.z))
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PendingRespawn {
@@ -417,6 +467,12 @@ impl VehiclesWorld {
         let (body, collider) = world.insert(builder, collider);
         let turret_collider =
             prepared_turret.map(|collider| world.insert_collider(collider, Some(body)));
+        let actor = if d.is_actor() {
+            let (feet, yaw) = feet_and_yaw(&s.transform);
+            Some(Player::adopt(body, collider, feet, yaw, actor_tuning(d, s.scale))?)
+        } else {
+            None
+        };
         let controller = if d.wheels.is_empty() {
             None
         } else {
@@ -456,8 +512,7 @@ impl VehiclesWorld {
                 restored_suspension: None,
                 restored_contacts: None,
                 mouse_steering: [0.; 2],
-                motion: Vec3::ZERO,
-                grounded: false,
+                actor,
             },
         );
         Ok(())
@@ -647,10 +702,9 @@ impl VehiclesWorld {
         ensure!(point.is_finite() && impulse.is_finite(), "invalid impulse");
         let v = self.instances.get_mut(&id).context("unknown vehicle")?;
         let d = &self.catalog[&v.spawn.definition];
-        if d.is_actor() {
+        if let Some(actor) = &mut v.actor {
             // Player::applyImpulse: velocity changes by impulse / mass.
-            v.motion += impulse / d.mass;
-            v.grounded &= impulse.y <= 0.;
+            actor.push(impulse / d.mass);
         } else {
             world.bodies[v.body].apply_impulse_at_point(impulse, point, true);
         }
@@ -677,9 +731,9 @@ impl VehiclesWorld {
         let velocity = Vec3::from_array(velocity);
         ensure!(velocity.is_finite(), "invalid velocity");
         let v = self.instances.get_mut(&id).context("unknown vehicle")?;
-        if self.catalog[&v.spawn.definition].is_actor() {
-            v.motion = velocity;
-            v.grounded &= velocity.y <= 0.;
+        if let Some(actor) = &mut v.actor {
+            let grounded = actor.state().grounded && velocity.y <= 0.;
+            actor.set_motion(velocity, grounded);
         } else {
             world.bodies[v.body].set_linvel(velocity, true);
         }
@@ -923,11 +977,15 @@ impl VehiclesWorld {
         }
     }
     /// Host samples water height at each body position (None outside authored water volumes).
+    /// `waters` are the map's authored liquids: buoyancy and splashes for
+    /// vehicles, and swimming for player-type mounts.
     pub fn pre_step(
         &mut self,
         world: &mut PhysicsWorld,
-        water_height: impl Fn([f32; 3]) -> Option<f32>,
+        waters: &[bri_content::water::Water],
     ) -> Result<()> {
+        let water_height =
+            |p: [f32; 3]| waters.iter().find_map(|w| w.surface_above(p));
         ensure!(
             (world.integration_parameters.dt - FIXED_DT).abs() < 1e-6,
             "vehicles require shared 120Hz timestep"
@@ -1028,7 +1086,7 @@ impl VehiclesWorld {
                 v.water = in_water;
             }
             if d.is_actor() {
-                actor_step(*id, v, d, c, driven, submerged, world, &mut self.intents);
+                actor_step(*id, v, d, c, driven, waters, world, &mut self.intents)?;
                 v.jump_held = c.jump;
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
@@ -1454,6 +1512,9 @@ fn explosion(
 /// Turret) move like players, per `Player::updateMove`: the rider's look turns
 /// the mount, the move keys run it at its authored speeds and `runForce`, jump
 /// uses `jumpForce`, and it steps up ledges and climbs its run surface angle.
+/// Player-type mounts run the player motor: the rider's look turns the
+/// mount, the move keys run it at its authored speeds and `runForce`, jump
+/// uses `jumpForce`, and it steps, climbs, swims and floats like a player.
 #[allow(clippy::too_many_arguments)]
 fn actor_step(
     id: VehicleId,
@@ -1461,128 +1522,42 @@ fn actor_step(
     d: &Definition,
     c: Controls,
     driven: bool,
-    submerged: f32,
+    waters: &[bri_content::water::Water],
     world: &mut PhysicsWorld,
     intents: &mut Vec<Intent>,
-) {
-    let dt = FIXED_DT;
-    let scale = v.spawn.scale;
-    let b = &world.bodies[v.body];
-    let position = b.translation();
-    let mut rotation = *b.rotation();
-    if driven {
+) -> Result<()> {
+    let actor = v.actor.as_mut().context("actor mount without a motor")?;
+    let yaw = if driven {
         // mRot.z follows the rider's accumulated mouse turn.
-        rotation = Quat::from_rotation_y(-c.aim_yaw);
-    }
-    let forward = rotation * -Vec3::Z;
-    let right = rotation * Vec3::X;
-    let swimming = if d.family == Family::Rowboat {
-        submerged > 0.05
+        (c.aim_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
     } else {
-        submerged >= 0.9
-    };
-    let [fs, bs, ss] = if swimming {
-        d.underwater_speeds
-    } else {
-        [d.max_speed, d.reverse_speed, d.max_side_speed]
+        actor.state().yaw
     };
     let (throttle, strafe) = if driven {
-        (c.throttle, c.strafe)
+        (c.throttle.clamp(-1., 1.), c.strafe.clamp(-1., 1.))
     } else {
         (0., 0.)
     };
-    let move_vec = forward * throttle + right * strafe;
-    let move_speed = if throttle > 0. {
-        fs * throttle
-    } else {
-        bs * -throttle
-    }
-    .max(ss * strafe.abs());
-    let desired = move_vec.normalize_or_zero() * move_speed * scale;
-    let mut velocity = v.motion;
-    let horizontal = Vec3::new(velocity.x, 0., velocity.z);
-    let grounded = v.grounded;
-    let horizontal = if grounded || swimming {
-        horizontal + (desired - horizontal).clamp_length_max(d.engine_force / d.mass * dt)
-    } else {
-        horizontal
+    let input = MoveInput {
+        forward: throttle,
+        right: strafe,
+        yaw,
+        pitch: 0.,
+        head_yaw: 0.,
+        jump: driven && c.jump,
+        crouch: false,
+        jet: false,
     };
-    velocity.x = horizontal.x;
-    velocity.z = horizontal.z;
-    let jumped = driven && grounded && c.jump && !v.jump_held && d.jump_speed > 0.;
-    if jumped {
-        velocity.y = d.jump_speed;
+    let motion = actor.step_in_water(world, input, waters)?;
+    if motion.jumped && d.family == Family::Horse {
         intents.push(Intent::Audio {
             vehicle: id,
             id: "HorseJumpSound".into(),
         });
     }
-    if !grounded || jumped {
-        velocity.y -= VEHICLE_GRAVITY * dt;
-    } else {
-        velocity.y = velocity.y.min(0.);
-    }
-    if submerged > 0. {
-        // Buoyancy against water of density 1, with the body's density.
-        velocity.y += submerged / d.density.max(0.05) * VEHICLE_GRAVITY * dt;
-        velocity *= (1. - submerged * 1.5 * dt).max(0.);
-    }
-    velocity *= (1. - d.drag * dt).max(0.);
-    velocity.y = velocity.y.max(-80.);
-    let collider = &world.colliders[v.collider];
-    let shape = collider.shared_shape().clone();
-    let local = *collider.position_wrt_parent().unwrap_or(&Pose::IDENTITY);
-    let pose = Pose::from_parts(position, rotation) * local;
-    let walkable = d.run_surface_angle.clamp(1., 89.).to_radians();
-    let rising = velocity.y > 0.;
-    let controller = KinematicCharacterController {
-        offset: CharacterLength::Absolute(0.01),
-        autostep: grounded.then_some(CharacterAutostep {
-            max_height: CharacterLength::Absolute(ACTOR_STEP_HEIGHT * scale),
-            min_width: CharacterLength::Absolute(0.1),
-            include_dynamic_bodies: false,
-        }),
-        max_slope_climb_angle: walkable,
-        min_slope_slide_angle: walkable,
-        snap_to_ground: (!rising).then_some(CharacterLength::Absolute(0.2)),
-        ..Default::default()
-    };
-    let query = world.query_pipeline_with_filter(
-        QueryFilter::default()
-            .exclude_rigid_body(v.body)
-            .exclude_sensors(),
-    );
-    let mut normals = Vec::new();
-    let motion = controller.move_shape(dt, &query, shape.as_ref(), &pose, velocity * dt, |hit| {
-        normals.push(hit.hit.normal1)
-    });
-    let intended = velocity * dt;
-    let moved = motion.translation;
-    let climbed = moved.y > intended.y.max(0.) + 0.01;
-    for normal in normals {
-        let into = velocity.dot(normal);
-        if into >= 0. {
-            continue;
-        }
-        let across = -Vec3::new(normal.x, 0., normal.z).normalize_or_zero();
-        let expected = intended.dot(across);
-        if normal.y < walkable.cos()
-            && climbed
-            && expected > 0.
-            && moved.dot(across) >= expected * 0.5
-        {
-            continue;
-        }
-        velocity -= normal * into;
-    }
-    v.grounded = motion.grounded && !rising;
-    if v.grounded {
-        velocity.y = 0.;
-    }
-    v.motion = velocity;
-    world.bodies[v.body].set_next_kinematic_position(Pose::from_parts(position + moved, rotation));
+    let state = actor.state();
     if d.family == Family::Horse && v.dead_at.is_none() {
-        let animation = if !v.grounded && !swimming {
+        let animation = if !state.grounded && v.water_coverage < 0.9 {
             "jump"
         } else if throttle > 0.01 {
             "run"
@@ -1601,6 +1576,7 @@ fn actor_step(
             });
         }
     }
+    Ok(())
 }
 fn weapon_step(
     tick: u64,
