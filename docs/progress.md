@@ -1861,3 +1861,23 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   --ignored` (7 of 7).
   Open: barrel pitch pose, seated look limits, vehicle camera offset/tilt/lag,
   ski-crash whiteout, clearing event-spawned projectiles on minigame change.
+- 2026-09-27 save/load sounds, streamed loads, chat HUD, Tutorial gates
+  (net protocol VERSION 17). Server chat lines carry their v20 message type
+  (`MessageTag`: MsgUploadStart, MsgUploadEnd, MsgProcessComplete,
+  MsgClearBricks) and every client plays the matching `addMessageCallback`
+  sound (uploadStart, processComplete, brickClear). A loaded save is checked
+  whole up front (definitions, owners, colors, item bounds), announced with
+  "Loading bricks. Please wait.", then published in batches every 100 ms
+  (25 bricks minimum, about 80 batches for large saves) and closed with
+  v20's "N / M bricks created in 0:03.27". One load at a time, as in v20.
+  Clear All / Clear Group post v20's clear messages. Chat HUD follows the
+  authored NewChatHud: text at (2, 20), the Say/Team box right under the last
+  line (`newMessageHud::updatePosition`) with `\c0SAY:` / `\c1TEAM:`, the VVV
+  page indicator, and the who's-typing line (`MsgStartTalking` via a
+  replicated `Vitals.talking`, started by the first typed non-`/` character).
+  `/wand` is wired; the Tutorial keeps `/wand` for the wand room and the
+  spray/FX cans for after the spray room, silently like
+  `TutorialParentingPackage`. Unverified: GuiMLTextCtrl `lineSpacing = 12`
+  is not applied (Torque's exact use of it is not in the references).
+  Evidence: `cargo test` for world/sim/ui/net/client and strict clippy pass;
+  `ui_runtime_probe` renders hud-chat-say/team/scrolled.
