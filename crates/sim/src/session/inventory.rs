@@ -25,7 +25,6 @@ impl Default for ToolInventory {
 impl ToolInventory {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.slots.len() == TOOL_SLOTS, "Invalid tool slot count");
-        let mut seen = BTreeSet::new();
         for item in self.slots.iter().flatten() {
             ensure!(
                 item.len() <= 128
@@ -33,9 +32,8 @@ impl ToolInventory {
                     && item.bytes().all(|c| c.is_ascii_lowercase()
                         || c.is_ascii_digit()
                         || c == b'.'
-                        || c == b'_')
-                    && seen.insert(item),
-                "Invalid or duplicate inventory item"
+                        || c == b'_'),
+                "Invalid inventory item"
             );
         }
         ensure!(

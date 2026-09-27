@@ -496,11 +496,9 @@ impl WeaponsWorld {
     /// `give` so they fill the first available slot instead.
     pub fn give_at(&mut self, id: ActorId, slot: usize, item: &str) -> Result<()> {
         ensure!(self.contains_item(item), "Unknown item");
+        // `ItemData::onPickup` takes the first free slot; v20 has no
+        // duplicate check, so a player may carry two of one item.
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
-        ensure!(
-            !a.inventory.iter().flatten().any(|i| i == item),
-            "Duplicate item"
-        );
         let place = a.inventory.get_mut(slot).context("Invalid item slot")?;
         ensure!(place.is_none(), "Occupied item slot");
         *place = Some(item.into());
@@ -510,12 +508,8 @@ impl WeaponsWorld {
     /// selection and install `items` slot for slot. In-flight projectiles keep
     /// flying; they belong to the world, not the inventory.
     pub fn set_inventory(&mut self, id: ActorId, items: &[Option<String>]) -> Result<()> {
-        let mut seen = std::collections::BTreeSet::new();
         for item in items.iter().flatten() {
-            ensure!(
-                self.contains_item(item) && seen.insert(item),
-                "Unknown or duplicate loadout item"
-            );
+            ensure!(self.contains_item(item), "Unknown loadout item");
         }
         let slots = self
             .actors

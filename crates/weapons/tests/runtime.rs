@@ -119,8 +119,10 @@ fn core_tools_share_slots_drops_and_validated_checkpoints() {
     for (slot, item) in CORE_TOOLS[..3].iter().enumerate() {
         assert_eq!(w.give(a, item).unwrap(), slot);
     }
+    // v20 allows a second copy of an item.
+    assert_eq!(w.give(a, CORE_TOOLS[0]).unwrap(), 3);
+    w.drop_item(a, 3).unwrap();
     let before = w.actor(a).unwrap().inventory.clone();
-    assert!(w.give(a, CORE_TOOLS[0]).is_err());
     assert!(w.give(a, "v20.weapon.unknown").is_err());
     assert_eq!(w.actor(a).unwrap().inventory, before);
     w.equip(a, Some(0)).unwrap();
@@ -138,7 +140,7 @@ fn core_tools_share_slots_drops_and_validated_checkpoints() {
     assert!(restored.pickup(a, drop).is_err());
     assert_eq!(restored.give(a, CORE_TOOLS[3]).unwrap(), 0);
     let mut corrupt = restored.save();
-    corrupt.actors[0].1.inventory[4] = Some(CORE_TOOLS[3].into());
+    corrupt.actors[0].1.inventory[4] = Some("v20.weapon.unknown".into());
     assert!(WeaponsWorld::restore(empty(), &serde_json::to_vec(&corrupt).unwrap()).is_err());
 }
 

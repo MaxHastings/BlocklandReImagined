@@ -1881,3 +1881,7 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   is not applied (Torque's exact use of it is not in the references).
   Evidence: `cargo test` for world/sim/ui/net/client and strict clippy pass;
   `ui_runtime_probe` renders hud-chat-say/team/scrolled.
+- 2026-09-27 Protocol 18 (Max approved): inventories may repeat an item like
+  v20 (duplicate minigame loadouts no longer break respawn), and the
+  Client > PlaySound event output is a private 2D `Notice::Sound`. Saves
+  store fake-dead bricks as they will respawn.

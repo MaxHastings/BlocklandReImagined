@@ -47,10 +47,8 @@ impl WeaponsWorld {
         for (id, a) in save.actors {
             a.frame.validate()?;
             ensure!((1..=16).contains(&a.inventory.len()), "Save inventory size");
-            let mut items = std::collections::BTreeSet::new();
             for item in a.inventory.iter().flatten() {
                 ensure!(w.contains_item(item), "Save unknown item");
-                ensure!(items.insert(item), "Duplicate saved inventory item");
             }
             if let Some(slot) = a.selected {
                 ensure!(

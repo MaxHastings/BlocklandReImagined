@@ -853,15 +853,10 @@ impl EventHost<'_> {
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 s.apply_minigame_effects(effects)?;
             }
+            // `GameConnection::playSound`: 2D, heard by this client only.
             ClientOp::PlaySound(sound) => {
                 if let Some(profile) = sound.clone() {
-                    let feet = peer.player.state().feet;
-                    let tick = s.simulation.state().tick;
-                    s.cues.emit(
-                        tick,
-                        crate::presentation::CueKind::WeaponSound { profile },
-                        feet,
-                    );
+                    s.notify(owner, Notice::Sound(profile));
                 }
             }
         }

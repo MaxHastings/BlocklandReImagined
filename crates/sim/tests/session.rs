@@ -83,6 +83,8 @@ fn inventories_are_owned_by_connections_and_reconnect_spawns_stock_tools() {
     assert_eq!(s.tool_inventories()[&a].selected, Some(1));
     let wand = "v20.weapon.wanditem";
     assert_eq!(s.give_item(a, wand).unwrap(), 3);
+    // v20 allows a second copy; only a full inventory refuses.
+    assert_eq!(s.give_item(a, wand).unwrap(), 4);
     assert!(s.give_item(a, wand).is_err());
     assert!(s.give_item(b + 99, wand).is_err());
     assert!(

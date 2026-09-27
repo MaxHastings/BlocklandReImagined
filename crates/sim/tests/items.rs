@@ -105,14 +105,24 @@ fn static_pickup_is_contact_driven_not_builder_trust_and_duplicates_do_not_resta
     assert!(s.tool_inventories()[&far].slots[3].is_none());
     let timer = s.weapon_view().static_items[0].available_at;
     assert_eq!(timer, 121);
+    // v20 has no duplicate check: the respawned wand fills the last slot.
+    for _ in 0..125 {
+        s.step().unwrap();
+    }
+    assert_eq!(
+        s.tool_inventories()[&player].slots[4].as_deref(),
+        Some(CORE_TOOLS[3])
+    );
+    let timer = s.weapon_view().static_items[0].available_at;
+    assert!(timer > 121);
+    // A full inventory leaves the next respawn in place.
     for _ in 0..125 {
         s.step().unwrap();
     }
     assert_eq!(s.weapon_view().static_items[0].available_at, timer);
-    assert!(s.tool_inventories()[&player].slots[4].is_none());
     assert!(s.set_item_bounds(bounds()).is_err());
     // After the original owner leaves, another overlapping player can consume
-    // the respawned item; an occupied full/duplicate inventory did not consume it.
+    // the respawned item.
     s.disconnect(player).unwrap();
     let next = s
         .join("Next".into(), Vec3::new(0., 0.35, 0.), false)

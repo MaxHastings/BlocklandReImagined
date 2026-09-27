@@ -163,3 +163,23 @@ fn minigame_owner_controls_and_invitations() {
     s.command(a, 5, Command::Emote("love".into())).unwrap();
     assert!(s.command(a, 6, Command::Emote("dance".into())).is_err());
 }
+
+#[test]
+fn minigame_loadout_may_repeat_an_item_like_v20() {
+    let mut s = session();
+    let a = s.join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let hammer = Some("v20.weapon.hammeritem".to_string());
+    let settings = Settings {
+        loadout: [hammer.clone(), hammer.clone(), None, None, None],
+        ..Settings::default()
+    };
+    s.command(a, 1, Command::MiniGame(MiniGameRequest::Create { color: 0, settings }))
+        .unwrap();
+    s.command(a, 2, Command::Suicide).unwrap();
+    steps(&mut s, 200);
+    s.command(a, 3, Command::Respawn).unwrap();
+    assert!(s.vitals()[&a].alive);
+    let slots = &s.tool_inventories()[&a].slots;
+    assert_eq!(slots[0], hammer);
+    assert_eq!(slots[1], hammer);
+}

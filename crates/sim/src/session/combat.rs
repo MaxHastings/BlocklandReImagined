@@ -109,6 +109,8 @@ pub enum Notice {
     },
     /// Movement the player may use now; the client predicts with the same mask.
     Abilities(super::Abilities),
+    /// `GameConnection::play2D`: a sound profile only this client hears.
+    Sound(String),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

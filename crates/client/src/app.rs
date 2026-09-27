@@ -1945,6 +1945,10 @@ impl App {
                             self.abilities = abilities;
                             continue;
                         }
+                        bri_sim::session::Notice::Sound(profile) => {
+                            self.audio.profile(&profile, bri_audio::Placement::Listener);
+                            continue;
+                        }
                         bri_sim::session::Notice::Invite {
                             game,
                             owner_name,

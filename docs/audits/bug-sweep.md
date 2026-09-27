@@ -34,10 +34,19 @@ Ranked by what a player would hit first.
   invisible and non-colliding until it respawns, and Save Bricks wrote those
   flags. Saves now store fake-dead bricks as they will respawn.
   (`crates/sim/src/session.rs`)
+- **Duplicate items (protocol 18).** A minigame loadout listing the same
+  item twice made every respawn fail, and picking up a second copy of an
+  item was refused. v20's `ItemData::onPickup` has no duplicate check, so
+  the runtime, `ToolInventory` and the client replica now accept repeats.
+- **Client > PlaySound was heard by everyone (protocol 18).** It is now a
+  private `Notice::Sound` played 2D for that client only, like
+  `GameConnection::playSound`.
 - **Brick PlaySound played on fake-dead bricks.** v20 returns while the brick
   is fake-dead; ours now does too.
 
 ## Still open, highest first
+
+Numbers are kept from the first report; 3 and 4 are fixed above.
 
 1. **One failed step stops the whole host.** `net/src/server.rs` runs
    `session.step()?`, and `step` propagates errors from combat, tools, brick
@@ -52,18 +61,6 @@ Ranked by what a player would hit first.
    so on LAN a second player cannot hammer, wrench or paint anything they did
    not build, and nobody but admins can edit public (owner 0) bricks.
    Multiplayer and admin thread (Trust).
-3. **A minigame loadout with the same item twice breaks every respawn.**
-   v20's `ItemData::onPickup` has no duplicate check and the minigame
-   equipment lists allow repeats. Ours rejects duplicates in
-   `WeaponsWorld::give_at`, `set_inventory` and `ToolInventory::validate`
-   (also on the client replica), so `give_loadout` fails and the respawn
-   aborts. Relaxing it changes what clients accept, so it needs a protocol
-   bump; the coordinator assigned VERSION 18 but the bump was not approved in
-   this session. Held for Max's go-ahead.
-4. **Client > PlaySound is heard by everyone.** v20's
-   `GameConnection::playSound` is `play2D` to that client only. Ours emits a
-   positional world cue at the player's feet for all clients. The fix is a
-   private `Notice::Sound`; it needs the same protocol bump as item 3.
 5. **The Horse Ray does nothing.** The runtime emits `HorseTransform`, but
    `step_weapons` counts it as a "weapon integration gap". Gameplay leftovers
    thread (player types).
