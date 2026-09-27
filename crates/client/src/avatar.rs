@@ -332,6 +332,7 @@ impl AvatarAssets {
             appearance,
             data,
             gpu: None,
+            uploaded_topology: Default::default(),
             outfit,
             materials,
             translucent_materials,
@@ -372,6 +373,9 @@ pub struct AvatarMesh {
     pub appearance: Appearance,
     pub data: SceneData,
     pub gpu: Option<GpuScene>,
+    /// Indices and batch layout last uploaded to `gpu`; a frame whose posed
+    /// topology differs (visibility or detail changes) needs a full upload.
+    uploaded_topology: (Vec<u32>, Vec<(std::ops::Range<u32>, usize)>),
     outfit: Outfit,
     materials: Vec<usize>,
     translucent_materials: Vec<usize>,
@@ -840,6 +844,20 @@ impl AvatarMesh {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
+        let same_topology = self.gpu.as_ref().is_some_and(|gpu| {
+            gpu.vertex_count == self.data.vertices.len()
+                && self.uploaded_topology.0 == self.data.indices
+                && self.uploaded_topology.1.len() == self.data.batches.len()
+                && self
+                    .uploaded_topology
+                    .1
+                    .iter()
+                    .zip(&self.data.batches)
+                    .all(|((range, material), b)| *range == b.indices && *material == b.material)
+        });
+        if !same_topology {
+            self.gpu = None;
+        }
         if let Some(gpu) = &mut self.gpu {
             gpu.update_vertices(
                 queue,
@@ -853,6 +871,14 @@ impl AvatarMesh {
             )?;
         } else {
             self.gpu = Some(renderer.upload(device, queue, &self.data)?);
+            self.uploaded_topology = (
+                self.data.indices.clone(),
+                self.data
+                    .batches
+                    .iter()
+                    .map(|b| (b.indices.clone(), b.material))
+                    .collect(),
+            );
         }
         Ok(())
     }
