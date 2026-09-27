@@ -77,16 +77,21 @@ fn main() -> Result<()> {
         );
         reports.push(serde_json::json!({"file": name, "name": world.name, "events": report}));
     }
-    std::fs::write(
-        output.join("report.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": 1,
-            "event_catalog": catalog.fingerprint(),
-            "rows": rows,
-            "runnable": runnable,
-            "worlds": reports,
-        }))?,
-    )?;
+    // Keep the world index (the source pass's `saves`) and add this binding.
+    let mut report = json(&args[0].join("report.json"))?;
+    report
+        .as_object_mut()
+        .context("Source report is not an object")?
+        .insert(
+            "event_binding".into(),
+            serde_json::json!({
+                "event_catalog": catalog.fingerprint(),
+                "rows": rows,
+                "runnable": runnable,
+                "worlds": reports,
+            }),
+        );
+    std::fs::write(output.join("report.json"), serde_json::to_vec_pretty(&report)?)?;
     println!(
         "{} worlds, {rows} event rows, {runnable} runnable",
         reports.len()
