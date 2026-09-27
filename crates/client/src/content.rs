@@ -1283,12 +1283,11 @@ mod tutorial_hammer {
                 ..Default::default()
             };
             let build = bri_world::build::SavedBuild {
-                schema_version: 1,
-                ownership_scope: None,
+                schema_version: bri_world::build::BUILD_SCHEMA,
                 world,
             };
             let plan =
-                bri_world::build::LoadPlan::prepare(sim.state(), build, 1, false, None, 2).unwrap();
+                bri_world::build::LoadPlan::prepare(sim.state(), build, 1, false, 2).unwrap();
             sim.load_build(&actor, plan).unwrap();
             loop {
                 let ids: Vec<_> = sim.state().bricks.keys().copied().collect();
