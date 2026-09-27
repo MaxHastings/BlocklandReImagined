@@ -2352,3 +2352,12 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `bri-weapons-import` plans only weapons, debris, runtime effects, item
   presentation, worlds and tutorial. Not run: macOS and Linux (WSL could not
   start its VM, and Maxwell deferred those platforms).
+- 2026-09-27 Build output and a shared compile cache. C: was 99% full: 1.56 TB
+  of cargo `target/` folders across ~50 worktrees. `tools/clean_targets.py`
+  (dry run by default, `--apply`, `--keep`) deleted 35 finished worktrees'
+  folders and freed 981 GB (C: 50 GB -> 909 GB free); it spares the main
+  checkout, locked folders and ones active in the last 30 minutes. sccache
+  0.18 is installed and set machine-wide (`~/.cargo/config.toml`,
+  40 GiB cap). Measured: a second checkout at a different path gets 8 of 11
+  cache hits building `bri-content` (the misses are workspace crates);
+  setting `CARGO_TARGET_DIR` drops that to 0 because the variable is hashed.

@@ -18,12 +18,16 @@ packs are kept and only the missing ones are built. Details and flags are in
 
 ## Builds and disk
 Every worktree's `target/` grows to 10-200 GB, and dozens of parallel worktrees
-filled Maxwell's C: drive (1.5 TB of build output on 2026-09-27). Compile
-through sccache so worktrees share compiled dependencies: `bootstrap.py` uses it
-whenever `sccache` is on PATH, capped by `SCCACHE_CACHE_SIZE` (default 40G).
-Do not share one `CARGO_TARGET_DIR` between worktrees: cargo locks it for a
-whole build, so parallel threads would queue, and each worktree's
-`target/release/bri-client` would overwrite the others'.
+filled Maxwell's C: drive (1.5 TB of build output on 2026-09-27). His PC
+compiles every cargo build through sccache (`~/.cargo/config.toml` sets
+`rustc-wrapper = "sccache"`, capped at 40 GiB in
+`%APPDATA%\Mozilla\sccache\config\config`), so a new worktree reuses the
+crates.io dependencies other worktrees already compiled. Workspace crates
+still compile per worktree. On other machines `bootstrap.py` uses sccache when
+it is on PATH (`cargo install sccache --locked`). Check with
+`sccache --show-stats`. Leave `CARGO_TARGET_DIR` unset: it is hashed into
+every cache key, and a target dir shared between worktrees would make cargo
+queue parallel builds and overwrite each worktree's `target/release/bri-client`.
 
 When a thread finishes, delete its worktree's build output (never the main
 checkout's, which packaging uses). `python tools/clean_targets.py` is a dry
