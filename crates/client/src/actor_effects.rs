@@ -1,6 +1,6 @@
 //! Cosmetic player and vehicle effects: emote, pain and burn images on the
 //! head (their original image state emitters), jet exhaust, vehicle burning,
-//! water splashes and vehicle weapon smoke. Driven by reliable presentation
+//! water splashes, vehicle weapon smoke and `serverCmdLight` player lights. Driven by reliable presentation
 //! cues and the presented poses; no gameplay authority.
 use anyhow::Result;
 use bri_fx_runtime::{
@@ -35,6 +35,18 @@ const PLAYER_SPLASH_SECONDS: f32 = 0.3;
 /// `PlayerSplash`'s expanding rings, which the effects importer converts from
 /// `SplashData` into a finite emitter of ring particles.
 const PLAYER_SPLASH_RING: &str = "v20/emitter/playersplash";
+/// `serverCmdLight`'s `PlayerLight` fxLight: its point light and corona flare.
+const PLAYER_LIGHT: &str = "v20/light/playerlight";
+
+/// One player's light this frame: where v20's attached fxLight sits (the
+/// player's mount point 1, `getRenderMountTransform(1)`) and whether the
+/// camera has line of sight to its flare.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerLight {
+    pub actor: u64,
+    pub position: Vec3,
+    pub flare_visible: bool,
+}
 
 /// Where an image or emitter is attached this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -100,6 +112,7 @@ pub struct ActorEffects {
     one_shots: Vec<(Anchor, EffectHandle)>,
     jets: BTreeMap<(u64, u8), EffectHandle>,
     burning: BTreeMap<u64, EffectHandle>,
+    lights: BTreeMap<u64, EffectHandle>,
     cursor: u64,
     pub diagnostics: Diagnostics,
 }
@@ -118,6 +131,7 @@ impl ActorEffects {
             one_shots: Vec::new(),
             jets: BTreeMap::new(),
             burning: BTreeMap::new(),
+            lights: BTreeMap::new(),
             cursor: 0,
             diagnostics: Diagnostics::default(),
         })
@@ -134,6 +148,9 @@ impl ActorEffects {
     pub fn burning_count(&self) -> usize {
         self.burning.len()
     }
+    pub fn light_count(&self) -> usize {
+        self.lights.len()
+    }
     /// A new session starts after its checkpoint; earlier one-shots never replay.
     pub fn reset(&mut self, checkpoint_cursor: u64) {
         self.world.teardown();
@@ -142,6 +159,7 @@ impl ActorEffects {
         self.one_shots.clear();
         self.jets.clear();
         self.burning.clear();
+        self.lights.clear();
         self.cursor = checkpoint_cursor;
     }
     fn note(&mut self, message: String) {
@@ -416,13 +434,15 @@ impl ActorEffects {
     }
     /// Step image states, keep sources on their anchors and simulate particles.
     /// `jets`: jetting players' two foot transforms and velocity. `burning`:
-    /// destroyed vehicles. A source whose anchor is gone drains.
+    /// destroyed vehicles. `lights`: players whose light is on. A source whose
+    /// anchor is gone drains.
     pub fn advance(
         &mut self,
         dt: f32,
         pose: impl Fn(Anchor) -> Option<Mat4>,
         jets: &[(u64, [Mat4; 2], Vec3)],
         burning: &[(u64, Mat4)],
+        lights: &[PlayerLight],
     ) -> Result<()> {
         anyhow::ensure!(
             dt.is_finite() && (0.0..=86400.0).contains(&dt),
@@ -523,6 +543,44 @@ impl ActorEffects {
             })
             .collect();
         sync_sources(world, &mut self.burning, &wanted, VEHICLE_BURN_EMITTER)?;
+        // `serverCmdLight` deletes the fxLight outright: no drain.
+        self.lights.retain(|actor, handle| {
+            let keep = lights.iter().any(|l| l.actor == *actor) && world.is_active(*handle);
+            if !keep {
+                world.stop(*handle, StopMode::Immediate);
+            }
+            keep
+        });
+        for light in lights {
+            let transform = SourceTransform {
+                position: light.position,
+                ..Default::default()
+            };
+            // `fxLight::renderObject` fades the flare over `FadeTime` toward
+            // its line-of-sight result.
+            let options = SourceOptions {
+                flare_visibility: if light.flare_visible { 1.0 } else { 0.0 },
+                ..Default::default()
+            };
+            if let Some(handle) = self.lights.get(&light.actor) {
+                world.update_source(*handle, transform)?;
+                world.update_options(*handle, options)?;
+            } else {
+                match world.start_light(PLAYER_LIGHT, transform, options) {
+                    Ok(handle) => {
+                        self.lights.insert(light.actor, handle);
+                    }
+                    Err(e) => {
+                        self.diagnostics.missing = self.diagnostics.missing.saturating_add(1);
+                        if self.diagnostics.messages.len() < MAX_MESSAGES {
+                            self.diagnostics
+                                .messages
+                                .insert(format!("Player light unavailable: {e:#}"));
+                        }
+                    }
+                }
+            }
+        }
         world.advance(dt, Vec3::ZERO)?;
         Ok(())
     }

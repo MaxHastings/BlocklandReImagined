@@ -173,6 +173,9 @@ pub struct LightSnapshot {
     pub color: Vec3,
     pub radius: f32,
 }
+/// Distance at which v20 stops drawing fxLight flares.
+pub const FLARE_MAX_DISTANCE: f32 = 75.;
+
 /// Storage-buffer layout: 32 bytes, aligned vec4 fields. color is brightness-scaled.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -750,6 +753,10 @@ impl EffectsWorld {
                     continue;
                 }
                 let distance = camera.position.distance(s.transform.position);
+                // v20's `fxLight::renderObject` only shows flares nearer than 75 units.
+                if distance >= FLARE_MAX_DISTANCE {
+                    continue;
+                }
                 let weight = ((distance - f.near_distance) / (f.far_distance - f.near_distance))
                     .clamp(0., 1.);
                 let size = 2.
@@ -764,8 +771,10 @@ impl EffectsWorld {
                 frame.particles.push(ParticleInstance {
                     position: s.transform.position,
                     size,
+                    // v20 divides the linked (brightness-scaled) colour by its
+                    // largest channel: a Brightness 5 white light flares white.
                     color: if f.link_color {
-                        color
+                        color / color.max_element()
                     } else {
                         Vec3::from_array(f.color)
                     }

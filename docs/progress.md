@@ -2286,3 +2286,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Evidence: `cargo test -p bri-console`, `cargo test -p bri-ui --test
   console`, `cargo test -p bri-ui`, `cargo test -p bri-client --lib console`,
   `ui_runtime_probe` console renders at 1024x768, 1920x1080 and 2x.
+
+- 2026-09-27 Player light corona. v20's `serverCmdLight` attaches the
+  `PlayerLight` fxLight (radius 10, brightness 5, white, no animation) to the
+  player. Its flare is `base/lighting/corona` (128x128 RGB, additive
+  `SRC_ALPHA, ONE`, no depth test), `ConstantSize 1` (a 2x2 unit billboard),
+  faded over `FadeTime 0.1` by a camera-to-light ray, hidden beyond 75 units,
+  and linked flare colour divided by its largest channel (exe `fxLight::
+  renderObject` 0x54d820). The attached position is the player's
+  `getRenderMountTransform(1)` (exe 0x54c1c1 casts to Player and calls vtable
+  0x160 = 0x5cc930 with mount 1), confirming the left hand (`Mount1`).
+  The client now starts `v20/light/playerlight` from the effects runtime per
+  lit player, so everyone sees each light and corona; the old hard-coded
+  point light (radius 12, colour 1) is gone. Open: v20's flare ray is also
+  blocked by players and vehicles; ours tests map and bricks only.

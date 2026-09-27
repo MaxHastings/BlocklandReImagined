@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bri_client::actor_effects::{ActorEffects, Anchor};
+use bri_client::actor_effects::{ActorEffects, Anchor, PlayerLight};
 use bri_content::effects::*;
 use bri_fx_runtime::{pack::TextureImage, *};
 use bri_sim::presentation::{Cue, CueKind};
@@ -38,7 +38,31 @@ fn effects() -> Arc<EffectsPack> {
         Library {
             schema_version: 1,
             textures: BTreeMap::from([("texture".into(), "texture.png".into())]),
-            lights: vec![],
+            lights: vec![Light {
+                id: "v20/light/playerlight".into(),
+                name: "Player's Light".into(),
+                enabled: true,
+                color: [1.; 3],
+                brightness: 5.,
+                radius: 10.,
+                color_curves: None,
+                brightness_curve: None,
+                radius_curve: None,
+                flare: Some(Flare {
+                    texture: "texture".into(),
+                    color: [1.; 3],
+                    third_person: true,
+                    constant_size: Some(1.),
+                    near_size: 3.,
+                    far_size: 0.5,
+                    near_distance: 10.,
+                    far_distance: 30.,
+                    fade_seconds: 0.1,
+                    blend_mode: 0,
+                    link_color: true,
+                    link_size: false,
+                }),
+            }],
             particles: vec![Particle {
                 id: "particle".into(),
                 texture: "texture".into(),
@@ -192,10 +216,10 @@ fn emote_image_emits_for_its_state_time_then_unmounts() -> Result<()> {
         },
     ));
     assert_eq!(fx.image_count(), 1);
-    fx.advance(0.1, head, &[], &[])?;
+    fx.advance(0.1, head, &[], &[], &[])?;
     assert!(fx.world().particle_count() > 0);
     for _ in 0..20 {
-        fx.advance(0.1, head, &[], &[])?;
+        fx.advance(0.1, head, &[], &[], &[])?;
     }
     assert_eq!(fx.image_count(), 0, "Done unmounts after the emitter time");
     assert!(
@@ -217,11 +241,11 @@ fn burning_loops_until_cleared_and_emotes_replace_it() -> Result<()> {
         },
     ));
     for _ in 0..8 {
-        fx.advance(0.1, head, &[], &[])?;
+        fx.advance(0.1, head, &[], &[], &[])?;
     }
     assert_eq!(fx.image_count(), 1, "burning outlives its first state");
     for _ in 0..4 {
-        fx.advance(0.1, head, &[], &[])?;
+        fx.advance(0.1, head, &[], &[], &[])?;
     }
     assert_eq!(fx.image_count(), 0, "clearBurn after the burn time");
     fx.cue(&cue(
@@ -240,7 +264,7 @@ fn burning_loops_until_cleared_and_emotes_replace_it() -> Result<()> {
     ));
     assert_eq!(fx.image_count(), 1, "slot 3 holds one image");
     // A body that is no longer presented drops its image.
-    fx.advance(0.1, |_| None, &[], &[])?;
+    fx.advance(0.1, |_| None, &[], &[], &[])?;
     assert_eq!(fx.image_count(), 0);
     Ok(())
 }
@@ -250,10 +274,10 @@ fn jets_burning_vehicles_and_splashes_follow_their_sources() -> Result<()> {
     let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
     let feet = [Mat4::IDENTITY, Mat4::from_translation(Vec3::X)];
     let wreck = Mat4::from_translation(Vec3::new(5., 0., 5.));
-    fx.advance(0.1, head, &[(7, feet, Vec3::ZERO)], &[(9, wreck)])?;
+    fx.advance(0.1, head, &[(7, feet, Vec3::ZERO)], &[(9, wreck)], &[])?;
     assert_eq!((fx.jet_count(), fx.burning_count()), (2, 1));
     assert!(fx.world().particle_count() > 0);
-    fx.advance(0.1, head, &[], &[])?;
+    fx.advance(0.1, head, &[], &[], &[])?;
     assert_eq!((fx.jet_count(), fx.burning_count()), (0, 0));
     fx.cue(&cue(
         1,
@@ -264,10 +288,10 @@ fn jets_burning_vehicles_and_splashes_follow_their_sources() -> Result<()> {
         },
     ));
     let at_vehicle = |a| matches!(a, Anchor::Vehicle { vehicle: 9 }).then_some(wreck);
-    fx.advance(0.05, at_vehicle, &[], &[])?;
+    fx.advance(0.05, at_vehicle, &[], &[], &[])?;
     assert!(fx.world().source_count() >= 2);
     for _ in 0..10 {
-        fx.advance(0.1, at_vehicle, &[], &[])?;
+        fx.advance(0.1, at_vehicle, &[], &[], &[])?;
     }
     assert_eq!(fx.world().source_count(), 0, "splash emitters are finite");
     assert!(
@@ -297,7 +321,7 @@ fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
             actor: 7,
             name: name.into(),
         }));
-        fx.advance(0.05, head, &[], &[])?;
+        fx.advance(0.05, head, &[], &[], &[])?;
     }
     for level in [5., 30., 50.] {
         fx.cue(&next(CueKind::Pain {
@@ -305,7 +329,7 @@ fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
             level,
             cry: true,
         }));
-        fx.advance(0.05, head, &[], &[])?;
+        fx.advance(0.05, head, &[], &[], &[])?;
     }
     fx.cue(&next(CueKind::Burn {
         actor: 7,
@@ -342,6 +366,7 @@ fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
         muzzle,
         &[(7, [Mat4::IDENTITY; 2], Vec3::ZERO)],
         &[(9, Mat4::IDENTITY)],
+        &[],
     )?;
     assert!(fx.world().particle_count() > 0);
     assert!(
@@ -350,5 +375,45 @@ fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
         fx.diagnostics.messages
     );
     assert_eq!(fx.diagnostics.capacity_rejections, 0);
+    Ok(())
+}
+
+#[test]
+fn player_lights_shine_and_flare_at_the_hand_until_switched_off() -> Result<()> {
+    let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+    let hand = Vec3::new(1., 2., 3.);
+    let light = |flare_visible| PlayerLight {
+        actor: 7,
+        position: hand,
+        flare_visible,
+    };
+    let camera = bri_fx_runtime::Camera {
+        view_projection: Mat4::IDENTITY,
+        position: Vec3::new(1., 2., 10.),
+        right: Vec3::X,
+        up: Vec3::Y,
+    };
+    fx.advance(0.2, head, &[], &[], &[light(true)])?;
+    assert_eq!(fx.light_count(), 1);
+    let frame = fx.world().snapshot(&camera);
+    assert_eq!(frame.lights.len(), 1);
+    assert_eq!(frame.lights[0].position, hand);
+    assert_eq!(frame.lights[0].radius, 10.);
+    let flare = &frame.particles[0];
+    assert_eq!(flare.position, hand);
+    assert!(!flare.depth_test, "flares draw over the scene like fxLight");
+    // `ConstantSize = 1`: a quad reaching one unit either side of the hand.
+    assert!((flare.size - 2.).abs() < 1e-5, "{}", flare.size);
+    // Linked flare colour is the light colour at full strength, not 5x.
+    assert_eq!(flare.color, glam::Vec4::ONE);
+    // Blocked sight fades the flare out over `FadeTime`; the light stays.
+    fx.advance(0.2, head, &[], &[], &[light(false)])?;
+    let frame = fx.world().snapshot(&camera);
+    assert_eq!(frame.lights.len(), 1);
+    assert!(frame.particles.iter().all(|p| p.size <= 0.));
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(fx.light_count(), 0);
+    assert!(fx.world().snapshot(&camera).lights.is_empty());
+    assert!(fx.diagnostics.messages.is_empty(), "{:?}", fx.diagnostics.messages);
     Ok(())
 }

@@ -367,6 +367,7 @@ impl App {
         view: &network::View,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         elapsed: f32,
+        flare_visible: impl Fn(Vec3) -> Result<bool>,
     ) -> Result<()> {
         let body = |id: u64| {
             vehicles
@@ -414,7 +415,29 @@ impl App {
                 )
             }
         };
-        actor_effects.advance(elapsed, pose, &jets, &burning)
+        // `serverCmdLight` attaches `PlayerLight` to the player; v20's
+        // `fxLight` follows the player's mount point 1 (the left hand, via
+        // `getRenderMountTransform(1)`), so light and corona move with the arm.
+        let mut lights = Vec::new();
+        for (owner, _) in view.vitals.iter().filter(|(_, v)| v.light && v.alive) {
+            let hand = avatars
+                .get(owner)
+                .and_then(|a| a.world_node(assets, "Mount1"))
+                .map(|m| m.w_axis.truncate());
+            let Some(position) = hand.or_else(|| {
+                presented
+                    .get(owner)
+                    .map(|p| Vec3::from(p.feet) + Vec3::Y * 1.5)
+            }) else {
+                continue;
+            };
+            lights.push(crate::actor_effects::PlayerLight {
+                actor: *owner,
+                position,
+                flare_visible: flare_visible(position)?,
+            });
+        }
+        actor_effects.advance(elapsed, pose, &jets, &burning, &lights)
     }
     fn reset_weapon_effect_session(&mut self, session: RequestId, checkpoint_cursor: u64) {
         if self.weapon_effect_session == Some(session) {
@@ -3583,6 +3606,12 @@ impl PlatformApp for App {
                 view,
                 presented,
                 elapsed.as_secs_f32(),
+                // `fxLight::TestLOS` casts from the camera to the flare,
+                // ignoring the player carrying it.
+                |at| {
+                    Ok(eye.distance(at) < bri_fx_runtime::FLARE_MAX_DISTANCE
+                        && building.effect_visible(bri_world::BrickId::MAX, eye, at)?)
+                },
             )?;
             self.explosion_shapes.advance(elapsed.as_secs_f32());
             let shells: Vec<_> = self
@@ -4331,22 +4360,6 @@ impl PlatformApp for App {
             || self.controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
         let hidden = self.combat.hidden_bodies(&view.vitals);
-        let lights_on: Vec<Vec3> = view
-            .vitals
-            .iter()
-            .filter(|(_, v)| v.light && v.alive)
-            .filter_map(|(owner, _)| {
-                // `serverCmdLight` attaches the PlayerLight to the player; it
-                // shines from the left hand (Mount1) and follows the arm.
-                let hand = self
-                    .avatars
-                    .get(owner)
-                    .and_then(|a| a.world_node(&self.avatar_assets, "Mount1"))
-                    .map(|m| m.w_axis.truncate());
-                let p = self.motion.presented().get(owner)?;
-                Some(hand.unwrap_or_else(|| Vec3::from(p.feet) + Vec3::Y * 1.5))
-            })
-            .collect();
         let renderer = self
             .renderer
             .as_mut()
@@ -4654,25 +4667,15 @@ impl PlatformApp for App {
             fog_end.max(fog_start + 0.001),
         )?;
         self.weapon_light_deferred = deferred_lights;
-        // `serverCmdLight` player lights first: they are always near the
-        // camera and must not be displaced by distant effect lights.
-        let mut lights: Vec<_> = lights_on
+        // Player lights are effect lights too; the nearest to the camera win.
+        let lights: Vec<_> = effects_frame
+            .lights
             .iter()
-            .map(|position| bri_render::scene::PointLight {
-                position_radius: position.extend(12.0).to_array(),
-                color: [1.0, 1.0, 1.0, 0.0],
+            .map(|light| bri_render::scene::PointLight {
+                position_radius: light.position.extend(light.radius).to_array(),
+                color: light.color.extend(0.).to_array(),
             })
             .collect();
-        lights.extend(
-            effects_frame
-                .lights
-                .iter()
-                .map(|light| bri_render::scene::PointLight {
-                    position_radius: light.position.extend(light.radius).to_array(),
-                    color: light.color.extend(0.).to_array(),
-                }),
-        );
-        lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .effects_renderer
