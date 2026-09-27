@@ -246,15 +246,15 @@ impl Drop for RouterPorts {
         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
     }
 }
-/// Encoded frames of a transfer, or why encoding failed; `None` until done.
-type EncodedFrames = watch::Receiver<Option<Result<Arc<[Vec<u8>]>, String>>>;
+/// A world transfer's encoded frames, or why encoding failed.
+type EncodedTransfer = Option<Result<Arc<[Vec<u8>]>, String>>;
 /// One entry in a peer's ordered reliable stream.
 #[derive(Clone)]
 enum Frame {
     Ready(Arc<Vec<u8>>),
     /// Frames still being encoded on a blocking thread (a world transfer).
     /// The writer waits for them in place, so later frames stay behind them.
-    Pending(EncodedFrames),
+    Pending(watch::Receiver<EncodedTransfer>),
 }
 /// Encode a world transfer off the authority loop. Every peer given the
 /// returned frame writes the transfer at that point in its stream.
@@ -383,7 +383,7 @@ pub fn start_with_admin_store_and_limit(
     start_configured(session, options, max_players, Some(store), true)
 }
 fn start_configured(
-    mut session: Session,
+    session: Session,
     options: ServerOptions,
     max_players: usize,
     admin_store: Option<AdminStore>,
@@ -414,7 +414,6 @@ fn start_configured(
     getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS randomness failed: {e}"))?;
     let host_token = ResumeToken(bytes);
     let host_key = token_key(&host_token);
-    session.set_ownership_scope(format!("{:x}", Sha256::digest(bytes)))?;
     let players = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let task = tokio::spawn(run(
         players.clone(),

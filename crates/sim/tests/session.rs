@@ -15,6 +15,13 @@ fn session() -> Session {
     session_on("test")
 }
 fn session_on(map_id: &str) -> Session {
+    session_with(World::new(
+        "Session".into(),
+        map_id.into(),
+        vec![[1.0; 4], [0.0; 4]],
+    ))
+}
+fn session_with(world: World) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -53,7 +60,7 @@ fn session_on(map_id: &str) -> Session {
     };
     Session::new(
         Simulation::new(
-            World::new("Session".into(), map_id.into(), vec![[1.0; 4], [0.0; 4]]),
+            world,
             defs,
             vec![
                 ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
@@ -380,7 +387,6 @@ fn aim(s: &Session, owner: u64) -> MoveInput {
 fn build_load_preflights_every_definition_and_preserves_existing_players() {
     use bri_world::{Brick, ContentRef, build::SavedBuild};
     let mut s = session();
-    s.set_ownership_scope("session".into()).unwrap();
     let host = s
         .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
         .unwrap();
@@ -397,7 +403,7 @@ fn build_load_preflights_every_definition_and_preserves_existing_players() {
         Brick::new(ContentRef::Resolved("missing".into()), [2.5, 0.1, -3.25], 1),
     );
     world.next_brick_id = 3;
-    let mut saved = SavedBuild::capture(&world, None, true, true).unwrap();
+    let mut saved = SavedBuild::capture(&world, true, true).unwrap();
     let before = s.snapshot();
     let cmd = |b: SavedBuild| Command::LoadBuild {
         build: Box::new(b),
@@ -440,11 +446,83 @@ fn build_load_preflights_every_definition_and_preserves_existing_players() {
         panic!()
     };
     assert_eq!(build.world.bricks, after.world.bricks);
-    assert_eq!(build.ownership_scope.as_deref(), Some("session"));
+    assert!(build.world.owners.is_empty(), "No principals built here");
     for _ in 0..30 {
         s.step().unwrap();
     }
     assert_eq!(s.snapshot().players.len(), 3);
+}
+#[test]
+fn returning_players_get_their_bricks_back_after_a_restart() {
+    use bri_admin::Principal;
+    use bri_world::{Brick, ContentRef, OwnerRecord, build::SavedBuild};
+    let (max, guest) = (Principal([1; 32]), Principal([2; 32]));
+    let mut world = World::new("Saved".into(), "test".into(), vec![[1.0; 4]]);
+    world.bricks.insert(
+        1,
+        Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7),
+    );
+    world.next_brick_id = 2;
+    world.owners.insert(7, OwnerRecord::new(max.0, "Maxwell".into()));
+    // The server restarts on the saved world.
+    let mut s = session_with(world);
+    let host = s.join("Host".into(), Vec3::Y, true).unwrap();
+    assert_eq!(host, 8, "Recorded numbers are never handed to anyone else");
+    let back = s
+        .join_verified("Maxwell".into(), Vec3::new(3.0, 1.0, 0.0), false, Some(max))
+        .unwrap();
+    assert_eq!(back, 7, "A returning principal owns their bricks again");
+    let other = s
+        .join_verified("Guest".into(), Vec3::new(6.0, 1.0, 0.0), false, Some(guest))
+        .unwrap();
+    assert_eq!(other, 9);
+    assert_eq!(s.snapshot().world.owners[&9].name, "Guest");
+    // A second connection of a principal already in the game gets its own
+    // number; the world keeps the first.
+    let twice = s
+        .join_verified("Maxwell".into(), Vec3::new(9.0, 1.0, 0.0), false, Some(max))
+        .unwrap();
+    assert_eq!(twice, 10);
+    assert_eq!(s.snapshot().world.owner_of(&"01".repeat(32)), Some(7));
+
+    // Saving with ownership and loading on another server keeps the builder.
+    let Reply::Saved(build) = s
+        .command(
+            host,
+            1,
+            Command::SaveBuild {
+                events: true,
+                ownership: true,
+            },
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(build.world.owners.len(), 1, "Only owners with saved bricks");
+    let mut fresh = session();
+    let loader = fresh.join("Host".into(), Vec3::Y, true).unwrap();
+    let saved: SavedBuild = *build;
+    assert_eq!(
+        fresh
+            .command(
+                loader,
+                1,
+                Command::LoadBuild {
+                    build: Box::new(saved),
+                    ownership: true,
+                },
+            )
+            .unwrap(),
+        Reply::Loaded { bricks: 1 }
+    );
+    fresh.step().unwrap();
+    let returning = fresh
+        .join_verified("Maxwell".into(), Vec3::new(3.0, 1.0, 0.0), false, Some(max))
+        .unwrap();
+    let world = fresh.snapshot().world;
+    assert_eq!(world.bricks.values().next().unwrap().owner, returning);
+    assert_eq!(world.owners[&returning].principal, "01".repeat(32));
 }
 #[test]
 fn two_players_build_edit_and_late_join_share_authoritative_state() {
@@ -812,7 +890,7 @@ fn saves_stream_in_batches_with_v20_load_messages() {
         );
     }
     world.next_brick_id = 61;
-    let saved = SavedBuild::capture(&world, None, false, false).unwrap();
+    let saved = SavedBuild::capture(&world, false, false).unwrap();
     let cmd = || Command::LoadBuild {
         build: Box::new(saved.clone()),
         ownership: false,

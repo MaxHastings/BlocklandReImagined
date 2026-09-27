@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
             &args[2].join(entry["file"].as_str().context("Missing file")?),
         )?;
         let count = original.bricks.len();
-        let build = SavedBuild::capture(&original, None, true, true)?;
+        let build = SavedBuild::capture(&original, true, true)?;
         let bytes = bri_world::build::encode(&build)?.len();
         let empty = World::new(
             "Live load".into(),

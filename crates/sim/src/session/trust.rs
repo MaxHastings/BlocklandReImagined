@@ -98,6 +98,14 @@ impl Session {
             .map(|p| p.principal)
             .or_else(|| self.departed.get(&owner).map(|d| d.3))
             .flatten()
+            .or_else(|| {
+                let hex = &self.simulation.state().owners.get(&owner)?.principal;
+                let mut key = [0u8; 32];
+                for (i, byte) in key.iter_mut().enumerate() {
+                    *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+                }
+                Some(Principal(key))
+            })
     }
     fn message_box(&mut self, owner: OwnerId, title: &str, text: String) {
         self.notify(
@@ -414,8 +422,17 @@ impl Session {
         let Some(ours) = self.principal_of(owner) else {
             return Trust::OwnerOnly;
         };
-        let owners = self.peers.keys().chain(self.departed.keys()).copied();
+        // Offline builders count too: trust is between principals, so a
+        // friend's bricks stay buildable while they are away.
+        let owners: BTreeSet<OwnerId> = self
+            .peers
+            .keys()
+            .chain(self.departed.keys())
+            .chain(self.simulation.state().owners.keys())
+            .copied()
+            .collect();
         let levels: BTreeMap<OwnerId, u8> = owners
+            .into_iter()
             .filter(|o| *o != owner)
             .filter_map(|o| {
                 let theirs = self.principal_of(o)?;

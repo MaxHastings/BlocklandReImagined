@@ -559,17 +559,12 @@ impl Session {
         } else {
             &tutorial.map.part1
         };
-        let build = bri_world::build::SavedBuild {
-            schema_version: 1,
-            ownership_scope: None,
-            world: world.clone(),
-        };
+        let build = bri_world::build::SavedBuild::new(world.clone());
         let plan = bri_world::build::LoadPlan::prepare(
             self.simulation.state(),
             build,
             owner,
             false,
-            None,
             self.next_owner,
         )?;
         self.item_spawners

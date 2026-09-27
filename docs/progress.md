@@ -2361,3 +2361,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   40 GiB cap). Measured: a second checkout at a different path gets 8 of 11
   cache hits building `bri-content` (the misses are workspace crates);
   setting `CARGO_TARGET_DIR` drops that to 0 because the variable is hashed.
+
+- 2026-09-27 Brick owners follow the player's identity (door-closer P0).
+  Brick owner numbers were per-session counters; a saved build carried an
+  opaque `ownership_scope`, and after a restart returning players were new
+  numbers who no longer owned their builds. The world now carries an owner
+  table (`World.owners`: number to principal and last name), joins map a
+  known principal back to its number (a second live connection of the same
+  principal gets a fresh number), the build format drops `ownership_scope`
+  (`SavedBuild` schema 2), and loading gives each recorded builder's bricks
+  to that principal's number on the target server. Unclaimed owners are
+  still remapped to fresh numbers. Trust levels now include offline owners
+  from the table. World saves without owners serialize unchanged, so the
+  generated packs are unaffected. Evidence: `cargo test -p bri-world -p
+  bri-sim -p bri-net` (new `returning_players_get_their_bricks_back_after_a_restart`).

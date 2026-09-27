@@ -989,7 +989,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         .push(color_row(EventTarget::Named("button".into()), 0));
     source.bricks.insert(99, brick);
     source.next_brick_id = 100;
-    let build = SavedBuild::capture(&source, None, true, true)?;
+    let build = SavedBuild::capture(&source, true, true)?;
     let load = |build: SavedBuild| Command::LoadBuild {
         build: Box::new(build),
         ownership: true,
@@ -1018,14 +1018,24 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         panic!("Missing build")
     };
     assert_eq!(saved.world.bricks[&1], first);
-    assert!(saved.ownership_scope.is_some());
+    assert!(saved.world.owners.is_empty(), "Imported owners stay unclaimed");
     assert_eq!(
         host.command(load(*saved)).await?,
         Reply::Loaded { bricks: 1 }
     );
     wait(&mut host, |c| c.replica.world.bricks.len() == 2).await?;
     wait(&mut guest, |c| c.replica.world.bricks.len() == 2).await?;
-    assert_eq!(host.replica.world.bricks[&2], first);
+    // Owners without a principal have no identity to return to, so a
+    // reload gives them a fresh, unclaimed number.
+    let reloaded = host.replica.world.bricks[&2].clone();
+    assert_ne!(reloaded.owner, first.owner);
+    assert_eq!(
+        Brick {
+            owner: first.owner,
+            ..reloaded
+        },
+        first
+    );
     let late = Client::connect(
         server.address,
         &server.certificate,
@@ -1085,7 +1095,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
         .collect();
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
-    let build = SavedBuild::capture(&world, None, true, true)?;
+    let build = SavedBuild::capture(&world, true, true)?;
     assert!(bri_world::build::encode(&build)?.len() > 16 * 1024 * 1024);
     assert_eq!(
         host.command(Command::LoadBuild {

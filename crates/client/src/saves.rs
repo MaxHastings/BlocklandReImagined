@@ -427,7 +427,7 @@ mod tests {
             }],
         };
         assert_eq!(store.load("Map", "Original.world.json")?.world, world);
-        let build = SavedBuild::capture(&world, Some("scope".into()), true, true)?;
+        let build = SavedBuild::capture(&world, true, true)?;
         assert!(
             store
                 .save("Original.world.json", "First", build.clone(), false)

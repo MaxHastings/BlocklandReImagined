@@ -64,7 +64,13 @@ impl Session {
         self.notices = std::mem::take(&mut old.notices);
         self.lan_host = old.lan_host;
         self.time_scale = old.time_scale;
-        self.ownership_scope = old.ownership_scope.clone();
+        // Players keep their owner numbers across maps, and so does the
+        // record of who each number is.
+        for (owner, record) in &old.simulation.state().owners {
+            if self.simulation.state().owners.get(owner) != Some(record) {
+                self.simulation.claim_owner(*owner, record.clone()).ok();
+            }
+        }
         self.next_owner = self.next_owner.max(old.next_owner);
         self.departed = std::mem::take(&mut old.departed);
         let players: Vec<(OwnerId, Peer)> = std::mem::take(&mut old.peers)
