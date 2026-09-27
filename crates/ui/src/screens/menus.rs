@@ -712,6 +712,9 @@ impl MessageScreen {
                 );
             }
             Callback::CloseEvents => core.pop(ScreenId::WrenchEvents),
+            Callback::IgnoreTrust { from } => {
+                super::trust::answer(core, *from, crate::api::TrustAnswer::Ignore)
+            }
             Callback::MiniGame { game, operation } => {
                 let valid = match operation {
                     MiniGameOperation::AcceptInvite | MiniGameOperation::RejectInvite | MiniGameOperation::IgnoreInvite => core.minigames.invitations.iter().any(|i| i.game == *game),

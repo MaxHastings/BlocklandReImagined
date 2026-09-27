@@ -138,6 +138,8 @@ pub enum Callback {
     },
     CloseEvents,
     MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
+    /// `TrustInviteGui.ignore()`.
+    IgnoreTrust { from: u64 },
 }
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
@@ -211,6 +213,8 @@ pub struct Core {
     pub players: Vec<PlayerRow>,
     pub admin: crate::models::admin::AdminModel,
     pub minigames: MiniGameUiState,
+    /// Open `TrustInviteGui` invitation.
+    pub trust_invite: Option<crate::api::TrustInvitation>,
     pub server_name: String,
     pub max_players: u32,
     pub center_print: Option<(String, Option<u64>)>,
@@ -915,6 +919,7 @@ impl Ui {
             players: Vec::new(),
             admin: Default::default(),
             minigames: MiniGameUiState::default(),
+            trust_invite: None,
             server_name: String::new(),
             max_players: 0,
             center_print: None,
@@ -1322,6 +1327,12 @@ impl Ui {
             }
             UiUpdate::MiniGames(state) => {
                 c.minigames = state;
+            }
+            UiUpdate::MessageBox { title, text } => c.message_ok(&title, &text),
+            UiUpdate::TrustInvite(invitation) => {
+                c.trust_invite = Some(invitation);
+                c.pop(ScreenId::TrustInvitation);
+                c.push(ScreenId::TrustInvitation);
             }
             UiUpdate::MiniGameInvite(invitation) => {
                 c.minigames.invitations.retain(|i| i.game != invitation.game);

@@ -585,6 +585,14 @@ pub enum UiAction {
     AcceptMiniGameInvite { game: MiniGameId },
     RejectMiniGameInvite { game: MiniGameId, ignore_owner: bool },
     RemoveMiniGameMember { target: MiniGamePlayerId },
+    /// `commandToServer('Trust_Invite')`: level 1 build, 2 full.
+    TrustInvite { target: u64, level: u8 },
+    /// `commandToServer('Trust_Demote')`: level 0 none, 1 build.
+    TrustDemote { target: u64, level: u8 },
+    /// `commandToServer('UnIgnore')`.
+    UnIgnore { target: u64 },
+    /// Trust invitation dialog answer.
+    AnswerTrustInvite { from: u64, answer: TrustAnswer },
     ResetMiniGame { game: MiniGameId },
     RespawnMiniGameMembers { game: MiniGameId },
     EndMiniGame { game: MiniGameId },
@@ -639,6 +647,8 @@ pub enum PlantError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerRow {
     pub id: u64,
+    /// This viewer ignores the player's trust invites.
+    pub ignoring: bool,
     pub name: String,
     pub score: i32,
     pub admin: bool,
@@ -722,6 +732,20 @@ pub struct MiniGameMemberRow {
     pub is_owner: bool,
     pub admin: bool,
     pub in_local_game: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustInvitation {
+    pub from: u64,
+    pub name: String,
+    pub bl_id: String,
+    /// 1 build, 2 full.
+    pub level: u8,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrustAnswer {
+    Accept,
+    Reject,
+    Ignore,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameInvitation {
@@ -825,6 +849,10 @@ pub enum UiUpdate {
     },
     MiniGames(MiniGameUiState),
     MiniGameInvite(MiniGameInvitation),
+    /// Server `MessageBoxOK`.
+    MessageBox { title: String, text: String },
+    /// `clientCmdTrustInvite`.
+    TrustInvite(TrustInvitation),
     Lagging(bool),
     /// Open the wrench for a brick the server says we may edit.
     OpenWrench {

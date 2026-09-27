@@ -23,6 +23,7 @@ pub mod platform;
 pub mod saves;
 pub mod settings;
 pub mod tool_ui;
+pub mod trust_list;
 pub mod vehicles;
 pub mod weapon_debris;
 pub mod weapon_effects;

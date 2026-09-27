@@ -11,6 +11,7 @@ pub mod play;
 pub mod players;
 pub mod saveload;
 pub mod selector;
+pub mod trust;
 pub mod wrench;
 
 use crate::api::{ChatChannel, MiniGameOperation, MiniGamePlayerId, RequestId, WrenchVariant};
@@ -40,6 +41,7 @@ pub enum ScreenId {
     MiniGames,
     MiniGameSettings,
     MiniGameInvitation,
+    TrustInvitation,
     Admin,
     AdminLogin,
     AdminBan,
@@ -130,6 +132,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::MiniGames => return Box::new(minigames::MiniGameScreen::list(core)),
         ScreenId::MiniGameSettings => return Box::new(minigames::MiniGameScreen::settings(core)),
         ScreenId::MiniGameInvitation => return Box::new(minigames::MiniGameScreen::invitation(core)),
+        ScreenId::TrustInvitation => return Box::new(trust::TrustInvite::new(core)),
         ScreenId::Admin
         | ScreenId::AdminLogin
         | ScreenId::AdminBan

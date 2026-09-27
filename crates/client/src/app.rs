@@ -75,6 +75,8 @@ impl Drop for WorldJob {
         self.abort.abort();
     }
 }
+/// Request id for the automatic trust list upload after joining.
+const TRUST_UPLOAD_REQUEST: RequestId = RequestId::MAX;
 struct Attempt {
     id: RequestId,
     worker: Worker,
@@ -91,6 +93,8 @@ struct Attempt {
     talking: Vec<bri_world::OwnerId>,
     /// Internet hosts: router port-forwarding outcomes for the host player.
     router: Option<mpsc::Receiver<String>>,
+    /// How this player trusts each other player (`secureClientCmd_ClientTrust`).
+    trust: BTreeMap<bri_world::OwnerId, bri_sim::session::PlayerTrust>,
 }
 struct PendingAction {
     action: UiAction,
@@ -1326,6 +1330,7 @@ impl App {
             last_chat: 0,
             talking: Vec::new(),
             router: internet.then_some(router),
+            trust: BTreeMap::new(),
         });
         Ok(())
     }
@@ -1537,6 +1542,7 @@ impl App {
             last_chat: 0,
             talking: Vec::new(),
             router: None,
+            trust: BTreeMap::new(),
         });
         Ok(())
     }
@@ -2011,6 +2017,54 @@ impl App {
                             owner_name: plain_chat(&owner_name),
                             owner_display_id: String::new(),
                         }),
+                        bri_sim::session::Notice::MessageBox { title, text } => {
+                            UiUpdate::MessageBox {
+                                title: plain_chat(&title),
+                                text: plain_chat(&text),
+                            }
+                        }
+                        bri_sim::session::Notice::Sound(profile) => {
+                            self.audio
+                                .profile(&profile, bri_audio::Placement::Listener);
+                            continue;
+                        }
+                        bri_sim::session::Notice::TrustInvite {
+                            from,
+                            name,
+                            principal,
+                            level,
+                        } => {
+                            // `clientCmdTrustInvite` refuses ignored players.
+                            if a.trust.get(&from).is_some_and(|t| t.ignoring) {
+                                continue;
+                            }
+                            UiUpdate::TrustInvite(TrustInvitation {
+                                from,
+                                name: plain_chat(&name),
+                                bl_id: crate::trust_list::display_id(&principal).to_string(),
+                                level,
+                            })
+                        }
+                        bri_sim::session::Notice::TrustSaved {
+                            principal,
+                            level,
+                            name,
+                        } => {
+                            let path = self.state_dir.join("trust-list.json");
+                            let saved = crate::trust_list::TrustList::load(&path)
+                                .update(&principal, level, &plain_chat(&name));
+                            if let Err(error) = saved {
+                                UiUpdate::Chat {
+                                    text: plain_chat(&format!("{error:#}")),
+                                }
+                            } else {
+                                continue;
+                            }
+                        }
+                        bri_sim::session::Notice::PlayerTrust(rows) => {
+                            a.trust = rows;
+                            continue;
+                        }
                         bri_sim::session::Notice::Inspected { .. } => unreachable!(),
                     };
                     self.ui.apply_session(a.id, update);
@@ -2315,6 +2369,10 @@ impl App {
             self.ui
                 .core
                 .request(UiAction::SetAvatar(self.ui.settings().avatar));
+            // `clientCmdTrustListUpload_Start`; the reply needs no handling.
+            let list = crate::trust_list::TrustList::load(&self.state_dir.join("trust-list.json"));
+            a.worker
+                .request(TRUST_UPLOAD_REQUEST, Command::TrustList(list.entries()))?;
         }
         if let Some(view) = &a.view {
             if let Some(snapshot) = &view.admin_snapshot
@@ -2387,12 +2445,21 @@ impl App {
                             }),
                             admin: owner == view.owner && view.administrator,
                             super_admin: false,
-                            bl_id: None,
-                            trust: if owner == view.owner {
-                                "You".into()
-                            } else {
-                                "None".into()
-                            },
+                            bl_id: a
+                                .trust
+                                .get(&owner)
+                                .and_then(|t| t.principal.as_ref())
+                                .map(crate::trust_list::display_id),
+                            trust: crate::trust_list::label(a.trust.get(&owner).map_or(
+                                if owner == view.owner {
+                                    bri_sim::session::TrustLevel::You
+                                } else {
+                                    bri_sim::session::TrustLevel::None
+                                },
+                                |t| t.level,
+                            ))
+                            .into(),
+                            ignoring: a.trust.get(&owner).is_some_and(|t| t.ignoring),
                         })
                         .collect(),
                     server_name: a.name.clone(),
@@ -3612,6 +3679,23 @@ impl PlatformApp for App {
                 }
                 UiAction::ClosePrintSelector
                 | UiAction::CancelWrench { .. } => Ok(()),
+                UiAction::TrustInvite { target, level } => {
+                    self.command(id, Command::TrustInvite { target, level }, action.clone())
+                }
+                UiAction::TrustDemote { target, level } => {
+                    self.command(id, Command::DemoteTrust { target, level }, action.clone())
+                }
+                UiAction::UnIgnore { target } => {
+                    self.command(id, Command::UnIgnore { target }, action.clone())
+                }
+                UiAction::AnswerTrustInvite { from, answer } => {
+                    let command = match answer {
+                        TrustAnswer::Accept => Command::AcceptTrust { from },
+                        TrustAnswer::Reject => Command::RejectTrust { from },
+                        TrustAnswer::Ignore => Command::IgnoreTrust { from },
+                    };
+                    self.command(id, command, action.clone())
+                }
                 UiAction::SetAvatar(ref prefs) => {
                     let connected = self.network_view().is_some();
                     let result = self.avatar_assets.from_prefs(prefs).and_then(|appearance| {
