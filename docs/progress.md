@@ -1670,6 +1670,20 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `maxFreelookAngle` = 3. F zoom eases in and out. Tests: `session` (camera,
   spy and corpse control) and client `controls`/`avatar`.
 
+- 2026-09-27 Internet hosting (a5). Start Game's Internet option was
+  greyed out by design (`menus.rs`, "public legacy services are excluded").
+  It now hosts like LAN on `0.0.0.0:28000` (UDP, QUIC) and still answers the
+  certificate query on UDP 28050, which Connect to IP uses for its first
+  join before pinning. Internet hosts turn `$Server::LAN` off, so brick
+  damage uses v20 `miniGameCanDamage` (ownership outside minigames); LAN and
+  single-player keep the looser rule. Connect to IP accepts a bare address
+  (port 28000). Query Internet stays disabled: no master server exists.
+  Remote hosts must allow UDP 28000 and 28050 through Windows Firewall and,
+  for a public IP, forward both on the router; Tailscale/ZeroTier only need
+  the firewall rule. Not yet tested over a real remote link. Packaged
+  `dist/BlocklandReImagined-alpha-2026-09-27-a5`: `-VerifyPackage` verified
+  3236 files; `--check` passed (14 maps, 170 brick definitions).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
