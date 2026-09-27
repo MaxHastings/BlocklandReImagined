@@ -33,6 +33,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::Hud::RecolorBrickIcons",
     "$pref::Gui::ShowBrickSlotNumbers",
     "$Pref::Gui::ColorEscapeMenu",
+    super::play::SMALL_PLANT_ERRORS,
     "$pref::Input::FastFirstThirdPerson",
     "$pref::Input::UseSuperShiftSmartToggle",
     "$pref::Input::UseSuperShiftToggle",
@@ -355,13 +356,6 @@ impl Options {
             if let Some(n) = find_section(v, title) {
                 v.nodes[n].ctrl.extent[1] = 322;
             }
-        }
-        // Gui Settings keeps two columns; the right one lost its first row.
-        let show_hud = v
-            .walk()
-            .find(|&n| v.node(n).ctrl.variable.as_deref() == Some("$pref::HUD::showToolTips"));
-        if let Some(n) = show_hud {
-            v.nodes[n].ctrl.position[1] = 27;
         }
         // Audio: Volume takes the driver section's place.
         if let Some(n) = find_section(v, "Volume") {

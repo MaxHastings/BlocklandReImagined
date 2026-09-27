@@ -109,7 +109,12 @@ fn fixture() -> Rc<Pack> {
                 "ConnectingGui::cancel();",
             )],
         ),
-        ("PlayGui", vec![]),
+        ("PlayGui", {
+            let mut icon = node("GuiBitmapCtrl", "HUD_SuperShift", 731, "");
+            icon.extent = [184, 37];
+            icon.visible = false;
+            vec![icon]
+        }),
         ("LoadingGui", vec![]),
         ("defaultControlsGui", vec![]),
     ] {
@@ -503,4 +508,27 @@ fn keyboard_turn_looks_at_the_preferred_rate_while_held() {
     up(&mut u, Key::PageUp);
     u.update(50);
     assert!(actions(&mut u).is_empty());
+}
+#[test]
+fn super_shift_toggle_shows_the_hud_icon_on_the_bottom_edge() {
+    let mut u = ui();
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::LAlt)), "toggleSuperShift");
+    play(&mut u);
+    let shown = |u: &Ui| {
+        let v = u.screen(ScreenId::Play).unwrap().view();
+        let n = v.id("HUD_SuperShift").unwrap();
+        (v.node(n).state.visible, v.node(n).rect.y)
+    };
+    assert!(!shown(&u).0);
+    down(&mut u, Key::LAlt);
+    up(&mut u, Key::LAlt);
+    u.update(16);
+    // 640x480 logical: below 1024 wide it sits above the inventory bar.
+    assert_eq!(shown(&u), (true, 480 - (87 + 37)));
+    down(&mut u, Key::LAlt);
+    up(&mut u, Key::LAlt);
+    u.update(16);
+    assert!(!shown(&u).0);
 }

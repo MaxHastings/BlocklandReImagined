@@ -5,6 +5,8 @@ use crate::api::{IconRef, PlantError};
 use crate::geom::WHITE;
 use crate::models::hud::{FX_ART, ScrollMode};
 
+pub const SMALL_PLANT_ERRORS: &str = "$pref::Video::useSmallPlantErrors";
+
 pub struct Play {
     view: View,
 }
@@ -304,13 +306,20 @@ impl Screen for Play {
         if let Some(n) = self.view.id("LagIcon") {
             self.view.set_visible(n, core.lagging);
         }
-        if let Some(n) = self.view.id("HUD_PlantError") {
-            self.view.set_visible(
-                n,
-                core.plant_error
-                    .is_some_and(|(e, _)| e != PlantError::Forbidden),
-            );
-            if let Some((e, _)) = core.plant_error {
+        // handlePlantError: the small icons replace the large ones when
+        // $pref::Video::useSmallPlantErrors is set.
+        let small = core.prefs.bool_or(SMALL_PLANT_ERRORS, false);
+        for (name, folder, shown) in [
+            ("HUD_PlantError", "planterrors", !small),
+            ("HUD_PlantErrorSmall", "planterrors_small", small),
+        ] {
+            let Some(n) = self.view.id(name) else {
+                continue;
+            };
+            let error = core.plant_error.map(|(e, _)| e).filter(|_| shown);
+            self.view
+                .set_visible(n, error.is_some_and(|e| e != PlantError::Forbidden));
+            if let Some(e) = error {
                 let name = match e {
                     PlantError::Overlap => "overlap",
                     PlantError::Float => "float",
@@ -322,7 +331,24 @@ impl Screen for Play {
                     PlantError::Limit => "limit",
                 };
                 self.view.state(n).bitmap =
-                    Some(format!("base/client/ui/planterrors/planterror_{name}"));
+                    Some(format!("base/client/ui/{folder}/planterror_{name}"));
+            }
+        }
+        // toggleSuperShift: HUD_SuperShift.setVisible($SuperShift), kept on
+        // the bottom edge from 1024 wide and above the inventory below it.
+        if let Some(n) = self.view.id("HUD_SuperShift") {
+            self.view.set_visible(n, core.super_shift);
+            let h = self.view.node(n).ctrl.extent[1];
+            let (_, height) = core.logical;
+            let y = if core.logical.0 >= 1024 {
+                height - h
+            } else {
+                height - (87 + h)
+            };
+            // Authored bottom sizing keeps this absolute position.
+            if self.view.node(n).rect.y != y {
+                self.view.nodes[n].ctrl.position[1] = y;
+                self.view.layout(core.logical.0, core.logical.1);
             }
         }
     }

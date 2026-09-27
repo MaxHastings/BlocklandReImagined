@@ -257,6 +257,13 @@ fn main() -> Result<()> {
         ui.core.run_command("useBricks", true);
         ui.update(120);
         render(&ui, "hud-bricks", &mut renderer, &mut report)?;
+        ui.core.run_command("toggleSuperShift", true);
+        ui.core.run_command("toggleSuperShift", false);
+        ui.apply(UiUpdate::PlantError(PlantError::Overlap));
+        ui.update(16);
+        render(&ui, "hud-super-shift", &mut renderer, &mut report)?;
+        ui.core.run_command("toggleSuperShift", true);
+        ui.core.run_command("toggleSuperShift", false);
         ui.core.run_command("useSprayCan", true);
         ui.update(120);
         render(&ui, "hud-paint", &mut renderer, &mut report)?;
