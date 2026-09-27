@@ -30,6 +30,7 @@ mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod tools;
+mod spray;
 pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
 };
@@ -246,6 +247,8 @@ struct Peer {
     chats: u32,
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
+    /// `SetTempColor` spray paint over the avatar's own colours.
+    temp_color: Option<spray::TempColor>,
     combat: combat::Combat,
     special: special::Progress,
     control: ControlObject,
@@ -393,7 +396,13 @@ impl Session {
     pub fn avatars(&self) -> BTreeMap<OwnerId, bri_content::avatar::Appearance> {
         self.peers
             .iter()
-            .filter_map(|(id, p)| p.avatar.clone().map(|a| (*id, a)))
+            .filter_map(|(id, p)| {
+                let mut avatar = p.avatar.clone()?;
+                if let Some(temp) = &p.temp_color {
+                    temp.apply(&mut avatar);
+                }
+                Some((*id, avatar))
+            })
             .collect()
     }
     pub fn is_administrator(&self, owner: OwnerId) -> bool {
@@ -483,6 +492,7 @@ impl Session {
                 special: Default::default(),
                 control: ControlObject::Player,
                 tutorial: Default::default(),
+                temp_color: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -598,6 +608,7 @@ impl Session {
                 special: Default::default(),
                 control: ControlObject::Player,
                 tutorial: Default::default(),
+                temp_color: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -1096,6 +1107,7 @@ impl Session {
         self.simulation.step()?;
         self.vehicle_post_step()?;
         self.step_weapons()?;
+        self.step_temp_colors();
         self.step_items()?;
         self.step_combat(impacts)?;
         self.step_specials()?;

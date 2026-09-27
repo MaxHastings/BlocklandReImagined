@@ -1004,3 +1004,77 @@ fn nested_events_return_to_wrench_without_overwriting_concurrent_properties() {
     )
     .unwrap();
 }
+
+#[test]
+fn spray_paint_temporarily_recolours_the_body_band_it_hits() {
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    s.set_avatar_catalog(
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "id": "test", "rig": "rig.json", "rig_sha256": "",
+            "parts": {"hat": ["none"], "accent": ["none"], "pack": ["none"],
+                "secondpack": ["none"], "chest": ["chest"], "hip": ["pants"],
+                "rarm": ["rarm"], "larm": ["larm"], "rhand": ["rhand"],
+                "lhand": ["lhand"], "rleg": ["rshoe"], "lleg": ["lshoe"]},
+            "accents_allowed": {}, "faces": ["smiley"],
+            "decals": ["AAA-None", "Alyx"], "surfaces": {}, "textures": {
+                "smiley": {"file": "smiley.png", "sha256": "", "source": "", "width": 1, "height": 1},
+                "Alyx": {"file": "alyx.png", "sha256": "", "source": "", "width": 1, "height": 1},
+                "AAA-None": {"file": "none.png", "sha256": "", "source": "", "width": 1, "height": 1}},
+            "defaults": {"parts": {}, "colors": {"head": [1.0, 0.88, 0.61, 1.0],
+                "torso": [0.9, 0.9, 0.9, 1.0], "hat": [1.0, 1.0, 0.0, 1.0],
+                "accent": [0.0, 0.2, 0.64, 0.7], "pack": [0.0, 0.4, 0.8, 1.0],
+                "secondpack": [0.0, 1.0, 0.0, 1.0], "hip": [0.0, 0.0, 1.0, 1.0],
+                "rarm": [0.9, 0.0, 0.0, 1.0], "larm": [0.9, 0.0, 0.0, 1.0],
+                "rhand": [1.0, 0.88, 0.61, 1.0], "lhand": [1.0, 0.88, 0.61, 1.0],
+                "rleg": [0.0, 0.0, 1.0, 1.0], "lleg": [0.0, 0.0, 1.0, 1.0]}, "face": "smiley", "decal": "Alyx"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(0.0, 0.05, -3.0), false)
+        .unwrap();
+    let own = s.avatars()[&guest].clone();
+    s.command(owner, 1, Command::UseSprayCan { color: 1 })
+        .unwrap();
+    aim(&mut s, owner, 2, [0.0, 1.45, -3.0]);
+    hold_still(&mut s, guest);
+    s.command(owner, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..12 {
+        s.step().unwrap();
+    }
+    s.command(owner, 4, Command::WeaponTrigger { down: false })
+        .unwrap();
+    for _ in 0..12 {
+        s.step().unwrap();
+    }
+    // Chest band: the paint colour at full alpha, no decal; legs unchanged.
+    let painted = &s.avatars()[&guest];
+    assert_eq!(painted.colors["torso"], [0.2, 0.3, 0.4, 1.0]);
+    assert_eq!(painted.colors["larm"], [0.2, 0.3, 0.4, 1.0]);
+    assert_eq!(painted.colors["lleg"], own.colors["lleg"]);
+    assert_eq!(painted.decal, "AAA-None");
+    assert_eq!(s.avatars()[&owner], own);
+    s.take_cues();
+    for _ in 0..200 {
+        s.step().unwrap();
+    }
+    assert_ne!(
+        s.avatars()[&guest],
+        own,
+        "held for 2000 ms after the last hit"
+    );
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    // `ClearTempColor`: the paint's splash at the player, own colours back.
+    assert_eq!(s.avatars()[&guest], own);
+    assert!(s.take_cues().iter().any(|c| matches!(&c.kind,
+        bri_sim::presentation::CueKind::WeaponEffect { definition, scale, .. }
+            if definition == "color1PaintExplosion" && *scale == 2.0)));
+}

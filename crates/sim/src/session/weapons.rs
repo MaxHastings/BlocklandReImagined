@@ -275,6 +275,7 @@ impl Session {
                 }
                 WeaponEvent::ToolFire { actor, image, .. } => self.tool_fire(actor.0, &image)?,
                 WeaponEvent::Contact { impact } => {
+                    self.spray_player(&impact);
                     if let TargetId::Brick(brick) = impact.target {
                         self.paint_contact(&impact)?;
                         self.special_projectile_hit(impact.source.0, brick, &impact.definition)?;

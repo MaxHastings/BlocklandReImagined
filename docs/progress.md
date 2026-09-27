@@ -1743,6 +1743,20 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   diagonals match a straight run's leg motion within 0.03 deg/frame
   (sheets in `artifacts/avatar-diagonal/`).
 
+- 2026-09-27 Spraying players (v20 `Player::SetTempColor`). A colour spray
+  can hitting a player recolours the body band at the impact height above the
+  feet: legs (<0.63), hip and hands (<1.04), torso and arms plus no decal
+  (<1.72), worn packs (<1.98), head (<2.35), worn hat and accent above. The
+  colour is the palette RGB at full alpha, with no trust check because
+  `PlayerStandardArmor` is not `paintable`. 2000 ms after the latest hit
+  `ClearTempColor` restores the avatar and plays `color<N>PaintExplosion` at
+  scale 2 at the player's centre; respawning also restores it. The session
+  overlays the temporary colours on the replicated appearance, so clients
+  rebuild the avatar through the existing appearance path. No protocol
+  change. Not covered: bots (AIPlayer) and v20's skirt-trim leg nodes.
+  Evidence: sim `spray_paint_temporarily_recolours_the_body_band_it_hits`
+  and the `spray::tests` band test; `cargo test -p bri-sim` passed.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
