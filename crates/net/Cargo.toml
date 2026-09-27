@@ -33,6 +33,7 @@ bri-crash = { path = "../crash" }
 igd-next = { version = "0.17", default-features = false }
 
 [dev-dependencies]
+bri-package-runtime = { path = "../package-runtime" }
 tempfile = "3"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 bri-physics = { path = "../physics" }

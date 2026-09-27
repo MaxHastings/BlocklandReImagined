@@ -1,0 +1,25 @@
+[package]
+name = "bri-stresslab"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Stress Lab harness: loads the Stress Lab packages into headless sessions, loopback hosts and soak runs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bri-content = { path = "../content" }
+bri-physics = { path = "../physics" }
+bri-world = { path = "../world" }
+bri-sim = { path = "../sim" }
+bri-net = { path = "../net" }
+bri-admin = { path = "../admin" }
+bri-identity = { path = "../identity" }
+bri-package = { path = "../package" }
+bri-package-runtime = { path = "../package-runtime" }
+glam = "0.33"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[dev-dependencies]
+tempfile = "3"

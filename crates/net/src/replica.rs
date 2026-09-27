@@ -23,6 +23,15 @@ pub struct Replica {
     pub time_scale: f32,
     /// Scene nodes of smashed map shapes.
     pub broken_shapes: BTreeSet<u32>,
+    pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
+    pub package_state: bri_sim::session::PackageStateView,
+}
+fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
+    ensure!(entities.len() <= 1024, "Too many package entities");
+    for e in entities {
+        e.validate()?;
+    }
+    Ok(())
 }
 fn validate_broken_shapes(shapes: &BTreeSet<u32>) -> Result<()> {
     ensure!(shapes.len() <= 4096, "Invalid broken map shapes");
@@ -108,6 +117,8 @@ impl Replica {
         validate_vehicles(&checkpoint.vehicles)?;
         validate_time_scale(checkpoint.time_scale)?;
         validate_broken_shapes(&checkpoint.broken_shapes)?;
+        validate_entities(&checkpoint.entities)?;
+        checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
             validate_vehicle_pose(pose)?;
         }
@@ -136,6 +147,8 @@ impl Replica {
                 .collect(),
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
+            entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
+            package_state: checkpoint.package_state,
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -214,6 +227,12 @@ impl Replica {
         if let Some(shapes) = &delta.broken_shapes {
             validate_broken_shapes(shapes)?;
         }
+        if let Some(entities) = &delta.entities {
+            validate_entities(entities)?;
+        }
+        if let Some(state) = &delta.package_state {
+            state.validate()?;
+        }
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -274,6 +293,12 @@ impl Replica {
         }
         if let Some(shapes) = delta.broken_shapes {
             self.broken_shapes = shapes;
+        }
+        if let Some(entities) = delta.entities {
+            self.entities = entities.into_iter().map(|e| (e.id, e)).collect();
+        }
+        if let Some(state) = delta.package_state {
+            self.package_state = state;
         }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();

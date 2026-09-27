@@ -541,6 +541,7 @@ dependencies = [
  "bri-identity",
  "bri-minigames",
  "bri-package",
+ "bri-package-runtime",
  "bri-physics",
  "bri-progress",
  "bri-sim",
@@ -638,6 +639,27 @@ dependencies = [
  "rapier3d",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "bri-stresslab"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-admin",
+ "bri-content",
+ "bri-identity",
+ "bri-net",
+ "bri-package",
+ "bri-package-runtime",
+ "bri-physics",
+ "bri-sim",
+ "bri-world",
+ "glam 0.33.10",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

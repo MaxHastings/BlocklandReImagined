@@ -137,6 +137,10 @@ pub struct ServerReport {
     #[serde(skip)]
     pub native_world: bri_world::World,
     pub notices: Vec<String>,
+    /// Durable package state and world edits for the host to save.
+    #[serde(skip)]
+    pub packages: Option<bri_sim::session::PackageSave>,
+    pub package_diagnostics: Vec<bri_package::diag::Diagnostic>,
 }
 impl ServerHandle {
     /// Answer LAN discovery queries for this host until it stops.
@@ -688,6 +692,8 @@ async fn run(
     let mut weapons = bri_sim::session::WeaponView::default();
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
+    let mut entities = session.package_entities();
+    let mut package_state = session.package_state();
     let mut minigames = Vec::new();
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
@@ -717,7 +723,7 @@ async fn run(
                     session.adopt(old,admin)?;
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();package_state=session.package_state();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks});
                     for peer in peers.values(){peer.send(transfer.clone());}
@@ -811,13 +817,15 @@ async fn run(
                 let current_palette=&session.simulation().state().palette;let changed_palette=if &palette!=current_palette{palette=current_palette.clone();Some(palette.clone())}else{None};
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
                 let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
+                let current_entities=session.package_entities();let changed_entities=if entities!=current_entities{entities=current_entities;Some(entities.clone())}else{None};
+                let current_state=session.package_state();let changed_state=if package_state!=current_state{package_state=current_state;Some(package_state.clone())}else{None};
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken}));cursor=next;
+                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,entities:changed_entities,package_state:changed_state}));cursor=next;
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(&Message::Notice(notice));}}
             }
             }
@@ -847,6 +855,8 @@ async fn run(
         },
         native_world: session.simulation().state().clone(),
         notices: session.take_notices(),
+        packages: session.package_save(),
+        package_diagnostics: session.package_diagnostics(),
     })
 }
 

@@ -5,7 +5,7 @@ use bri_sim::{
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-pub const VERSION: u32 = 31;
+pub const VERSION: u32 = 32;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -200,6 +200,10 @@ pub struct Checkpoint {
     pub world_bricks: u64,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: BTreeSet<u32>,
+    /// Entities of enabled packages.
+    pub entities: Vec<bri_sim::session::EntityInfo>,
+    /// Public state of enabled packages.
+    pub package_state: bri_sim::session::PackageStateView,
 }
 impl Checkpoint {
     /// Everything but the bricks, plus an O(1) snapshot of the authoritative
@@ -231,6 +235,8 @@ impl Checkpoint {
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
             world_bricks: world.bricks.len() as u64,
+            entities: session.package_entities(),
+            package_state: session.package_state(),
         };
         (checkpoint, world.bricks.clone())
     }
@@ -330,6 +336,9 @@ pub struct Delta {
     pub vehicles: Option<Vec<bri_sim::session::VehicleInfo>>,
     pub time_scale: Option<f32>,
     pub broken_shapes: Option<BTreeSet<u32>>,
+    /// Package entities, when any moved or changed.
+    pub entities: Option<Vec<bri_sim::session::EntityInfo>>,
+    pub package_state: Option<bri_sim::session::PackageStateView>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
