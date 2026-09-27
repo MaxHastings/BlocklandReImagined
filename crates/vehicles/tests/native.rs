@@ -957,3 +957,28 @@ fn runover_needs_speed_but_always_pushes_and_skips_player_type_mounts() {
         "horses do not run players over"
     );
 }
+#[test]
+fn vehicle_spawned_before_an_unrelated_collision_pass_still_simulates() {
+    let (mut v, mut w) = setup();
+    step(&mut v, &mut w, 2, None);
+    // A player joining or leaving runs a collision pass before the next step.
+    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+    w.detect_collisions(&(), &());
+    step(&mut v, &mut w, 60, None);
+    let s = &v.snapshot(&w).vehicles[0];
+    assert!(s.transform.position[1] < 3., "the jeep fell under gravity");
+}
+#[test]
+fn restored_vehicles_join_an_island_even_before_their_first_pre_step() {
+    let (mut a, mut aw) = setup();
+    spawn(&mut a, &mut aw, "jeepvehicle", 3.);
+    step(&mut a, &mut aw, 12, None);
+    let cp = save(&mut a, &aw);
+    let (mut b, mut bw) = setup();
+    b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
+    // Other shared-world users may step physics before vehicles do.
+    for _ in 0..30 {
+        bw.step();
+    }
+    assert!(bw.bodies.iter().any(|(_, body)| body.is_dynamic() && body.linvel().y < -1.));
+}

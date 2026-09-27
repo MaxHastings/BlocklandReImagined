@@ -1842,3 +1842,22 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `artifacts/native-static-foliage/foliage_before_after.jpg`; `cargo test
   --release -p bri-render` (incl. ignored GPU cases) passes. v20's own
   translucent depth behaviour is closed-engine and not verified.
+
+- 2026-09-27 vehicle audit and fixes (`docs/audits/vehicles.md`). Seated
+  input now follows a per-seat role: drivers face the seat and passengers turn
+  freely (the driver spun with the mouse before), the view turns with the
+  vehicle, the tank gunner aims relative to the hull (the sign was reversed),
+  the Tank Turret is spawnable, boarding needs a landing 0.2 above the origin
+  and takes the first free seat. Mouse steering per Torque `mSteering` for the
+  Magic Carpet (plus FlyingVehicle's unit-sphere inertia, which is why it only
+  flew straight), Flying Wheeled Jeep and skis. Skis and tumbling are wired end
+  to end. Run over, click-to-flip, turret hit routing, passenger protection,
+  `VehicleDamageScale`, `impulseVertical` and minigame vehicle cleanup/eject
+  are applied. Horse/rowboat/cannon/turret move with a kinematic player motor
+  (horse follow-ups handed to Gameplay leftovers). Content: vehicles-pack-010
+  (schema 4) and weapons-pack-008 (schema 3; same as 007 apart from the new
+  fields and main's bae2359 importer fix). Evidence: `cargo test -p
+  bri-vehicles` (28 native tests), `cargo test -p bri-sim --test vehicles --
+  --ignored` (6 of 7; the bot-brick case failed on unmodified main too).
+  Open: barrel pitch pose, seated look limits, vehicle camera offset/tilt/lag,
+  ski-crash whiteout, clearing event-spawned projectiles on minigame change.
