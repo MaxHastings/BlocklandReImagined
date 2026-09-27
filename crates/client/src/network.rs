@@ -24,6 +24,9 @@ pub struct View {
     pub owner: OwnerId,
     pub administrator: bool,
     pub world: Arc<PublicWorld>,
+    /// Increments with every replica world change; `world_log` says what changed.
+    pub world_revision: u64,
+    pub world_log: Arc<WorldLog>,
     pub names: BTreeMap<OwnerId, String>,
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub poses: BTreeMap<OwnerId, Pose>,
@@ -38,6 +41,57 @@ pub struct View {
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     pub rtt_ms: u32,
+}
+/// Brick ids each replica world revision changed, so consumers can update in
+/// proportion to a change instead of comparing every brick. Bounded: a
+/// consumer that falls further behind compares whole worlds instead.
+#[derive(Default)]
+pub struct WorldLog {
+    edits: std::sync::Mutex<std::collections::VecDeque<WorldEdit>>,
+}
+struct WorldEdit {
+    revision: u64,
+    bricks: Vec<u64>,
+    palette: bool,
+}
+/// Everything that may differ between two revisions of one replica.
+#[derive(Debug, Default, PartialEq)]
+pub struct WorldChanges {
+    pub bricks: std::collections::BTreeSet<u64>,
+    pub palette: bool,
+}
+impl WorldLog {
+    const EDITS: usize = 1024;
+    fn push(&self, revision: u64, bricks: Vec<u64>, palette: bool) {
+        let mut edits = self.edits.lock().unwrap_or_else(|e| e.into_inner());
+        if edits.len() == Self::EDITS {
+            edits.pop_front();
+        }
+        edits.push_back(WorldEdit {
+            revision,
+            bricks,
+            palette,
+        });
+    }
+    /// Changes after revision `from` through `to`, or None when that history
+    /// was trimmed (or the revisions are not from this log).
+    pub fn between(&self, from: u64, to: u64) -> Option<WorldChanges> {
+        let edits = self.edits.lock().unwrap_or_else(|e| e.into_inner());
+        let mut changes = WorldChanges::default();
+        let mut expected = from + 1;
+        for edit in edits
+            .iter()
+            .filter(|e| e.revision > from && e.revision <= to)
+        {
+            if edit.revision != expected {
+                return None;
+            }
+            expected += 1;
+            changes.bricks.extend(&edit.bricks);
+            changes.palette |= edit.palette;
+        }
+        (expected == to + 1).then_some(changes)
+    }
 }
 pub enum Event {
     Presentation {
@@ -146,9 +200,14 @@ impl Drop for Worker {
     }
 }
 
+struct WorldState {
+    world: Arc<PublicWorld>,
+    revision: u64,
+    log: Arc<WorldLog>,
+}
 fn publish(
     client: &Client,
-    world: Arc<PublicWorld>,
+    world: &WorldState,
     checkpoint_cue_cursor: u64,
     sender: &watch::Sender<Option<View>>,
 ) {
@@ -157,7 +216,9 @@ fn publish(
         tools: client.replica.tools.clone(),
         owner: client.owner,
         administrator: client.administrator,
-        world,
+        world: world.world.clone(),
+        world_revision: world.revision,
+        world_log: world.log.clone(),
         names: client.replica.names.clone(),
         avatars: client.replica.avatars.clone(),
         poses: client.replica.poses.clone(),
@@ -179,9 +240,13 @@ async fn run(
     view: &watch::Sender<Option<View>>,
     events: &mpsc::Sender<Event>,
 ) -> Result<()> {
-    let mut world = Arc::new(client.replica.world.clone());
+    let mut world = WorldState {
+        world: Arc::new(client.replica.world.clone()),
+        revision: 0,
+        log: Arc::default(),
+    };
     let checkpoint_cue_cursor = client.replica.cue_cursor;
-    publish(client, world.clone(), checkpoint_cue_cursor, view);
+    publish(client, &world, checkpoint_cue_cursor, view);
     events
         .try_send(Event::Ready)
         .context("UI event queue closed")?;
@@ -210,20 +275,50 @@ async fn run(
                         let (request,_)=pending.remove(&sequence).context("Unsolicited server reply")?;
                         events.try_send(Event::Reply{request,result}).context("UI reply queue is full or closed")?;
                     }
-                    ClientEvent::Updated {world_changed}=>{
+                    ClientEvent::Updated {world_changed,changed_bricks,palette_changed}=>{
                         let cues=client.replica.take_cues();
                         if !cues.is_empty() || client.replica.dropped_cues!=cue_drops {
                             cue_drops=client.replica.dropped_cues;
                             events.try_send(Event::Presentation{cues,dropped:client.replica.dropped_cues}).context("Client presentation queue is full or closed")?;
                         }
-                        if world_changed {world=Arc::new(client.replica.world.clone());}
-                        publish(client,world.clone(),checkpoint_cue_cursor,view);
+                        if world_changed {
+                            world.revision+=1;
+                            world.log.push(world.revision,changed_bricks,palette_changed);
+                            world.world=Arc::new(client.replica.world.clone());
+                        }
+                        publish(client,&world,checkpoint_cue_cursor,view);
                     }
-                    ClientEvent::Pose(_)|ClientEvent::Vehicle(_)=>publish(client,world.clone(),checkpoint_cue_cursor,view),
-                    ClientEvent::AdminSnapshot(_)=>publish(client,world.clone(),checkpoint_cue_cursor,view),
+                    ClientEvent::Pose(_)|ClientEvent::Vehicle(_)=>publish(client,&world,checkpoint_cue_cursor,view),
+                    ClientEvent::AdminSnapshot(_)=>publish(client,&world,checkpoint_cue_cursor,view),
                     ClientEvent::Notice(notice)=>events.try_send(Event::Notice(notice)).context("UI notice queue is full or closed")?,
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn world_log_reports_contiguous_changes_or_nothing() {
+        let log = WorldLog::default();
+        log.push(1, vec![5, 6], false);
+        log.push(2, vec![6, 7], true);
+        assert_eq!(
+            log.between(0, 2),
+            Some(WorldChanges {
+                bricks: [5, 6, 7].into(),
+                palette: true
+            })
+        );
+        assert_eq!(log.between(2, 2), Some(WorldChanges::default()));
+        assert_eq!(log.between(1, 3), None, "future revision");
+        for revision in 3..=WorldLog::EDITS as u64 + 2 {
+            log.push(revision, vec![revision], false);
+        }
+        assert_eq!(log.between(0, 5), None, "trimmed history");
+        let recent = log.between(10, 12).unwrap();
+        assert_eq!(recent.bricks, [11, 12].into());
     }
 }

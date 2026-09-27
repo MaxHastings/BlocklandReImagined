@@ -289,9 +289,21 @@ impl SceneData {
         surface_materials: [usize; 6],
         fx: BrickFx,
     ) -> Result<()> {
+        mesh.validate()?;
+        self.append_validated_brick_with_fx(mesh, transform, paint, surface_materials, fx)
+    }
+    /// As `append_brick_with_fx`, for a mesh the caller already validated once
+    /// (chunk builders place the same mesh thousands of times).
+    pub fn append_validated_brick_with_fx(
+        &mut self,
+        mesh: &bri_content::brick::Brick,
+        transform: [f32; 16],
+        paint: [f32; 4],
+        surface_materials: [usize; 6],
+        fx: BrickFx,
+    ) -> Result<()> {
         use bri_content::brick::Surface;
         let fx_uv = fx.encode()?;
-        mesh.validate()?;
         resolve_brick_vertex_color(paint, None)?;
         // Validate all authored sentinels before publishing any geometry.
         for quad in &mesh.quads {
@@ -414,7 +426,7 @@ impl SceneData {
     /// Consolidate opaque geometry after appending many bricks. Per-vertex
     /// paint/UVs stay intact; translucent batches remain independently sortable.
     pub fn coalesce_opaque_batches(&mut self) -> Result<()> {
-        self.validate()?;
+        self.validate_geometry()?;
         let mut opaque = std::collections::BTreeMap::<usize, Vec<u32>>::new();
         let mut translucent = Vec::new();
         for batch in &self.batches {
@@ -465,6 +477,29 @@ impl SceneData {
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.validate_geometry()?;
+        for image in &self.images {
+            let bytes = u64::from(image.width)
+                .checked_mul(u64::from(image.height))
+                .and_then(|pixels| pixels.checked_mul(4));
+            ensure!(
+                image.width > 0 && image.height > 0 && bytes == Some(image.rgba.len() as u64),
+                "Invalid scene image {}",
+                image.label
+            );
+        }
+        for material in &self.materials {
+            ensure!(
+                material.images.iter().all(|i| *i < self.images.len()),
+                "Material {} references missing image",
+                material.name
+            );
+        }
+        Ok(())
+    }
+    /// Geometry, batches and material uniforms, without image resources. Chunk
+    /// geometry bound to a shared material palette carries no images itself.
+    pub fn validate_geometry(&self) -> Result<()> {
         self.fog.validate()?;
         ensure!(
             self.vertices.len() <= u32::MAX as usize && self.indices.len() <= u32::MAX as usize,
@@ -487,16 +522,6 @@ impl SceneData {
                 .all(|i| (*i as usize) < self.vertices.len()),
             "Scene index out of range"
         );
-        for image in &self.images {
-            let bytes = u64::from(image.width)
-                .checked_mul(u64::from(image.height))
-                .and_then(|pixels| pixels.checked_mul(4));
-            ensure!(
-                image.width > 0 && image.height > 0 && bytes == Some(image.rgba.len() as u64),
-                "Invalid scene image {}",
-                image.label
-            );
-        }
         for material in &self.materials {
             ensure!(
                 material.parameters.is_some()
@@ -506,11 +531,6 @@ impl SceneData {
                         .as_ref()
                         .is_none_or(|p| p.iter().flatten().all(|x| x.is_finite())),
                 "Invalid water/terrain material uniforms"
-            );
-            ensure!(
-                material.images.iter().all(|i| *i < self.images.len()),
-                "Material {} references missing image",
-                material.name
             );
             if let AlphaMode::Mask(cutoff) = material.alpha {
                 ensure!(
@@ -625,6 +645,8 @@ pub struct GpuScene {
     materials: Vec<wgpu::BindGroup>,
     batches: Vec<MeshBatch>,
     material_modes: Vec<(usize, bool, bool)>, // opaque/alpha/additive, double sided, background
+    /// World-space bounds of static chunk geometry; unbounded scenes always draw.
+    bounds: Option<(Vec3, Vec3)>,
     pub vertex_count: usize,
     pub index_count: usize,
     pub image_count: usize,
@@ -807,11 +829,65 @@ impl GpuScene {
             materials: self.materials.clone(),
             batches: vec![selected],
             material_modes: self.material_modes.clone(),
+            bounds: self.bounds,
             vertex_count: self.vertex_count,
             index_count: self.index_count,
             image_count: self.image_count,
         })
     }
+}
+
+/// Vertex/index buffers never have zero size; empty scenes carry no batches.
+fn geometry_buffers(
+    device: &wgpu::Device,
+    label: &str,
+    data: &SceneData,
+) -> (wgpu::Buffer, wgpu::Buffer) {
+    let empty_vertex = [SceneVertex {
+        position: [0.; 3],
+        normal: [0.; 3],
+        uv: [0.; 2],
+        lightmap_uv: [0.; 2],
+        color: [0.; 4],
+    }];
+    let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(if data.vertices.is_empty() {
+            &empty_vertex
+        } else {
+            &data.vertices
+        }),
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+    });
+    let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("scene indices"),
+        contents: bytemuck::cast_slice(if data.indices.is_empty() {
+            &[0u32]
+        } else {
+            &data.indices
+        }),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    (vertices, indices)
+}
+
+/// Clip-space planes (a, b, c, d) with inside meaning ax+by+cz+d >= 0.
+fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
+    let (r0, r1, r2, r3) = (
+        view_projection.row(0),
+        view_projection.row(1),
+        view_projection.row(2),
+        view_projection.row(3),
+    );
+    // 0..1 depth: the near plane is row 2 alone.
+    [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2]
+}
+fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
+    planes.iter().all(|plane| {
+        let normal = plane.truncate();
+        let farthest = Vec3::select(normal.cmpge(Vec3::ZERO), max, min);
+        normal.dot(farthest) + plane.w >= 0.
+    })
 }
 
 pub const MAX_POINT_LIGHTS: usize = 256;
@@ -833,6 +909,7 @@ pub struct SceneRenderer {
     repeat: wgpu::Sampler,
     clamp: wgpu::Sampler,
     eye: Vec3,
+    frustum: Option<[glam::Vec4; 6]>,
 }
 
 impl SceneRenderer {
@@ -997,6 +1074,7 @@ impl SceneRenderer {
             repeat: sampler(wgpu::AddressMode::Repeat),
             clamp: sampler(wgpu::AddressMode::ClampToEdge),
             eye: Vec3::ZERO,
+            frustum: None,
         }
     }
     /// Upload once. Construct another GpuScene for dynamic bricks/characters;
@@ -1015,16 +1093,7 @@ impl SceneRenderer {
                 && data.indices.len() as u64 * 4 <= limits.max_buffer_size,
             "Scene buffer exceeds device limits"
         );
-        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&data.name),
-            contents: bytemuck::cast_slice(&data.vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-        let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("scene indices"),
-            contents: bytemuck::cast_slice(&data.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        let (vertices, indices) = geometry_buffers(device, &data.name, data);
         let mut views = Vec::with_capacity(data.images.len());
         for image in &data.images {
             ensure!(
@@ -1147,9 +1216,53 @@ impl SceneRenderer {
                     )
                 })
                 .collect(),
+            bounds: None,
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: data.images.len(),
+        })
+    }
+    /// Upload one static world chunk whose batches index `palette`'s materials.
+    /// Only geometry is created; textures and bind groups stay shared, and the
+    /// chunk's bounds let the renderer skip it outside the view frustum.
+    pub fn upload_chunk(
+        &self,
+        device: &wgpu::Device,
+        data: &SceneData,
+        palette: &GpuScene,
+    ) -> Result<GpuScene> {
+        data.validate_geometry()?;
+        ensure!(
+            data.materials == palette.material_descriptors,
+            "Chunk geometry was built against a different material palette"
+        );
+        ensure!(
+            data.vertices.len() as u64 * std::mem::size_of::<SceneVertex>() as u64
+                <= device.limits().max_buffer_size
+                && data.indices.len() as u64 * 4 <= device.limits().max_buffer_size,
+            "Chunk buffer exceeds device limits"
+        );
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        for vertex in &data.vertices {
+            min = min.min(Vec3::from(vertex.position));
+            max = max.max(Vec3::from(vertex.position));
+        }
+        // Brick shape FX displace vertices in the shader by up to 0.1 units.
+        let margin = Vec3::splat(0.2);
+        let (vertices, indices) = geometry_buffers(device, &data.name, data);
+        Ok(GpuScene {
+            vertices,
+            indices,
+            materials: palette.materials.clone(),
+            material_modes: palette.material_modes.clone(),
+            material_descriptors: palette.material_descriptors.clone(),
+            image_signatures: palette.image_signatures.clone(),
+            batches: data.batches.clone(),
+            bounds: (!data.vertices.is_empty()).then_some((min - margin, max + margin)),
+            vertex_count: data.vertices.len(),
+            index_count: data.indices.len(),
+            image_count: palette.image_count,
         })
     }
     /// Upload changed animation geometry while sharing the original material
@@ -1188,6 +1301,7 @@ impl SceneRenderer {
             material_descriptors: base.material_descriptors.clone(),
             image_signatures: base.image_signatures.clone(),
             batches: data.batches.clone(),
+            bounds: None,
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: base.image_count,
@@ -1197,6 +1311,9 @@ impl SceneRenderer {
     /// single submission would intentionally use the latest camera everywhere.
     pub fn update_camera(&mut self, queue: &wgpu::Queue, camera: &Camera) {
         self.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
+        self.frustum = Some(frustum_planes(Mat4::from_cols_array(
+            &camera.view_projection,
+        )));
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(camera));
     }
     /// Validate before writing, including an empty update to clear the previous frame.
@@ -1262,6 +1379,11 @@ impl SceneRenderer {
         }
         let mut order = Vec::new();
         for &scene in scenes {
+            if let (Some(frustum), Some(bounds)) = (&self.frustum, scene.bounds)
+                && !aabb_visible(frustum, bounds)
+            {
+                continue;
+            }
             for batch in &scene.batches {
                 order.push(Draw {
                     scene,

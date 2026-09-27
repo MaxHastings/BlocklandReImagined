@@ -88,37 +88,69 @@ pub fn build_world_scene_materials(
     scene.vertices.reserve(count.saturating_mul(2));
     scene.indices.reserve(count.saturating_mul(3));
     for (id, brick) in world.bricks.iter().filter(|(_, b)| b.visible) {
-        let ContentRef::Resolved(definition) = &brick.definition else {
-            unreachable!("validated visible definition");
-        };
-        let mesh = &meshes[definition];
-        let mut surfaces = surface_materials;
-        if let (Some(materials), Some(print)) = (materials, &brick.print) {
-            let name = match print {
-                ContentRef::Resolved(id) => id,
-                ContentRef::Unresolved { namespace, name }
-                    if namespace.eq_ignore_ascii_case("print") =>
-                {
-                    name
-                }
-                _ => bail!("Brick {id} has unsupported print namespace"),
-            };
-            surfaces[5] = materials.print_material(&mut scene, name)?;
-        }
-        scene
-            .append_brick_with_fx(
-                mesh,
-                brick.transform().to_cols_array(),
-                world.palette[brick.color as usize],
-                surfaces,
-                BrickFx::new(brick.color_effect, brick.shape_effect)?,
-            )
-            .with_context(|| format!("Building native geometry for brick {id}"))?;
+        append_world_brick(
+            &mut scene,
+            *id,
+            brick,
+            &world.palette,
+            meshes,
+            surface_materials,
+            materials,
+            false,
+        )?;
     }
     scene.coalesce_opaque_batches()?;
     scene.omissions.sort();
     scene.omissions.dedup();
     Ok(scene)
+}
+
+/// Append one validated visible brick with its paint, print and FX.
+#[allow(clippy::too_many_arguments)] // one brick plus the shared chunk/palette context
+pub(crate) fn append_world_brick(
+    scene: &mut SceneData,
+    id: u64,
+    brick: &bri_world::Brick,
+    palette: &[[f32; 4]],
+    meshes: &BTreeMap<String, BrickMesh>,
+    surface_materials: [usize; 6],
+    materials: Option<&crate::materials::BrickMaterials>,
+    mesh_validated: bool,
+) -> Result<()> {
+    let ContentRef::Resolved(definition) = &brick.definition else {
+        bail!(
+            "Visible brick {id} has an unresolved definition: {:?}",
+            brick.definition
+        );
+    };
+    let mesh = meshes.get(definition).with_context(|| {
+        format!("Visible brick {id} definition {definition} has no native render mesh")
+    })?;
+    let mut surfaces = surface_materials;
+    if let (Some(materials), Some(print)) = (materials, &brick.print) {
+        let name = match print {
+            ContentRef::Resolved(id) => id,
+            ContentRef::Unresolved { namespace, name }
+                if namespace.eq_ignore_ascii_case("print") =>
+            {
+                name
+            }
+            _ => bail!("Brick {id} has unsupported print namespace"),
+        };
+        surfaces[5] = materials.print_material(scene, name)?;
+    }
+    if !mesh_validated {
+        mesh.validate()?;
+    }
+    scene
+        .append_validated_brick_with_fx(
+            mesh,
+            brick.transform().to_cols_array(),
+            palette[brick.color as usize],
+            surfaces,
+            BrickFx::new(brick.color_effect, brick.shape_effect)?,
+        )
+        .with_context(|| format!("Building native geometry for brick {id}"))
 }
 
 #[cfg(test)]

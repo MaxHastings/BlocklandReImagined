@@ -1782,6 +1782,21 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `artifacts/torque-quirks/crouch-tap.png` and the hip log. The hip rises from
   0.2445 to 0.5434, snaps to 0.6660 on the re-press, then sinks again.
 
+- 2026-09-27 Chunked brick meshes. A planted brick rebuilt and re-uploaded
+  the whole world mesh (Golden Gate: 964k triangles, 108 MB). Bricks now
+  live in 32-unit 3D chunks (`client::world_chunks`) sharing one uploaded
+  material palette (surfaces, all 77 prints, blended copies); the network
+  bridge keeps a bounded `WorldLog` of changed brick ids per replica
+  revision, so the chunk builder, the build-tool query mirror and the
+  prediction collision mirror touch only changed bricks. Chunks carry
+  bounds and are frustum culled. `perf_probe`
+  on Golden Gate (machine under other builds, so absolute times are noisy):
+  one plant rebuilds one chunk in ~24 ms off-thread (whole world in the same
+  run: 360-1200 ms) and uploads 3.6 MB in ~2 ms; building query sync 20 ms
+  to 0.04 ms; collision mirror 17-60 ms to 2 ms; frames p50 spawn 6.2 to
+  1.9-4.5 ms, overview 20 to 4-6 ms. Chunked renders match the whole-world
+  render (0 and 9 of 2.07M pixels differ; PNGs beside the probe report).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

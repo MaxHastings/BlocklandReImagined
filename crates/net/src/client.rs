@@ -23,6 +23,9 @@ enum Incoming {
 pub enum ClientEvent {
     Updated {
         world_changed: bool,
+        /// Brick ids the delta added, replaced or removed.
+        changed_bricks: Vec<u64>,
+        palette_changed: bool,
     },
     Pose(OwnerId),
     Vehicle(u64),
@@ -253,8 +256,14 @@ impl Client {
             Incoming::Reliable(message) => match *message {
                 Message::Update(delta) => {
                     let world_changed = !delta.bricks.is_empty() || delta.palette.is_some();
+                    let changed_bricks = delta.bricks.keys().copied().collect();
+                    let palette_changed = delta.palette.is_some();
                     self.replica.update(delta)?;
-                    Ok(ClientEvent::Updated { world_changed })
+                    Ok(ClientEvent::Updated {
+                        world_changed,
+                        changed_bricks,
+                        palette_changed,
+                    })
                 }
                 Message::Reply { sequence, result } => Ok(ClientEvent::Reply { sequence, result }),
                 Message::Notice(notice) => Ok(ClientEvent::Notice(notice)),

@@ -45,7 +45,9 @@ const CORRECTION_RATE: f32 = 14.0;
 pub struct Motion {
     mirror: Option<CollisionMirror>,
     predictor: Option<Predictor>,
-    mirrored: Option<Arc<PublicWorld>>,
+    /// The replica world the collision mirror matches, with its change log
+    /// and revision.
+    mirrored: Option<(Arc<PublicWorld>, Arc<crate::network::WorldLog>, u64)>,
     owner: OwnerId,
     accumulator: f32,
     previous: Option<PlayerState>,
@@ -119,14 +121,36 @@ impl Motion {
         if self
             .mirrored
             .as_ref()
-            .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
+            .is_none_or(|(old, _, _)| !Arc::ptr_eq(old, &view.world))
         {
-            if let Some(predictor) = &mut self.predictor {
-                predictor.sync_world(&view.world.bricks)?;
-            } else if let Some(mirror) = &mut self.mirror {
-                mirror.sync(&view.world.bricks)?;
+            // Sync only the bricks the replica logged since the mirrored
+            // revision; without that history, compare every brick.
+            let changes = self
+                .mirrored
+                .as_ref()
+                .filter(|(_, log, _)| Arc::ptr_eq(log, &view.world_log))
+                .and_then(|(_, log, revision)| log.between(*revision, view.world_revision));
+            let bricks = &view.world.bricks;
+            match (&mut self.predictor, &mut self.mirror, changes) {
+                (Some(predictor), _, Some(changes)) => {
+                    predictor.sync_world_changes(bricks, changes.bricks)?;
+                }
+                (Some(predictor), _, None) => {
+                    predictor.sync_world(bricks)?;
+                }
+                (None, Some(mirror), Some(changes)) => {
+                    mirror.sync_changes(bricks, changes.bricks)?;
+                }
+                (None, Some(mirror), None) => {
+                    mirror.sync(bricks)?;
+                }
+                (None, None, _) => {}
             }
-            self.mirrored = Some(view.world.clone());
+            self.mirrored = Some((
+                view.world.clone(),
+                view.world_log.clone(),
+                view.world_revision,
+            ));
         }
         for (owner, pose) in &view.poses {
             self.observe_clock(pose.tick);

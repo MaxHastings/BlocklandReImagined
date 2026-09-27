@@ -202,13 +202,31 @@ impl Building {
     /// palette and player-pose changes never rebuild map physics or the index.
     /// Return whether query geometry changed (not whether any world field did).
     pub fn sync_world(&mut self, world: &PublicWorld) -> Result<bool> {
+        self.sync_world_changes(world, None)
+    }
+    /// As `sync_world`; `known` lists every brick that may differ from the
+    /// last synced world, so a brick plant costs one brick, not the world.
+    pub fn sync_world_changes(
+        &mut self,
+        world: &PublicWorld,
+        known: Option<&crate::network::WorldChanges>,
+    ) -> Result<bool> {
         ensure!(
             !world.palette.is_empty() && world.palette.len() <= 256,
             "Invalid world palette"
         );
+        let candidates: Box<dyn Iterator<Item = (&u64, &Brick)>> = match known {
+            Some(known) => Box::new(
+                known
+                    .bricks
+                    .iter()
+                    .filter_map(|id| world.bricks.get_key_value(id)),
+            ),
+            None => Box::new(world.bricks.iter()),
+        };
         // Validate all changed candidates first: malformed updates are atomic.
         let mut changed = Vec::new();
-        for (&id, brick) in &world.bricks {
+        for (&id, brick) in candidates {
             if self
                 .bricks
                 .get(&id)
@@ -226,12 +244,20 @@ impl Building {
                 changed.push((id, brick.clone(), Bounds::new(brick, &definition.mesh)?));
             }
         }
-        let removed: Vec<_> = self
-            .bricks
-            .keys()
-            .filter(|id| !world.bricks.contains_key(id))
-            .copied()
-            .collect();
+        let removed: Vec<_> = match known {
+            Some(known) => known
+                .bricks
+                .iter()
+                .filter(|id| self.bricks.contains_key(id) && !world.bricks.contains_key(id))
+                .copied()
+                .collect(),
+            None => self
+                .bricks
+                .keys()
+                .filter(|id| !world.bricks.contains_key(id))
+                .copied()
+                .collect(),
+        };
         let dirty = !changed.is_empty() || !removed.is_empty();
         for id in removed {
             self.bricks.remove(&id);

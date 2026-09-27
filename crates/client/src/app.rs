@@ -30,7 +30,7 @@ use bri_ui::{
 use bri_vehicles::schema::SeatRole;
 use glam::Vec3;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
@@ -48,12 +48,23 @@ struct Prepared {
     terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     meshes: Arc<Meshes>,
     materials: Arc<crate::materials::BrickMaterials>,
+    palette: Arc<crate::world_chunks::BrickPalette>,
     building: crate::building::Building,
     mirror: bri_sim::prediction::CollisionMirror,
 }
+/// A background chunk update: the replica revision it reached, and the
+/// chunk state handed back with the rebuilt chunks.
 type WorldRender = (
     Arc<bri_net::protocol::PublicWorld>,
-    std::result::Result<SceneData, String>,
+    u64,
+    Arc<network::WorldLog>,
+    std::result::Result<
+        (
+            crate::world_chunks::ChunkedWorld,
+            crate::world_chunks::ChunkChanges,
+        ),
+        String,
+    >,
 );
 struct WorldJob {
     receiver: mpsc::Receiver<WorldRender>,
@@ -134,9 +145,17 @@ pub struct App {
     gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
     depth: Option<(wgpu::Texture, (u32, u32))>,
     meshes: Option<Arc<Meshes>>,
-    cpu_world: Option<SceneData>,
-    gpu_world: Option<GpuScene>,
+    /// Replicated bricks as independently rebuilt chunks sharing one
+    /// uploaded material palette. A running job owns `chunked`.
+    palette: Option<Arc<crate::world_chunks::BrickPalette>>,
+    gpu_palette: Option<GpuScene>,
+    chunked: crate::world_chunks::ChunkedWorld,
+    cpu_chunks: HashMap<crate::world_chunks::ChunkKey, SceneData>,
+    gpu_chunks: HashMap<crate::world_chunks::ChunkKey, GpuScene>,
+    chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
     world_source: Option<Arc<bri_net::protocol::PublicWorld>>,
+    world_revision: u64,
+    world_log: Option<Arc<network::WorldLog>>,
     world_job: Option<WorldJob>,
     load_limit: Arc<tokio::sync::Semaphore>,
     materials: Option<Arc<crate::materials::BrickMaterials>>,
@@ -145,6 +164,8 @@ pub struct App {
     tool_ui: crate::tool_ui::ToolUi,
     dialog_epoch: u64,
     query_source: Option<Arc<bri_net::protocol::PublicWorld>>,
+    /// The replica log and revision `query_source` came from.
+    query_log: Option<(Arc<network::WorldLog>, u64)>,
     ghost_gpu: Option<GpuScene>,
     ghost_uploaded: u64,
     avatar_assets: Arc<crate::avatar::AvatarAssets>,
@@ -660,9 +681,15 @@ impl App {
             gpu_terrain: Vec::new(),
             depth: None,
             meshes: None,
-            cpu_world: None,
-            gpu_world: None,
+            palette: None,
+            gpu_palette: None,
+            chunked: Default::default(),
+            cpu_chunks: HashMap::new(),
+            gpu_chunks: HashMap::new(),
+            chunk_uploads: BTreeSet::new(),
             world_source: None,
+            world_revision: 0,
+            world_log: None,
             world_job: None,
             load_limit: Arc::new(tokio::sync::Semaphore::new(2)),
             materials: None,
@@ -671,6 +698,7 @@ impl App {
             tool_ui,
             dialog_epoch: 0,
             query_source: None,
+            query_log: None,
             ghost_gpu: None,
             ghost_uploaded: u64::MAX,
             avatar_assets,
@@ -773,9 +801,15 @@ impl App {
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.meshes = None;
-        self.cpu_world = None;
-        self.gpu_world = None;
+        self.palette = None;
+        self.gpu_palette = None;
+        self.chunked = Default::default();
+        self.cpu_chunks.clear();
+        self.gpu_chunks.clear();
+        self.chunk_uploads.clear();
         self.world_source = None;
+        self.world_revision = 0;
+        self.world_log = None;
         self.world_job = None;
         self.materials = None;
         self.building = None;
@@ -787,6 +821,7 @@ impl App {
         self.ui.core.minigames = Default::default();
         self.tool_ui.invalidate();
         self.query_source = None;
+        self.query_log = None;
         self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
@@ -1109,6 +1144,7 @@ impl App {
                     let materials = Arc::new(crate::materials::BrickMaterials::load(
                         &paths.brick_materials,
                     )?);
+                    let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
                     let mut mirror = bri_sim::prediction::CollisionMirror::new(
                         loaded.simulation.definitions.clone(),
                         loaded.query_colliders.clone(),
@@ -1147,6 +1183,7 @@ impl App {
                             terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                             meshes,
                             materials,
+                            palette,
                             building,
                             mirror,
                         },
@@ -1389,6 +1426,7 @@ impl App {
                 let materials = Arc::new(crate::materials::BrickMaterials::load(
                     &paths.brick_materials,
                 )?);
+                let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
                 let mut mirror = bri_sim::prediction::CollisionMirror::new(
                     definitions.clone(),
                     native_map.colliders.clone(),
@@ -1422,6 +1460,7 @@ impl App {
                     terrain: visual.terrain.into_iter().map(Arc::new).collect(),
                     meshes,
                     materials,
+                    palette,
                     building,
                     mirror,
                 })
@@ -1944,6 +1983,8 @@ impl App {
             self.cpu_terrain = prepared.terrain;
             self.meshes = Some(prepared.meshes);
             self.materials = Some(prepared.materials);
+            self.palette = Some(prepared.palette);
+            self.gpu_palette = None;
             self.building = Some(prepared.building);
             self.motion.install(prepared.mirror);
             self.building
@@ -2008,7 +2049,12 @@ impl App {
                 .as_ref()
                 .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
         {
-            if let Err(error) = building.sync_world(&view.world) {
+            let known = self
+                .query_log
+                .as_ref()
+                .filter(|(log, _)| self.query_source.is_some() && Arc::ptr_eq(log, &view.world_log))
+                .and_then(|(log, revision)| log.between(*revision, view.world_revision));
+            if let Err(error) = building.sync_world_changes(&view.world, known.as_ref()) {
                 self.ui.apply_session(
                     a.id,
                     UiUpdate::Connection(ConnectionState::Failed {
@@ -2037,25 +2083,34 @@ impl App {
                 self.ui.apply_session(a.id, UiUpdate::Colorset(colors));
             }
             self.query_source = Some(view.world.clone());
+            self.query_log = Some((view.world_log.clone(), view.world_revision));
             self.ghost_uploaded = u64::MAX;
             self.brick_debris.sync_world(&view.world);
             self.hidden_uploaded = None;
         }
         if let Some(job) = &self.world_job
-            && let Ok((source, result)) = job.receiver.try_recv()
+            && let Ok((source, revision, log, result)) = job.receiver.try_recv()
         {
             self.world_job = None;
             match result {
-                Ok(scene)
-                    if a.view
-                        .as_ref()
-                        .is_some_and(|view| Arc::ptr_eq(&source, &view.world)) =>
-                {
-                    self.cpu_world = Some(scene);
+                // Always applied: chunk state is consistent with `source`, and
+                // a newer replica is reached by the next incremental update.
+                Ok((chunked, changes)) => {
+                    self.chunked = chunked;
+                    for (key, scene) in changes {
+                        if let Some(scene) = scene {
+                            self.cpu_chunks.insert(key, scene);
+                            self.chunk_uploads.insert(key);
+                        } else {
+                            self.cpu_chunks.remove(&key);
+                            self.gpu_chunks.remove(&key);
+                            self.chunk_uploads.remove(&key);
+                        }
+                    }
                     self.world_source = Some(source);
-                    self.gpu_world = None;
+                    self.world_revision = revision;
+                    self.world_log = Some(log);
                 }
-                Ok(_) => {} // superseded while the background render build ran
                 Err(reason) => {
                     self.ui.apply_session(
                         a.id,
@@ -2067,8 +2122,8 @@ impl App {
             }
         }
         if self.world_job.is_none()
-            && let (Some(meshes), Some(materials), Some(view)) =
-                (&self.meshes, &self.materials, &a.view)
+            && let (Some(meshes), Some(materials), Some(palette), Some(view)) =
+                (&self.meshes, &self.materials, &self.palette, &a.view)
             && self
                 .world_source
                 .as_ref()
@@ -2076,7 +2131,17 @@ impl App {
         {
             let meshes = meshes.clone();
             let materials = materials.clone();
+            let palette = palette.clone();
             let world = view.world.clone();
+            let (revision, log) = (view.world_revision, view.world_log.clone());
+            // Compare only the bricks the replica reports changed since the
+            // applied revision; without that history, compare whole worlds.
+            let known = self
+                .world_log
+                .as_ref()
+                .filter(|applied| Arc::ptr_eq(applied, &log))
+                .and_then(|log| log.between(self.world_revision, revision));
+            let mut chunked = std::mem::take(&mut self.chunked);
             let (send, receive) = mpsc::sync_channel(1);
             let load_limit = self.load_limit.clone();
             let task = self.runtime.spawn(async move {
@@ -2086,17 +2151,21 @@ impl App {
                 let source = world.clone();
                 let result = tokio::task::spawn_blocking(move || {
                     let _permit = permit;
-                    crate::world_scene::build_world_scene_materials(
-                        &world,
-                        &meshes,
-                        4_000_000,
-                        Some(&materials),
-                    )
-                    .map_err(|e| format!("{e:#}"))
+                    chunked
+                        .update(
+                            world,
+                            known.as_ref(),
+                            &meshes,
+                            &palette,
+                            Some(&materials),
+                            4_000_000,
+                        )
+                        .map(|changes| (chunked, changes))
+                        .map_err(|e| format!("{e:#}"))
                 })
                 .await
                 .unwrap_or_else(|error| Err(error.to_string()));
-                let _ = send.send((source, result));
+                let _ = send.send((source, revision, log, result));
             });
             self.world_job = Some(WorldJob {
                 receiver: receive,
@@ -3437,7 +3506,8 @@ impl PlatformApp for App {
         )?);
         self.gpu_scene = None;
         self.gpu_terrain.clear();
-        self.gpu_world = None;
+        self.gpu_palette = None;
+        self.gpu_chunks.clear();
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
         self.debris_models.clear();
@@ -3461,7 +3531,8 @@ impl PlatformApp for App {
         self.effects_renderer = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
-        self.gpu_world = None;
+        self.gpu_palette = None;
+        self.gpu_chunks.clear();
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
         self.debris_models.clear();
@@ -3527,11 +3598,19 @@ impl PlatformApp for App {
                 })
                 .collect::<Result<_>>()?;
         }
-        if self.gpu_world.is_none()
-            && let Some(world) = &self.cpu_world
-            && !world.indices.is_empty()
+        if self.gpu_palette.is_none()
+            && let Some(palette) = &self.palette
         {
-            self.gpu_world = Some(renderer.upload(frame.device, frame.queue, world)?);
+            self.gpu_palette = Some(renderer.upload(frame.device, frame.queue, &palette.scene)?);
+            self.chunk_uploads.extend(self.cpu_chunks.keys().copied());
+        }
+        if let Some(palette) = &self.gpu_palette {
+            for key in std::mem::take(&mut self.chunk_uploads) {
+                if let Some(chunk) = self.cpu_chunks.get(&key) {
+                    self.gpu_chunks
+                        .insert(key, renderer.upload_chunk(frame.device, chunk, palette)?);
+                }
+            }
         }
         if let Some(building) = &self.building
             && self.ghost_uploaded != building.ghost_generation()
@@ -3761,9 +3840,7 @@ impl PlatformApp for App {
             .create_view(&Default::default());
         let [r, g, b, a] = scene.clear_color.map(f64::from);
         let mut scenes = vec![self.gpu_scene.as_ref().unwrap()];
-        if let Some(world) = &self.gpu_world {
-            scenes.push(world);
-        }
+        scenes.extend(self.gpu_chunks.values());
         if let Some(ghost) = &self.ghost_gpu {
             scenes.push(ghost);
         }
