@@ -69,13 +69,17 @@ impl Session {
         self.weapons.spawn_drop(item, at, velocity)?;
         Ok(())
     }
-    pub(super) fn step_items(&mut self) -> Result<()> {
+    /// Bring the item spawners up to date with the bricks changed since the
+    /// last network publish. Commands change bricks before a tick and the
+    /// tick's own rules (layout swaps, streamed loads, events) change them
+    /// after `step_items`, so this runs at both ends of `step`: the publish
+    /// that follows a tick clears the dirty set. Reconciliation is idempotent
+    /// and never resets an unchanged item's respawn clock.
+    pub(super) fn reconcile_items(&mut self) -> Result<()> {
         if self.item_spawners.bounds.is_empty() {
             return Ok(());
         }
         let tick = self.simulation.state().tick;
-        // Replication retains dirty IDs until a network publish. Reconciliation is
-        // idempotent and never resets an unchanged item's respawn clock.
         for &id in &self.dirty {
             self.item_spawners.reconcile(
                 id,
@@ -84,6 +88,14 @@ impl Session {
                 tick,
             )?;
         }
+        Ok(())
+    }
+    pub(super) fn step_items(&mut self) -> Result<()> {
+        if self.item_spawners.bounds.is_empty() {
+            return Ok(());
+        }
+        let tick = self.simulation.state().tick;
+        self.reconcile_items()?;
         let mut dynamic = crate::item_spawners::ContactIndex::default();
         for drop in self.weapons.drops() {
             if let Some(shape) = self.item_spawners.bounds.get(&drop.item) {

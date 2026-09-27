@@ -1427,6 +1427,7 @@ impl Session {
         self.step_build_load()?;
         let changed = self.dirty.clone();
         self.step_events(&changed)?;
+        self.reconcile_items()?;
         Ok(())
     }
     pub fn snapshot(&self) -> Snapshot {

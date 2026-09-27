@@ -20,6 +20,9 @@ mod common;
 use common::*;
 
 fn session(bricks: Vec<Brick>, wall: bool) -> Session {
+    session_on(bricks, wall, "test")
+}
+fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -58,7 +61,7 @@ fn session(bricks: Vec<Brick>, wall: bool) -> Session {
     };
     let mut world = World::new(
         "Tools".into(),
-        "test".into(),
+        map_id.into(),
         vec![[1.0; 4], [0.2, 0.3, 0.4, 0.5]],
     );
     for brick in bricks {
@@ -77,6 +80,20 @@ fn session(bricks: Vec<Brick>, wall: bool) -> Session {
     s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
         .unwrap();
     s
+}
+fn core_tool_bounds() -> std::collections::BTreeMap<String, bri_weapons::ItemBounds> {
+    bri_weapons::CORE_TOOLS
+        .into_iter()
+        .map(|id| {
+            (
+                id.into(),
+                bri_weapons::ItemBounds {
+                    min: [-0.1; 3],
+                    max: [0.1; 3],
+                },
+            )
+        })
+        .collect()
 }
 fn catalog() -> ToolCatalog {
     ToolCatalog {
@@ -1259,4 +1276,53 @@ fn player_datablock_and_scale_events_reshape_the_player() {
         s.take_event_diagnostics()
     );
     assert_eq!(player.scale, 1.5);
+}
+
+#[test]
+fn tutorial_layout_swaps_keep_their_item_spawns_between_publishes() {
+    use bri_sim::tutorial::{MAP_ID, TutorialMap, Zone, ZoneKind};
+    let mut s = session_on(vec![], false, MAP_ID);
+    s.set_tool_catalog(catalog()).unwrap();
+    s.set_item_bounds(core_tool_bounds()).unwrap();
+    // Part 1 carries the break room's hammer on a brick (`+-ITEM Hammer`).
+    let mut part1 = World::new("Tutorial_Part1".into(), MAP_ID.into(), vec![[1.0; 4]]);
+    let mut pad = Brick::new(ContentRef::Resolved("plate".into()), [4.5, 0.1, -4.25], 0);
+    pad.item_spawn.item = Some(ContentRef::Resolved(bri_weapons::CORE_TOOLS[0].into()));
+    part1.bricks.insert(1, pad);
+    part1.next_brick_id = 2;
+    // Spawning in the look zone installs part 1, on a tutorial tick.
+    let look = Zone {
+        kind: ZoneKind::Look,
+        goal: "Look".into(),
+        bind: String::new(),
+        task: String::new(),
+        min: Vec3::new(-2.0, -1.0, -2.0),
+        max: Vec3::new(2.0, 3.0, 2.0),
+    };
+    s.set_tutorial(TutorialMap {
+        zones: vec![look],
+        look_target: Vec3::new(0.0, 0.0, 10.0),
+        part1,
+        part2: World::new("Tutorial_Part2".into(), MAP_ID.into(), vec![[1.0; 4]]),
+        targets: vec![],
+        targets_end_ms: 0,
+    })
+    .unwrap();
+    s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    // The network server publishes, and so clears the dirty bricks, after
+    // every sixth tick: the same ticks the tutorial's rules run on.
+    for _ in 0..60 {
+        s.step().unwrap();
+        if s.simulation().state().tick.is_multiple_of(6) {
+            s.take_dirty();
+        }
+    }
+    let items: Vec<String> = s
+        .weapon_view()
+        .static_items
+        .into_iter()
+        .map(|i| i.item)
+        .collect();
+    assert_eq!(items, [bri_weapons::CORE_TOOLS[0]]);
 }
