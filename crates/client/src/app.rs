@@ -261,6 +261,10 @@ pub struct App {
     world_job: Option<WorldJob>,
     graphics: crate::graphics::Graphics,
     load_limit: Arc<tokio::sync::Semaphore>,
+    /// Rebuild GPU renderers before the next frame (the map changed).
+    gpu_restart: bool,
+    /// Map of the installed scene.
+    scene_map: Option<String>,
     materials: Option<Arc<crate::materials::BrickMaterials>>,
     building: Option<crate::building::Building>,
     pending_actions: BTreeMap<RequestId, PendingAction>,
@@ -650,6 +654,15 @@ impl App {
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref())
     }
+    /// Map whose scene is installed and drawn.
+    pub fn scene_map(&self) -> Option<&str> {
+        self.scene_map.as_deref()
+    }
+    /// The local player as presented this frame (prediction included).
+    pub fn presented_local(&self) -> Option<&bri_sim::player::PlayerState> {
+        let owner = self.network_view()?.owner;
+        self.motion.presented().get(&owner)
+    }
     pub fn load(content_root: &Path, state_dir: &Path, size: (u32, u32)) -> Result<Self> {
         Self::load_with_audio(content_root, state_dir, size, bri_audio::OutputKind::Null)
     }
@@ -832,6 +845,8 @@ impl App {
             world_job: None,
             graphics,
             load_limit: Arc::new(tokio::sync::Semaphore::new(2)),
+            gpu_restart: false,
+            scene_map: None,
             materials: None,
             building: None,
             pending_actions: BTreeMap::new(),
@@ -913,6 +928,7 @@ impl App {
     }
     fn disconnect(&mut self) {
         self.ui.core.name_tags.clear();
+        self.scene_map = None;
         self.abilities = Default::default();
         self.brick_hand = None;
         self.foliage.clear();
@@ -2197,6 +2213,13 @@ impl App {
             return Ok(());
         }
         if let Ok(prepared) = a.scene.try_recv() {
+            if self.cpu_scene.is_some() {
+                // A map change: renderers keep per-map sky and terrain state,
+                // so rebuild them for the new map like a fresh join.
+                self.gpu_stopped();
+                self.gpu_restart = true;
+            }
+            self.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
             self.weather.set_map(&prepared.map_id, prepared.waters)?;
             self.cpu_scene = Some(prepared.scene);
@@ -3997,11 +4020,13 @@ impl PlatformApp for App {
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
-        // Anti-aliasing changes every world pipeline and attachment.
-        if self
-            .renderer
-            .as_ref()
-            .is_some_and(|r| r.samples() != self.graphics.samples)
+        // Anti-aliasing changes every world pipeline and attachment; a map
+        // change needs renderers built for the new map.
+        if std::mem::take(&mut self.gpu_restart)
+            || self
+                .renderer
+                .as_ref()
+                .is_some_and(|r| r.samples() != self.graphics.samples)
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }
