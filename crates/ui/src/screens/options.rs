@@ -20,6 +20,9 @@ const ANISOTROPY: &str = "$pref::OpenGL::anisotropy";
 const SHADOW_QUALITY: &str = "$pref::ShadowQuality";
 /// Not a v20 setting: 4x MSAA, on unless turned off.
 const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
+/// Not a v20 setting (v20 shadowed only players, vehicles and items): bricks
+/// cast sun shadows too, off unless turned on.
+const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
 /// `$pref::Player::defaultFov`, the normal camera FOV in degrees (v20
 /// default 90). The B4v21 patch of the reference v20 install adds its slider.
@@ -37,6 +40,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
     "$pref::OpenGL::useGLNearest",
     ANTI_ALIASING,
+    BRICK_SHADOWS,
     "$Pref::Audio::PlayMusic",
     "$Pref::Audio::MenuSounds",
     "$Pref::Audio::PlayBrickPlantSound",
@@ -420,7 +424,8 @@ impl Options {
                 bottoms.insert(n, close_rows(v, n));
             }
         }
-        // Anti-aliasing has no v20 control; it joins Display Settings.
+        // Anti-aliasing and brick shadows have no v20 control; they join
+        // Display Settings.
         let vsync = v.walk().find(|&n| {
             v.node(n)
                 .ctrl
@@ -440,6 +445,13 @@ impl Options {
             c.position = [x, y];
             c.extent = [110, 23];
             c.command = None;
+            v.add(parent, c.clone());
+            // Brick Shadows follows it: the authored Shadow Quality section
+            // is too narrow and clipped for another row.
+            c.name = Some("OptGraphicsBrickShadowsToggle".into());
+            c.variable = Some(BRICK_SHADOWS.into());
+            c.text = Some("Brick Shadows".into());
+            c.position[1] += c.extent[1] - 3;
             v.add(parent, c);
         }
         // Audio: Volume takes the driver section's place.
@@ -1450,6 +1462,9 @@ mod tests {
         }
         let sharp = audio_node(&s, "$pref::OpenGL::useGLNearest");
         assert!(s.view.node(sharp).state.visible && !s.view.bool_value(sharp));
+        let bricks = audio_node(&s, BRICK_SHADOWS);
+        assert!(s.view.node(bricks).state.visible && !s.view.bool_value(bricks));
+        toggle_audio(&mut s, &mut ui, BRICK_SHADOWS, true);
         toggle_audio(&mut s, &mut ui, ANTI_ALIASING, false);
         toggle_audio(&mut s, &mut ui, "$pref::OpenGL::useGLNearest", true);
         s.slider("SliderGraphicsAnisotropy", 0.5);
@@ -1459,6 +1474,7 @@ mod tests {
         let p = &ui.core.prefs;
         assert_eq!(p.i64_or(SHADOW_QUALITY, 0), 3);
         assert!(!p.bool_or(ANTI_ALIASING, true));
+        assert!(p.bool_or(BRICK_SHADOWS, false));
         assert!(p.bool_or("$pref::OpenGL::useGLNearest", false));
         assert!(p.bool_or("$pref::OpenGL::textureTrilinear", false));
         assert_eq!(p.f32_or(ANISOTROPY, 0.0), 0.5);
