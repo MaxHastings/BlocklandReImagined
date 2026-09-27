@@ -853,11 +853,14 @@ impl Session {
                     player,
                     clear_event_schedules,
                     reset_owned_vehicles,
-                    ..
+                    clear_spawned_objects,
                 } => {
                     if let Some(owner) = self.owner_of(player) {
                         if clear_event_schedules {
                             self.cancel_owner_events(owner);
+                        }
+                        if clear_spawned_objects {
+                            self.clear_event_projectiles(owner);
                         }
                         if reset_owned_vehicles {
                             self.reset_owned_vehicles(owner);

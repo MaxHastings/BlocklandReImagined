@@ -54,13 +54,13 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 18 | Damage type scaling | `$Damage::VehicleDamageScale` (Gun 0.2, Akimbo 0.05, Arrow 0.5, Sword 0.75, Hammer 0) | Ignored | Fixed: weapons-pack-008 carries `vehicle_scale` |
 | 19 | Passenger protection | `protectPassengersDirect/Radius/Burn` (Jeep radius; Tank all three) | Flags imported, never applied | Fixed |
 | 20 | Explosion upward kick | `impulseVertical` (2000 on tank, jeep and cannon explosions) | Not converted | Fixed: weapons-pack-008 `impulse_vertical`, applied in radius impulse |
-| 21 | Minigame cleanup | Joining, leaving or resetting off LAN runs `ClearEventSchedules` and `resetVehicles`; the owner's spawn bricks eject riders who may no longer use them | Both effects ignored | Fixed for event schedules, vehicle reset and ejection; clearing event-spawned projectiles is Open (no projectile removal API) |
+| 21 | Minigame cleanup | Joining, leaving or resetting off LAN runs `ClearEventSchedules` and `resetVehicles`; the owner's spawn bricks eject riders who may no longer use them | Both effects ignored | Fixed: event schedules, vehicle reset, ejection and the owner's event-spawned projectiles |
 | 22 | Horse animation | Run, back, side, jump, root DSQ threads | Server emits them; the client draws the horse's rest pose | Handed off |
 | 23 | Horse Ray | Turns a player into a rideable horse others can board | Event dropped | Handed off |
-| 24 | Barrel pitch visual | Turret and cannon barrels tilt with the gunner's look | Aim pitch is replicated but no node is posed | Open |
-| 25 | Mounted look limits | `setLookLimits(lookUpLimit, lookDownLimit)` while seated | Not applied; the argument semantics are engine-side | Open |
-| 26 | Vehicle camera detail | `cameraMaxDist`, `cameraOffset`, `cameraTilt`, `cameraLag` | Only `cameraMaxDist` | Open |
-| 27 | Whiteout on ski crash | `setWhiteout(time/7000)` | Not drawn | Open |
+| 24 | Barrel pitch visual | Turret and cannon barrels tilt with the gunner's look | Aim pitch was replicated but no node was posed | Fixed: the authored `look` clip poses the barrel |
+| 25 | Mounted look limits | `setLookLimits(lookUpLimit, lookDownLimit)` while seated | Not applied | Fixed: pitch kept inside the limits, read as fractions of the look range from down (0) to up (1), since `setLookLimits(1, 0)` is the unlimited reset; the Tank gunner seat stays unlimited |
+| 26 | Vehicle camera detail | `cameraMaxDist`, `cameraOffset`, `cameraTilt`, `cameraLag` | Only `cameraMaxDist` | Fixed: pivot height, tilt and lag from vehicles-pack-011 |
+| 27 | Whiteout on ski crash | `setWhiteout(time/7000)` | Not drawn | Fixed: white flash of time/7 when a tumble starts, fading one unit per second (the fade rate is inferred) |
 | 28 | Tire forces | Torque lateral/longitudinal tire springs, relaxation, anti-sway | Rapier raycast vehicle with the authored spring and friction | Accepted adaptation, feel for Maxwell's playtest |
 | 29 | Flying Wheeled lift and surfaces | Blockland engine code | Approximation with the authored thrust, lift and torques | Accepted adaptation |
 | 30 | HoverVehicle | No v20 content uses it | Not implemented | Not needed |
@@ -85,7 +85,8 @@ the datablock's speeds, run force, jump, step height, slope limit, drag and
 buoyancy. Impulses change their velocity by impulse / mass, like
 `Player::applyImpulse`.
 
-**Data.** vehicles-pack-010 (schema 4) adds `strafe_steering`, `look_pitch`
+**Data.** vehicles-pack-011 (schema 5) adds the chase camera and seated look
+limits on top of vehicles-pack-010 (schema 4), which added `strafe_steering`, `look_pitch`
 and `underwater_speeds` and the FlyingVehicle sphere inertia.
 weapons-pack-008 (schema 3) adds `Explosion::impulse_vertical` and
 `DamageType::vehicle_scale`; apart from those two fields it is identical to

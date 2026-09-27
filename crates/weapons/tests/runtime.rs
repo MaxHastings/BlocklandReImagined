@@ -927,3 +927,19 @@ fn scripted_arm_poses_follow_the_original_on_mount_threads() {
     );
     assert_eq!(scripted_arm_pose("v20.image.gunimage", "Ready"), None);
 }
+#[test]
+fn removed_projectiles_vanish_without_exploding() {
+    let mut w = world("gunitem");
+    let id = w
+        .spawn(
+            "v20.projectile.tankshellprojectile",
+            ActorId(1),
+            Vec3::ZERO,
+            Vec3::X,
+            1.0,
+        )
+        .unwrap();
+    assert!(w.remove_projectile(id));
+    assert!(!w.remove_projectile(id));
+    assert!(w.projectiles().next().is_none());
+}

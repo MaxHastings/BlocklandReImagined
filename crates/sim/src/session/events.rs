@@ -44,6 +44,9 @@ pub(super) struct Events {
     pub(super) projectile_responses: BTreeMap<BrickId, bri_weapons::ContactResponse>,
     /// Bricks killed with `fakeKillBrick` and the tick they come back.
     pub(super) respawns: BTreeMap<BrickId, u64>,
+    /// Projectiles events spawned, by the owner of the brick whose quota
+    /// they count against (`QuotaObject`), newest last.
+    pub(super) spawned: BTreeMap<OwnerId, VecDeque<u64>>,
     diagnostics: VecDeque<String>,
 }
 
@@ -115,6 +118,12 @@ impl Session {
             for brick in &self.events.installed {
                 world.cancel_source(id(*brick), ev::CancelMode::All);
             }
+        }
+    }
+    /// `ClearEventObjects`: remove the projectiles the owner's bricks spawned.
+    pub(super) fn clear_event_projectiles(&mut self, owner: OwnerId) {
+        for projectile in self.events.spawned.remove(&owner).unwrap_or_default() {
+            self.weapons.remove_projectile(projectile);
         }
     }
     /// `GameConnection::ClearEventSchedules`: cancel the owner's pending events.
@@ -574,15 +583,31 @@ impl EventHost<'_> {
         scale: f32,
     ) {
         let source = ActorId(self.instigator(d));
-        if let Err(error) =
-            self.session
-                .weapons
-                .spawn(projectile, source, at, velocity, scale.clamp(0.1, 10.0))
+        match self
+            .session
+            .weapons
+            .spawn(projectile, source, at, velocity, scale.clamp(0.1, 10.0))
         {
-            note(
+            Ok(id) => {
+                if let Some(owner) = self
+                    .session
+                    .simulation
+                    .state()
+                    .bricks
+                    .get(&d.source.index)
+                    .map(|b| b.owner)
+                {
+                    let spawned = self.session.events.spawned.entry(owner).or_default();
+                    if spawned.len() == 256 {
+                        spawned.pop_front();
+                    }
+                    spawned.push_back(id);
+                }
+            }
+            Err(error) => note(
                 &mut self.session.events.diagnostics,
                 format!("Event projectile {projectile}: {error:#}"),
-            );
+            ),
         }
     }
     fn random3(&mut self) -> [f32; 3] {

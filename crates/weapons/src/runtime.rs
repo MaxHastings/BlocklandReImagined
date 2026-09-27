@@ -479,6 +479,14 @@ impl WeaponsWorld {
         );
         Ok(())
     }
+    /// Remove one live projectile without exploding it (`killObjects`).
+    pub fn remove_projectile(&mut self, projectile: u64) -> bool {
+        let removed = self.projectiles.remove(&projectile).is_some();
+        if removed {
+            self.events.push(Event::Removed { projectile });
+        }
+        removed
+    }
     pub fn remove_actor(&mut self, id: ActorId) {
         if let Some(mut a) = self.actors.remove(&id) {
             self.unmount(id, &mut a);

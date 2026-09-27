@@ -1876,8 +1876,10 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   fields and main's bae2359 importer fix). Evidence: `cargo test -p
   bri-vehicles` (28 native tests), `cargo test -p bri-sim --test vehicles --
   --ignored` (7 of 7).
-  Open: barrel pitch pose, seated look limits, vehicle camera offset/tilt/lag,
-  ski-crash whiteout, clearing event-spawned projectiles on minigame change.
+  Follow-up the same day closed the rest: barrels pose their look clip,
+  seated look limits, chase camera offset/tilt/lag (vehicles-pack-011, schema
+  5), the ski-crash whiteout and clearing the owner's event projectiles on
+  minigame change.
 - 2026-09-27 save/load sounds, streamed loads, chat HUD, Tutorial gates
   (net protocol VERSION 17). Server chat lines carry their v20 message type
   (`MessageTag`: MsgUploadStart, MsgUploadEnd, MsgProcessComplete,
