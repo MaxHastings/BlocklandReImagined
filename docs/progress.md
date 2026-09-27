@@ -1684,6 +1684,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `dist/BlocklandReImagined-alpha-2026-09-27-a5`: `-VerifyPackage` verified
   3236 files; `--check` passed (14 maps, 170 brick definitions).
 
+- 2026-09-27 UPnP for Internet hosts (a6). `bri-net::upnp` (igd-next, sync,
+  no hyper) forwards UDP 28000/28050 from the router with a 1 h lease renewed
+  every 20 min (falls back to a permanent lease if required) and removes
+  them when the host stops. The search binds to the default-route interface
+  because Hyper-V/WSL adapters can misroute SSDP. The host gets one chat line:
+  public address, a double/carrier NAT warning, or manual-forwarding advice.
+  Maxwell's own router (192.168.88.1) answers no UPnP search, confirmed by
+  Windows' HNetCfg.NATUPnP too, so it shows the manual advice. Packaged
+  `dist/BlocklandReImagined-alpha-2026-09-27-a6`: `-VerifyPackage` 3236 files;
+  `--check` passed.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
