@@ -110,8 +110,11 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     // Leaving the minigame (after respawning) makes the same fall harmless.
     steps(&mut s, 130);
     s.command(a, 2, Command::Respawn).unwrap();
+    s.take_private_notices();
     s.command(a, 3, Command::MiniGame(MiniGameRequest::End)).unwrap();
     assert!(s.minigame_views().is_empty());
+    assert!(s.take_private_notices().iter().any(|(o, n)| *o == a
+        && matches!(n, Notice::Chat(t) if t.ends_with("The mini-game ended."))));
     let mut sequence = 1000;
     for _ in 0..600 {
         sequence += 1;

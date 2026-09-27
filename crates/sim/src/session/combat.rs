@@ -584,6 +584,15 @@ impl Session {
         };
         let reset = matches!(command, mg::Command::Reset { .. });
         let created = matches!(command, mg::Command::Create { .. });
+        // MiniGameSO::endGame tells every member; they are gone afterwards.
+        let ending: Vec<OwnerId> = if matches!(command, mg::Command::End { .. }) {
+            self.game_of(owner)
+                .and_then(|game| self.minigames.game(game).ok())
+                .map(|g| g.members.iter().filter_map(|&m| self.owner_of(m)).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let effects = self.minigames.execute(command).map_err(|e| {
             anyhow::anyhow!(match e {
                 mg::Error::Cooldown => "Please wait before doing that again".to_string(),
@@ -601,6 +610,12 @@ impl Session {
             self.notify(
                 owner,
                 Notice::Chat(format!("{}Mini-game created.", color_code(5))),
+            );
+        }
+        for member in ending {
+            self.notify(
+                member,
+                Notice::Chat(format!("{}The mini-game ended.", color_code(5))),
             );
         }
         if reset {
