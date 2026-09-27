@@ -32,7 +32,11 @@ fn main() -> Result<()> {
             .iter()
             .find(|n| matches!(n.kind, Kind::Spawn))
             .context("Missing original spawn")?;
-        let spawn = Mat4::from_cols_array(&node.transform).transform_point3(Vec3::ZERO);
+        let authored = Mat4::from_cols_array(&node.transform).transform_point3(Vec3::ZERO);
+        // Players join at the host's collision-checked candidates, never at the
+        // raw marker, which may touch or sit inside authored geometry.
+        let spawn = bri_sim::spawn::candidates(&physics, &native.scene, &PlayerTuning::default())
+            .with_context(|| format!("Spawn candidates in {}", native.scene.name))?[0];
         let mut player = Player::spawn(&mut physics, 1, spawn, PlayerTuning::default())
             .with_context(|| format!("Player spawn in {}", native.scene.name))?;
         for _ in 0..240 {
@@ -100,7 +104,9 @@ fn main() -> Result<()> {
         }
         let crouched = player.state().clone();
         ensure!(crouched.crouched, "Crouch failed");
+        // Measure from the lowest point: the crouch walk may end mid-fall off a ledge.
         let mut jet_rise = 0.0_f32;
+        let mut lowest = crouched.feet[1];
         for _ in 0..120 {
             player.step(
                 &mut physics,
@@ -110,18 +116,22 @@ fn main() -> Result<()> {
                 },
             )?;
             physics.step();
-            jet_rise = jet_rise.max(player.state().feet[1] - crouched.feet[1]);
+            lowest = lowest.min(player.state().feet[1]);
+            jet_rise = jet_rise.max(player.state().feet[1] - lowest);
         }
         ensure!(
             jet_rise > 1.0,
-            "Original map jet failed in {}",
+            "Original map jet failed in {}: rose {jet_rise}",
             native.scene.name
         );
         let camera = player.camera(&physics, true);
         ensure!(camera.is_finite(), "Invalid camera");
-        reports.push(serde_json::json!({"map":native.scene.name,"original_spawn":spawn.to_array(),"settled":settled,"floor_clearance_at_center":clearance,"jump_rise":highest-settled.feet[1],"crouch_end":crouched,"jet_rise":jet_rise,"camera":camera.to_array()}));
+        reports.push(serde_json::json!({"map":native.scene.name,"original_spawn":spawn.to_array(),"settled":settled,"floor_clearance_at_center":clearance,"jump_rise":highest-settled.feet[1],"crouch_end":crouched,"jet_rise":jet_rise,"authored_spawn":authored.to_array(),"camera":camera.to_array()}));
     }
-    ensure!(reports.len() == 3, "Expected three original maps");
+    ensure!(
+        reports.len() == bundle["maps"].as_array().map_or(0, Vec::len),
+        "Every original map must be probed"
+    );
     if let Some(parent) = args[1].parent() {
         std::fs::create_dir_all(parent)?;
     }
