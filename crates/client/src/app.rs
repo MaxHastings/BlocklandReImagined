@@ -3187,16 +3187,38 @@ impl PlatformApp for App {
                         self.mount_heading = Some(heading);
                     }
                 }
+                Self::pose_mounts(
+                    &mut self.mount_meshes,
+                    &self.avatar_assets,
+                    &self.vehicle_assets,
+                    &self.vehicles,
+                    self.animation_time,
+                    view,
+                )?;
                 // Riders sit exactly on their rendered vehicle's seat.
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
                         continue;
                     };
                     if let Some(info) = view.vehicles.get(&vehicle)
-                        && let Some((feet, yaw)) =
+                        && let Some((mut feet, yaw)) =
                             self.vehicles
                                 .seat(&self.vehicle_assets, info, usize::from(seat))
                     {
+                        // A horse's rider rides its animated mount node, rising
+                        // and falling with the gait like v20's `mountObject`.
+                        if let Some(node) = self
+                            .mount_meshes
+                            .get(&vehicle)
+                            .zip(
+                                self.vehicle_assets
+                                    .definition(&info.definition)
+                                    .and_then(|d| d.seats.get(usize::from(seat))),
+                            )
+                            .and_then(|(mesh, s)| mesh.world_node(&self.avatar_assets, &s.node))
+                        {
+                            feet = node.w_axis.truncate();
+                        }
                         let velocity = self
                             .vehicles
                             .frame(vehicle)
@@ -3217,14 +3239,6 @@ impl PlatformApp for App {
                 }
                 self.vehicles
                     .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
-                Self::pose_mounts(
-                    &mut self.mount_meshes,
-                    &self.avatar_assets,
-                    &self.vehicle_assets,
-                    &self.vehicles,
-                    self.animation_time,
-                    view,
-                )?;
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
                 for (owner, images) in &view.weapons.images {
@@ -3406,12 +3420,20 @@ impl PlatformApp for App {
                                     Some(d.seats.get(usize::from(seat))?.pose == "sit")
                                 })
                                 .unwrap_or(false)),
-                    // Riders show their seat, not their last walking tick.
-                    tick_state: self
-                        .motion
-                        .ticked(*owner)
-                        .filter(|_| view.vitals.get(owner).is_none_or(|v| v.mounted.is_none()))
-                        .cloned(),
+                    // Riders hold `root` (`Armor::onMount` sets the action
+                    // thread to root and mountThread on thread 0); they do
+                    // not run, jump or fall with their mount's motion.
+                    tick_state: if view.vitals.get(owner).is_some_and(|v| v.mounted.is_some()) {
+                        Some(bri_sim::player::PlayerState {
+                            velocity: [0.0; 3],
+                            grounded: true,
+                            jetting: false,
+                            crouched: false,
+                            ..player.clone()
+                        })
+                    } else {
+                        self.motion.ticked(*owner).cloned()
+                    },
                 };
                 self.avatars.get_mut(owner).unwrap().pose_with_animation(
                     &self.avatar_assets,
