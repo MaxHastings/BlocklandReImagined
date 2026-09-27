@@ -1,4 +1,4 @@
-use super::Session;
+use super::{ControlObject, Session};
 use anyhow::{Context, Result, ensure};
 use bri_admin::{
     Action, Administration, BanRecord, ConnectionId, DurableState, Effect, GameplayCommand, Origin,
@@ -23,6 +23,7 @@ pub enum AdminCapability {
     /// `/realBrickCount`, `/cancelAllEvents`, `/clearBots`.
     WorldCommands,
     DestructoWand,
+    Spy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +50,9 @@ pub struct AdminBrickGroup {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum AdminData {
     None,
-    LoginRejected { attempts: u8 },
+    LoginRejected {
+        attempts: u8,
+    },
     BrickGroups(Vec<AdminBrickGroup>),
     BanList {
         rows: Vec<BanRecord>,
@@ -196,6 +199,7 @@ impl AdminRuntime {
             supported.insert(AdminCapability::HighlightBricks);
             supported.insert(AdminCapability::WorldCommands);
             supported.insert(AdminCapability::DestructoWand);
+            supported.insert(AdminCapability::Spy);
             if rows.iter().any(|row| {
                 row.durable_identity_available
                     && !row.is_owner
@@ -247,6 +251,8 @@ impl AdminRuntime {
                 | Action::CancelAllEvents
                 | Action::ClearBots
                 | Action::DestructoWand
+                | Action::Spy { .. }
+                | Action::DropCameraAtPlayer
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
                 | Action::HostSetPassword {
@@ -382,6 +388,16 @@ impl AdminRuntime {
                         GameplayCommand::DestructoWand => {
                             session.use_admin_wand(actor_owner)?;
                         }
+                        GameplayCommand::Spy(target) => {
+                            let target = *self
+                                .connection_to_owner
+                                .get(&target)
+                                .context("That player has no body to spy on")?;
+                            session.set_control(actor_owner, ControlObject::Spy(target))?;
+                        }
+                        GameplayCommand::DropCameraAtPlayer => {
+                            session.set_control(actor_owner, ControlObject::Camera)?;
+                        }
                         other => {
                             anyhow::bail!("Administration action is not implemented: {other:?}")
                         }
@@ -395,7 +411,9 @@ impl AdminRuntime {
                     }
                 }
                 Effect::BansChanged | Effect::AutoRolesChanged => changed = true,
-                Effect::Configure(_) => anyhow::bail!("Administration setting has no installed host adapter"),
+                Effect::Configure(_) => {
+                    anyhow::bail!("Administration setting has no installed host adapter")
+                }
             }
         }
         if changed {
@@ -486,7 +504,10 @@ impl Session {
     }
 
     pub fn restore_admin_state(&mut self, bytes: &[u8]) -> Result<()> {
-        ensure!(self.peers.is_empty() && self.departed.is_empty(), "Admin state can only be restored before clients connect");
+        ensure!(
+            self.peers.is_empty() && self.departed.is_empty(),
+            "Admin state can only be restored before clients connect"
+        );
         self.admin.restore(bytes)
     }
 

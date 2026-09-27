@@ -222,7 +222,13 @@ impl Motion {
     }
     /// Compute presented states for this frame. The local player uses its
     /// interpolated prediction; remotes interpolate buffered poses.
-    pub fn present(&mut self, view: &View, yaw: f32, pitch: f32) -> &BTreeMap<OwnerId, PlayerState> {
+    pub fn present(
+        &mut self,
+        view: &View,
+        yaw: f32,
+        pitch: f32,
+        head_yaw: f32,
+    ) -> &BTreeMap<OwnerId, PlayerState> {
         self.presented.clear();
         self.local_eye = None;
         if let Some(predictor) = &self.predictor {
@@ -234,6 +240,7 @@ impl Motion {
             state.feet = feet.to_array();
             state.yaw = yaw;
             state.pitch = pitch;
+            state.head_yaw = head_yaw;
             let eye = self
                 .eye_height
                 .unwrap_or_else(|| state.eye(&PlayerTuning::default()).y - feet.y);
@@ -296,6 +303,7 @@ fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     let turn = (b.yaw - a.yaw + PI).rem_euclid(2.0 * PI) - PI;
     out.yaw = (a.yaw + turn * t + PI).rem_euclid(2.0 * PI) - PI;
     out.pitch = a.pitch + (b.pitch - a.pitch) * t;
+    out.head_yaw = a.head_yaw + (b.head_yaw - a.head_yaw) * t;
     out
 }
 
@@ -309,6 +317,7 @@ mod tests {
             velocity: [10.0, 0.0, 0.0],
             yaw,
             pitch: 0.0,
+            head_yaw: 0.0,
             grounded: true,
             crouched: false,
             jetting: false,

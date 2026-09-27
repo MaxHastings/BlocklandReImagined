@@ -405,7 +405,7 @@ impl Session {
                 match hit.target {
                     TargetId::Brick(id) => {
                         if self.trusted_brick_edit(owner, id) {
-                            self.kill_brick(owner, id, hit.position, dir)?;
+                            self.tool_kill_brick(owner, id, hit.position, dir)?;
                         }
                     }
                     TargetId::Actor(target) => {
@@ -442,7 +442,7 @@ impl Session {
                 match hit.target {
                     TargetId::Brick(id) => {
                         if self.trusted_brick_edit(owner, id) {
-                            self.kill_brick(owner, id, hit.position, dir)?;
+                            self.tool_kill_brick(owner, id, hit.position, dir)?;
                         }
                     }
                     TargetId::Actor(target) => {
@@ -480,7 +480,7 @@ impl Session {
                 );
                 self.tool_sound("wandHitSound", hit.position);
                 match hit.target {
-                    TargetId::Brick(id) => self.kill_brick(owner, id, hit.position, dir)?,
+                    TargetId::Brick(id) => self.tool_kill_brick(owner, id, hit.position, dir)?,
                     TargetId::Actor(target) => {
                         let velocity = (dir + Vec3::Y).normalize() * 20.0;
                         self.set_player_velocity(target.0, velocity);
@@ -595,29 +595,23 @@ impl Session {
         self.notify(owner, Notice::Center { text, seconds: 1.0 });
     }
 
-    /// The one path by which a tool destroys a brick (`killBrick`). The hit
-    /// point and swing direction are for the brick destruction effect.
-    fn kill_brick(
+    /// A tool destroying a brick (`killBrick`): debris pops away from the hit.
+    fn tool_kill_brick(
         &mut self,
         owner: OwnerId,
         id: BrickId,
-        _hit_position: Vec3,
+        hit_position: Vec3,
         _direction: Vec3,
     ) -> Result<()> {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
-        let position = self.simulation.state().bricks[&id].position;
-        self.simulation.remove(&actor, id)?;
-        self.dirty.insert(id);
+        let center = Vec3::from(self.simulation.state().bricks[&id].position);
+        let _ = hit_position;
+        self.kill_brick(&actor, id, super::debris::BrickBlast::pop(center))?;
         for peer in self.peers.values_mut() {
             if peer.inspection.as_ref().is_some_and(|i| i.id == id) {
                 peer.inspection = None;
             }
         }
-        self.cues.emit(
-            self.simulation.state().tick,
-            crate::presentation::CueKind::Break,
-            position,
-        );
         Ok(())
     }
 

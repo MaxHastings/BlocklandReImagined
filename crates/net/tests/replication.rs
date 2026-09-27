@@ -43,6 +43,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             velocity: [0.0; 3],
             yaw,
             pitch: 0.0,
+            head_yaw: 0.0,
             grounded: true,
             crouched: false,
             jetting: false,

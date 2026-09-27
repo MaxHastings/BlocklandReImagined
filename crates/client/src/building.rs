@@ -661,27 +661,7 @@ impl Building {
         let end = eye + backward * distance;
         let low = eye.min(end) - Vec3::splat(radius);
         let high = eye.max(end) + Vec3::splat(radius);
-        for field in &self.terrain {
-            let [gx0, gy0] = field.grid(low.x, high.z);
-            let [gx1, gy1] = field.grid(high.x, low.z);
-            let (x0, y0) = (gx0.floor() as i32, gy0.floor() as i32);
-            let region = [
-                x0,
-                y0,
-                gx1.floor() as i32 - x0 + 1,
-                gy1.floor() as i32 - y0 + 1,
-            ];
-            let mesh = field.mesh(region)?;
-            if mesh.triangles.is_empty() {
-                continue;
-            }
-            let patch = TriMesh::new(
-                mesh.positions
-                    .iter()
-                    .map(|p| Vector::from_array(*p))
-                    .collect(),
-                mesh.triangles,
-            )?;
+        for patch in self.terrain_patches(low, high)? {
             if let Some(hit) = cast_shapes(
                 &origin,
                 velocity,
@@ -723,6 +703,73 @@ impl Building {
                 } else {
                     distance
                 })
+    }
+
+    /// Exact terrain triangles covering a box, one patch per terrain field.
+    pub fn terrain_patches(&self, low: Vec3, high: Vec3) -> Result<Vec<TriMesh>> {
+        let mut patches = Vec::new();
+        for field in &self.terrain {
+            let [gx0, gy0] = field.grid(low.x, high.z);
+            let [gx1, gy1] = field.grid(high.x, low.z);
+            let (x0, y0) = (gx0.floor() as i32, gy0.floor() as i32);
+            let region = [
+                x0,
+                y0,
+                gx1.floor() as i32 - x0 + 1,
+                gy1.floor() as i32 - y0 + 1,
+            ];
+            let mesh = field.mesh(region)?;
+            if mesh.triangles.is_empty() {
+                continue;
+            }
+            patches.push(TriMesh::new(
+                mesh.positions
+                    .iter()
+                    .map(|p| Vector::from_array(*p))
+                    .collect(),
+                mesh.triangles,
+            )?);
+        }
+        Ok(patches)
+    }
+
+    /// Half size of a brick definition's grid volume in its own frame.
+    pub fn definition_half_extents(&self, definition: &str) -> Option<Vec3> {
+        let mesh = &self.definitions.entries.get(definition)?.mesh;
+        Some(Vec3::new(
+            mesh.footprint_studs[0] as f32 * 0.25,
+            mesh.height_plates as f32 * 0.1,
+            mesh.footprint_studs[1] as f32 * 0.25,
+        ))
+    }
+
+    /// Map interiors and static models, as the collision mirror holds them.
+    pub fn map_colliders(&self) -> impl Iterator<Item = &Collider> {
+        self.map
+            .colliders
+            .iter()
+            .filter(|(_, c)| !c.is_sensor())
+            .map(|(_, c)| c)
+    }
+
+    /// Colliding replicated bricks touching a box, with their world poses.
+    pub fn colliding_bricks(
+        &self,
+        low: Vec3,
+        high: Vec3,
+    ) -> Result<Vec<(BrickId, SharedShape, Pose)>> {
+        self.camera_index
+            .query(query_bounds(low, high))
+            .into_iter()
+            .map(|id| {
+                let brick = &self.bricks[&id];
+                Ok((
+                    id,
+                    self.definitions.get(brick)?.shape.clone(),
+                    brick_pose(brick),
+                ))
+            })
+            .collect()
     }
 
     /// Local updates acknowledge equipment choices only. Commands require the
@@ -1181,6 +1228,7 @@ mod tests {
             velocity: [0.0; 3],
             yaw: 0.0,
             pitch: -std::f32::consts::FRAC_PI_2,
+            head_yaw: 0.0,
             grounded: false,
             crouched: false,
             jetting: false,

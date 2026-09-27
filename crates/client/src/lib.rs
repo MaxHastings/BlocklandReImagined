@@ -4,6 +4,7 @@ pub mod admin_ui;
 pub mod app;
 pub mod audio;
 pub mod avatar;
+pub mod brick_debris;
 pub mod building;
 pub mod content;
 pub mod controls;

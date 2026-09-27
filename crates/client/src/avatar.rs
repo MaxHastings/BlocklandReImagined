@@ -430,6 +430,18 @@ impl AvatarMesh {
             time: (0.5 - player.pitch / std::f32::consts::PI).clamp(0.0, 1.0) * look.duration,
             weight: 1.0,
         });
+        // `Player::updateLookAnimation`: free look turns only the head,
+        // mapped over the datablock's +/-maxLookAngle.
+        let headside = assets
+            .rig
+            .sequence("headside")
+            .context("Missing headside clip")?;
+        layers.push(Layer {
+            animation: headside,
+            time: (0.5 + player.head_yaw / std::f32::consts::PI).clamp(0.0, 1.0)
+                * headside.duration,
+            weight: 1.0,
+        });
         if let Some(action) = &animation_input.action {
             let name = action.sequence.to_ascii_lowercase();
             if name != "root" {
@@ -572,6 +584,7 @@ impl Preview {
                 velocity: [0.0; 3],
                 yaw: 0.0,
                 pitch: 0.0,
+                head_yaw: 0.0,
                 grounded: true,
                 crouched: false,
                 jetting: false,
@@ -636,6 +649,7 @@ mod tests {
             velocity: [0.0; 3],
             yaw: 0.0,
             pitch: 0.0,
+            head_yaw: 0.0,
             grounded: true,
             crouched: false,
             jetting: false,
@@ -867,6 +881,29 @@ mod tests {
                 .abs_diff_eq(expected_forward, 1e-5)
         );
         assert!(eye.transform_vector3(-Vec3::Z).y > 0.0);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn free_look_turns_only_the_head_toward_the_camera() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let assets = AvatarAssets::load(&root)?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let mut p = player();
+        mesh.pose(&assets, &p, 0.0)?;
+        let head = mesh.world_node(&assets, "Head").context("Head node")?;
+        let torso = mesh.world_node(&assets, "Torso").context("Torso node")?;
+        // Positive yaw turns right (+X from the -Z forward).
+        p.head_yaw = 1.0;
+        mesh.pose(&assets, &p, 1.0)?;
+        let turned = mesh.world_node(&assets, "Head").context("Head node")?;
+        let (_, rest, _) = head.to_scale_rotation_translation();
+        let (_, now, _) = turned.to_scale_rotation_translation();
+        let look = (now * rest.inverse()) * -Vec3::Z;
+        assert!(look.x > 0.5, "head turns toward the camera: {look}");
+        assert!(look.y.abs() < 0.1, "free look turns, not tilts: {look}");
+        assert_eq!(mesh.world_node(&assets, "Torso"), Some(torso));
         Ok(())
     }
 

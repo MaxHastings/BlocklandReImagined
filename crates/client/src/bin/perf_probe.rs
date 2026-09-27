@@ -185,6 +185,7 @@ fn main() -> Result<()> {
                     right: rng.next() * 2.0 - 1.0,
                     yaw: rng.next() * std::f32::consts::TAU - std::f32::consts::PI,
                     pitch: 0.0,
+                    head_yaw: 0.0,
                     jump: rng.next() < 0.2,
                     crouch: false,
                     jet: rng.next() < 0.3,

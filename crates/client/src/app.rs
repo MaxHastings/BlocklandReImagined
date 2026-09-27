@@ -106,6 +106,14 @@ pub struct App {
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
     weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
     weapon_cue_drops: u64,
+    /// Killed-brick debris (v20 brick explosions) and its GPU models.
+    brick_debris: crate::brick_debris::BrickDebris,
+    debris_models: crate::brick_debris::DebrisModels,
+    brick_kills: Vec<bri_sim::presentation::Cue>,
+    /// Non-rendering bricks, drawn only while a building tool is out, and
+    /// whether the uploaded scene is the shown one (None: stale).
+    hidden_gpu: Option<GpuScene>,
+    hidden_uploaded: Option<bool>,
     weapon_light_deferred: usize,
     weapon_effect_session: Option<RequestId>,
     weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
@@ -175,6 +183,11 @@ impl App {
         self.audio.cue(&cue);
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
+        if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
+            && self.brick_kills.len() < bri_sim::presentation::MAX_CUES
+        {
+            self.brick_kills.push(cue.clone());
+        }
         if matches!(
             cue.kind,
             bri_sim::presentation::CueKind::WeaponEffect { .. }
@@ -618,6 +631,11 @@ impl App {
             explosion_shapes,
             weapon_cues: VecDeque::new(),
             weapon_cue_drops: 0,
+            brick_debris: Default::default(),
+            debris_models: Default::default(),
+            brick_kills: Vec::new(),
+            hidden_gpu: None,
+            hidden_uploaded: None,
             weapon_light_deferred: 0,
             weapon_effect_session: None,
             weapon_animation_cues: VecDeque::new(),
@@ -720,6 +738,11 @@ impl App {
         self.weapon_animation_drops = 0;
         self.weapon_animation_cursor = 0;
         self.weapon_cue_drops = 0;
+        self.brick_debris.clear();
+        self.debris_models.clear();
+        self.brick_kills.clear();
+        self.hidden_gpu = None;
+        self.hidden_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
@@ -753,7 +776,7 @@ impl App {
         self.motion.reset();
         self.vehicles.clear();
         self.music_world = None;
-        self.controls.free_camera = None;
+        self.controls.clear_observer();
         self.macro_recording = None;
         self.macro_playback.clear();
         self.combat = Default::default();
@@ -807,9 +830,26 @@ impl App {
             .and_then(|v| v.vitals.get(&v.owner))
             .is_some_and(|v| v.mounted.is_some())
     }
+    /// Steer whatever the server says this client controls. A granted free
+    /// camera starts at the player's smoothed eye (`dropCameraAtPlayer`).
+    fn follow_control(&mut self) {
+        let Some(view) = self.network_view() else {
+            return;
+        };
+        let control = view
+            .vitals
+            .get(&view.owner)
+            .map_or_else(Default::default, |v| v.control);
+        let eye = self.motion.local_eye().or_else(|| {
+            view.poses
+                .get(&view.owner)
+                .map(|p| p.player.eye(&PlayerTuning::default()))
+        });
+        self.controls.follow(control, view.owner, eye);
+    }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person || self.controls.free_camera.is_some() || !self.local_alive()
+        self.controls.third_person || self.controls.observer().is_some() || !self.local_alive()
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -1107,6 +1147,8 @@ impl App {
             }
             .parse()?;
             let mut session = Session::new(loaded.simulation);
+            // Every game this client hosts is single-player or LAN.
+            session.set_lan_host(true);
             session.set_admin_passwords(admin, super_admin)?;
             session.set_tool_catalog(catalog)?;
             session.set_weapon_pack(weapon_pack)?;
@@ -1391,6 +1433,11 @@ impl App {
             Command::Tool(ToolAction::Inspect { mode }) => Some(*mode),
             _ => None,
         };
+        // Administration requests never carry a gameplay aim.
+        let aim = (!matches!(command, Command::Admin(_))).then_some(bri_sim::session::ActionAim {
+            yaw: self.controls.yaw,
+            pitch: self.controls.pitch,
+        });
         let dialog_request = inspection.is_some()
             || matches!(
                 action,
@@ -1403,14 +1450,7 @@ impl App {
             .filter(|a| a.entered)
             .context("Not connected")?
             .worker
-            .request_with_aim(
-                id,
-                command,
-                Some(bri_sim::session::ActionAim {
-                    yaw: self.controls.yaw,
-                    pitch: self.controls.pitch,
-                }),
-            )?;
+            .request_with_aim(id, command, aim)?;
         self.pending_actions.insert(
             id,
             PendingAction {
@@ -1949,6 +1989,8 @@ impl App {
             }
             self.query_source = Some(view.world.clone());
             self.ghost_uploaded = u64::MAX;
+            self.brick_debris.sync_world(&view.world);
+            self.hidden_uploaded = None;
         }
         if let Some(job) = &self.world_job
             && let Ok((source, result)) = job.receiver.try_recv()
@@ -2171,6 +2213,31 @@ impl Drop for App {
         self.disconnect();
     }
 }
+/// Eye of the camera in control: the free camera itself, an orbit around the
+/// spied player, the chase camera, or the player's own eye.
+fn camera_eye(
+    controls: &Controls,
+    presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    building: &crate::building::Building,
+    own_eye: Vec3,
+    forward: Vec3,
+    chase: Option<f32>,
+) -> Result<Vec3> {
+    use crate::controls::ObserverMode;
+    match controls.observer().map(|o| o.mode) {
+        Some(ObserverMode::Free(position)) => Ok(position),
+        // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
+        Some(ObserverMode::Orbit(_)) => building.camera_position(
+            controls.orbit_focus(presented).unwrap_or(own_eye),
+            forward,
+            8.0,
+        ),
+        None => match chase {
+            Some(distance) => building.camera_position(own_eye, forward, distance),
+            None => Ok(own_eye),
+        },
+    }
+}
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -2345,9 +2412,11 @@ impl PlatformApp for App {
         self.poll_network()?;
         self.poll_files();
         let alive = self.local_alive();
-        let observing = self.controls.fly(elapsed.as_secs_f32());
+        self.follow_control();
+        self.controls.fly(elapsed.as_secs_f32());
+        self.controls.advance_zoom(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
-            let input = if alive && !observing {
+            let input = if alive {
                 self.controls.movement()
             } else {
                 // Corpses ignore controls; keep aim so the server agrees.
@@ -2367,8 +2436,9 @@ impl PlatformApp for App {
             if let Some(view) = &a.view {
                 let mounted = view.vitals.get(&view.owner).and_then(|v| v.mounted);
                 self.motion.set_mounted(mounted.is_some());
+                let head_yaw = self.controls.movement().head_yaw;
                 self.motion
-                    .present(view, self.controls.yaw, self.controls.pitch);
+                    .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
                 let driven = mounted.filter(|(_, seat)| *seat == 0).map(|(id, _)| id);
                 self.vehicles.update(
                     &view.vehicles,
@@ -2557,7 +2627,7 @@ impl PlatformApp for App {
             self.effects.sync(view.world.clone(), meshes)?;
             self.foliage.advance(elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.
-            let (yaw, pitch) = self.controls.view_angles();
+            let (yaw, pitch) = self.controls.camera_angles();
             let forward = Vec3::new(
                 yaw.sin() * pitch.cos(),
                 pitch.sin(),
@@ -2567,17 +2637,15 @@ impl PlatformApp for App {
                 .motion
                 .local_eye()
                 .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
-            let eye = if let Some(camera) = self.controls.free_camera {
-                camera
-            } else if third_person {
-                building.camera_position(
-                    eye,
-                    forward,
-                    Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.),
-                )?
-            } else {
-                eye
-            };
+            let eye = camera_eye(
+                &self.controls,
+                presented,
+                building,
+                eye,
+                forward,
+                third_person
+                    .then(|| Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.)),
+            )?;
             listener = bri_audio::Listener {
                 position: eye.to_array(),
                 forward: forward.to_array(),
@@ -2635,6 +2703,13 @@ impl PlatformApp for App {
             self.explosion_shapes.advance(elapsed.as_secs_f32());
             self.audio
                 .sync_projectiles(&view.weapons.projectiles, &self.content.weapons.pack);
+            let kills = std::mem::take(&mut self.brick_kills);
+            if self.brick_debris.cues(&kills, building)? > 0 {
+                // Newly dead bricks are not hidden bricks to reveal.
+                self.hidden_uploaded = None;
+            }
+            self.brick_debris
+                .advance(elapsed.as_secs_f32().min(0.25), building)?;
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
@@ -2689,6 +2764,24 @@ impl PlatformApp for App {
                     }
                 }
                 self.answer(id, Ok(()));
+                continue;
+            }
+            // Clicking out of the spy orbit returns to the body
+            // (`Observer::onTrigger` in `Corpse` mode); the free camera
+            // ignores triggers. The dead click to respawn above.
+            if let Some(observer) = self.controls.observer()
+                && let UiAction::Game(GameAction::Held {
+                    control: HeldControl::Fire,
+                    down,
+                }) = action
+            {
+                if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
+                    if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
+                        self.answer(id, Err(error));
+                    }
+                } else {
+                    self.answer(id, Ok(()));
+                }
                 continue;
             }
             if self.local_mounted()
@@ -2916,19 +3009,24 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::Game(GameAction::DropCameraAtPlayer) => {
-                    // `serverCmdDropCameraAtPlayer`: administrators only.
+                    // `serverCmdDropCameraAtPlayer`: the server hands control
+                    // to the camera; pressing again re-drops it at the eye.
                     match self.network_view() {
                         Some(view) if view.administrator => {
-                            if self.controls.free_camera.is_some() {
-                                self.controls.free_camera = None;
-                            } else {
-                                self.controls.free_camera = self.motion.local_eye().or_else(|| {
-                                    view.poses
-                                        .get(&view.owner)
-                                        .map(|p| p.player.eye(&PlayerTuning::default()))
-                                });
+                            if let Some(eye) = self.motion.local_eye() {
+                                self.controls.redrop_camera(eye);
                             }
-                            Ok(())
+                            let result = self.command(
+                                id,
+                                Command::Admin(bri_admin::Request::new(
+                                    bri_admin::Action::DropCameraAtPlayer,
+                                )),
+                                action.clone(),
+                            );
+                            if result.is_ok() {
+                                continue;
+                            }
+                            result
                         }
                         Some(_) => Err(anyhow::anyhow!(
                             "Only administrators can use the free camera"
@@ -2937,13 +3035,16 @@ impl PlatformApp for App {
                     }
                 }
                 UiAction::Game(GameAction::DropPlayerAtCamera) => {
-                    match self.controls.free_camera.take() {
+                    match self.controls.free_camera() {
                         Some(eye) => {
+                            // The body arrives facing the camera's heading.
+                            let (yaw, _) = self.controls.camera_angles();
+                            self.controls.yaw = yaw;
                             let result = self.command(
                                 id,
                                 Command::DropPlayerAt {
                                     eye: eye.to_array(),
-                                    yaw: self.controls.yaw,
+                                    yaw,
                                 },
                                 action.clone(),
                             );
@@ -3178,6 +3279,9 @@ impl PlatformApp for App {
         self.gpu_world = None;
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.debris_models.clear();
+        self.hidden_gpu = None;
+        self.hidden_uploaded = None;
         self.depth = None;
         Ok(())
     }
@@ -3199,6 +3303,9 @@ impl PlatformApp for App {
         self.gpu_world = None;
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.debris_models.clear();
+        self.hidden_gpu = None;
+        self.hidden_uploaded = None;
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -3229,7 +3336,7 @@ impl PlatformApp for App {
             return Ok(false);
         };
         let third_person = self.controls.third_person
-            || self.controls.free_camera.is_some()
+            || self.controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
         let hidden = self.combat.hidden_bodies(&view.vitals);
         let lights_on: Vec<Vec3> = view
@@ -3294,6 +3401,64 @@ impl PlatformApp for App {
             }
             self.ghost_uploaded = building.ghost_generation();
         }
+        if let Some(building) = &self.building
+            && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
+        {
+            // v20 `showBricks` images (hammer, wrench, printer, wands, bricks)
+            // reveal non-rendering bricks as ghosts.
+            let show = matches!(
+                building.equipment(),
+                crate::building::Equipment::Brick(_)
+                    | crate::building::Equipment::Hammer
+                    | crate::building::Equipment::Wrench
+                    | crate::building::Equipment::Printer
+                    | crate::building::Equipment::Wand
+            );
+            if self.hidden_uploaded != Some(show) {
+                self.hidden_gpu = None;
+                if show {
+                    let hidden = bri_net::protocol::PublicWorld {
+                        name: "Non-rendering bricks".into(),
+                        map_id: view.world.map_id.clone(),
+                        palette: view.world.palette.clone(),
+                        bricks: view
+                            .world
+                            .bricks
+                            .iter()
+                            .filter(|(id, b)| !b.visible && !self.brick_debris.is_dead(**id))
+                            .map(|(id, b)| {
+                                let mut b = b.clone();
+                                b.visible = true;
+                                (*id, b)
+                            })
+                            .collect(),
+                    };
+                    if !hidden.bricks.is_empty() {
+                        let mut data = crate::world_scene::build_world_scene_materials(
+                            &hidden,
+                            meshes,
+                            1_000_000,
+                            Some(materials),
+                        )?;
+                        translucent_ghost(&mut data);
+                        if !data.indices.is_empty() {
+                            self.hidden_gpu =
+                                Some(renderer.upload(frame.device, frame.queue, &data)?);
+                        }
+                    }
+                }
+                self.hidden_uploaded = Some(show);
+            }
+            self.debris_models.upload(
+                &self.brick_debris,
+                renderer,
+                frame.device,
+                frame.queue,
+                meshes,
+                materials,
+                &view.world.palette,
+            )?;
+        }
         if self
             .depth
             .as_ref()
@@ -3319,7 +3484,7 @@ impl PlatformApp for App {
         )?;
         self.explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
-        let (yaw, pitch) = self.controls.view_angles();
+        let (yaw, pitch) = self.controls.camera_angles();
         let pitch = pitch.clamp(-1.56, 1.56);
         let forward = Vec3::new(
             yaw.sin() * pitch.cos(),
@@ -3331,16 +3496,16 @@ impl PlatformApp for App {
             .local_eye()
             .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
         let camera_distance = Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.0);
-        let eye = if let Some(camera) = self.controls.free_camera {
-            camera
-        } else if third_person {
+        let eye = camera_eye(
+            &self.controls,
+            self.motion.presented(),
             self.building
                 .as_ref()
-                .context("Camera collision mirror missing")?
-                .camera_position(eye, forward, camera_distance)?
-        } else {
-            eye
-        };
+                .context("Camera collision mirror missing")?,
+            eye,
+            forward,
+            third_person.then_some(camera_distance),
+        )?;
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
         let forward = if shake == Vec3::ZERO {
@@ -3441,6 +3606,9 @@ impl PlatformApp for App {
         if let Some(ghost) = &self.ghost_gpu {
             scenes.push(ghost);
         }
+        if let Some(hidden) = &self.hidden_gpu {
+            scenes.push(hidden);
+        }
         for (owner, avatar) in &self.avatars {
             if (*owner != view.owner || third_person)
                 && !hidden.contains(owner)
@@ -3453,6 +3621,7 @@ impl PlatformApp for App {
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
+        item_draws.extend(self.debris_models.draws());
         renderer.render_with_instances(
             frame.encoder,
             frame.target,

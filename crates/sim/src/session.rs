@@ -14,6 +14,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod admin;
 mod bots;
 mod combat;
+mod control;
+pub use control::ControlObject;
+mod debris;
 mod events;
 mod admin_world;
 mod inventory;
@@ -144,11 +147,14 @@ pub enum Command {
     ClearCheckpoint,
     /// `/treasureStatus`: how many treasure chests this player has found.
     TreasureStatus,
-    /// Admin `dropPlayerAtCamera`: move the player to the free camera's eye.
+    /// Admin `dropPlayerAtCamera`: move the player to the free camera's eye
+    /// and return control to it.
     DropPlayerAt {
         eye: [f32; 3],
         yaw: f32,
     },
+    /// `setControlObject(player)`: leave the admin free or spy camera.
+    ControlPlayer,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatLine {
@@ -238,6 +244,7 @@ struct Peer {
     avatar: Option<bri_content::avatar::Appearance>,
     combat: combat::Combat,
     special: special::Progress,
+    control: ControlObject,
 }
 pub struct Session {
     events: events::Events,
@@ -280,6 +287,9 @@ pub struct Session {
     bulk_requests: u32,
     admin: admin::AdminRuntime,
     admin_disconnects: VecDeque<OwnerId>,
+    /// v20 `$Server::LAN`: single-player and LAN hosts use the looser brick
+    /// damage rules.
+    lan_host: bool,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -327,7 +337,12 @@ impl Session {
             bulk_requests: 0,
             admin: admin::AdminRuntime::default(),
             admin_disconnects: VecDeque::new(),
+            lan_host: false,
         }
+    }
+    /// Mark a single-player or LAN host (v20 `$Server::LAN`).
+    pub fn set_lan_host(&mut self, lan: bool) {
+        self.lan_host = lan;
     }
     pub fn simulation(&self) -> &Simulation {
         &self.simulation
@@ -458,6 +473,7 @@ impl Session {
                 principal,
                 combat,
                 special: Default::default(),
+                control: ControlObject::Player,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -491,6 +507,7 @@ impl Session {
             ),
         );
         peer.player.despawn(&mut self.simulation.physics);
+        self.release_spies(owner);
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
         Ok(())
@@ -570,6 +587,7 @@ impl Session {
                 principal,
                 combat,
                 special: Default::default(),
+                control: ControlObject::Player,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -802,6 +820,7 @@ impl Session {
                 peer.player
                     .teleport(&mut self.simulation.physics, feet, yaw)?;
                 peer.inputs.clear();
+                peer.control = ControlObject::Player;
                 // `serverCmdDropPlayerAtCamera` costs a point inside minigames.
                 let player = peer.combat.player;
                 if self
@@ -812,6 +831,10 @@ impl Session {
                 {
                     self.apply_minigame_effects(effects)?;
                 }
+                Ok(Reply::Accepted)
+            }
+            Command::ControlPlayer => {
+                self.return_to_body(owner)?;
                 Ok(Reply::Accepted)
             }
             Command::ClearCheckpoint => {
@@ -964,7 +987,7 @@ impl Session {
                 while let Some((sequence, input)) = peer.inputs.pop_front() {
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
-                    peer.input = input;
+                    peer.input = peer.body_input(input);
                 }
                 driving.push((owner, peer.input));
                 peer.player.hold(&mut self.simulation.physics);
@@ -993,17 +1016,9 @@ impl Session {
                 let input = if let Some((sequence, input)) = peer.inputs.pop_front() {
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
-                    peer.input = input;
-                    if peer.combat.alive {
-                        input
-                    } else {
-                        // Corpses fall but ignore controls.
-                        MoveInput {
-                            yaw: peer.player.state().yaw,
-                            pitch: peer.player.state().pitch,
-                            ..Default::default()
-                        }
-                    }
+                    // Corpses fall and camera operators stand, ignoring controls.
+                    peer.input = peer.body_input(input);
+                    peer.input
                 } else {
                     MoveInput {
                         yaw: peer.input.yaw,

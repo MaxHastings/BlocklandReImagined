@@ -43,7 +43,7 @@ pub(super) struct Events {
     /// weapon runtime at the moment of contact.
     pub(super) projectile_responses: BTreeMap<BrickId, bri_weapons::ContactResponse>,
     /// Bricks killed with `fakeKillBrick` and the tick they come back.
-    respawns: BTreeMap<BrickId, u64>,
+    pub(super) respawns: BTreeMap<BrickId, u64>,
     diagnostics: VecDeque<String>,
 }
 
@@ -370,9 +370,9 @@ impl Session {
     pub fn pending_events(&self) -> usize {
         self.events.world.as_ref().map_or(0, EventWorld::pending)
     }
-    /// Explosions and heavy hits knock small bricks out when the shooter's
-    /// minigame allows brick damage (`fxDTSBrick::onBlownUp`). They come back
-    /// after the minigame's brick respawn time.
+    /// Explosions and heavy hits knock small bricks out under v20's brick
+    /// damage rules (`fxDTSBrick::onBlownUp`). They come back after the
+    /// minigame's brick respawn time.
     pub(super) fn blow_up_bricks(
         &mut self,
         source: OwnerId,
@@ -412,7 +412,6 @@ impl Session {
             .minigames
             .respawn_delay(game, mg::RespawnObject::Brick)
             .unwrap_or(3600);
-        let tick = self.simulation.state().tick;
         for brick in hit.into_iter().take(64) {
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
@@ -431,25 +430,41 @@ impl Session {
             {
                 continue;
             }
-            let target = mg::Target::Object {
-                kind: mg::ObjectKind::Brick,
-                owner: Some(mg::AccountId(b.owner)),
-                membership: mg::Membership::Owner,
-                spawn_brick: false,
+            // v20 `ProjectileData::onExplode`: single-player and LAN hosts
+            // ($Server::LAN) only ask the shooter's minigame for brick damage;
+            // internet servers use miniGameCanDamage, or ownership outside
+            // minigames.
+            let allowed = match game {
+                Some(g) if self.lan_host => self
+                    .minigames
+                    .game(g)
+                    .is_ok_and(|g| g.settings.brick_damage),
+                None if self.lan_host => true,
+                Some(_) => {
+                    let target = mg::Target::Object {
+                        kind: mg::ObjectKind::Brick,
+                        owner: Some(mg::AccountId(b.owner)),
+                        membership: mg::Membership::Owner,
+                        spawn_brick: false,
+                    };
+                    self.minigames.can_radius_damage(damage, target) == mg::Decision::Allow
+                }
+                None => b.owner == source,
             };
-            if self.minigames.can_radius_damage(damage, target) != mg::Decision::Allow {
+            if !allowed {
                 continue;
             }
-            let center = b.position;
-            self.simulation.mutate(brick, |b| {
-                b.visible = false;
-                b.raycast = false;
-                b.colliding = false;
-            })?;
-            self.dirty.insert(brick);
-            self.cues
-                .emit(tick, crate::presentation::CueKind::Break, center);
-            self.events.respawns.insert(brick, tick + delay.max(1));
+            // v20 throws direct hits with a 0.02 falloff radius.
+            let blast = super::debris::BrickBlast {
+                origin: position,
+                force: impact.force,
+                radius: if impact.radius > 0.0 {
+                    impact.radius
+                } else {
+                    0.02
+                },
+            };
+            self.fake_kill_brick(brick, blast, delay)?;
             self.fire_input(brick, "onBlownUp", Some(source));
         }
         Ok(())
@@ -599,19 +614,10 @@ impl EventHost<'_> {
             }
             // The engine turns `disappear` into Presence changes.
             BrickOp::Disappear { .. } => {}
-            BrickOp::FakeKill { seconds, .. } => {
-                self.edit(brick, |b| {
-                    b.visible = false;
-                    b.raycast = false;
-                    b.colliding = false;
-                })?;
-                self.session.cues.emit(
-                    tick,
-                    crate::presentation::CueKind::Break,
-                    center.to_array(),
-                );
+            BrickOp::FakeKill { velocity, seconds } => {
                 let delay = u64::from((*seconds).clamp(1, 300)) * TICKS_PER_SECOND;
-                self.session.events.respawns.insert(brick, tick + delay);
+                let blast = super::debris::BrickBlast::fake_kill(center, *velocity);
+                self.session.fake_kill_brick(brick, blast, delay)?;
             }
             BrickOp::Respawn => {
                 self.session.events.respawns.remove(&brick);
