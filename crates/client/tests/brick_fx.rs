@@ -293,7 +293,7 @@ fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
     let materials = BrickMaterials::load(&root.join("content/brick-materials-001"))?;
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-003"),
+        &root.join("content/maps-pass-007"),
     )?;
     let meshes: BTreeMap<_, _> = definitions
         .entries
@@ -376,7 +376,7 @@ fn native_original_brick_fx_prints_phase_and_paint_offscreen() -> Result<()> {
     let materials = BrickMaterials::load(&root.join("content/brick-materials-001"))?;
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-003"),
+        &root.join("content/maps-pass-007"),
     )?;
     let meshes: BTreeMap<_, _> = definitions
         .entries

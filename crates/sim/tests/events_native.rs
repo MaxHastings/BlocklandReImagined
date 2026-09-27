@@ -67,7 +67,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         let name = world.name.clone();
         let definitions = Definitions::load(
             &content.join("stock-catalog-004"),
-            &content.join("maps-pass-003"),
+            &content.join("maps-pass-007"),
         )?;
         let mut s = Session::new(Simulation::new(
             world,

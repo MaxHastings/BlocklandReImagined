@@ -125,7 +125,7 @@ mod tests {
         assert!(ToolCatalog::from_native(&catalog, &effects, &missing).is_err());
         let simulation = Simulation::new(
             World::new("Dedicated test".into(), "fixture".into(), vec![[1.; 4]]),
-            Definitions::load(&catalog_dir, &root.join("content/maps-pass-003"))?,
+            Definitions::load(&catalog_dir, &root.join("content/maps-pass-007"))?,
             vec![ColliderBuilder::cuboid(100., 0.5, 100.).translation(Vector::new(0., -0.5, 0.))],
         )?;
         let mut session = Session::new(simulation);

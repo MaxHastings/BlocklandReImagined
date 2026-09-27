@@ -73,7 +73,7 @@ impl Default for ContentConfig {
             schema_version: 1,
             map_bundle: "map-bundle-016".into(),
             brick_catalog: "stock-catalog-004".into(),
-            geometry: "maps-pass-003".into(),
+            geometry: "maps-pass-007".into(),
             effects: "effects-pass-004".into(),
             worlds: "worlds-pass-005".into(),
             ui_pack: "ui-pack-003".into(),

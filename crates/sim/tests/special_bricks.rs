@@ -27,7 +27,7 @@ impl Harness {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let definitions = Definitions::load(
             &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-003"),
+            &root.join("content/maps-pass-007"),
         )?;
         let world = World::new("Special".into(), "test".into(), vec![[1.0; 4]]);
         let mut s = Session::new(Simulation::new(

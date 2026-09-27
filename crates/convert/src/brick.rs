@@ -304,14 +304,23 @@ fn solid_grid(width: u32, depth: u32, height: u32) -> Vec<String> {
         .collect()
 }
 
+/// v20 generates `BRICK` geometry in the fxDTSBrickData loader
+/// (`blocklandv20.exe` 0x53ad25, verified by emulation in
+/// `data/v20-generated-bricks.jsonl`). Positions below are Torque units (Z up):
+/// outer extents grow by 0.0012, SIDE UVs are centred and scaled so the rim
+/// keeps the texture's 245/512 half-width over a 0.084-stud inset, TOP tiles
+/// once per stud with U toward -X and V toward +Y.
 fn standard(brick: &mut Brick) {
+    const EPSILON: f32 = 0.0012;
+    const RIM: f32 = 245.0 / 512.0;
+    const INSET: f32 = 0.084;
     let [w, d] = brick.footprint_studs.map(|n| n as f32);
     let h = brick.height_plates as f32;
-    let [x, y, z] = [w * STUD * 0.5, h * PLATE * 0.5, d * STUD * 0.5];
+    let (x, y, z) = (w * 0.25, d * 0.25, h * 0.1);
     brick.attachment_rows = solid_grid(w as u32, d as u32, h as u32);
     brick.collision_boxes.push(CollisionBox {
         center: [0.0; 3],
-        size: [x * 2.0, y * 2.0, z * 2.0],
+        size: [x * 2.0, z * 2.0, y * 2.0],
     });
     brick.coverage = Some(
         [w * d, w * d, w * h, d * h, w * h, d * h].map(|area| Coverage {
@@ -319,98 +328,130 @@ fn standard(brick: &mut Brick) {
             required_area: area,
         }),
     );
-    let mut add = |face, surface, positions: [[f32; 3]; 4], n, uv: [[f32; 2]; 4]| {
+    let (xe, ye, ze) = (x + EPSILON, y + EPSILON, z + EPSILON);
+    let (ix, iy) = (x - 0.25, y - 0.25);
+    let span = |studs: f32| {
+        let half = RIM * studs / (studs - INSET);
+        (0.5 - half, 0.5 + half)
+    };
+    let mut add = |face, surface, torque: [[f32; 3]; 4], n: [f32; 3], uv: [[f32; 2]; 4]| {
+        // Torque (x, y, z) is native (x, z, -y); the mirror flips winding.
+        let normal = [n[0], n[2], -n[1]];
         brick.quads.push(Quad {
             face,
             surface,
-            vertices: std::array::from_fn(|i| Vertex {
-                position: positions[i],
-                normal: n,
+            vertices: [0, 3, 2, 1].map(|i| Vertex {
+                position: [torque[i][0], torque[i][2], -torque[i][1]],
+                normal,
                 uv: uv[i],
             }),
             colors: None,
         });
     };
-    let uv = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-    add(
-        Face::North,
-        Surface::Side,
-        [[-x, -y, -z], [-x, y, -z], [x, y, -z], [x, -y, -z]],
-        [0.0, 0.0, -1.0],
-        [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
-    );
-    add(
-        Face::South,
-        Surface::Side,
-        [[-x, -y, z], [x, -y, z], [x, y, z], [-x, y, z]],
-        [0.0, 0.0, 1.0],
-        uv,
-    );
-    add(
-        Face::West,
-        Surface::Side,
-        [[-x, -y, -z], [-x, -y, z], [-x, y, z], [-x, y, -z]],
-        [-1.0, 0.0, 0.0],
-        uv,
-    );
-    add(
-        Face::East,
-        Surface::Side,
-        [[x, -y, z], [x, -y, -z], [x, y, -z], [x, y, z]],
-        [1.0, 0.0, 0.0],
-        uv,
-    );
     add(
         Face::Top,
         Surface::Top,
-        [[-x, y, -z], [-x, y, z], [x, y, z], [x, y, -z]],
-        [0.0, 1.0, 0.0],
-        [[0.0, 0.0], [0.0, d], [w, d], [w, 0.0]],
+        [[xe, -ye, ze], [-xe, -ye, ze], [-xe, ye, ze], [xe, ye, ze]],
+        [0.0, 0.0, 1.0],
+        [[0.0, 0.0], [w, 0.0], [w, d], [0.0, d]],
     );
-    let ix = x - STUD * 0.5;
-    let iz = z - STUD * 0.5;
-    let n = [0.0, -1.0, 0.0];
-    if ix > 0.0 && iz > 0.0 {
-        add(
-            Face::Bottom,
-            Surface::BottomLoop,
-            [[-ix, -y, -iz], [ix, -y, -iz], [ix, -y, iz], [-ix, -y, iz]],
-            n,
-            [
-                [d - 1.0, 0.0],
-                [d - 1.0, w - 1.0],
-                [0.0, w - 1.0],
-                [0.0, 0.0],
-            ],
-        );
-    }
+    let down = [0.0, 0.0, -1.0];
     add(
         Face::Bottom,
         Surface::BottomEdge,
-        [[-x, -y, -z], [x, -y, -z], [ix, -y, -iz], [-ix, -y, -iz]],
-        n,
-        [[-0.5, 0.0], [w - 0.5, 0.0], [w - 1.0, 0.5], [0.0, 0.5]],
-    );
-    add(
-        Face::Bottom,
-        Surface::BottomEdge,
-        [[-ix, -y, iz], [ix, -y, iz], [x, -y, z], [-x, -y, z]],
-        n,
-        [[0.0, 0.5], [w - 1.0, 0.5], [w - 0.5, 0.0], [-0.5, 0.0]],
-    );
-    add(
-        Face::Bottom,
-        Surface::BottomEdge,
-        [[-x, -y, -z], [-ix, -y, -iz], [-ix, -y, iz], [-x, -y, z]],
-        n,
+        [
+            [-xe, -ye, -ze],
+            [-ix, -iy, -ze],
+            [-ix, iy, -ze],
+            [-xe, ye, -ze],
+        ],
+        down,
         [[d - 0.5, 0.0], [d - 1.0, 0.5], [0.0, 0.5], [-0.5, 0.0]],
     );
     add(
         Face::Bottom,
         Surface::BottomEdge,
-        [[ix, -y, -iz], [x, -y, -z], [x, -y, z], [ix, -y, iz]],
-        n,
-        [[d - 1.0, 0.5], [d - 0.5, 0.0], [-0.5, 0.0], [0.0, 0.5]],
+        [[xe, ye, -ze], [ix, iy, -ze], [ix, -iy, -ze], [xe, -ye, -ze]],
+        down,
+        [[-0.5, 0.0], [0.0, 0.5], [d - 1.0, 0.5], [d - 0.5, 0.0]],
+    );
+    add(
+        Face::Bottom,
+        Surface::BottomEdge,
+        [[-xe, ye, -ze], [-ix, iy, -ze], [ix, iy, -ze], [xe, ye, -ze]],
+        down,
+        [[w - 0.5, 0.0], [w - 1.0, 0.5], [0.0, 0.5], [-0.5, 0.0]],
+    );
+    add(
+        Face::Bottom,
+        Surface::BottomEdge,
+        [
+            [xe, -ye, -ze],
+            [ix, -iy, -ze],
+            [-ix, -iy, -ze],
+            [-xe, -ye, -ze],
+        ],
+        down,
+        [[w - 0.5, 0.0], [w - 1.0, 0.5], [0.0, 0.5], [-0.5, 0.0]],
+    );
+    if w > 1.0 && d > 1.0 {
+        add(
+            Face::Bottom,
+            Surface::BottomLoop,
+            [
+                [ix, -iy, -ze],
+                [ix, iy, -ze],
+                [-ix, iy, -ze],
+                [-ix, -iy, -ze],
+            ],
+            down,
+            [
+                [0.0, w - 1.0],
+                [d - 1.0, w - 1.0],
+                [d - 1.0, 0.0],
+                [0.0, 0.0],
+            ],
+        );
+    }
+    let (v0, v1) = span(h * 0.4);
+    let side = |(u0, u1): (f32, f32)| [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+    add(
+        Face::North,
+        Surface::Side,
+        [[xe, ye, ze], [-xe, ye, ze], [-xe, ye, -ze], [xe, ye, -ze]],
+        [0.0, 1.0, 0.0],
+        side(span(w)),
+    );
+    add(
+        Face::East,
+        Surface::Side,
+        [[xe, -ye, ze], [xe, ye, ze], [xe, ye, -ze], [xe, -ye, -ze]],
+        [1.0, 0.0, 0.0],
+        side(span(d)),
+    );
+    add(
+        Face::South,
+        Surface::Side,
+        [
+            [-xe, -ye, ze],
+            [xe, -ye, ze],
+            [xe, -ye, -ze],
+            [-xe, -ye, -ze],
+        ],
+        [0.0, -1.0, 0.0],
+        side(span(w)),
+    );
+    add(
+        Face::West,
+        Surface::Side,
+        [
+            [-xe, ye, ze],
+            [-xe, -ye, ze],
+            [-xe, -ye, -ze],
+            [-xe, ye, -ze],
+        ],
+        [-1.0, 0.0, 0.0],
+        side(span(d)),
     );
 }
 
@@ -433,6 +474,52 @@ mod tests {
         let (plate, _) = read(b"1 1 1\nBRICK", "plate".into()).unwrap();
         assert_eq!(plate.attachment_rows, ["b"]);
         assert!(!plate.quads.iter().any(|q| q.surface == Surface::BottomLoop));
+    }
+    #[test]
+    fn standard_matches_emulated_v20_generator() {
+        // Quads emitted by blocklandv20.exe 0x53ad25 under emulation, in its
+        // order: top, bottom (edges W/E/N/S then loop), then N, E, S, W sides.
+        let surfaces = [
+            Surface::Top,
+            Surface::BottomLoop,
+            Surface::BottomEdge,
+            Surface::Side,
+        ];
+        for line in include_str!("../data/v20-generated-bricks.jsonl").lines() {
+            let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            let size: Vec<u32> = serde_json::from_value(record["size"].clone()).unwrap();
+            let text = format!(
+                "{} {} {}
+BRICK",
+                size[0], size[1], size[2]
+            );
+            let (brick, _) = read(text.as_bytes(), "generated".into()).unwrap();
+            let expected: Vec<&serde_json::Value> = record["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|f| f.as_array().unwrap())
+                .collect();
+            assert_eq!(brick.quads.len(), expected.len(), "{size:?}");
+            for (quad, v20) in brick.quads.iter().zip(expected) {
+                let tex = v20["tex"].as_u64().unwrap() as usize;
+                assert_eq!(quad.surface, surfaces[tex], "{size:?}");
+                for (k, i) in [0, 3, 2, 1].into_iter().enumerate() {
+                    let p = &v20["pos"][i];
+                    let uv = &v20["uv"][i];
+                    let torque = [0, 1, 2].map(|c| p[c].as_f64().unwrap() as f32);
+                    let native = [torque[0], torque[2], -torque[1]];
+                    let vertex = quad.vertices[k];
+                    for c in 0..3 {
+                        assert!((vertex.position[c] - native[c]).abs() < 1e-5, "{size:?}");
+                    }
+                    for c in 0..2 {
+                        let want = uv[c].as_f64().unwrap() as f32;
+                        assert!((vertex.uv[c] - want).abs() < 1e-5, "{size:?} uv");
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn authored_world_normal_rotates_without_rescaling() {

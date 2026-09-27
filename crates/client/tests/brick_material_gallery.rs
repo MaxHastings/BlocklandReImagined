@@ -120,7 +120,7 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
     )?)?;
     let definitions = Definitions::load(
         &content.join("stock-catalog-004"),
-        &content.join("maps-pass-003"),
+        &content.join("maps-pass-007"),
     )?;
     let meshes = definitions
         .entries

@@ -1483,7 +1483,7 @@ mod tests {
         let fingerprint = |avatar: &Path| {
             fingerprint_runtime(
                 &content.join("stock-catalog-004"),
-                &content.join("maps-pass-003"),
+                &content.join("maps-pass-007"),
                 &content.join("map-bundle-005"),
                 &content.join("brick-materials-001"),
                 &content.join("effects-pass-004"),

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][string]$V20Root,
-    [string]$ConvertedContent = 'content/maps-pass-003',
+    [string]$ConvertedContent = 'content/maps-pass-007',
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [string]$StockScript = '.research/v20-dso/server/scripts/allGameScripts-Vanilla.cs',
     [string]$DefaultAddonList = '.research/bl-decompiled/v20/server/defaultAddOnList.cs'
