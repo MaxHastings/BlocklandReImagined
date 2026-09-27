@@ -92,6 +92,12 @@ pub enum CueKind {
         effect: String,
         active: bool,
     },
+    /// The engine's explosion operation went off here (package creatures,
+    /// scripted blasts). Clients choose the look; `source` names the package.
+    Explosion {
+        radius: f32,
+        source: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -174,6 +180,10 @@ impl Cue {
             } => ensure!(
                 *vehicle > 0 && !name.is_empty() && text(name),
                 "Invalid vehicle cue"
+            ),
+            CueKind::Explosion { radius, source } => ensure!(
+                radius.is_finite() && (0.0..=64.0).contains(radius) && !source.is_empty() && text(source),
+                "Invalid explosion cue"
             ),
             CueKind::Emote { actor, name } => ensure!(
                 *actor > 0 && crate::session::EMOTES.contains(&name.as_str()),

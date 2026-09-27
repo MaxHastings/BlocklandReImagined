@@ -168,6 +168,8 @@ pub(super) enum DamageKind {
     Suicide,
     /// Wrench event output (`kill`, negative `addHealth`).
     Event,
+    /// A package operation (explosion, direct damage), named by package.
+    Package { name: String },
 }
 impl DamageKind {
     fn direct(&self) -> bool {
@@ -180,6 +182,7 @@ impl DamageKind {
             Self::Fall => "Fall",
             Self::Impact => "Impact",
             Self::Suicide | Self::Event => "Suicide",
+            Self::Package { name } => name,
         }
     }
 }

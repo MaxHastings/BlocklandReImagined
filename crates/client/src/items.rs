@@ -692,6 +692,7 @@ mod bounds_tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
     #[test]
+    #[ignore = "requires generated native item content; CPU only"]
     fn original_dts_header_bounds_survive_native_float_roundtrip() -> Result<()> {
         let root = root();
         let assets = ItemAssets::load(
@@ -766,6 +767,7 @@ mod bounds_tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires generated native item content; CPU only"]
     fn translucent_spray_can_keeps_a_clear_colored_body_and_solid_trim() -> Result<()> {
         let root = root();
         let assets = ItemAssets::load(
@@ -792,6 +794,7 @@ mod bounds_tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires generated native item content; CPU only"]
     fn native_bounds_corruption_rejects_before_geometry_loading() -> Result<()> {
         let root = root();
         let source = root.join("content/item-presentation-pack-010");

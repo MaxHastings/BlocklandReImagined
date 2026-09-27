@@ -118,6 +118,32 @@ The reported `fourth_failed_admin_password` flake could not be reproduced
 dropped. `unread_pose_datagrams_never_block_reliable_delivery` pins the one
 plausible mechanism checked while looking (an undrained client being kicked).
 
+## Weaknesses of owning the engine (third pass)
+
+Owning the engine means owning what a commercial engine hands you for free.
+Ranked by impact on getting problems fixed, with status:
+
+1. **Crash capture: done.** `bri-crash` (installed by `bri-client` and
+   `bri-server` before anything else) writes `logs/` next to the game, falling
+   back to the per-user state folder when the install is read-only:
+   `session-<UTC time>.log` holds everything the game printed (stderr is teed,
+   so a terminal still shows it); a Rust panic adds `crash-<time>.txt` with
+   message, location, thread, backtrace and the end of the session log; a
+   native crash (access violation, driver fault) adds `crash-<time>.dmp`, a
+   minidump, plus a `.txt` with the exception code. The newest 20 session logs
+   and 10 crash reports are kept. Release builds now carry line tables so
+   backtraces and dumps name files and lines (open a dump against the
+   matching build's `bri_client.pdb`). Tested by real crashes in child
+   processes: `cargo test -p bri-crash`.
+2. Platform-layer robustness (window modes, DPI, focus, device loss, a DX12
+   and Vulkan backend fallback). Next.
+3. An in-game frame profiler and debug overlays (frame time, CPU and GPU
+   spans, net stats) as console commands.
+4. Recorded-input playback tests for GUI and input flows.
+5. Net soak tests with simulated latency, jitter and loss.
+6. A benchmark map with a frame-time budget checked on each build.
+7. A dependency-aware content build that rebuilds stale packs.
+
 ## Next, by payoff
 
 1. Items 10 and 11: done (second pass above).

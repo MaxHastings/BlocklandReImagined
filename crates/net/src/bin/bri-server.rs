@@ -55,6 +55,10 @@ async fn main() -> Result<()> {
     let mut paths: Vec<_> = args[..16].iter().map(PathBuf::from).collect();
     let events_dir = paths.remove(14);
     let vehicles_dir = paths.remove(13);
+    // Session log and crash reports beside the server binary (or in its state).
+    if let Err(error) = bri_crash::install("bri-server", &bri_crash::default_directories(&paths[13])) {
+        eprintln!("Crash capture unavailable: {error}");
+    }
     let bind = args[16]
         .to_str()
         .context("Invalid listen address")?

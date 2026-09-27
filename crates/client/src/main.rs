@@ -54,6 +54,12 @@ fn main() -> Result<()> {
         Some(path) => PathBuf::from(path),
         None => default_state_directory()?,
     };
+    // Every run keeps a session log; a crash leaves a report (and on Windows
+    // a minidump) in logs/ next to the game for the player to send.
+    match bri_crash::install("bri-client", &bri_crash::default_directories(&state)) {
+        Ok(capture) => bri_console::echo(format!("Log: {}", capture.session_log.display())),
+        Err(error) => bri_console::warn(format!("Crash capture unavailable: {error}")),
+    }
     if args[0] == "--check" {
         let app = App::load(&content, &state, (1280, 720)).context(REGENERATE_HINT)?;
         println!(
