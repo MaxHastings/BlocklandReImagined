@@ -1,4 +1,5 @@
 //! UI → native application → asynchronous authoritative server integration.
+use bri_vehicles::schema::SeatRole;
 use crate::{
     content::{ClientContent, LOADABLE_MAPS},
     controls::Controls,
@@ -157,6 +158,8 @@ pub struct App {
     motion: crate::motion::Motion,
     vehicle_assets: crate::vehicles::VehicleAssets,
     vehicles: crate::vehicles::ClientVehicles,
+    /// Heading of the vehicle the local player rides, last frame.
+    mount_heading: Option<f32>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     net_graph: Option<(std::time::Instant, u32)>,
     /// LAN listings from the last discovery query: address -> certificate.
@@ -681,6 +684,7 @@ impl App {
             motion: Default::default(),
             vehicle_assets,
             vehicles: Default::default(),
+            mount_heading: None,
             music_world: None,
             net_graph: None,
             lan_hosts: BTreeMap::new(),
@@ -2547,6 +2551,38 @@ impl PlatformApp for App {
                     self.motion.server_tick(),
                     driven,
                 );
+                // The view rides along: it turns with the vehicle, follows a
+                // mouse-steered one, and stays put on a mount facing the look.
+                let riding = mounted.and_then(|(vehicle, seat)| {
+                    let info = view.vehicles.get(&vehicle)?;
+                    let d = self.vehicle_assets.definition(&info.definition)?;
+                    let forward = self.vehicles.frame(vehicle)?.rotation * Vec3::NEG_Z;
+                    Some((
+                        d.seat_role(usize::from(seat)),
+                        forward.x.atan2(-forward.z),
+                        forward.y.clamp(-1.0, 1.0).asin(),
+                    ))
+                });
+                match riding {
+                    Some((SeatRole::MouseDriver, heading, pitch)) => {
+                        self.controls.set_vehicle_view(Some((heading, pitch)));
+                        self.mount_heading = Some(heading);
+                    }
+                    Some((SeatRole::Actor, ..)) | None => {
+                        self.controls.set_vehicle_view(None);
+                        self.mount_heading = None;
+                    }
+                    Some((_, heading, _)) => {
+                        self.controls.set_vehicle_view(None);
+                        if let Some(previous) = self.mount_heading {
+                            let turn = (heading - previous + std::f32::consts::PI)
+                                .rem_euclid(std::f32::consts::TAU)
+                                - std::f32::consts::PI;
+                            self.controls.carry_yaw(turn);
+                        }
+                        self.mount_heading = Some(heading);
+                    }
+                }
                 // Riders sit exactly on their rendered vehicle's seat.
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
@@ -2561,10 +2597,15 @@ impl PlatformApp for App {
                             .vehicles
                             .frame(vehicle)
                             .map_or(Vec3::ZERO, |f| f.velocity);
+                        // Whoever controls the vehicle faces the seat.
+                        let locked = self
+                            .vehicle_assets
+                            .definition(&info.definition)
+                            .is_some_and(|d| d.seat_role(usize::from(seat)) != SeatRole::Passenger);
                         self.motion.override_presented(
                             *owner,
                             feet,
-                            yaw,
+                            locked.then_some(yaw),
                             velocity,
                             *owner == view.owner,
                         );
@@ -2696,6 +2737,18 @@ impl PlatformApp for App {
                         }
                     }
                 }
+                // SkiItem's color shift tints the skis of anyone riding skis.
+                let skiing = view
+                    .vitals
+                    .get(owner)
+                    .and_then(|v| v.mounted)
+                    .and_then(|(vehicle, _)| view.vehicles.get(&vehicle))
+                    .and_then(|info| self.vehicle_assets.definition(&info.definition))
+                    .is_some_and(|d| d.family == bri_vehicles::Family::Skis);
+                self.avatars
+                    .get_mut(owner)
+                    .unwrap()
+                    .set_skis(skiing.then_some([0.0, 0.2, 0.64, 1.0]));
                 let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
                 let input = crate::avatar::AvatarAnimationInput {
                     held_tool_pose: if dead {

@@ -24,6 +24,10 @@ pub struct Controls {
     /// The admin camera in control, if any. The body's `yaw`/`pitch` stay
     /// where they were left while it is active.
     observer: Option<Observer>,
+    /// Driving a mouse-steered vehicle: the view follows the vehicle and
+    /// the mouse only steers. `yaw`/`pitch` then carry the raw mouse turn,
+    /// pitch wrapping every half turn, for the server's steering deltas.
+    vehicle_view: Option<(f32, f32)>,
 }
 /// The client's half of a replicated camera [`ControlObject`]: look and move
 /// keys steer it instead of the body.
@@ -48,6 +52,9 @@ const ZOOM_RATE: f32 = 10.0;
 const OBSERVER_PITCH: f32 = FRAC_PI_2 - 0.01;
 fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(2.0 * PI) - PI
+}
+fn wrap_half(a: f32) -> f32 {
+    (a + FRAC_PI_2).rem_euclid(PI) - FRAC_PI_2
 }
 impl Controls {
     pub fn held(&self, c: HeldControl) -> bool {
@@ -95,9 +102,29 @@ impl Controls {
             // (`Player::updateMove` always adds pitch to `mHead.x`).
             self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
             self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+        } else if self.vehicle_view.is_some() {
+            self.yaw = wrap(self.yaw + yaw);
+            self.pitch = wrap_half(self.pitch + pitch);
         } else {
             self.yaw = wrap(self.yaw + yaw);
             self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+        }
+    }
+    /// Follow a mouse-steered vehicle's heading and pitch, or stop. Leaving
+    /// faces the body where the vehicle was heading.
+    pub fn set_vehicle_view(&mut self, view: Option<(f32, f32)>) {
+        if view.is_none()
+            && let Some((yaw, _)) = self.vehicle_view
+        {
+            self.yaw = wrap(yaw);
+            self.pitch = 0.0;
+        }
+        self.vehicle_view = view;
+    }
+    /// Turn the view with the vehicle it rides.
+    pub fn carry_yaw(&mut self, turn: f32) {
+        if turn.is_finite() {
+            self.yaw = wrap(self.yaw + turn);
         }
     }
     fn axis(&self, positive: HeldControl, negative: HeldControl) -> f32 {
@@ -227,7 +254,10 @@ impl Controls {
     }
     /// The body's head and eye direction, including held free-look.
     pub fn view_angles(&self) -> (f32, f32) {
-        (wrap(self.yaw + self.free_yaw), self.pitch)
+        match self.vehicle_view {
+            Some((yaw, pitch)) => (wrap(yaw + self.free_yaw), pitch),
+            None => (wrap(self.yaw + self.free_yaw), self.pitch),
+        }
     }
     /// Where the rendered camera looks: the observer's own angles while a
     /// camera has control.

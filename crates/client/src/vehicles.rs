@@ -6,7 +6,7 @@ use anyhow::{Context, Result, ensure};
 use bri_content::shape::Shape;
 use bri_render::scene::{GpuInstances, GpuScene, SceneImage, SceneRenderer, SceneTransform};
 use bri_sim::session::{VehicleInfo, VehiclePose};
-use bri_vehicles::{Definition, Family, Pack, schema::Wheel};
+use bri_vehicles::{Definition, Pack, schema::Wheel};
 use glam::{Mat4, Quat, Vec3};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -211,9 +211,7 @@ impl ClientVehicles {
             Vec3::from(s.transform.position),
             Quat::from_array(s.transform.rotation),
         );
-        if matches!(d.family, Family::Cannon | Family::Turret)
-            || (seat == 2 && d.attachment_mount.is_some())
-        {
+        if seat == 2 && d.attachment_mount.is_some() {
             let pivot = d
                 .attachment_mount
                 .as_ref()

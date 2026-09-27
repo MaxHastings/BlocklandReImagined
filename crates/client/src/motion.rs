@@ -87,10 +87,18 @@ impl Motion {
             .map(|offset| self.local_seconds * TICK_RATE + offset)
     }
     /// Replace a presented state (riders follow their rendered vehicle seat).
-    pub fn override_presented(&mut self, owner: OwnerId, feet: Vec3, yaw: f32, velocity: Vec3, local: bool) {
+    /// A `yaw` locks the rider facing the seat; passengers keep their own.
+    pub fn override_presented(
+        &mut self,
+        owner: OwnerId,
+        feet: Vec3,
+        yaw: Option<f32>,
+        velocity: Vec3,
+        local: bool,
+    ) {
         if let Some(state) = self.presented.get_mut(&owner) {
             state.feet = feet.to_array();
-            if !local {
+            if let Some(yaw) = yaw {
                 state.yaw = yaw;
             }
             state.velocity = velocity.to_array();

@@ -185,6 +185,22 @@ impl AvatarAssets {
     }
 }
 
+impl AvatarMesh {
+    /// `Player::startSkiing` unhides the LSki/RSki nodes in paint color.
+    pub fn set_skis(&mut self, color: Option<[f32; 4]>) {
+        for node in ["lski", "rski"] {
+            match color {
+                Some(color) => {
+                    self.outfit.nodes.insert(node.into(), color);
+                }
+                None => {
+                    self.outfit.nodes.remove(node);
+                }
+            }
+        }
+    }
+}
+
 pub struct AvatarMesh {
     posed_nodes: Vec<Mat4>,
     model_transform: Mat4,
