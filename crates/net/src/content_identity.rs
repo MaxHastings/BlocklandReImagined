@@ -807,11 +807,13 @@ mod tests {
         let root = Fixture::new().root.join("weapons");
         std::fs::create_dir(&root).unwrap();
         let pack = bri_weapons::Pack {
-            schema_version: 1,
+            schema_version: bri_weapons::SCHEMA,
             id: "test.weapons".into(),
             items: BTreeMap::new(),
             images: BTreeMap::new(),
             projectiles: BTreeMap::new(),
+            damage_types: BTreeMap::new(),
+            explosions: BTreeMap::new(),
             definitions: vec![],
             resources: vec![bri_weapons::Resource {
                 path: "original.dts".into(),
@@ -951,9 +953,9 @@ mod tests {
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
     }
     #[test]
-    #[ignore = "requires generated native weapons-pack-003; no window or audio"]
+    #[ignore = "requires generated native weapons-pack-004; no window or audio"]
     fn native_weapons_pack_identity_and_all_21_choices() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-003");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-004");
         let content = WeaponContent::load(&root).unwrap();
         assert_eq!(content.pack.items.len(), 17);
         assert_eq!(content.item_choices.len(), 21);
@@ -1138,9 +1140,9 @@ mod tests {
     #[ignore = "requires native weapons/presentation pack003; no renderer or original readers"]
     fn native_item_physics_covers_all_21_and_pins_authored_bounds() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let weapons = WeaponContent::load(&root.join("weapons-pack-003")).unwrap();
+        let weapons = WeaponContent::load(&root.join("weapons-pack-004")).unwrap();
         let physics =
-            ItemPhysicsContent::load(&root.join("item-presentation-pack-003"), &weapons).unwrap();
+            ItemPhysicsContent::load(&root.join("item-presentation-pack-005"), &weapons).unwrap();
         assert_eq!(physics.bounds.len(), 21);
         assert_eq!(
             physics

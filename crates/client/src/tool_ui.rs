@@ -1047,13 +1047,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires converted weapons-pack-003 native JSON; no window or original reads"]
+    #[ignore = "requires converted weapons-pack-004 native JSON; no window or original reads"]
     fn native_weapon_pack_and_core_tools_expose_all_21_item_choices() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/weapons-pack-003/weapons.json");
+            .join("../../content/weapons-pack-004/weapons.json");
         let bytes = std::fs::read(root).unwrap();
         let pack: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(pack["schema_version"], 1);
+        assert_eq!(pack["schema_version"], bri_weapons::SCHEMA);
         let mut rows: Vec<(String, String)> = pack["items"]
             .as_object()
             .unwrap()

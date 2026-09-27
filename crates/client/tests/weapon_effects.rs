@@ -131,11 +131,13 @@ fn weapons() -> Arc<Pack> {
         rest_speed: 0.,
     };
     Arc::new(Pack {
-        schema_version: 1,
+        schema_version: bri_weapons::SCHEMA,
         id: "test".into(),
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::from([("projectile".into(), p)]),
+        damage_types: BTreeMap::new(),
+        explosions: BTreeMap::new(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
@@ -446,7 +448,7 @@ fn actual_native_weapon_bindings_and_effects() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let pack = EffectsPack::load(root.join("content/effects-runtime-pack-002"))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-003/weapons.json"),
+        root.join("content/weapons-pack-004/weapons.json"),
     )?)?);
     let mut fx = WeaponEffects::new(pack, weapons.clone(), EffectsLimits::default())?;
     fx.cues(

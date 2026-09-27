@@ -10,8 +10,8 @@ fn root() -> PathBuf {
 }
 fn assets() -> Result<ItemAssets> {
     ItemAssets::load(
-        &root().join("content/item-presentation-pack-003"),
-        &root().join("content/weapons-pack-003"),
+        &root().join("content/item-presentation-pack-005"),
+        &root().join("content/weapons-pack-004"),
     )
 }
 
@@ -150,11 +150,11 @@ fn corrupt_or_oversized_native_resources_reject() -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
-    copy_dir(&root().join("content/item-presentation-pack-003"), &fixture)?;
+    copy_dir(&root().join("content/item-presentation-pack-005"), &fixture)?;
     let manifest = fixture.join("presentation.json");
     let original = std::fs::read(&manifest)?;
     let value: serde_json::Value = serde_json::from_slice(&original)?;
-    let weapons = root().join("content/weapons-pack-003");
+    let weapons = root().join("content/weapons-pack-004");
     for mode in 0..6 {
         let mut bad = value.clone();
         match mode {
@@ -499,7 +499,7 @@ fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
     std::fs::write(
         out.join("report.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"schema_version":1,"adapter":gpu.adapter_info.name,"pack":"item-presentation-pack-003","single_upload_pose_update":true,"records":records,"not_original_parity_acceptance":true}),
+            &serde_json::json!({"schema_version":1,"adapter":gpu.adapter_info.name,"pack":"item-presentation-pack-005","single_upload_pose_update":true,"records":records,"not_original_parity_acceptance":true}),
         )?,
     )?;
     Ok(())

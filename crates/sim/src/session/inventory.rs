@@ -54,6 +54,8 @@ pub(super) fn core_runtime() -> WeaponsWorld {
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::new(),
+        damage_types: BTreeMap::new(),
+        explosions: BTreeMap::new(),
         definitions: Vec::new(),
         resources: Vec::new(),
         diagnostics: Vec::new(),

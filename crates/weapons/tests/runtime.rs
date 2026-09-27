@@ -53,7 +53,7 @@ fn load() -> Pack {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/weapons-pack-003/weapons.json")
+                .join("../../content/weapons-pack-004/weapons.json")
         });
     Pack::from_json(&std::fs::read(path).expect("Run documented importer first")).unwrap()
 }
@@ -88,6 +88,8 @@ fn empty() -> Pack {
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::new(),
+        damage_types: BTreeMap::new(),
+        explosions: BTreeMap::new(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],

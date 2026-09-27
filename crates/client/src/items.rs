@@ -688,8 +688,8 @@ mod bounds_tests {
     fn original_dts_header_bounds_survive_native_float_roundtrip() -> Result<()> {
         let root = root();
         let assets = ItemAssets::load(
-            &root.join("content/item-presentation-pack-003"),
-            &root.join("content/weapons-pack-003"),
+            &root.join("content/item-presentation-pack-005"),
+            &root.join("content/weapons-pack-004"),
         )?;
         assert_eq!(assets.item_physics.items.len(), 21);
         // Independently inspected source pistol.dts bytes116..139, SHA
@@ -761,7 +761,7 @@ mod bounds_tests {
     #[test]
     fn native_bounds_corruption_rejects_before_geometry_loading() -> Result<()> {
         let root = root();
-        let source = root.join("content/item-presentation-pack-003");
+        let source = root.join("content/item-presentation-pack-005");
         let base = root.join("artifacts/native-items");
         std::fs::create_dir_all(&base)?;
         let fixture = base.join(format!(
@@ -776,7 +776,7 @@ mod bounds_tests {
             serde_json::from_slice(&std::fs::read(source.join("presentation.json"))?)?;
         let physics: serde_json::Value =
             serde_json::from_slice(&std::fs::read(source.join("item-physics.json"))?)?;
-        let weapons = root.join("content/weapons-pack-003");
+        let weapons = root.join("content/weapons-pack-004");
         for (mode, expected) in [
             (0, "Invalid authored model bounds"),
             (1, "missing field"),

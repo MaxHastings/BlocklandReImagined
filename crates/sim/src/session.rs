@@ -740,6 +740,17 @@ impl Session {
                 ensure!(EMOTES.contains(&name.as_str()), "Unknown emote");
                 ensure!(peer.combat.alive, "Dead players cannot emote");
                 let feet = peer.player.state().feet;
+                // `serverCmdAlarm`: the emote is an AlarmProjectile at the eye.
+                if name == "alarm" {
+                    let eye = peer.player.eye();
+                    let _ = self.weapons.spawn(
+                        "v20.projectile.alarmprojectile",
+                        bri_weapons::ActorId(owner),
+                        eye,
+                        Vec3::Y,
+                        1.0,
+                    );
+                }
                 self.cues.emit(
                     tick,
                     crate::presentation::CueKind::Emote { actor: owner, name },

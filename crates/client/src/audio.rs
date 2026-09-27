@@ -176,11 +176,13 @@ impl ClientAudio {
             CueKind::Break => "brick.break",
             CueKind::HammerHit => "tool.hammer.hit",
             CueKind::WrenchHit => "tool.wrench.hit",
-            CueKind::Pain { .. } => "player.pain_cry",
+            CueKind::Pain { cry: true, .. } => "player.pain_cry",
             CueKind::Death { .. } => "player.death_cry",
-            CueKind::Spawn { .. } => "player.spawn",
-            CueKind::Emote { name, .. } if name == "alarm" => "emote.alarm",
-            CueKind::Emote { .. } | CueKind::VehicleEffect { .. } => return,
+            // Emote, spawn and corpse sounds belong to their explosions.
+            CueKind::Pain { .. }
+            | CueKind::Burn { .. }
+            | CueKind::Emote { .. }
+            | CueKind::VehicleEffect { .. } => return,
             CueKind::VehicleSound { sound, .. } => {
                 if sound.contains('.') {
                     self.trigger(sound, Placement::World(cue.position));

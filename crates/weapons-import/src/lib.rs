@@ -56,6 +56,8 @@ fn resource(d: &Definition, key: &str) -> String {
                 .join("/"),
             p.trim_start_matches("./")
         )
+    } else if let Some(rest) = p.strip_prefix("~/") {
+        format!("base/{rest}")
     } else {
         p
     }
@@ -139,6 +141,32 @@ pub fn parse(text: &str, path: &str) -> Result<Vec<Definition>> {
     ensure!(defs.len() <= 4096, "Definition budget exceeded");
     Ok(defs)
 }
+/// Literal `AddDamageType(name, suicide, murder, vehicleScale, direct)` calls
+/// in source order. Guards are not evaluated: a later call replaces an earlier
+/// one of the same name, as `AddDamageType` reuses an existing index.
+pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
+    ensure!(text.len() <= 8 * 1024 * 1024, "Script too large");
+    let call = Regex::new(
+        r#"(?i)AddDamageType\s*\(\s*"(\w+)"\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*[^,()]*,\s*([^,()]*)\)"#,
+    )?;
+    let text = uncomment(text);
+    Ok(call
+        .captures_iter(&text)
+        .map(|c| {
+            let text = |a: usize, b: usize| {
+                c.get(a)
+                    .or_else(|| c.get(b))
+                    .map_or(String::new(), |m| m.as_str().to_owned())
+            };
+            DamageType {
+                name: c[1].to_owned(),
+                suicide_message: text(2, 3),
+                murder_message: text(4, 5),
+                direct: matches!(c[6].trim(), "1" | "true"),
+            }
+        })
+        .collect())
+}
 fn resolve(
     key: &str,
     all: &BTreeMap<String, Definition>,
@@ -189,6 +217,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::new(),
+        damage_types: BTreeMap::new(),
+        explosions: BTreeMap::new(),
         definitions,
         resources: vec![],
         diagnostics: vec![],
@@ -203,6 +233,18 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
     }
     for d in resolved
         .values()
+        .filter(|d| d.class.eq_ignore_ascii_case("ExplosionData"))
+    {
+        pack.explosions.insert(
+            d.name.to_ascii_lowercase(),
+            ExplosionInfo {
+                name: d.name.clone(),
+                sound: field(d, "soundProfile"),
+            },
+        );
+    }
+    for d in resolved
+        .values()
         .filter(|d| d.class.eq_ignore_ascii_case("ProjectileData"))
     {
         let e = resolved.get(&field(d, "explosion").to_ascii_lowercase());
@@ -212,7 +254,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             radius: e.map_or(0.0, |e| num(e, "damageRadius", 0.0)),
             impulse: e.map_or(0.0, |e| num(e, "impulseForce", 0.0)),
             impulse_radius: e.map_or(0.0, |e| num(e, "impulseRadius", 0.0)),
-            burn_seconds: e.map_or(0.0, |e| num(e, "playerBurnTime", 0.0)),
+            burn_seconds: e.map_or(0.0, |e| num(e, "playerBurnTime", 0.0) / 1000.0),
         };
         let sport = field(d, "sportBallImage");
         let id = native_id("projectile", &d.name);
@@ -388,7 +430,20 @@ fn check_output(root: &Path, out: &Path) -> Result<()> {
     );
     Ok(())
 }
-pub fn convert(root: &Path, core: &Path, out: &Path) -> Result<Pack> {
+/// Core datablocks presented by native hosts without an add-on referencing
+/// them: emote/pain/burn images and the spawn/death projectiles.
+const CORE_PRESENTATION: [&str; 7] = [
+    "clockProjectile",
+    "PainLowImage",
+    "PainMidImage",
+    "PainHighImage",
+    "PlayerBurnImage",
+    "spawnProjectile",
+    "deathProjectile",
+];
+/// `core` is the recovered `allGameScripts.cs`; `core_damage_types` the
+/// recovered `DamageTypes.cs` holding `initDefaultDamageTypes`.
+pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -> Result<Pack> {
     check_output(root, out)?;
     ensure!(
         !out.exists(),
@@ -397,21 +452,19 @@ pub fn convert(root: &Path, core: &Path, out: &Path) -> Result<Pack> {
     let mut assets = BTreeMap::new();
     let mut imported_bytes = 0usize;
     let mut defs = vec![];
+    // Load order: base defaults, base script, then add-ons alphabetically.
+    let core_text = std::fs::read_to_string(core)?;
+    let mut damage = damage_types(&std::fs::read_to_string(core_damage_types)?)?;
+    damage.extend(damage_types(&core_text)?);
     let mut paths = std::fs::read_dir(root.join("Add-Ons"))?
         .map(|e| e.map(|e| e.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
     paths.sort();
     for path in paths {
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if ![
-            "Weapon_",
-            "Item_",
-            "Projectile_",
-            "Vehicle_Tank",
-            "Vehicle_Pirate_Cannon",
-        ]
-        .iter()
-        .any(|p| name.starts_with(p))
+        if !["Weapon_", "Item_", "Projectile_", "Vehicle_", "Emote_"]
+            .iter()
+            .any(|p| name.starts_with(p))
             || path.extension().is_none_or(|s| s != "zip")
         {
             continue;
@@ -441,27 +494,40 @@ pub fn convert(root: &Path, core: &Path, out: &Path) -> Result<Pack> {
                 "Aggregate archive byte budget"
             );
             if virtual_path.ends_with(".cs") {
-                defs.extend(parse(&String::from_utf8_lossy(&data), &virtual_path)?);
+                let text = String::from_utf8_lossy(&data);
+                defs.extend(parse(&text, &virtual_path)?);
+                damage.extend(damage_types(&text)?);
             }
             assets.insert(virtual_path.to_ascii_lowercase(), (virtual_path, data));
         }
     }
     // Core dependencies are imported only when explicitly referenced from this closure.
     let core_defs = parse(
-        &std::fs::read_to_string(core)?,
+        &core_text,
         "base/server/scripts/allGameScripts.cs (recovered)",
     )?;
     defs.extend(
         core_defs
             .iter()
-            .filter(|d| d.name.eq_ignore_ascii_case("clockProjectile"))
+            .filter(|d| {
+                CORE_PRESENTATION
+                    .iter()
+                    .any(|n| d.name.eq_ignore_ascii_case(n))
+            })
             .cloned(),
     );
     let mut names: BTreeSet<_> = defs.iter().map(|d| d.name.to_ascii_lowercase()).collect();
     for _ in 0..8 {
         let refs = defs
             .iter()
-            .flat_map(|d| d.fields.values())
+            .flat_map(|d| {
+                // Projectile inheritance (`jeepExplosionProjectile : vehicleExplosionProjectile`).
+                let parent = d
+                    .parent
+                    .as_ref()
+                    .filter(|_| d.class.eq_ignore_ascii_case("ProjectileData"));
+                d.fields.values().chain(parent)
+            })
             .map(|s| clean(s).to_ascii_lowercase())
             .collect::<BTreeSet<_>>();
         let add: Vec<_> = core_defs
@@ -480,7 +546,39 @@ pub fn convert(root: &Path, core: &Path, out: &Path) -> Result<Pack> {
             defs.push(d);
         }
     }
+    // Numeric core globals such as `$HeadSlot = 5;` used as literal field values.
+    let global = Regex::new(r"(?m)^\$(\w+)\s*=\s*(-?\d+(?:\.\d+)?)\s*;")?;
+    let globals: BTreeMap<String, String> = global
+        .captures_iter(&core_text)
+        .map(|c| (format!("${}", c[1].to_ascii_lowercase()), c[2].to_owned()))
+        .collect();
+    for d in &mut defs {
+        for v in d.fields.values_mut() {
+            if let Some(n) = globals.get(&clean(v).to_ascii_lowercase()) {
+                *v = n.clone();
+            }
+        }
+    }
     let mut pack = lower(defs)?;
+    for t in damage {
+        // `AddDamageType` refuses a type whose icon file is missing.
+        let missing: Vec<_> = t
+            .icons()
+            .filter(|id| {
+                let file = format!("{id}.png");
+                !assets.contains_key(&file) && !root.join(&file).is_file()
+            })
+            .collect();
+        if missing.is_empty() {
+            pack.damage_types.insert(t.name.to_ascii_lowercase(), t);
+        } else {
+            pack.diagnostics.push(format!(
+                "Damage type {} icon missing: {}",
+                t.name,
+                missing.join(", ")
+            ));
+        }
+    }
     std::fs::create_dir_all(out.join("shapes"))?;
     std::fs::create_dir_all(out.join("textures"))?;
     let paths: BTreeSet<_> = pack
@@ -586,6 +684,30 @@ mod tests {
             "2"
         );
         assert_eq!(ticks(0.14), 17);
+    }
+    #[test]
+    fn damage_types_keep_literal_messages_in_order() {
+        let t = damage_types(
+            "// AddDamageType(\"Old\", 'x', 'y', 1, 1);
+if(!$DamageType::Gun)
+  AddDamageType(\"Gun\",   '<bitmap:add-ons/Weapon_Gun/CI_gun> %1',    '%2 <bitmap:add-ons/Weapon_Gun/CI_gun> %1',0.2,1);
+AddDamageType(\"Radius\", '<bitmap:base/client/ui/ci/bomb> %1', '%2 <bitmap:base/client/ui/ci/splat> %1', 1, 0);",
+        )
+        .unwrap();
+        assert_eq!(t.len(), 2);
+        assert!(t[0].direct && !t[1].direct);
+        assert_eq!(
+            t[0].icons().collect::<Vec<_>>(),
+            ["add-ons/weapon_gun/ci_gun"; 2]
+        );
+        assert_eq!(
+            t[1].message("Victim", None),
+            "<bitmap:base/client/ui/ci/bomb> Victim"
+        );
+        assert_eq!(
+            t[1].message("%2", Some("Killer")),
+            "Killer <bitmap:base/client/ui/ci/splat> %2"
+        );
     }
     #[test]
     fn cycles_reject() {

@@ -2069,7 +2069,7 @@ fn plain_chat(text: &str) -> String {
         .collect()
 }
 /// Server-authored text keeps vanilla color escapes and `<bitmap:...>` icons
-/// from the base UI, but no other markup or control characters.
+/// (base UI and add-on death icons), but no other markup or control characters.
 fn server_markup(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -2081,9 +2081,9 @@ fn server_markup(text: &str) -> String {
                 if after[8..end]
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
-                    && after[8..end]
-                        .to_ascii_lowercase()
-                        .starts_with("base/client/ui/") =>
+                    && ["base/client/ui/", "add-ons/"]
+                        .iter()
+                        .any(|p| after[8..end].to_ascii_lowercase().starts_with(p)) =>
             {
                 out.push_str(&after[..=end].to_ascii_lowercase());
                 rest = &after[end + 1..];

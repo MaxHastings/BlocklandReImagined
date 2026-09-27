@@ -57,10 +57,14 @@ fn suicide_death_message_score_and_click_respawn() {
     assert!(!vitals[&b].alive);
     assert_eq!(vitals[&b].health, 0.0);
     assert_eq!(vitals[&b].score, -1);
-    // Minigame death messages go to members only, with the vanilla icon.
+    // Minigame death messages go to members only. Icons come from the
+    // weapon pack's damage types, which this core-only session lacks.
     let notices = s.take_private_notices();
-    assert!(notices.iter().any(|(o, n)| *o == a
-        && matches!(n, Notice::Chat(t) if t.contains("ci/skull") && t.contains("Bravo"))));
+    assert!(
+        notices
+            .iter()
+            .any(|(o, n)| *o == a && matches!(n, Notice::Chat(t) if t == "Bravo"))
+    );
     assert!(s.command(b, 3, Command::Suicide).is_err());
     assert!(s.command(b, 4, Command::Respawn).is_err(), "respawn delay");
     steps(&mut s, 125);
@@ -105,7 +109,7 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     }
     assert!(!s.is_alive(a), "an 80 unit fall kills inside a minigame");
     let chat = s.take_private_notices();
-    assert!(chat.iter().any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains("ci/crater"))));
+    assert!(chat.iter().any(|(_, n)| matches!(n, Notice::Chat(t) if t == "Alpha")));
 
     // Leaving the minigame (after respawning) makes the same fall harmless.
     steps(&mut s, 130);

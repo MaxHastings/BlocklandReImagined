@@ -14,6 +14,7 @@ use bri_ui::{
     schema::{PACK_SCHEMA_VERSION, UiPack},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::Digest;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -80,8 +81,8 @@ impl Default for ContentConfig {
             audio: "audio-pack-001".into(),
             weather: "weather-pack-001".into(),
             foliage: "foliage-pack-001".into(),
-            weapons: "weapons-pack-003".into(),
-            item_presentation: "item-presentation-pack-003".into(),
+            weapons: "weapons-pack-004".into(),
+            item_presentation: "item-presentation-pack-005".into(),
             vehicles: "vehicles-pack-007".into(),
             events: "events-pack-002".into(),
         }
@@ -424,7 +425,8 @@ impl ClientContent {
             &paths.item_presentation,
             &weapons,
         )?;
-        let schema = load_ui_schema(&paths.ui_pack)?;
+        let mut schema = load_ui_schema(&paths.ui_pack)?;
+        install_death_icons(&mut schema, &weapons.pack, &paths.weapons)?;
         let paint = palette(&schema)?;
         let bundle = load_bundle(&paths.map_bundle)?;
         let mut maps = Vec::new();
@@ -795,6 +797,50 @@ fn validate_catalog(paths: &ContentPaths) -> Result<Catalog> {
     Ok(catalog)
 }
 
+/// Kill messages name add-on death icons (`AddDamageType`) that live in the
+/// weapon pack as original bytes; the UI draws them beside its own images.
+fn install_death_icons(
+    schema: &mut UiPack,
+    weapons: &bri_weapons::Pack,
+    root: &Path,
+) -> Result<()> {
+    for id in weapons.damage_types.values().flat_map(|t| t.icons()) {
+        if schema.images.contains_key(&id) {
+            continue;
+        }
+        let source = format!("{id}.png");
+        let (resource, native) = weapons
+            .resources
+            .iter()
+            .find(|r| r.path.eq_ignore_ascii_case(&source))
+            .and_then(|r| Some((r, r.native_file.as_deref()?)))
+            .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
+        let path = file(root, native, INDEX_LIMIT)?;
+        let bytes = fs::read(&path)?;
+        ensure!(
+            format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
+            "Death icon checksum mismatch: {id}"
+        );
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()?
+            .into_dimensions()?;
+        ensure!(
+            width > 0 && height > 0 && width <= 256 && height <= 256,
+            "Invalid death icon size: {id}"
+        );
+        schema.images.insert(
+            id,
+            bri_ui::schema::ImageEntry {
+                file: path.to_string_lossy().into_owned(),
+                width,
+                height,
+                sha256: resource.sha256.clone(),
+                source: resource.path.clone(),
+            },
+        );
+    }
+    Ok(())
+}
 fn load_ui_schema(root: &Path) -> Result<UiPack> {
     let pack: UiPack = read_json(&file(root, "ui-pack.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
     ensure!(
@@ -1021,8 +1067,8 @@ mod tests {
     #[test]
     fn old_content_config_defaults_native_item_presentation_path() {
         let config: ContentConfig =
-            serde_json::from_str(r#"{"schema_version":1,"weapons":"weapons-pack-003"}"#).unwrap();
-        assert_eq!(config.item_presentation, "item-presentation-pack-003");
+            serde_json::from_str(r#"{"schema_version":1,"weapons":"weapons-pack-004"}"#).unwrap();
+        assert_eq!(config.item_presentation, "item-presentation-pack-005");
         assert!(serde_json::from_str::<ContentConfig>(r#"{"item_presentaton":"typo"}"#).is_err());
     }
     #[test]

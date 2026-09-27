@@ -15,8 +15,10 @@ use bri_weapons::{ActorId, CORE_TOOLS};
 pub const MAX_HEALTH: f32 = 100.0;
 /// `$Game::PlayerInvulnerabilityTime` (2.5 s) at 120 Hz.
 const INVULNERABLE_TICKS: u64 = 300;
-/// `$CorpseTimeoutValue` (5 s): the body stops blocking after this.
+/// `$CorpseTimeoutValue` (5 s): `Player::RemoveBody` then deletes the corpse.
 const CORPSE_TICKS: u64 = 600;
+/// `Armor::damage` sums hits less than 300 ms apart into one pain level.
+const PAIN_TICKS: u64 = 36;
 /// `minImpactSpeed` and `speedDamageScale`.
 const MIN_IMPACT_SPEED: f32 = 30.0;
 const SPEED_DAMAGE_SCALE: f32 = 3.8;
@@ -25,6 +27,8 @@ const PLAYER_MASS: f32 = 90.0;
 /// Minimum respawn delay outside minigames (`$Game::MinRespawnTime`).
 const MIN_RESPAWN_TICKS: u64 = 120;
 const SPAWN_BRICK: &str = "v20/brick/brickspawnpointdata";
+const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
+const DEATH_PROJECTILE: &str = "v20.projectile.deathprojectile";
 const MAX_NOTICES: usize = 256;
 
 /// Per-player authoritative combat state.
@@ -41,6 +45,8 @@ pub(super) struct Combat {
     /// Last direct damage type and tick (death messages prefer it).
     pub last_direct: Option<(String, u64)>,
     pub corpse_cleared: bool,
+    pub pain_level: f32,
+    pub pain_tick: u64,
 }
 
 /// Replicated per-player status. Health drives the damage flash; the rest
@@ -132,24 +138,13 @@ impl DamageKind {
     fn direct(&self) -> bool {
         matches!(self, Self::Weapon { direct: true, .. })
     }
-    /// Death icon from the base CI set (`base/client/ui/ci`).
-    fn icon(&self) -> &'static str {
+    /// The `AddDamageType` name whose kill message this death shows.
+    fn type_name(&self) -> &str {
         match self {
-            Self::Weapon { name, direct } => {
-                let name = name.to_ascii_lowercase();
-                if name.contains("hammer") {
-                    "hammer"
-                } else if name.contains("jeep") || name.contains("vehicle") {
-                    "carexplosion"
-                } else if *direct {
-                    "generic"
-                } else {
-                    "bomb"
-                }
-            }
-            Self::Fall => "crater",
-            Self::Impact => "splat",
-            Self::Suicide | Self::Event => "skull",
+            Self::Weapon { name, .. } => name,
+            Self::Fall => "Fall",
+            Self::Impact => "Impact",
+            Self::Suicide | Self::Event => "Suicide",
         }
     }
 }
@@ -219,6 +214,8 @@ impl Session {
             light: false,
             last_direct: None,
             corpse_cleared: false,
+            pain_level: 0.0,
+            pain_tick: 0,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -376,15 +373,25 @@ impl Session {
             peer.combat.last_direct = Some((name.clone(), tick));
         }
         peer.combat.health = (peer.combat.health - amount).max(0.0);
+        peer.combat.pain_level = if tick.saturating_sub(peer.combat.pain_tick) > PAIN_TICKS {
+            amount
+        } else {
+            peer.combat.pain_level + amount
+        };
+        peer.combat.pain_tick = tick;
+        let alive = peer.combat.health > 0.0;
+        let level = peer.combat.pain_level;
         let feet = peer.player.state().feet;
-        if peer.combat.health > 0.0 {
-            if amount > 10.0 {
-                self.cues.emit(
-                    tick,
-                    crate::presentation::CueKind::Pain { actor: target },
-                    feet,
-                );
-            }
+        self.cues.emit(
+            tick,
+            crate::presentation::CueKind::Pain {
+                actor: target,
+                level,
+                cry: alive && amount > 10.0,
+            },
+            feet,
+        );
+        if alive {
             return Ok(());
         }
         self.kill(target, source, kind)
@@ -449,12 +456,17 @@ impl Session {
             feet,
         );
         self.apply_minigame_effects(effects)?;
-        // `GameConnection::onDeath` messages: "%2 <icon> %1" or "<icon> %1".
+        // `GameConnection::onDeath`: the type's suicide or murder message.
         let victim_name = self.peers[&victim].name.clone();
-        let icon = format!("<bitmap:base/client/ui/ci/{}>", kind.icon());
-        let text = match killer.filter(|k| *k != victim) {
-            Some(k) => format!("{} {icon} {victim_name}", self.peers[&k].name),
-            None => format!("{icon} {victim_name}"),
+        let killer_name = killer
+            .filter(|k| *k != victim)
+            .map(|k| self.peers[&k].name.clone());
+        let text = match self.weapons.pack.damage_type(kind.type_name()) {
+            Some(t) => t.message(&victim_name, killer_name.as_deref()),
+            None => killer_name.map_or_else(
+                || victim_name.clone(),
+                |k| format!("{k} killed {victim_name}"),
+            ),
         };
         let game = self.game_of(victim);
         self.chat_game(game, None, text);
@@ -800,8 +812,14 @@ impl Session {
         let (feet, yaw) = self.pick_spawn(owner);
         {
             let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-            peer.player
-                .teleport(&mut self.simulation.physics, feet, yaw)?;
+            // The corpse is this same player: an early respawn removes it now.
+            if !peer.combat.alive && !peer.combat.corpse_cleared {
+                let corpse = Vec3::from(peer.player.state().feet);
+                let _ = self
+                    .weapons
+                    .spawn(DEATH_PROJECTILE, ActorId(owner), corpse, Vec3::ZERO, 1.0);
+            }
+            peer.player.teleport(&mut self.simulation.physics, feet, yaw)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.combat.health = MAX_HEALTH;
             peer.combat.alive = true;
@@ -812,11 +830,11 @@ impl Session {
             peer.inputs.clear();
         }
         self.give_loadout(owner, equipment.as_ref())?;
-        self.cues.emit(
-            tick,
-            crate::presentation::CueKind::Spawn { actor: owner },
-            feet.to_array(),
-        );
+        // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
+        let center = feet + Vec3::Y * crate::player::PlayerTuning::default().stand_height * 0.5;
+        let _ = self
+            .weapons
+            .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
         Ok(())
     }
 
@@ -890,14 +908,22 @@ impl Session {
             .map_err(|e| anyhow::anyhow!("Minigame clock: {e}"))?;
         self.apply_minigame_effects(effects)?;
         let tick = self.simulation.state().tick;
-        for peer in self.peers.values_mut() {
+        let mut bodies = Vec::new();
+        for (&owner, peer) in self.peers.iter_mut() {
             if !peer.combat.alive
                 && !peer.combat.corpse_cleared
                 && tick.saturating_sub(peer.combat.died_tick) >= CORPSE_TICKS
             {
                 peer.player.set_solid(&mut self.simulation.physics, false);
                 peer.combat.corpse_cleared = true;
+                bodies.push((ActorId(owner), Vec3::from(peer.player.state().feet)));
             }
+        }
+        // `Player::RemoveBody`: a deathProjectile where the corpse lay.
+        for (actor, feet) in bodies {
+            let _ = self
+                .weapons
+                .spawn(DEATH_PROJECTILE, actor, feet, Vec3::ZERO, 1.0);
         }
         for (owner, impact) in impacts {
             let speed = impact.length();

@@ -1422,7 +1422,21 @@ impl WeaponsWorld {
         });
         true
     }
+    /// An explosion's composite plus its `soundProfile`, both at the projectile.
     fn effect(&mut self, p: &Projectile, definition: &str, direction: Option<Vec3>) {
+        if let Some(sound) = self
+            .pack
+            .explosions
+            .get(&definition.to_ascii_lowercase())
+            .map(|e| e.sound.clone())
+            .filter(|s| !s.is_empty())
+        {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(p.source),
+                profile: sound,
+                position: p.position,
+            });
+        }
         if !definition.is_empty() {
             self.events.push(Event::Effect {
                 source: TargetId::Actor(p.source),

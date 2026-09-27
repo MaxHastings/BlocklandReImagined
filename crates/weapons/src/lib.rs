@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod runtime;
 pub use runtime::*;
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 pub const TICK_HZ: u32 = 120;
 /// Authored DTS object bounds converted offline to native coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -175,6 +175,55 @@ pub struct Resource {
     pub native_file: Option<String>,
     pub diagnostics: Vec<String>,
 }
+/// `AddDamageType`: kill-message templates, `%1` the victim and `%2` the
+/// killer, with `<bitmap:...>` death icons kept verbatim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DamageType {
+    pub name: String,
+    pub suicide_message: String,
+    pub murder_message: String,
+    pub direct: bool,
+}
+impl DamageType {
+    /// Lower-case ids of the icons both templates show.
+    pub fn icons(&self) -> impl Iterator<Item = String> + '_ {
+        [&self.suicide_message, &self.murder_message]
+            .into_iter()
+            .flat_map(|m| m.split("<bitmap:").skip(1))
+            .filter_map(|rest| rest.split_once('>'))
+            .map(|(id, _)| id.to_ascii_lowercase())
+    }
+    /// Substitute names in one pass so a name containing `%1` stays literal.
+    pub fn message(&self, victim: &str, killer: Option<&str>) -> String {
+        let (template, killer) = match killer {
+            Some(k) => (&self.murder_message, k),
+            None => (&self.suicide_message, ""),
+        };
+        let mut out = String::new();
+        let mut chars = template.chars().peekable();
+        while let Some(c) = chars.next() {
+            match (c, chars.peek()) {
+                ('%', Some('1')) => {
+                    chars.next();
+                    out.push_str(victim);
+                }
+                ('%', Some('2')) => {
+                    chars.next();
+                    out.push_str(killer);
+                }
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+}
+/// `ExplosionData` fields presented beside its native effects composite.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExplosionInfo {
+    pub name: String,
+    /// Original `soundProfile`, empty when silent.
+    pub sound: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -182,6 +231,10 @@ pub struct Pack {
     pub items: BTreeMap<String, Item>,
     pub images: BTreeMap<String, Image>,
     pub projectiles: BTreeMap<String, ProjectileDef>,
+    /// Keyed by lower-case damage type name (`$DamageType::<name>`).
+    pub damage_types: BTreeMap<String, DamageType>,
+    /// Keyed by lower-case explosion datablock name.
+    pub explosions: BTreeMap<String, ExplosionInfo>,
     pub definitions: Vec<Definition>,
     pub resources: Vec<Resource>,
     pub diagnostics: Vec<String>,
@@ -196,12 +249,51 @@ impl Pack {
         pack.validate()?;
         Ok(pack)
     }
+    /// The type named by a `$DamageType::<name>` reference; unknown names
+    /// fall back to `Default` as an unset Torque global indexes type 0.
+    pub fn damage_type(&self, reference: &str) -> Option<&DamageType> {
+        let name = reference.trim();
+        let name = match name.get(..13) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
+            _ => name,
+        };
+        self.damage_types
+            .get(&name.to_ascii_lowercase())
+            .or_else(|| self.damage_types.get("default"))
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == SCHEMA, "Unknown weapon schema");
         ensure!(
-            self.items.len() <= 1024 && self.images.len() <= 4096 && self.projectiles.len() <= 4096,
+            self.items.len() <= 1024
+                && self.images.len() <= 4096
+                && self.projectiles.len() <= 4096
+                && self.damage_types.len() <= 1024
+                && self.explosions.len() <= 4096,
             "Definition budget exceeded"
         );
+        for (key, t) in &self.damage_types {
+            ensure!(
+                key == &t.name.to_ascii_lowercase()
+                    && [&t.suicide_message, &t.murder_message]
+                        .iter()
+                        .all(|m| m.len() <= 256 && !m.chars().any(char::is_control))
+                    && t.icons().all(|id| {
+                        id.len() <= 128
+                            && id
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
+                    }),
+                "Invalid damage type {key}"
+            );
+        }
+        for (key, e) in &self.explosions {
+            ensure!(
+                key == &e.name.to_ascii_lowercase()
+                    && e.sound.len() <= 128
+                    && !e.sound.chars().any(char::is_control),
+                "Invalid explosion {key}"
+            );
+        }
         for (id, item) in &self.items {
             ensure!(
                 id == &item.id && self.images.contains_key(&item.image),

@@ -341,8 +341,11 @@ impl Session {
                     kind,
                     ..
                 } => {
-                    let lower = kind.to_ascii_lowercase();
-                    let direct = !lower.contains("radius") && !lower.contains("explosion");
+                    let direct = self
+                        .weapons
+                        .pack
+                        .damage_type(&kind)
+                        .is_some_and(|t| t.direct);
                     self.damage_player(
                         target.0,
                         amount,
@@ -380,6 +383,23 @@ impl Session {
                 }
                 WeaponEvent::BallHit { source, brick, .. } => {
                     self.fire_input(brick, "onBallHit", Some(source.0));
+                }
+                WeaponEvent::Burn {
+                    target: TargetId::Actor(target),
+                    seconds,
+                    ..
+                } => {
+                    if let Some(peer) = self.peers.get(&target.0).filter(|p| p.combat.alive) {
+                        let feet = peer.player.state().feet;
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::Burn {
+                                actor: target.0,
+                                seconds: seconds.min(300.0),
+                            },
+                            feet,
+                        );
+                    }
                 }
                 WeaponEvent::SportMovement { locked: false, .. } => {}
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),

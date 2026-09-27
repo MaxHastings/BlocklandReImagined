@@ -126,7 +126,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--repo', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[3])
     parser.add_argument('--original', type=pathlib.Path, default=pathlib.Path(r'E:\Downloads\B4v21Launcher\versions\Blockland v20'))
-    parser.add_argument('--output', default='content/item-presentation-pack-003')
+    parser.add_argument('--output', default='content/item-presentation-pack-005')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     if args.self_test:
@@ -136,7 +136,7 @@ def main():
     out = (repo / args.output).resolve()
     if out.exists() or not out.is_relative_to(repo / 'content') or out.is_relative_to(args.original.resolve()):
         raise ValueError('Fresh workspace content output required')
-    weapons_root = repo / 'content/weapons-pack-003'
+    weapons_root = repo / 'content/weapons-pack-004'
     weapon_bytes = read(weapons_root / 'weapons.json', 32 * 1024 * 1024)
     pack = json.loads(weapon_bytes)
     native_root = repo / 'content/maps-pass-006'

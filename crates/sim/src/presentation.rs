@@ -34,17 +34,21 @@ pub enum CueKind {
         image: String,
         hand: u8,
     },
-    /// `Player::playPain` after more than 10 damage.
+    /// `Armor::damage` pain emote from the pain level summed over 300 ms;
+    /// `cry` is `Player::playPain` after a hit of more than 10.
     Pain {
         actor: u64,
+        level: f32,
+        cry: bool,
     },
     /// `Armor::onDisabled`: death cry and death animation.
     Death {
         actor: u64,
     },
-    /// `spawnProjectile` burst where a player (re)spawns.
-    Spawn {
+    /// `Player::burn`: `PlayerBurnImage` flames for this long.
+    Burn {
         actor: u64,
+        seconds: f32,
     },
     /// Emote image above the head (alarm, love, hate, confusion) or sit.
     Emote {
@@ -123,9 +127,15 @@ impl Cue {
                 *actor > 0 && !image.is_empty() && text(image) && *hand < 2,
                 "Invalid shell cue"
             ),
-            CueKind::Pain { actor } | CueKind::Death { actor } | CueKind::Spawn { actor } => {
-                ensure!(*actor > 0, "Invalid player cue")
-            }
+            CueKind::Death { actor } => ensure!(*actor > 0, "Invalid player cue"),
+            CueKind::Pain { actor, level, .. } => ensure!(
+                *actor > 0 && level.is_finite() && (0.0..=1e6).contains(level),
+                "Invalid pain cue"
+            ),
+            CueKind::Burn { actor, seconds } => ensure!(
+                *actor > 0 && seconds.is_finite() && (0.0..=300.).contains(seconds),
+                "Invalid burn cue"
+            ),
             CueKind::VehicleSound { vehicle, sound: name }
             | CueKind::VehicleEffect {
                 vehicle,
