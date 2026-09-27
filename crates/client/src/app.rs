@@ -38,6 +38,9 @@ use std::{
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
 /// World camera far plane; also the farthest terrain tiles are ever drawn.
 const FAR_PLANE: f32 = 4000.0;
+/// PlayerStandardArmor's `cameraMaxDist`, `cameraVerticalOffset` and
+/// `cameraTilt`; the stock Player_* add-ons inherit them.
+const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
 struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
@@ -1349,20 +1352,7 @@ impl App {
         vehicles: &crate::vehicles::ClientVehicles,
         lag: Vec3,
         view: &network::View,
-        local: &bri_sim::player::PlayerState,
     ) -> Option<(f32, Vec3, f32)> {
-        // A `HorseArmor` player uses its datablock's camera fields
-        // (cameraMaxDist, cameraVerticalOffset above the feet, cameraTilt).
-        if local.archetype == bri_sim::player_types::PlayerType::Horse.archetype()
-            && view.vitals.get(&view.owner).is_none_or(|v| v.mounted.is_none())
-        {
-            let camera = &assets.definition("v20.vehicle.horsearmor")?.camera;
-            return Some((
-                camera.max_dist.clamp(1.0, 40.0),
-                Vec3::from(local.feet) + Vec3::Y * camera.offset + lag,
-                camera.tilt,
-            ));
-        }
         let (vehicle, _) = view.vitals.get(&view.owner)?.mounted?;
         let info = view.vehicles.get(&vehicle)?;
         let camera = &assets.definition(&info.definition)?.camera;
@@ -1372,6 +1362,103 @@ impl App {
             frame.position + Vec3::Y * camera.offset + lag,
             camera.tilt,
         ))
+    }
+    /// `Player::getCameraTransform` (blocklandv20.exe 0x5ab7d0) on foot or as
+    /// a horse: the pivot is the middle of the standing box plus
+    /// `cameraVerticalOffset` (0.75 while sliding in), the view is pitched
+    /// down by `cameraTilt`, and the camera sits `cameraMaxDist` back along
+    /// that tilted view. Box, offset and distance scale with the player. A
+    /// package archetype keeps its own `camera_distance`.
+    fn player_camera(
+        assets: &crate::vehicles::VehicleAssets,
+        archetypes: &bri_sim::archetype::Archetypes,
+        lag: Vec3,
+        local: &bri_sim::player::PlayerState,
+        pos: f32,
+    ) -> (f32, Vec3, f32) {
+        let horse = local.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+        let (max_dist, offset, tilt) = match assets.definition("v20.vehicle.horsearmor") {
+            Some(d) if horse => (d.camera.max_dist, d.camera.offset, d.camera.tilt),
+            _ => (
+                archetypes.resolve(local.archetype).look.camera_distance,
+                PLAYER_CAMERA.1,
+                PLAYER_CAMERA.2,
+            ),
+        };
+        let scale = local.scale;
+        let stand_height = archetypes.tuning(local.archetype, scale).stand_height;
+        let lift = stand_height * 0.5 + (offset * pos + 0.75 * (1.0 - pos)) * scale;
+        (
+            (max_dist * scale * pos).clamp(0.0, 40.0),
+            Vec3::from(local.feet) + Vec3::Y * lift + lag,
+            tilt,
+        )
+    }
+    /// Where the view camera is and how it looks (yaw, pitch): first person,
+    /// sliding out to the chase camera, or an observer camera.
+    #[allow(clippy::too_many_arguments)]
+    fn view_camera(
+        controls: &Controls,
+        presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+        building: &crate::building::Building,
+        assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        lag: Vec3,
+        view: &network::View,
+        local: &bri_sim::player::PlayerState,
+        first_person_eye: Vec3,
+    ) -> Result<(Vec3, f32, f32)> {
+        let look = |yaw: f32, pitch: f32| {
+            Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
+        };
+        let (yaw, pitch) = controls.camera_angles();
+        let pitch = pitch.clamp(-1.56, 1.56);
+        let pos = controls.camera_pos();
+        let mounted = view.vitals.get(&view.owner).is_some_and(|v| v.mounted.is_some());
+        if controls.observer().is_some() || pos == 0.0 {
+            let eye = camera_eye(
+                controls,
+                presented,
+                &view.entities,
+                building,
+                first_person_eye,
+                look(yaw, pitch),
+                None,
+            )?;
+            return Ok((eye, yaw, pitch));
+        }
+        if !mounted {
+            let (distance, pivot, tilt) =
+                Self::player_camera(assets, &view.archetypes, lag, local, pos);
+            let pitch = (pitch - tilt).clamp(-1.56, 1.56);
+            let eye = camera_eye(
+                controls,
+                presented,
+                &view.entities,
+                building,
+                pivot,
+                look(yaw, pitch),
+                Some(distance),
+            )?;
+            return Ok((eye, yaw, pitch));
+        }
+        // `cameraTilt` turns the vehicle chase view down without moving the camera.
+        let chase = Self::chase_camera(assets, vehicles, lag, view);
+        let eye = camera_eye(
+            controls,
+            presented,
+            &view.entities,
+            building,
+            chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
+            look(yaw, pitch),
+            Some(
+                chase.map_or(view.archetypes.resolve(local.archetype).look.camera_distance, |(distance, ..)| {
+                    distance
+                }) * pos,
+            ),
+        )?;
+        let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
+        Ok((eye, yaw, pitch))
     }
     /// Pose each spawned horse with the horse rig from its interpolated
     /// frame: body in the brick's colour, dead ones in `death1`.
@@ -3689,6 +3776,7 @@ impl PlatformApp for App {
             prefs.bool_or("$Pref::Input::VehicleMouseInvert", true),
         );
         self.controls.advance_zoom(elapsed.as_secs_f32());
+        self.controls.advance_view(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             let input = if alive {
                 self.abilities.apply(self.controls.movement())
@@ -4182,39 +4270,24 @@ impl PlatformApp for App {
             self.effects.sync(view.world.clone(), meshes)?;
             self.foliage.advance(game_elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.
-            let (yaw, pitch) = self.controls.camera_angles();
+            let (eye, yaw, pitch) = Self::view_camera(
+                &self.controls,
+                presented,
+                building,
+                &self.vehicle_assets,
+                &self.vehicles,
+                self.chase_lag,
+                view,
+                local,
+                self.motion
+                    .local_eye()
+                    .unwrap_or_else(|| view.archetypes.eye(local)),
+            )?;
             let forward = Vec3::new(
                 yaw.sin() * pitch.cos(),
                 pitch.sin(),
                 -yaw.cos() * pitch.cos(),
             );
-            let eye = self
-                .motion
-                .local_eye()
-                .unwrap_or_else(|| view.archetypes.eye(local));
-            let chase = third_person
-            .then(|| {
-                Self::chase_camera(
-                    &self.vehicle_assets,
-                    &self.vehicles,
-                    self.chase_lag,
-                    view,
-                    local,
-                )
-            })
-            .flatten();
-            let eye = camera_eye(
-                &self.controls,
-                presented,
-                &view.entities,
-                building,
-                chase.map_or(eye, |(_, pivot, _)| pivot),
-                forward,
-                third_person.then(|| {
-                    let distance = view.archetypes.resolve(local.archetype).look.camera_distance;
-                    chase.map_or(distance, |(distance, ..)| distance)
-                }),
-            )?;
             listener = bri_audio::Listener {
                 position: eye.to_array(),
                 forward: forward.to_array(),
@@ -5452,53 +5525,26 @@ impl PlatformApp for App {
             }
             instances.update(frame.queue, &shells)?;
         }
-        let (yaw, pitch) = self.controls.camera_angles();
-        let pitch = pitch.clamp(-1.56, 1.56);
+        let (eye, yaw, pitch) = Self::view_camera(
+            &self.controls,
+            self.motion.presented(),
+            self.building
+                .as_ref()
+                .context("Camera collision mirror missing")?,
+            &self.vehicle_assets,
+            &self.vehicles,
+            self.chase_lag,
+            view,
+            local,
+            self.motion
+                .local_eye()
+                .unwrap_or_else(|| view.archetypes.eye(local)),
+        )?;
         let forward = Vec3::new(
             yaw.sin() * pitch.cos(),
             pitch.sin(),
             -yaw.cos() * pitch.cos(),
         );
-        let eye = self
-            .motion
-            .local_eye()
-            .unwrap_or_else(|| view.archetypes.eye(local));
-        let chase = third_person
-            .then(|| {
-                Self::chase_camera(
-                    &self.vehicle_assets,
-                    &self.vehicles,
-                    self.chase_lag,
-                    view,
-                    local,
-                )
-            })
-            .flatten();
-        let eye = camera_eye(
-            &self.controls,
-            self.motion.presented(),
-            &view.entities,
-            self.building
-                .as_ref()
-                .context("Camera collision mirror missing")?,
-            chase.map_or(eye, |(_, pivot, _)| pivot),
-            forward,
-            third_person.then(|| {
-                let distance = view.archetypes.resolve(local.archetype).look.camera_distance;
-                chase.map_or(distance, |(distance, ..)| distance)
-            }),
-        )?;
-        // `cameraTilt` turns the chase view down without moving the camera.
-        let (pitch, forward) = match chase {
-            Some((_, _, tilt)) if tilt != 0.0 && self.controls.observer().is_none() => {
-                let pitch = (pitch - tilt).clamp(-1.56, 1.56);
-                (
-                    pitch,
-                    Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos()),
-                )
-            }
-            _ => (pitch, forward),
-        };
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
         let forward = if shake == Vec3::ZERO {

@@ -28,7 +28,10 @@ The world box is therefore 1.25 x 1.25 x 2.65 standing and 1.25 x 1.25 x 1.0
 crouched, feet at the box bottom, matching `PlayerTuning`. `maxStepHeight`
 (+0x2AC) defaults to 1.0 and is not quartered.
 
-Eye heights 2.4/0.85, gravity 20, jet thrust 35, horizontal
+The eye is m.dts's `Eye` node, which `Player::getRenderEyeTransform`
+(0x5aafa0) reads from the animated shape: 2.156 above the feet standing,
+0.627 at the end of the `crouch` sequence, and 0.141 ahead of the box centre
+along the body's facing. Gravity 20, jet thrust 35, horizontal
 jet thrust 48, jet rise cap 25 and forward cap 33 are explicit adaptation
 assumptions. The original
 script's resistance limits inform the caps but do not prove the new equations.
@@ -43,10 +46,14 @@ are unlimited; crouch blends toward aimed forward thrust. Original avatar render
 customization and initial run/back/side/crouch/jump/fall/look layers are connected
 to authoritative poses. Animation transitions, movement-rate matching, tools/emotes,
 effects, vehicle mounting and camera polish remain work.
-The third-person camera sphere-sweeps backward from the eye. The native client
+The third-person camera follows `Player::getCameraTransform` (0x5ab7d0): it
+pivots at the middle of the standing box plus `cameraVerticalOffset` (feet +
+2.075), pitches the view down by `cameraTilt` (0.261) and sits `cameraMaxDist`
+back along that tilted view, all scaled with the player. Toggling slides the
+camera over 0.2 s (`$cameraSpeed` 5). It sphere-sweeps backward from the pivot. The native client
 now queries map geometry and replicated authored brick collision shapes, including
 shapes extending beyond the placement footprint. Visibility and raycast toggles
-do not override collision. Original tilt/vertical offsets, smoothing and dynamic
+do not override collision. Dynamic
 actor/vehicle camera obstruction have not yet been integrated.
 
 ## Collision: v20 `updatePos`, not a physics solver

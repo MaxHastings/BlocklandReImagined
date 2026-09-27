@@ -22,10 +22,14 @@ pub struct Controls {
     normal_fov: Option<f32>,
     /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
     zoom_fov: Option<f32>,
-    /// The zoom FOV shown, easing toward `zoom_fov` so wheel steps glide.
-    zoom_shown: f32,
-    /// Eased zoom progress: 0 at the normal FOV, 1 fully zoomed.
-    zoom: f32,
+    /// The FOV shown (`$cameraFov`), ramping toward the normal or zoom FOV.
+    /// `None` until the first frame, which starts at its target.
+    fov_shown: Option<f32>,
+    /// `GameConnection::mCameraPos`: 0 in first person, 1 fully out in
+    /// third person; slides between them when the view is toggled.
+    camera_pos: f32,
+    /// The last toggle's `$pref::Input::FastFirstThirdPerson`.
+    fast_view: bool,
     /// The admin camera in control, if any. The body's `yaw`/`pitch` stay
     /// where they were left while it is active.
     observer: Option<Observer>,
@@ -63,9 +67,14 @@ pub enum ObserverMode {
     /// the moves go to the entity, steered by this camera's yaw.
     Drive(u64),
 }
-/// Zoom eases toward its target at this exponential rate (95% in 0.3 s),
-/// in place of the engine's timed `setFov` transition.
-const ZOOM_RATE: f32 = 10.0;
+/// `setFov` only sets a target; each frame `$cameraFov` moves toward it by
+/// elapsed ms / zoomSpeed * 90 degrees (blocklandv20.exe 0x58ee10).
+/// init.cs passes `$pref::Player::zoomSpeed` (0) to `setZoomSpeed`, which
+/// clamps it to 200 ms, so every FOV change is a linear 450 degrees/s ramp.
+const ZOOM_DEGREES_PER_SECOND: f32 = 90.0 / 0.2;
+/// `$cameraSpeed` from `toggleFirstPerson`: 5 camera positions per second,
+/// or 1000 with `$pref::Input::FastFirstThirdPerson`.
+const CAMERA_SPEED: (f32, f32) = (5.0, 1000.0);
 /// v20's wheel-zoom limits (`toggleZoomFOV`'s 5 and 85).
 const ZOOM_FOV_RANGE: (f32, f32) = (5.0, 85.0);
 /// Observer cameras stop just short of straight up or down.
@@ -109,7 +118,10 @@ impl Controls {
             GameAction::SetZoomFov { fov } if fov.is_finite() => {
                 self.zoom_fov = Some(fov.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1))
             }
-            GameAction::ToggleFirstPerson { .. } => self.third_person = !self.third_person,
+            GameAction::ToggleFirstPerson { fast } => {
+                self.third_person = !self.third_person;
+                self.fast_view = fast;
+            }
             _ => return false,
         }
         true
@@ -328,43 +340,53 @@ impl Controls {
     pub fn set_fov_prefs(&mut self, normal: f32, zoom: f32) {
         self.normal_fov = normal.is_finite().then(|| normal.clamp(5.0, 140.0));
         if self.zoom_fov.is_none() && zoom.is_finite() {
-            let zoom = zoom.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1);
-            self.zoom_fov = Some(zoom);
-            self.zoom_shown = zoom;
+            self.zoom_fov = Some(zoom.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1));
         }
     }
-    /// Ease the zoom toward whether Zoom is held, and the zoom FOV toward
-    /// the wheel's choice; frame-rate independent.
+    /// Ramp the shown FOV toward the zoom FOV while Zoom is held, else the
+    /// normal FOV. Wheel steps and the options slider ride the same ramp.
     pub fn advance_zoom(&mut self, seconds: f32) {
         if !seconds.is_finite() {
             return;
         }
-        let step = 1.0 - (-ZOOM_RATE * seconds.clamp(0.0, 0.25)).exp();
-        let ease = |value: &mut f32, target: f32, done: f32| {
-            *value += (target - *value) * step;
-            if (target - *value).abs() < done {
-                *value = target;
-            }
-        };
-        let zooming = f32::from(u8::from(self.held(HeldControl::Zoom)));
-        ease(&mut self.zoom, zooming, 1e-3);
-        let zoom_fov = self.zoom_fov();
-        if self.zoom == 0.0 || self.zoom_shown == 0.0 {
-            self.zoom_shown = zoom_fov;
+        let target = self.target_fov();
+        let shown = self.fov_shown.get_or_insert(target);
+        let step = ZOOM_DEGREES_PER_SECOND * seconds.clamp(0.0, 0.25);
+        *shown += (target - *shown).clamp(-step, step);
+    }
+    fn target_fov(&self) -> f32 {
+        if self.held(HeldControl::Zoom) {
+            self.zoom_fov.unwrap_or(10.0)
         } else {
-            ease(&mut self.zoom_shown, zoom_fov, 1e-2);
+            self.normal_fov.unwrap_or(90.0)
         }
     }
-    fn zoom_fov(&self) -> f32 {
-        self.zoom_fov.unwrap_or(10.0)
-    }
-    /// The current horizontal FOV in degrees (Torque's `$cameraFov`),
-    /// between the normal FOV and the zoom FOV as zoom eases in. Look
+    /// The current horizontal FOV in degrees (Torque's `$cameraFov`). Look
     /// sensitivity follows it through the transition.
     pub fn fov(&self) -> f32 {
-        let normal = self.normal_fov.unwrap_or(90.0);
-        let t = self.zoom * self.zoom * (3.0 - 2.0 * self.zoom);
-        normal + (self.zoom_shown - normal) * t
+        self.fov_shown.unwrap_or_else(|| self.target_fov())
+    }
+    /// Slide the camera out to third person or in to first person
+    /// (`GameConnection::getControlCameraTransform`).
+    pub fn advance_view(&mut self, seconds: f32) {
+        if !seconds.is_finite() {
+            return;
+        }
+        let speed = if self.fast_view {
+            CAMERA_SPEED.1
+        } else {
+            CAMERA_SPEED.0
+        };
+        let step = speed * seconds.clamp(0.0, 0.25);
+        self.camera_pos = if self.third_person {
+            (self.camera_pos + step).min(1.0)
+        } else {
+            (self.camera_pos - step).max(0.0)
+        };
+    }
+    /// How far the camera is out toward third person, 0 to 1.
+    pub fn camera_pos(&self) -> f32 {
+        self.camera_pos
     }
 }
 #[cfg(test)]
@@ -414,14 +436,13 @@ mod tests {
         assert_eq!(c.movement().head_yaw, 0.0);
         assert_eq!(c.view_angles(), (c.yaw, c.pitch));
         c.set_fov_prefs(90.0, 45.0);
+        c.advance_zoom(0.0);
         held(&mut c, HeldControl::Zoom, true);
-        assert_eq!(c.fov(), 90.0, "zoom eases in rather than snapping");
+        assert_eq!(c.fov(), 90.0, "zoom ramps in rather than snapping");
+        // v20's linear 450 degrees/s: 45 degrees takes 0.1 s.
         c.advance_zoom(0.05);
-        let partial = c.fov();
-        assert!(partial < 90.0 && partial > 45.0, "{partial}");
-        for _ in 0..60 {
-            c.advance_zoom(1.0 / 60.0);
-        }
+        assert!((c.fov() - 67.5).abs() < 1e-3, "{}", c.fov());
+        c.advance_zoom(0.05);
         assert_eq!(c.fov(), 45.0);
         held(&mut c, HeldControl::Zoom, false);
         for _ in 0..4 {
@@ -442,9 +463,9 @@ mod tests {
         assert_eq!(c.fov(), 10.0, "v20's saved zoom FOV, not a fixed 45");
         c.action(&GameAction::SetZoomFov { fov: 15.0 });
         c.set_fov_prefs(110.0, 10.0);
-        c.advance_zoom(1.0 / 60.0);
+        c.advance_zoom(0.005);
         let gliding = c.fov();
-        assert!(gliding > 10.0 && gliding < 15.0, "{gliding}");
+        assert!((gliding - 12.25).abs() < 1e-3, "{gliding}");
         for _ in 0..120 {
             c.advance_zoom(1.0 / 60.0);
         }
@@ -456,6 +477,18 @@ mod tests {
             pitch: 0.0,
         });
         assert!((c.yaw - before - 0.15).abs() < 1e-5);
+    }
+    #[test]
+    fn view_toggle_slides_the_camera_in_a_fifth_of_a_second() {
+        let mut c = Controls::default();
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(0.1);
+        assert!((c.camera_pos() - 0.5).abs() < 1e-6);
+        c.advance_view(0.2);
+        assert_eq!(c.camera_pos(), 1.0);
+        c.action(&GameAction::ToggleFirstPerson { fast: true });
+        c.advance_view(0.001);
+        assert_eq!(c.camera_pos(), 0.0, "FastFirstThirdPerson snaps");
     }
     #[test]
     fn camera_control_leaves_the_body_still_and_unturned() {
