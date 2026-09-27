@@ -78,6 +78,106 @@ fn session() -> Session {
         .unwrap();
     session
 }
+/// The core tools as v20 images with the stock state layout (Activate, Ready,
+/// PreFire, Fire running `onFire`, CheckFire, StopFire), without shapes or
+/// effects, so tool swings cross QUIC without the generated weapons pack.
+fn tool_pack() -> bri_weapons::Pack {
+    let state = |name: &str, ticks, script: &str| bri_weapons::State {
+        name: name.into(),
+        ticks,
+        wait: true,
+        allow_change: true,
+        script: script.into(),
+        ..Default::default()
+    };
+    let mut items = std::collections::BTreeMap::new();
+    let mut images = std::collections::BTreeMap::new();
+    for (id, stem) in bri_weapons::CORE_TOOLS
+        .into_iter()
+        .zip(["hammer", "wrench", "printGun", "wand"])
+    {
+        let image = format!("v20.image.{}image", stem.to_ascii_lowercase());
+        let states = vec![
+            bri_weapons::State {
+                timeout: Some(1),
+                ..state("Activate", 0, "")
+            },
+            bri_weapons::State {
+                down: Some(2),
+                ..state("Ready", 0, "")
+            },
+            bri_weapons::State {
+                timeout: Some(3),
+                ..state("PreFire", 2, "onPreFire")
+            },
+            bri_weapons::State {
+                timeout: Some(4),
+                ..state("Fire", 24, "onFire")
+            },
+            bri_weapons::State {
+                up: Some(5),
+                ..state("CheckFire", 0, "")
+            },
+            bri_weapons::State {
+                timeout: Some(1),
+                ..state("StopFire", 2, "onStopFire")
+            },
+        ];
+        images.insert(
+            image.clone(),
+            bri_weapons::Image {
+                id: image.clone(),
+                name: format!("{stem}Image"),
+                model: String::new(),
+                projectile: None,
+                mount_point: 0,
+                offset: [0.; 3],
+                eye_offset: [0.; 3],
+                source_rotation_degrees: [0.; 3],
+                correct_muzzle: false,
+                melee: true,
+                color: [1.; 4],
+                color_shift: false,
+                arm_ready: true,
+                casing: String::new(),
+                min_shot_ticks: 0,
+                states,
+            },
+        );
+        items.insert(
+            id.to_string(),
+            bri_weapons::Item {
+                id: id.into(),
+                name: format!("{stem}Item"),
+                ui_name: stem.into(),
+                image,
+                model: String::new(),
+                icon: String::new(),
+                can_drop: true,
+                sport: false,
+            },
+        );
+    }
+    let pack = bri_weapons::Pack {
+        schema_version: bri_weapons::SCHEMA,
+        id: "test.tools".into(),
+        items,
+        images,
+        projectiles: Default::default(),
+        damage_types: Default::default(),
+        explosions: Default::default(),
+        definitions: vec![],
+        resources: vec![],
+        diagnostics: vec![],
+    };
+    pack.validate().unwrap();
+    pack
+}
+fn tool_session() -> Session {
+    let mut session = session();
+    session.set_weapon_pack(tool_pack()).unwrap();
+    session
+}
 fn color_row(target: EventTarget, color: u8) -> EventRow {
     EventRow {
         preserved: None,
@@ -200,9 +300,8 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
 async fn full_event_list_crosses_real_quic_replication_and_native_save_atomically() -> Result<()> {
-    let server = server::start(session(), options())?;
+    let server = server::start(tool_session(), options())?;
     let mut owner = Client::connect(
         server.address,
         &server.certificate,
@@ -234,7 +333,9 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
     let inspect = Command::Tool(ToolAction::Inspect {
         mode: InspectMode::Events,
     });
-    owner.command(Command::EquipTool { slot: Some(1) }).await?;
+    // The wrench hit opens the brick; Events is the dialog nested inside it.
+    let (hit, _, mode) = swing(&mut owner, 1).await?.expect("wrench opens the brick");
+    assert_eq!((hit, mode), (id, InspectMode::Wrench));
     assert!(
         matches!(owner.command(inspect.clone()).await?, Reply::Inspected { brick_id, mode: InspectMode::Events, .. } if brick_id == id)
     );
@@ -442,7 +543,6 @@ fn options() -> ServerOptions {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
 async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> Result<()> {
     use bri_sim::session::ActionAim;
     let server = server::start(session(), options())?;
@@ -474,7 +574,6 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         .player
         .eye(&bri_sim::player::PlayerTuning::default());
     let mut sequences = vec![];
-    client.command(Command::EquipTool { slot: Some(1) }).await?;
     for z in [-3.25, 3.25] {
         let d = Vec3::new(0.5, 0.1, z) - eye;
         let aim = ActionAim {
@@ -483,12 +582,7 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         };
         sequences.push(
             client
-                .request_with_aim(
-                    Command::Tool(ToolAction::Inspect {
-                        mode: InspectMode::Wrench,
-                    }),
-                    Some(aim),
-                )
+                .request_with_aim(Command::Activate, Some(aim))
                 .await?,
         );
     }
@@ -498,7 +592,7 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
             if let bri_net::client::ClientEvent::Reply { sequence, result } =
                 client.receive().await?
             {
-                let Reply::Inspected { brick_id, .. } = result.map_err(anyhow::Error::msg)? else {
+                let Reply::Activated(Some(brick_id)) = result.map_err(anyhow::Error::msg)? else {
                     panic!()
                 };
                 replies.push((sequence, brick_id));
@@ -1103,6 +1197,52 @@ async fn aim(client: &mut Client) -> Result<()> {
     })
     .await
 }
+/// Equip a tool slot and swing it once at the current look, returning the
+/// dialog the host opened (wrench or printer). The trigger is released after.
+async fn swing(
+    client: &mut Client,
+    slot: usize,
+) -> Result<Option<(u64, Box<bri_world::Brick>, InspectMode)>> {
+    use bri_net::client::ClientEvent;
+    use bri_sim::session::Notice;
+    client
+        .command(Command::EquipTool { slot: Some(slot) })
+        .await?;
+    // Triggers need a live movement stream; renew it at the current look.
+    let p = &client.replica.poses[&client.owner].player;
+    let look = MoveInput {
+        yaw: p.yaw,
+        pitch: p.pitch,
+        ..Default::default()
+    };
+    send_inputs(client, &[look])?;
+    let press = client
+        .request(Command::WeaponTrigger { down: true })
+        .await?;
+    let opened = tokio::time::timeout(Duration::from_millis(750), async {
+        loop {
+            match client.receive().await? {
+                ClientEvent::Reply {
+                    sequence,
+                    result: Err(error),
+                } if sequence == press => anyhow::bail!("{error}"),
+                ClientEvent::Notice(Notice::Inspected {
+                    brick_id,
+                    brick,
+                    mode,
+                }) => return Ok((brick_id, brick, mode)),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .ok()
+    .transpose()?;
+    client
+        .command(Command::WeaponTrigger { down: false })
+        .await?;
+    Ok(opened)
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_actions() -> Result<()>
@@ -1174,9 +1314,8 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
     Ok(())
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
 async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<()> {
-    let server = server::start(session(), options())?;
+    let server = server::start(tool_session(), options())?;
     let mut a = Client::connect(
         server.address,
         &server.certificate,
@@ -1209,6 +1348,13 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
     wait(&mut b, |c| c.replica.world.bricks.contains_key(&id)).await?;
     aim(&mut a).await?;
     aim(&mut b).await?;
+    // B has no trust: its wrench opens nothing and its hammer leaves A's brick.
+    assert!(swing(&mut b, 1).await?.is_none());
+    assert!(swing(&mut b, 0).await?.is_none());
+    let (opened, _, _) = swing(&mut a, 1)
+        .await?
+        .expect("owner's wrench opens the brick");
+    assert_eq!(opened, id);
     a.command(Command::Chat("Native multiplayer".into()))
         .await?;
     wait(&mut a, |c| {
@@ -1266,9 +1412,9 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
     assert_eq!(resumed.owner, owner);
     assert_eq!(resumed.replica.names[&owner], "A");
     aim(&mut resumed).await?;
-    resumed
-        .command(Command::EquipTool { slot: Some(0) })
-        .await?;
+    // The resumed owner still owns the brick, so the hammer breaks it.
+    assert!(swing(&mut resumed, 0).await?.is_none());
+    wait(&mut resumed, |c| !c.replica.world.bricks.contains_key(&id)).await?;
     drop(resumed);
     drop(b);
     drop(late);
@@ -1276,7 +1422,8 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
     assert_eq!(report.joins, 3);
     assert_eq!(report.resumes, 1);
     assert!(report.final_world.bricks.is_empty());
-    assert!(report.rejected >= 3);
+    // Forged resume and content mismatch; untrusted swings are misses, not rejections.
+    assert!(report.rejected >= 2);
     Ok(())
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

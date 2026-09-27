@@ -301,6 +301,9 @@ impl Session {
     /// setup. Network players change bricks only through their tools.
     pub fn edit_brick(&mut self, owner: OwnerId, id: BrickId, edit: Edit) -> Result<()> {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
+        if let Edit::Events(rows) = &edit {
+            self.validate_event_rows(rows)?;
+        }
         let brick = self.simulation.state().bricks.get(&id).context("Unknown brick")?;
         self.tool_catalog.validate_edit(brick, &edit)?;
         self.item_spawners

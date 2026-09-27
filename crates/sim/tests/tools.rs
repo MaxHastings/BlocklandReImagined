@@ -728,7 +728,6 @@ fn printing_uses_catalog_aspect_letters_default_and_inspection_identity() {
 }
 
 #[test]
-#[ignore = "tools now fire through weapon triggers; rewrite pending"]
 fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
     let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7);
     brick.source_records.push(SourceRecord {
@@ -798,6 +797,13 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
     assert!(
         serde_json::from_str::<ToolAction>(
             r#"{"kind":"set_events","value":{"brick":1,"events":[],"source_records":[]}}"#
+        )
+        .is_err()
+    );
+    // v20 has no raw brick-edit command; clients reach events only by wrench.
+    assert!(
+        serde_json::from_str::<Command>(
+            r#"{"kind":"edit","value":{"brick":1,"edit":{"events":[]}}}"#
         )
         .is_err()
     );

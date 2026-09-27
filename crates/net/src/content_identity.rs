@@ -797,14 +797,68 @@ mod tests {
     use super::*;
     use bri_content::brick_materials::{Bundle, Image, Package, Print, SURFACES, Source};
     use bri_content::effects::{Library, Light};
+    /// The four core tools as pack items, each with its own v20-style image,
+    /// named like the stock pack (including Hammer's trailing space).
+    fn core_tool_items() -> (
+        BTreeMap<String, bri_weapons::Item>,
+        BTreeMap<String, bri_weapons::Image>,
+    ) {
+        let mut items = BTreeMap::new();
+        let mut images = BTreeMap::new();
+        for (id, ui_name) in bri_weapons::CORE_TOOLS
+            .into_iter()
+            .zip(["Hammer ", "Wrench", "Printer", "Wand"])
+        {
+            let stem = id
+                .trim_start_matches("v20.weapon.")
+                .trim_end_matches("item");
+            let image = format!("v20.image.{stem}image");
+            images.insert(
+                image.clone(),
+                bri_weapons::Image {
+                    id: image.clone(),
+                    name: format!("{stem}Image"),
+                    model: "source.dts".into(),
+                    projectile: None,
+                    mount_point: 0,
+                    offset: [0.; 3],
+                    eye_offset: [0.; 3],
+                    source_rotation_degrees: [0.; 3],
+                    correct_muzzle: false,
+                    melee: true,
+                    color: [1.; 4],
+                    color_shift: false,
+                    arm_ready: true,
+                    casing: String::new(),
+                    min_shot_ticks: 0,
+                    states: vec![],
+                },
+            );
+            items.insert(
+                id.into(),
+                bri_weapons::Item {
+                    id: id.into(),
+                    name: format!("{stem}Item"),
+                    ui_name: ui_name.into(),
+                    image,
+                    model: "source.dts".into(),
+                    icon: String::new(),
+                    can_drop: true,
+                    sport: false,
+                },
+            );
+        }
+        (items, images)
+    }
     fn weapon_fixture() -> (PathBuf, bri_weapons::Pack) {
         let root = Fixture::new().root.join("weapons");
         std::fs::create_dir(&root).unwrap();
+        let (items, images) = core_tool_items();
         let pack = bri_weapons::Pack {
             schema_version: bri_weapons::SCHEMA,
             id: "test.weapons".into(),
-            items: BTreeMap::new(),
-            images: BTreeMap::new(),
+            items,
+            images,
             projectiles: BTreeMap::new(),
             damage_types: BTreeMap::new(),
             explosions: BTreeMap::new(),
@@ -825,7 +879,6 @@ mod tests {
         std::fs::write(root.join("weapons.json"), serde_json::to_vec(pack).unwrap()).unwrap();
     }
     #[test]
-    #[ignore = "fixture predates core tools moving into the weapons pack"]
     fn weapons_identity_hashes_native_bytes_and_rejects_catalog_replacement() {
         let (root, mut pack) = weapon_fixture();
         let before = WeaponContent::load(&root).unwrap();
@@ -914,7 +967,6 @@ mod tests {
         std::fs::File::create(root.join("shape.json")).unwrap();
     }
     #[test]
-    #[ignore = "fixture predates core tools moving into the weapons pack"]
     fn weapon_alias_resolution_preserves_unknown_names_and_source_records() {
         let (root, _) = weapon_fixture();
         let content = WeaponContent::load(&root).unwrap();
@@ -953,7 +1005,8 @@ mod tests {
     fn native_weapons_pack_identity_and_all_21_choices() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-007");
         let content = WeaponContent::load(&root).unwrap();
-        assert_eq!(content.pack.items.len(), 17);
+        // 17 weapons plus the four core tools, which are v20 images too.
+        assert_eq!(content.pack.items.len(), 21);
         assert_eq!(content.item_choices.len(), 21);
         assert_eq!(content.extend_identity("base").len(), 64);
         content
@@ -997,7 +1050,6 @@ mod tests {
         .unwrap();
     }
     #[test]
-    #[ignore = "fixture predates core tools moving into the weapons pack"]
     fn item_physics_pins_bounds_catalog_and_resources_into_identity_nine() {
         let (root, weapons, mut manifest, mut physics) = physics_fixture();
         let before = ItemPhysicsContent::load(&root, &weapons).unwrap();
@@ -1037,7 +1089,6 @@ mod tests {
         assert!(ItemPhysicsContent::load(&root, &weapons).is_err());
     }
     #[test]
-    #[ignore = "fixture predates core tools moving into the weapons pack"]
     fn item_physics_rejects_stale_pins_incomplete_catalog_and_invalid_bounds() {
         let (root, weapons, manifest, physics) = physics_fixture();
         let mut invalid = manifest.clone();
