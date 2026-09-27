@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/files", "crates/render", "crates/physics", "crates/content", "crates/convert", "crates/world", "crates/progress", "crates/admin", "crates/identity", "crates/sim", "crates/motor", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import", "crates/console", "crates/package"]
+members = ["crates/files", "crates/render", "crates/physics", "crates/content", "crates/convert", "crates/world", "crates/progress", "crates/admin", "crates/identity", "crates/sim", "crates/motor", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import", "crates/console", "crates/package", "crates/package-runtime"]
 resolver = "2"
 
 [workspace.package]

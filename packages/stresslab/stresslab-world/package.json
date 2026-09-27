@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "stresslab-world",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stress Lab Strata",
+  "description": "A generated, chunked, mineable world of layered ground and ore veins.",
+  "authors": ["Stress Lab"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "v20-bricks": ">=4.0.0" },
+  "capabilities": [],
+  "provides": [
+    { "kind": "behaviour", "id": "stresslab-world:behaviour/strata", "file": "behaviour.json" },
+    { "kind": "script", "id": "stresslab-world:script/strata", "file": "strata.rhai" },
+    { "kind": "world", "id": "stresslab-world:world/strata", "file": "world.json" }
+  ]
+}

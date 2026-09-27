@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "script": "creeper.rhai",
+  "commands": [
+    { "name": "spawn", "admin": true },
+    { "name": "spawn_here", "aim_reach": 32.0, "admin": true }
+  ],
+  "state": {
+    "global": {
+      "natural_spawning": { "default": true, "public": true },
+      "explosions": { "default": 0, "public": true }
+    }
+  },
+  "tick_interval": 1200
+}
