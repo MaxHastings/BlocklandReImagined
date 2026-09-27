@@ -7,6 +7,9 @@ use crate::models::chat::{ChatSend, chat_send};
 use crate::ui::{Callback, MessageBox};
 use crate::view::EventKind;
 
+const SERVER_TYPE: &str = "$Pref::Net::ServerType";
+const MAX_PLAYERS: &str = "$Pref::Server::MaxPlayers";
+
 pub struct NativeScreen {
     id: ScreenId,
     view: View,
@@ -59,14 +62,15 @@ impl NativeScreen {
                 s.visible("DefaultControls_CancelBlocker", false);
             }
             ScreenId::StartMission => {
-                for name in ["SM_demoBanner1", "SM_demoBanner2", "SM_OptionsBlocker"] { s.visible(name, false); }
-                s.radio("SM_OptSinglePlayer");
+                for name in ["SM_demoBanner1", "SM_demoBanner2"] { s.visible(name, false); }
                 // Public legacy services are excluded. LAN and direct IP remain.
                 s.active("SM_OptInternet", false);
                 if let Some(n) = s.view.id("SM_PlayerCountMenu") {
-                    s.view.state(n).items = (1..=64).map(|i| (i.to_string(), i)).collect();
-                    s.view.select(n, Some(core.prefs.i64_or("$Pref::Server::MaxPlayers", 8).clamp(1, 64)));
+                    s.view.state(n).items = (1..=32).map(|i| (i.to_string(), i)).collect();
                 }
+                let lan = core.prefs.str_or(SERVER_TYPE, "SinglePlayer").eq_ignore_ascii_case("LAN");
+                s.radio(if lan { "SM_OptLAN" } else { "SM_OptSinglePlayer" });
+                s.server_type(core, lan);
             }
             ScreenId::JoinServer => {
                 s.visible("JSG_demoBanner", false); s.visible("JSG_demoBanner2", false);
@@ -139,6 +143,19 @@ impl NativeScreen {
                 IconRef::Pack(p) => Some(p.clone()),
                 _ => None,
             };
+        }
+    }
+    /// startMissionGui::ClickSinglePlayer/ClickLAN: single player greys the
+    /// server options out and plays alone.
+    fn server_type(&mut self, core: &Core, lan: bool) {
+        self.visible("SM_OptionsBlocker", !lan);
+        if let Some(n) = self.view.id("SM_PlayerCountMenu") {
+            let players = if lan {
+                core.prefs.i64_or(MAX_PLAYERS, 8).clamp(1, 32)
+            } else {
+                1
+            };
+            self.view.select(n, Some(players));
         }
     }
     fn refresh(&mut self, core: &Core) {
@@ -330,17 +347,25 @@ impl NativeScreen {
                 .map(|n| self.view.edit_text(n))
                 .unwrap_or_default()
         };
+        let lan = self.checked("SM_OptLAN");
+        let max_players = self
+            .selected("SM_PlayerCountMenu")
+            .unwrap_or(1)
+            .clamp(1, 32) as u32;
+        core.prefs
+            .set(SERVER_TYPE, if lan { "LAN" } else { "SinglePlayer" });
+        if lan {
+            core.prefs.set(MAX_PLAYERS, max_players.to_string());
+        }
+        core.save_settings();
         let action = UiAction::HostGame {
             map: id,
-            mode: if self.checked("SM_OptLAN") {
+            mode: if lan {
                 ServerMode::Lan
             } else {
                 ServerMode::SinglePlayer
             },
-            max_players: self
-                .selected("SM_PlayerCountMenu")
-                .unwrap_or(8)
-                .clamp(1, 64) as u32,
+            max_players,
             server_name: self.edit("TxtServerName"),
             password: self.edit("TxtServerPassword"),
             admin_password: pref("$Pref::Server::AdminPassword"),
@@ -499,7 +524,8 @@ impl Screen for NativeScreen {
             }
             "sm_startmission();" => self.host(core),
             "sm_missionlist.select();" => self.map_preview(core),
-            "startmissiongui.clicklan();" | "startmissiongui.clicksingleplayer();" => {}
+            "startmissiongui.clicklan();" => self.server_type(core, true),
+            "startmissiongui.clicksingleplayer();" => self.server_type(core, false),
             "defaultcontrolsgui.apply();" => {
                 let mouse = (0..=3)
                     .find(|i| self.checked(&format!("OPT_Mouse{i}")))

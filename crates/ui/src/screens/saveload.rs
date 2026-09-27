@@ -1,7 +1,16 @@
 //! Native save/load dialogs. Files live on the client's PC; the host authorizes loading.
 use super::*;
 use crate::api::{IconRef, SaveFileInfo, UiAction};
+use crate::ui::Callback;
 use crate::view::EventKind;
+
+/// Native saves are `<name>.world.json`; the dialogs show and take the bare
+/// name like v20 did with `.bls`.
+const EXTENSION: &str = ".world.json";
+
+fn display_name(file: &str) -> &str {
+    file.strip_suffix(EXTENSION).unwrap_or(file)
+}
 
 pub struct SaveLoad {
     id: ScreenId,
@@ -10,7 +19,6 @@ pub struct SaveLoad {
     files: Vec<SaveFileInfo>,
     map: Option<String>,
     pending: Option<RequestId>,
-    overwrite: Option<(String, String, bool, bool)>,
     sort_date: bool,
     descending: bool,
 }
@@ -49,7 +57,6 @@ impl SaveLoad {
             files: vec![],
             map: core.save_context.as_ref().map(|c| c.0.clone()),
             pending: None,
-            overwrite: None,
             sort_date: false,
             descending: false,
         };
@@ -65,42 +72,18 @@ impl SaveLoad {
         for n in s.view.walk().collect::<Vec<_>>() {
             if let Some(var) = s.view.node(n).ctrl.variable.clone() {
                 s.view.set_bool(n, core.prefs.bool_or(&var, true));
+                // Torque's Fast Load skipped brick ghosting; native loading
+                // has no equivalent.
                 if var.eq_ignore_ascii_case("$pref::FastLoad") {
-                    s.view.set_active(n, false);
-                    s.view.set_text(n, "Native load (host controlled)");
+                    s.view.set_visible(n, false);
                 }
             }
         }
-        let parent = window(&s.view).unwrap_or(s.view.root);
-        let mut note = text(
-            "GuiMLTextProfile",
-            if save {
-                Rect::new(330, 408, 280, 58)
-            } else {
-                Rect::new(338, 338, 285, 40)
-            },
-            if save {
-                "Native filename: name.world.json. Builds are saved on your PC."
-            } else {
-                "Select a native save. Loading permissions are checked by the host."
-            },
-        );
-        note.class = "GuiMLTextCtrl".into();
-        note.name = Some("NativeSaveStatus".into());
-        s.view.add(parent, note);
         if save {
-            s.set("SaveBricks_FileName", "My Build.world.json");
             s.view.focus = s.view.id("SaveBricks_FileName");
             // The recovered description edit extends below its authored form.
             if let Some(n) = s.view.id("SaveBricks_Description") {
                 s.view.nodes[n].ctrl.extent[1] = 90;
-            }
-            if let Some(n) = s
-                .view
-                .id("SaveBricks_FileList")
-                .and_then(|n| s.view.node(n).parent)
-            {
-                s.view.nodes[n].ctrl.extent[1] = 314;
             }
         } else if let Some(n) = s.view.id("LoadBricks_Description") {
             s.view.nodes[n].ctrl.extent[1] = 43;
@@ -123,8 +106,12 @@ impl SaveLoad {
             self.view.set_text(n, text);
         }
     }
-    fn status(&mut self, t: &str) {
-        self.set("NativeSaveStatus", t);
+    fn title(&self) -> &'static str {
+        if self.save() {
+            "Save Bricks"
+        } else {
+            "Load Bricks"
+        }
     }
     fn edit(&self, name: &str) -> String {
         self.view
@@ -194,7 +181,12 @@ impl SaveLoad {
                 .files
                 .iter()
                 .enumerate()
-                .map(|(i, f)| (format!("{}\t{}", f.name, f.modified), i as i64))
+                .map(|(i, f)| {
+                    (
+                        format!("{}\t{}", display_name(&f.name), f.modified),
+                        i as i64,
+                    )
+                })
                 .collect();
             self.view.select(
                 n,
@@ -288,12 +280,7 @@ impl SaveLoad {
                     | "GuiPopUpMenuCtrl"
                     | "GuiTextListCtrl"
             ) {
-                let unsupported = c
-                    .variable
-                    .as_deref()
-                    .is_some_and(|v| v.eq_ignore_ascii_case("$pref::FastLoad"));
-                self.view
-                    .set_active(n, self.pending.is_none() && !unsupported);
+                self.view.set_active(n, self.pending.is_none());
             }
         }
         if let Some(n) = self.view.by_command(if self.save() {
@@ -312,60 +299,63 @@ impl SaveLoad {
             );
         }
     }
-    fn reset_confirmation(&mut self) {
-        self.overwrite = None;
-        if let Some(n) = self.view.by_command("SaveBricks_Save();") {
-            self.view.set_text(n, "Save");
-        }
-    }
     fn submit(&mut self, core: &mut Core) {
         if self.pending.is_some() {
             return;
         }
         if self.save() {
             if self.map.is_none() {
-                self.status("Waiting for current map information.");
                 return;
             }
-            let name = self.edit("SaveBricks_FileName");
+            let base = self.edit("SaveBricks_FileName");
+            if base.trim().is_empty() {
+                core.message_ok("No Filename", "You must enter a filename.");
+                return;
+            }
+            let name = format!("{base}{EXTENSION}");
             if !valid_name(&name) {
-                self.status("Use a valid filename ending in .world.json; no folders or reserved device names.");
+                core.message_ok(
+                    "Invalid Filename",
+                    "Filenames cannot contain any of these characters \\ / : * ? \" < > |",
+                );
                 return;
             }
-            let draft = (
-                name.clone(),
-                self.edit("SaveBricks_Description"),
-                self.checked("SaveBricks_ExtendedInfo"),
-                self.checked("SaveBricks_Ownership"),
-            );
-            let exists = self
+            let description = self.edit("SaveBricks_Description");
+            let events = self.checked("SaveBricks_ExtendedInfo");
+            let ownership = self.checked("SaveBricks_Ownership");
+            if self
                 .files
                 .iter()
-                .any(|f| f.name.eq_ignore_ascii_case(&name));
-            if exists && self.overwrite.as_ref() != Some(&draft) {
-                self.overwrite = Some(draft);
-                if let Some(n) = self.view.by_command("SaveBricks_Save();") {
-                    self.view.set_text(n, "Overwrite");
-                }
-                self.status(&format!(
-                    "Replace {name}? Click Overwrite to confirm, or edit/cancel to keep it."
-                ));
+                .any(|f| f.name.eq_ignore_ascii_case(&name))
+            {
+                core.message_yes_no(
+                    "File Exists, Overwrite?",
+                    &format!("Are you sure you want to overwrite the file \"{base}\"?"),
+                    Callback::OverwriteSave {
+                        name,
+                        description,
+                        events,
+                        ownership,
+                    },
+                );
                 return;
             }
             self.pending = Some(core.request_pending(
                 UiAction::SaveBricks {
                     name,
-                    description: draft.1,
-                    events: draft.2,
-                    ownership: draft.3,
-                    overwrite: exists,
+                    description,
+                    events,
+                    ownership,
+                    overwrite: false,
                 },
                 Pending::Save,
             ));
-            self.status("Saving native world...");
         } else {
             if !core.is_admin() {
-                self.status("Loading requires host or administrator permission.");
+                core.message_ok(
+                    "Load Bricks",
+                    "Loading requires host or administrator permission.",
+                );
                 return;
             }
             let Some(file) = self.selected().cloned() else {
@@ -379,14 +369,11 @@ impl SaveLoad {
                 },
                 Pending::Load,
             ));
-            self.status("Loading native world...");
         }
         self.lock();
     }
     fn cancel(&mut self, core: &mut Core) {
-        if self.pending.is_some() {
-            self.status("Processing this request; wait for its result.");
-        } else {
+        if self.pending.is_none() {
             core.pop(self.id);
         }
     }
@@ -429,7 +416,6 @@ impl Screen for SaveLoad {
             return;
         }
         if ev.kind == EventKind::Changed {
-            self.reset_confirmation();
             if self.view.id("LoadBricks_MapMenu") == Some(ev.node) {
                 self.map = self
                     .view
@@ -443,7 +429,7 @@ impl Screen for SaveLoad {
             } else if self.view.id(self.list_name()) == Some(ev.node) {
                 if self.save() {
                     if let Some(f) = self.selected().cloned() {
-                        self.set("SaveBricks_FileName", &f.name);
+                        self.set("SaveBricks_FileName", display_name(&f.name));
                         self.set("SaveBricks_Description", &f.description);
                     }
                 } else {
@@ -475,7 +461,6 @@ impl Screen for SaveLoad {
             }
             "savebricks_description.settext(\"\");" => {
                 self.set("SaveBricks_Description", "");
-                self.reset_confirmation();
             }
             _ => {}
         }
@@ -483,11 +468,14 @@ impl Screen for SaveLoad {
     fn on_result(
         &mut self,
         id: RequestId,
-        _kind: Option<&Pending>,
+        kind: Option<&Pending>,
         result: &Result<(), String>,
         core: &mut Core,
     ) -> bool {
-        if self.pending != Some(id) {
+        // A confirmed overwrite is requested by the message box; this dialog
+        // still owns its result.
+        let confirmed_overwrite = self.save() && kind == Some(&Pending::Save);
+        if self.pending != Some(id) && !confirmed_overwrite {
             return false;
         }
         self.pending = None;
@@ -499,8 +487,7 @@ impl Screen for SaveLoad {
                 }
             }
             Err(e) => {
-                self.reset_confirmation();
-                self.status(&format!("Request rejected: {e}"));
+                core.message_ok(self.title(), &format!("Request rejected: {e}"));
                 self.lock();
             }
         }
@@ -604,33 +591,54 @@ mod tests {
         }
     }
     #[test]
-    fn save_overwrite_confirms_exact_draft_and_rejection_preserves_it() {
+    fn save_takes_bare_names_and_confirms_overwrite_with_a_message_box() {
         let mut ui = fixture();
         let mut s = SaveLoad::new(ScreenId::SaveBricks, &ui.core);
-        s.set("SaveBricks_FileName", "House.world.json");
+        let list = s.view.id("SaveBricks_FileList").unwrap();
+        assert_eq!(s.view.node(list).state.items[0].0, "House\t2026-09-26");
+        s.submit(&mut ui.core);
+        assert!(ui.drain_actions().is_empty(), "an empty name is refused");
+        ui.core.cmds.clear();
+        s.set("SaveBricks_FileName", "House");
         s.set("SaveBricks_Description", "new description");
         s.submit(&mut ui.core);
         assert!(ui.drain_actions().is_empty());
-        assert!(s.overwrite.is_some());
-        s.set("SaveBricks_Description", "changed after confirmation");
-        s.submit(&mut ui.core);
-        assert!(ui.drain_actions().is_empty());
+        let confirm = ui.core.cmds.iter().find_map(|c| match c {
+            crate::ui::StackCmd::Message(m) => Some(m.on_yes.clone()),
+            _ => None,
+        });
+        assert!(matches!(
+            confirm,
+            Some(Callback::OverwriteSave { ref name, ref description, .. })
+                if name == "House.world.json" && description == "new description"
+        ));
+        ui.core.cmds.clear();
+        let id = ui.core.request_pending(
+            UiAction::SaveBricks {
+                name: "House.world.json".into(),
+                description: String::new(),
+                events: true,
+                ownership: true,
+                overwrite: true,
+            },
+            Pending::Save,
+        );
+        ui.drain_actions();
+        assert!(s.on_result(id, Some(&Pending::Save), &Ok(()), &mut ui.core));
+        assert!(
+            ui.core
+                .cmds
+                .iter()
+                .any(|c| matches!(c, crate::ui::StackCmd::Pop(ScreenId::SaveBricks)))
+        );
+        ui.core.cmds.clear();
+        s.set("SaveBricks_FileName", "Tower");
         s.submit(&mut ui.core);
         let actions = ui.drain_actions();
-        let (id, a) = &actions[0];
-        assert!(
-            matches!(a,UiAction::SaveBricks{name,description,overwrite:true,..}if name=="House.world.json"&&description=="changed after confirmation")
-        );
-        s.submit(&mut ui.core);
-        assert!(ui.drain_actions().is_empty());
-        s.on_result(*id, None, &Err("disk full".into()), &mut ui.core);
-        assert_eq!(s.edit("SaveBricks_FileName"), "House.world.json");
-        assert_eq!(
-            s.edit("SaveBricks_Description"),
-            "changed after confirmation"
-        );
-        assert!(s.pending.is_none());
-        assert!(s.overwrite.is_none());
+        assert!(matches!(
+            &actions[0].1,
+            UiAction::SaveBricks { name, overwrite: false, .. } if name == "Tower.world.json"
+        ));
     }
     #[test]
     fn load_map_selection_permissions_and_pending_result() {
@@ -663,6 +671,14 @@ mod tests {
         };
         s.submit(&mut ui.core);
         assert!(ui.drain_actions().is_empty());
+        assert!(
+            ui.core
+                .cmds
+                .iter()
+                .any(|c| matches!(c, crate::ui::StackCmd::Message(_))),
+            "a refused load explains why"
+        );
+        ui.core.cmds.clear();
         ui.core.conn = ConnectionState::InGame {
             server_name: "Test".into(),
             max_players: 8,

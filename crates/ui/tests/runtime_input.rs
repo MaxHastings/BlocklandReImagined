@@ -275,7 +275,12 @@ fn host_uses_current_catalog_once_and_rejection_reenables_form() {
     }]));
     click(&mut u, ScreenId::MainMenu, "start");
     click(&mut u, ScreenId::StartMission, "host");
-    let a = u.drain_actions();
+    // Hosting also saves the chosen server type, as v20's prefs did.
+    let a: Vec<_> = u
+        .drain_actions()
+        .into_iter()
+        .filter(|(_, a)| !matches!(a, UiAction::SaveSettings(_)))
+        .collect();
     assert_eq!(a.len(), 1);
     assert!(matches!(&a[0].1,UiAction::HostGame{map,..} if map=="native/bedroom"));
     click(&mut u, ScreenId::StartMission, "host");
@@ -288,7 +293,13 @@ fn host_uses_current_catalog_once_and_rejection_reenables_form() {
     down(&mut u, Key::Return);
     assert_eq!(u.top_id(), ScreenId::StartMission);
     click(&mut u, ScreenId::StartMission, "host");
-    assert_eq!(actions(&mut u).len(), 1);
+    assert_eq!(
+        actions(&mut u)
+            .iter()
+            .filter(|a| matches!(a, UiAction::HostGame { .. }))
+            .count(),
+        1
+    );
     u.apply(UiUpdate::Connection(ConnectionState::Connecting {
         text: "Hosting".into(),
     }));
