@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod runtime;
 pub use runtime::*;
-pub const SCHEMA: u32 = 2;
+/// 3 adds explosion vertical impulse and per-type vehicle damage scale.
+pub const SCHEMA: u32 = 3;
 pub const TICK_HZ: u32 = 120;
 /// Authored DTS object bounds converted offline to native coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -147,6 +148,8 @@ pub struct Explosion {
     pub radius: f32,
     pub impulse: f32,
     pub impulse_radius: f32,
+    /// `impulseVertical`: a straight-up push alongside the radial one.
+    pub impulse_vertical: f32,
     pub burn_seconds: f32,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -207,6 +210,8 @@ pub struct DamageType {
     pub name: String,
     pub suicide_message: String,
     pub murder_message: String,
+    /// `$Damage::VehicleDamageScale`: vehicles take this share of the damage.
+    pub vehicle_scale: f32,
     pub direct: bool,
 }
 impl DamageType {

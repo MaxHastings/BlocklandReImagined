@@ -44,7 +44,7 @@ fn camera() -> Camera {
 fn effects(root: &Path) -> Result<WeaponEffects> {
     let pack = EffectsPack::load(root.join("content/effects-runtime-pack-002"))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-007/weapons.json"),
+        root.join("content/weapons-pack-008/weapons.json"),
     )?)?);
     let mut fx = WeaponEffects::new(pack, weapons, EffectsLimits::default())?;
     fx.set_palette(&PALETTE);

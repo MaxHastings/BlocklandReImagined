@@ -49,7 +49,7 @@ fn load() -> Pack {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/weapons-pack-007/weapons.json")
+                .join("../../content/weapons-pack-008/weapons.json")
         });
     Pack::from_json(&std::fs::read(path).expect("Run documented importer first")).unwrap()
 }

@@ -180,7 +180,7 @@ pub fn parse(text: &str, path: &str) -> Result<Vec<Definition>> {
 pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
     ensure!(text.len() <= 8 * 1024 * 1024, "Script too large");
     let call = Regex::new(
-        r#"(?i)AddDamageType\s*\(\s*"(\w+)"\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*[^,()]*,\s*([^,()]*)\)"#,
+        r#"(?i)AddDamageType\s*\(\s*"(\w+)"\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*([^,()]*),\s*([^,()]*)\)"#,
     )?;
     let text = uncomment(text);
     Ok(call
@@ -195,7 +195,8 @@ pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
                 name: c[1].to_owned(),
                 suicide_message: text(2, 3),
                 murder_message: text(4, 5),
-                direct: matches!(c[6].trim(), "1" | "true"),
+                vehicle_scale: c[6].trim().parse().unwrap_or(1.0),
+                direct: matches!(c[7].trim(), "1" | "true"),
             }
         })
         .collect())
@@ -313,6 +314,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             radius: e.map_or(0.0, |e| num(e, "damageRadius", 0.0)),
             impulse: e.map_or(0.0, |e| num(e, "impulseForce", 0.0)),
             impulse_radius: e.map_or(0.0, |e| num(e, "impulseRadius", 0.0)),
+            impulse_vertical: e.map_or(0.0, |e| num(e, "impulseVertical", 0.0)),
             burn_seconds: e.map_or(0.0, |e| num(e, "playerBurnTime", 0.0) / 1000.0),
         };
         let sport = field(d, "sportBallImage");
@@ -603,8 +605,8 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
                     .iter()
                     .any(|n| d.name.eq_ignore_ascii_case(n))
                     || CORE_ROOTS
-                    .iter()
-                    .any(|root| d.name.eq_ignore_ascii_case(root))
+                        .iter()
+                        .any(|root| d.name.eq_ignore_ascii_case(root))
             })
             .cloned(),
     );

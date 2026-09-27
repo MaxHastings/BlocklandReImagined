@@ -9,7 +9,7 @@ use bri_world::Brick;
 /// The generated native weapon pack, which includes the core tool images.
 pub fn weapon_pack() -> bri_weapons::Pack {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-007/weapons.json");
+        .join("../../content/weapons-pack-008/weapons.json");
     bri_weapons::Pack::from_json(&std::fs::read(path).expect("Run the documented importer first"))
         .unwrap()
 }

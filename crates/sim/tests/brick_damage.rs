@@ -146,7 +146,7 @@ fn hammer_kills_a_brick_and_throws_it_up_off_its_spot() {
 /// Returns the session and the bricks' ids after the blast.
 fn rocket_at_bricks(lan: bool, bystander_bricks: bool) -> (Session, [u64; 2], Vec<u64>) {
     let pack = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-007/weapons.json");
+        .join("../../content/weapons-pack-008/weapons.json");
     let mut s = session();
     s.set_lan_host(lan);
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(pack).unwrap()).unwrap())

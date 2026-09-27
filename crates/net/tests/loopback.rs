@@ -453,7 +453,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
 #[ignore = "requires native weapons pack; headless QUIC only"]
 async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-007/weapons.json");
+        .join("../../content/weapons-pack-008/weapons.json");
     let mut game = session();
     game.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(root)?)?)?;
     let mut loadout = bri_sim::session::ToolInventory::default();

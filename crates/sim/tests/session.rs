@@ -263,7 +263,7 @@ fn release_after_core_switch_is_idempotent_but_cannot_start_a_weapon() {
 fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably() {
     let mut s = session();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-007/weapons.json");
+        .join("../../content/weapons-pack-008/weapons.json");
     s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap())
         .unwrap();
     let owner = s.join("Player".into(), Vec3::Y, false).unwrap();
@@ -296,7 +296,7 @@ fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably
 fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound() {
     use bri_sim::{presentation::CueKind, session::ActionAim};
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-007/weapons.json");
+        .join("../../content/weapons-pack-008/weapons.json");
     let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();

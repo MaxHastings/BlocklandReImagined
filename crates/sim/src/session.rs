@@ -976,7 +976,16 @@ impl Session {
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
-                let hit = self.simulation.activate(peer.player.eye(), direction)?;
+                let eye = peer.player.eye();
+                let brick_distance = self
+                    .simulation
+                    .target(eye, direction, 5.0)?
+                    .filter(|hit| hit.brick.is_some())
+                    .map(|hit| hit.distance);
+                if self.flip_vehicle(owner, eye, direction, brick_distance) {
+                    return Ok(Reply::Activated(None));
+                }
+                let hit = self.simulation.activate(eye, direction)?;
                 if let Some(brick) = hit
                     && self.special_activate(owner, brick)?
                 {

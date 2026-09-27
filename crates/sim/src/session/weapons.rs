@@ -383,8 +383,9 @@ impl Session {
                     source,
                     target: TargetId::Vehicle(vehicle),
                     amount,
-                    ..
-                } => self.damage_vehicle(vehicle, amount, source.0)?,
+                    kind,
+                    position,
+                } => self.damage_vehicle(vehicle, amount, source.0, &kind, position)?,
                 WeaponEvent::Impulse {
                     target: TargetId::Vehicle(vehicle),
                     impulse,
@@ -414,7 +415,9 @@ impl Session {
                     seconds,
                     ..
                 } => {
-                    if let Some(peer) = self.peers.get(&target.0).filter(|p| p.combat.alive) {
+                    if let Some(peer) = self.peers.get(&target.0).filter(|p| p.combat.alive)
+                        && !self.passenger_protected(target.0, bri_vehicles::DamageKind::Burn)
+                    {
                         let feet = peer.player.state().feet;
                         self.burn_player(target.0, seconds);
                         self.cues.emit(

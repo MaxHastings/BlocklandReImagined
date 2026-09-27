@@ -37,6 +37,8 @@ pub(super) struct Vehicles {
     pending_skis: Vec<(OwnerId, VehicleId, u64)>,
     /// Players riding a tumble vehicle, watched through the corpse camera.
     tumbling: BTreeSet<OwnerId>,
+    /// Player/vehicle pairs in contact last tick, so run-overs fire on contact.
+    touching: BTreeSet<(OwnerId, VehicleId)>,
     scanned: bool,
 }
 #[derive(Debug, Clone)]
@@ -437,14 +439,40 @@ impl Session {
             .find(|v| v.id.0 == vehicle && !v.destroyed)?;
         Some((v.owner.0, world.definition(&v.definition)?.mass))
     }
-    pub(super) fn damage_vehicle(&mut self, vehicle: u64, amount: f32, by: OwnerId) -> Result<()> {
+    /// `WheeledVehicleData::damage`: scaled by the damage type's
+    /// `$Damage::VehicleDamageScale`; a hit on the Tank's turret wears down
+    /// the turret's own health instead.
+    pub(super) fn damage_vehicle(
+        &mut self,
+        vehicle: u64,
+        amount: f32,
+        by: OwnerId,
+        kind: &str,
+        position: Vec3,
+    ) -> Result<()> {
+        let scale = self
+            .weapons
+            .pack
+            .damage_type(kind)
+            .map_or(1.0, |t| t.vehicle_scale);
         if let Some(world) = &mut self.vehicles.world {
-            world.damage(
-                &self.simulation.physics,
-                VehicleId(vehicle),
-                amount,
-                veh::OwnerId(by),
-            )?;
+            let id = VehicleId(vehicle);
+            match world.hit_part(&self.simulation.physics, id, position.to_array()) {
+                veh::VehiclePart::Turret => world.damage_turret(
+                    &mut self.simulation.physics,
+                    id,
+                    amount * scale,
+                    veh::OwnerId(by),
+                )?,
+                veh::VehiclePart::Chassis => world.damage(
+                    &self.simulation.physics,
+                    id,
+                    amount * scale,
+                    veh::OwnerId(by),
+                )?,
+            }
+            let intents = world.drain_intents();
+            self.apply_vehicle_intents(intents)?;
         }
         Ok(())
     }
@@ -546,51 +574,73 @@ impl Session {
         let _ = world.set_controls(veh::OwnerId(owner), OccupantId(owner), controls);
         Ok(())
     }
-    /// Walking into a rideable vehicle mounts its first free seat
-    /// (`Armor::onCollision` with a vehicle, `$Game::MinMountTime`).
-    fn mount_contacts(&mut self) -> Result<()> {
+    /// Players touching vehicles (`WheeledVehicleData::onCollision`): one
+    /// landing on top of a rideable vehicle they may use takes its first free
+    /// mount node (`$Game::MinMountTime` after leaving one); anyone else it
+    /// touches is run over and pushed, once per contact.
+    fn vehicle_contacts(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
         let Some(world) = &self.vehicles.world else {
             return Ok(());
         };
         let snapshot = world.snapshot(&self.simulation.physics);
-        let mut attempts = Vec::new();
+        let mut boarding = Vec::new();
+        let mut touching = BTreeSet::new();
         for (owner, peer) in &self.peers {
-            if !peer.combat.alive
-                || self.bots.is_bot(*owner)
-                || self.vehicles.mounted.contains_key(owner)
-                || self
-                    .vehicles
-                    .last_dismount
-                    .get(owner)
-                    .is_some_and(|t| tick.saturating_sub(*t) < MIN_MOUNT_TICKS)
-            {
+            if !peer.combat.alive || self.vehicles.mounted.contains_key(owner) {
                 continue;
             }
             let bounds = peer.player.world_bounds();
-            let aabb = Aabb::new(
-                Vector::from_array(bounds.min) - Vector::splat(0.2),
-                Vector::from_array(bounds.max) + Vector::splat(0.2),
-            );
+            let half = (Vec3::from(bounds.max) - Vec3::from(bounds.min)) * 0.5 + Vec3::splat(0.05);
+            let body = Cuboid::new(half);
+            let pose =
+                Pose::from_translation((Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5);
             let feet = Vec3::from(peer.player.state().feet);
+            let may_board = !self.bots.is_bot(*owner)
+                && self
+                    .vehicles
+                    .last_dismount
+                    .get(owner)
+                    .is_none_or(|t| tick.saturating_sub(*t) >= MIN_MOUNT_TICKS);
             for v in &snapshot.vehicles {
-                if v.destroyed || feet.y <= v.transform.position[1] + MOUNT_ABOVE * v.scale {
+                if v.destroyed {
                     continue;
                 }
-                let touching = world
+                let contact = world
                     .colliders_of(&self.simulation.physics, v.id)
                     .into_iter()
                     .any(|c| {
                         let collider = &self.simulation.physics.colliders[c];
-                        collider.compute_aabb().intersects(&aabb)
+                        rapier3d::parry::query::contact(
+                            &pose,
+                            &body,
+                            collider.position(),
+                            collider.shape(),
+                            0.0,
+                        )
+                        .is_ok_and(|c| c.is_some())
                     });
-                if touching && self.can_ride(*owner, v.owner.0) {
-                    attempts.push((*owner, v.id, v.seats.len(), feet));
+                if !contact {
+                    continue;
+                }
+                let above = feet.y > v.transform.position[1] + MOUNT_ABOVE * v.scale;
+                let free = v.seats.iter().any(|s| s.occupant.is_none());
+                if above && !v.seats.is_empty() && may_board && self.can_ride(*owner, v.owner.0) {
+                    if free {
+                        boarding.push((*owner, v.id));
+                    }
+                } else {
+                    touching.insert((*owner, v.id));
                 }
             }
         }
+        let begun: Vec<_> = touching
+            .difference(&self.vehicles.touching)
+            .copied()
+            .collect();
+        self.vehicles.touching = touching;
         let world = self.vehicles.world.as_mut().unwrap();
-        for (owner, vehicle, _, _) in attempts {
+        for (owner, vehicle) in boarding {
             // The first free mount node takes the rider, wherever they touched.
             let free = world
                 .snapshot(&self.simulation.physics)
@@ -608,7 +658,136 @@ impl Session {
                 );
             }
         }
+        for (owner, vehicle) in begun {
+            let Some(velocity) = self.peers.get(&owner).map(|p| p.player.state().velocity) else {
+                continue;
+            };
+            let _ = world.player_contact(
+                &self.simulation.physics,
+                vehicle,
+                OccupantId(owner),
+                velocity,
+            );
+        }
         Ok(())
+    }
+    /// `Vehicle::onActivate`: clicking a slow vehicle you may use flips it
+    /// with an impulse of five times its mass, up and away from you.
+    /// Returns whether the click went to a vehicle (not a nearer brick).
+    pub(super) fn flip_vehicle(
+        &mut self,
+        owner: OwnerId,
+        eye: Vec3,
+        direction: Vec3,
+        brick: Option<f32>,
+    ) -> bool {
+        let Some(world) = &self.vehicles.world else {
+            return false;
+        };
+        let direction = direction.normalize_or_zero();
+        let is_vehicle = |_: ColliderHandle, c: &Collider| c.user_data >> 64 == VEHICLE_TAG >> 64;
+        let Some((collider, distance)) = self
+            .simulation
+            .physics
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&is_vehicle))
+            .cast_ray(&Ray::new(eye, direction), 10.0, true)
+        else {
+            return false;
+        };
+        if brick.is_some_and(|brick| brick < distance) {
+            return false;
+        }
+        let id = VehicleId(self.simulation.physics.colliders[collider].user_data as u64);
+        let Some(v) = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .find(|v| v.id == id && !v.destroyed)
+        else {
+            return false;
+        };
+        let Some(mass) = world.definition(&v.definition).map(|d| d.mass) else {
+            return false;
+        };
+        if Vec3::from(v.velocity).length() > 2.0 || !self.can_ride(owner, v.owner.0) {
+            return true;
+        }
+        let impulse = (direction + Vec3::Y).normalize_or_zero() * mass * 5.0 / v.scale;
+        self.push_vehicle(id.0, eye + direction * distance, impulse);
+        true
+    }
+    /// `GameConnection::resetVehicles`: fresh vehicles on the owner's spawn bricks.
+    pub(super) fn reset_owned_vehicles(&mut self, owner: OwnerId) {
+        let bricks: Vec<BrickId> = self
+            .simulation
+            .state()
+            .bricks
+            .iter()
+            .filter(|(_, b)| b.owner == owner && b.vehicle.is_some())
+            .map(|(id, _)| *id)
+            .collect();
+        for brick in bricks {
+            if let Err(error) = self.respawn_vehicle_brick(brick) {
+                if self.notices.len() == 64 {
+                    self.notices.pop_front();
+                }
+                self.notices
+                    .push_back(format!("Reset vehicle {brick}: {error:#}"));
+            }
+        }
+    }
+    /// `fxDTSBrick::vehicleMinigameEject`: riders who may no longer use the
+    /// owner's vehicles get off them.
+    pub(super) fn eject_unwelcome_riders(&mut self, brick_owner: OwnerId) {
+        let Some(world) = &self.vehicles.world else {
+            return;
+        };
+        let riders: Vec<OwnerId> = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .filter(|v| {
+                self.vehicles.brick_of.get(&v.id).is_some_and(|b| {
+                    self.simulation
+                        .state()
+                        .bricks
+                        .get(b)
+                        .is_some_and(|brick| brick.owner == brick_owner)
+                })
+            })
+            .flat_map(|v| {
+                v.seats
+                    .into_iter()
+                    .filter_map(|s| s.occupant.map(|o| o.owner.0))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|rider| !self.can_ride(*rider, brick_owner))
+            .collect();
+        for rider in riders {
+            if let Some(world) = &mut self.vehicles.world {
+                let _ = world.dismount(
+                    &self.simulation.physics,
+                    veh::OwnerId(rider),
+                    OccupantId(rider),
+                    false,
+                );
+            }
+        }
+        if let Some(world) = &mut self.vehicles.world {
+            let intents = world.drain_intents();
+            let _ = self.apply_vehicle_intents(intents);
+        }
+    }
+    /// `Armor::damage` spares passengers the vehicle protects, and
+    /// `radiusDamage` spares them its burn.
+    pub(super) fn passenger_protected(&self, owner: OwnerId, kind: veh::DamageKind) -> bool {
+        let (Some(mount), Some(world)) = (self.vehicles.mounted.get(&owner), &self.vehicles.world)
+        else {
+            return false;
+        };
+        world
+            .passenger_protected(mount.vehicle, kind)
+            .unwrap_or(false)
     }
     pub(super) fn vehicle_pre_step(&mut self) -> Result<()> {
         self.reconcile_vehicle_bricks()?;
@@ -632,7 +811,7 @@ impl Session {
         self.apply_vehicle_intents(intents)?;
         self.board_skis()?;
         self.follow_seats()?;
-        self.mount_contacts()?;
+        self.vehicle_contacts()?;
         Ok(())
     }
     /// `Player::startSkiing`: an invisible ski vehicle at the skier's feet,
@@ -968,19 +1147,24 @@ impl Session {
                     ..
                 } => {
                     let victim = target.0;
-                    if self.can_damage_player(owner.0, victim, false) {
+                    if !self.can_damage_player(owner.0, victim, false) {
+                        continue;
+                    }
+                    if damage > 0.0 {
                         self.damage_player(
                             victim,
                             damage,
                             combat::DamageKind::Weapon {
                                 name: "Vehicle".into(),
-                                direct: true,
+                                direct: false,
                             },
                             Some(owner.0),
                         )?;
                     }
+                    // setVelocity: the push replaces the player's velocity.
                     if let Some(peer) = self.peers.get_mut(&victim) {
-                        peer.player.push(Vec3::from(velocity));
+                        let current = Vec3::from(peer.player.state().velocity);
+                        peer.player.push(Vec3::from(velocity) - current);
                     }
                 }
                 Intent::TumbleRequested {

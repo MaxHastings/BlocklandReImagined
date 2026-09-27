@@ -1603,7 +1603,9 @@ impl WeaponsWorld {
                 }
             }
             let impulse_factor = falloff(distance, d.explosion.impulse_radius * p.scale);
-            if impulse_factor > 0.0 && d.explosion.impulse > 0.0 {
+            if impulse_factor > 0.0
+                && (d.explosion.impulse > 0.0 || d.explosion.impulse_vertical > 0.0)
+            {
                 // `radiusImpulse` flattens a downward push on anything
                 // standing within three units of the ground.
                 let mut push = target.center - p.position;
@@ -1625,8 +1627,8 @@ impl WeaponsWorld {
                 self.events.push(Event::Impulse {
                     source: p.source,
                     target: target.target,
-                    impulse: push.normalize_or_zero()
-                        * d.explosion.impulse
+                    impulse: (push.normalize_or_zero() * d.explosion.impulse
+                        + Vec3::Y * d.explosion.impulse_vertical)
                         * p.scale
                         * impulse_factor,
                     position: p.position,

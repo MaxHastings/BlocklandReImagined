@@ -689,7 +689,7 @@ mod bounds_tests {
         let root = root();
         let assets = ItemAssets::load(
             &root.join("content/item-presentation-pack-008"),
-            &root.join("content/weapons-pack-007"),
+            &root.join("content/weapons-pack-008"),
         )?;
         assert_eq!(assets.item_physics.items.len(), 21);
         // Independently inspected source pistol.dts bytes116..139, SHA
@@ -776,7 +776,7 @@ mod bounds_tests {
             serde_json::from_slice(&std::fs::read(source.join("presentation.json"))?)?;
         let physics: serde_json::Value =
             serde_json::from_slice(&std::fs::read(source.join("item-physics.json"))?)?;
-        let weapons = root.join("content/weapons-pack-007");
+        let weapons = root.join("content/weapons-pack-008");
         for (mode, expected) in [
             (0, "Invalid authored model bounds"),
             (1, "missing field"),

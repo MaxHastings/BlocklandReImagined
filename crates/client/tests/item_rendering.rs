@@ -11,7 +11,7 @@ fn root() -> PathBuf {
 fn assets() -> Result<ItemAssets> {
     ItemAssets::load(
         &root().join("content/item-presentation-pack-008"),
-        &root().join("content/weapons-pack-007"),
+        &root().join("content/weapons-pack-008"),
     )
 }
 
@@ -154,7 +154,7 @@ fn corrupt_or_oversized_native_resources_reject() -> Result<()> {
     let manifest = fixture.join("presentation.json");
     let original = std::fs::read(&manifest)?;
     let value: serde_json::Value = serde_json::from_slice(&original)?;
-    let weapons = root().join("content/weapons-pack-007");
+    let weapons = root().join("content/weapons-pack-008");
     for mode in 0..6 {
         let mut bad = value.clone();
         match mode {

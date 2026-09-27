@@ -932,3 +932,28 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
         );
     }
 }
+#[test]
+fn runover_needs_speed_but_always_pushes_and_skips_player_type_mounts() {
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+    let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    b.set_linvel(Vec3::new(5., 0., 0.), true);
+    // No driver: minRunOverSpeed 4 plus 2, so 5 m/s only pushes.
+    v.player_contact(&w, VehicleId(1), OccupantId(99), [0.; 3])
+        .unwrap();
+    let push = v.drain_intents().into_iter().find_map(|i| match i {
+        Intent::RunOver {
+            damage, velocity, ..
+        } => Some((damage, velocity)),
+        _ => None,
+    });
+    assert_eq!(push, Some((0., [6., 0., 0.])));
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "horsearmor", 0.2);
+    v.player_contact(&w, VehicleId(1), OccupantId(99), [0.; 3])
+        .unwrap();
+    assert!(
+        v.drain_intents().is_empty(),
+        "horses do not run players over"
+    );
+}

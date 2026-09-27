@@ -851,7 +851,12 @@ impl VehiclesWorld {
             DamageKind::Impact => false,
         })
     }
-    /// Feed authoritative contacts against players. Host resolves collider identity; no user_data namespace is assumed.
+    /// A player touched this vehicle without boarding it
+    /// (`WheeledVehicleData::onCollision`). Faster than `minRunOverSpeed`
+    /// (at least 2, plus 2 with no driver) it does speed times
+    /// `runOverDamageScale` damage; either way it sets the player's velocity to
+    /// its own times `runOverPushScale`. Host applies both only where the
+    /// minigame lets the vehicle damage the player. Player-type mounts do not.
     pub fn player_contact(
         &mut self,
         world: &PhysicsWorld,
@@ -860,32 +865,62 @@ impl VehiclesWorld {
         target_velocity: [f32; 3],
     ) -> Result<()> {
         let v = self.instances.get(&id).context("unknown vehicle")?;
-        if self.occupied.contains_key(&target) {
+        let d = &self.catalog[&v.spawn.definition];
+        if self.occupied.contains_key(&target) || d.is_actor() || v.dead_at.is_some() {
             return Ok(());
         }
-        let d = &self.catalog[&v.spawn.definition];
         ensure!(
             Vec3::from_array(target_velocity).is_finite(),
             "invalid target velocity"
         );
-        let delta = v.velocity(d, &world.bodies[v.body]);
-        ensure!(delta.is_finite(), "invalid contact velocity");
-        let speed = delta.length();
-        if speed >= d.runover_speed {
-            self.intents.push(Intent::RunOver {
-                vehicle: id,
-                owner: v
-                    .seats
-                    .iter()
-                    .flatten()
-                    .next()
-                    .map_or(v.spawn.owner, |o| o.owner),
-                target,
-                damage: speed * d.runover_damage,
-                velocity: (delta * d.runover_push).to_array(),
-            });
-        }
+        let velocity = v.velocity(d, &world.bodies[v.body]);
+        ensure!(velocity.is_finite(), "invalid contact velocity");
+        let driver = v.seats.first().copied().flatten();
+        let authored = |value: f32, default: f32| {
+            if value > 0. && value < 1e30 {
+                value
+            } else {
+                default
+            }
+        };
+        let minimum =
+            authored(d.runover_speed, 2.).clamp(2., 999.) + if driver.is_none() { 2. } else { 0. };
+        let speed = velocity.length();
+        self.intents.push(Intent::RunOver {
+            vehicle: id,
+            owner: v
+                .seats
+                .iter()
+                .flatten()
+                .next()
+                .map_or(v.spawn.owner, |o| o.owner),
+            target,
+            damage: if speed > minimum {
+                speed * authored(d.runover_damage, 5.)
+            } else {
+                0.
+            },
+            velocity: (velocity * authored(d.runover_push, 1.2)).to_array(),
+        });
         Ok(())
+    }
+    /// Which part of a vehicle a hit at `point` struck: its attached turret
+    /// when that is the nearer collider.
+    pub fn hit_part(&self, world: &PhysicsWorld, id: VehicleId, point: [f32; 3]) -> VehiclePart {
+        let Some(v) = self.instances.get(&id) else {
+            return VehiclePart::Chassis;
+        };
+        let point = Vec3::from_array(point);
+        let distance = |c: ColliderHandle| {
+            let collider = &world.colliders[c];
+            collider
+                .shape()
+                .distance_to_point(collider.position(), point, true)
+        };
+        match v.turret_collider {
+            Some(turret) if distance(turret) < distance(v.collider) => VehiclePart::Turret,
+            _ => VehiclePart::Chassis,
+        }
     }
     /// Host samples water height at each body position (None outside authored water volumes).
     pub fn pre_step(

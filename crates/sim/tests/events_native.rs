@@ -49,7 +49,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         &content.join("brick-materials-001/brick-materials.json"),
     )?)?;
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-        content.join("weapons-pack-007/weapons.json"),
+        content.join("weapons-pack-008/weapons.json"),
     )?)?;
     let vehicles = bri_vehicles::Pack::load(content.join("vehicles-pack-010/vehicles.json"))?;
     let mut totals = BTreeMap::<String, usize>::new();

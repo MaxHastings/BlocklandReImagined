@@ -364,6 +364,18 @@ impl Session {
         source: Option<OwnerId>,
     ) -> Result<()> {
         let tick = self.simulation.state().tick;
+        if !matches!(kind, DamageKind::Suicide | DamageKind::Event)
+            && self.passenger_protected(
+                target,
+                if kind.direct() {
+                    bri_vehicles::DamageKind::Direct
+                } else {
+                    bri_vehicles::DamageKind::Radius
+                },
+            )
+        {
+            return Ok(());
+        }
         let Some(peer) = self.peers.get_mut(&target) else {
             return Ok(());
         };
@@ -819,12 +831,30 @@ impl Session {
                         }
                     }
                 }
+                // Joining, leaving or resetting a minigame off LAN:
+                // `ClearEventSchedules` and `resetVehicles` for the client.
+                mg::Effect::Cleanup {
+                    player,
+                    clear_event_schedules,
+                    reset_owned_vehicles,
+                    ..
+                } => {
+                    if let Some(owner) = self.owner_of(player) {
+                        if clear_event_schedules {
+                            self.cancel_owner_events(owner);
+                        }
+                        if reset_owned_vehicles {
+                            self.reset_owned_vehicles(owner);
+                        }
+                    }
+                }
+                mg::Effect::EjectVehicles { brick_owner } => {
+                    self.eject_unwelcome_riders(brick_owner.0);
+                }
                 mg::Effect::Created { .. }
                 | mg::Effect::Configured { .. }
                 | mg::Effect::Score { .. }
                 | mg::Effect::Reset { .. }
-                | mg::Effect::Cleanup { .. }
-                | mg::Effect::EjectVehicles { .. }
                 | mg::Effect::StartBall { .. } => {}
             }
         }

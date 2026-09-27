@@ -117,6 +117,17 @@ impl Session {
             }
         }
     }
+    /// `GameConnection::ClearEventSchedules`: cancel the owner's pending events.
+    pub(super) fn cancel_owner_events(&mut self, owner: OwnerId) {
+        let bricks = &self.simulation.state().bricks;
+        if let Some(world) = self.events.world.as_mut() {
+            for brick in &self.events.installed {
+                if bricks.get(brick).is_some_and(|b| b.owner == owner) {
+                    world.cancel_source(id(*brick), ev::CancelMode::All);
+                }
+            }
+        }
+    }
     pub fn take_event_diagnostics(&mut self) -> Vec<String> {
         self.events.diagnostics.drain(..).collect()
     }
