@@ -135,8 +135,16 @@ Ranked by impact on getting problems fixed, with status:
    backtraces and dumps name files and lines (open a dump against the
    matching build's `bri_client.pdb`). Tested by real crashes in child
    processes: `cargo test -p bri-crash`.
-2. Platform-layer robustness (window modes, DPI, focus, device loss, a DX12
-   and Vulkan backend fallback). Next.
+2. **Platform-layer robustness: GPU part done.** The client opens the
+   high-performance adapter on DX12 first, falls back to Vulkan when DX12's
+   driver or device fails, and to WARP software rendering as a last resort so
+   a player still reaches the menus; `WGPU_BACKEND` forces a backend. The
+   chosen GPU, backend and driver go to the session log, with the reasons for
+   any fallback. A lost GPU device (driver reset or update, TDR) now rebuilds
+   the renderer the way a resume does instead of ending the game; three losses
+   within a minute still fail with the reason. Audio device loss was fixed in
+   the first pass. Window modes, DPI, focus and mouse capture belong to the
+   Window thread.
 3. An in-game frame profiler and debug overlays (frame time, CPU and GPU
    spans, net stats) as console commands.
 4. Recorded-input playback tests for GUI and input flows.

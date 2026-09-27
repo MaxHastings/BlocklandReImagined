@@ -87,8 +87,84 @@ struct Graphics {
     renderer: UiRenderer,
     reconfigure: bool,
     device_lost: Arc<Mutex<Option<String>>>,
+    /// Kept to rebuild the GPU after a device loss without an event loop.
+    display: winit::event_loop::OwnedDisplayHandle,
 }
 
+/// Open the discrete GPU on the first backend that works. A broken or missing
+/// driver for one API (a common DX12 or Vulkan failure on older machines)
+/// falls through to the next instead of ending the game; software rendering
+/// (WARP) is the last resort so a player still reaches the menus and can
+/// report the problem. `WGPU_BACKEND=dx12|vulkan|...` forces one backend.
+fn open_gpu(
+    window: &Arc<Window>,
+    display: winit::event_loop::OwnedDisplayHandle,
+) -> Result<(
+    wgpu::Instance,
+    wgpu::Surface<'static>,
+    wgpu::Adapter,
+    wgpu::Device,
+    wgpu::Queue,
+)> {
+    let forced = wgpu::Backends::from_env();
+    let order: Vec<(wgpu::Backends, bool)> = match forced {
+        Some(backends) => vec![(backends, false), (backends, true)],
+        None => vec![
+            (wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN, false),
+            (wgpu::Backends::VULKAN, false),
+            (wgpu::Backends::PRIMARY, true),
+        ],
+    };
+    let mut failures = Vec::new();
+    for (backends, software) in order {
+        if backends.is_empty() {
+            continue;
+        }
+        let mut descriptor =
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display.clone()));
+        descriptor.backends = backends;
+        let instance = wgpu::Instance::new(descriptor);
+        let attempt = (|| -> Result<_> {
+            let surface = instance
+                .create_surface(window.clone())
+                .context("creating the render surface")?;
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: software,
+                    compatible_surface: Some(&surface),
+                    ..Default::default()
+                }))
+                .context("no compatible adapter")?;
+            let (device, queue) =
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                    .context("creating the GPU device")?;
+            Ok((surface, adapter, device, queue))
+        })();
+        match attempt {
+            Ok((surface, adapter, device, queue)) => {
+                let info = adapter.get_info();
+                bri_console::echo(format!(
+                    "GPU: {} ({:?}, {:?}, driver {} {})",
+                    info.name, info.backend, info.device_type, info.driver, info.driver_info
+                ));
+                if !failures.is_empty() {
+                    bri_console::warn(format!(
+                        "Fell back to {:?} after: {}",
+                        info.backend,
+                        failures.join("; ")
+                    ));
+                }
+                return Ok((instance, surface, adapter, device, queue));
+            }
+            Err(error) => failures.push(format!(
+                "{backends:?}{}: {error:#}",
+                if software { " (software)" } else { "" }
+            )),
+        }
+    }
+    anyhow::bail!("No usable GPU backend: {}", failures.join("; "))
+}
 fn present_mode(vsync: bool, modes: &[wgpu::PresentMode]) -> Result<wgpu::PresentMode> {
     if vsync {
         return Ok(wgpu::PresentMode::Fifo);
@@ -105,17 +181,7 @@ impl Graphics {
         vsync: bool,
         display: winit::event_loop::OwnedDisplayHandle,
     ) -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
-            Box::new(display),
-        ));
-        let surface = instance
-            .create_surface(window.clone())
-            .context("creating the native render surface")?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .context("finding a GPU for the native window")?;
+        let (instance, surface, adapter, device, queue) = open_gpu(&window, display.clone())?;
         let caps = surface.get_capabilities(&adapter);
         // UiRenderer samples authored art as unorm; a non-sRGB swapchain matches
         // the existing offscreen reference output without a second gamma curve.
@@ -126,9 +192,6 @@ impl Graphics {
             .find(|f| !f.is_srgb())
             .or_else(|| caps.formats.first().copied())
             .context("surface exposes no texture formats")?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .context("creating the native GPU device")?;
         let device_lost = Arc::new(Mutex::new(None));
         let lost_callback = device_lost.clone();
         device.set_device_lost_callback(move |reason, message| {
@@ -177,6 +240,7 @@ impl Graphics {
             renderer,
             reconfigure: false,
             device_lost,
+            display,
         })
     }
     fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -284,6 +348,8 @@ fn fits(windowed: &[(u32, u32)], (w, h): (u32, u32)) -> bool {
 
 struct Runner {
     config: PlatformConfig,
+    /// Recent GPU device losses, to stop retrying a GPU that keeps failing.
+    gpu_losses: Vec<Instant>,
     window: Option<Arc<Window>>,
     graphics: Option<Graphics>,
     focused: bool,
@@ -316,6 +382,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
     let now = Instant::now();
     let windowed = PhysicalSize::new(config.size.0, config.size.1);
     let mut runner = Runner {
+        gpu_losses: Vec::new(),
         config,
         window: None,
         graphics: None,
@@ -610,6 +677,33 @@ impl Runner {
         }
         self.sync_cursor()
     }
+    /// A lost GPU device (driver reset or update, TDR, eGPU unplug) rebuilds
+    /// the renderer the way a resume does instead of ending the game. Losing
+    /// it again and again means the GPU cannot run the game: then it fails.
+    fn recover_gpu(&mut self, reason: String) -> Result<()> {
+        let now = Instant::now();
+        self.gpu_losses
+            .retain(|lost| now.duration_since(*lost) < Duration::from_secs(60));
+        self.gpu_losses.push(now);
+        anyhow::ensure!(
+            self.gpu_losses.len() <= 3,
+            "The GPU device was lost repeatedly: {reason}"
+        );
+        bri_console::warn(format!("GPU device lost ({reason}); restarting the renderer."));
+        let (Some(window), Some(lost)) = (self.window.clone(), self.graphics.take()) else {
+            return Ok(());
+        };
+        let display = lost.display.clone();
+        self.config.app.gpu_stopped();
+        drop(lost);
+        let gpu = Graphics::new(window.clone(), self.config.vsync, display)?;
+        self.config
+            .app
+            .gpu_ready(&gpu.device, &gpu.queue, gpu.config.format)?;
+        self.graphics = Some(gpu);
+        self.resize(window.inner_size());
+        Ok(())
+    }
     fn render(&mut self) -> Result<()> {
         let Some(window) = &self.window else {
             return Ok(());
@@ -622,7 +716,7 @@ impl Runner {
             return Ok(());
         };
         if let Some(reason) = g.device_lost.lock().ok().and_then(|mut error| error.take()) {
-            bail!("The native GPU device was lost: {reason}");
+            return self.recover_gpu(reason);
         }
         // Resized can trail the real size (restore, DPI, fullscreen toggles);
         // never present a swapchain that disagrees with the window.
