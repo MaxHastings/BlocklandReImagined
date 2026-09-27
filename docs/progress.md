@@ -1998,3 +1998,14 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   controls in the same column apart, which fixes Fullscreen drawn over
   Disable Vsync. Evidence: options unit tests and `ui_runtime_probe` renders
   of all four tabs.
+
+- 2026-09-27 Brick visuals audit against v20 (`docs/audits/bricks.md`). From
+  exe disassembly and emulation: bricks now decal the surface overlay after
+  lighting (GL_DECAL), brickSIDE is clamped with nearest magnification, the
+  ghost brick is v20's pulsing two-shell temp brick, and generated `BRICK`
+  meshes match the exe's generator exactly (TOP studs were rotated 180°, SIDE
+  rim UVs were wrong). Geometry pack is now `maps-pass-007` (maps-pass-003
+  with 80 regenerated meshes via `regenerate_bricks`). Evidence: converter
+  test against emulated output, `brick_audit` render vs
+  `tools/brick_reference.py` independent v20 reference (1.1/255 mean
+  difference). Open: port the exact v20 colour/shape FX equations.
