@@ -1289,7 +1289,7 @@ fn players_cannot_load_builds_teleport_change_maps_or_time() {
         ),
     );
     other.next_brick_id = 2;
-    let build = bri_world::build::SavedBuild::capture(&other, None, false, false).unwrap();
+    let build = bri_world::build::SavedBuild::capture(&other, false, false).unwrap();
     let bricks = g.bricks();
     let feet = g.body(guest).feet;
     assert!(
@@ -2113,7 +2113,7 @@ fn player_saves_cannot_starve_the_administrator_build_budget() {
     let guest = g.s.join("Guest".into(), B_SPAWN, false).unwrap();
     g.steps(60);
     let empty = World::new("Empty".into(), "e".into(), vec![[1.0; 4], [0.0; 4]]);
-    let build = bri_world::build::SavedBuild::capture(&empty, None, false, false).unwrap();
+    let build = bri_world::build::SavedBuild::capture(&empty, false, false).unwrap();
     let load = |build: &bri_world::build::SavedBuild| Command::LoadBuild {
         build: Box::new(build.clone()),
         ownership: false,
