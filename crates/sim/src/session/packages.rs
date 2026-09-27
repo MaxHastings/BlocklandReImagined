@@ -111,15 +111,26 @@ impl PackageStateView {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.packages.len() <= 256, "Too many package namespaces");
         for ns in self.packages.values() {
-            ensure!(ns.players.len() <= 64 && ns.global.len() <= 256, "Oversized package state");
-            for v in ns.global.values().chain(ns.players.values().flat_map(|m| m.values())) {
+            ensure!(
+                ns.players.len() <= 64 && ns.global.len() <= 256,
+                "Oversized package state"
+            );
+            for v in ns
+                .global
+                .values()
+                .chain(ns.players.values().flat_map(|m| m.values()))
+            {
                 bri_package_runtime::state::check_value(v)?;
             }
         }
         Ok(())
     }
     /// A bound value: `package:player/key` for `viewer`, or `package:global/key`.
-    pub fn get(&self, binding: &bri_package_runtime::content::Binding, viewer: OwnerId) -> Option<&serde_json::Value> {
+    pub fn get(
+        &self,
+        binding: &bri_package_runtime::content::Binding,
+        viewer: OwnerId,
+    ) -> Option<&serde_json::Value> {
         let ns = self.packages.get(&binding.package)?;
         if binding.player {
             ns.players.get(&viewer)?.get(&binding.key)
@@ -150,10 +161,21 @@ impl PackageSave {
         Ok(serde_json::to_vec(self)?)
     }
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        ensure!(bytes.len() <= 256 * 1024 * 1024, "Package save is too large");
+        ensure!(
+            bytes.len() <= 256 * 1024 * 1024,
+            "Package save is too large"
+        );
         let save: Self = serde_json::from_slice(bytes).context("Package save is damaged")?;
-        ensure!(save.schema_version == PACKAGE_SAVE_SCHEMA, "Unsupported package save schema");
-        ensure!(save.world.as_ref().is_none_or(|w| w.removed.len() <= MAX_BRICKS * 4), "Oversized world edits");
+        ensure!(
+            save.schema_version == PACKAGE_SAVE_SCHEMA,
+            "Unsupported package save schema"
+        );
+        ensure!(
+            save.world
+                .as_ref()
+                .is_none_or(|w| w.removed.len() <= MAX_BRICKS * 4),
+            "Oversized world edits"
+        );
         Ok(save)
     }
 }
@@ -191,7 +213,10 @@ struct GeneratedWorld {
 impl GeneratedWorld {
     fn chunk_of(&self, position: Vec3) -> (i64, i64) {
         let size = self.def.chunk_size();
-        ((position.x / size).floor() as i64, (position.z / size).floor() as i64)
+        (
+            (position.x / size).floor() as i64,
+            (position.z / size).floor() as i64,
+        )
     }
     fn in_bounds(&self, chunk: (i64, i64)) -> bool {
         let r = i64::from(self.def.radius_chunks);
@@ -222,7 +247,9 @@ fn note(host: &mut PackageHost, diagnostic: Diagnostic) {
     host.diagnostics.push_back(diagnostic);
 }
 fn diagnostics_error(problems: Vec<Diagnostic>) -> anyhow::Error {
-    anyhow::Error::new(bri_package::diag::Rejected(bri_package::diag::Diagnostics(problems)))
+    anyhow::Error::new(bri_package::diag::Rejected(bri_package::diag::Diagnostics(
+        problems,
+    )))
 }
 
 impl Session {
@@ -230,7 +257,11 @@ impl Session {
     /// scripts, set up defaults, restore a save, and generate the world
     /// around the origin. Returns spawn points on the generated ground when
     /// a package provides the world.
-    pub fn install_packages(&mut self, catalog: Arc<Catalog>, save: Option<PackageSave>) -> Result<Vec<Vec3>> {
+    pub fn install_packages(
+        &mut self,
+        catalog: Arc<Catalog>,
+        save: Option<PackageSave>,
+    ) -> Result<Vec<Vec3>> {
         ensure!(
             self.peers.is_empty() && self.departed.is_empty() && self.packages.is_none(),
             "Packages are enabled before players join"
@@ -241,7 +272,9 @@ impl Session {
         for (id, behaviour) in catalog.behaviours() {
             let ns = store.namespace_mut(id);
             for (key, def) in &behaviour.state.global {
-                ns.global.entry(key.clone()).or_insert_with(|| def.default.clone());
+                ns.global
+                    .entry(key.clone())
+                    .or_insert_with(|| def.default.clone());
             }
         }
         let world = match catalog.world() {
@@ -250,7 +283,11 @@ impl Session {
                     Some(w) if &w.provider == provider => w.seed,
                     _ => def.seed,
                 };
-                let removed = save.world.filter(|w| &w.provider == provider).map(|w| w.removed).unwrap_or_default();
+                let removed = save
+                    .world
+                    .filter(|w| &w.provider == provider)
+                    .map(|w| w.removed)
+                    .unwrap_or_default();
                 Some(self.prepare_world(package.id(), provider, def, seed, removed)?)
             }
             None => None,
@@ -266,7 +303,12 @@ impl Session {
             diagnostics: VecDeque::new(),
             output: VecDeque::new(),
         }));
-        let Some(view) = self.packages.as_ref().and_then(|h| h.world.as_ref()).map(|w| w.def.view_chunks as i64) else {
+        let Some(view) = self
+            .packages
+            .as_ref()
+            .and_then(|h| h.world.as_ref())
+            .map(|w| w.def.view_chunks as i64)
+        else {
             return Ok(Vec::new());
         };
         for cx in -view..=view {
@@ -276,13 +318,21 @@ impl Session {
         }
         Ok(self.generated_spawns())
     }
-    fn prepare_world(&mut self, package: &str, provider: &str, def: &ChunkWorld, seed: i64, removed: BTreeSet<[i64; 3]>) -> Result<GeneratedWorld> {
+    fn prepare_world(
+        &mut self,
+        package: &str,
+        provider: &str,
+        def: &ChunkWorld,
+        seed: i64,
+        removed: BTreeSet<[i64; 3]>,
+    ) -> Result<GeneratedWorld> {
         let brick = Brick::new(ContentRef::Resolved(def.voxel_brick.clone()), [0.0; 3], 0);
-        let definition = self
-            .simulation
-            .definitions
-            .get(&brick)
-            .with_context(|| format!("World provider {provider} draws voxels with `{}`, which is not a known brick", def.voxel_brick))?;
+        let definition = self.simulation.definitions.get(&brick).with_context(|| {
+            format!(
+                "World provider {provider} draws voxels with `{}`, which is not a known brick",
+                def.voxel_brick
+            )
+        })?;
         let (min, max) = crate::definitions::brick_box(&brick, &definition.mesh);
         let size = max - min;
         ensure!(
@@ -297,7 +347,10 @@ impl Session {
             let index = match palette.iter().position(|c| *c == material.color) {
                 Some(i) => i,
                 None => {
-                    ensure!(palette.len() < 256, "World provider materials overflow the 256-colour palette");
+                    ensure!(
+                        palette.len() < 256,
+                        "World provider materials overflow the 256-colour palette"
+                    );
                     palette.push(material.color);
                     palette.len() - 1
                 }
@@ -305,8 +358,20 @@ impl Session {
             colors.push(u8::try_from(index)?);
         }
         if palette != self.simulation.state().palette {
-            let plan = bri_world::build::LoadPlan::batch(self.simulation.state(), &palette, Vec::new(), self.next_owner)?;
-            self.simulation.load_build(&Actor { owner: 0, administrator: true, ..Default::default() }, plan)?;
+            let plan = bri_world::build::LoadPlan::batch(
+                self.simulation.state(),
+                &palette,
+                Vec::new(),
+                self.next_owner,
+            )?;
+            self.simulation.load_build(
+                &Actor {
+                    owner: 0,
+                    administrator: true,
+                    ..Default::default()
+                },
+                plan,
+            )?;
         }
         Ok(GeneratedWorld {
             provider: provider.into(),
@@ -342,7 +407,9 @@ impl Session {
     /// Generate one chunk through the package's script and add its voxels as
     /// world-owned bricks.
     fn generate_chunk(&mut self, chunk: (i64, i64)) -> Result<()> {
-        let Some(mut host) = self.packages.take() else { return Ok(()) };
+        let Some(mut host) = self.packages.take() else {
+            return Ok(());
+        };
         let result = (|| -> Result<()> {
             let world = host.world.as_mut().context("No world provider")?;
             if !world.chunks.insert(chunk) || !world.in_bounds(chunk) {
@@ -354,7 +421,11 @@ impl Session {
                 function: &world.def.generate.clone(),
                 args: vec![chunk.0.into(), chunk.1.into()],
                 budget: Budget::Generate,
-                snapshot: Arc::new(Snapshot { seed: world.seed, tick: self.simulation.state().tick, ..Default::default() }),
+                snapshot: Arc::new(Snapshot {
+                    seed: world.seed,
+                    tick: self.simulation.state().tick,
+                    ..Default::default()
+                }),
                 caller: None,
                 aim: None,
                 entity: None,
@@ -362,23 +433,40 @@ impl Session {
                 entity_vars: BTreeMap::new(),
             };
             let package = world.package.clone();
-            let outcome = host.runtime.call(&package, call).map_err(|d| diagnostics_error(vec![d]))?;
+            let outcome = host
+                .runtime
+                .call(&package, call)
+                .map_err(|d| diagnostics_error(vec![d]))?;
             let world = host.world.as_mut().expect("checked above");
             let voxels = script::voxels(&outcome.returned, world.def.materials.len(), limit)
-                .map_err(|m| diagnostics_error(vec![Diagnostic::error("world.voxels", m).at(package.clone())]))?;
+                .map_err(|m| {
+                    diagnostics_error(vec![
+                        Diagnostic::error("world.voxels", m).at(package.clone()),
+                    ])
+                })?;
             let mut bricks = Vec::new();
             let mut placed = Vec::new();
             let mut seen = BTreeSet::new();
             for [x, y, z, m] in voxels {
                 let position = [x, y, z];
                 // Voxels belong to the chunk that generated them.
-                if (x.div_euclid(n), z.div_euclid(n)) != chunk || world.removed.contains(&position) || !seen.insert(position) {
+                if (x.div_euclid(n), z.div_euclid(n)) != chunk
+                    || world.removed.contains(&position)
+                    || !seen.insert(position)
+                {
                     continue;
                 }
-                let mut brick = Brick::new(ContentRef::Resolved(world.def.voxel_brick.clone()), world.center(position), 0);
+                let mut brick = Brick::new(
+                    ContentRef::Resolved(world.def.voxel_brick.clone()),
+                    world.center(position),
+                    0,
+                );
                 brick.color = world.colors[m as usize];
                 bricks.push(brick);
-                placed.push(Voxel { position, material: m as usize });
+                placed.push(Voxel {
+                    position,
+                    material: m as usize,
+                });
             }
             ensure!(
                 self.simulation.state().bricks.len() + bricks.len() <= MAX_BRICKS,
@@ -388,8 +476,20 @@ impl Session {
                 return Ok(());
             }
             let palette = self.simulation.state().palette.clone();
-            let plan = bri_world::build::LoadPlan::batch(self.simulation.state(), &palette, bricks, self.next_owner)?;
-            let ids = self.simulation.load_build(&Actor { owner: 0, administrator: true, ..Default::default() }, plan)?;
+            let plan = bri_world::build::LoadPlan::batch(
+                self.simulation.state(),
+                &palette,
+                bricks,
+                self.next_owner,
+            )?;
+            let ids = self.simulation.load_build(
+                &Actor {
+                    owner: 0,
+                    administrator: true,
+                    ..Default::default()
+                },
+                plan,
+            )?;
             for (id, voxel) in ids.into_iter().zip(placed) {
                 self.dirty.insert(id);
                 world.voxels.insert(id, voxel);
@@ -465,9 +565,16 @@ impl Session {
             let catalog = host.catalog.clone();
             let mut hooks = Vec::new();
             for (id, behaviour) in catalog.behaviours() {
-                let values = host.store.namespace_mut(id).players.entry(key.clone()).or_default();
+                let values = host
+                    .store
+                    .namespace_mut(id)
+                    .players
+                    .entry(key.clone())
+                    .or_default();
                 for (k, def) in &behaviour.state.player {
-                    values.entry(k.clone()).or_insert_with(|| def.default.clone());
+                    values
+                        .entry(k.clone())
+                        .or_insert_with(|| def.default.clone());
                 }
                 if behaviour.on_join {
                     hooks.push(id.clone());
@@ -476,7 +583,15 @@ impl Session {
             hooks
         };
         for package in hooks {
-            let _ = self.run_package(&package, "on_join", vec![Dynamic::from_int(owner as i64)], Budget::Command, Some(owner), None, None);
+            let _ = self.run_package(
+                &package,
+                "on_join",
+                vec![Dynamic::from_int(owner as i64)],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
         }
     }
     /// Run one package function, then commit its state and apply its
@@ -503,7 +618,17 @@ impl Session {
             .filter(|(_, e)| e.package == package)
             .map(|(id, e)| (*id, e.vars.clone()))
             .collect();
-        let call = Call { function, args, budget, snapshot, caller, aim, entity, state, entity_vars };
+        let call = Call {
+            function,
+            args,
+            budget,
+            snapshot,
+            caller,
+            aim,
+            entity,
+            state,
+            entity_vars,
+        };
         let outcome = match host.runtime.call(package, call) {
             Ok(outcome) => outcome,
             Err(diagnostic) => {
@@ -518,34 +643,64 @@ impl Session {
             host.output.push_back(format!("{package}: {line}"));
         }
         // State may only use declared keys.
-        let schema = host.catalog.packages.get(package).and_then(|p| p.behaviour.as_ref()).map(|b| b.state.clone()).unwrap_or_default();
+        let schema = host
+            .catalog
+            .packages
+            .get(package)
+            .and_then(|p| p.behaviour.as_ref())
+            .map(|b| b.state.clone())
+            .unwrap_or_default();
         let undeclared = outcome
             .state
             .global
             .keys()
             .find(|k| !schema.global.contains_key(*k))
-            .or_else(|| outcome.state.players.values().flat_map(|m| m.keys()).find(|k| !schema.player.contains_key(*k)));
+            .or_else(|| {
+                outcome
+                    .state
+                    .players
+                    .values()
+                    .flat_map(|m| m.keys())
+                    .find(|k| !schema.player.contains_key(*k))
+            });
         if let Some(key) = undeclared {
-            let d = Diagnostic::error("state.undeclared", format!("{function} wrote state key `{key}`, which the behaviour does not declare"))
-                .at(package.to_string())
-                .hint("declare every state key under behaviour.json `state`");
+            let d = Diagnostic::error(
+                "state.undeclared",
+                format!("{function} wrote state key `{key}`, which the behaviour does not declare"),
+            )
+            .at(package.to_string())
+            .hint("declare every state key under behaviour.json `state`");
             note(host, d.clone());
             return Err(d);
         }
-        let capabilities = host.catalog.packages.get(package).map(|p| p.manifest.capabilities.clone()).unwrap_or_default();
+        let capabilities = host
+            .catalog
+            .packages
+            .get(package)
+            .map(|p| p.manifest.capabilities.clone())
+            .unwrap_or_default();
         for op in &outcome.ops {
             let owned = match op {
-                Op::RemoveEntity { entity } | Op::Steer { entity, .. } | Op::Label { entity, .. } => {
-                    host.entities.get(entity).is_some_and(|e| e.package == package)
-                }
+                Op::RemoveEntity { entity }
+                | Op::Steer { entity, .. }
+                | Op::Label { entity, .. } => host
+                    .entities
+                    .get(entity)
+                    .is_some_and(|e| e.package == package),
                 _ => true,
             };
             let checked = authorize(package, &capabilities, op).and_then(|()| {
                 if owned {
                     Ok(())
                 } else {
-                    Err(Diagnostic::error("op.not_owner", format!("{} targets an entity this package does not own", bri_package_runtime::ops::op_name(op)))
-                        .at(package.to_string()))
+                    Err(Diagnostic::error(
+                        "op.not_owner",
+                        format!(
+                            "{} targets an entity this package does not own",
+                            bri_package_runtime::ops::op_name(op)
+                        ),
+                    )
+                    .at(package.to_string()))
                 }
             });
             if let Err(d) = checked {
@@ -562,7 +717,10 @@ impl Session {
         for op in outcome.ops {
             if let Err(error) = self.apply_package_op(package, op) {
                 let host = self.packages.as_mut().expect("installed");
-                note(host, Diagnostic::warning("op.failed", format!("{error:#}")).at(package.to_string()));
+                note(
+                    host,
+                    Diagnostic::warning("op.failed", format!("{error:#}")).at(package.to_string()),
+                );
             }
         }
         Ok(())
@@ -571,23 +729,47 @@ impl Session {
         let tick = self.simulation.state().tick;
         match op {
             Op::RemoveBrick { brick } => self.package_remove_brick(brick, None),
-            Op::Explode { position, radius, damage, brick_radius } => {
-                self.explode(Vec3::from(position), radius, damage, brick_radius, package)
-            }
-            Op::DamagePlayer { player, amount } => self.damage_player(player, amount, combat::DamageKind::Package { name: package.into() }, None),
-            Op::SpawnEntity { kind, position } => self.spawn_package_entity(&kind, Vec3::from(position)).map(|_| ()),
+            Op::Explode {
+                position,
+                radius,
+                damage,
+                brick_radius,
+            } => self.explode(Vec3::from(position), radius, damage, brick_radius, package),
+            Op::DamagePlayer { player, amount } => self.damage_player(
+                player,
+                amount,
+                combat::DamageKind::Package {
+                    name: package.into(),
+                },
+                None,
+            ),
+            Op::SpawnEntity { kind, position } => self
+                .spawn_package_entity(&kind, Vec3::from(position))
+                .map(|_| ()),
             Op::RemoveEntity { entity } => {
                 self.remove_package_entity(entity);
                 Ok(())
             }
-            Op::Steer { entity, direction, jump } => {
-                if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&entity)) {
+            Op::Steer {
+                entity,
+                direction,
+                jump,
+            } => {
+                if let Some(e) = self
+                    .packages
+                    .as_mut()
+                    .and_then(|h| h.entities.get_mut(&entity))
+                {
                     e.steer = (Vec3::new(direction[0], 0.0, direction[1]), jump);
                 }
                 Ok(())
             }
             Op::Label { entity, label } => {
-                if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&entity)) {
+                if let Some(e) = self
+                    .packages
+                    .as_mut()
+                    .and_then(|h| h.entities.get_mut(&entity))
+                {
                     e.label = label;
                 }
                 Ok(())
@@ -605,18 +787,42 @@ impl Session {
         }
     }
     /// Remove a brick for good, recording generated voxels as world edits.
-    fn package_remove_brick(&mut self, brick: BrickId, blast: Option<super::debris::BrickBlast>) -> Result<()> {
-        let b = self.simulation.state().bricks.get(&brick).context("No such brick")?;
+    fn package_remove_brick(
+        &mut self,
+        brick: BrickId,
+        blast: Option<super::debris::BrickBlast>,
+    ) -> Result<()> {
+        let b = self
+            .simulation
+            .state()
+            .bricks
+            .get(&brick)
+            .context("No such brick")?;
         let definition = self.simulation.definitions.get(b)?;
-        ensure!(!definition.indestructible && !b.base_plate, "Brick {brick} is indestructible");
+        ensure!(
+            !definition.indestructible && !b.base_plate,
+            "Brick {brick} is indestructible"
+        );
         let center = Vec3::from(b.position);
         if let Some(world) = self.packages.as_ref().and_then(|h| h.world.as_ref())
             && let Some(voxel) = world.voxels.get(&brick)
         {
-            ensure!(!world.def.materials[voxel.material].indestructible, "{} cannot be removed", world.def.materials[voxel.material].name);
+            ensure!(
+                !world.def.materials[voxel.material].indestructible,
+                "{} cannot be removed",
+                world.def.materials[voxel.material].name
+            );
         }
-        let admin = Actor { owner: 0, administrator: true, ..Default::default() };
-        self.kill_brick(&admin, brick, blast.unwrap_or_else(|| super::debris::BrickBlast::pop(center)))?;
+        let admin = Actor {
+            owner: 0,
+            administrator: true,
+            ..Default::default()
+        };
+        self.kill_brick(
+            &admin,
+            brick,
+            blast.unwrap_or_else(|| super::debris::BrickBlast::pop(center)),
+        )?;
         self.forget_voxel(brick);
         Ok(())
     }
@@ -630,8 +836,21 @@ impl Session {
     /// The one explosion operation: damage players within `radius` (full at
     /// the centre, none at the edge), damage package entities the same way,
     /// and destroy bricks within `brick_radius`.
-    pub fn explode(&mut self, center: Vec3, radius: f32, damage: f32, brick_radius: f32, source: &str) -> Result<()> {
-        ensure!(center.is_finite() && radius.is_finite() && damage.is_finite() && brick_radius.is_finite(), "Invalid explosion");
+    pub fn explode(
+        &mut self,
+        center: Vec3,
+        radius: f32,
+        damage: f32,
+        brick_radius: f32,
+        source: &str,
+    ) -> Result<()> {
+        ensure!(
+            center.is_finite()
+                && radius.is_finite()
+                && damage.is_finite()
+                && brick_radius.is_finite(),
+            "Invalid explosion"
+        );
         let victims: Vec<(OwnerId, f32)> = self
             .peers
             .iter()
@@ -641,7 +860,14 @@ impl Session {
             })
             .collect();
         for (owner, amount) in victims {
-            self.damage_player(owner, amount, combat::DamageKind::Package { name: source.into() }, None)?;
+            self.damage_player(
+                owner,
+                amount,
+                combat::DamageKind::Package {
+                    name: source.into(),
+                },
+                None,
+            )?;
             if let Some(p) = self.peers.get_mut(&owner) {
                 let away = (Vec3::from(p.player.state().feet) - center).normalize_or_zero();
                 p.player.push((away + Vec3::Y * 0.5) * amount * 0.2);
@@ -681,7 +907,11 @@ impl Session {
                 })
                 .collect();
             hit.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            let blast = super::debris::BrickBlast { origin: center, force: 20.0, radius: brick_radius };
+            let blast = super::debris::BrickBlast {
+                origin: center,
+                force: 20.0,
+                radius: brick_radius,
+            };
             for (_, brick) in hit.into_iter().take(MAX_BLAST_BRICKS) {
                 // Indestructible bricks and materials simply survive.
                 let _ = self.package_remove_brick(brick, Some(blast));
@@ -690,7 +920,10 @@ impl Session {
         let tick = self.simulation.state().tick;
         self.cues.emit(
             tick,
-            crate::presentation::CueKind::Explosion { radius, source: source.into() },
+            crate::presentation::CueKind::Explosion {
+                radius,
+                source: source.into(),
+            },
             center.to_array(),
         );
         Ok(())
@@ -699,9 +932,17 @@ impl Session {
     /// fits. Returns its id.
     pub fn spawn_package_entity(&mut self, kind: &str, position: Vec3) -> Result<u64> {
         let host = self.packages.as_ref().context("No packages are enabled")?;
-        let (package, def) = host.catalog.entity(kind).with_context(|| format!("Unknown entity kind `{kind}`"))?;
+        let (package, def) = host
+            .catalog
+            .entity(kind)
+            .with_context(|| format!("Unknown entity kind `{kind}`"))?;
         let alive = host.entities.values().filter(|e| e.kind == kind).count();
-        ensure!(alive < def.max_alive as usize, "{} already has {alive} of at most {} alive", def.name, def.max_alive);
+        ensure!(
+            alive < def.max_alive as usize,
+            "{} already has {alive} of at most {} alive",
+            def.name,
+            def.max_alive
+        );
         ensure!(host.entities.len() < 1024, "Too many package entities");
         let id = host.next_entity;
         let (package, def) = (package.id().to_string(), def.clone());
@@ -709,7 +950,13 @@ impl Session {
         let mut body = None;
         for lift in 0..8 {
             let feet = position + Vec3::Y * (lift as f32);
-            if let Ok(b) = Player::spawn_tagged(&mut self.simulation.physics, id, ENTITY_TAG | u128::from(id), feet, tuning.clone()) {
+            if let Ok(b) = Player::spawn_tagged(
+                &mut self.simulation.physics,
+                id,
+                ENTITY_TAG | u128::from(id),
+                feet,
+                tuning.clone(),
+            ) {
                 body = Some(b);
                 break;
             }
@@ -744,34 +991,77 @@ impl Session {
     }
 
     /// A client asked to run a package command.
-    pub(super) fn package_command(&mut self, owner: OwnerId, request: PackageCommand, direction: Vec3) -> Result<Reply> {
-        let host = self.packages.as_ref().context("This server runs no packages")?;
+    pub(super) fn package_command(
+        &mut self,
+        owner: OwnerId,
+        request: PackageCommand,
+        direction: Vec3,
+    ) -> Result<Reply> {
+        let host = self
+            .packages
+            .as_ref()
+            .context("This server runs no packages")?;
         let peer = self.peers.get(&owner).context("Unknown connection")?;
-        let reject = |code: &str, message: String| diagnostics_error(vec![Diagnostic::error(code, message).at(request.package.clone())]);
+        let reject = |code: &str, message: String| {
+            diagnostics_error(vec![
+                Diagnostic::error(code, message).at(request.package.clone()),
+            ])
+        };
         let behaviour = host
             .catalog
             .packages
             .get(&request.package)
             .and_then(|p| p.behaviour.as_ref())
-            .ok_or_else(|| reject("command.package", format!("The server does not run package `{}`", request.package)))?;
+            .ok_or_else(|| {
+                reject(
+                    "command.package",
+                    format!("The server does not run package `{}`", request.package),
+                )
+            })?;
         let def = behaviour
             .commands
             .iter()
             .find(|c| c.name == request.command)
-            .ok_or_else(|| reject("command.unknown", format!("`{}` declares no command `{}`", request.package, request.command)))?;
+            .ok_or_else(|| {
+                reject(
+                    "command.unknown",
+                    format!(
+                        "`{}` declares no command `{}`",
+                        request.package, request.command
+                    ),
+                )
+            })?;
         if def.admin && !peer.actor.administrator {
-            return Err(reject("command.admin", format!("`{}` is for administrators", request.command)));
+            return Err(reject(
+                "command.admin",
+                format!("`{}` is for administrators", request.command),
+            ));
         }
-        if request.args.len() != def.args.len() || !request.args.iter().zip(&def.args).all(|(a, t)| a.matches(*t)) {
-            return Err(reject("command.args", format!("`{}` takes ({:?})", request.command, def.args)));
+        if request.args.len() != def.args.len()
+            || !request
+                .args
+                .iter()
+                .zip(&def.args)
+                .all(|(a, t)| a.matches(*t))
+        {
+            return Err(reject(
+                "command.args",
+                format!("`{}` takes ({:?})", request.command, def.args),
+            ));
         }
-        if request.args.iter().any(|a| matches!(a, PackageArg::String(s) if s.len() > 256 || s.chars().any(char::is_control)) || matches!(a, PackageArg::Float(f) if !f.is_finite())) {
+        if request.args.iter().any(|a| {
+            matches!(a, PackageArg::String(s) if s.len() > 256 || s.chars().any(char::is_control))
+                || matches!(a, PackageArg::Float(f) if !f.is_finite())
+        }) {
             return Err(reject("command.args", "Invalid command argument".into()));
         }
         let tick = self.simulation.state().tick;
         let key = (owner, request.package.clone(), request.command.clone());
         if host.cooldowns.get(&key).is_some_and(|until| tick < *until) {
-            return Err(reject("command.cooldown", format!("`{}` is cooling down", request.command)));
+            return Err(reject(
+                "command.cooldown",
+                format!("`{}` is cooling down", request.command),
+            ));
         }
         let aim = match def.aim_reach {
             Some(reach) => {
@@ -780,7 +1070,10 @@ impl Session {
                 hit.map(|hit| script::Aim {
                     tag: hit.brick.and_then(|b| {
                         let world = host.world.as_ref()?;
-                        world.voxels.get(&b).map(|v| world.def.materials[v.material].id.clone())
+                        world
+                            .voxels
+                            .get(&b)
+                            .map(|v| world.def.materials[v.material].id.clone())
                     }),
                     brick: hit.brick,
                     position: hit.position.to_array(),
@@ -798,21 +1091,36 @@ impl Session {
         {
             host.cooldowns.insert(key, tick + cooldown);
         }
-        self.run_package(&request.package, &function, args, Budget::Command, Some(owner), aim, None)
-            .map_err(|d| diagnostics_error(vec![d]))?;
+        self.run_package(
+            &request.package,
+            &function,
+            args,
+            Budget::Command,
+            Some(owner),
+            aim,
+            None,
+        )
+        .map_err(|d| diagnostics_error(vec![d]))?;
         Ok(Reply::Accepted)
     }
 
     /// Package work for one tick: entity thinking and movement, world
     /// streaming around players, and `on_tick` hooks.
     pub(super) fn step_packages(&mut self) -> Result<()> {
-        let Some(host) = self.packages.as_ref() else { return Ok(()) };
+        let Some(host) = self.packages.as_ref() else {
+            return Ok(());
+        };
         let tick = self.simulation.state().tick;
         // Bricks removed by other means (hammer, wand) are world edits too.
         let gone: Vec<BrickId> = self
             .dirty
             .iter()
-            .filter(|id| host.world.as_ref().is_some_and(|w| w.voxels.contains_key(*id)) && !self.simulation.state().bricks.contains_key(*id))
+            .filter(|id| {
+                host.world
+                    .as_ref()
+                    .is_some_and(|w| w.voxels.contains_key(*id))
+                    && !self.simulation.state().bricks.contains_key(*id)
+            })
             .copied()
             .collect();
         for id in gone {
@@ -826,11 +1134,29 @@ impl Session {
             .map(|(id, e)| (*id, e.package.clone(), e.think.clone()))
             .collect();
         for (id, package, think) in due {
-            let Some(view) = self.package_snapshot().entities.into_iter().find(|e| e.id == id) else { continue };
+            let Some(view) = self
+                .package_snapshot()
+                .entities
+                .into_iter()
+                .find(|e| e.id == id)
+            else {
+                continue;
+            };
             if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
                 e.next_think = tick + e.interval;
             }
-            if self.run_package(&package, &think, vec![script::entity_map(&view)], Budget::Think, None, None, Some(id)).is_err() {
+            if self
+                .run_package(
+                    &package,
+                    &think,
+                    vec![script::entity_map(&view)],
+                    Budget::Think,
+                    None,
+                    None,
+                    Some(id),
+                )
+                .is_err()
+            {
                 // A broken think stops the entity rather than spamming errors.
                 if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
                     e.steer = (Vec3::ZERO, false);
@@ -845,14 +1171,21 @@ impl Session {
                 let (direction, jump) = e.steer;
                 let flat = Vec3::new(direction.x, 0.0, direction.z);
                 let moving = flat.length_squared() > 1e-6;
-                let yaw = if moving { flat.x.atan2(-flat.z) } else { e.body.state().yaw };
+                let yaw = if moving {
+                    flat.x.atan2(-flat.z)
+                } else {
+                    e.body.state().yaw
+                };
                 let input = MoveInput {
                     forward: if moving { e.speed } else { 0.0 },
-                    yaw: (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI,
+                    yaw: (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                        - std::f32::consts::PI,
                     jump,
                     ..Default::default()
                 };
-                let _ = e.body.step_in_water(&mut self.simulation.physics, input, &liquids);
+                let _ = e
+                    .body
+                    .step_in_water(&mut self.simulation.physics, input, &liquids);
                 if e.body.state().feet[1] < KILL_Y {
                     fallen.push(*id);
                 }
@@ -881,7 +1214,11 @@ impl Session {
                     }
                     wanted.sort();
                     wanted.dedup();
-                    wanted.into_iter().map(|(_, c)| c).take(CHUNKS_PER_TICK).collect()
+                    wanted
+                        .into_iter()
+                        .map(|(_, c)| c)
+                        .take(CHUNKS_PER_TICK)
+                        .collect()
                 }
                 None => Vec::new(),
             }
@@ -896,11 +1233,22 @@ impl Session {
             .expect("checked")
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.tick_interval.is_some_and(|i| tick > 0 && tick.is_multiple_of(u64::from(i))))
+            .filter(|(_, b)| {
+                b.tick_interval
+                    .is_some_and(|i| tick > 0 && tick.is_multiple_of(u64::from(i)))
+            })
             .map(|(id, _)| id.clone())
             .collect();
         for package in hooks {
-            let _ = self.run_package(&package, "on_tick", Vec::new(), Budget::Tick, None, None, None);
+            let _ = self.run_package(
+                &package,
+                "on_tick",
+                Vec::new(),
+                Budget::Tick,
+                None,
+                None,
+                None,
+            );
         }
         Ok(())
     }
@@ -928,10 +1276,14 @@ impl Session {
     }
     /// Public package state for clients.
     pub fn package_state(&self) -> PackageStateView {
-        let Some(host) = self.packages.as_ref() else { return PackageStateView::default() };
+        let Some(host) = self.packages.as_ref() else {
+            return PackageStateView::default();
+        };
         let mut view = PackageStateView::default();
         for (id, behaviour) in host.catalog.behaviours() {
-            let Some(ns) = host.store.namespace(id) else { continue };
+            let Some(ns) = host.store.namespace(id) else {
+                continue;
+            };
             let public_global: BTreeMap<_, _> = ns
                 .global
                 .iter()
@@ -952,14 +1304,29 @@ impl Session {
                 }
             }
             if !public_global.is_empty() || !players.is_empty() {
-                view.packages.insert(id.clone(), NamespaceView { global: public_global, players });
+                view.packages.insert(
+                    id.clone(),
+                    NamespaceView {
+                        global: public_global,
+                        players,
+                    },
+                );
             }
         }
         view
     }
     /// The server-side value of a player's package state (tests, tools).
-    pub fn package_value(&self, package: &str, owner: OwnerId, key: &str) -> Option<serde_json::Value> {
-        self.packages.as_ref()?.store.player(package, &self.player_key(owner), key).cloned()
+    pub fn package_value(
+        &self,
+        package: &str,
+        owner: OwnerId,
+        key: &str,
+    ) -> Option<serde_json::Value> {
+        self.packages
+            .as_ref()?
+            .store
+            .player(package, &self.player_key(owner), key)
+            .cloned()
     }
     /// Everything a host saves to resume this package world.
     pub fn package_save(&self) -> Option<PackageSave> {
@@ -967,16 +1334,25 @@ impl Session {
         Some(PackageSave {
             schema_version: PACKAGE_SAVE_SCHEMA,
             store: host.store.persistent(&host.catalog),
-            world: host.world.as_ref().map(|w| WorldSave { provider: w.provider.clone(), seed: w.seed, removed: w.removed.clone() }),
+            world: host.world.as_ref().map(|w| WorldSave {
+                provider: w.provider.clone(),
+                seed: w.seed,
+                removed: w.removed.clone(),
+            }),
         })
     }
     /// Recent package problems, newest last.
     pub fn package_diagnostics(&self) -> Vec<Diagnostic> {
-        self.packages.as_ref().map(|h| h.diagnostics.iter().cloned().collect()).unwrap_or_default()
+        self.packages
+            .as_ref()
+            .map(|h| h.diagnostics.iter().cloned().collect())
+            .unwrap_or_default()
     }
     /// Counts for tools and soak reports.
     pub fn package_stats(&self) -> PackageStats {
-        let Some(host) = self.packages.as_ref() else { return PackageStats::default() };
+        let Some(host) = self.packages.as_ref() else {
+            return PackageStats::default();
+        };
         PackageStats {
             entities: host.entities.len(),
             chunks: host.world.as_ref().map_or(0, |w| w.chunks.len()),

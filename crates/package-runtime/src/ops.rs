@@ -17,7 +17,9 @@ pub const CAPABILITIES: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Op {
-    RemoveBrick { brick: u64 },
+    RemoveBrick {
+        brick: u64,
+    },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
     Explode {
@@ -26,44 +28,79 @@ pub enum Op {
         damage: f32,
         brick_radius: f32,
     },
-    DamagePlayer { player: u64, amount: f32 },
-    SpawnEntity { kind: String, position: [f32; 3] },
-    RemoveEntity { entity: u64 },
+    DamagePlayer {
+        player: u64,
+        amount: f32,
+    },
+    SpawnEntity {
+        kind: String,
+        position: [f32; 3],
+    },
+    RemoveEntity {
+        entity: u64,
+    },
     /// Walk direction on the ground plane (normalised by the engine), jump.
-    Steer { entity: u64, direction: [f32; 2], jump: bool },
+    Steer {
+        entity: u64,
+        direction: [f32; 2],
+        jump: bool,
+    },
     /// A short replicated label clients may present (model colours).
-    Label { entity: u64, label: String },
-    Tell { player: u64, text: String },
-    Broadcast { text: String },
+    Label {
+        entity: u64,
+        label: String,
+    },
+    Tell {
+        player: u64,
+        text: String,
+    },
+    Broadcast {
+        text: String,
+    },
 }
 impl Op {
     pub fn capability(&self) -> &'static str {
         match self {
             Self::RemoveBrick { .. } => "world.edit",
             Self::Explode { .. } | Self::DamagePlayer { .. } => "damage",
-            Self::SpawnEntity { .. } | Self::RemoveEntity { .. } | Self::Steer { .. } | Self::Label { .. } => "entity",
+            Self::SpawnEntity { .. }
+            | Self::RemoveEntity { .. }
+            | Self::Steer { .. }
+            | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } => "chat",
         }
     }
     /// Shape limits, independent of who asks.
     fn bounded(&self) -> Result<(), String> {
         let finite = |v: &[f32]| v.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.0);
-        let chat = |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
+        let chat =
+            |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let ok = match self {
             Self::RemoveBrick { .. } | Self::RemoveEntity { .. } => true,
-            Self::Explode { position, radius, damage, brick_radius } => {
+            Self::Explode {
+                position,
+                radius,
+                damage,
+                brick_radius,
+            } => {
                 finite(position)
                     && (0.0..=32.0).contains(radius)
                     && (0.0..=1000.0).contains(damage)
                     && (0.0..=16.0).contains(brick_radius)
             }
-            Self::DamagePlayer { amount, .. } => amount.is_finite() && (0.0..=1000.0).contains(amount),
+            Self::DamagePlayer { amount, .. } => {
+                amount.is_finite() && (0.0..=1000.0).contains(amount)
+            }
             Self::SpawnEntity { kind, position } => kind.len() <= 128 && finite(position),
             Self::Steer { direction, .. } => finite(direction),
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
         };
-        if ok { Ok(()) } else { Err(format!("{self:?} is outside the operation's limits")) }
+        if ok {
+            Ok(())
+        } else {
+            Err(format!("{self:?} is outside the operation's limits"))
+        }
     }
 }
 
@@ -86,7 +123,11 @@ pub fn authorize(package: &str, capabilities: &[String], op: &Op) -> Result<(), 
     if let Op::SpawnEntity { kind, .. } = op
         && kind.split(':').next() != Some(package)
     {
-        return Err(Diagnostic::error("op.foreign_entity", format!("cannot spawn `{kind}`: packages spawn only their own entity kinds")).at(package));
+        return Err(Diagnostic::error(
+            "op.foreign_entity",
+            format!("cannot spawn `{kind}`: packages spawn only their own entity kinds"),
+        )
+        .at(package));
     }
     Ok(())
 }

@@ -10,12 +10,10 @@ fn mix(mut h: u64) -> u64 {
 }
 /// Uniform in `[0, 1)` for integer lattice coordinates.
 pub fn hash3(seed: i64, x: i64, y: i64, z: i64) -> f64 {
-    let h = mix(
-        (seed as u64)
-            ^ mix(x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            ^ mix((y as u64).wrapping_add(0x632B_E59B_D9B4_E019)).rotate_left(21)
-            ^ mix((z as u64).wrapping_add(0x8515_7AF5)).rotate_left(42),
-    );
+    let h = mix((seed as u64)
+        ^ mix(x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ mix((y as u64).wrapping_add(0x632B_E59B_D9B4_E019)).rotate_left(21)
+        ^ mix((z as u64).wrapping_add(0x8515_7AF5)).rotate_left(42));
     (h >> 11) as f64 / (1u64 << 53) as f64
 }
 /// Smooth 2D value noise in `[-1, 1]`, one lattice cell per unit.

@@ -23,7 +23,10 @@ const MAX_STORE_BYTES: usize = 64 * 1024 * 1024;
 pub struct PlayerKey(pub String);
 impl PlayerKey {
     pub fn principal(bytes: &[u8; 32]) -> Self {
-        Self(format!("principal:{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+        Self(format!(
+            "principal:{}",
+            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        ))
     }
     pub fn session(owner: u64) -> Self {
         Self(format!("session:{owner}"))
@@ -48,7 +51,10 @@ pub fn check_value(value: &Value) -> Result<()> {
         "a state value is at most {MAX_VALUE_BYTES} bytes"
     );
     if let Value::Number(n) = value {
-        ensure!(n.as_f64().is_some_and(f64::is_finite), "numbers must be finite");
+        ensure!(
+            n.as_f64().is_some_and(f64::is_finite),
+            "numbers must be finite"
+        );
     }
     Ok(())
 }
@@ -87,7 +93,12 @@ impl Store {
     pub fn persistent(&self, set: &crate::Catalog) -> Self {
         let mut out = Self::default();
         for (package, ns) in &self.namespaces {
-            let Some(schema) = set.packages.get(package).and_then(|p| p.behaviour.as_ref()).map(|b| &b.state) else {
+            let Some(schema) = set
+                .packages
+                .get(package)
+                .and_then(|p| p.behaviour.as_ref())
+                .map(|b| &b.state)
+            else {
                 continue;
             };
             let target = out.namespace_mut(package);
@@ -115,15 +126,29 @@ impl Store {
             schema_version: STORE_SCHEMA,
             store: self.clone(),
         })?;
-        ensure!(bytes.len() <= MAX_STORE_BYTES, "package state exceeds 64 MiB");
+        ensure!(
+            bytes.len() <= MAX_STORE_BYTES,
+            "package state exceeds 64 MiB"
+        );
         Ok(bytes)
     }
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        ensure!(bytes.len() <= MAX_STORE_BYTES, "package state exceeds 64 MiB");
-        let saved: SavedStore = serde_json::from_slice(bytes).context("Package state file is damaged")?;
-        ensure!(saved.schema_version == STORE_SCHEMA, "Unsupported package state schema");
+        ensure!(
+            bytes.len() <= MAX_STORE_BYTES,
+            "package state exceeds 64 MiB"
+        );
+        let saved: SavedStore =
+            serde_json::from_slice(bytes).context("Package state file is damaged")?;
+        ensure!(
+            saved.schema_version == STORE_SCHEMA,
+            "Unsupported package state schema"
+        );
         for ns in saved.store.namespaces.values() {
-            for v in ns.global.values().chain(ns.players.values().flat_map(|m| m.values())) {
+            for v in ns
+                .global
+                .values()
+                .chain(ns.players.values().flat_map(|m| m.values()))
+            {
                 check_value(v)?;
             }
         }

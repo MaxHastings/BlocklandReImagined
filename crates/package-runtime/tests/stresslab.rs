@@ -27,12 +27,28 @@ fn set() -> PackageSet {
         ("stresslab-economy", Side::Server),
         ("stresslab-hud", Side::Client),
     ] {
-        packages.push(PackageEntry { id: id.into(), version: "1.0.0".into(), side, dir: id.into(), role: None });
+        packages.push(PackageEntry {
+            id: id.into(),
+            version: "1.0.0".into(),
+            side,
+            dir: id.into(),
+            role: None,
+        });
     }
-    PackageSet { schema_version: 1, packages }
+    PackageSet {
+        schema_version: 1,
+        packages,
+    }
 }
 fn player(id: u64) -> PlayerView {
-    PlayerView { id, key: PlayerKey::session(id), name: format!("P{id}"), position: [0.0; 3], alive: true, admin: true }
+    PlayerView {
+        id,
+        key: PlayerKey::session(id),
+        name: format!("P{id}"),
+        position: [0.0; 3],
+        alive: true,
+        admin: true,
+    }
 }
 fn call<'a>(function: &'a str, args: Vec<Dynamic>, snapshot: &Arc<Snapshot>) -> Call<'a> {
     Call {
@@ -56,7 +72,10 @@ fn stress_lab_packages_load_on_server_and_client() {
     assert!(server.entity("stresslab-creeper:entity/creeper").is_some());
     // A client loads only client-side packages and never sees scripts.
     let client = Catalog::load(&root(), &set(), false).unwrap_or_else(|e| panic!("{e:#?}"));
-    assert_eq!(client.packages.keys().collect::<Vec<_>>(), ["stresslab-creeper-model", "stresslab-hud"]);
+    assert_eq!(
+        client.packages.keys().collect::<Vec<_>>(),
+        ["stresslab-creeper-model", "stresslab-hud"]
+    );
     assert!(client.packages.values().all(|p| p.behaviour.is_none()));
     Runtime::compile(&server).unwrap_or_else(|e| panic!("{e:#?}"));
 }
@@ -66,21 +85,35 @@ fn world_generation_is_deterministic_and_bounded() {
     let catalog = Catalog::load(&root(), &set(), true).unwrap();
     let mut runtime = Runtime::compile(&catalog).unwrap();
     let (_, _, world) = catalog.world().unwrap();
-    let snapshot = Arc::new(Snapshot { seed: world.seed, ..Default::default() });
+    let snapshot = Arc::new(Snapshot {
+        seed: world.seed,
+        ..Default::default()
+    });
     let mut generate = |cx: i64, cz: i64| {
         let mut c = call(&world.generate, vec![cx.into(), cz.into()], &snapshot);
         c.budget = Budget::Generate;
-        let out = runtime.call("stresslab-world", c).unwrap_or_else(|e| panic!("{e}"));
+        let out = runtime
+            .call("stresslab-world", c)
+            .unwrap_or_else(|e| panic!("{e}"));
         voxels(&out.returned, world.materials.len(), 8 * 8 * 64).unwrap()
     };
     let a = generate(0, 0);
     assert_eq!(a, generate(0, 0));
     assert_ne!(a, generate(1, 0));
-    assert!(a.iter().all(|v| (0..8).contains(&v[0]) && (0..8).contains(&v[2])));
-    assert!(a.iter().filter(|v| v[1] == 0).all(|v| v[3] == 6), "bedrock floor");
+    assert!(
+        a.iter()
+            .all(|v| (0..8).contains(&v[0]) && (0..8).contains(&v[2]))
+    );
+    assert!(
+        a.iter().filter(|v| v[1] == 0).all(|v| v[3] == 6),
+        "bedrock floor"
+    );
     let many: Vec<_> = (0..6).flat_map(|c| generate(c, -c)).collect();
     for ore in [3, 4, 5] {
-        assert!(many.iter().any(|v| v[3] == ore), "material {ore} never generated");
+        assert!(
+            many.iter().any(|v| v[3] == ore),
+            "material {ore} never generated"
+        );
     }
 }
 
@@ -88,28 +121,61 @@ fn world_generation_is_deterministic_and_bounded() {
 fn mining_economy_runs_on_server_state_only() {
     let catalog = Catalog::load(&root(), &set(), true).unwrap();
     let mut runtime = Runtime::compile(&catalog).unwrap();
-    let snapshot = Arc::new(Snapshot { players: vec![player(5)], ..Default::default() });
+    let snapshot = Arc::new(Snapshot {
+        players: vec![player(5)],
+        ..Default::default()
+    });
     let key = PlayerKey::session(5);
     let mut state = Namespace::default();
-    let defaults = catalog.packages["stresslab-economy"].behaviour.as_ref().unwrap().state.clone();
-    state.players.insert(key.clone(), defaults.player.iter().map(|(k, d)| (k.clone(), d.default.clone())).collect());
-    state.global = defaults.global.iter().map(|(k, d)| (k.clone(), d.default.clone())).collect();
+    let defaults = catalog.packages["stresslab-economy"]
+        .behaviour
+        .as_ref()
+        .unwrap()
+        .state
+        .clone();
+    state.players.insert(
+        key.clone(),
+        defaults
+            .player
+            .iter()
+            .map(|(k, d)| (k.clone(), d.default.clone()))
+            .collect(),
+    );
+    state.global = defaults
+        .global
+        .iter()
+        .map(|(k, d)| (k.clone(), d.default.clone()))
+        .collect();
     let mut mine = |state: &mut Namespace, tag: &str| {
         let mut c = call("cmd_mine", vec![5_i64.into()], &snapshot);
         c.caller = Some(5);
-        c.aim = Some(Aim { brick: Some(77), tag: Some(tag.into()), position: [0.0; 3], distance: 2.0 });
+        c.aim = Some(Aim {
+            brick: Some(77),
+            tag: Some(tag.into()),
+            position: [0.0; 3],
+            distance: 2.0,
+        });
         c.state = state.clone();
-        let out = runtime.call("stresslab-economy", c).unwrap_or_else(|e| panic!("{e}"));
+        let out = runtime
+            .call("stresslab-economy", c)
+            .unwrap_or_else(|e| panic!("{e}"));
         *state = out.state;
         out.ops
     };
-    assert_eq!(mine(&mut state, "stresslab-world:material/copper"), [Op::RemoveBrick { brick: 77 }]);
+    assert_eq!(
+        mine(&mut state, "stresslab-world:material/copper"),
+        [Op::RemoveBrick { brick: 77 }]
+    );
     mine(&mut state, "stresslab-world:material/copper");
     mine(&mut state, "stresslab-world:material/stone");
     assert_eq!(state.players[&key]["copper"], 2);
     assert_eq!(state.players[&key]["mined"], 3);
     // Bedrock is not mineable: no removal is asked for.
-    assert!(!mine(&mut state, "stresslab-world:material/bedrock").iter().any(|o| matches!(o, Op::RemoveBrick { .. })));
+    assert!(
+        !mine(&mut state, "stresslab-world:material/bedrock")
+            .iter()
+            .any(|o| matches!(o, Op::RemoveBrick { .. }))
+    );
     let mut c = call("cmd_sell_all", vec![5_i64.into()], &snapshot);
     c.state = state.clone();
     let out = runtime.call("stresslab-economy", c).unwrap();
@@ -125,7 +191,9 @@ fn creeper_chases_then_fuses_then_explodes() {
     let mut vars = BTreeMap::from([(9_u64, BTreeMap::new())]);
     let mut state = Namespace::default();
     state.global.insert("explosions".into(), 0.into());
-    let mut think = |x: f32, vars: &mut BTreeMap<u64, BTreeMap<String, serde_json::Value>>, state: &mut Namespace| {
+    let mut think = |x: f32,
+                     vars: &mut BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+                     state: &mut Namespace| {
         let me = EntityView {
             id: 9,
             kind: "stresslab-creeper:entity/creeper".into(),
@@ -135,23 +203,38 @@ fn creeper_chases_then_fuses_then_explodes() {
             health: 20.0,
             speed: 3.0,
         };
-        let snapshot = Arc::new(Snapshot { players: vec![player(1)], entities: vec![me.clone()], ..Default::default() });
+        let snapshot = Arc::new(Snapshot {
+            players: vec![player(1)],
+            entities: vec![me.clone()],
+            ..Default::default()
+        });
         let mut c = call("think", vec![entity_map(&me)], &snapshot);
         c.entity = Some(9);
         c.budget = Budget::Think;
         c.entity_vars = vars.clone();
         c.state = state.clone();
-        let out = runtime.call("stresslab-creeper", c).unwrap_or_else(|e| panic!("{e}"));
+        let out = runtime
+            .call("stresslab-creeper", c)
+            .unwrap_or_else(|e| panic!("{e}"));
         *vars = out.entity_vars;
         *state = out.state;
         out.ops
     };
     let far = think(10.0, &mut vars, &mut state);
-    assert!(far.iter().any(|o| matches!(o, Op::Steer { direction, .. } if direction[0] < 0.0)), "{far:?}");
+    assert!(
+        far.iter()
+            .any(|o| matches!(o, Op::Steer { direction, .. } if direction[0] < 0.0)),
+        "{far:?}"
+    );
     let exploded = (0..20).any(|_| {
         let ops = think(1.0, &mut vars, &mut state);
         let boom = ops.iter().any(|o| matches!(o, Op::Explode { .. }));
-        assert!(!boom || ops.iter().any(|o| matches!(o, Op::RemoveEntity { entity: 9 })));
+        assert!(
+            !boom
+                || ops
+                    .iter()
+                    .any(|o| matches!(o, Op::RemoveEntity { entity: 9 }))
+        );
         boom
     });
     assert!(exploded);
@@ -160,14 +243,42 @@ fn creeper_chases_then_fuses_then_explodes() {
 
 #[test]
 fn one_capability_gate_checks_every_operation() {
-    let op = Op::Explode { position: [0.0; 3], radius: 3.0, damage: 10.0, brick_radius: 0.0 };
-    let denied = authorize("stresslab-economy", &["world.edit".into(), "chat".into()], &op).unwrap_err();
+    let op = Op::Explode {
+        position: [0.0; 3],
+        radius: 3.0,
+        damage: 10.0,
+        brick_radius: 0.0,
+    };
+    let denied = authorize(
+        "stresslab-economy",
+        &["world.edit".into(), "chat".into()],
+        &op,
+    )
+    .unwrap_err();
     assert_eq!(denied.code, "op.capability");
     assert!(authorize("stresslab-creeper", &["damage".into()], &op).is_ok());
-    let foreign = Op::SpawnEntity { kind: "other:entity/x".into(), position: [0.0; 3] };
-    assert_eq!(authorize("stresslab-creeper", &["entity".into()], &foreign).unwrap_err().code, "op.foreign_entity");
-    let huge = Op::Explode { position: [0.0; 3], radius: 500.0, damage: 10.0, brick_radius: 0.0 };
-    assert_eq!(authorize("stresslab-creeper", &["damage".into()], &huge).unwrap_err().code, "op.bounds");
+    let foreign = Op::SpawnEntity {
+        kind: "other:entity/x".into(),
+        position: [0.0; 3],
+    };
+    assert_eq!(
+        authorize("stresslab-creeper", &["entity".into()], &foreign)
+            .unwrap_err()
+            .code,
+        "op.foreign_entity"
+    );
+    let huge = Op::Explode {
+        position: [0.0; 3],
+        radius: 500.0,
+        damage: 10.0,
+        brick_radius: 0.0,
+    };
+    assert_eq!(
+        authorize("stresslab-creeper", &["damage".into()], &huge)
+            .unwrap_err()
+            .code,
+        "op.bounds"
+    );
 }
 
 #[test]
@@ -193,14 +304,24 @@ fn runaway_scripts_are_stopped_and_change_nothing() {
     .unwrap();
     let set = PackageSet {
         schema_version: 1,
-        packages: vec![PackageEntry { id: "loop".into(), version: "1.0.0".into(), side: Side::Server, dir: "loop".into(), role: None }],
+        packages: vec![PackageEntry {
+            id: "loop".into(),
+            version: "1.0.0".into(),
+            side: Side::Server,
+            dir: "loop".into(),
+            role: None,
+        }],
     };
     let catalog = Catalog::load(dir.path(), &set, true).unwrap();
     let mut runtime = Runtime::compile(&catalog).unwrap();
     let snapshot = Arc::new(Snapshot::default());
-    let spin = runtime.call("loop", call("cmd_spin", vec![1_i64.into()], &snapshot)).unwrap_err();
+    let spin = runtime
+        .call("loop", call("cmd_spin", vec![1_i64.into()], &snapshot))
+        .unwrap_err();
     assert_eq!(spin.code, "script.budget", "{spin}");
-    let big = runtime.call("loop", call("cmd_big", vec![1_i64.into()], &snapshot)).unwrap_err();
+    let big = runtime
+        .call("loop", call("cmd_big", vec![1_i64.into()], &snapshot))
+        .unwrap_err();
     assert_eq!(big.code, "script.limit", "{big}");
 }
 
@@ -218,12 +339,30 @@ fn broken_packages_report_every_problem_with_codes() {
     .unwrap();
     let set = PackageSet {
         schema_version: 1,
-        packages: vec![PackageEntry { id: "bad".into(), version: "1.0.0".into(), side: Side::Client, dir: "bad".into(), role: None }],
+        packages: vec![PackageEntry {
+            id: "bad".into(),
+            version: "1.0.0".into(),
+            side: Side::Client,
+            dir: "bad".into(),
+            role: None,
+        }],
     };
     let problems = Catalog::load(dir.path(), &set, true).unwrap_err();
     let codes: Vec<&str> = problems.iter().map(|d| d.code.as_str()).collect();
-    for code in ["manifest.version", "manifest.api", "manifest.license", "manifest.capability", "manifest.provide.namespace", "manifest.provide.unknown_kind"] {
+    for code in [
+        "manifest.version",
+        "manifest.api",
+        "manifest.license",
+        "manifest.capability",
+        "manifest.provide.namespace",
+        "manifest.provide.unknown_kind",
+    ] {
         assert!(codes.contains(&code), "{code} missing from {codes:?}");
     }
-    assert!(problems.iter().all(|d| d.location.as_deref().is_some_and(|l| l.starts_with("bad/"))), "{problems:#?}");
+    assert!(
+        problems
+            .iter()
+            .all(|d| d.location.as_deref().is_some_and(|l| l.starts_with("bad/"))),
+        "{problems:#?}"
+    );
 }

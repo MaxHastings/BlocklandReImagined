@@ -1,8 +1,8 @@
 //! The content kinds a package may provide, and their typed definitions.
 //! Each kind declares which side needs it: server-only kinds (behaviour,
 //! scripts, world providers) never leave the host.
-use bri_package::packages::Side;
 use anyhow::{Result, ensure};
+use bri_package::packages::Side;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -58,7 +58,8 @@ fn identifier(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 48
         && s.starts_with(|c: char| c.is_ascii_lowercase())
-        && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 fn color(c: &[f32; 4]) -> bool {
     c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
@@ -136,24 +137,47 @@ fn yes() -> bool {
 }
 impl Behaviour {
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema_version == 1, "behaviour schema_version must be 1");
+        ensure!(
+            self.schema_version == 1,
+            "behaviour schema_version must be 1"
+        );
         ensure!(self.commands.len() <= 64, "at most 64 commands");
         let mut names = std::collections::BTreeSet::new();
         for c in &self.commands {
-            ensure!(identifier(&c.name), "command name `{}` must be lowercase a-z, 0-9, _", c.name);
+            ensure!(
+                identifier(&c.name),
+                "command name `{}` must be lowercase a-z, 0-9, _",
+                c.name
+            );
             ensure!(names.insert(&c.name), "duplicate command `{}`", c.name);
-            ensure!(c.args.len() <= 8, "command `{}` has more than 8 arguments", c.name);
+            ensure!(
+                c.args.len() <= 8,
+                "command `{}` has more than 8 arguments",
+                c.name
+            );
             if let Some(reach) = c.aim_reach {
-                ensure!(reach.is_finite() && (0.0..=64.0).contains(&reach), "aim_reach must be 0 to 64");
+                ensure!(
+                    reach.is_finite() && (0.0..=64.0).contains(&reach),
+                    "aim_reach must be 0 to 64"
+                );
             }
         }
         for (key, def) in self.state.player.iter().chain(&self.state.global) {
-            ensure!(identifier(key), "state key `{key}` must be lowercase a-z, 0-9, _");
+            ensure!(
+                identifier(key),
+                "state key `{key}` must be lowercase a-z, 0-9, _"
+            );
             crate::state::check_value(&def.default)?;
         }
-        ensure!(self.state.player.len() + self.state.global.len() <= 256, "at most 256 state keys");
+        ensure!(
+            self.state.player.len() + self.state.global.len() <= 256,
+            "at most 256 state keys"
+        );
         if let Some(interval) = self.tick_interval {
-            ensure!((1..=12_000).contains(&interval), "tick_interval must be 1 to 12000");
+            ensure!(
+                (1..=12_000).contains(&interval),
+                "tick_interval must be 1 to 12000"
+            );
         }
         Ok(())
     }
@@ -199,16 +223,42 @@ pub struct Material {
 impl ChunkWorld {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "world schema_version must be 1");
-        ensure!(identifier(&self.generate), "generate must name a script function");
-        ensure!((1..=32).contains(&self.chunk_voxels), "chunk_voxels must be 1 to 32");
-        ensure!(self.voxel_size.is_finite() && (0.25..=16.0).contains(&self.voxel_size), "voxel_size must be 0.25 to 16");
+        ensure!(
+            identifier(&self.generate),
+            "generate must name a script function"
+        );
+        ensure!(
+            (1..=32).contains(&self.chunk_voxels),
+            "chunk_voxels must be 1 to 32"
+        );
+        ensure!(
+            self.voxel_size.is_finite() && (0.25..=16.0).contains(&self.voxel_size),
+            "voxel_size must be 0.25 to 16"
+        );
         ensure!(text(&self.voxel_brick, 256), "voxel_brick is required");
-        ensure!((1..=8).contains(&self.view_chunks), "view_chunks must be 1 to 8");
-        ensure!((1..=256).contains(&self.radius_chunks), "radius_chunks must be 1 to 256");
-        ensure!(!self.materials.is_empty() && self.materials.len() <= 64, "1 to 64 materials");
+        ensure!(
+            (1..=8).contains(&self.view_chunks),
+            "view_chunks must be 1 to 8"
+        );
+        ensure!(
+            (1..=256).contains(&self.radius_chunks),
+            "radius_chunks must be 1 to 256"
+        );
+        ensure!(
+            !self.materials.is_empty() && self.materials.len() <= 64,
+            "1 to 64 materials"
+        );
         for m in &self.materials {
-            ensure!(bri_package::id::ContentId::parse(&m.id).is_ok(), "material id `{}` is not namespace:kind/name", m.id);
-            ensure!(text(&m.name, 64) && color(&m.color), "material `{}` needs a name and a 0..1 RGBA color", m.id);
+            ensure!(
+                bri_package::id::ContentId::parse(&m.id).is_ok(),
+                "material id `{}` is not namespace:kind/name",
+                m.id
+            );
+            ensure!(
+                text(&m.name, 64) && color(&m.color),
+                "material `{}` needs a name and a 0..1 RGBA color",
+                m.id
+            );
         }
         Ok(())
     }
@@ -246,13 +296,31 @@ impl EntityKind {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "entity schema_version must be 1");
         ensure!(text(&self.name, 64), "entity name is required");
-        ensure!(bri_package::id::ContentId::parse(&self.model).is_ok(), "model must be namespace:model/name");
+        ensure!(
+            bri_package::id::ContentId::parse(&self.model).is_ok(),
+            "model must be namespace:model/name"
+        );
         ensure!(identifier(&self.think), "think must name a script function");
-        ensure!((1..=120).contains(&self.think_interval), "think_interval must be 1 to 120 ticks");
-        ensure!(self.speed.is_finite() && (0.0..=4.0).contains(&self.speed), "speed must be 0 to 4");
-        ensure!(self.scale.is_finite() && (0.2..=4.0).contains(&self.scale), "scale must be 0.2 to 4");
-        ensure!(self.health.is_finite() && self.health > 0.0 && self.health <= 100_000.0, "health must be positive");
-        ensure!((1..=256).contains(&self.max_alive), "max_alive must be 1 to 256");
+        ensure!(
+            (1..=120).contains(&self.think_interval),
+            "think_interval must be 1 to 120 ticks"
+        );
+        ensure!(
+            self.speed.is_finite() && (0.0..=4.0).contains(&self.speed),
+            "speed must be 0 to 4"
+        );
+        ensure!(
+            self.scale.is_finite() && (0.2..=4.0).contains(&self.scale),
+            "scale must be 0.2 to 4"
+        );
+        ensure!(
+            self.health.is_finite() && self.health > 0.0 && self.health <= 100_000.0,
+            "health must be positive"
+        );
+        ensure!(
+            (1..=256).contains(&self.max_alive),
+            "max_alive must be 1 to 256"
+        );
         Ok(())
     }
 }
@@ -277,11 +345,16 @@ pub struct ModelBox {
 impl BoxModel {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "model schema_version must be 1");
-        ensure!(!self.boxes.is_empty() && self.boxes.len() <= 64, "1 to 64 boxes");
+        ensure!(
+            !self.boxes.is_empty() && self.boxes.len() <= 64,
+            "1 to 64 boxes"
+        );
         for b in &self.boxes {
             ensure!(
                 b.center.iter().all(|v| v.is_finite() && v.abs() <= 16.0)
-                    && b.size.iter().all(|v| v.is_finite() && *v > 0.0 && *v <= 16.0)
+                    && b.size
+                        .iter()
+                        .all(|v| v.is_finite() && *v > 0.0 && *v <= 16.0)
                     && color(&b.color)
                     && b.label_colors.values().all(color)
                     && b.label_colors.len() <= 8,
@@ -342,23 +415,45 @@ pub const HUD_SLOTS: [&str; 1] = ["hud.overlay"];
 impl HudPanel {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "hud schema_version must be 1");
-        ensure!(HUD_SLOTS.contains(&self.slot.as_str()), "unknown HUD slot `{}`; known: {}", self.slot, HUD_SLOTS.join(", "));
+        ensure!(
+            HUD_SLOTS.contains(&self.slot.as_str()),
+            "unknown HUD slot `{}`; known: {}",
+            self.slot,
+            HUD_SLOTS.join(", ")
+        );
         ensure!(text(&self.title, 48), "title must be 1 to 48 characters");
-        ensure!(color(&self.background) && color(&self.accent) && color(&self.text), "colors must be 0..1 RGBA");
-        ensure!(!self.rows.is_empty() && self.rows.len() <= 16, "1 to 16 rows");
+        ensure!(
+            color(&self.background) && color(&self.accent) && color(&self.text),
+            "colors must be 0..1 RGBA"
+        );
+        ensure!(
+            !self.rows.is_empty() && self.rows.len() <= 16,
+            "1 to 16 rows"
+        );
         for row in &self.rows {
             ensure!(text(&row.label, 32), "row label must be 1 to 32 characters");
-            ensure!(Binding::parse(&row.bind).is_some(), "bind `{}` is not package:player/key or package:global/key", row.bind);
-            ensure!(row.color.as_ref().is_none_or(color), "row color must be 0..1 RGBA");
+            ensure!(
+                Binding::parse(&row.bind).is_some(),
+                "bind `{}` is not package:player/key or package:global/key",
+                row.bind
+            );
+            ensure!(
+                row.color.as_ref().is_none_or(color),
+                "row color must be 0..1 RGBA"
+            );
         }
         ensure!(self.keys.len() <= 8, "at most 8 keys");
         for k in &self.keys {
             ensure!(
                 k.key.len() == 1 && k.key.chars().all(|c| c.is_ascii_uppercase()),
-                "key `{}` must be one letter A-Z", k.key
+                "key `{}` must be one letter A-Z",
+                k.key
             );
             ensure!(text(&k.label, 24), "key label must be 1 to 24 characters");
-            ensure!(bri_package::id::namespace_problem(&k.package).is_none() && identifier(&k.command), "key needs a package id and a command name");
+            ensure!(
+                bri_package::id::namespace_problem(&k.package).is_none() && identifier(&k.command),
+                "key needs a package id and a command name"
+            );
         }
         Ok(())
     }
@@ -379,6 +474,10 @@ impl Binding {
             "global" => false,
             _ => return None,
         };
-        identifier(&key).then_some(Self { package, player, key })
+        identifier(&key).then_some(Self {
+            package,
+            player,
+            key,
+        })
     }
 }

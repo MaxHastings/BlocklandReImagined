@@ -54,7 +54,9 @@ impl Manifest {
     pub fn parse(bytes: &[u8], expected: &str) -> Result<Self, Vec<Diagnostic>> {
         let at = location(expected, MANIFEST_FILE);
         if bytes.len() > MAX_MANIFEST_BYTES {
-            return Err(vec![Diagnostic::error("manifest.too_large", "package.json is over 256 KiB").at(at)]);
+            return Err(vec![
+                Diagnostic::error("manifest.too_large", "package.json is over 256 KiB").at(at),
+            ]);
         }
         let manifest: Self = serde_json::from_slice(bytes).map_err(|e| {
             vec![Diagnostic::error("manifest.json", e.to_string())
@@ -64,41 +66,73 @@ impl Manifest {
         let mut out = Vec::new();
         if manifest.schema_version != MANIFEST_SCHEMA {
             out.push(
-                Diagnostic::error("manifest.schema_version", format!("schema_version {} is not supported", manifest.schema_version))
-                    .at(format!("{at}#/schema_version"))
-                    .hint(format!("set \"schema_version\": {MANIFEST_SCHEMA}")),
+                Diagnostic::error(
+                    "manifest.schema_version",
+                    format!(
+                        "schema_version {} is not supported",
+                        manifest.schema_version
+                    ),
+                )
+                .at(format!("{at}#/schema_version"))
+                .hint(format!("set \"schema_version\": {MANIFEST_SCHEMA}")),
             );
         }
         if manifest.id != expected {
             out.push(
-                Diagnostic::error("manifest.id.mismatch", format!("package.json says `{}` but packages.json lists `{expected}`", manifest.id))
-                    .at(format!("{at}#/id")),
+                Diagnostic::error(
+                    "manifest.id.mismatch",
+                    format!(
+                        "package.json says `{}` but packages.json lists `{expected}`",
+                        manifest.id
+                    ),
+                )
+                .at(format!("{at}#/id")),
             );
         }
         if let Some(problem) = id::namespace_problem(&manifest.id) {
-            out.push(Diagnostic::error("manifest.id.invalid", format!("package id `{}` {problem}", manifest.id)).at(format!("{at}#/id")));
+            out.push(
+                Diagnostic::error(
+                    "manifest.id.invalid",
+                    format!("package id `{}` {problem}", manifest.id),
+                )
+                .at(format!("{at}#/id")),
+            );
         } else if id::is_reserved(&manifest.id) {
             out.push(
-                Diagnostic::error("manifest.id.reserved", format!("package id `{}` is reserved for the game", manifest.id))
-                    .at(format!("{at}#/id"))
-                    .hint("pick your own id"),
+                Diagnostic::error(
+                    "manifest.id.reserved",
+                    format!("package id `{}` is reserved for the game", manifest.id),
+                )
+                .at(format!("{at}#/id"))
+                .hint("pick your own id"),
             );
         }
         if let Err(problem) = Version::parse(&manifest.version) {
-            out.push(Diagnostic::error("manifest.version", problem).at(format!("{at}#/version")).hint("use three numbers, e.g. \"1.0.0\""));
+            out.push(
+                Diagnostic::error("manifest.version", problem)
+                    .at(format!("{at}#/version"))
+                    .hint("use three numbers, e.g. \"1.0.0\""),
+            );
         }
         if manifest.api == 0 || manifest.api > bri_package::API_LEVEL {
             out.push(
                 Diagnostic::error(
                     "manifest.api",
-                    format!("needs platform API level {}; this game provides {}", manifest.api, bri_package::API_LEVEL),
+                    format!(
+                        "needs platform API level {}; this game provides {}",
+                        manifest.api,
+                        bri_package::API_LEVEL
+                    ),
                 )
                 .at(format!("{at}#/api"))
                 .hint(format!("set \"api\": {}", bri_package::API_LEVEL)),
             );
         }
         if manifest.name.trim().is_empty() || manifest.name.len() > 64 {
-            out.push(Diagnostic::error("manifest.name", "name must be 1 to 64 characters").at(format!("{at}#/name")));
+            out.push(
+                Diagnostic::error("manifest.name", "name must be 1 to 64 characters")
+                    .at(format!("{at}#/name")),
+            );
         }
         if manifest.license.trim().is_empty() {
             out.push(
@@ -109,28 +143,42 @@ impl Manifest {
         }
         for (dependency, requirement) in &manifest.dependencies {
             if let Err(problem) = Requirement::parse(requirement) {
-                out.push(Diagnostic::error("manifest.dependency", format!("`{dependency}`: {problem}")).at(format!("{at}#/dependencies")));
+                out.push(
+                    Diagnostic::error("manifest.dependency", format!("`{dependency}`: {problem}"))
+                        .at(format!("{at}#/dependencies")),
+                );
             }
         }
         for capability in &manifest.capabilities {
             if !crate::ops::CAPABILITIES.contains(&capability.as_str()) {
                 out.push(
-                    Diagnostic::error("manifest.capability", format!("unknown capability `{capability}`"))
-                        .at(format!("{at}#/capabilities"))
-                        .hint(format!("known capabilities: {}", crate::ops::CAPABILITIES.join(", "))),
+                    Diagnostic::error(
+                        "manifest.capability",
+                        format!("unknown capability `{capability}`"),
+                    )
+                    .at(format!("{at}#/capabilities"))
+                    .hint(format!(
+                        "known capabilities: {}",
+                        crate::ops::CAPABILITIES.join(", ")
+                    )),
                 );
             }
         }
         for (i, provide) in manifest.provides.iter().enumerate() {
             let pointer = format!("{at}#/provides/{i}");
             match ContentId::parse(&provide.id) {
-                Err(problem) => out.push(Diagnostic::error("manifest.provide.id", problem).at(pointer.clone())),
+                Err(problem) => {
+                    out.push(Diagnostic::error("manifest.provide.id", problem).at(pointer.clone()))
+                }
                 Ok(content) => {
                     if content.namespace != id::content_namespace(&manifest.id) {
                         out.push(
                             Diagnostic::error(
                                 "manifest.provide.namespace",
-                                format!("`{}` is outside this package's namespace `{}`", provide.id, manifest.id),
+                                format!(
+                                    "`{}` is outside this package's namespace `{}`",
+                                    provide.id, manifest.id
+                                ),
                             )
                             .at(pointer.clone()),
                         );
@@ -139,7 +187,10 @@ impl Manifest {
                         out.push(
                             Diagnostic::error(
                                 "manifest.provide.kind",
-                                format!("`{}` has kind `{}` but is declared as `{}`", provide.id, content.kind, provide.kind),
+                                format!(
+                                    "`{}` has kind `{}` but is declared as `{}`",
+                                    provide.id, content.kind, provide.kind
+                                ),
                             )
                             .at(pointer.clone()),
                         );
@@ -148,12 +199,22 @@ impl Manifest {
             }
             if crate::content::Kind::parse(&provide.kind).is_none() {
                 out.push(
-                    Diagnostic::error("manifest.provide.unknown_kind", format!("unknown kind `{}`", provide.kind))
-                        .at(pointer)
-                        .hint(format!("known kinds: {}", crate::content::Kind::NAMES.join(", "))),
+                    Diagnostic::error(
+                        "manifest.provide.unknown_kind",
+                        format!("unknown kind `{}`", provide.kind),
+                    )
+                    .at(pointer)
+                    .hint(format!(
+                        "known kinds: {}",
+                        crate::content::Kind::NAMES.join(", ")
+                    )),
                 );
             }
         }
-        if out.is_empty() { Ok(manifest) } else { Err(out) }
+        if out.is_empty() {
+            Ok(manifest)
+        } else {
+            Err(out)
+        }
     }
 }

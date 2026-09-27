@@ -23,8 +23,8 @@ pub mod package;
 pub mod script;
 pub mod state;
 
+pub use bri_package::diag::Diagnostic;
 pub use ops::Op;
 pub use package::{Catalog, Package};
-pub use bri_package::diag::Diagnostic;
-pub use state::{PlayerKey, Store};
 pub use rhai::{self, Dynamic};
+pub use state::{PlayerKey, Store};

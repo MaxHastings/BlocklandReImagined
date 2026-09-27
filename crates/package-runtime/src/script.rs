@@ -9,10 +9,10 @@
 //! Sandbox: no file, network, clock, module or `eval` access; a fixed
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
-use bri_package::diag::Diagnostic;
 use crate::manifest::location;
 use crate::ops::Op;
 use crate::state::{Namespace, PlayerKey, check_value};
+use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -136,7 +136,11 @@ fn number(value: &Dynamic) -> Fallible<f64> {
 }
 fn float(value: &Dynamic) -> Fallible<f32> {
     let v = number(value)?;
-    if v.is_finite() { Ok(v as f32) } else { fail("number is not finite") }
+    if v.is_finite() {
+        Ok(v as f32)
+    } else {
+        fail("number is not finite")
+    }
 }
 fn id(value: &Dynamic) -> Fallible<u64> {
     match value.as_int() {
@@ -147,7 +151,9 @@ fn id(value: &Dynamic) -> Fallible<u64> {
 fn push(op: Op) -> Fallible<()> {
     with(|i| {
         if i.ops.len() >= MAX_OPS_PER_CALL {
-            return fail(format!("more than {MAX_OPS_PER_CALL} operations in one call"));
+            return fail(format!(
+                "more than {MAX_OPS_PER_CALL} operations in one call"
+            ));
         }
         i.ops.push(op);
         Ok(())
@@ -214,19 +220,44 @@ fn player_key(i: &Invocation, player: &Dynamic) -> Fallible<PlayerKey> {
 fn register_api(engine: &mut Engine) {
     engine.register_fn("tick", || with(|i| Ok(i.snapshot.tick as i64)));
     engine.register_fn("seed", || with(|i| Ok(i.snapshot.seed)));
-    engine.register_fn("caller", || with(|i| Ok(i.caller.map_or(Dynamic::UNIT, |c| Dynamic::from_int(c as i64)))));
-    engine.register_fn("players", || with(|i| Ok(i.snapshot.players.iter().map(player_map).collect::<Array>())));
+    engine.register_fn("caller", || {
+        with(|i| {
+            Ok(i.caller
+                .map_or(Dynamic::UNIT, |c| Dynamic::from_int(c as i64)))
+        })
+    });
+    engine.register_fn("players", || {
+        with(|i| Ok(i.snapshot.players.iter().map(player_map).collect::<Array>()))
+    });
     engine.register_fn("player", |player: Dynamic| {
         with(|i| {
             let player = id(&player)?;
-            Ok(i.snapshot.players.iter().find(|p| p.id == player).map_or(Dynamic::UNIT, player_map))
+            Ok(i.snapshot
+                .players
+                .iter()
+                .find(|p| p.id == player)
+                .map_or(Dynamic::UNIT, player_map))
         })
     });
-    engine.register_fn("entities", || with(|i| Ok(i.snapshot.entities.iter().map(entity_map).collect::<Array>())));
+    engine.register_fn("entities", || {
+        with(|i| {
+            Ok(i.snapshot
+                .entities
+                .iter()
+                .map(entity_map)
+                .collect::<Array>())
+        })
+    });
     engine.register_fn("me", || {
         with(|i| {
-            let Some(me) = i.entity else { return Ok(Dynamic::UNIT) };
-            Ok(i.snapshot.entities.iter().find(|e| e.id == me).map_or(Dynamic::UNIT, entity_map))
+            let Some(me) = i.entity else {
+                return Ok(Dynamic::UNIT);
+            };
+            Ok(i.snapshot
+                .entities
+                .iter()
+                .find(|e| e.id == me)
+                .map_or(Dynamic::UNIT, entity_map))
         })
     });
     engine.register_fn("aim", || {
@@ -234,7 +265,11 @@ fn register_api(engine: &mut Engine) {
             Ok(i.aim.as_ref().map_or(Dynamic::UNIT, |a| {
                 let [x, y, z] = position(a.position);
                 map([
-                    ("brick", a.brick.map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64))),
+                    (
+                        "brick",
+                        a.brick
+                            .map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
+                    ),
                     ("tag", a.tag.clone().map_or(Dynamic::UNIT, Dynamic::from)),
                     x,
                     y,
@@ -245,7 +280,9 @@ fn register_api(engine: &mut Engine) {
         })
     });
     // Package state: global keys, then per-player keys.
-    engine.register_fn("get", |key: &str| with(|i| Ok(i.state.global.get(key).map_or(Dynamic::UNIT, to_dynamic))));
+    engine.register_fn("get", |key: &str| {
+        with(|i| Ok(i.state.global.get(key).map_or(Dynamic::UNIT, to_dynamic)))
+    });
     engine.register_fn("set", |key: &str, value: Dynamic| {
         with(|i| {
             i.state.global.insert(key.into(), to_json(&value)?);
@@ -255,85 +292,152 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("get_player", |player: Dynamic, key: &str| {
         with(|i| {
             let k = player_key(i, &player)?;
-            Ok(i.state.players.get(&k).and_then(|m| m.get(key)).map_or(Dynamic::UNIT, to_dynamic))
+            Ok(i.state
+                .players
+                .get(&k)
+                .and_then(|m| m.get(key))
+                .map_or(Dynamic::UNIT, to_dynamic))
         })
     });
-    engine.register_fn("set_player", |player: Dynamic, key: &str, value: Dynamic| {
-        with(|i| {
-            let k = player_key(i, &player)?;
-            let v = to_json(&value)?;
-            i.state.players.entry(k).or_default().insert(key.into(), v);
-            Ok(())
-        })
-    });
-    engine.register_fn("add_player", |player: Dynamic, key: &str, amount: Dynamic| {
-        with(|i| {
-            let k = player_key(i, &player)?;
-            let values = i.state.players.entry(k).or_default();
-            let current = values.get(key).cloned().unwrap_or(serde_json::Value::from(0));
-            let next = match (current.as_i64(), amount.as_int()) {
-                (Some(a), Ok(b)) => serde_json::Value::from(a.checked_add(b).ok_or("state number overflow")?),
-                _ => {
-                    let sum = current.as_f64().unwrap_or(0.0) + number(&amount)?;
-                    serde_json::Number::from_f64(sum).map(serde_json::Value::Number).ok_or("state number is not finite")?
-                }
-            };
-            values.insert(key.into(), next.clone());
-            Ok(to_dynamic(&next))
-        })
-    });
+    engine.register_fn(
+        "set_player",
+        |player: Dynamic, key: &str, value: Dynamic| {
+            with(|i| {
+                let k = player_key(i, &player)?;
+                let v = to_json(&value)?;
+                i.state.players.entry(k).or_default().insert(key.into(), v);
+                Ok(())
+            })
+        },
+    );
+    engine.register_fn(
+        "add_player",
+        |player: Dynamic, key: &str, amount: Dynamic| {
+            with(|i| {
+                let k = player_key(i, &player)?;
+                let values = i.state.players.entry(k).or_default();
+                let current = values
+                    .get(key)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::from(0));
+                let next = match (current.as_i64(), amount.as_int()) {
+                    (Some(a), Ok(b)) => {
+                        serde_json::Value::from(a.checked_add(b).ok_or("state number overflow")?)
+                    }
+                    _ => {
+                        let sum = current.as_f64().unwrap_or(0.0) + number(&amount)?;
+                        serde_json::Number::from_f64(sum)
+                            .map(serde_json::Value::Number)
+                            .ok_or("state number is not finite")?
+                    }
+                };
+                values.insert(key.into(), next.clone());
+                Ok(to_dynamic(&next))
+            })
+        },
+    );
     // Package-local entity variables.
     engine.register_fn("entity_get", |entity: Dynamic, key: &str| {
         with(|i| {
             let e = id(&entity)?;
-            Ok(i.entity_vars.get(&e).and_then(|m| m.get(key)).map_or(Dynamic::UNIT, to_dynamic))
+            Ok(i.entity_vars
+                .get(&e)
+                .and_then(|m| m.get(key))
+                .map_or(Dynamic::UNIT, to_dynamic))
         })
     });
-    engine.register_fn("entity_set", |entity: Dynamic, key: &str, value: Dynamic| {
-        with(|i| {
-            let e = id(&entity)?;
-            if !i.entity_vars.contains_key(&e) {
-                return fail(format!("entity {e} does not belong to this package"));
-            }
-            let v = to_json(&value)?;
-            i.entity_vars.entry(e).or_default().insert(key.into(), v);
-            Ok(())
-        })
-    });
+    engine.register_fn(
+        "entity_set",
+        |entity: Dynamic, key: &str, value: Dynamic| {
+            with(|i| {
+                let e = id(&entity)?;
+                if !i.entity_vars.contains_key(&e) {
+                    return fail(format!("entity {e} does not belong to this package"));
+                }
+                let v = to_json(&value)?;
+                i.entity_vars.entry(e).or_default().insert(key.into(), v);
+                Ok(())
+            })
+        },
+    );
     // Pure helpers.
     engine.register_fn("noise", |seed: i64, x: Dynamic, z: Dynamic| {
         Ok::<_, Box<EvalAltResult>>(crate::noise::value2(seed, number(&x)?, number(&z)?))
     });
-    engine.register_fn("hash3", |seed: i64, x: i64, y: i64, z: i64| crate::noise::hash3(seed, x, y, z));
+    engine.register_fn("hash3", |seed: i64, x: i64, y: i64, z: i64| {
+        crate::noise::hash3(seed, x, y, z)
+    });
     // Operations.
-    engine.register_fn("remove_brick", |brick: Dynamic| push(Op::RemoveBrick { brick: id(&brick)? }));
-    engine.register_fn("explode", |x: Dynamic, y: Dynamic, z: Dynamic, radius: Dynamic, damage: Dynamic, brick_radius: Dynamic| {
-        push(Op::Explode {
-            position: [float(&x)?, float(&y)?, float(&z)?],
-            radius: float(&radius)?,
-            damage: float(&damage)?,
-            brick_radius: float(&brick_radius)?,
+    engine.register_fn("remove_brick", |brick: Dynamic| {
+        push(Op::RemoveBrick { brick: id(&brick)? })
+    });
+    engine.register_fn(
+        "explode",
+        |x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         radius: Dynamic,
+         damage: Dynamic,
+         brick_radius: Dynamic| {
+            push(Op::Explode {
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                damage: float(&damage)?,
+                brick_radius: float(&brick_radius)?,
+            })
+        },
+    );
+    engine.register_fn("damage", |player: Dynamic, amount: Dynamic| {
+        push(Op::DamagePlayer {
+            player: id(&player)?,
+            amount: float(&amount)?,
         })
     });
-    engine.register_fn("damage", |player: Dynamic, amount: Dynamic| {
-        push(Op::DamagePlayer { player: id(&player)?, amount: float(&amount)? })
+    engine.register_fn(
+        "spawn_entity",
+        |kind: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push(Op::SpawnEntity {
+                kind: kind.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+            })
+        },
+    );
+    engine.register_fn("remove_entity", |entity: Dynamic| {
+        push(Op::RemoveEntity {
+            entity: id(&entity)?,
+        })
     });
-    engine.register_fn("spawn_entity", |kind: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
-        push(Op::SpawnEntity { kind: kind.into(), position: [float(&x)?, float(&y)?, float(&z)?] })
+    engine.register_fn(
+        "steer",
+        |entity: Dynamic, dx: Dynamic, dz: Dynamic, jump: bool| {
+            push(Op::Steer {
+                entity: id(&entity)?,
+                direction: [float(&dx)?, float(&dz)?],
+                jump,
+            })
+        },
+    );
+    engine.register_fn("label", |entity: Dynamic, label: &str| {
+        push(Op::Label {
+            entity: id(&entity)?,
+            label: label.into(),
+        })
     });
-    engine.register_fn("remove_entity", |entity: Dynamic| push(Op::RemoveEntity { entity: id(&entity)? }));
-    engine.register_fn("steer", |entity: Dynamic, dx: Dynamic, dz: Dynamic, jump: bool| {
-        push(Op::Steer { entity: id(&entity)?, direction: [float(&dx)?, float(&dz)?], jump })
+    engine.register_fn("tell", |player: Dynamic, text: &str| {
+        push(Op::Tell {
+            player: id(&player)?,
+            text: text.into(),
+        })
     });
-    engine.register_fn("label", |entity: Dynamic, label: &str| push(Op::Label { entity: id(&entity)?, label: label.into() }));
-    engine.register_fn("tell", |player: Dynamic, text: &str| push(Op::Tell { player: id(&player)?, text: text.into() }));
-    engine.register_fn("broadcast", |text: &str| push(Op::Broadcast { text: text.into() }));
+    engine.register_fn("broadcast", |text: &str| {
+        push(Op::Broadcast { text: text.into() })
+    });
 }
 
 fn sandbox() -> Engine {
     use rhai::packages::{
-        BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, CorePackage, LogicPackage,
-        MoreStringPackage, Package,
+        BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, CorePackage,
+        LogicPackage, MoreStringPackage, Package,
     };
     let mut engine = Engine::new_raw();
     CorePackage::new().register_into_engine(&mut engine);
@@ -374,7 +478,11 @@ pub struct Runtime {
 }
 impl Default for Runtime {
     fn default() -> Self {
-        Self { engine: sandbox(), scripts: BTreeMap::new(), sources: BTreeMap::new() }
+        Self {
+            engine: sandbox(),
+            scripts: BTreeMap::new(),
+            sources: BTreeMap::new(),
+        }
     }
 }
 impl Runtime {
@@ -384,8 +492,12 @@ impl Runtime {
         let mut runtime = Self::default();
         let mut problems = Vec::new();
         for (id, package) in &set.packages {
-            let Some(behaviour) = &package.behaviour else { continue };
-            let Some(source) = package.script_source() else { continue };
+            let Some(behaviour) = &package.behaviour else {
+                continue;
+            };
+            let Some(source) = package.script_source() else {
+                continue;
+            };
             let ast = match runtime.engine.compile(source) {
                 Ok(ast) => ast,
                 Err(e) => {
@@ -404,17 +516,27 @@ impl Runtime {
                         .hint("move top-level statements into a function; keep constants in behaviour state"),
                 );
             }
-            let has = |name: &str, arity: usize| ast.iter_functions().any(|f| f.name == name && f.params.len() == arity);
+            let has = |name: &str, arity: usize| {
+                ast.iter_functions()
+                    .any(|f| f.name == name && f.params.len() == arity)
+            };
             let mut need = |name: String, arity: usize, why: &str| {
                 if !has(&name, arity) {
                     problems.push(
-                        Diagnostic::error("script.missing_function", format!("{why} needs `fn {name}` with {arity} parameter(s)"))
-                            .at(location(id, &behaviour.script)),
+                        Diagnostic::error(
+                            "script.missing_function",
+                            format!("{why} needs `fn {name}` with {arity} parameter(s)"),
+                        )
+                        .at(location(id, &behaviour.script)),
                     );
                 }
             };
             for c in &behaviour.commands {
-                need(format!("cmd_{}", c.name), 1 + c.args.len(), &format!("command `{}`", c.name));
+                need(
+                    format!("cmd_{}", c.name),
+                    1 + c.args.len(),
+                    &format!("command `{}`", c.name),
+                );
             }
             if behaviour.on_join {
                 need("on_join".into(), 1, "on_join");
@@ -431,18 +553,21 @@ impl Runtime {
             runtime.scripts.insert(id.clone(), Arc::new(ast));
             runtime.sources.insert(id.clone(), behaviour.script.clone());
         }
-        if problems.is_empty() { Ok(runtime) } else { Err(problems) }
+        if problems.is_empty() {
+            Ok(runtime)
+        } else {
+            Err(problems)
+        }
     }
     pub fn has_script(&self, package: &str) -> bool {
         self.scripts.contains_key(package)
     }
     /// Run one function. On error nothing of the call is kept.
     pub fn call(&mut self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
-        let ast = self
-            .scripts
-            .get(package)
-            .cloned()
-            .ok_or_else(|| Diagnostic::error("script.none", "package has no script").at(package))?;
+        let ast =
+            self.scripts.get(package).cloned().ok_or_else(|| {
+                Diagnostic::error("script.none", "package has no script").at(package)
+            })?;
         self.engine.set_max_operations(call.budget.operations());
         let previous = CURRENT.with(|c| {
             c.borrow_mut().replace(Invocation {
@@ -456,12 +581,20 @@ impl Runtime {
                 output: Vec::new(),
             })
         });
-        let options = rhai::CallFnOptions::new().eval_ast(false).rewind_scope(true);
+        let options = rhai::CallFnOptions::new()
+            .eval_ast(false)
+            .rewind_scope(true);
         let mut scope = rhai::Scope::new();
-        let result = self
-            .engine
-            .call_fn_with_options::<Dynamic>(options, &mut scope, &ast, call.function, call.args);
-        let invocation = CURRENT.with(|c| std::mem::replace(&mut *c.borrow_mut(), previous)).expect("set above");
+        let result = self.engine.call_fn_with_options::<Dynamic>(
+            options,
+            &mut scope,
+            &ast,
+            call.function,
+            call.args,
+        );
+        let invocation = CURRENT
+            .with(|c| std::mem::replace(&mut *c.borrow_mut(), previous))
+            .expect("set above");
         match result {
             Ok(returned) => Ok(Outcome {
                 returned,
@@ -473,17 +606,28 @@ impl Runtime {
             Err(e) => {
                 let code = match *e {
                     EvalAltResult::ErrorTooManyOperations(_) => "script.budget",
-                    EvalAltResult::ErrorDataTooLarge(..) | EvalAltResult::ErrorStackOverflow(_) => "script.limit",
+                    EvalAltResult::ErrorDataTooLarge(..) | EvalAltResult::ErrorStackOverflow(_) => {
+                        "script.limit"
+                    }
                     _ => "script.error",
                 };
                 let position = e.position();
-                let script = self.sources.get(package).map_or(String::new(), Clone::clone);
-                let mut problem = Diagnostic::error(code, format!("{}: {}", call.function, e)).at(match position.line() {
-                    Some(line) => format!("{}:{line}", location(package, &script)),
-                    None => location(package, &script),
-                });
+                let script = self
+                    .sources
+                    .get(package)
+                    .map_or(String::new(), Clone::clone);
+                let mut problem =
+                    Diagnostic::error(code, format!("{}: {}", call.function, e)).at(match position
+                        .line()
+                    {
+                        Some(line) => format!("{}:{line}", location(package, &script)),
+                        None => location(package, &script),
+                    });
                 if code == "script.budget" {
-                    problem = problem.hint(format!("the call exceeded {} script operations", call.budget.operations()));
+                    problem = problem.hint(format!(
+                        "the call exceeded {} script operations",
+                        call.budget.operations()
+                    ));
                 }
                 Err(problem)
             }
@@ -493,11 +637,17 @@ impl Runtime {
 
 /// Convert a script's `[[x, y, z, m], ...]` into voxels, bounded.
 pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i64; 4]>, String> {
-    let array = value
-        .read_lock::<Array>()
-        .ok_or_else(|| format!("expected an array of [x, y, z, material], got {}", value.type_name()))?;
+    let array = value.read_lock::<Array>().ok_or_else(|| {
+        format!(
+            "expected an array of [x, y, z, material], got {}",
+            value.type_name()
+        )
+    })?;
     if array.len() > limit {
-        return Err(format!("{} voxels is more than the chunk limit {limit}", array.len()));
+        return Err(format!(
+            "{} voxels is more than the chunk limit {limit}",
+            array.len()
+        ));
     }
     let mut out = Vec::with_capacity(array.len());
     for entry in array.iter() {
@@ -507,7 +657,9 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
             .ok_or("each voxel is [x, y, z, material]")?;
         let mut item = [0_i64; 4];
         for (slot, value) in item.iter_mut().zip(v.iter()) {
-            *slot = value.as_int().map_err(|_| "voxel coordinates and material are integers")?;
+            *slot = value
+                .as_int()
+                .map_err(|_| "voxel coordinates and material are integers")?;
         }
         if item[3] < 0 || item[3] as usize >= materials {
             return Err(format!("material {} is not declared", item[3]));
