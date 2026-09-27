@@ -936,9 +936,9 @@ fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
         color: 0,
     };
     assert_eq!(run(&mut s, plant), ["plant"]);
-    assert_eq!(run(&mut s, Command::Tool(ToolAction::UndoPlant)), ["undo"]);
+    assert_eq!(run(&mut s, Command::Tool(ToolAction::UndoBrick)), ["undo"]);
     // Nothing left to undo: v20 plays nothing.
-    assert!(run(&mut s, Command::Tool(ToolAction::UndoPlant)).is_empty());
+    assert!(run(&mut s, Command::Tool(ToolAction::UndoBrick)).is_empty());
     // `activateLevel` climbs on clicks within 320 ms; the fifth repeat swings harder.
     let swings: Vec<_> = (0..6).flat_map(|_| run(&mut s, Command::Activate)).collect();
     assert_eq!(

@@ -966,7 +966,7 @@ impl Building {
                 });
             }
             UiAction::Game(GameAction::UndoBrick) => {
-                out.commands.push(Command::Tool(ToolAction::UndoPlant))
+                out.commands.push(Command::Tool(ToolAction::UndoBrick))
             }
             _ => return Ok(None),
         }

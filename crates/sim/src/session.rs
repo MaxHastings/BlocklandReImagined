@@ -34,6 +34,7 @@ mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod tools;
+mod undo;
 mod spray;
 pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
@@ -44,7 +45,8 @@ pub use combat::{MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, Vitals};
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 /// Stock emotes (`Emote_*` add-ons plus the built-in sit animation).
 pub const EMOTES: [&str; 5] = ["alarm", "confusion", "love", "hate", "sit"];
-pub use tools::{InspectMode, ToolAction, ToolCatalog, UNDO_PLANT_LIMIT};
+pub use tools::{InspectMode, ToolAction, ToolCatalog};
+pub use undo::UNDO_QUEUE_SIZE;
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 
 /// The surface height of water covering any part of this player's body.
@@ -408,7 +410,7 @@ pub struct Session {
     dirty: BTreeSet<BrickId>,
     notices: VecDeque<String>,
     tool_catalog: ToolCatalog,
-    plant_undo: BTreeMap<OwnerId, VecDeque<BrickId>>,
+    undo: BTreeMap<OwnerId, undo::UndoStack>,
     avatar_catalog: Option<bri_content::avatar::Package>,
     ownership_scope: Option<String>,
     bulk_window_tick: u64,
@@ -468,7 +470,7 @@ impl Session {
             dirty: BTreeSet::new(),
             notices: VecDeque::new(),
             tool_catalog: ToolCatalog::default(),
-            plant_undo: BTreeMap::new(),
+            undo: BTreeMap::new(),
             avatar_catalog: None,
             ownership_scope: None,
             bulk_window_tick: 0,
@@ -1201,11 +1203,7 @@ impl Session {
                 let id = self.simulation.plant(&builder, brick)?;
                 self.special_planted(owner, id)?;
                 self.dirty.insert(id);
-                let undo = self.plant_undo.entry(owner).or_default();
-                if undo.len() == UNDO_PLANT_LIMIT {
-                    undo.pop_front();
-                }
-                undo.push_back(id);
+                self.push_undo(owner, undo::UndoEntry::Plant(id));
                 self.cues
                     .emit(tick, crate::presentation::CueKind::Plant, position);
                 self.play_thread_three(tick, owner, "plant");

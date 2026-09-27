@@ -6,7 +6,7 @@ use bri_sim::{
     definitions::{Definition, Definitions},
     player::{MoveInput, PlayerTuning},
     session::{
-        Command, InspectMode, Reply, Session, ToolAction, ToolCatalog, UNDO_PLANT_LIMIT,
+        Command, InspectMode, Reply, Session, ToolAction, ToolCatalog, UNDO_QUEUE_SIZE,
         WrenchProperties,
     },
     simulation::Simulation,
@@ -398,7 +398,9 @@ fn tool(s: &mut Session, owner: u64, seq: u64, action: ToolAction) -> anyhow::Re
 fn inspect(s: &mut Session, owner: u64, seq: u64, mode: InspectMode) -> Brick {
     if mode == InspectMode::Events {
         let Reply::Inspected {
-            brick, mode: actual, ..
+            brick,
+            mode: actual,
+            ..
         } = tool(s, owner, seq, ToolAction::Inspect { mode }).unwrap()
         else {
             panic!("expected inspection")
@@ -861,7 +863,7 @@ fn hammer_ranges_and_map_occlusion_are_authoritative() {
 }
 
 #[test]
-fn undo_is_owner_scoped_lifo_skips_removed_bricks_and_survives_authenticated_resume() {
+fn undo_is_owner_scoped_lifo_spends_removed_bricks_and_survives_authenticated_resume() {
     let (mut s, owner, first) = setup();
     let second = plant(&mut s, owner, 2, [1.5, 0.1, -3.25]);
     let third = plant(&mut s, owner, 3, [2.5, 0.1, -3.25]);
@@ -872,35 +874,30 @@ fn undo_is_owner_scoped_lifo_skips_removed_bricks_and_survives_authenticated_res
         .join("Guest".into(), Vec3::new(5.0, 0.05, 0.0), true)
         .unwrap();
     assert_eq!(
-        tool(&mut s, guest, 1, ToolAction::UndoPlant).unwrap(),
+        tool(&mut s, guest, 1, ToolAction::UndoBrick).unwrap(),
         Reply::Undone(None)
     );
     s.disconnect(owner).unwrap();
     s.resume(owner, Vec3::new(50.0, 0.05, 50.0)).unwrap();
-    assert_eq!(
-        tool(&mut s, owner, 1, ToolAction::UndoPlant).unwrap(),
-        Reply::Undone(Some(second))
-    );
-    assert_eq!(
-        tool(&mut s, owner, 2, ToolAction::UndoPlant).unwrap(),
-        Reply::Undone(Some(first))
-    );
-    assert_eq!(
-        tool(&mut s, owner, 3, ToolAction::UndoPlant).unwrap(),
-        Reply::Undone(None)
-    );
+    // v20 pops one entry per press: the hammered brick's entry is spent.
+    for (seq, undone) in [(1, None), (2, Some(second)), (3, Some(first)), (4, None)] {
+        assert_eq!(
+            tool(&mut s, owner, seq, ToolAction::UndoBrick).unwrap(),
+            Reply::Undone(undone)
+        );
+    }
     assert!(s.simulation().state().bricks.is_empty());
 }
 
 #[test]
-fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
+fn undo_retains_only_the_511_entries_of_a_512_slot_queue() {
     let mut s = session(vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(-3.0, 0.05, 0.0), false)
         .unwrap();
     let mut seq = 0;
     let mut first = 0;
-    for i in 0..=UNDO_PLANT_LIMIT {
+    for i in 0..UNDO_QUEUE_SIZE {
         if i % 50 == 0 {
             for _ in 0..120 {
                 s.step().unwrap();
@@ -917,7 +914,7 @@ fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
             first = id;
         }
     }
-    for i in 0..UNDO_PLANT_LIMIT {
+    for i in 0..UNDO_QUEUE_SIZE - 1 {
         if i % 50 == 0 {
             for _ in 0..120 {
                 s.step().unwrap();
@@ -925,12 +922,12 @@ fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
         }
         seq += 1;
         assert_eq!(
-            tool(&mut s, owner, seq, ToolAction::UndoPlant).unwrap(),
-            Reply::Undone(Some((UNDO_PLANT_LIMIT + 1 - i) as u64))
+            tool(&mut s, owner, seq, ToolAction::UndoBrick).unwrap(),
+            Reply::Undone(Some((UNDO_QUEUE_SIZE - i) as u64))
         );
     }
     assert_eq!(
-        tool(&mut s, owner, seq + 1, ToolAction::UndoPlant).unwrap(),
+        tool(&mut s, owner, seq + 1, ToolAction::UndoBrick).unwrap(),
         Reply::Undone(None)
     );
     assert_eq!(
@@ -941,6 +938,75 @@ fn planting_undo_retains_only_the_stock_512_most_recent_entries() {
             .copied()
             .collect::<Vec<_>>(),
         vec![first]
+    );
+}
+
+/// `serverCmdUndoBrick` walks one mixed stack: prints, shape FX, colour FX,
+/// spray paint, then the plant, which breaks like a hammered brick.
+#[test]
+fn undo_reverts_paint_and_print_then_breaks_the_plant() {
+    use bri_sim::presentation::CueKind;
+    let (mut s, owner, id) = setup();
+    let spray = |s: &mut Session, seq: u64, command: Command| {
+        s.command(owner, seq, command).unwrap();
+        hold_still(s, owner);
+        s.command(owner, seq + 1, Command::WeaponTrigger { down: true })
+            .unwrap();
+        for _ in 0..40 {
+            s.step().unwrap();
+        }
+        s.command(owner, seq + 2, Command::WeaponTrigger { down: false })
+            .unwrap();
+    };
+    spray(&mut s, 2, Command::UseSprayCan { color: 1 });
+    spray(&mut s, 5, Command::UseFxCan { fx: 6 });
+    spray(&mut s, 8, Command::UseFxCan { fx: 8 });
+    inspect(&mut s, owner, 11, InspectMode::Printer);
+    tool(
+        &mut s,
+        owner,
+        12,
+        ToolAction::SetPrint {
+            brick: id,
+            print: Some("print/face".into()),
+        },
+    )
+    .unwrap();
+    let brick = |s: &Session| s.simulation().state().bricks.get(&id).cloned();
+    let edited = brick(&s).unwrap();
+    assert_eq!(
+        (edited.color, edited.color_effect, edited.shape_effect),
+        (1, 6, 1)
+    );
+    s.take_cues();
+    let undo = |s: &mut Session, seq: u64| {
+        assert_eq!(
+            tool(s, owner, seq, ToolAction::UndoBrick).unwrap(),
+            Reply::Undone(Some(id))
+        );
+        brick(s)
+    };
+    let b = undo(&mut s, 13).unwrap();
+    assert_eq!(b.print, Some(ContentRef::Resolved("print/A".into())));
+    assert_eq!(undo(&mut s, 14).unwrap().shape_effect, 0);
+    assert_eq!(undo(&mut s, 15).unwrap().color_effect, 0);
+    let b = undo(&mut s, 16).unwrap();
+    assert_eq!((b.color, b.color_effect, b.shape_effect), (0, 0, 0));
+    assert!(undo(&mut s, 17).is_none());
+    let cues = s.take_cues();
+    assert_eq!(
+        cues.iter()
+            .filter(|c| matches!(&c.kind,
+                CueKind::WeaponAnimation { sequence, thread: 3, .. } if sequence == "undo"))
+            .count(),
+        5
+    );
+    // The same `BrickKill` as the hammer: break sound and debris pop.
+    assert!(cues.iter().any(|c| matches!(&c.kind,
+        CueKind::BrickKill { brick, force, .. } if *brick == id && *force > 0.)));
+    assert_eq!(
+        tool(&mut s, owner, 18, ToolAction::UndoBrick).unwrap(),
+        Reply::Undone(None)
     );
 }
 

@@ -2,13 +2,10 @@
 //! are v20 images run by the weapon state machine; their `onFire` scripts
 //! land here as server raycasts from the swinger's eye. No client positions,
 //! identities or arbitrary source records cross this boundary.
+use super::undo::UndoEntry;
 use super::*;
 use bri_weapons::{ActorId, TargetId};
 use bri_world::authority::trust as level;
-
-/// Original game.cs constructs New_QueueSO(512). This queue currently records
-/// planting only; vanilla paint/FX/print undo and chain-kill effects remain work.
-pub const UNDO_PLANT_LIMIT: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,7 +41,8 @@ pub enum ToolAction {
         brick: BrickId,
         events: Vec<bri_world::EventRow>,
     },
-    UndoPlant,
+    /// `serverCmdUndoBrick` (Ctrl+Z).
+    UndoBrick,
     /// Vehicle spawn wrench `< Respawn >`.
     RespawnVehicle {
         brick: BrickId,
@@ -419,7 +417,7 @@ impl Session {
                             // `killBrick` removes the brick and its program.
                             self.fire_input(id, "onToolBreak", Some(owner));
                             self.step_events(&BTreeSet::new())?;
-                            self.tool_kill_brick(owner, id, hit.position, dir)?;
+                            self.tool_kill_brick(owner, id)?;
                         }
                     }
                     TargetId::Actor(target) => {
@@ -461,7 +459,7 @@ impl Session {
                             // `killBrick` removes the brick and its program.
                             self.fire_input(id, "onToolBreak", Some(owner));
                             self.step_events(&BTreeSet::new())?;
-                            self.tool_kill_brick(owner, id, hit.position, dir)?;
+                            self.tool_kill_brick(owner, id)?;
                         }
                     }
                     TargetId::Actor(target) => {
@@ -499,7 +497,7 @@ impl Session {
                 );
                 self.tool_sound("wandHitSound", hit.position);
                 match hit.target {
-                    TargetId::Brick(id) => self.tool_kill_brick(owner, id, hit.position, dir)?,
+                    TargetId::Brick(id) => self.tool_kill_brick(owner, id)?,
                     TargetId::Actor(target) => {
                         let velocity = (dir + Vec3::Y).normalize() * 20.0;
                         self.set_player_velocity(target.0, velocity);
@@ -564,11 +562,18 @@ impl Session {
         let Some(brick) = self.simulation.state().bricks.get(&id) else {
             return Ok(());
         };
-        let unchanged = match &edit {
-            Edit::Color(color) => brick.color == *color,
-            Edit::ColorEffect(effect) => brick.color_effect == *effect,
-            Edit::ShapeEffect(effect) => brick.shape_effect == *effect,
-            _ => false,
+        // v20 pushes the old value onto the painter's undo stack.
+        let (unchanged, undo) = match &edit {
+            Edit::Color(color) => (brick.color == *color, UndoEntry::Color(id, brick.color)),
+            Edit::ColorEffect(effect) => (
+                brick.color_effect == *effect,
+                UndoEntry::ColorEffect(id, brick.color_effect),
+            ),
+            Edit::ShapeEffect(effect) => (
+                brick.shape_effect == *effect,
+                UndoEntry::ShapeEffect(id, brick.shape_effect),
+            ),
+            _ => return Ok(()),
         };
         if unchanged || !self.trusted_brick_edit(owner, id, level::FULL) {
             return Ok(());
@@ -576,6 +581,7 @@ impl Session {
         let actor = copy_actor(&self.peers[&owner].actor);
         self.simulation.edit(&actor, id, edit)?;
         self.dirty.insert(id);
+        self.push_undo(owner, undo);
         Ok(())
     }
 
@@ -610,21 +616,14 @@ impl Session {
             format!("BL_ID: {owner}")
         }
     }
-    fn center_print(&mut self, owner: OwnerId, text: String) {
+    pub(super) fn center_print(&mut self, owner: OwnerId, text: String) {
         self.notify(owner, Notice::Center { text, seconds: 1.0 });
     }
 
     /// A tool destroying a brick (`killBrick`): debris pops away from the hit.
-    fn tool_kill_brick(
-        &mut self,
-        owner: OwnerId,
-        id: BrickId,
-        hit_position: Vec3,
-        _direction: Vec3,
-    ) -> Result<()> {
+    pub(super) fn tool_kill_brick(&mut self, owner: OwnerId, id: BrickId) -> Result<()> {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
         let center = Vec3::from(self.simulation.state().bricks[&id].position);
-        let _ = hit_position;
         self.kill_brick(&actor, id, super::debris::BrickBlast::pop(center))?;
         for peer in self.peers.values_mut() {
             if peer.inspection.as_ref().is_some_and(|i| i.id == id) {
@@ -824,7 +823,7 @@ impl Session {
     /// has moved since.
     pub(super) fn tool_action(&mut self, owner: OwnerId, action: ToolAction) -> Result<Reply> {
         let required = match &action {
-            ToolAction::UndoPlant => None,
+            ToolAction::UndoBrick => None,
             ToolAction::SetPrint { .. } => Some(bri_weapons::CORE_TOOLS[2]),
             ToolAction::Inspect { .. }
             | ToolAction::SetWrench { .. }
@@ -834,26 +833,10 @@ impl Session {
         if let Some(required) = required {
             inventory::require_equipment(&self.weapons, owner, Some(required))?;
         }
-        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-        if action == ToolAction::UndoPlant {
-            let undo = self.plant_undo.entry(owner).or_default();
-            // Missing entries may have been hammered by their owner/admin.
-            while let Some(id) = undo.back().copied() {
-                let Some(brick) = self.simulation.state().bricks.get(&id) else {
-                    undo.pop_back();
-                    continue;
-                };
-                ensure!(brick.owner == owner, "Undo brick ownership changed");
-                self.simulation.remove(&peer.actor, id)?;
-                undo.pop_back();
-                self.dirty.insert(id);
-                peer.inspection = None;
-                let tick = self.simulation.state().tick;
-                self.play_thread_three(tick, owner, "undo");
-                return Ok(Reply::Undone(Some(id)));
-            }
-            return Ok(Reply::Undone(None));
+        if action == ToolAction::UndoBrick {
+            return self.undo_brick(owner);
         }
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         let id = peer
             .inspection
             .as_ref()
@@ -942,6 +925,13 @@ impl Session {
         self.item_spawners
             .validate_edit(self.simulation.state(), id, &edit)?;
         let edited_events = matches!(edit, Edit::Events(_));
+        // `serverCmdSetPrint` records a print change for undo.
+        let undo = match &edit {
+            Edit::Print(print) if *print != brick.print => {
+                Some(UndoEntry::Print(id, brick.print.clone()))
+            }
+            _ => None,
+        };
         self.simulation.edit(&peer.actor, id, edit)?;
         self.dirty.insert(id);
         if edited_events && let Some(inspection) = &mut peer.inspection {
@@ -957,6 +947,9 @@ impl Session {
             }
         } else {
             peer.inspection = None;
+        }
+        if let Some(undo) = undo {
+            self.push_undo(owner, undo);
         }
         Ok(Reply::Accepted)
     }

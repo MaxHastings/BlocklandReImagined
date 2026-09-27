@@ -506,7 +506,7 @@ impl Session {
             self.simulation.remove(&actor, id)?;
             self.dirty.insert(id);
         }
-        self.plant_undo.clear();
+        self.undo.clear();
         let tutorial = self.tutorial.as_deref().unwrap();
         let world = if part2 {
             &tutorial.map.part2

@@ -2075,3 +2075,16 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   brick centre + packed ids). Blink no longer makes bricks translucent.
   Evidence: `brick_fx` and `item_rendering` GPU tests, `brick_audit` FX scene
   vs the reference renderer (1.3/255 mean difference).
+- 2026-09-27 Undo parity with v20 (`serverCmdUndoBrick`, `%client.undoStack`).
+  One mixed per-owner stack (`crates/sim/src/session/undo.rs`) now records
+  plants, spray paint (`COLOR`), colour FX (`COLORFX`), shape FX (`SHAPEFX`)
+  and prints (`PRINT`), each only when the value changed. Undoing a plant is a
+  `killBrick`, so the brick breaks with the hammer's break sound and debris
+  instead of vanishing. Kept v20 quirks: each press pops one entry even when
+  its brick is gone; `New_QueueSO(512)` holds 511 entries; paint/print undo
+  needs Full trust and its refusal prints a blank group name; the undo
+  animation plays whenever the entry's brick exists. Not ported: `COLORGENERIC`
+  (we don't paint bots or vehicles) and the chain-kill undo trust check (our
+  bricks never chain-kill). `ToolAction::UndoPlant` is now `UndoBrick`, so the
+  protocol version moved to 23. Evidence: `cargo test -p bri-sim` including
+  `undo_reverts_paint_and_print_then_breaks_the_plant`.

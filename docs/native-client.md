@@ -106,12 +106,13 @@ pose packet. The ghost has a translucent original-material preview.
 Ordinary wrench properties, print selection and the implemented brick-event
 subset use server inspections and reject stale edits. Catalog IDs, print aspects,
 target reach and ownership are checked by the server. Opaque imported records
-remain read-only and server-owned. Planting undo retains the last 512 placements
-per owner. Sound/vehicle/item wrench behaviors, additional events and other
+remain read-only and server-owned. Ctrl+Z follows v20's per-client undo queue
+(511 entries): plants break like hammered bricks, and spray paint, FX paint and
+prints revert. Sound/vehicle/item wrench behaviors, additional events and other
 unfinished adapters still report explicit errors.
 
 Remaining building fidelity includes exact ghost re-centering/snapping, the
-terrain-only placement offset, projectile tool-flight timing, paint/FX/print undo,
+terrain-only placement offset, projectile tool-flight timing,
 held tools/animations/audio and complete trust/minigame/equipment rules. Reliable
 actions capture body aim when dispatched, independently of movement datagrams.
 The server validates this aim and still owns position, reach and permissions;
