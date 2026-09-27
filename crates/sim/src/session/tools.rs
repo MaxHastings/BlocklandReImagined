@@ -345,17 +345,15 @@ impl Session {
         }
         if action == ToolAction::Hammer {
             let position = brick.position;
-            self.simulation.remove(&peer.actor, id)?;
+            let actor = Actor {
+                owner: peer.actor.owner,
+                administrator: peer.actor.administrator,
+            };
             peer.inspection = None;
-            self.dirty.insert(id);
+            self.kill_brick(&actor, id, super::debris::BrickBlast::pop(position.into()))?;
             self.cues.emit(
                 self.simulation.state().tick,
                 crate::presentation::CueKind::HammerHit,
-                position,
-            );
-            self.cues.emit(
-                self.simulation.state().tick,
-                crate::presentation::CueKind::Break,
                 position,
             );
             return Ok(Reply::Accepted);

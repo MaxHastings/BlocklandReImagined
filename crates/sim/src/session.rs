@@ -16,6 +16,7 @@ mod bots;
 mod combat;
 mod control;
 pub use control::ControlObject;
+mod debris;
 mod events;
 mod admin_world;
 mod inventory;
@@ -285,6 +286,9 @@ pub struct Session {
     bulk_requests: u32,
     admin: admin::AdminRuntime,
     admin_disconnects: VecDeque<OwnerId>,
+    /// v20 `$Server::LAN`: single-player and LAN hosts use the looser brick
+    /// damage rules.
+    lan_host: bool,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -332,7 +336,12 @@ impl Session {
             bulk_requests: 0,
             admin: admin::AdminRuntime::default(),
             admin_disconnects: VecDeque::new(),
+            lan_host: false,
         }
+    }
+    /// Mark a single-player or LAN host (v20 `$Server::LAN`).
+    pub fn set_lan_host(&mut self, lan: bool) {
+        self.lan_host = lan;
     }
     pub fn simulation(&self) -> &Simulation {
         &self.simulation
@@ -954,10 +963,11 @@ impl Session {
                     "Tool target is out of reach or obstructed"
                 );
                 let position = self.simulation.state().bricks[&brick].position;
-                self.simulation.remove(&peer.actor, brick)?;
-                self.dirty.insert(brick);
-                self.cues
-                    .emit(tick, crate::presentation::CueKind::Break, position);
+                let actor = Actor {
+                    owner: peer.actor.owner,
+                    administrator: peer.actor.administrator,
+                };
+                self.kill_brick(&actor, brick, debris::BrickBlast::pop(position.into()))?;
                 Ok(Reply::Accepted)
             }
             Command::Activate => {

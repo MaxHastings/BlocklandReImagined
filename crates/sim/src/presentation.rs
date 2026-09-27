@@ -3,11 +3,28 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 pub const MAX_CUES: usize = 4096;
+/// Upper bound on a brick blast's force and falloff radius.
+pub const MAX_BRICK_FORCE: f32 = 1000.;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CueKind {
     Jump,
     Plant,
-    Break,
+    /// v20 `transmitBrickExplosion`: a brick was killed or fake-killed.
+    /// Clients throw its debris from `origin`; `Cue::position` is the brick's
+    /// center. The look travels with the cue because the brick may already
+    /// be gone from the client's world.
+    BrickKill {
+        brick: u64,
+        definition: bri_world::ContentRef,
+        quarter_turns: u8,
+        color: u8,
+        color_effect: u8,
+        shape_effect: u8,
+        print: Option<bri_world::ContentRef>,
+        origin: [f32; 3],
+        force: f32,
+        radius: f32,
+    },
     HammerHit,
     WrenchHit,
     WeaponSound {
@@ -162,6 +179,36 @@ impl Cue {
                 *actor > 0 && crate::session::EMOTES.contains(&name.as_str()),
                 "Invalid emote cue"
             ),
+            CueKind::BrickKill {
+                brick,
+                definition,
+                quarter_turns,
+                color_effect,
+                shape_effect,
+                print,
+                origin,
+                force,
+                radius,
+                ..
+            } => {
+                definition.validate()?;
+                if let Some(print) = print {
+                    print.validate()?;
+                }
+                ensure!(
+                    *brick > 0
+                        && matches!(definition, bri_world::ContentRef::Resolved(_))
+                        && *quarter_turns < 4
+                        && *color_effect <= 6
+                        && *shape_effect <= 2
+                        && origin
+                            .iter()
+                            .all(|v| v.is_finite() && v.abs() <= 1_000_000.)
+                        && (0. ..=MAX_BRICK_FORCE).contains(force)
+                        && (0. ..=MAX_BRICK_FORCE).contains(radius),
+                    "Invalid brick kill cue"
+                )
+            }
             _ => {}
         }
         if let CueKind::WeaponSound { profile } = &self.kind {

@@ -180,7 +180,7 @@ impl ClientAudio {
             }
             CueKind::Jump => "player.jump",
             CueKind::Plant => "brick.plant",
-            CueKind::Break => "brick.break",
+            CueKind::BrickKill { .. } => "brick.break",
             CueKind::HammerHit => "tool.hammer.hit",
             CueKind::WrenchHit => "tool.wrench.hit",
             CueKind::Pain { cry: true, .. } => "player.pain_cry",

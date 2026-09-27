@@ -106,6 +106,14 @@ pub struct App {
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
     weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
     weapon_cue_drops: u64,
+    /// Killed-brick debris (v20 brick explosions) and its GPU models.
+    brick_debris: crate::brick_debris::BrickDebris,
+    debris_models: crate::brick_debris::DebrisModels,
+    brick_kills: Vec<bri_sim::presentation::Cue>,
+    /// Non-rendering bricks, drawn only while a building tool is out, and
+    /// whether the uploaded scene is the shown one (None: stale).
+    hidden_gpu: Option<GpuScene>,
+    hidden_uploaded: Option<bool>,
     weapon_light_deferred: usize,
     weapon_effect_session: Option<RequestId>,
     weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
@@ -175,6 +183,11 @@ impl App {
         self.audio.cue(&cue);
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
+        if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
+            && self.brick_kills.len() < bri_sim::presentation::MAX_CUES
+        {
+            self.brick_kills.push(cue.clone());
+        }
         if matches!(
             cue.kind,
             bri_sim::presentation::CueKind::WeaponEffect { .. }
@@ -635,6 +648,11 @@ impl App {
             explosion_shapes,
             weapon_cues: VecDeque::new(),
             weapon_cue_drops: 0,
+            brick_debris: Default::default(),
+            debris_models: Default::default(),
+            brick_kills: Vec::new(),
+            hidden_gpu: None,
+            hidden_uploaded: None,
             weapon_light_deferred: 0,
             weapon_effect_session: None,
             weapon_animation_cues: VecDeque::new(),
@@ -737,6 +755,11 @@ impl App {
         self.weapon_animation_drops = 0;
         self.weapon_animation_cursor = 0;
         self.weapon_cue_drops = 0;
+        self.brick_debris.clear();
+        self.debris_models.clear();
+        self.brick_kills.clear();
+        self.hidden_gpu = None;
+        self.hidden_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
@@ -1141,6 +1164,8 @@ impl App {
             }
             .parse()?;
             let mut session = Session::new(loaded.simulation);
+            // Every game this client hosts is single-player or LAN.
+            session.set_lan_host(true);
             session.set_admin_passwords(admin, super_admin)?;
             session.set_tool_catalog(catalog)?;
             session.set_weapon_pack(weapon_pack)?;
@@ -1929,6 +1954,8 @@ impl App {
             }
             self.query_source = Some(view.world.clone());
             self.ghost_uploaded = u64::MAX;
+            self.brick_debris.sync_world(&view.world);
+            self.hidden_uploaded = None;
         }
         if let Some(job) = &self.world_job
             && let Ok((source, result)) = job.receiver.try_recv()
@@ -2629,6 +2656,13 @@ impl PlatformApp for App {
             self.explosion_shapes.advance(elapsed.as_secs_f32());
             self.audio
                 .sync_projectiles(&view.weapons.projectiles, &self.content.weapons.pack);
+            let kills = std::mem::take(&mut self.brick_kills);
+            if self.brick_debris.cues(&kills, building)? > 0 {
+                // Newly dead bricks are not hidden bricks to reveal.
+                self.hidden_uploaded = None;
+            }
+            self.brick_debris
+                .advance(elapsed.as_secs_f32().min(0.25), building)?;
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
@@ -3198,6 +3232,9 @@ impl PlatformApp for App {
         self.gpu_world = None;
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.debris_models.clear();
+        self.hidden_gpu = None;
+        self.hidden_uploaded = None;
         self.depth = None;
         Ok(())
     }
@@ -3219,6 +3256,9 @@ impl PlatformApp for App {
         self.gpu_world = None;
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.debris_models.clear();
+        self.hidden_gpu = None;
+        self.hidden_uploaded = None;
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -3313,6 +3353,64 @@ impl PlatformApp for App {
                 }
             }
             self.ghost_uploaded = building.ghost_generation();
+        }
+        if let Some(building) = &self.building
+            && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
+        {
+            // v20 `showBricks` images (hammer, wrench, printer, wands, bricks)
+            // reveal non-rendering bricks as ghosts.
+            let show = matches!(
+                building.equipment(),
+                crate::building::Equipment::Brick(_)
+                    | crate::building::Equipment::Hammer
+                    | crate::building::Equipment::Wrench
+                    | crate::building::Equipment::Printer
+                    | crate::building::Equipment::Wand
+            );
+            if self.hidden_uploaded != Some(show) {
+                self.hidden_gpu = None;
+                if show {
+                    let hidden = bri_net::protocol::PublicWorld {
+                        name: "Non-rendering bricks".into(),
+                        map_id: view.world.map_id.clone(),
+                        palette: view.world.palette.clone(),
+                        bricks: view
+                            .world
+                            .bricks
+                            .iter()
+                            .filter(|(id, b)| !b.visible && !self.brick_debris.is_dead(**id))
+                            .map(|(id, b)| {
+                                let mut b = b.clone();
+                                b.visible = true;
+                                (*id, b)
+                            })
+                            .collect(),
+                    };
+                    if !hidden.bricks.is_empty() {
+                        let mut data = crate::world_scene::build_world_scene_materials(
+                            &hidden,
+                            meshes,
+                            1_000_000,
+                            Some(materials),
+                        )?;
+                        translucent_ghost(&mut data);
+                        if !data.indices.is_empty() {
+                            self.hidden_gpu =
+                                Some(renderer.upload(frame.device, frame.queue, &data)?);
+                        }
+                    }
+                }
+                self.hidden_uploaded = Some(show);
+            }
+            self.debris_models.upload(
+                &self.brick_debris,
+                renderer,
+                frame.device,
+                frame.queue,
+                meshes,
+                materials,
+                &view.world.palette,
+            )?;
         }
         if self
             .depth
@@ -3461,6 +3559,9 @@ impl PlatformApp for App {
         if let Some(ghost) = &self.ghost_gpu {
             scenes.push(ghost);
         }
+        if let Some(hidden) = &self.hidden_gpu {
+            scenes.push(hidden);
+        }
         for (owner, avatar) in &self.avatars {
             if (*owner != view.owner || third_person)
                 && !hidden.contains(owner)
@@ -3473,6 +3574,7 @@ impl PlatformApp for App {
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
+        item_draws.extend(self.debris_models.draws());
         renderer.render_with_instances(
             frame.encoder,
             frame.target,
