@@ -25,6 +25,7 @@ sha2 = "0.10"
 ring = "0.17.14"
 tempfile = "3"
 zstd = "0.13"
+igd-next = { version = "0.17", default-features = false }
 
 [dev-dependencies]
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }

@@ -7,4 +7,5 @@ pub mod discovery;
 pub mod protocol;
 pub mod replica;
 pub mod server;
+pub mod upnp;
 mod tick_clock;

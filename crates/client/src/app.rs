@@ -75,6 +75,8 @@ struct Attempt {
     entered: bool,
     view: Option<network::View>,
     last_chat: u64,
+    /// Internet hosts: router port-forwarding outcomes for the host player.
+    router: Option<mpsc::Receiver<String>>,
 }
 struct PendingAction {
     action: UiAction,
@@ -1028,6 +1030,7 @@ impl App {
             .find(|m| m.id == map)
             .map_or_else(|| map.clone(), |m| m.name.clone());
         let (scene_tx, scene) = mpsc::sync_channel(1);
+        let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
         self.disconnect();
@@ -1197,6 +1200,9 @@ impl App {
                 host.advertise(listing_name, listing_map, max_players, identity.clone())
                     .await?;
             }
+            if internet {
+                host.open_router_ports(router_tx);
+            }
             let client = Client::connect_with_identity(
                 address,
                 &host.certificate,
@@ -1224,6 +1230,7 @@ impl App {
             entered: false,
             view: None,
             last_chat: 0,
+            router: internet.then_some(router),
         });
         Ok(())
     }
@@ -1431,6 +1438,7 @@ impl App {
             entered: false,
             view: None,
             last_chat: 0,
+            router: None,
         });
         Ok(())
     }
@@ -2199,6 +2207,13 @@ impl App {
                     };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
+                }
+            }
+            if a.entered
+                && let Some(router) = &a.router
+            {
+                while let Ok(text) = router.try_recv() {
+                    self.ui.apply_session(a.id, UiUpdate::Chat { text: plain_chat(&text) });
                 }
             }
             self.ui.apply_session(
