@@ -125,7 +125,7 @@ plausible mechanism checked while looking (an undrained client being kicked).
 3. Item 9 follow-up: a compact wire form for bricks (ids and packed
    position/rotation/color instead of named fields) would cut checkpoint bytes
    several-fold; do it together with item 2.
-5. Items 14, 15, 17 as the owners of those areas touch them.
+4. Items 14, 15, 17 as the owners of those areas touch them.
 
 ## Evidence
 
