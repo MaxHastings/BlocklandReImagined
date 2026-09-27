@@ -239,7 +239,9 @@ fn inventory_drop_pickup_and_disconnect() {
     let mut w = world("GunItem");
     let mut q = Scene::default();
     run(&mut w, 30, &mut q);
-    assert!(w.give(ActorId(1), &native_id("weapon", "GunItem")).is_err());
+    // v20 `ItemData::onPickup` has no duplicate check: a second gun takes
+    // the next free slot.
+    assert_eq!(w.give(ActorId(1), &native_id("weapon", "GunItem")).unwrap(), 1);
     let d = w.drop_item(ActorId(1), 0).unwrap();
     assert!(w.pickup(ActorId(1), d).is_err());
     w.add_actor(ActorId(2), 5).unwrap();
