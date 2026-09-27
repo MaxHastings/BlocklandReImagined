@@ -40,18 +40,39 @@ impl BrickBlast {
 
 impl Session {
     /// `killBrick`: remove the brick for good and throw its debris. The
-    /// hammer and Destructo Wand come through here.
+    /// hammer, both wands and undo come through here. Like v20, every brick
+    /// left with no path to the ground dies with it (the chain kill); the
+    /// hammer never gets here with such a brick.
     pub(super) fn kill_brick(
         &mut self,
         actor: &Actor,
         brick: BrickId,
         blast: BrickBlast,
     ) -> Result<()> {
+        let stranded = self.simulation.stranded_by(brick)?;
         let cue = self.brick_kill_cue(brick, blast)?;
         self.simulation.remove(actor, brick)?;
         self.dirty.insert(brick);
         self.events.respawns.remove(&brick);
         self.emit_brick_kill(cue);
+        // The engine kills these, whoever owns them.
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        for id in stranded {
+            let Some(b) = self.simulation.state().bricks.get(&id) else {
+                continue;
+            };
+            if self.simulation.definitions.get(b)?.indestructible {
+                continue;
+            }
+            let cue = self.brick_kill_cue(id, BrickBlast::pop(Vec3::from(b.position)))?;
+            self.simulation.remove(&engine, id)?;
+            self.dirty.insert(id);
+            self.events.respawns.remove(&id);
+            self.emit_brick_kill(cue);
+        }
         Ok(())
     }
     /// `fakeKillBrick` and brick explosions: hide the brick, make it

@@ -78,11 +78,25 @@ impl Session {
             .clone();
         let edit = match entry {
             UndoEntry::Plant(_) => {
-                // Only a brick still in the undoer's own brick group. v20's
-                // chain-kill trust check has nothing to guard here: our
-                // bricks never fall when their support goes.
+                // Only a brick still in the undoer's own brick group.
                 if brick_owner != owner {
                     return Ok(Reply::Undone(None));
+                }
+                // `undoTrustCheck`: a brick whose loss would strand others
+                // needs Full trust from every brick group it touches above
+                // and below. It is group-to-group trust with no admin bypass.
+                if self.simulation.will_cause_chain_kill(id)? {
+                    for neighbor in self.simulation.connected_bricks(id)? {
+                        let group = self.simulation.state().bricks[&neighbor].owner;
+                        if actor.trust_level(group) < level::FULL {
+                            let name = self.brick_group_name(group);
+                            self.center_print(
+                                owner,
+                                format!("{name} does not trust you enough to do that."),
+                            );
+                            return Ok(Reply::Undone(None));
+                        }
+                    }
                 }
                 self.tool_kill_brick(owner, id)?;
                 return Ok(Reply::Undone(Some(id)));

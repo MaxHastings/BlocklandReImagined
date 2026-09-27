@@ -9,7 +9,7 @@ use bri_world::{
 };
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
 /// Why a brick could not be planted. Clients show the original plant-error
@@ -304,6 +304,79 @@ impl Simulation {
         let mesh = &self.definitions.get(brick).ok()?.mesh;
         Some(crate::definitions::brick_box(brick, mesh))
     }
+    /// v20 `fxDTSBrick::willCauseChainKill`: whether killing this brick would
+    /// leave any other brick without a path to the ground. The hammer refuses
+    /// such bricks; the wands and undo break them anyway.
+    pub fn will_cause_chain_kill(&self, id: BrickId) -> Result<bool> {
+        Ok(!self.stranded_by(id)?.is_empty())
+    }
+    /// The bricks `killBrick` chain-kills with this one: those left without
+    /// a path to the ground once it is gone, nearest first. Bricks connect
+    /// by studs, up or down, and grounded bricks hold up everything joined
+    /// to them.
+    pub fn stranded_by(&self, id: BrickId) -> Result<Vec<BrickId>> {
+        ensure!(self.state().bricks.contains_key(&id), "Unknown brick");
+        let (mut supported, mut stranded) = (BTreeSet::new(), Vec::new());
+        for start in self.connected_bricks(id)? {
+            if supported.contains(&start) || stranded.contains(&start) {
+                continue;
+            }
+            let mut seen = BTreeSet::from([id, start]);
+            let mut order = vec![start];
+            let mut next = 0;
+            let mut grounded = false;
+            while let Some(&brick) = order.get(next) {
+                next += 1;
+                if supported.contains(&brick) || self.grounded_root(brick)? {
+                    grounded = true;
+                    break;
+                }
+                for other in self.connected_bricks(brick)? {
+                    if seen.insert(other) {
+                        order.push(other);
+                    }
+                }
+            }
+            if grounded {
+                seen.remove(&id);
+                supported.extend(seen);
+            } else {
+                stranded.extend(order);
+            }
+        }
+        Ok(stranded)
+    }
+    /// Bricks joined to this one by studs above or below (`getUpBrick`,
+    /// `getDownBrick`).
+    pub fn connected_bricks(&self, id: BrickId) -> Result<Vec<BrickId>> {
+        let world = self.state();
+        let brick = &world.bricks[&id];
+        let mesh = &self.definitions.get(brick)?.mesh;
+        let bounds = self.index.bounds(id);
+        let mut out = Vec::new();
+        for other in self.index.query(bounds.expanded(1)) {
+            if other == id {
+                continue;
+            }
+            let existing = &world.bricks[&other];
+            let other_mesh = &self.definitions.get(existing)?.mesh;
+            if grid::connected(
+                (brick, mesh, bounds),
+                (existing, other_mesh, self.index.bounds(other)),
+            ) {
+                out.push(other);
+            }
+        }
+        Ok(out)
+    }
+    /// The chain-kill root test: a brick resting on the map is ground.
+    fn grounded_root(&self, id: BrickId) -> Result<bool> {
+        Ok(on_ground(
+            &self.physics,
+            self.terrain.as_ref(),
+            self.index.bounds(id),
+        ))
+    }
     /// Map liquids plus water bricks, for the player motor.
     pub fn liquids(&self) -> Vec<bri_content::water::Water> {
         self.waters
@@ -358,6 +431,9 @@ impl Simulation {
             })
             .collect()
     }
+    /// Longest brick-targeting ray: the admin Destructo Wand's 500 units at
+    /// up to four times player scale.
+    pub const MAX_TARGET_DISTANCE: f32 = 2000.0;
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
         self.target_filtered(origin, direction, max_distance, false)
     }
@@ -386,7 +462,7 @@ impl Simulation {
                 && direction.length_squared() > 0.1
                 && max_distance.is_finite()
                 && max_distance > 0.0
-                && max_distance <= 150.0,
+                && max_distance <= Self::MAX_TARGET_DISTANCE,
             "Invalid targeting ray"
         );
         let direction = direction.normalize();
@@ -577,37 +653,75 @@ fn validate_placement(
         }
     }
     if !supported {
-        let map_filter = |_: ColliderHandle, c: &Collider| c.user_data == MAP_TAG;
-        let query =
-            physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_filter));
-        'support: for z in bounds.min[2]..bounds.max()[2] {
-            for x in bounds.min[0]..bounds.max()[0] {
-                for y in bounds.min[1]..bounds.max()[1] {
-                    if !b"bd".contains(&bounds.cell(
-                        [x, y, z],
-                        brick.quarter_turns,
-                        &definition.mesh,
-                    )) {
-                        continue;
-                    }
-                    let origin = Vector::new(
-                        (x as f32 + 0.5) * 0.5,
-                        y as f32 * 0.2 + 0.002,
-                        (z as f32 + 0.5) * 0.5,
-                    );
-                    if query
-                        .cast_ray_and_get_normal(&Ray::new(origin, -Vector::Y), 0.205, true)
-                        .is_some_and(|(_, h)| h.normal.y > 0.5)
-                    {
-                        supported = true;
-                        break 'support;
-                    }
-                }
-            }
-        }
+        supported = map_supported(physics, brick, &definition.mesh, bounds);
     }
     if !supported {
         return Err(PlantFailure::Float.into());
     }
     Ok(())
+}
+/// Whether a brick's downward studs rest on the map (interiors and statics)
+/// rather than only on other bricks.
+fn map_supported(
+    physics: &PhysicsWorld,
+    brick: &Brick,
+    mesh: &bri_content::brick::Brick,
+    bounds: Bounds,
+) -> bool {
+    let map_filter = |_: ColliderHandle, c: &Collider| c.user_data == MAP_TAG;
+    let query = physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_filter));
+    for z in bounds.min[2]..bounds.max()[2] {
+        for x in bounds.min[0]..bounds.max()[0] {
+            for y in bounds.min[1]..bounds.max()[1] {
+                if !b"bd".contains(&bounds.cell([x, y, z], brick.quarter_turns, mesh)) {
+                    continue;
+                }
+                let origin = Vector::new(
+                    (x as f32 + 0.5) * 0.5,
+                    y as f32 * 0.2 + 0.002,
+                    (z as f32 + 0.5) * 0.5,
+                );
+                if query
+                    .cast_ray_and_get_normal(&Ray::new(origin, -Vector::Y), 0.205, true)
+                    .is_some_and(|(_, h)| h.normal.y > 0.5)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+/// v20's plant-time ground probe, approximately: a ray from the brick's top
+/// down to 0.1 below its bottom at each footprint cell finds map floor no
+/// higher than 0.1 above the bottom, or terrain reaches above the bottom.
+/// Loaded layouts sit a few thousandths into the floor, so the ray must
+/// start above it.
+fn on_ground(
+    physics: &PhysicsWorld,
+    terrain: Option<&crate::map::TerrainStream>,
+    bounds: Bounds,
+) -> bool {
+    let map_filter = |_: ColliderHandle, c: &Collider| c.user_data == MAP_TAG;
+    let query = physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_filter));
+    let bottom = bounds.min[1] as f32 * 0.2;
+    let top = bounds.max()[1] as f32 * 0.2;
+    for z in bounds.min[2]..bounds.max()[2] {
+        for x in bounds.min[0]..bounds.max()[0] {
+            let origin = Vec3::new((x as f32 + 0.5) * 0.5, top, (z as f32 + 0.5) * 0.5);
+            let reach = top - bottom + 0.1;
+            let floor = query
+                .cast_ray_and_get_normal(
+                    &Ray::new(Vector::from_array(origin.to_array()), -Vector::Y),
+                    reach,
+                    true,
+                )
+                .is_some_and(|(_, h)| h.normal.y > 0.5 && top - h.time_of_impact <= bottom + 0.1);
+            let ground = terrain.is_some_and(|t| t.cast_ray(origin, Vec3::NEG_Y, reach).is_some());
+            if floor || ground {
+                return true;
+            }
+        }
+    }
+    false
 }
