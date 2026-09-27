@@ -534,3 +534,14 @@ fn super_shift_toggle_shows_the_hud_icon_on_the_bottom_edge() {
     u.update(16);
     assert!(!shown(&u).0);
 }
+#[test]
+fn ski_crash_whiteout_takes_the_stronger_flash_and_fades() {
+    let mut u = ui();
+    u.apply(UiUpdate::Whiteout(0.5));
+    u.apply(UiUpdate::Whiteout(0.25));
+    assert_eq!(u.core.whiteout, 0.5);
+    u.update(250);
+    assert!((u.core.whiteout - 0.25).abs() < 1e-6);
+    u.update(1000);
+    assert_eq!(u.core.whiteout, 0.0);
+}

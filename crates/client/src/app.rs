@@ -190,6 +190,8 @@ pub struct App {
     mount_heading: Option<f32>,
     /// `mCameraOffset`: how far the chase camera trails the vehicle.
     chase_lag: Vec3,
+    /// The tumble vehicle the local player last started riding.
+    tumble: Option<u64>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     net_graph: Option<(std::time::Instant, u32)>,
     /// LAN listings from the last discovery query: address -> certificate.
@@ -753,6 +755,7 @@ impl App {
             vehicles: Default::default(),
             mount_heading: None,
             chase_lag: Vec3::ZERO,
+            tumble: None,
             music_world: None,
             net_graph: None,
             lan_hosts: BTreeMap::new(),
@@ -2715,6 +2718,14 @@ impl PlatformApp for App {
                     let dt = elapsed.as_secs_f32().min(0.1);
                     self.chase_lag -=
                         (self.chase_lag * d.camera.decay + frame.velocity * d.camera.lag) * dt;
+                    // skiVehicle::onWreck whites the screen out by the crash
+                    // speed: clamp(1 + (speed - 10) / 50 * 7, 1, 7) / 7.
+                    if d.family == bri_vehicles::Family::Tumble && self.tumble != Some(vehicle) {
+                        self.tumble = Some(vehicle);
+                        let seconds =
+                            (1.0 + (frame.velocity.length() - 10.0) / 50.0 * 7.0).clamp(1.0, 7.0);
+                        self.ui.apply(UiUpdate::Whiteout(seconds / 7.0));
+                    }
                     let forward = frame.rotation * Vec3::NEG_Z;
                     Some((
                         d.seat_role(usize::from(seat)),

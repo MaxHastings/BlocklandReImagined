@@ -814,6 +814,8 @@ pub enum UiUpdate {
     PlantError(PlantError),
     /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
     DamageFlash(f32),
+    /// White screen (`setWhiteout`) that fades over a second per unit.
+    Whiteout(f32),
     /// Net graph text (`toggleNetGraph`); None hides it.
     NetGraph(Option<String>),
     Players {

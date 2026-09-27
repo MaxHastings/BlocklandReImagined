@@ -218,6 +218,8 @@ pub struct Core {
     pub plant_error: Option<(PlantError, u64)>,
     /// Current damage flash opacity (0..=0.75), fading over time.
     pub damage_flash: f32,
+    /// Current whiteout opacity (0..=1), fading over time.
+    pub whiteout: f32,
     pub net_graph: Option<String>,
     pub lagging: bool,
     pub shape_names: bool,
@@ -326,6 +328,7 @@ impl Core {
         self.bottom_print = None;
         self.plant_error = None;
         self.damage_flash = 0.0;
+        self.whiteout = 0.0;
         self.lagging = false;
         self.super_shift = false;
         self.zoom_on = false;
@@ -918,6 +921,7 @@ impl Ui {
             bottom_print: None,
             plant_error: None,
             damage_flash: 0.0,
+            whiteout: 0.0,
             net_graph: None,
             lagging: false,
             shape_names: true,
@@ -1297,6 +1301,11 @@ impl Ui {
             }
             UiUpdate::PlantError(e) => c.plant_error = Some((e, c.time_ms + 800)),
             UiUpdate::NetGraph(text) => c.net_graph = text,
+            UiUpdate::Whiteout(amount) => {
+                if amount.is_finite() {
+                    c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
+                }
+            }
             UiUpdate::DamageFlash(amount) => {
                 if amount.is_finite() {
                     c.damage_flash = (c.damage_flash + amount.max(0.0)).min(0.75);
@@ -1703,6 +1712,7 @@ impl Ui {
         c.time_ms = c.time_ms.saturating_add(dt_ms);
         c.keyboard_turn(dt_ms);
         c.damage_flash = (c.damage_flash - dt_ms as f32 / 1000.0).max(0.0);
+        c.whiteout = (c.whiteout - dt_ms as f32 / 1000.0).max(0.0);
         let now = c.time_ms;
         for cmd in c.repeater.due(now) {
             let (super_mode, base) = match cmd.strip_prefix("super:") {
