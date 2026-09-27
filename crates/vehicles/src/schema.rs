@@ -355,9 +355,13 @@ impl Pack {
                 "invalid mass properties"
             );
             ensure!(
-                d.look_pitch.iter().all(|v| v.is_finite() && v.abs() <= std::f32::consts::FRAC_PI_2 + 0.001)
+                d.look_pitch
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= std::f32::consts::FRAC_PI_2 + 0.001)
                     && d.look_pitch[0] <= d.look_pitch[1]
-                    && d.underwater_speeds.iter().all(|v| v.is_finite() && *v >= 0.),
+                    && d.underwater_speeds
+                        .iter()
+                        .all(|v| v.is_finite() && *v >= 0.),
                 "invalid actor look/swim parameters"
             );
             for wheel in &d.wheels {

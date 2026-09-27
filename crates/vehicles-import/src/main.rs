@@ -539,17 +539,23 @@ fn main() -> Result<()> {
         // datablock opts out (vehicles with pitch control do).
         // The Tank's gunner aims its TankTurretPlayer, whose look range bounds the barrel.
         let look = if name == "TankVehicle" {
-            blocks.get("tankturretplayer").context("tank turret player")?
+            blocks
+                .get("tankturretplayer")
+                .context("tank turret player")?
         } else {
             b
         };
         let strafe_steering = !wheels.is_empty()
             && !matches!(
-                field(b, "steeringUseStrafeSteering").to_lowercase().as_str(),
+                field(b, "steeringUseStrafeSteering")
+                    .to_lowercase()
+                    .as_str(),
                 "false" | "0"
             );
         if family == Family::Flying {
-            adaptations.push("FlyingVehicle inertia is the engine's unit sphere (0.4 mass), not massBox".into());
+            adaptations.push(
+                "FlyingVehicle inertia is the engine's unit sphere (0.4 mass), not massBox".into(),
+            );
         }
         definitions.push(Definition {
             id: format!("v20.vehicle.{}", name.to_lowercase()),

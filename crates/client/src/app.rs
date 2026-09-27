@@ -1,5 +1,4 @@
 //! UI → native application → asynchronous authoritative server integration.
-use bri_vehicles::schema::SeatRole;
 use crate::{
     content::{ClientContent, LOADABLE_MAPS},
     controls::Controls,
@@ -28,6 +27,7 @@ use bri_ui::{
     screens::ScreenId,
     ui::{Ui, UiConfig},
 };
+use bri_vehicles::schema::SeatRole;
 use glam::Vec3;
 use std::{
     collections::{BTreeMap, VecDeque},

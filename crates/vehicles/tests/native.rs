@@ -913,7 +913,11 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
                 throttle: 1.,
                 steer: 1.,
                 // Mouse-steered vehicles turn by accumulating mouse motion.
-                look_delta: if d.strafe_steering { [0.; 2] } else { [0.02, 0.] },
+                look_delta: if d.strafe_steering {
+                    [0.; 2]
+                } else {
+                    [0.02, 0.]
+                },
                 ..Default::default()
             },
         )

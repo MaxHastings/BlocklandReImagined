@@ -346,9 +346,7 @@ impl Session {
             .context("Unknown brick")?;
         ensure!(brick.vehicle.is_some(), "This brick has no vehicle");
         if let Some(kind) = brick.vehicle.as_ref().and_then(|v| match &v.vehicle {
-            bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id) => {
-                Some(id.clone())
-            }
+            bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id) => Some(id.clone()),
             _ => None,
         }) {
             // Bots come back fresh at their brick.
@@ -696,9 +694,13 @@ impl Session {
         if !alive || self.vehicles.mounted.contains_key(&owner) {
             return Ok(());
         }
-        let Some(id) =
-            self.spawn_transient(owner, "v20.vehicle.deathvehicle", transform, velocity, scale)
-        else {
+        let Some(id) = self.spawn_transient(
+            owner,
+            "v20.vehicle.deathvehicle",
+            transform,
+            velocity,
+            scale,
+        ) else {
             return Ok(());
         };
         let world = self.vehicles.world.as_mut().unwrap();
@@ -796,7 +798,13 @@ impl Session {
             };
             let boarded = eligible.is_some_and(|feet| {
                 world
-                    .mount(&self.simulation.physics, vehicle, 0, occupant(owner), feet.to_array())
+                    .mount(
+                        &self.simulation.physics,
+                        vehicle,
+                        0,
+                        occupant(owner),
+                        feet.to_array(),
+                    )
                     .is_ok()
             });
             if !boarded {

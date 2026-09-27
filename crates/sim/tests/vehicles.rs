@@ -67,7 +67,10 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
     assert_eq!(infos[0].definition, JEEP);
     assert_eq!(infos[0].color, Some(0), "recolored with the brick color");
     let parked = Vec3::from(s.vehicle_poses()[0].position);
-    assert!(parked.distance(Vec3::new(0.0, 0.0, -12.0)) < 3.0, "{parked}");
+    assert!(
+        parked.distance(Vec3::new(0.0, 0.0, -12.0)) < 3.0,
+        "{parked}"
+    );
     // Hop onto the jeep: the driver seat is taken.
     for i in 0..60 {
         let input = MoveInput {
@@ -94,7 +97,10 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
         240,
     )?;
     let after = Vec3::from(s.vehicle_poses()[0].position);
-    assert!(before.distance(after) > 5.0, "jeep drove {before} -> {after}");
+    assert!(
+        before.distance(after) > 5.0,
+        "jeep drove {before} -> {after}"
+    );
     // The rider stays in the seat while moving.
     let rider = s
         .motion_states()
@@ -134,7 +140,9 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
 #[test]
 #[ignore = "requires the converted native vehicle, weapon and brick packs"]
 fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Result<()> {
-    use bri_sim::session::{ActionAim, InspectMode, MiniGameRequest, ToolCatalog, WrenchProperties};
+    use bri_sim::session::{
+        ActionAim, InspectMode, MiniGameRequest, ToolCatalog, WrenchProperties,
+    };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
@@ -247,7 +255,6 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     Ok(())
 }
 
-
 /// Feeds one player's input for a number of ticks.
 struct Feeder {
     owner: u64,
@@ -300,9 +307,17 @@ fn walking_into_a_vehicle_does_not_board_it_but_jumping_on_does() -> anyhow::Res
         },
         300,
     )?;
-    assert_eq!(s.mounted(owner), None, "walking into the jeep only bumps it");
+    assert_eq!(
+        s.mounted(owner),
+        None,
+        "walking into the jeep only bumps it"
+    );
     p.board(&mut s, 0.0)?;
-    assert_eq!(s.mounted(owner).map(|m| m.1), Some(0), "the driver seat first");
+    assert_eq!(
+        s.mounted(owner).map(|m| m.1),
+        Some(0),
+        "the driver seat first"
+    );
     Ok(())
 }
 
@@ -329,8 +344,14 @@ fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_crouch() -> anyhow::Res
     )?;
     let pose = &s.vehicle_poses()[0];
     let after = Vec3::from(pose.position);
-    assert!((pose_heading(pose.rotation) - look).abs() < 0.01, "faces the look");
-    assert!(after.x - before.x > 15.0, "runs at maxForwardSpeed 12: {before} -> {after}");
+    assert!(
+        (pose_heading(pose.rotation) - look).abs() < 0.01,
+        "faces the look"
+    );
+    assert!(
+        after.x - before.x > 15.0,
+        "runs at maxForwardSpeed 12: {before} -> {after}"
+    );
     // The rider sits facing the horse's way.
     let rider = s
         .motion_states()
@@ -441,7 +462,11 @@ fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
     fire(&mut s, &mut p)?;
     p.feed(&mut s, MoveInput::default(), 40)?;
     let (vehicle, _) = s.mounted(owner).expect("riding the skis");
-    let skis = s.vehicle_infos().into_iter().find(|v| v.id == vehicle).unwrap();
+    let skis = s
+        .vehicle_infos()
+        .into_iter()
+        .find(|v| v.id == vehicle)
+        .unwrap();
     assert_eq!(skis.definition, "v20.vehicle.skivehicle");
     fire(&mut s, &mut p)?;
     p.feed(&mut s, MoveInput::default(), 4)?;

@@ -395,7 +395,11 @@ impl Session {
                     brick,
                     matched,
                 } => {
-                    let input = if matched { "OnKeyMatch" } else { "OnKeyMismatch" };
+                    let input = if matched {
+                        "OnKeyMatch"
+                    } else {
+                        "OnKeyMismatch"
+                    };
                     self.fire_input(brick, input, Some(actor.0));
                 }
                 WeaponEvent::Touchdown { actor, brick } => {

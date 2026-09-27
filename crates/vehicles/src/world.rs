@@ -80,7 +80,9 @@ impl Controls {
             "nonfinite controls"
         );
         ensure!(
-            self.look_delta.iter().all(|x| x.abs() <= std::f32::consts::PI),
+            self.look_delta
+                .iter()
+                .all(|x| x.abs() <= std::f32::consts::PI),
             "look turn outside bounds"
         );
         ensure!(
@@ -271,7 +273,11 @@ struct Instance {
 }
 impl Instance {
     fn velocity(&self, d: &Definition, b: &RigidBody) -> Vec3 {
-        if d.is_actor() { self.motion } else { b.linvel() }
+        if d.is_actor() {
+            self.motion
+        } else {
+            b.linvel()
+        }
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1065,8 +1071,7 @@ impl VehiclesWorld {
                                 true,
                             );
                             b.add_torque(
-                                -up * (steer * d.yaw_force)
-                                    - right * (pitch * d.pitch_force)
+                                -up * (steer * d.yaw_force) - right * (pitch * d.pitch_force)
                                     + forward * (roll * d.roll_force),
                                 true,
                             );
@@ -1135,8 +1140,7 @@ impl VehiclesWorld {
                             }
                         }
                         b.add_torque(
-                            -up * (steer * d.yaw_force)
-                                - right * (pitch * d.pitch_force)
+                            -up * (steer * d.yaw_force) - right * (pitch * d.pitch_force)
                                 + forward * (roll * d.roll_force),
                             true,
                         );
@@ -1372,8 +1376,14 @@ impl VehiclesWorld {
                         energy: v.energy,
                         jetting: v.jetting,
                         turret_aim: [
-                            if d.is_actor() { 0. } else { weapon_control.aim_yaw },
-                            weapon_control.aim_pitch.clamp(d.look_pitch[0], d.look_pitch[1]),
+                            if d.is_actor() {
+                                0.
+                            } else {
+                                weapon_control.aim_yaw
+                            },
+                            weapon_control
+                                .aim_pitch
+                                .clamp(d.look_pitch[0], d.look_pitch[1]),
                         ],
                         turret_damage: v.turret_damage,
                         turret_transform: d
@@ -1441,9 +1451,18 @@ fn actor_step(
     } else {
         [d.max_speed, d.reverse_speed, d.max_side_speed]
     };
-    let (throttle, strafe) = if driven { (c.throttle, c.strafe) } else { (0., 0.) };
+    let (throttle, strafe) = if driven {
+        (c.throttle, c.strafe)
+    } else {
+        (0., 0.)
+    };
     let move_vec = forward * throttle + right * strafe;
-    let move_speed = if throttle > 0. { fs * throttle } else { bs * -throttle }.max(ss * strafe.abs());
+    let move_speed = if throttle > 0. {
+        fs * throttle
+    } else {
+        bs * -throttle
+    }
+    .max(ss * strafe.abs());
     let desired = move_vec.normalize_or_zero() * move_speed * scale;
     let mut velocity = v.motion;
     let horizontal = Vec3::new(velocity.x, 0., velocity.z);
@@ -1499,14 +1518,9 @@ fn actor_step(
             .exclude_sensors(),
     );
     let mut normals = Vec::new();
-    let motion = controller.move_shape(
-        dt,
-        &query,
-        shape.as_ref(),
-        &pose,
-        velocity * dt,
-        |hit| normals.push(hit.hit.normal1),
-    );
+    let motion = controller.move_shape(dt, &query, shape.as_ref(), &pose, velocity * dt, |hit| {
+        normals.push(hit.hit.normal1)
+    });
     let intended = velocity * dt;
     let moved = motion.translation;
     let climbed = moved.y > intended.y.max(0.) + 0.01;
@@ -1517,7 +1531,11 @@ fn actor_step(
         }
         let across = -Vec3::new(normal.x, 0., normal.z).normalize_or_zero();
         let expected = intended.dot(across);
-        if normal.y < walkable.cos() && climbed && expected > 0. && moved.dot(across) >= expected * 0.5 {
+        if normal.y < walkable.cos()
+            && climbed
+            && expected > 0.
+            && moved.dot(across) >= expected * 0.5
+        {
             continue;
         }
         velocity -= normal * into;
@@ -1712,18 +1730,18 @@ fn prepare_spawn(
         RigidBodyBuilder::dynamic()
     }
     .pose(pose(&s.transform))
-        .gravity_scale(if world_gravity > 0. {
-            VEHICLE_GRAVITY / world_gravity
-        } else {
-            0.
-        })
-        .linear_damping(if d.family == Family::Flying {
-            0.
-        } else {
-            d.drag * 0.05
-        })
-        .angular_damping(d.angular_drag)
-        .ccd_enabled(true);
+    .gravity_scale(if world_gravity > 0. {
+        VEHICLE_GRAVITY / world_gravity
+    } else {
+        0.
+    })
+    .linear_damping(if d.family == Family::Flying {
+        0.
+    } else {
+        d.drag * 0.05
+    })
+    .angular_damping(d.angular_drag)
+    .ccd_enabled(true);
     if d.is_actor() {
         builder = builder.can_sleep(false);
     }

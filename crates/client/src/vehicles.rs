@@ -85,14 +85,8 @@ impl VehicleAssets {
                 .collect();
             let refs: Vec<&SceneImage> = images.iter().collect();
             let pose = bri_content::animation::sample(&shape, None, 0.0)?;
-            let data = native_shape_scene(
-                &asset.path,
-                &shape,
-                &refs,
-                [1.0; 4],
-                Mat4::IDENTITY,
-                &pose,
-            )?;
+            let data =
+                native_shape_scene(&asset.path, &shape, &refs, [1.0; 4], Mat4::IDENTITY, &pose)?;
             models.insert(
                 asset.path.clone(),
                 Model {
@@ -183,9 +177,7 @@ impl ClientVehicles {
                 continue;
             };
             let frame = match server_tick {
-                Some(now) if Some(*id) != driven => {
-                    sample(history, now - INTERPOLATION_TICKS)
-                }
+                Some(now) if Some(*id) != driven => sample(history, now - INTERPOLATION_TICKS),
                 Some(now) => {
                     let ahead = ((now - newest.tick as f64).clamp(0.0, 6.0) / TICK_RATE) as f32;
                     let mut frame = frame_of(newest);
@@ -271,10 +263,9 @@ impl ClientVehicles {
                 push(&wheel.model, body * local, [1.0; 4]);
             }
             if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount) {
-                let local = to_transform(
-                    Vec3::from(mount.position),
-                    Quat::from_array(mount.rotation),
-                ) * Mat4::from_rotation_y(frame.turret_aim[0]);
+                let local =
+                    to_transform(Vec3::from(mount.position), Quat::from_array(mount.rotation))
+                        * Mat4::from_rotation_y(frame.turret_aim[0]);
                 push(model, body * local, tint);
             }
         }
@@ -352,10 +343,7 @@ fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
             let t = ((tick - a.tick as f64) / (b.tick - a.tick).max(1) as f64) as f32;
             let (fa, fb) = (frame_of(a), frame_of(b));
             let lerp = |x: &[f32], y: &[f32]| -> Vec<f32> {
-                x.iter()
-                    .zip(y)
-                    .map(|(p, q)| p + (q - p) * t)
-                    .collect()
+                x.iter().zip(y).map(|(p, q)| p + (q - p) * t).collect()
             };
             return VehicleFrame {
                 position: fa.position.lerp(fb.position, t),
