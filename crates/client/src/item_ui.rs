@@ -133,7 +133,7 @@ mod tests {
         let weapons =
             bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-008"))?;
         let assets = crate::items::ItemAssets::load(
-            &root.join("item-presentation-pack-008"),
+            &root.join("item-presentation-pack-009"),
             &root.join("weapons-pack-008"),
         )?;
         let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;
@@ -171,7 +171,7 @@ mod tests {
         let weapons =
             bri_net::content_identity::WeaponContent::load(&root.join("weapons-pack-008"))?;
         let assets = crate::items::ItemAssets::load(
-            &root.join("item-presentation-pack-008"),
+            &root.join("item-presentation-pack-009"),
             &root.join("weapons-pack-008"),
         )?;
         let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;

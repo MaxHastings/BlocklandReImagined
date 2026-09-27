@@ -1191,7 +1191,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let weapons = WeaponContent::load(&root.join("weapons-pack-008")).unwrap();
         let physics =
-            ItemPhysicsContent::load(&root.join("item-presentation-pack-008"), &weapons).unwrap();
+            ItemPhysicsContent::load(&root.join("item-presentation-pack-009"), &weapons).unwrap();
         assert_eq!(physics.bounds.len(), 21);
         assert_eq!(
             physics

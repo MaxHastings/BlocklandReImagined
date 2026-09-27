@@ -4315,7 +4315,7 @@ mod tests {
             app.content
                 .paths
                 .effects_runtime
-                .ends_with("effects-runtime-pack-002")
+                .ends_with("effects-runtime-pack-004")
         );
         assert_eq!(app.tool_ui.server_catalog().items.len(), 21);
         assert_eq!(app.content.datablocks["ItemData"].len(), 21);

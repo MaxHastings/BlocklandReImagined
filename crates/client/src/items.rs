@@ -688,7 +688,7 @@ mod bounds_tests {
     fn original_dts_header_bounds_survive_native_float_roundtrip() -> Result<()> {
         let root = root();
         let assets = ItemAssets::load(
-            &root.join("content/item-presentation-pack-008"),
+            &root.join("content/item-presentation-pack-009"),
             &root.join("content/weapons-pack-008"),
         )?;
         assert_eq!(assets.item_physics.items.len(), 21);
@@ -761,7 +761,7 @@ mod bounds_tests {
     #[test]
     fn native_bounds_corruption_rejects_before_geometry_loading() -> Result<()> {
         let root = root();
-        let source = root.join("content/item-presentation-pack-008");
+        let source = root.join("content/item-presentation-pack-009");
         let base = root.join("artifacts/native-items");
         std::fs::create_dir_all(&base)?;
         let fixture = base.join(format!(

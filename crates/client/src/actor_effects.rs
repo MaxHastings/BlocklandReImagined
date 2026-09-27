@@ -25,13 +25,16 @@ const VEHICLE_SPLASH: [&str; 2] = [
 ];
 
 /// `PlayerStandardArmor.splashEmitter[0..2]` burst for `PlayerSplash.lifetimeMS`
-/// where a player breaks the surface; the splash ring itself is not drawn.
+/// where a player breaks the surface.
 const PLAYER_SPLASH: [&str; 3] = [
     "v20/emitter/playerfoamdropletsemitter",
     "v20/emitter/playerfoamemitter",
     "v20/emitter/playerbubbleemitter",
 ];
 const PLAYER_SPLASH_SECONDS: f32 = 0.3;
+/// `PlayerSplash`'s expanding rings, which the effects importer converts from
+/// `SplashData` into a finite emitter of ring particles.
+const PLAYER_SPLASH_RING: &str = "v20/emitter/playersplash";
 
 /// Where an image or emitter is attached this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -197,6 +200,12 @@ impl ActorEffects {
                     if started.is_err() {
                         self.note(format!("Player splash emitter unavailable: {emitter}"));
                     }
+                }
+                let ring = self
+                    .world
+                    .start_emitter(PLAYER_SPLASH_RING, at, SourceOptions::default());
+                if ring.is_err() {
+                    self.note(format!("Player splash emitter unavailable: {PLAYER_SPLASH_RING}"));
                 }
             }
             CueKind::WeaponEffect { definition, .. } => {

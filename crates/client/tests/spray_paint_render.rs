@@ -42,7 +42,7 @@ fn camera() -> Camera {
     }
 }
 fn effects(root: &Path) -> Result<WeaponEffects> {
-    let pack = EffectsPack::load(root.join("content/effects-runtime-pack-002"))?;
+    let pack = EffectsPack::load(root.join("content/effects-runtime-pack-004"))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
         root.join("content/weapons-pack-008/weapons.json"),
     )?)?);

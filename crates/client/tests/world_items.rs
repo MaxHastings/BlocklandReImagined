@@ -17,7 +17,7 @@ fn root() -> PathBuf {
 fn packs() -> Result<(Arc<ItemAssets>, Arc<bri_weapons::Pack>)> {
     let root = root();
     let assets = ItemAssets::load(
-        &root.join("content/item-presentation-pack-008"),
+        &root.join("content/item-presentation-pack-009"),
         &root.join("content/weapons-pack-008"),
     )?;
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(
