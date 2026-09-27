@@ -287,15 +287,31 @@ fn main() -> Result<()> {
     let seconds = TICKS as f64 / 120.0;
     let over_budget = step_ms.iter().filter(|v| **v > 1000.0 / 120.0).count();
 
-    // Late join: the checkpoint is built and compressed on the authority loop.
+    // Late join: an O(1) snapshot on the authority loop, then the world is
+    // chunked and compressed off it and reassembled by the client.
     let t = Instant::now();
-    let checkpoint = Checkpoint::from_session(&session, 0);
+    let (checkpoint, bricks) = Checkpoint::from_session(&session, 0);
     let checkpoint_build_ms = ms(t.elapsed());
     let t = Instant::now();
-    let checkpoint_frame = bri_net::codec::encode(&checkpoint)?;
+    let frames = bri_net::protocol::WorldTransfer {
+        head: bri_net::protocol::Message::MapChanged(checkpoint),
+        bricks,
+    }
+    .encode()?;
     let checkpoint_encode_ms = ms(t.elapsed());
+    let checkpoint_bytes: usize = frames.iter().map(Vec::len).sum();
     let t = Instant::now();
-    let decoded: Checkpoint = bri_net::codec::decode(&checkpoint_frame)?;
+    let bri_net::protocol::Message::MapChanged(head) = bri_net::codec::decode(&frames[0])? else {
+        anyhow::bail!("Expected a checkpoint")
+    };
+    let mut assembly = bri_net::protocol::WorldAssembly::new(head)?;
+    for frame in &frames[1..] {
+        let bri_net::protocol::Message::WorldChunk(chunk) = bri_net::codec::decode(frame)? else {
+            anyhow::bail!("Expected a world chunk")
+        };
+        assembly.add(chunk)?;
+    }
+    let decoded = assembly.finish()?;
     let checkpoint_decode_ms = ms(t.elapsed());
     let world = Arc::new(decoded.world);
 
@@ -436,7 +452,7 @@ fn main() -> Result<()> {
             "checkpoint_build_ms": checkpoint_build_ms,
             "checkpoint_encode_ms": checkpoint_encode_ms,
             "checkpoint_decode_ms": checkpoint_decode_ms,
-            "checkpoint_compressed_bytes": checkpoint_frame.len(),
+            "checkpoint_compressed_bytes": checkpoint_bytes,
         },
         "client": {
             "world_mesh_build": percentiles(&mut mesh_ms),

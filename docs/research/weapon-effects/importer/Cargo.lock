@@ -113,6 +113,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-content",
+ "bri-events",
  "bri-world",
  "glam",
  "image",
@@ -121,6 +122,17 @@ dependencies = [
  "sha2",
  "walkdir",
  "zip",
+]
+
+[[package]]
+name = "bri-events"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -167,6 +179,7 @@ name = "bri-world"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-events",
  "glam",
  "serde",
  "serde_json",

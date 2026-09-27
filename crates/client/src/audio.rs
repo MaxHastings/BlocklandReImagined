@@ -223,7 +223,7 @@ impl ClientAudio {
         self.trigger(key, Placement::World(cue.position));
     }
     /// Keep one positional loop per music brick in step with the world.
-    pub fn sync_music(&mut self, bricks: &BTreeMap<u64, bri_world::Brick>) {
+    pub fn sync_music(&mut self, bricks: &bri_world::Bricks) {
         let wanted: BTreeMap<u64, (String, [f32; 3])> = bricks
             .iter()
             .filter_map(|(id, b)| match &b.sound {

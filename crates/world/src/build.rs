@@ -77,7 +77,7 @@ impl SavedBuild {
         ownership: bool,
     ) -> Result<Self> {
         let mut world = world.clone();
-        for brick in world.bricks.values_mut() {
+        crate::update_bricks(&mut world.bricks, |brick| {
             if !events {
                 brick.events.clear();
             }
@@ -89,7 +89,7 @@ impl SavedBuild {
                 (events || !tag.eq_ignore_ascii_case("+-EVENT"))
                     && (ownership || !tag.eq_ignore_ascii_case("+-OWNER"))
             });
-        }
+        });
         let result = Self {
             schema_version: 1,
             ownership_scope: ownership.then_some(scope).flatten(),
@@ -205,7 +205,7 @@ impl LoadPlan {
         let mut owners = BTreeMap::new();
         let mut next_owner = next_owner;
         let mut bricks = BTreeMap::new();
-        for (offset, mut brick) in build.world.bricks.into_values().enumerate() {
+        for (offset, mut brick) in build.world.bricks.into_iter().map(|(_, b)| b).enumerate() {
             brick.color = colors[brick.color as usize];
             for event in &mut brick.events {
                 for value in &mut event.params {

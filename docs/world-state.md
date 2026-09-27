@@ -62,8 +62,8 @@ then. `persistence::autosave` publishes `autosave-<unix millis>.world.json` with
 `save_new` and keeps the newest revisions. The dedicated `bri-server` autosaves
 every 60 s into its state directory and keeps 3; passing the newest as its
 `<world.json>` resumes after a crash. The snapshot is a clone of the world taken
-on the tick thread, which costs time on very large worlds. The windowed client
-host does not autosave yet.
+on the tick thread; bricks are a persistent map, so that clone shares them
+rather than copying. The windowed client host does not autosave yet.
 
 ## Original saves
 

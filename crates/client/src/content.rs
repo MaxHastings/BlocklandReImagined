@@ -93,6 +93,35 @@ impl Default for ContentConfig {
     }
 }
 
+/// How a source checkout creates or refreshes its content (tools/bootstrap.py).
+pub const REGENERATE_HINT: &str = "If content packs are missing or out of date, regenerate them from a source checkout with: python tools/bootstrap.py --v20 \"<Blockland v20 folder>\" (docs/content-regeneration.md)";
+
+impl ContentConfig {
+    /// Every pack directory this configuration loads, in declaration order.
+    pub fn pack_names(&self) -> Vec<&str> {
+        vec![
+            &self.map_bundle,
+            &self.brick_catalog,
+            &self.geometry,
+            &self.effects,
+            &self.worlds,
+            &self.ui_pack,
+            &self.brick_materials,
+            &self.avatar,
+            &self.effects_runtime,
+            &self.audio,
+            &self.weather,
+            &self.foliage,
+            &self.weapons,
+            &self.item_presentation,
+            &self.weapon_debris,
+            &self.vehicles,
+            &self.events,
+            &self.tutorial,
+        ]
+    }
+}
+
 /// Send-friendly handles for a background hosting/loading worker. These paths
 /// contain generated native content only; Rc<Pack> never crosses threads.
 #[derive(Debug, Clone)]
@@ -292,9 +321,22 @@ impl ContentPaths {
             "Unsupported client content config schema {}",
             config.schema_version
         );
+        let given = root;
         let root = root
             .canonicalize()
-            .context("Content root is missing; supply the generated content directory")?;
+            .with_context(|| format!("Content directory {} is missing", root.display()))?;
+        // Name every absent pack at once so one regeneration run fixes them all.
+        let missing: Vec<&str> = config
+            .pack_names()
+            .into_iter()
+            .filter(|name| !root.join(name).is_dir())
+            .collect();
+        ensure!(
+            missing.is_empty(),
+            "Content packs missing from {}: {}",
+            given.display(),
+            missing.join(", ")
+        );
         let package = |name: &str| -> Result<PathBuf> {
             let path = contained(&root, name)?;
             ensure!(path.is_dir(), "Expected native package directory: {name}");

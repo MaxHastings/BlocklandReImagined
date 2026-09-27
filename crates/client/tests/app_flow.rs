@@ -497,7 +497,8 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
         .unwrap()
         .world
         .bricks
-        .first_key_value()
+        .iter()
+        .next()
         .unwrap();
     let planted = planted.clone();
     assert_eq!(planted.position, ghost.position);

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "packages": [
+    { "id": "v20-map-bundle", "version": "16.0.0", "side": "shared", "dir": "map-bundle-016", "role": "map_bundle" },
+    { "id": "v20-bricks", "version": "4.0.0", "side": "shared", "dir": "stock-catalog-004", "role": "brick_catalog" },
+    { "id": "v20-brick-geometry", "version": "7.0.0", "side": "shared", "dir": "maps-pass-007", "role": "geometry" },
+    { "id": "v20-effects", "version": "4.0.0", "side": "shared", "dir": "effects-pass-004", "role": "effects" },
+    { "id": "v20-brick-materials", "version": "1.0.0", "side": "shared", "dir": "brick-materials-001", "role": "brick_materials" },
+    { "id": "v20-avatar", "version": "1.0.0", "side": "shared", "dir": "avatar-pack-001", "role": "avatar" },
+    { "id": "v20-audio", "version": "1.0.0", "side": "shared", "dir": "audio-pack-001", "role": "audio" },
+    { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "weapons-pack-009", "role": "weapons" },
+    { "id": "v20-item-presentation", "version": "10.0.0", "side": "shared", "dir": "item-presentation-pack-010", "role": "item_presentation" },
+    { "id": "v20-vehicles", "version": "11.0.0", "side": "shared", "dir": "vehicles-pack-011", "role": "vehicles" },
+    { "id": "v20-events", "version": "2.0.0", "side": "shared", "dir": "events-pack-002", "role": "events" },
+    { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-003", "role": "ui_pack" },
+    { "id": "v20-effects-runtime", "version": "4.0.0", "side": "client", "dir": "effects-runtime-pack-004", "role": "effects_runtime" },
+    { "id": "v20-weather", "version": "1.0.0", "side": "client", "dir": "weather-pack-001", "role": "weather" },
+    { "id": "v20-foliage", "version": "1.0.0", "side": "client", "dir": "foliage-pack-001", "role": "foliage" },
+    { "id": "v20-weapon-debris", "version": "3.0.0", "side": "client", "dir": "weapon-debris-pack-003", "role": "weapon_debris" },
+    { "id": "v20-worlds", "version": "5.0.0", "side": "server", "dir": "worlds-pass-005", "role": "worlds" },
+    { "id": "v20-tutorial", "version": "1.0.0", "side": "server", "dir": "tutorial-pack-001", "role": "tutorial" }
+  ]
+}

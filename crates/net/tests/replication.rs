@@ -21,7 +21,7 @@ fn checkpoint() -> Checkpoint {
             name: "Test".into(),
             map_id: "Fixture".into(),
             palette: vec![[1.0; 4]],
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
         },
         names: [(1, "Player".into())].into(),
         avatars: Default::default(),
@@ -32,6 +32,7 @@ fn checkpoint() -> Checkpoint {
         vehicles: vec![],
         vehicle_poses: vec![],
         time_scale: 1.0,
+        world_bricks: 0,
     }
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
@@ -455,4 +456,62 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
             ..
         }
     ));
+}
+
+#[test]
+fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
+    let mut bricks = bri_world::Bricks::new();
+    for id in 1..=(WORLD_CHUNK as u64 * 2 + 17) {
+        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [id as f32, 0.0, 0.0], 0);
+        brick.source_records.push(bri_world::SourceRecord {
+            line: 1,
+            text: "private original record".into(),
+            diagnostic: None,
+        });
+        bricks.insert(id, brick);
+    }
+    let mut head = checkpoint();
+    head.world_bricks = bricks.len() as u64;
+    let frames = WorldTransfer {
+        head: Message::MapChanged(head),
+        bricks: bricks.clone(),
+    }
+    .encode()
+    .unwrap();
+    assert_eq!(frames.len(), 1 + 3, "head plus three chunks");
+    let Message::MapChanged(head) = codec::decode(&frames[0]).unwrap() else {
+        panic!("expected the checkpoint first")
+    };
+    let mut world = WorldAssembly::new(head).unwrap();
+    let mut chunks = Vec::new();
+    for frame in &frames[1..] {
+        let Message::WorldChunk(chunk) = codec::decode(frame).unwrap() else {
+            panic!("expected a chunk")
+        };
+        assert!(chunk.len() <= WORLD_CHUNK);
+        assert!(!world.complete());
+        chunks.push(chunk.clone());
+        world.add(chunk).unwrap();
+    }
+    let received = world.finish().unwrap();
+    assert_eq!(received.world.bricks.len(), bricks.len());
+    assert!(received.world.bricks.values().all(|b| b.source_records.is_empty()));
+    assert_eq!(received.world.bricks, public_bricks(&bricks));
+
+    // Hostile or broken streams never assemble.
+    let mut announced = received.clone();
+    announced.world.bricks = Default::default();
+    let mut duplicate = WorldAssembly::new(announced.clone()).unwrap();
+    duplicate.add(chunks[0].clone()).unwrap();
+    assert!(duplicate.add(chunks[0].clone()).is_err());
+    let mut small = announced.clone();
+    small.world_bricks = 1;
+    assert!(WorldAssembly::new(small).unwrap().add(chunks[2].clone()).is_err());
+    assert!(WorldAssembly::new(announced.clone()).unwrap().finish().is_err());
+    let mut prefilled = announced;
+    prefilled.world.bricks.insert(1, bricks[&1].clone());
+    assert!(WorldAssembly::new(prefilled).is_err());
+    let mut empty = checkpoint();
+    empty.world_bricks = 0;
+    assert!(WorldAssembly::new(empty).unwrap().complete());
 }

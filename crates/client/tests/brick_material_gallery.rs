@@ -7,7 +7,7 @@ use bri_render::scene::{Camera, SceneData, SceneRenderer, create_depth};
 use bri_sim::definitions::Definitions;
 use bri_ui::gpu::Headless;
 use bri_world::{Brick, ContentRef};
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 fn render(gpu: &Headless, scene: &SceneData, path: &Path) -> Result<()> {
     let size = wgpu::Extent3d {
@@ -135,7 +135,7 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
             [0.15, 0.4, 0.8, 1.0],
             [0.8, 0.8, 0.8, 1.0],
         ],
-        bricks: BTreeMap::new(),
+        bricks: Default::default(),
     };
     let mut records = vec![];
     for (index, print) in materials.bundle.prints.iter().enumerate() {

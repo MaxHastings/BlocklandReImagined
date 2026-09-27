@@ -236,7 +236,7 @@ mod tests {
             name: "Test".into(),
             map_id: "map/test".into(),
             palette: vec![[0.9, 0.2, 0.1, 1.0], [0.2, 0.4, 0.8, 0.5]],
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
         }
     }
     fn brick(position: [f32; 3]) -> bri_world::Brick {

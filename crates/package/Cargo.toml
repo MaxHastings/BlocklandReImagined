@@ -1,0 +1,12 @@
+[package]
+name = "bri-package"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Packages: namespaced content ids, the package list a peer loads, and the environment compared at join"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"

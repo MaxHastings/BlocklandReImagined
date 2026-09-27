@@ -68,11 +68,11 @@ impl CollisionMirror {
     }
     /// Incrementally mirror replicated brick collision. Returns whether any
     /// collider changed. Unknown definitions reject the update atomically.
-    pub fn sync(&mut self, bricks: &BTreeMap<BrickId, Brick>) -> Result<bool> {
+    pub fn sync(&mut self, bricks: &bri_world::Bricks) -> Result<bool> {
         let removed = self
             .bricks
             .keys()
-            .filter(|id| !bricks.contains_key(id))
+            .filter(|id| !bricks.contains_key(*id))
             .copied();
         let candidates: Vec<_> = bricks.keys().copied().chain(removed).collect();
         self.sync_changes(bricks, candidates)
@@ -82,7 +82,7 @@ impl CollisionMirror {
     /// `sync` when the log is complete, without walking the whole world.
     pub fn sync_changes(
         &mut self,
-        bricks: &BTreeMap<BrickId, Brick>,
+        bricks: &bri_world::Bricks,
         candidates: impl IntoIterator<Item = BrickId>,
     ) -> Result<bool> {
         let mut changed = Vec::new();
@@ -197,13 +197,13 @@ impl Predictor {
     pub fn world(&self) -> &CollisionMirror {
         &self.world
     }
-    pub fn sync_world(&mut self, bricks: &BTreeMap<BrickId, Brick>) -> Result<bool> {
+    pub fn sync_world(&mut self, bricks: &bri_world::Bricks) -> Result<bool> {
         self.world.sync(bricks)
     }
     /// `sync_world` restricted to the bricks a replica change log names.
     pub fn sync_world_changes(
         &mut self,
-        bricks: &BTreeMap<BrickId, Brick>,
+        bricks: &bri_world::Bricks,
         candidates: impl IntoIterator<Item = BrickId>,
     ) -> Result<bool> {
         self.world.sync_changes(bricks, candidates)

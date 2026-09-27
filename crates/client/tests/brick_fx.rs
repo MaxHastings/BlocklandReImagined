@@ -44,7 +44,7 @@ fn world(color: u8, shape: u8) -> PublicWorld {
         name: "FX".into(),
         map_id: "test".into(),
         palette: vec![[0.3, 0.6, 0.2, 0.65]],
-        bricks: BTreeMap::from([(1, b)]),
+        bricks: bri_world::Bricks::unit(1, b),
     }
 }
 #[test]

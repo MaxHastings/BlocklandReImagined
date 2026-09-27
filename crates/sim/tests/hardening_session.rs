@@ -338,7 +338,7 @@ impl Game {
         id
     }
     fn bricks(&self) -> BTreeMap<BrickId, Brick> {
-        self.s.simulation().state().bricks.clone()
+        self.s.simulation().state().bricks.clone().into_iter().collect()
     }
     fn center_prints(&self, owner: OwnerId) -> Vec<String> {
         self.log

@@ -4425,7 +4425,7 @@ impl PlatformApp for App {
                     name: "Local unplanted ghost".into(),
                     map_id: view.world.map_id.clone(),
                     palette,
-                    bricks: [(0, ghost.clone())].into(),
+                    bricks: bri_world::Bricks::unit(0, ghost.clone()),
                 };
                 let mut data = crate::world_scene::build_world_scene_materials(
                     &world,
@@ -5024,7 +5024,7 @@ mod tests {
         );
         assert_eq!(app.tool_ui.server_catalog().items.len(), 21);
         assert_eq!(app.content.datablocks["ItemData"].len(), 21);
-        assert_eq!(app.content.weapons.pack.items.len(), 17);
+        assert_eq!(app.content.weapons.pack.items.len(), 21);
         assert_eq!(app.content.item_physics.bounds.len(), 21);
         app.ui.core.request(UiAction::HostGame {
             map: "v20/add-ons/map_bedroom/bedroom.mis".into(),

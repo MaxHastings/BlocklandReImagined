@@ -295,6 +295,8 @@ async fn run(
                     }
                     ClientEvent::Pose(_)|ClientEvent::Vehicle(_)=>publish(client,&world,checkpoint_cue_cursor,view),
                     ClientEvent::AdminSnapshot(_)=>publish(client,&world,checkpoint_cue_cursor,view),
+                    // The loading screen comes up from bri-progress; the replica swaps on MapChanged.
+                    ClientEvent::MapChanging{..}=>{}
                     ClientEvent::MapChanged=>{
                         // No log entry: consumers compare the whole new world.
                         world.revision+=1;

@@ -2021,7 +2021,7 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn join_reports_the_world_download_against_the_welcome_frame_length() -> Result<()> {
+async fn join_reports_the_world_download_in_bricks() -> Result<()> {
     use bri_progress::{Progress, Stage, Unit};
     let state_dir = tempfile::tempdir()?;
     let key = ClientIdentity::load_or_create(state_dir.path().join("joiner.identity"))?;
@@ -2046,10 +2046,40 @@ async fn join_reports_the_world_download_against_the_welcome_frame_length() -> R
     let seen = progress.snapshot();
     assert_eq!(
         (seen.stage, seen.unit),
-        (Stage::ReceivingWorld, Unit::Bytes)
+        (Stage::ReceivingWorld, Unit::Bricks)
     );
-    assert!(seen.total.is_some_and(|total| total > 0));
     assert_eq!(Some(seen.done), seen.total);
     assert_eq!(seen.fraction(), 1.0);
+    Ok(())
+}
+
+/// A client that is slow to drain its events (a busy frame thread, a test
+/// between steps) must not be disconnected by unreliable pose traffic
+/// crowding out reliable messages. Regression for the flaky
+/// `fourth_failed_admin_password_closes_the_authenticated_connection`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let mut first = Client::connect(
+        server.address,
+        &server.certificate,
+        "First".into(),
+        "fixture-v1".into(),
+        None,
+    )
+    .await?;
+    let _second = Client::connect(
+        server.address,
+        &server.certificate,
+        "Second".into(),
+        "fixture-v1".into(),
+        None,
+    )
+    .await?;
+    // Two players' poses at 40 Hz each outrun any event queue in seconds.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let reply = first.command(Command::Chat("still here".into())).await;
+    assert!(reply.is_ok(), "{reply:?}");
+    server.stop().await?;
     Ok(())
 }
