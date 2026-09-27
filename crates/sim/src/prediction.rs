@@ -69,25 +69,42 @@ impl CollisionMirror {
     /// Incrementally mirror replicated brick collision. Returns whether any
     /// collider changed. Unknown definitions reject the update atomically.
     pub fn sync(&mut self, bricks: &BTreeMap<BrickId, Brick>) -> Result<bool> {
+        let removed = self
+            .bricks
+            .keys()
+            .filter(|id| !bricks.contains_key(id))
+            .copied();
+        let candidates: Vec<_> = bricks.keys().copied().chain(removed).collect();
+        self.sync_changes(bricks, candidates)
+    }
+    /// Mirror only `candidates`, the bricks a replica change log says were
+    /// added, edited or removed; others are assumed unchanged. Same result as
+    /// `sync` when the log is complete, without walking the whole world.
+    pub fn sync_changes(
+        &mut self,
+        bricks: &BTreeMap<BrickId, Brick>,
+        candidates: impl IntoIterator<Item = BrickId>,
+    ) -> Result<bool> {
         let mut changed = Vec::new();
-        for (id, brick) in bricks {
+        let mut removed = Vec::new();
+        for id in candidates {
+            let Some(brick) = bricks.get(&id) else {
+                if self.bricks.contains_key(&id) {
+                    removed.push(id);
+                }
+                continue;
+            };
             let geometry = Geometry::of(brick);
-            if self.bricks.get(id).is_none_or(|(_, old)| *old != geometry) {
+            if self.bricks.get(&id).is_none_or(|(_, old)| *old != geometry) {
                 let definition = self.definitions.get(brick)?;
                 changed.push((
-                    *id,
-                    brick_collider(brick, definition, *id),
+                    id,
+                    brick_collider(brick, definition, id),
                     geometry,
                     brick_water(brick, definition),
                 ));
             }
         }
-        let removed: Vec<_> = self
-            .bricks
-            .keys()
-            .filter(|id| !bricks.contains_key(id))
-            .copied()
-            .collect();
         if changed.is_empty() && removed.is_empty() {
             return Ok(false);
         }
@@ -175,6 +192,14 @@ impl Predictor {
     pub fn sync_world(&mut self, bricks: &BTreeMap<BrickId, Brick>) -> Result<bool> {
         self.world.sync(bricks)
     }
+    /// `sync_world` restricted to the bricks a replica change log names.
+    pub fn sync_world_changes(
+        &mut self,
+        bricks: &BTreeMap<BrickId, Brick>,
+        candidates: impl IntoIterator<Item = BrickId>,
+    ) -> Result<bool> {
+        self.world.sync_changes(bricks, candidates)
+    }
     /// Advance one fixed tick. Returns the input's sequence number, which the
     /// caller sends on the movement channel, and the local motion events.
     pub fn step(&mut self, input: MoveInput) -> Result<(u64, MotionEvents)> {
@@ -232,7 +257,11 @@ impl Predictor {
         let predicted = self.player.state().clone();
         self.player.restore(&mut self.world.physics, state)?;
         self.world.stream_terrain();
-        while self.pending.front().is_some_and(|(sequence, _)| *sequence <= ack) {
+        while self
+            .pending
+            .front()
+            .is_some_and(|(sequence, _)| *sequence <= ack)
+        {
             self.pending.pop_front();
         }
         for (_, input) in &self.pending {

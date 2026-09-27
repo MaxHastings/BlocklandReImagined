@@ -145,3 +145,124 @@ fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
     // Older server ticks never rewind an applied correction.
     assert!(prediction.reconcile(9, 6, initial).unwrap().is_none());
 }
+
+fn plate_definitions() -> Definitions {
+    use bri_content::{
+        brick::Brick as Mesh,
+        collision::{CollisionBody, Part},
+    };
+    let collision = CollisionBody {
+        id: "plate".into(),
+        parts: vec![Part::Box {
+            center: [0.0; 3],
+            size: [1.0, 0.2, 0.5],
+        }],
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    Definitions {
+        entries: [(
+            "plate".into(),
+            bri_sim::definitions::Definition {
+                mesh: Mesh {
+                    schema_version: 1,
+                    id: "plate".into(),
+                    footprint_studs: [2, 1],
+                    height_plates: 1,
+                    attachment_rows: vec!["bb".into()],
+                    collision_boxes: vec![],
+                    needs_external_collision: false,
+                    coverage: None,
+                    quads: vec![],
+                },
+                collision,
+                shape,
+                indestructible: false,
+                special: Default::default(),
+            },
+        )]
+        .into(),
+    }
+}
+/// `count` plates on a grid, keyed from 1.
+fn plates(count: u64) -> std::collections::BTreeMap<u64, bri_world::Brick> {
+    (1..=count)
+        .map(|id| {
+            let (x, z) = ((id % 200) as f32, (id / 200) as f32);
+            let position = [x - 100.0, 0.1, z * 0.5 - 50.0];
+            let brick =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), position, 1);
+            (id, brick)
+        })
+        .collect()
+}
+#[test]
+fn change_log_sync_matches_a_full_compare() {
+    let mut bricks = plates(500);
+    let mut full = CollisionMirror::new(plate_definitions(), map(), vec![]);
+    let mut logged = CollisionMirror::new(plate_definitions(), map(), vec![]);
+    assert!(full.sync(&bricks).unwrap());
+    assert!(logged.sync(&bricks).unwrap());
+    // Plant one, move one, remove one, as one replica revision.
+    bricks.insert(900, bricks[&1].clone());
+    bricks.get_mut(&900).unwrap().position[1] = 0.3;
+    bricks.get_mut(&7).unwrap().position[1] = 0.5;
+    bricks.remove(&8);
+    assert!(full.sync(&bricks).unwrap());
+    assert!(logged.sync_changes(&bricks, [900, 7, 8]).unwrap());
+    // A log entry for an unchanged brick is harmless.
+    assert!(!logged.sync_changes(&bricks, [9]).unwrap());
+    assert!(!logged.sync(&bricks).unwrap(), "change log missed an edit");
+    let count = |m: &CollisionMirror| m.physics().colliders.len();
+    assert_eq!(count(&full), count(&logged));
+    for (id, y) in [(900, 0.3), (7, 0.5)] {
+        let hit = |m: &CollisionMirror| {
+            let p = bricks[&id].position;
+            m.physics()
+                .query_pipeline()
+                .cast_ray(
+                    &Ray::new(Vector::new(p[0], 5.0, p[2]), Vector::new(0.0, -1.0, 0.0)),
+                    10.0,
+                    true,
+                )
+                .map(|(_, toi)| 5.0 - toi)
+        };
+        assert!(hit(&full).is_some_and(|top| (top - (y + 0.1)).abs() < 1e-4));
+        assert_eq!(hit(&logged), hit(&full));
+    }
+}
+/// `cargo test --release -p bri-sim --test prediction mirror_sync_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "timing probe"]
+fn mirror_sync_timing() {
+    let mut bricks = plates(44_000);
+    let mut full = CollisionMirror::new(plate_definitions(), map(), vec![]);
+    let mut logged = CollisionMirror::new(plate_definitions(), map(), vec![]);
+    full.sync(&bricks).unwrap();
+    logged.sync(&bricks).unwrap();
+    let (mut t_full, mut t_logged) = (Vec::new(), Vec::new());
+    for plant in 0..20u64 {
+        let id = 100_000 + plant;
+        let mut brick = bricks[&(plant + 1)].clone();
+        brick.position[1] = 0.3;
+        bricks.insert(id, brick);
+        let start = std::time::Instant::now();
+        full.sync(&bricks).unwrap();
+        t_full.push(start.elapsed().as_secs_f64() * 1e3);
+        let start = std::time::Instant::now();
+        logged.sync_changes(&bricks, [id]).unwrap();
+        t_logged.push(start.elapsed().as_secs_f64() * 1e3);
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    println!(
+        "44k bricks, one plant: full {:.3} ms, change log {:.3} ms (median of 20)",
+        median(&mut t_full),
+        median(&mut t_logged)
+    );
+}
