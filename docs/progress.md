@@ -1717,3 +1717,12 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
    behavior. Complete full event targets and minigame authority as shared systems.
 3. Complete the full alpha contract and package a coherent game for Maxwell;
    technical probes are not the requested handoff.
+
+- 2026-09-27 v20 bug sweep (`docs/audits/bug-sweep.md`). Fixed explosion
+  splash to match `ProjectileData::onExplode` (no cover test, centre
+  distance, quadratic falloff, projectile scale, grounded push flattening)
+  and made splash honour minigame `selfDamage`. Minigame reset now respawns
+  the owners' vehicles and restores their items, and event-driven resets
+  announce themselves. Ranked open items (host stops on any step error, LAN
+  and public-brick trust, duplicate loadout items, private PlaySound, Horse
+  Ray, join/leave messages, shell casings) went to the coordinator.

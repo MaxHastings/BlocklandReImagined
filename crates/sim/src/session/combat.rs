@@ -311,7 +311,7 @@ impl Session {
             self.chat.pop_front();
         }
     }
-    fn chat_game(&mut self, game: Option<GameId>, except: Option<OwnerId>, text: String) {
+    pub(super) fn chat_game(&mut self, game: Option<GameId>, except: Option<OwnerId>, text: String) {
         match game {
             None => self.system_chat(text),
             Some(game) => {
@@ -787,13 +787,44 @@ impl Session {
                         }
                     }
                 }
+                // `MiniGameSO::Reset`: `spawnVehicle(0)` on the owners'
+                // vehicle bricks and `Item.fadeIn(0)` on their item bricks.
+                mg::Effect::ResetBricks {
+                    owners,
+                    respawn_vehicles,
+                    reveal_items,
+                } => {
+                    let bricks: Vec<(BrickId, bool)> = self
+                        .simulation
+                        .state()
+                        .bricks
+                        .iter()
+                        .filter(|(_, b)| owners.contains(&mg::AccountId(b.owner)))
+                        .map(|(id, b)| (*id, b.vehicle.is_some()))
+                        .collect();
+                    for (brick, vehicle) in bricks {
+                        // A blocked respawn must not abort the reset.
+                        if respawn_vehicles
+                            && vehicle
+                            && let Err(error) = self.respawn_vehicle_brick(brick)
+                        {
+                            if self.notices.len() == 64 {
+                                self.notices.pop_front();
+                            }
+                            self.notices
+                                .push_back(format!("Reset vehicle {brick}: {error:#}"));
+                        }
+                        if reveal_items && let Some(item) = self.item_spawners.items.get_mut(&brick) {
+                            item.available_at = tick;
+                        }
+                    }
+                }
                 mg::Effect::Created { .. }
                 | mg::Effect::Configured { .. }
                 | mg::Effect::Score { .. }
                 | mg::Effect::Reset { .. }
                 | mg::Effect::Cleanup { .. }
                 | mg::Effect::EjectVehicles { .. }
-                | mg::Effect::ResetBricks { .. }
                 | mg::Effect::StartBall { .. } => {}
             }
         }

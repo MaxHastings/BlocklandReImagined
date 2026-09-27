@@ -9,6 +9,8 @@ pub struct WeaponQuery<'a> {
     pub simulation: &'a Simulation,
     /// Host-owned gameplay policy. This is never supplied by a packet.
     pub affect: &'a dyn Fn(ActorId, TargetId) -> bool,
+    /// Explosion splash policy (adds the minigame's `selfDamage`).
+    pub affect_radius: &'a dyn Fn(ActorId, TargetId) -> bool,
     pub catch: &'a dyn Fn(ActorId, ActorId) -> bool,
     /// Zero-delay `onProjectileHit -> Projectile` event rows by brick.
     pub responses: &'a BTreeMap<u64, ContactResponse>,
@@ -26,6 +28,46 @@ fn target(tag: u128) -> Option<TargetId> {
         Some(TargetId::Brick(tag as u64))
     } else {
         None
+    }
+}
+
+impl WeaponQuery<'_> {
+    /// Line of sight to a radius target through the map and bricks.
+    pub fn visible(&mut self, from: Vec3, nearby: &Nearby) -> bool {
+        let delta = nearby.center - from;
+        let distance = delta.length();
+        if !from.is_finite() || !nearby.center.is_finite() || !distance.is_finite() {
+            return false;
+        }
+        if distance < 0.000001 {
+            return true;
+        }
+        let predicate = |_: ColliderHandle, collider: &Collider| {
+            matches!(
+                target(collider.user_data),
+                Some(TargetId::Map(_) | TargetId::Brick(_))
+            )
+        };
+        let direction = delta / distance;
+        let advance = 0.001_f32.min(distance * 0.5);
+        let ray = Ray::new(
+            Vector::from_array((from + direction * advance).to_array()),
+            Vector::from_array(direction.to_array()),
+        );
+        let reach = (distance - advance - 0.001).max(0.);
+        self.simulation
+            .terrain_ray(from + direction * advance, direction, reach)
+            .is_none()
+            && self
+                .simulation
+                .physics
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .exclude_sensors()
+                        .predicate(&predicate),
+                )
+                .cast_ray(&ray, reach, true)
+                .is_none()
     }
 }
 
@@ -151,44 +193,11 @@ impl Query for WeaponQuery<'_> {
         found
     }
 
-    fn visible(&mut self, from: Vec3, nearby: &Nearby) -> bool {
-        let delta = nearby.center - from;
-        let distance = delta.length();
-        if !from.is_finite() || !nearby.center.is_finite() || !distance.is_finite() {
-            return false;
-        }
-        if distance < 0.000001 {
-            return true;
-        }
-        let predicate = |_: ColliderHandle, collider: &Collider| {
-            matches!(
-                target(collider.user_data),
-                Some(TargetId::Map(_) | TargetId::Brick(_))
-            )
-        };
-        let direction = delta / distance;
-        let advance = 0.001_f32.min(distance * 0.5);
-        let ray = Ray::new(
-            Vector::from_array((from + direction * advance).to_array()),
-            Vector::from_array(direction.to_array()),
-        );
-        let reach = (distance - advance - 0.001).max(0.);
-        self.simulation
-            .terrain_ray(from + direction * advance, direction, reach)
-            .is_none()
-            && self
-                .simulation
-                .physics
-                .query_pipeline_with_filter(
-                    QueryFilter::default()
-                        .exclude_sensors()
-                        .predicate(&predicate),
-                )
-                .cast_ray(&ray, reach, true)
-                .is_none()
-    }
     fn can_affect(&self, source: ActorId, target: TargetId) -> bool {
         (self.affect)(source, target)
+    }
+    fn can_affect_radius(&self, source: ActorId, target: TargetId) -> bool {
+        (self.affect_radius)(source, target)
     }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool {
         (self.catch)(source, target)

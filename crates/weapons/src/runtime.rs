@@ -156,8 +156,11 @@ pub trait Query {
 
     fn sweep(&mut self, start: Vec3, end: Vec3, filter: Filter) -> Option<Hit>;
     fn radius(&mut self, center: Vec3, radius: f32, limit: usize) -> Vec<Nearby>;
-    fn visible(&mut self, from: Vec3, target: &Nearby) -> bool;
     fn can_affect(&self, source: ActorId, target: TargetId) -> bool;
+    /// Explosion splash; unlike a direct hit it also honours `selfDamage`.
+    fn can_affect_radius(&self, source: ActorId, target: TargetId) -> bool {
+        self.can_affect(source, target)
+    }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool;
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1568,25 +1571,26 @@ impl WeaponsWorld {
                 message: "Radius adapter exceeded target budget".into(),
             });
         }
-        for target in targets.into_iter().take(MAX_QUERY_TARGETS) {
-            if !target.distance.is_finite()
-                || target.distance < 0.0
-                || !target.center.is_finite()
-                || !q.can_affect(p.source, target.target)
-                || !q.visible(p.position, &target)
-            {
-                continue;
-            }
-            let damage_factor = if d.explosion.radius > 0.0 {
-                (1.0 - target.distance / (d.explosion.radius * p.scale)).clamp(0.0, 1.0)
+        // `ProjectileData::onExplode`: no line-of-sight test; distance is
+        // taken to the target's centre and both falloffs are quadratic.
+        let falloff = |distance: f32, radius: f32| {
+            if radius > 0.0 {
+                (1.0 - (distance / radius).powi(2)).clamp(0.0, 1.0)
             } else {
                 0.0
-            };
+            }
+        };
+        for target in targets.into_iter().take(MAX_QUERY_TARGETS) {
+            if !target.center.is_finite() || !q.can_affect_radius(p.source, target.target) {
+                continue;
+            }
+            let distance = target.center.distance(p.position);
+            let damage_factor = falloff(distance, d.explosion.radius * p.scale);
             if damage_factor > 0.0 && d.explosion.damage > 0.0 {
                 self.events.push(Event::Damage {
                     source: p.source,
                     target: target.target,
-                    amount: d.explosion.damage * damage_factor,
+                    amount: d.explosion.damage * p.scale * damage_factor,
                     kind: d.radius_damage_type.clone(),
                     position: p.position,
                 });
@@ -1598,17 +1602,32 @@ impl WeaponsWorld {
                     });
                 }
             }
-            let impulse_factor = if d.explosion.impulse_radius > 0.0 {
-                (1.0 - target.distance / (d.explosion.impulse_radius * p.scale)).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
+            let impulse_factor = falloff(distance, d.explosion.impulse_radius * p.scale);
             if impulse_factor > 0.0 && d.explosion.impulse > 0.0 {
+                // `radiusImpulse` flattens a downward push on anything
+                // standing within three units of the ground.
+                let mut push = target.center - p.position;
+                if push.y < 0.0
+                    && q.sweep(
+                        target.center,
+                        target.center - Vec3::Y * 3.0,
+                        Filter {
+                            projectile_age_ticks: None,
+                            source: p.source,
+                            players: false,
+                            world_only: true,
+                        },
+                    )
+                    .is_some_and(|hit| matches!(hit.target, TargetId::Map(_) | TargetId::Brick(_)))
+                {
+                    push.y = 0.0;
+                }
                 self.events.push(Event::Impulse {
                     source: p.source,
                     target: target.target,
-                    impulse: (target.center - p.position).normalize_or_zero()
+                    impulse: push.normalize_or_zero()
                         * d.explosion.impulse
+                        * p.scale
                         * impulse_factor,
                     position: p.position,
                 });

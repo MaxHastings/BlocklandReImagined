@@ -6,7 +6,6 @@ struct Scene {
     hit: Option<Hit>,
     near: Vec<Nearby>,
     deny: bool,
-    occluded: bool,
     response: Option<ContactResponse>,
 }
 impl Query for Scene {
@@ -37,9 +36,6 @@ impl Query for Scene {
     }
     fn radius(&mut self, _: Vec3, _: f32, limit: usize) -> Vec<Nearby> {
         self.near.iter().take(limit).cloned().collect()
-    }
-    fn visible(&mut self, _: Vec3, _: &Nearby) -> bool {
-        !self.occluded
     }
     fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
         !self.deny
@@ -402,38 +398,36 @@ fn horse_ray_transforms_without_nominal_damage() {
 }
 #[test]
 #[ignore = "requires converted vanilla weapons pack"]
-fn explosion_radius_occlusion_permissions_and_brick_intents() {
-    for blocked in [false, true] {
-        let mut w = WeaponsWorld::new(load()).unwrap();
-        w.spawn(
-            &native_id("projectile", "rocketLauncherProjectile"),
-            ActorId(1),
-            Vec3::ZERO,
-            Vec3::NEG_Z * 65.0,
-            1.0,
-        )
-        .unwrap();
-        let mut q = Scene {
-            hit: Some(hit(TargetId::Map(1), -0.25)),
-            near: vec![Nearby {
-                target: TargetId::Actor(ActorId(2)),
-                center: Vec3::new(1.5, 0.0, -0.25),
-                distance: 1.5,
-            }],
-            occluded: blocked,
-            ..Default::default()
-        };
-        let e = w.step(&mut q);
-        assert_eq!(
-            e.iter()
-                .any(|e| matches!(e,Event::Damage{amount,..}if (*amount-50.0).abs()<0.001)),
-            !blocked
-        );
-        assert!(
-            e.iter()
-                .any(|e| matches!(e, Event::BrickImpact { target: None, .. }))
-        );
-    }
+fn explosion_radius_falloff_ignores_cover_and_intends_bricks() {
+    // v20 `onExplode`: no line-of-sight test and a quadratic falloff,
+    // 100 * (1 - (1.5 / 3)^2) = 75 at half the rocket's damage radius.
+    let mut w = WeaponsWorld::new(load()).unwrap();
+    w.spawn(
+        &native_id("projectile", "rocketLauncherProjectile"),
+        ActorId(1),
+        Vec3::ZERO,
+        Vec3::NEG_Z * 65.0,
+        1.0,
+    )
+    .unwrap();
+    let mut q = Scene {
+        hit: Some(hit(TargetId::Map(1), -0.25)),
+        near: vec![Nearby {
+            target: TargetId::Actor(ActorId(2)),
+            center: Vec3::new(1.5, 0.0, -0.25),
+            distance: 1.0,
+        }],
+        ..Default::default()
+    };
+    let e = w.step(&mut q);
+    assert!(
+        e.iter()
+            .any(|e| matches!(e,Event::Damage{amount,..}if (*amount-75.0).abs()<0.001))
+    );
+    assert!(
+        e.iter()
+            .any(|e| matches!(e, Event::BrickImpact { target: None, .. }))
+    );
 }
 #[test]
 #[ignore = "requires converted vanilla weapons pack"]
@@ -630,9 +624,6 @@ impl Query for PhysicsScene {
     }
     fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
         vec![]
-    }
-    fn visible(&mut self, _: Vec3, _: &Nearby) -> bool {
-        true
     }
     fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
         true

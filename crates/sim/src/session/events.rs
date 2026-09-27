@@ -900,6 +900,17 @@ impl EventHost<'_> {
         };
         match s.minigames.execute(command) {
             Ok(effects) => {
+                // `MiniGameSO::Reset` names the client that set it off.
+                if matches!(op, MiniGameOp::Reset) {
+                    let resetter = d.client.map_or(owner, |c| c.id.index);
+                    if let Some(name) = s.peers.get(&resetter).map(|p| p.name.clone()) {
+                        s.chat_game(
+                            Some(game),
+                            None,
+                            format!("\u{E003}{name}\u{E005} reset the mini-game"),
+                        );
+                    }
+                }
                 s.apply_minigame_effects(effects)?;
                 Ok(Apply::Applied)
             }

@@ -196,10 +196,14 @@ impl Session {
         // Player damage follows minigame policy; resolve it before the weapon
         // world borrows the session mutably.
         let mut hostile = BTreeSet::new();
+        let mut splash = BTreeSet::new();
         for source in self.peers.keys() {
             for target in self.peers.keys() {
                 if self.can_damage_player(*source, *target, false) {
                     hostile.insert((*source, *target));
+                }
+                if self.can_damage_player(*source, *target, true) {
+                    splash.insert((*source, *target));
                 }
             }
         }
@@ -221,10 +225,15 @@ impl Session {
             TargetId::Actor(target) => hostile.contains(&(source.0, target.0)),
             _ => false,
         };
+        let affect_radius = |source: ActorId, target| match target {
+            TargetId::Actor(target) => splash.contains(&(source.0, target.0)),
+            other => affect(source, other),
+        };
         let catch = |_: ActorId, _: ActorId| false; // pending minigame/sports host policy
         let mut query = crate::weapon_query::WeaponQuery {
             simulation: &self.simulation,
             affect: &affect,
+            affect_radius: &affect_radius,
             catch: &catch,
             responses: &self.events.projectile_responses,
             truncated_targets: 0,
