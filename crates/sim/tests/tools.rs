@@ -1078,3 +1078,37 @@ fn spray_paint_temporarily_recolours_the_body_band_it_hits() {
         bri_sim::presentation::CueKind::WeaponEffect { definition, scale, .. }
             if definition == "color1PaintExplosion" && *scale == 2.0)));
 }
+
+#[test]
+#[ignore = "requires the converted native event catalog"]
+fn hammering_a_brick_fires_its_on_tool_break_events() {
+    let mut s = session(vec![], false);
+    let catalog = bri_events::Catalog::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/events-pack-002/catalog.json"),
+    )
+    .unwrap();
+    s.set_event_catalog(catalog, Vec::new()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
+        .unwrap();
+    let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    s.edit_brick(
+        owner,
+        id,
+        Edit::Events(vec![EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onToolBreak".into(),
+            delay_ms: 0,
+            target: EventTarget::Slot(bri_events::Slot::Client),
+            output: "CenterPrint".into(),
+            params: vec![EventValue::Text("Broken".into()), EventValue::Int(2)],
+        }]),
+    )
+    .unwrap();
+    swing(&mut s, owner, 2, 0).unwrap();
+    assert!(!s.simulation().state().bricks.contains_key(&id));
+    assert_eq!(center_prints(&mut s, owner), ["Broken"]);
+}

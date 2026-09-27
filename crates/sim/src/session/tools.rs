@@ -417,6 +417,10 @@ impl Session {
                     TargetId::Brick(id) => {
                         // Tutorial `noBreak` bricks survive tools.
                         if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
+                            // `fxDTSBrick::onToolBreak` runs its rows before
+                            // `killBrick` removes the brick and its program.
+                            self.fire_input(id, "onToolBreak", Some(owner));
+                            self.step_events(&BTreeSet::new())?;
                             self.tool_kill_brick(owner, id, hit.position, dir)?;
                         }
                     }
@@ -455,6 +459,10 @@ impl Session {
                     TargetId::Brick(id) => {
                         // Tutorial `noBreak` bricks survive tools.
                         if self.trusted_brick_edit(owner, id) && !self.tutorial_protects(id) {
+                            // `fxDTSBrick::onToolBreak` runs its rows before
+                            // `killBrick` removes the brick and its program.
+                            self.fire_input(id, "onToolBreak", Some(owner));
+                            self.step_events(&BTreeSet::new())?;
                             self.tool_kill_brick(owner, id, hit.position, dir)?;
                         }
                     }

@@ -610,11 +610,7 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
 }
 
 /// Outputs the host does not apply yet; rows using them stay read-only.
-const UNSUPPORTED_OUTPUTS: &[(&str, &str)] = &[
-    ("Player", "BurnPlayer"),
-    ("Player", "ClearBurn"),
-    ("Player", "setPlayerScale"),
-];
+const UNSUPPORTED_OUTPUTS: &[(&str, &str)] = &[("Player", "setPlayerScale")];
 /// The dialog's view of the host catalog: every vanilla input and output.
 pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
     let param = |p: &bri_events::Param| match p.clone() {

@@ -810,11 +810,12 @@ impl EventHost<'_> {
                     self.spawn_projectile(d, projectile, feet + Vec3::Y, Vec3::ZERO, *scale);
                 }
             }
-            // One player type exists and players do not burn yet.
-            PlayerOp::DataBlock(_) | PlayerOp::ClearBurn => {}
-            PlayerOp::Burn { .. } => {
-                return Ok(Apply::Rejected("burning is not available yet".into()));
-            }
+            // One player type exists.
+            PlayerOp::DataBlock(_) => {}
+            // `Player::BurnPlayer`/`clearBurn`: PlayerBurnImage flames for the
+            // given seconds; clearing ends them at once.
+            PlayerOp::Burn { seconds } => self.burn(owner, *seconds as f32),
+            PlayerOp::ClearBurn => self.burn(owner, 0.0),
             PlayerOp::Scale(_) => {
                 return Ok(Apply::Rejected(
                     "player scaling is not available yet".into(),
@@ -822,6 +823,18 @@ impl EventHost<'_> {
             }
         }
         Ok(Apply::Applied)
+    }
+    fn burn(&mut self, owner: OwnerId, seconds: f32) {
+        let tick = self.session.simulation.state().tick;
+        let feet = self.session.peers[&owner].player.state().feet;
+        self.session.cues.emit(
+            tick,
+            crate::presentation::CueKind::Burn {
+                actor: owner,
+                seconds: seconds.min(300.0),
+            },
+            feet,
+        );
     }
     fn client_op(&mut self, d: &Dispatch, op: &ClientOp) -> Result<Apply> {
         let owner = d.target.id.index;
