@@ -20,6 +20,9 @@ pub struct ServerHandle {
     pub certificate: Vec<u8>,
     /// Private in-process host capability. Never write this into public host metadata.
     pub host_token: ResumeToken,
+    /// Live connected-player count (LAN listing).
+    pub players: Arc<std::sync::atomic::AtomicU32>,
+    discovery: Option<tokio::task::JoinHandle<()>>,
     stop: Option<oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<Result<ServerReport>>,
 }
@@ -39,7 +42,25 @@ pub struct ServerReport {
     pub notices: Vec<String>,
 }
 impl ServerHandle {
+    /// Answer LAN discovery queries for this host until it stops.
+    pub async fn advertise(&mut self, name: String, map: String, max_players: u32, content_id: String) -> Result<()> {
+        let beacon = crate::discovery::Beacon {
+            version: VERSION,
+            name,
+            port: self.address.port(),
+            players: 0,
+            max_players,
+            map,
+            content_id,
+            certificate: crate::discovery::hex(&self.certificate),
+        };
+        self.discovery = Some(crate::discovery::respond(beacon, self.players.clone()).await?);
+        Ok(())
+    }
     pub async fn stop(mut self) -> Result<ServerReport> {
+        if let Some(discovery) = self.discovery.take() {
+            discovery.abort();
+        }
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -148,7 +169,9 @@ fn start_configured(
     let host_token = ResumeToken(bytes);
     let host_key = token_key(&host_token);
     session.set_ownership_scope(format!("{:x}", Sha256::digest(bytes)))?;
+    let players = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let task = tokio::spawn(run(
+        players.clone(),
         endpoint,
         session,
         options,
@@ -163,6 +186,8 @@ fn start_configured(
         address,
         certificate,
         host_token,
+        players,
+        discovery: None,
         stop: Some(stop_tx),
         task,
     })
@@ -316,6 +341,7 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
 }
 #[allow(clippy::too_many_arguments)]
 async fn run(
+    players: Arc<std::sync::atomic::AtomicU32>,
     endpoint: Endpoint,
     mut session: Session,
     options: ServerOptions,
@@ -413,6 +439,7 @@ async fn run(
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}}},
         }},
         _=ticker.tick()=>{
+            players.store(peers.len() as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
             let steps=clock.advance(now.duration_since(previous));previous=now;
             for _ in 0..steps {

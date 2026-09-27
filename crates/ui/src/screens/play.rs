@@ -246,6 +246,15 @@ fn hud(core: &Core) -> View {
         &chat,
         "BlockChatTextProfile",
     );
+    if let Some(text) = &core.net_graph {
+        fill(&mut v, Rect::new(w - 220, 4, 216, 20), [0, 0, 0, 128]);
+        markup(
+            &mut v,
+            Rect::new(w - 216, 6, 212, 18),
+            text,
+            "BlockChatTextProfile",
+        );
+    }
     if let Some((message, _)) = &core.center_print {
         markup(
             &mut v,

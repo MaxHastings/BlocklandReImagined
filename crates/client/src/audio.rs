@@ -18,6 +18,8 @@ pub struct ClientAudio {
     pub server_dropped: u64,
     pub requested: BTreeMap<String, u64>,
     prefs: Prefs,
+    /// Music-brick loops keyed by brick: (loop id, position, voice).
+    music: BTreeMap<u64, (String, [f32; 3], SoundHandle)>,
 }
 
 impl ClientAudio {
@@ -78,6 +80,7 @@ impl ClientAudio {
             server_dropped: 0,
             requested: BTreeMap::new(),
             prefs: Prefs::default(),
+            music: BTreeMap::new(),
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -189,7 +192,45 @@ impl ClientAudio {
         };
         self.trigger(key, Placement::World(cue.position));
     }
+    /// Keep one positional loop per music brick in step with the world.
+    pub fn sync_music(&mut self, bricks: &BTreeMap<u64, bri_world::Brick>) {
+        let wanted: BTreeMap<u64, (String, [f32; 3])> = bricks
+            .iter()
+            .filter_map(|(id, b)| match &b.sound {
+                Some(bri_world::ContentRef::Resolved(sound)) => {
+                    Some((*id, (sound.clone(), b.position)))
+                }
+                _ => None,
+            })
+            .collect();
+        let stale: Vec<u64> = self
+            .music
+            .iter()
+            .filter(|(id, (sound, position, _))| {
+                wanted.get(id) != Some(&(sound.clone(), *position))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stale {
+            if let Some((_, _, handle)) = self.music.remove(&id) {
+                let result = self.runtime.stop_with_fade(handle, 0.2);
+                self.record(result);
+            }
+        }
+        for (id, (sound, position)) in wanted {
+            if self.music.contains_key(&id) || self.music.len() >= 64 {
+                continue;
+            }
+            match self.runtime.play(&sound, Placement::World(position)) {
+                Ok(handle) => {
+                    self.music.insert(id, (sound, position, handle));
+                }
+                Err(error) => self.record(Err(error)),
+            }
+        }
+    }
     pub fn clear(&mut self) {
+        self.music.clear();
         self.pending.clear();
         let result = self.runtime.stop_all();
         self.record(result);

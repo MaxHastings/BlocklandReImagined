@@ -33,6 +33,11 @@ pub enum PlatformCommand {
         vsync: bool,
     },
     ToggleFullscreen,
+    /// Save the next presented frame as PNG. `hud` includes the interface.
+    Screenshot {
+        path: std::path::PathBuf,
+        hud: bool,
+    },
 }
 
 /// The bridge owns simulation/content/settings and consumes UiActions in
@@ -132,8 +137,14 @@ impl Graphics {
             }
         });
         let size = window.inner_size();
+        // Screenshots copy the swapchain image when the backend allows it.
+        let usage = if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
@@ -204,6 +215,7 @@ struct Runner {
     next_tick: Instant,
     display: Option<DisplayChange>,
     error: Option<anyhow::Error>,
+    screenshot: Option<(std::path::PathBuf, bool)>,
 }
 
 /// Launch only from an explicitly requested interactive execution path. This
@@ -229,6 +241,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         next_tick: now,
         display: None,
         error: None,
+        screenshot: None,
     };
     let event_loop = EventLoop::new().context("creating the native event loop")?;
     event_loop
@@ -437,6 +450,9 @@ impl Runner {
                             });
                         }
                     }
+                    PlatformCommand::Screenshot { path, hud } => {
+                        self.screenshot = Some((path, hud));
+                    }
                 }
             }
         }
@@ -499,6 +515,14 @@ impl Runner {
             size: (size.width, size.height),
             ui_renderer: &mut g.renderer,
         })?;
+        let screenshot = self.screenshot.take();
+        let scene_capture = match &screenshot {
+            Some((path, false)) => Some((
+                path.clone(),
+                capture_copy(&g.device, &mut encoder, &surface.texture, g.config.format)?,
+            )),
+            _ => None,
+        };
         let ui = self.config.app.ui();
         g.renderer.render(
             &g.device,
@@ -517,9 +541,122 @@ impl Runner {
                 a: 1.0,
             }),
         );
+        let hud_capture = match &screenshot {
+            Some((path, true)) => Some((
+                path.clone(),
+                capture_copy(&g.device, &mut encoder, &surface.texture, g.config.format)?,
+            )),
+            _ => None,
+        };
         g.queue.submit([encoder.finish()]);
+        if let Some((path, capture)) = scene_capture.or(hud_capture) {
+            let saved = capture.save(&g.device, &path);
+            let text = match &saved {
+                Ok(()) => format!(
+                    "Screenshot saved: {}",
+                    path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into())
+                ),
+                Err(error) => format!("Screenshot failed: {error:#}"),
+            };
+            self.config.app.ui_mut().apply(bri_ui::api::UiUpdate::BottomPrint {
+                text,
+                seconds: 3.0,
+                hide_bar: false,
+            });
+        }
         window.pre_present_notify();
         g.queue.present(surface);
+        Ok(())
+    }
+}
+
+/// A frame copy queued in the frame's own encoder.
+struct Capture {
+    buffer: wgpu::Buffer,
+    width: u32,
+    height: u32,
+    row: u32,
+    bgra: bool,
+}
+fn capture_copy(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+) -> Result<Capture> {
+    anyhow::ensure!(
+        texture.usage().contains(wgpu::TextureUsages::COPY_SRC),
+        "This display backend cannot read back frames"
+    );
+    let (width, height) = (texture.width(), texture.height());
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("screenshot readback"),
+        size: u64::from(row) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    Ok(Capture {
+        buffer,
+        width,
+        height,
+        row,
+        bgra: matches!(
+            format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ),
+    })
+}
+impl Capture {
+    fn save(self, device: &wgpu::Device, path: &std::path::Path) -> Result<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(5)),
+        })?;
+        rx.recv_timeout(Duration::from_secs(5))??;
+        let mapped = self
+            .buffer
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|e| anyhow::anyhow!("screenshot readback: {e:?}"))?;
+        let mut pixels = Vec::with_capacity((self.width * self.height * 4) as usize);
+        for line in mapped.chunks_exact(self.row as usize) {
+            for p in line[..self.width as usize * 4].chunks_exact(4) {
+                if self.bgra {
+                    pixels.extend_from_slice(&[p[2], p[1], p[0], 255]);
+                } else {
+                    pixels.extend_from_slice(&[p[0], p[1], p[2], 255]);
+                }
+            }
+        }
+        drop(mapped);
+        self.buffer.unmap();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        image::save_buffer(path, &pixels, self.width, self.height, image::ColorType::Rgba8)?;
         Ok(())
     }
 }

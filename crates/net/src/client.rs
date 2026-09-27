@@ -324,6 +324,10 @@ impl Client {
         })
         .await?
     }
+    /// Current QUIC round-trip estimate.
+    pub fn rtt(&self) -> Duration {
+        self.connection.rtt()
+    }
     pub fn close(&self) {
         self.connection.close(0_u32.into(), b"Client disconnect");
     }

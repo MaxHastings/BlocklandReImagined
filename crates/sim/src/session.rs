@@ -119,6 +119,13 @@ pub enum Command {
     MiniGame(MiniGameRequest),
     /// Next (+1) or previous (-1) free vehicle seat.
     SwitchSeat(i8),
+    /// `teamChat`: only the sender's minigame members see it.
+    TeamChat(String),
+    /// Admin `dropPlayerAtCamera`: move the player to the free camera's eye.
+    DropPlayerAt {
+        eye: [f32; 3],
+        yaw: f32,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatLine {
@@ -690,6 +697,41 @@ impl Session {
             }
             Command::MiniGame(request) => {
                 self.minigame_request(owner, request)?;
+                Ok(Reply::Accepted)
+            }
+            Command::TeamChat(text) => {
+                peer.chats = peer.chats.saturating_add(1);
+                ensure!(peer.chats <= 4, "Chat rate exceeded");
+                ensure!(
+                    !text.trim().is_empty()
+                        && text.len() <= 256
+                        && !text.chars().any(char::is_control),
+                    "Invalid chat message"
+                );
+                let name = peer.name.clone();
+                self.team_chat(owner, &name, &text)?;
+                Ok(Reply::Accepted)
+            }
+            Command::DropPlayerAt { eye, yaw } => {
+                ensure!(peer.actor.administrator, "Only administrators can do that");
+                ensure!(peer.combat.alive, "You are dead");
+                ensure!(!self.vehicles.is_mounted(owner), "Leave the vehicle first");
+                let eye = Vec3::from(eye);
+                ensure!(
+                    eye.is_finite() && eye.abs().max_element() < 1_000_000.0 && yaw.is_finite(),
+                    "Invalid camera position"
+                );
+                let feet = eye - Vec3::Y * PlayerTuning::default().stand_eye;
+                peer.player
+                    .teleport(&mut self.simulation.physics, feet, yaw)?;
+                peer.inputs.clear();
+                // `serverCmdDropPlayerAtCamera` costs a point inside minigames.
+                let player = peer.combat.player;
+                if self.minigames.player(player).is_ok_and(|p| p.game.is_some())
+                    && let Ok(effects) = self.minigames.event_score(player, -1, true)
+                {
+                    self.apply_minigame_effects(effects)?;
+                }
                 Ok(Reply::Accepted)
             }
             Command::SwitchSeat(step) => {

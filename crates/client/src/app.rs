@@ -133,6 +133,14 @@ pub struct App {
     motion: crate::motion::Motion,
     vehicle_assets: crate::vehicles::VehicleAssets,
     vehicles: crate::vehicles::ClientVehicles,
+    music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
+    net_graph: Option<(std::time::Instant, u32)>,
+    /// LAN listings from the last discovery query: address -> certificate.
+    lan_hosts: BTreeMap<String, Vec<u8>>,
+    lan_query: Option<mpsc::Receiver<Vec<(SocketAddr, bri_net::discovery::Beacon)>>>,
+    macro_recording: Option<Vec<UiAction>>,
+    build_macro: Vec<UiAction>,
+    macro_playback: VecDeque<UiAction>,
     combat: CombatPresentation,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
@@ -566,6 +574,13 @@ impl App {
             motion: Default::default(),
             vehicle_assets,
             vehicles: Default::default(),
+            music_world: None,
+            net_graph: None,
+            lan_hosts: BTreeMap::new(),
+            lan_query: None,
+            macro_recording: None,
+            build_macro: Vec::new(),
+            macro_playback: VecDeque::new(),
             combat: Default::default(),
         })
     }
@@ -655,6 +670,10 @@ impl App {
         self.ghost_uploaded = u64::MAX;
         self.motion.reset();
         self.vehicles.clear();
+        self.music_world = None;
+        self.controls.free_camera = None;
+        self.macro_recording = None;
+        self.macro_playback.clear();
         self.combat = Default::default();
     }
     /// The authoritative local player is alive (or not yet known).
@@ -678,6 +697,29 @@ impl App {
             .filter(|v| v.is_finite() && (1.0..=40.0).contains(v))
             .or(Some(8.0))
     }
+    fn update_net_graph(&mut self) {
+        let Some((since, frames)) = self.net_graph.as_mut() else {
+            return;
+        };
+        *frames += 1;
+        let elapsed = since.elapsed().as_secs_f32();
+        if elapsed < 0.5 {
+            return;
+        }
+        let fps = *frames as f32 / elapsed;
+        *since = std::time::Instant::now();
+        *frames = 0;
+        let text = match self.network_view() {
+            Some(view) => format!(
+                "FPS {:.0}   Ping {} ms   Players {}",
+                fps,
+                view.rtt_ms,
+                view.names.len()
+            ),
+            None => format!("FPS {fps:.0}"),
+        };
+        self.ui.apply(UiUpdate::NetGraph(Some(text)));
+    }
     fn local_mounted(&self) -> bool {
         self.network_view()
             .and_then(|v| v.vitals.get(&v.owner))
@@ -685,7 +727,7 @@ impl App {
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
-        self.controls.third_person || !self.local_alive()
+        self.controls.third_person || self.controls.free_camera.is_some() || !self.local_alive()
     }
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
@@ -844,6 +886,13 @@ impl App {
         };
         let single = mode == ServerMode::SinglePlayer;
         let max_players = if single { 1 } else { max_players };
+        let listing_name = local_name.clone();
+        let listing_map = self
+            .content
+            .maps
+            .iter()
+            .find(|m| m.id == map)
+            .map_or_else(|| map.clone(), |m| m.name.clone());
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
@@ -978,7 +1027,7 @@ impl App {
             session.set_avatar_catalog(avatar_catalog)?;
             session.set_vehicle_pack(vehicle_pack)?;
             session.set_spawn_points(loaded.spawn_points.clone())?;
-            let host = server::start_with_admin_store_and_limit(
+            let mut host = server::start_with_admin_store_and_limit(
                 session,
                 ServerOptions {
                     bind,
@@ -990,14 +1039,9 @@ impl App {
             )?;
             let address = SocketAddr::from(([127, 0, 0, 1], host.address.port()));
             if !single {
-                std::fs::create_dir_all(&state_dir)?;
-                std::fs::write(state_dir.join("host-certificate.der"), &host.certificate)?;
-                std::fs::write(
-                    state_dir.join("host.json"),
-                    serde_json::to_vec_pretty(
-                        &serde_json::json!({"schema_version":1,"port":host.address.port(),"certificate":"host-certificate.der","content_id":identity,"content_identity_version":content_identity::CONTENT_IDENTITY_VERSION}),
-                    )?,
-                )?;
+                // LAN players find this host (and its certificate) by broadcast.
+                host.advertise(listing_name, listing_map, max_players, identity.clone())
+                    .await?;
             }
             let client = Client::connect_with_identity(
                 address,
@@ -1037,25 +1081,19 @@ impl App {
         let address: SocketAddr = address
             .parse()
             .context("Enter an IP address and port, for example 192.168.1.10:28000")?;
-        // Explicit trust pins only. A dedicated in-game trust/import flow remains work.
+        // Certificates come from LAN discovery, then saved pins, then a direct
+        // discovery query to the address (trust on first use, then pinned).
         let pins_file = self.state_dir.join("trusted-hosts.json");
-        ensure!(
+        let known = self.lan_hosts.get(&address.to_string()).cloned().or_else(|| {
             std::fs::metadata(&pins_file)
-                .context("No trusted host pins configured yet")?
-                .len()
-                <= 1024 * 1024,
-            "Host pin file too large"
-        );
-        let pins: std::collections::BTreeMap<String, Vec<u8>> =
-            serde_json::from_slice(&std::fs::read(pins_file)?)?;
-        let certificate = pins
-            .get(&address.to_string())
-            .context("This host certificate has not been trusted yet")?
-            .clone();
-        ensure!(
-            !certificate.is_empty() && certificate.len() <= 16384,
-            "Invalid certificate pin"
-        );
+                .ok()
+                .filter(|m| m.len() <= 1024 * 1024)
+                .and_then(|_| std::fs::read(&pins_file).ok())
+                .and_then(|bytes| {
+                    serde_json::from_slice::<BTreeMap<String, Vec<u8>>>(&bytes).ok()
+                })
+                .and_then(|pins| pins.get(&address.to_string()).cloned())
+        });
         let paths = self.content.paths.clone();
         let player = self.player_name();
         let weapon_snapshot = self.content.weapons.clone();
@@ -1080,6 +1118,26 @@ impl App {
             }),
         );
         let worker = Worker::start(self.runtime.handle(), async move {
+            let certificate = match known {
+                Some(certificate) => certificate,
+                None => bri_net::discovery::query(
+                    &[SocketAddr::new(
+                        address.ip(),
+                        bri_net::discovery::DISCOVERY_PORT,
+                    )],
+                    Duration::from_millis(1500),
+                )
+                .await?
+                .into_iter()
+                .find(|(a, _)| a.port() == address.port())
+                .context("No Blockland ReImagined host answered at that address")?
+                .1
+                .certificate_der()?,
+            };
+            ensure!(
+                !certificate.is_empty() && certificate.len() <= 16384,
+                "Invalid host certificate"
+            );
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })
@@ -1126,6 +1184,20 @@ impl App {
                 &native_identity,
             )
             .await?;
+            // Remember the host's certificate for later direct joins.
+            let pin = certificate.clone();
+            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut pins: BTreeMap<String, Vec<u8>> = std::fs::read(&pins_file)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice(&b).ok())
+                    .unwrap_or_default();
+                if pins.len() < 1024 {
+                    pins.insert(address.to_string(), pin);
+                    std::fs::write(&pins_file, serde_json::to_vec_pretty(&pins)?)?;
+                }
+                Ok(())
+            })
+            .await;
             let map = client.replica.world.map_id.clone();
             ensure!(
                 LOADABLE_MAPS.contains(&map.as_str()),
@@ -2036,6 +2108,21 @@ impl CombatPresentation {
     }
 }
 
+/// Ghost/plant/brick-selection actions recorded by build macros.
+fn macro_action(action: &UiAction) -> bool {
+    matches!(
+        action,
+        UiAction::UseBrickSlot { .. }
+            | UiAction::InstantUseBrick { .. }
+            | UiAction::Game(
+                GameAction::ShiftBrick { .. }
+                    | GameAction::SuperShiftBrick { .. }
+                    | GameAction::RotateBrick { .. }
+                    | GameAction::PlantBrick
+            )
+    )
+}
+
 fn building_action(action: &UiAction) -> bool {
     matches!(
         action,
@@ -2115,8 +2202,9 @@ impl PlatformApp for App {
         self.poll_network()?;
         self.poll_files();
         let alive = self.local_alive();
+        let observing = self.controls.fly(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
-            let input = if alive {
+            let input = if alive && !observing {
                 self.controls.movement()
             } else {
                 // Corpses ignore controls; keep aim so the server agrees.
@@ -2170,9 +2258,50 @@ impl PlatformApp for App {
                 }
                 self.vehicles
                     .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
+                if self
+                    .music_world
+                    .as_ref()
+                    .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
+                {
+                    self.audio.sync_music(&view.world.bricks);
+                    self.music_world = Some(view.world.clone());
+                }
             }
         }
         self.update_combat_presentation();
+        self.update_net_graph();
+        if let Some(receiver) = &self.lan_query
+            && let Ok(found) = receiver.try_recv()
+        {
+            self.lan_query = None;
+            self.lan_hosts.clear();
+            let mut servers = Vec::new();
+            for (address, beacon) in found {
+                if let Ok(certificate) = beacon.certificate_der() {
+                    self.lan_hosts.insert(address.to_string(), certificate);
+                    servers.push(ServerInfo {
+                        address: address.to_string(),
+                        name: plain_chat(&beacon.name),
+                        password: false,
+                        dedicated: false,
+                        ping_ms: None,
+                        players: beacon.players,
+                        max_players: beacon.max_players,
+                        bricks: 0,
+                        map: plain_chat(&beacon.map),
+                    });
+                }
+            }
+            self.ui.apply(UiUpdate::LanServers {
+                servers,
+                querying: false,
+            });
+        }
+        // Build macro playback: one recorded building action per frame so the
+        // server's action budget is never exceeded.
+        if let Some(action) = self.macro_playback.pop_front() {
+            self.ui.core.request(action);
+        }
         let third_person = self.third_person_view();
         let weapon_checkpoint = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
             a.view
@@ -2280,7 +2409,9 @@ impl PlatformApp for App {
                 .motion
                 .local_eye()
                 .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
-            let eye = if third_person {
+            let eye = if let Some(camera) = self.controls.free_camera {
+                camera
+            } else if third_person {
                 building.camera_position(
                     eye,
                     forward,
@@ -2433,6 +2564,12 @@ impl PlatformApp for App {
                 }
                 continue;
             }
+            if let Some(recording) = &mut self.macro_recording
+                && macro_action(&action)
+                && recording.len() < 4096
+            {
+                recording.push(action.clone());
+            }
             if building_action(&action) {
                 match self.handle_building(id, &action) {
                     Ok(true) => {}
@@ -2562,6 +2699,92 @@ impl PlatformApp for App {
                     platform.push(PlatformCommand::ToggleFullscreen);
                     continue;
                 }
+                UiAction::Game(GameAction::ToggleNetGraph) => {
+                    self.net_graph = match self.net_graph {
+                        Some(_) => {
+                            self.ui.apply(UiUpdate::NetGraph(None));
+                            None
+                        }
+                        None => Some((std::time::Instant::now(), 0)),
+                    };
+                    Ok(())
+                }
+                UiAction::Game(GameAction::ToggleBuildMacroRecording) => {
+                    let text = match self.macro_recording.take() {
+                        Some(recorded) => {
+                            let count = recorded.len();
+                            self.build_macro = recorded;
+                            format!("Build macro saved ({count} actions)")
+                        }
+                        None => {
+                            self.macro_recording = Some(Vec::new());
+                            "Recording build macro...".into()
+                        }
+                    };
+                    self.ui.apply(UiUpdate::BottomPrint {
+                        text,
+                        seconds: 3.0,
+                        hide_bar: false,
+                    });
+                    Ok(())
+                }
+                UiAction::Game(GameAction::PlayBackBuildMacro) => {
+                    if self.macro_recording.is_none() {
+                        self.macro_playback.extend(self.build_macro.iter().cloned());
+                    }
+                    Ok(())
+                }
+                UiAction::Game(GameAction::Screenshot { kind }) => {
+                    let stamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis());
+                    platform.push(PlatformCommand::Screenshot {
+                        path: self
+                            .state_dir
+                            .join("screenshots")
+                            .join(format!("Blockland_{stamp}.png")),
+                        hud: kind == ScreenshotKind::Normal,
+                    });
+                    Ok(())
+                }
+                UiAction::Game(GameAction::DropCameraAtPlayer) => {
+                    // `serverCmdDropCameraAtPlayer`: administrators only.
+                    match self.network_view() {
+                        Some(view) if view.administrator => {
+                            if self.controls.free_camera.is_some() {
+                                self.controls.free_camera = None;
+                            } else {
+                                self.controls.free_camera = self.motion.local_eye().or_else(|| {
+                                    view.poses
+                                        .get(&view.owner)
+                                        .map(|p| p.player.eye(&PlayerTuning::default()))
+                                });
+                            }
+                            Ok(())
+                        }
+                        Some(_) => Err(anyhow::anyhow!("Only administrators can use the free camera")),
+                        None => Err(anyhow::anyhow!("Not connected")),
+                    }
+                }
+                UiAction::Game(GameAction::DropPlayerAtCamera) => {
+                    match self.controls.free_camera.take() {
+                        Some(eye) => {
+                            let result = self.command(
+                                id,
+                                Command::DropPlayerAt {
+                                    eye: eye.to_array(),
+                                    yaw: self.controls.yaw,
+                                },
+                                action.clone(),
+                            );
+                            if result.is_ok() {
+                                continue;
+                            }
+                            result
+                        }
+                        None => Ok(()),
+                    }
+                }
                 UiAction::Game(GameAction::NextSeat | GameAction::PrevSeat) => {
                     let step = if matches!(action, UiAction::Game(GameAction::NextSeat)) {
                         1
@@ -2622,6 +2845,63 @@ impl PlatformApp for App {
                     }
                     result
                 }
+                UiAction::Chat {
+                    channel: ChatChannel::Team,
+                    text,
+                } => {
+                    let result = self.command(
+                        id,
+                        Command::TeamChat(text.clone()),
+                        UiAction::Chat {
+                            channel: ChatChannel::Team,
+                            text,
+                        },
+                    );
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::ChatCommand { ref name, .. } => {
+                    // Vanilla slash commands that map to existing requests.
+                    let command = match name.to_ascii_lowercase().as_str() {
+                        "suicide" | "kill" => Some(Command::Suicide),
+                        "light" => Some(Command::ToggleLight),
+                        "sit" | "love" | "hate" | "alarm" | "confusion" => {
+                            Some(Command::Emote(name.to_ascii_lowercase()))
+                        }
+                        _ => None,
+                    };
+                    match command {
+                        Some(command) => {
+                            let result = self.command(id, command, action.clone());
+                            if result.is_ok() {
+                                continue;
+                            }
+                            result
+                        }
+                        None => Err(anyhow::anyhow!("Unknown command: /{name}")),
+                    }
+                }
+                UiAction::StartTutorial => {
+                    if self.ui.session_request() != Some(id) {
+                        continue;
+                    }
+                    let result = self.host(
+                        id,
+                        "v20/add-ons/map_tutorial/tutorial.mis".into(),
+                        ServerMode::SinglePlayer,
+                        1,
+                        "Tutorial".into(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    );
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
                 UiAction::StartTyping
                 | UiAction::StopTyping
                 | UiAction::ClosePrintSelector
@@ -2659,13 +2939,22 @@ impl PlatformApp for App {
                         Ok(())
                     }),
                 UiAction::QueryLan => {
+                    let (send, receive) = mpsc::sync_channel(1);
+                    self.runtime.spawn(async move {
+                        let found = bri_net::discovery::query(
+                            &[bri_net::discovery::broadcast()],
+                            Duration::from_millis(1200),
+                        )
+                        .await
+                        .unwrap_or_default();
+                        let _ = send.send(found);
+                    });
+                    self.lan_query = Some(receive);
                     self.ui.apply(UiUpdate::LanServers {
                         servers: vec![],
-                        querying: false,
+                        querying: true,
                     });
-                    Err(anyhow::anyhow!(
-                        "LAN discovery is not connected yet; use a trusted direct IP host"
-                    ))
+                    Ok(())
                 }
                 _ => Err(anyhow::anyhow!(
                     "This feature is not connected to native gameplay yet. It remains required before the alpha handoff."
@@ -2763,7 +3052,9 @@ impl PlatformApp for App {
         let Some(local) = self.motion.presented().get(&view.owner) else {
             return Ok(false);
         };
-        let third_person = self.controls.third_person || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
+        let third_person = self.controls.third_person
+            || self.controls.free_camera.is_some()
+            || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
         let hidden = self.combat.hidden_bodies(&view.vitals);
         let lights_on: Vec<Vec3> = view
             .vitals
@@ -2849,7 +3140,9 @@ impl PlatformApp for App {
             .local_eye()
             .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
         let camera_distance = Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.0);
-        let eye = if third_person {
+        let eye = if let Some(camera) = self.controls.free_camera {
+            camera
+        } else if third_person {
             self.building
                 .as_ref()
                 .context("Camera collision mirror missing")?

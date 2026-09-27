@@ -1550,3 +1550,45 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
     server.stop().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<()> {
+    let mut server = server::start(session(), options())?;
+    server
+        .advertise("LAN Host".into(), "Fixture".into(), 8, "fixture-v1".into())
+        .await?;
+    let found = bri_net::discovery::query(
+        &["127.0.0.1:28050".parse()?],
+        Duration::from_millis(1500),
+    )
+    .await?;
+    let (address, beacon) = found
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no LAN reply"))?;
+    assert_eq!(address.port(), server.address.port());
+    assert_eq!(beacon.name, "LAN Host");
+    assert_eq!(beacon.max_players, 8);
+    let certificate = beacon.certificate_der()?;
+    assert_eq!(certificate, server.certificate);
+    // The advertised certificate is enough to join.
+    let mut client = Client::connect(
+        address,
+        &certificate,
+        "Finder".into(),
+        "fixture-v1".into(),
+        None,
+    )
+    .await?;
+    client.command(Command::Chat("found you".into())).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let found = bri_net::discovery::query(
+        &["127.0.0.1:28050".parse()?],
+        Duration::from_millis(1500),
+    )
+    .await?;
+    assert_eq!(found[0].1.players, 1, "listing reports connected players");
+    drop(client);
+    server.stop().await?;
+    Ok(())
+}

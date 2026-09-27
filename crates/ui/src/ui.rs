@@ -204,6 +204,7 @@ pub struct Core {
     pub plant_error: Option<(PlantError, u64)>,
     /// Current damage flash opacity (0..=0.75), fading over time.
     pub damage_flash: f32,
+    pub net_graph: Option<String>,
     pub lagging: bool,
     pub shape_names: bool,
     pub super_shift: bool,
@@ -875,6 +876,7 @@ impl Ui {
             bottom_print: None,
             plant_error: None,
             damage_flash: 0.0,
+            net_graph: None,
             lagging: false,
             shape_names: true,
             super_shift: false,
@@ -1250,6 +1252,7 @@ impl Ui {
                 c.bottom_print = None;
             }
             UiUpdate::PlantError(e) => c.plant_error = Some((e, c.time_ms + 800)),
+            UiUpdate::NetGraph(text) => c.net_graph = text,
             UiUpdate::DamageFlash(amount) => {
                 if amount.is_finite() {
                     c.damage_flash = (c.damage_flash + amount.max(0.0)).min(0.75);

@@ -430,6 +430,27 @@ impl Session {
         Ok(())
     }
 
+    /// Minigame team chat (`serverCmdTeamMessageSent`).
+    pub(super) fn team_chat(&mut self, owner: OwnerId, name: &str, text: &str) -> Result<()> {
+        let game = self.game_of(owner).context("You are not in a mini-game")?;
+        // Private-use escapes are color codes; strip any the sender typed.
+        let clean: String = text
+            .chars()
+            .filter(|c| !(0xE000..0xE010).contains(&(*c as u32)))
+            .map(|c| match c {
+                '<' => '\u{2039}',
+                '>' => '\u{203A}',
+                c => c,
+            })
+            .collect();
+        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+        self.chat_game(
+            Some(game),
+            None,
+            format!("{}{name}{}: {clean}", color_code(7), color_code(4)),
+        );
+        Ok(())
+    }
     /// Self-inflicted death (`serverCmdSuicide`).
     pub(super) fn suicide(&mut self, owner: OwnerId) -> Result<()> {
         let peer = self.peers.get(&owner).context("Unknown connection")?;

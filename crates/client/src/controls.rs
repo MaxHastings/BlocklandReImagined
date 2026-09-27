@@ -15,6 +15,9 @@ pub struct Controls {
     free_pitch: f32,
     pub third_person: bool,
     zoom_fov: Option<f32>,
+    /// Admin observer camera (`dropCameraAtPlayer`): flies with the movement
+    /// keys while the player stands still.
+    pub free_camera: Option<glam::Vec3>,
 }
 fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(2.0 * PI) - PI
@@ -80,6 +83,27 @@ impl Controls {
             self.axis(HeldControl::TurnRight, HeldControl::TurnLeft) * amount,
             self.axis(HeldControl::LookUp, HeldControl::LookDown) * amount,
         );
+    }
+    /// Fly the observer camera; returns true while it is active.
+    pub fn fly(&mut self, seconds: f32) -> bool {
+        let Some(mut position) = self.free_camera else {
+            return false;
+        };
+        if !seconds.is_finite() {
+            return true;
+        }
+        let (yaw, pitch) = (self.yaw, self.pitch);
+        let forward = glam::Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos());
+        let right = glam::Vec3::new(yaw.cos(), 0.0, yaw.sin());
+        let up = u8::from(self.held.contains(&HeldControl::Jump)) as f32
+            - u8::from(self.held.contains(&HeldControl::Crouch)) as f32;
+        let speed = if self.held.contains(&HeldControl::Walk) { 8.0 } else { 30.0 };
+        let direction = forward * self.axis(HeldControl::Forward, HeldControl::Backward)
+            + right * self.axis(HeldControl::Right, HeldControl::Left)
+            + glam::Vec3::Y * up;
+        position += direction.normalize_or_zero() * speed * seconds.clamp(0.0, 0.1);
+        self.free_camera = Some(position);
+        true
     }
     pub fn movement(&self) -> MoveInput {
         let walk = if self.held(HeldControl::Walk) {
