@@ -220,13 +220,15 @@ impl Drop for RouterPorts {
         std::thread::spawn(move || drop(slot.lock().ok().and_then(|mut m| m.take())));
     }
 }
+/// A world transfer's encoded frames, or why encoding failed.
+type EncodedTransfer = Option<Result<Arc<[Vec<u8>]>, String>>;
 /// One entry in a peer's ordered reliable stream.
 #[derive(Clone)]
 enum Frame {
     Ready(Arc<Vec<u8>>),
     /// Frames still being encoded on a blocking thread (a world transfer).
     /// The writer waits for them in place, so later frames stay behind them.
-    Pending(watch::Receiver<Option<Result<Arc<[Vec<u8>]>, String>>>),
+    Pending(watch::Receiver<EncodedTransfer>),
 }
 /// Encode a world transfer off the authority loop. Every peer given the
 /// returned frame writes the transfer at that point in its stream.

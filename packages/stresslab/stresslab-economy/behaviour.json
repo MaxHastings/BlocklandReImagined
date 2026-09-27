@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "script": "economy.rhai",
+  "commands": [
+    { "name": "mine", "aim_reach": 8.0, "cooldown_ticks": 18 },
+    { "name": "sell", "args": ["string"] },
+    { "name": "sell_all" }
+  ],
+  "state": {
+    "player": {
+      "bits": { "default": 0, "public": true },
+      "coal": { "default": 0, "public": true },
+      "copper": { "default": 0, "public": true },
+      "gold": { "default": 0, "public": true },
+      "mined": { "default": 0, "public": true }
+    },
+    "global": {
+      "sold": { "default": 0, "public": true }
+    }
+  },
+  "on_join": true
+}

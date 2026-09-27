@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "stresslab-economy",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stress Lab Mining Economy",
+  "description": "Mine the generated ground for ore and sell it for Bits. The server keeps every balance.",
+  "authors": ["Stress Lab"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "stresslab-world": "^1.0.0" },
+  "capabilities": ["world.edit", "chat"],
+  "provides": [
+    { "kind": "behaviour", "id": "stresslab-economy:behaviour/economy", "file": "behaviour.json" },
+    { "kind": "script", "id": "stresslab-economy:script/economy", "file": "economy.rhai" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "Creeper",
+  "model": "stresslab-creeper-model:model/creeper",
+  "think": "think",
+  "think_interval": 6,
+  "speed": 0.7,
+  "scale": 0.9,
+  "health": 20.0,
+  "max_alive": 12
+}
