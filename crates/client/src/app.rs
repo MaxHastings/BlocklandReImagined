@@ -4635,9 +4635,14 @@ impl PlatformApp for App {
         item_draws.extend(self.debris_models.draws());
         {
             use bri_render::scene::ShadowCasters;
-            // Bricks, players and models cast; the map's own shadows are
-            // baked (see bri_render::shadow).
-            let mut bodies: Vec<&GpuScene> = self.gpu_chunks.values().collect();
+            // Players, vehicles and items (dropped and held) cast, like v20's
+            // projected shape shadows; bricks only with the BrickShadows pref.
+            // The map's own shadows are baked (see bri_render::shadow).
+            let mut bodies: Vec<&GpuScene> = if self.graphics.brick_shadows {
+                self.gpu_chunks.values().collect()
+            } else {
+                Vec::new()
+            };
             bodies.extend(
                 self.avatars
                     .iter()

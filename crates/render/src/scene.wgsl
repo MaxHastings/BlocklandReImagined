@@ -89,12 +89,18 @@ fn shadow_lit(c:ShadowCoord)->f32 {
 fn sun_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
     return shadow_lit(shadow_coord(position,normal));
 }
-// Lightmaps already hold the map's own sun shadow. A caster darkens them to
-// at most the ambient level, so baked shadow is never darkened twice.
+// Like v20's projected shape shadows, a caster darkens a baked (lightmapped)
+// surface by a fixed share whatever its baked light, so players and vehicles
+// shadow the dim Bedroom carpet too. The share is the mission's ambient to
+// ambient+sun ratio, bounded so shadows stay visible but never black.
 fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let c=shadow_coord(position,normal);
     if c.cascade<0 {return lightmap;}
-    return mix(min(lightmap,camera.ambient.rgb),lightmap,shadow_lit(c));
+    let weights=vec3<f32>(0.2126,0.7152,0.0722);
+    let ambient=dot(camera.ambient.rgb,weights);
+    let lit=ambient+dot(camera.sun_color.rgb,weights);
+    let shade=clamp(ambient/max(lit,0.0001),0.4,0.7);
+    return lightmap*mix(shade,1.0,shadow_lit(c));
 }
 @group(1) @binding(15) var<uniform> material:array<vec4<f32>,4>;
 // v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).

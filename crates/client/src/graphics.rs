@@ -6,6 +6,9 @@ use std::collections::BTreeMap;
 
 /// Native anti-aliasing pref (v20 had none): world-pass MSAA on or off.
 pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
+/// Native pref: bricks cast sun shadows too (default off). v20's projected
+/// shape shadows came from players, vehicles and items, never bricks.
+pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Graphics {
@@ -16,6 +19,7 @@ pub struct Graphics {
     /// Sun shadows from v20's Shadow Quality radios (`$pref::ShadowQuality`,
     /// 0 Best .. 4 Minimum, v20 default 0). Minimum turns them off.
     pub shadows: Option<ShadowSettings>,
+    pub brick_shadows: bool,
 }
 pub fn shadow_settings(level: i64) -> Option<ShadowSettings> {
     match level {
@@ -47,6 +51,7 @@ impl Graphics {
                 1
             },
             shadows: shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0)),
+            brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
         }
     }
 }
@@ -74,6 +79,8 @@ mod tests {
             Some(ShadowSettings::LOW)
         );
         assert_eq!(graphics(&[("$pref::ShadowQuality", "4")]).shadows, None);
+        assert!(!graphics(&[]).brick_shadows);
+        assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
         let chosen = graphics(&[
             ("$pref::OpenGL::textureTrilinear", "0"),
             ("$pref::OpenGL::useGLNearest", "1"),

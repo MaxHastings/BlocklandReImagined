@@ -1,13 +1,13 @@
-//! Cascaded sun shadow maps. Torque v20 had no sun shadows on bricks or
-//! players (only baked interior/terrain lightmaps and per-shape blobs), so
-//! this is designed for this game rather than copied.
+//! Cascaded sun shadow maps. v20 drew per-shape projected shadows from
+//! players, vehicles and items (quality from `setShadowResolution`), never
+//! from bricks, and baked the map's own shadows into lightmaps. Here those
+//! casters render into stabilized cascades instead; bricks are optional.
 //!
-//! Only bricks, players, vehicles and items cast. v20 lit bricks and players
-//! by the sun everywhere, even inside the Bedroom and Kitchen interiors, and
-//! baked the map's own shadows into lightmaps; letting map geometry shadow
-//! bricks would darken nearly every indoor build (checked with Cottage and
-//! Town renders). Lightmapped surfaces darken to at most the ambient level,
-//! so a baked shadow is never darkened twice.
+//! Map geometry never casts. v20 lit bricks and players by the sun even
+//! inside the Bedroom and Kitchen interiors, so map shadows on bricks would
+//! darken nearly every indoor build (checked with Cottage and Town renders).
+//! Lightmapped surfaces (which cannot separate their baked sun from other
+//! light) darken by a bounded fixed share, as v20's projected shadows did.
 use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3, Vec4};
 

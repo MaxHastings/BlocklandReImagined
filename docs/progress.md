@@ -1875,6 +1875,20 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   unchanged (0.562/1.0/1.0/0.996 before and after); 3.9% of pixels differ,
   at blade edges.
 
+- 2026-09-27 Shadow casters follow v20's projected shape shadows (Max's
+  direction): players (including the first-person body), vehicles and
+  held/dropped items cast; bricks cast only with the native
+  `$pref::Video::BrickShadows` (default off). Baked surfaces now darken by a
+  fixed share under a caster (mission ambient/(ambient+sun), bounded
+  0.4-0.7) instead of down to ambient, because the Bedroom carpet's baked
+  light is already at ambient and hid player shadows entirely
+  (`artifacts/native-client-flow/bedroom-third-person.png` now shows one).
+  Also fixed the flaky app_flow wrench/printer timeout: a cancelled click's
+  late inspection notice reopened the wrench; notices now open only if no
+  tool switch/cancel/close happened since the click (70 runs, no wrench or
+  printer failure; one unrelated rehost "Connection changed while reading
+  the build" timeout seen once).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
