@@ -2009,3 +2009,22 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   test against emulated output, `brick_audit` render vs
   `tools/brick_reference.py` independent v20 reference (1.1/255 mean
   difference). Open: port the exact v20 colour/shape FX equations.
+- 2026-09-27 Engine foundations audit (`docs/audits/engine-foundations.md`),
+  protocol VERSION 21. Fixed: a hostile movement sequence could panic a
+  dev-built host; any unencodable Update/MapChanged/Notice/admin snapshot
+  stopped the host for everyone (now disconnects only the affected peers);
+  LAN discovery was a ~100x UDP amplifier on the UPnP-forwarded port (queries
+  now padded to 1,200 bytes, replies capped at 3x) and crashed the browser on
+  non-ASCII certificate text; resume tickets filled after 4,096 joins and
+  refused everyone (now evicts the oldest disconnected ticket); frames that ran
+  over 6 prediction ticks dropped inputs (rubber-banding after hitches);
+  movement floods are rate-limited per peer; audio reopens the default device
+  after a headset unplug or default-output change. The wire is one strict
+  MessagePack codec for frames and datagrams (1,100-byte datagram bound).
+  Golden Gate state: raw 19.2 to 13.7 MB, client decode about 30% faster.
+  Open, ranked in the audit: replica world deep-clone per edit (12-21 ms at
+  44k bricks), monolithic checkpoint on the authority loop, unified atomic
+  writes for host identity and pins. Evidence: `cargo test -p bri-net -p
+  bri-audio`, `cargo test -p bri-client --lib --test transport`, two-client
+  loopback `cargo test -p bri-client --test multiplayer --release -- --ignored`,
+  `wire_benchmark` (ignored, BRI_BENCH_WORLD).
