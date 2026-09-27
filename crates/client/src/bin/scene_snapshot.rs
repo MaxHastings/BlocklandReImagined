@@ -1,11 +1,13 @@
 //! Offscreen snapshot of a native map from its spawn, rendered with the game's
 //! scene renderer into a PNG. No window, input or original-file access.
 //!
-//! Usage: scene_snapshot <map-bundle-dir> <map-id> <out.png> [yaw-degrees] [pitch-degrees]
+//! Usage: scene_snapshot <map-bundle-dir> <map-id> <out.png> [yaw-degrees] [pitch-degrees] [eye-x eye-y eye-z]
+//! The optional eye is in Torque mission coordinates (Z up); the default is the spawn.
 use anyhow::{Context, Result, ensure};
 use bri_render::{
     scene::{Camera, SceneRenderer, create_depth},
     scene_loader::load_map_bundle,
+    terrain_scene::GpuTerrain,
 };
 use glam::Vec3;
 use std::path::PathBuf;
@@ -13,8 +15,8 @@ use std::path::PathBuf;
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
-        (3..=5).contains(&args.len()),
-        "Usage: scene_snapshot <map-bundle-dir> <map-id> <out.png> [yaw-degrees] [pitch-degrees]"
+        (3..=5).contains(&args.len()) || args.len() == 8,
+        "Usage: scene_snapshot <map-bundle-dir> <map-id> <out.png> [yaw-degrees] [pitch-degrees] [eye-x eye-y eye-z]"
     );
     let yaw = args
         .get(3)
@@ -24,8 +26,17 @@ fn main() -> Result<()> {
         .get(4)
         .map_or(Ok(-20.0), |v| v.parse::<f32>())?
         .to_radians();
-    let scene = load_map_bundle(&PathBuf::from(&args[0]), &args[1])?.scene;
-    let eye = Vec3::from(scene.spawn) + Vec3::Y * 2.4;
+    let map = load_map_bundle(&PathBuf::from(&args[0]), &args[1])?;
+    let scene = map.scene;
+    let eye = if args.len() == 8 {
+        let v = args[5..8]
+            .iter()
+            .map(|v| v.parse::<f32>())
+            .collect::<Result<Vec<_>, _>>()?;
+        Vec3::new(v[0], v[2], -v[1])
+    } else {
+        Vec3::from(scene.spawn) + Vec3::Y * 2.4
+    };
     let forward = Vec3::new(
         yaw.sin() * pitch.cos(),
         pitch.sin(),
@@ -59,6 +70,15 @@ fn main() -> Result<()> {
     let depth = create_depth(&device, width, height).create_view(&Default::default());
     let mut renderer = SceneRenderer::new(&device, format);
     let gpu = renderer.upload(&device, &queue, &scene)?;
+    let mut terrain = map
+        .terrain
+        .into_iter()
+        .map(|t| GpuTerrain::upload(&renderer, &device, &queue, t.into(), 4000.0))
+        .collect::<Result<Vec<_>>>()?;
+    for t in &mut terrain {
+        t.update(&queue, eye, 4000.0)?;
+    }
+    let terrain_draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
     let mut camera = Camera::perspective(
         eye.to_array(),
         (eye + forward).to_array(),
@@ -77,11 +97,12 @@ fn main() -> Result<()> {
         mapped_at_creation: false,
     });
     let mut encoder = device.create_command_encoder(&Default::default());
-    renderer.render(
+    renderer.render_with_instances(
         &mut encoder,
         &view,
         &depth,
         &[&gpu],
+        &terrain_draws,
         Some(wgpu::Color::BLACK),
     );
     encoder.copy_texture_to_buffer(
