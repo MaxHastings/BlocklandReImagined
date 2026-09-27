@@ -218,3 +218,18 @@ fn slash_commands_and_admin_go_through_host_requests() {
     );
     assert!(log_has("Administration status not received yet; try again."));
 }
+
+#[test]
+fn fov_drives_the_options_camera_setting() {
+    use bri_ui::screens::options::{DEFAULT_FOV, default_fov};
+    let mut u = ui();
+    tilde(&mut u);
+    submit(&mut u, "fov 110");
+    assert_eq!(u.core.prefs.get(DEFAULT_FOV), Some("110"));
+    // The client's camera reads exactly this each frame (App::tick).
+    assert_eq!(default_fov(&u.core.prefs), 110.0);
+    // Outside the slider's 70..140 range is rejected, not clamped silently.
+    submit(&mut u, "fov 200");
+    assert_eq!(u.core.prefs.get(DEFAULT_FOV), Some("110"));
+    assert!(log_has("fov: expected 70 to 140"));
+}

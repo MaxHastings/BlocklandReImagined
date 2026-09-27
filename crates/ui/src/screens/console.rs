@@ -235,7 +235,13 @@ pub fn registry(core: &Core) -> Registry<Core> {
     r.cvar("mousesensitivity", "$pref::Input::MouseSensitivity", Kind::Float { min: 0.0, max: 10.0 }, "Mouse look speed.");
     r.cvar("invertmouse", "$pref::Input::MouseInvert", Kind::Bool, "Invert mouse look.");
     r.cvar("keyboardturnspeed", super::options::KEYBOARD_TURN_SPEED, Kind::Float { min: 0.02, max: 1.0 }, "Keyboard turn rate.");
-    r.cvar("fov", "$pref::Player::defaultFov", Kind::Float { min: 1.0, max: 179.0 }, "Camera field of view in degrees.");
+    // The Options FOV slider's pref and range; the camera reads it each frame.
+    r.cvar(
+        "fov",
+        super::options::DEFAULT_FOV,
+        Kind::Int { min: super::options::FOV_RANGE.0 as i64, max: super::options::FOV_RANGE.1 as i64 },
+        "Camera field of view in degrees (Options slider).",
+    );
     r.cvar("chatsize", super::options::CHAT_SIZE, Kind::Int { min: 0, max: 10 }, "Chat text size.");
     r.cvar("chatlines", "$Pref::Chat::MaxDisplayLines", Kind::Int { min: 1, max: 64 }, "Chat lines shown.");
     r.cvar("shadows", "$pref::ShadowQuality", Kind::Int { min: 0, max: 4 }, "Shadow quality: 0 best .. 4 off.");
