@@ -1,6 +1,9 @@
 //! Contact-driven host pickups. No remote position or Pickup command exists.
 use super::*;
 use bri_weapons::{ActorId, ItemBounds};
+/// `MsgItemPickup`'s client `ItemPickup` sound, heard on picking up and on
+/// dropping a tool; loadouts fill slots silently.
+const ITEM_SOUND: &str = "ItemPickup";
 /// Item_Sports ball shapes are about 0.36 units in radius.
 const BALL_RADIUS: f32 = 0.36;
 impl Session {
@@ -54,6 +57,7 @@ impl Session {
         self.weapons.set_frame(actor, frame)?;
         let was_selected = self.weapons.actor(actor).unwrap().selected == Some(slot);
         self.weapons.drop_item(actor, slot)?;
+        self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
         self.weapon_triggers.remove(&owner);
         if was_selected {
             self.peers.get_mut(&owner).unwrap().inspection = None;
@@ -151,6 +155,9 @@ impl Session {
                         .item_spawn
                         .respawn_ticks();
                     self.item_spawners.picked_up(id, tick, respawn)?;
+                    if !sport {
+                        self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
+                    }
                 }
             }
             for id in dynamic.query(contact) {
@@ -160,8 +167,8 @@ impl Session {
                     if source.is_some_and(|s| s.0 == 0 || self.game_of(s.0) == game) {
                         let _ = self.weapons.pickup_ball(actor, id);
                     }
-                } else {
-                    let _ = self.weapons.pickup(actor, id);
+                } else if self.weapons.pickup(actor, id).is_ok() {
+                    self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
                 }
             }
         }

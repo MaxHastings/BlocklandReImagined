@@ -1908,7 +1908,9 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   hands), walking into rolling/resting ball projectiles, football/soccer
   `onRest` items that mount on touch, `armor::onDisabled` drops the ball, the
   minigame StartBall (a ball in loadout slot 0), `weaponSwitchSound` on every
-  pickup and `CatchFootballMessage` prints plus the in-memory record. Cause of
+  pickup and `CatchFootballMessage` prints plus the in-memory record. Tool
+  pickups and drops play the client `ItemPickup` sound (`MsgItemPickup`) as a
+  private `Notice::Sound`. Cause of
   "the ball is not in my hand": basketballImage mounts on Mount8, which the
   player shape lacks; Torque then uses the player transform, and the client
   now does the same for every missing mount node. Script-driven arm threads
@@ -1925,4 +1927,4 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   sports --test items --test tools -- --include-ignored`; offscreen App probe
   `cargo test -p bri-client --test held_items_render --release -- --ignored`
   (frames in `artifacts/held-items/`). Open: player types, setPlayerScale,
-  Horse Ray, pickup/drop GUI sound (one protocol bump).
+  Horse Ray (one protocol bump).

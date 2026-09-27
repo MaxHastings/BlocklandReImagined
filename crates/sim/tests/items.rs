@@ -333,3 +333,25 @@ fn dropped_item_rests_on_the_bottom_of_its_box() {
         drop.position.y
     );
 }
+#[test]
+fn dropping_and_picking_up_a_tool_play_the_item_sound() {
+    use bri_sim::session::Notice;
+    let mut s = session();
+    let a = s
+        .join("Thrower".into(), Vec3::new(8., 1., 8.), false)
+        .unwrap();
+    let b = s
+        .join("Recipient".into(), Vec3::new(8., 2.4, 6.3), false)
+        .unwrap();
+    s.command(b, 1, Command::DropTool { slot: 0 }).unwrap();
+    s.take_private_notices();
+    s.command(a, 1, Command::DropTool { slot: 0 }).unwrap();
+    s.step().unwrap();
+    let sounds: Vec<_> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(_, n)| matches!(n, Notice::Sound(p) if p == "ItemPickup"))
+        .map(|(o, _)| o)
+        .collect();
+    assert_eq!(sounds, [a, b]);
+}
