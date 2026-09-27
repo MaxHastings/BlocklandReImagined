@@ -52,7 +52,8 @@ fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> b
             start.elapsed() < timeout,
             "Timed out waiting for {what}; screens {:?}; tools {:?}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
             app.ui.stack(),
-            app.network_view().and_then(|v| v.tools.get(&v.owner).cloned()),
+            app.network_view()
+                .and_then(|v| v.tools.get(&v.owner).cloned()),
             app.ui.core.conn,
             app.network_view().map(|v| v.world.bricks.len()),
             app.pending_requests(),
@@ -912,6 +913,25 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     )?;
     app.ui.core.pop(ScreenId::LoadBricks);
 
+    // v20 undoes newest first: the Letters/B print, then the plant.
+    action(&mut app, UiAction::Game(GameAction::UndoBrick))?;
+    until(
+        &mut app,
+        "authoritative print undo restores the previous print",
+        Duration::from_secs(5),
+        |a| {
+            a.network_view()
+                .unwrap()
+                .world
+                .bricks
+                .values()
+                .next()
+                .unwrap()
+                .print
+                != Some(bri_world::ContentRef::Resolved(print_b.clone()))
+                && a.pending_requests() == 0
+        },
+    )?;
     action(&mut app, UiAction::Game(GameAction::UndoBrick))?;
     until(
         &mut app,
