@@ -1867,6 +1867,14 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   (first-person body shadow on Slopes terrain); client GPU tests brick_fx,
   foliage_scene, world_items, vehicle_render and app_flow weather pass.
 
+- 2026-09-27 Grass mipmaps. The foliage replicator's textures now upload
+  mip chains whose alpha is rescaled per level to keep the alpha-tested
+  coverage of level 0 (`mipmap::chain_preserving_coverage`, cutoff 0.5
+  from the pack), so distant grass stops shimmering without thinning out.
+  Bedroom `foliage_scene` render: grass coverage per screen band is
+  unchanged (0.562/1.0/1.0/0.996 before and after); 3.9% of pixels differ,
+  at blade edges.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

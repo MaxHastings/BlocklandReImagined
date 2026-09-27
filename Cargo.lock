@@ -395,6 +395,7 @@ dependencies = [
  "anyhow",
  "bri-content",
  "bri-physics",
+ "bri-render",
  "bytemuck",
  "glam 0.33.10",
  "image",

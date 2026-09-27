@@ -63,6 +63,51 @@ pub fn chain(width: u32, height: u32, rgba: &[u8], srgb: bool) -> Vec<(u32, u32,
     levels
 }
 
+/// As `chain`, for alpha-tested images: each smaller level's alpha is scaled
+/// so the fraction of texels passing `cutoff` matches level 0. Plain
+/// averaging would thin cut-out grass and leaves until they vanish.
+pub fn chain_preserving_coverage(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    srgb: bool,
+    cutoff: f32,
+) -> Vec<(u32, u32, Cow<'_, [u8]>)> {
+    let threshold = (cutoff.clamp(0.0, 1.0) * 255.0) as u32;
+    let coverage = |pixels: &[u8], scale: f32| {
+        let passing = pixels
+            .chunks_exact(4)
+            .filter(|t| ((f32::from(t[3]) * scale) as u32).min(255) > threshold)
+            .count();
+        passing as f32 / (pixels.len() / 4).max(1) as f32
+    };
+    let mut levels = chain(width, height, rgba, srgb);
+    let target = coverage(rgba, 1.0);
+    for (_, _, pixels) in levels.iter_mut().skip(1) {
+        let (mut low, mut high) = (0.0f32, 64.0f32);
+        for _ in 0..20 {
+            let mid = (low + high) / 2.0;
+            if coverage(pixels, mid) < target {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        // Small levels may not reach the target exactly; take the nearer side.
+        let scale =
+            if (coverage(pixels, low) - target).abs() < (coverage(pixels, high) - target).abs() {
+                low
+            } else {
+                high
+            };
+        let pixels = pixels.to_mut();
+        for texel in pixels.chunks_exact_mut(4) {
+            texel[3] = (f32::from(texel[3]) * scale).min(255.0) as u8;
+        }
+    }
+    levels
+}
+
 fn srgb_to_linear(v: f32) -> f32 {
     if v <= 0.04045 {
         v / 12.92
@@ -113,5 +158,33 @@ mod tests {
         // Fully transparent texels keep their plain average colour.
         let clear = [200, 100, 0, 0, 100, 50, 0, 0, 200, 100, 0, 0, 100, 50, 0, 0];
         assert_eq!(&chain(2, 2, &clear, false)[1].2[..], &[150, 75, 0, 0]);
+    }
+
+    #[test]
+    fn cut_out_coverage_survives_down_to_small_levels() {
+        // Scattered opaque texels (about 30%) in a transparent 64x64 image.
+        let (w, h) = (64u32, 64u32);
+        let mut seed = 12345u32;
+        let rgba: Vec<u8> = (0..w * h)
+            .flat_map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let a = if (seed >> 16) % 10 < 3 { 255 } else { 0 };
+                [40, 160, 40, a]
+            })
+            .collect();
+        let passing = |p: &[u8]| {
+            p.chunks_exact(4).filter(|t| t[3] > 127).count() as f32 / (p.len() / 4) as f32
+        };
+        let base = passing(&rgba);
+        // Plain averaging thins the cut-out; the preserving chain keeps it.
+        assert!(passing(&chain(w, h, &rgba, true)[2].2) < base * 0.5);
+        let kept = chain_preserving_coverage(w, h, &rgba, true, 0.5);
+        for (_, _, level) in &kept[1..4] {
+            assert!(
+                (passing(level) - base).abs() < 0.12,
+                "{} vs {base}",
+                passing(level)
+            );
+        }
     }
 }

@@ -208,6 +208,7 @@ impl FoliageRenderer {
             label: Some("original foliage atlas linear clamp"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         ensure!(
@@ -215,7 +216,7 @@ impl FoliageRenderer {
             "foliage images exceed128MiB budget"
         );
         let mut textures = Vec::new();
-        for image in images {
+        for (index, image) in images.iter().enumerate() {
             ensure!(
                 image.width > 0
                     && image.height > 0
@@ -230,26 +231,52 @@ impl FoliageRenderer {
                 height: image.height,
                 depth_or_array_layers: 1,
             };
+            // Mipmapped against shimmer, keeping the alpha-tested coverage of
+            // the strictest definition that uses this image.
+            let cutoff = pack
+                .definitions
+                .iter()
+                .filter(|d| d.texture == index)
+                .map(|d| d.alpha_cutoff)
+                .fold(0.5f32, f32::max);
+            let levels = bri_render::mipmap::chain_preserving_coverage(
+                image.width,
+                image.height,
+                &image.rgba,
+                true,
+                cutoff,
+            );
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("original foliage RGBA"),
                 size,
-                mip_level_count: 1,
+                mip_level_count: levels.len() as u32,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            queue.write_texture(
-                texture.as_image_copy(),
-                &image.rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(image.width * 4),
-                    rows_per_image: Some(image.height),
-                },
-                size,
-            );
+            for (level, (width, height, rgba)) in levels.iter().enumerate() {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: level as u32,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    rgba.as_ref(),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 4),
+                        rows_per_image: Some(*height),
+                    },
+                    wgpu::Extent3d {
+                        width: *width,
+                        height: *height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             let view = texture.create_view(&Default::default());
             textures.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
