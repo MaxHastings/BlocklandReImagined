@@ -153,6 +153,14 @@ impl Building {
         }
     }
 
+    /// Terrain or interiors between two points (`GuiShapeNameHud` sight test).
+    pub fn map_blocks(&self, from: Vec3, to: Vec3) -> bool {
+        let delta = to - from;
+        let distance = delta.length();
+        distance > 0.001
+            && delta.is_finite()
+            && self.map_ray(from, delta / distance, distance).is_some()
+    }
     pub fn set_catalog(&mut self, entries: Vec<(String, u8)>) -> Result<()> {
         let mut catalog = BTreeMap::new();
         for (id, orientation) in entries {

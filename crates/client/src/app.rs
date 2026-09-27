@@ -912,6 +912,7 @@ impl App {
         Ok(())
     }
     fn disconnect(&mut self) {
+        self.ui.core.name_tags.clear();
         self.abilities = Default::default();
         self.brick_hand = None;
         self.foliage.clear();
@@ -2597,6 +2598,64 @@ impl Drop for App {
 }
 /// Eye of the camera in control: the free camera itself, an orbit around the
 /// spied player, the chase camera, or the player's own eye.
+/// `GuiShapeNameHud::onRender`: every other living player's name above their
+/// eye point (`verticalOffset` 0.85), hidden behind terrain and interiors and
+/// faded over the last 90% of the visible distance (`distanceFade` 0.1).
+#[allow(clippy::too_many_arguments)]
+fn name_tags(
+    view: &network::View,
+    presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    building: Option<&crate::building::Building>,
+    view_projection: glam::Mat4,
+    camera: Vec3,
+    visible_distance: f32,
+    size: (f32, f32),
+    scale: f32,
+    controlling_body: bool,
+) -> Vec<bri_ui::api::NameTag> {
+    const VERTICAL_OFFSET: f32 = 0.85;
+    const DISTANCE_FADE: f32 = 0.1;
+    let fade_distance = visible_distance * DISTANCE_FADE;
+    let mut tags = Vec::new();
+    for (owner, name) in &view.names {
+        if (*owner == view.owner && controlling_body)
+            || !view.vitals.get(owner).is_some_and(|v| v.alive)
+        {
+            continue;
+        }
+        let Some(state) = presented.get(owner) else {
+            continue;
+        };
+        let target = state.eye(&PlayerTuning::default());
+        let distance = target.distance(camera);
+        if distance <= 0.0 || distance > visible_distance {
+            continue;
+        }
+        if building.is_some_and(|b| b.map_blocks(camera, target)) {
+            continue;
+        }
+        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
+        if clip.w <= 0.0 {
+            continue;
+        }
+        let ndc = clip.truncate() / clip.w;
+        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
+            continue;
+        }
+        let opacity = if distance < fade_distance {
+            1.0
+        } else {
+            1.0 - (distance - fade_distance) / (visible_distance - fade_distance)
+        };
+        tags.push(bri_ui::api::NameTag {
+            x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
+            y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            text: plain_chat(name),
+            opacity,
+        });
+    }
+    tags
+}
 fn camera_eye(
     controls: &Controls,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
@@ -4263,6 +4322,17 @@ impl PlatformApp for App {
         for terrain in &mut self.gpu_terrain {
             terrain.update(frame.queue, eye, fog_end.max(1.))?;
         }
+        self.ui.core.name_tags = name_tags(
+            view,
+            self.motion.presented(),
+            self.building.as_ref(),
+            glam::Mat4::from_cols_array(&camera.view_projection),
+            eye,
+            fog_end.max(1.),
+            (frame.size.0 as f32, frame.size.1 as f32),
+            self.ui.scale(),
+            self.controls.observer().is_none(),
+        );
         self.foliage.prepare(
             frame,
             &bri_foliage::Camera {

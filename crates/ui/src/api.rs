@@ -733,6 +733,15 @@ pub struct MiniGameMemberRow {
     pub admin: bool,
     pub in_local_game: bool,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NameTag {
+    /// Anchor in logical pixels: the name is centered above it.
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    /// Distance fade, 0..=1.
+    pub opacity: f32,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrustInvitation {
     pub from: u64,

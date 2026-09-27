@@ -108,6 +108,29 @@ fn markup(v: &mut View, r: Rect, label: &str, style: &str) {
 
 /// Rebuilt in a bounded temporary view: no detached controls accumulate as
 /// inventory, paint or chat changes. The authored PlayGui remains persistent.
+/// `PlayGui_ShapeNameHud`: names centered above each anchor in the HUD's
+/// `BlockChatTextProfile` font and `textColor` (1 1 0.909), faded by distance.
+fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
+    let Some(font) = pack
+        .data
+        .styles
+        .get("BlockChatTextProfile")
+        .and_then(|s| s.font.as_deref())
+        .and_then(|f| crate::text::Font::get(pack, f))
+    else {
+        return;
+    };
+    for tag in &core.name_tags {
+        let alpha = (tag.opacity.clamp(0.0, 1.0) * 255.0) as u8;
+        if alpha == 0 {
+            continue;
+        }
+        let x = tag.x - font.width(&tag.text) as f32 / 2.0;
+        let y = tag.y - font.line_height() as f32;
+        font.draw(dl, x.round(), y.round(), &tag.text, [255, 255, 232, alpha], &[]);
+    }
+}
+
 fn hud(core: &Core) -> View {
     let (w, h) = core.logical;
     let m = &core.hud;
@@ -421,6 +444,9 @@ impl Screen for Play {
     }
     fn draw(&self, pack: &Pack, dl: &mut DrawList, core: &Core) {
         self.view.draw(pack, dl);
+        if core.shape_names {
+            name_tags(pack, dl, core);
+        }
         hud(core).draw(pack, dl);
     }
 }

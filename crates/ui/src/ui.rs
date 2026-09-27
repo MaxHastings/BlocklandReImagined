@@ -215,6 +215,8 @@ pub struct Core {
     pub minigames: MiniGameUiState,
     /// Open `TrustInviteGui` invitation.
     pub trust_invite: Option<crate::api::TrustInvitation>,
+    /// Other players' names this frame (`GuiShapeNameHud`).
+    pub name_tags: Vec<crate::api::NameTag>,
     pub server_name: String,
     pub max_players: u32,
     pub center_print: Option<(String, Option<u64>)>,
@@ -920,6 +922,7 @@ impl Ui {
             admin: Default::default(),
             minigames: MiniGameUiState::default(),
             trust_invite: None,
+            name_tags: Vec::new(),
             server_name: String::new(),
             max_players: 0,
             center_print: None,
