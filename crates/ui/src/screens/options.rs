@@ -21,6 +21,12 @@ const SHADOW_QUALITY: &str = "$pref::ShadowQuality";
 /// Not a v20 setting: 4x MSAA, on unless turned off.
 const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
+/// `$pref::Player::defaultFov`, the normal camera FOV in degrees (v20
+/// default 90). The B4v21 patch of the reference v20 install adds its slider.
+pub const DEFAULT_FOV: &str = "$pref::Player::defaultFov";
+/// The patch's `SliderFOV` range; `validateFOV` rounds to whole degrees.
+pub const FOV_RANGE: (f32, f32) = (70.0, 140.0);
+const FOV_SLIDER: &str = "SliderFOV";
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &["$pref::OpenGL::textureTrilinear", ANTI_ALIASING];
 /// Checkbox preferences the native game honours.
@@ -64,6 +70,7 @@ const SUPPORTED_CONTROLS: &[&str] = &[
     "Opt_MaxChatLines",
     "OptRemapList",
     "SliderGraphicsAnisotropy",
+    FOV_SLIDER,
 ];
 const CHAT_SIZE_RADIO: &str = "OPT_ChatSize";
 const VALUE_CLASSES: &[&str] = &[
@@ -116,6 +123,16 @@ fn put_display(p: &mut Prefs, d: DisplaySettings) {
     );
     p.set_bool(FULLSCREEN, d.fullscreen);
     p.set_bool(NO_VSYNC, !d.vsync);
+}
+
+/// The normal camera FOV in whole degrees within the slider's range.
+pub fn default_fov(p: &Prefs) -> f32 {
+    let fov = p.f32_or(DEFAULT_FOV, 90.0);
+    if fov.is_finite() {
+        fov.round().clamp(FOV_RANGE.0, FOV_RANGE.1)
+    } else {
+        90.0
+    }
 }
 
 /// `$Pref::Gui::ChatSize` (0–10, v20 default 4) selects the chat HUD font
@@ -347,6 +364,7 @@ impl Options {
             "SliderGraphicsAnisotropy",
             core.prefs.f32_or(ANISOTROPY, 0.0).clamp(0.0, 1.0),
         );
+        s.slider(FOV_SLIDER, default_fov(&core.prefs));
         s.set_chat_size(chat_size(&core.prefs));
         s.set_shadow_quality(core.prefs.i64_or(SHADOW_QUALITY, 0));
         s.pane("Graphics");
@@ -371,6 +389,24 @@ impl Options {
             if hide {
                 v.set_visible(n, false);
             }
+        }
+        // The patched v20 FOV row (`SliderFOV`), in Advanced Graphics
+        // Options below Anisotropy; close_rows moves it up with the rest.
+        let aniso = v.id("SliderGraphicsAnisotropy");
+        let section = aniso.and_then(|k| v.walk().find(|&n| v.node(n).children.contains(&k)));
+        if let (Some(aniso), Some(section)) = (aniso, section) {
+            let mut label = ctrl("GuiTextCtrl", "GuiTextProfile", Rect::new(235, 141, 25, 18));
+            label.text = Some("FOV:".into());
+            v.add(section, label);
+            let mut slider = v.node(aniso).ctrl.clone();
+            slider.name = Some(FOV_SLIDER.into());
+            slider.position = [265, 141];
+            slider
+                .fields
+                .insert("range".into(), format!("{} {}", FOV_RANGE.0, FOV_RANGE.1));
+            slider.fields.insert("ticks".into(), "40".into());
+            slider.fields.insert("snap".into(), "0".into());
+            v.add(section, slider);
         }
         let sections: Vec<NodeId> = v.walk().filter(|&n| is_section(v, n)).collect();
         for &n in &sections {
@@ -541,6 +577,15 @@ impl Options {
                 }
                 self.draft.set(pref, v.clamp(lo, hi).to_string());
             }
+        }
+        if let Some(n) = self.view.id(FOV_SLIDER) {
+            let v = self.view.num(n);
+            if !v.is_finite() {
+                return Err("Sliders must hold finite numbers.".into());
+            }
+            let fov = v.round().clamp(FOV_RANGE.0, FOV_RANGE.1);
+            self.draft.set(DEFAULT_FOV, fov.to_string());
+            self.view.set_num(n, fov);
         }
         for &(name, pref, _) in VOLUMES {
             if let Some(n) = self.view.id(name) {
@@ -1417,6 +1462,22 @@ mod tests {
         assert!(p.bool_or("$pref::OpenGL::useGLNearest", false));
         assert!(p.bool_or("$pref::OpenGL::textureTrilinear", false));
         assert_eq!(p.f32_or(ANISOTROPY, 0.0), 0.5);
+    }
+    #[test]
+    fn fov_slider_sits_right_of_its_label_and_saves_whole_degrees() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id(FOV_SLIDER).unwrap();
+        assert!(s.view.node(n).state.visible);
+        assert_eq!(s.view.num(n), 90.0, "v20 default");
+        let label = s.view.by_text("GuiTextCtrl", "FOV:").unwrap();
+        assert!(s.view.node(label).state.visible);
+        assert!(labels(&s.view.node(label).ctrl, &s.view.node(n).ctrl));
+        s.view.set_num(n, 101.6);
+        click(&mut s, "done", &mut ui);
+        assert_eq!(ui.core.prefs.get(DEFAULT_FOV), Some("102"));
+        ui.core.prefs.set(DEFAULT_FOV, "500");
+        assert_eq!(default_fov(&ui.core.prefs), FOV_RANGE.1);
     }
     #[test]
     fn display_rejection_does_not_commit_then_success_retains_applied_boundary() {

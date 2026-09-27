@@ -3091,6 +3091,11 @@ impl PlatformApp for App {
         let alive = self.local_alive();
         self.follow_control();
         self.controls.fly(elapsed.as_secs_f32());
+        let prefs = &self.ui.core.prefs;
+        self.controls.set_fov_prefs(
+            bri_ui::screens::options::default_fov(prefs),
+            prefs.f32_or("$Pref::player::CurrentFOV", 10.0),
+        );
         self.controls.advance_zoom(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             let input = if alive {
@@ -4515,7 +4520,7 @@ impl PlatformApp for App {
             eye.to_array(),
             (eye + forward).to_array(),
             aspect,
-            vertical_fov(self.controls.fov(90.0).to_radians(), aspect),
+            vertical_fov(self.controls.fov().to_radians(), aspect),
             0.05,
             FAR_PLANE,
         );

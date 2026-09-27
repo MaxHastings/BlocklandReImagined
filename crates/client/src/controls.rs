@@ -18,7 +18,12 @@ pub struct Controls {
     /// Held free look turns the head, not the body (`mHead.z`).
     free_yaw: f32,
     pub third_person: bool,
+    /// `$pref::Player::defaultFov`; `None` is v20's 90.
+    normal_fov: Option<f32>,
+    /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
     zoom_fov: Option<f32>,
+    /// The zoom FOV shown, easing toward `zoom_fov` so wheel steps glide.
+    zoom_shown: f32,
     /// Eased zoom progress: 0 at the normal FOV, 1 fully zoomed.
     zoom: f32,
     /// The admin camera in control, if any. The body's `yaw`/`pitch` stay
@@ -48,6 +53,8 @@ pub enum ObserverMode {
 /// Zoom eases toward its target at this exponential rate (95% in 0.3 s),
 /// in place of the engine's timed `setFov` transition.
 const ZOOM_RATE: f32 = 10.0;
+/// v20's wheel-zoom limits (`toggleZoomFOV`'s 5 and 85).
+const ZOOM_FOV_RANGE: (f32, f32) = (5.0, 85.0);
 /// Observer cameras stop just short of straight up or down.
 const OBSERVER_PITCH: f32 = FRAC_PI_2 - 0.01;
 fn wrap(a: f32) -> f32 {
@@ -81,12 +88,13 @@ impl Controls {
                 if !yaw.is_finite() || !pitch.is_finite() {
                     return true;
                 }
-                let scale = self.fov(90.0) / 90.0;
+                // `getMouseAdjustAmount`: sensitivity × `$cameraFov` / 90.
+                let scale = self.fov() / 90.0;
                 // OS mouse Y increases downwards; simulation pitch increases up.
                 self.look(yaw * scale, -pitch * scale);
             }
             GameAction::SetZoomFov { fov } if fov.is_finite() => {
-                self.zoom_fov = Some(fov.clamp(5.0, 85.0))
+                self.zoom_fov = Some(fov.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1))
             }
             GameAction::ToggleFirstPerson { .. } => self.third_person = !self.third_person,
             _ => return false,
@@ -271,29 +279,48 @@ impl Controls {
         self.observer
             .map_or_else(|| self.view_angles(), |o| (o.yaw, o.pitch))
     }
-    /// Ease the zoom toward whether Zoom is held; frame-rate independent.
+    /// The saved FOV prefs: the normal FOV, and the zoom FOV to start from
+    /// until the wheel changes it.
+    pub fn set_fov_prefs(&mut self, normal: f32, zoom: f32) {
+        self.normal_fov = normal.is_finite().then(|| normal.clamp(5.0, 140.0));
+        if self.zoom_fov.is_none() && zoom.is_finite() {
+            let zoom = zoom.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1);
+            self.zoom_fov = Some(zoom);
+            self.zoom_shown = zoom;
+        }
+    }
+    /// Ease the zoom toward whether Zoom is held, and the zoom FOV toward
+    /// the wheel's choice; frame-rate independent.
     pub fn advance_zoom(&mut self, seconds: f32) {
         if !seconds.is_finite() {
             return;
         }
-        let target = f32::from(u8::from(self.held(HeldControl::Zoom)));
         let step = 1.0 - (-ZOOM_RATE * seconds.clamp(0.0, 0.25)).exp();
-        self.zoom += (target - self.zoom) * step;
-        if (target - self.zoom).abs() < 1e-3 {
-            self.zoom = target;
+        let ease = |value: &mut f32, target: f32, done: f32| {
+            *value += (target - *value) * step;
+            if (target - *value).abs() < done {
+                *value = target;
+            }
+        };
+        let zooming = f32::from(u8::from(self.held(HeldControl::Zoom)));
+        ease(&mut self.zoom, zooming, 1e-3);
+        let zoom_fov = self.zoom_fov();
+        if self.zoom == 0.0 || self.zoom_shown == 0.0 {
+            self.zoom_shown = zoom_fov;
+        } else {
+            ease(&mut self.zoom_shown, zoom_fov, 1e-2);
         }
     }
-    /// The current FOV, between `normal` and the zoom FOV as zoom eases in.
-    /// Look sensitivity follows it through the transition.
-    pub fn fov(&self, normal: f32) -> f32 {
-        let normal = if normal.is_finite() {
-            normal.clamp(5.0, 140.0)
-        } else {
-            90.0
-        };
-        let zoomed = self.zoom_fov.unwrap_or(45.0);
+    fn zoom_fov(&self) -> f32 {
+        self.zoom_fov.unwrap_or(10.0)
+    }
+    /// The current horizontal FOV in degrees (Torque's `$cameraFov`),
+    /// between the normal FOV and the zoom FOV as zoom eases in. Look
+    /// sensitivity follows it through the transition.
+    pub fn fov(&self) -> f32 {
+        let normal = self.normal_fov.unwrap_or(90.0);
         let t = self.zoom * self.zoom * (3.0 - 2.0 * self.zoom);
-        normal + (zoomed - normal) * t
+        normal + (self.zoom_shown - normal) * t
     }
 }
 #[cfg(test)]
@@ -342,20 +369,49 @@ mod tests {
         held(&mut c, HeldControl::FreeLook, false);
         assert_eq!(c.movement().head_yaw, 0.0);
         assert_eq!(c.view_angles(), (c.yaw, c.pitch));
+        c.set_fov_prefs(90.0, 45.0);
         held(&mut c, HeldControl::Zoom, true);
-        assert_eq!(c.fov(90.0), 90.0, "zoom eases in rather than snapping");
+        assert_eq!(c.fov(), 90.0, "zoom eases in rather than snapping");
         c.advance_zoom(0.05);
-        let partial = c.fov(90.0);
+        let partial = c.fov();
         assert!(partial < 90.0 && partial > 45.0, "{partial}");
         for _ in 0..60 {
             c.advance_zoom(1.0 / 60.0);
         }
-        assert_eq!(c.fov(90.0), 45.0);
+        assert_eq!(c.fov(), 45.0);
         held(&mut c, HeldControl::Zoom, false);
         for _ in 0..4 {
             c.advance_zoom(0.25);
         }
-        assert_eq!(c.fov(90.0), 90.0);
+        assert_eq!(c.fov(), 90.0);
+    }
+    #[test]
+    fn fov_prefs_set_normal_and_zoom_and_wheel_steps_glide() {
+        let mut c = Controls::default();
+        assert_eq!(c.fov(), 90.0, "v20 default FOV");
+        c.set_fov_prefs(110.0, 10.0);
+        assert_eq!(c.fov(), 110.0);
+        held(&mut c, HeldControl::Zoom, true);
+        for _ in 0..120 {
+            c.advance_zoom(1.0 / 60.0);
+        }
+        assert_eq!(c.fov(), 10.0, "v20's saved zoom FOV, not a fixed 45");
+        c.action(&GameAction::SetZoomFov { fov: 15.0 });
+        c.set_fov_prefs(110.0, 10.0);
+        c.advance_zoom(1.0 / 60.0);
+        let gliding = c.fov();
+        assert!(gliding > 10.0 && gliding < 15.0, "{gliding}");
+        for _ in 0..120 {
+            c.advance_zoom(1.0 / 60.0);
+        }
+        assert_eq!(c.fov(), 15.0);
+        // Mouse look slows with the zoomed FOV, as v20's `$cameraFov / 90`.
+        let before = c.yaw;
+        c.action(&GameAction::Look {
+            yaw: 0.9,
+            pitch: 0.0,
+        });
+        assert!((c.yaw - before - 0.15).abs() < 1e-5);
     }
     #[test]
     fn camera_control_leaves_the_body_still_and_unturned() {
