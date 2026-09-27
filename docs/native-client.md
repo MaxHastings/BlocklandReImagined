@@ -57,8 +57,22 @@ lifetimes. Opaque brick batches are coalesced; transparent batches retain
 ordering. Replicated brick state drives native geometry, paint, visibility and
 rotation through background mesh builds, including after joining a populated
 world. The current four-million-triangle replacement budget rejects excessive
-worlds explicitly; chunked updates/culling/streaming remain necessary for large
-builds.
+worlds explicitly. Bricks are meshed in 32-unit chunks (`world_chunks`) against
+one shared material palette; a replica change rebuilds only the chunks it
+touches, and chunks are frustum culled.
+
+Scene textures are mipmapped (lightmaps and weight maps bind their base level
+only) and follow v20's Trilinear, Sharp Filter and Anisotropy prefs. The world
+pass uses 4x MSAA unless Anti-Aliasing is off. Cascaded sun shadows
+(`bri_render::shadow`, Shadow Quality; Minimum is off) are cast by players,
+vehicles and held/dropped items, like v20's projected shape shadows, and by
+bricks only with Brick Shadows. Bricks that do not cast, interiors and terrain
+render into a separate occluder depth map: a shadow is dropped wherever an
+occluder lies between the caster and the receiving surface, so a player on a
+brick tower shades the tower top and not the floor beneath it
+(`crates/render/tests/shadow_occluders.rs`). Baked surfaces darken by a
+bounded share of the mission's ambient/sun ratio; vertex-lit surfaces lose the
+sun term.
 
 The renderer now draws original sky faces and moving cloud layers with distance
 fog for all 14 reference maps. Sky orientation/depth/translation and cloud

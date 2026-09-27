@@ -4729,12 +4729,16 @@ impl PlatformApp for App {
             use bri_render::scene::ShadowCasters;
             // Players, vehicles and items (dropped and held) cast, like v20's
             // projected shape shadows; bricks only with the BrickShadows pref.
-            // The map's own shadows are baked (see bri_render::shadow).
-            let mut bodies: Vec<&GpuScene> = if self.graphics.brick_shadows {
-                self.gpu_chunks.values().collect()
+            // The map's own shadows are baked. Whatever does not cast still
+            // stops shadows passing through it (see bri_render::shadow).
+            let chunks: Vec<&GpuScene> = self.gpu_chunks.values().collect();
+            let (mut bodies, mut blockers) = if self.graphics.brick_shadows {
+                (chunks, Vec::new())
             } else {
-                Vec::new()
+                (Vec::new(), chunks)
             };
+            blockers.extend(self.gpu_scene.as_ref());
+            let terrain: Vec<_> = self.gpu_terrain.iter().flat_map(|t| t.draws()).collect();
             bodies.extend(
                 self.avatars
                     .iter()
@@ -4754,6 +4758,10 @@ impl PlatformApp for App {
                 ShadowCasters {
                     scenes: &bodies,
                     instances: &models,
+                },
+                ShadowCasters {
+                    scenes: &blockers,
+                    instances: &terrain,
                 },
             );
         }

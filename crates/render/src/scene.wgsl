@@ -47,11 +47,12 @@ fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
 // layer per cascade. forward_count.w==0 disables them.
 struct Shadows {
     matrices:array<mat4x4<f32>,4>, splits:vec4<f32>, texels:vec4<f32>,
-    forward_count:vec4<f32>, params:vec4<f32>,
+    forward_count:vec4<f32>, params:vec4<f32>, depth_scale:vec4<f32>,
 };
 @group(0) @binding(6) var shadow_map:texture_depth_2d_array;
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
 @group(0) @binding(8) var<uniform> shadows:Shadows;
+@group(0) @binding(9) var shadow_point:sampler;
 struct ShadowCoord { uv:vec2<f32>, depth:f32, cascade:i32, strength:f32 };
 fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     var out:ShadowCoord;
@@ -72,18 +73,43 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     out.strength=clamp((last-view_depth)/(last*0.1),0.0,1.0);
     return out;
 }
-// 3x3 percentage-closer filter; 1 is fully lit.
+// Lit (1) or shadowed (0) for each of a gathered 2x2 texel block, ordered
+// as textureGather returns them. A texel is shadowed only when no occluder
+// (non-casting brick, interior, terrain) lies between its caster and this
+// surface, so a shadow lands only on the first surface it reaches.
+fn shadow_block(uv:vec2<f32>,c:ShadowCoord,occluder_layer:i32,gap:f32)->vec4<f32> {
+    let casters=textureGather(shadow_map,shadow_point,uv,c.cascade);
+    let occluders=textureGather(shadow_map,shadow_point,uv,occluder_layer);
+    let between=occluders>casters+vec4<f32>(gap) & occluders<vec4<f32>(c.depth-gap);
+    return select(vec4<f32>(1.0),vec4<f32>(0.0),casters<vec4<f32>(c.depth) & !between);
+}
+// Smooth 3x3 percentage-closer filter from a 4x4 texel footprint, with
+// bilinear edge weights; 1 is fully lit.
 fn shadow_lit(c:ShadowCoord)->f32 {
     if c.cascade<0 {return 1.0;}
-    let layer=c.cascade;
-    let texel=1.0/shadows.params.y;
-    var lit=0.0;
-    for(var y=-1;y<=1;y+=1) {
-        for(var x=-1;x<=1;x+=1) {
-            lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,c.uv+vec2<f32>(f32(x),f32(y))*texel,layer,c.depth);
-        }
-    }
-    return mix(1.0,lit/9.0,c.strength);
+    let occluder_layer=c.cascade+i32(shadows.forward_count.w);
+    let size=shadows.params.y;
+    // Occluders must be a tenth of a unit clear of caster and receiver.
+    let gap=0.1*shadows.depth_scale[c.cascade];
+    let f=c.uv*size-vec2<f32>(0.5);
+    let base=floor(f);
+    let t=f-base;
+    // Blocks of texels (base-1, base) and (base+1, base+2) on each axis;
+    // gather order is (0,1), (1,1), (1,0), (0,0).
+    let a=shadow_block(base/size,c,occluder_layer,gap);
+    let b=shadow_block((base+vec2<f32>(2.0,0.0))/size,c,occluder_layer,gap);
+    let d=shadow_block((base+vec2<f32>(0.0,2.0))/size,c,occluder_layer,gap);
+    let e=shadow_block((base+vec2<f32>(2.0))/size,c,occluder_layer,gap);
+    let rows=array<vec4<f32>,4>(
+        vec4<f32>(a.w,a.z,b.w,b.z),
+        vec4<f32>(a.x,a.y,b.x,b.y),
+        vec4<f32>(d.w,d.z,e.w,e.z),
+        vec4<f32>(d.x,d.y,e.x,e.y),
+    );
+    let wx=vec4<f32>(1.0-t.x,1.0,1.0,t.x);
+    let wy=vec4<f32>(1.0-t.y,1.0,1.0,t.y);
+    let lit=dot(wy,vec4<f32>(dot(rows[0],wx),dot(rows[1],wx),dot(rows[2],wx),dot(rows[3],wx)))/9.0;
+    return mix(1.0,lit,c.strength);
 }
 // Sun light reaching a vertex-lit surface past bricks, players and models.
 fn sun_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {

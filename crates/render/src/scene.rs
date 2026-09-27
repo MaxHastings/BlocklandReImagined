@@ -1082,6 +1082,10 @@ fn camera_group(
             binding: 8,
             resource: shadows.receiver.as_entire_binding(),
         },
+        wgpu::BindGroupEntry {
+            binding: 9,
+            resource: wgpu::BindingResource::Sampler(&shadows.point),
+        },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
@@ -1193,6 +1197,12 @@ impl SceneRenderer {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
             ],
@@ -1666,12 +1676,20 @@ impl SceneRenderer {
     /// interiors or terrain, see `crate::shadow`) for the camera last passed
     /// to `update_camera`. Only opaque and alpha-masked, non-background
     /// materials cast. Without shadows this records nothing.
-    pub fn render_shadows(&self, encoder: &mut wgpu::CommandEncoder, casters: ShadowCasters<'_>) {
+    ///
+    /// Occluders (bricks that do not cast, interiors, terrain) render into a
+    /// separate map that only stops shadows from passing through them.
+    pub fn render_shadows(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        casters: ShadowCasters<'_>,
+        occluders: ShadowCasters<'_>,
+    ) {
         let cascades = &self.shadows.cascades;
-        {
+        for (group, casters) in [casters, occluders].iter().enumerate() {
             for (index, cascade) in cascades.iter().enumerate() {
                 let planes = frustum_planes(cascade.view_projection);
-                let layer = index;
+                let layer = group * cascades.len() + index;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("sun shadow cascade"),
                     color_attachments: &[],

@@ -1902,6 +1902,18 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `cargo test -p bri-sim --test vehicles -- --ignored` and
   `cargo test -p bri-client --lib`.
 
+- 2026-09-27 Shadows stop at the first surface (Max: his shadow showed both
+  on the brick building he stood on and on the Bedroom floor beneath it).
+  Non-casting bricks, interiors and terrain render into an occluder layer
+  per cascade; the receiver filter gathers caster and occluder depths and
+  drops a caster's shadow where an occluder sits more than 0.1 units
+  between caster and receiver (smooth 3x3 PCF from a 4x4 gather). With
+  Brick Shadows on, bricks cast and only map geometry occludes. Evidence:
+  `bri-render --test shadow_occluders` (tower top shaded, floor below
+  unchanged, and shaded without occluders), Slopes first-person shadow
+  still lands on terrain. Brick Shadows checkbox added under Anti-Aliasing
+  in Options > Graphics (the authored Shadow Quality box clips a sixth row).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

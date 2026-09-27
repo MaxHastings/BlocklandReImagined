@@ -8,6 +8,12 @@
 //! darken nearly every indoor build (checked with Cottage and Town renders).
 //! Lightmapped surfaces (which cannot separate their baked sun from other
 //! light) darken by a bounded fixed share, as v20's projected shadows did.
+//!
+//! Surfaces that do not cast (bricks unless Brick Shadows is on, interiors,
+//! terrain) still stop a shadow: they render into a second, occluder depth
+//! map, and a caster's shadow is dropped wherever an occluder lies between
+//! the caster and the receiving surface. A player on a brick tower shades
+//! the tower top, not the floor beneath it.
 use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3, Vec4};
 
@@ -51,7 +57,7 @@ impl ShadowSettings {
         ensure!(
             (1..=MAX_CASCADES as u32).contains(&self.cascades)
                 && (256..=device.limits().max_texture_dimension_2d).contains(&self.resolution)
-                && self.cascades <= device.limits().max_texture_array_layers
+                && self.cascades * 2 <= device.limits().max_texture_array_layers
                 && self.distance.is_finite()
                 && (10.0..=2000.0).contains(&self.distance),
             "Invalid shadow settings {self:?}"
@@ -70,6 +76,8 @@ pub(crate) struct ShadowUniform {
     texels: [f32; 4],
     forward_count: [f32; 4],
     params: [f32; 4],
+    /// Shadow-map depth per world unit along the sun, per cascade.
+    depth_scale: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -77,6 +85,7 @@ pub(crate) struct Cascade {
     pub view_projection: Mat4,
     pub far: f32,
     pub texel: f32,
+    pub depth_scale: f32,
 }
 
 /// Split the view from its near plane to `settings.distance` and fit each
@@ -160,6 +169,7 @@ pub(crate) fn cascades(
             view_projection: projection * rotation,
             far: split,
             texel,
+            depth_scale: 1.0 / (2.0 * radius + CASTER_REACH),
         });
         start = split;
     }
@@ -173,6 +183,8 @@ pub(crate) struct ShadowMaps {
     pub array_view: wgpu::TextureView,
     pub layer_views: Vec<wgpu::TextureView>,
     pub comparison: wgpu::Sampler,
+    /// Nearest sampling for gathering caster and occluder depths.
+    pub point: wgpu::Sampler,
     pub receiver: wgpu::Buffer,
     caster: wgpu::Buffer,
     pub caster_group: wgpu::BindGroup,
@@ -187,7 +199,8 @@ impl ShadowMaps {
         material_layout: &wgpu::BindGroupLayout,
         vertex_layouts: &[Option<wgpu::VertexBufferLayout<'_>>],
     ) -> Self {
-        let (size, layers) = settings.map_or((1, 1), |s| (s.resolution, s.cascades));
+        // Per cascade: caster depth, then (after all cascades) occluder depth.
+        let (size, layers) = settings.map_or((1, 2), |s| (s.resolution, s.cascades * 2));
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sun shadow maps"),
             size: wgpu::Extent3d {
@@ -221,6 +234,10 @@ impl ShadowMaps {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let point = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sun shadow depth gather"),
             ..Default::default()
         });
         use wgpu::util::DeviceExt;
@@ -348,6 +365,7 @@ impl ShadowMaps {
             array_view,
             layer_views,
             comparison,
+            point,
             receiver,
             caster,
             caster_group,
@@ -367,6 +385,7 @@ impl ShadowMaps {
                 uniform.matrices[i] = cascade.view_projection.to_cols_array();
                 uniform.splits[i] = cascade.far;
                 uniform.texels[i] = cascade.texel;
+                uniform.depth_scale[i] = cascade.depth_scale;
                 queue.write_buffer(
                     &self.caster,
                     i as u64 * CASTER_STRIDE,
@@ -396,6 +415,7 @@ impl ShadowUniform {
             texels: [0.0; 4],
             forward_count: Vec4::ZERO.to_array(),
             params: [0.0, 1.0, 0.0, 0.0],
+            depth_scale: [0.0; 4],
         }
     }
 }

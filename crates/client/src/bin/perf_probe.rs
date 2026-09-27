@@ -769,6 +769,10 @@ fn quality_variants(
                         scenes: &scenes[1..],
                         instances: &[],
                     },
+                    bri_render::scene::ShadowCasters {
+                        scenes: &scenes[..1],
+                        instances: &[],
+                    },
                 );
                 renderer.render(
                     &mut encoder,
@@ -824,6 +828,10 @@ fn quality_variants(
                         &mut encoder,
                         bri_render::scene::ShadowCasters {
                             scenes: &scenes[1..],
+                            instances: &[],
+                        },
+                        bri_render::scene::ShadowCasters {
+                            scenes: &scenes[..1],
                             instances: &[],
                         },
                     );
