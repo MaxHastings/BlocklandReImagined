@@ -160,9 +160,10 @@ const KEYBOARD_TURN: [(&str, f32, f32); 4] = [
     ("panup", 0.0, -1.0),
     ("pandown", 0.0, 1.0),
 ];
-/// Radians per second at `KeyboardTurnSpeed` 1.0 (the v20 default 0.5 turns
-/// at 2 rad/s).
-const KEYBOARD_TURN_RATE: f32 = 4.0;
+/// Radians per second at `KeyboardTurnSpeed` 1.0. v20's getNextMove adds
+/// the `$mvYaw*Speed`/`$mvPitch*Speed` values to every 32 ms move
+/// (blocklandv20.exe 0x59571e), so the default 0.5 turns at 15.6 rad/s.
+const KEYBOARD_TURN_RATE: f32 = 1.0 / 0.032;
 
 /// What kind of answer a pending request is waiting for.
 #[derive(Debug, Clone, PartialEq)]
