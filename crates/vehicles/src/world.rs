@@ -3,7 +3,10 @@ use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::{
-    control::{DynamicRayCastVehicleController, WheelTuning},
+    control::{
+        CharacterAutostep, CharacterLength, DynamicRayCastVehicleController,
+        KinematicCharacterController, WheelTuning,
+    },
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
@@ -40,9 +43,23 @@ pub struct Controls {
     pub jump: bool,
     pub jet: bool,
     pub fire: bool,
+    /// Attached turret: aim relative to the hull. Player-type mounts: the
+    /// world heading the rider looks along (the mount turns to face it).
     pub aim_yaw: f32,
     pub aim_pitch: f32,
+    /// This tick's mouse turn (yaw right, pitch up), radians: Torque's
+    /// `move->yaw`/`move->pitch`, which mouse-steered vehicles accumulate.
+    #[serde(default)]
+    pub look_delta: [f32; 2],
 }
+/// Velocity change on contact that wrecks skis (`hardImpactSpeed` is 10;
+/// ordinary bumps only raise ski impact puffs).
+const SKI_WRECK_SPEED: f32 = 20.;
+/// Torque's player step height (`maxStepHeight`) for player-type mounts.
+const ACTOR_STEP_HEIGHT: f32 = 1.0;
+/// Steering Auto-Return (on by default in v20): released mouse steering
+/// halves every quarter second.
+const STEERING_RETURN_PER_TICK: f32 = 0.977_15;
 impl Controls {
     fn validate(self) -> Result<Self> {
         ensure!(
@@ -54,11 +71,17 @@ impl Controls {
                 self.vertical,
                 self.strafe,
                 self.aim_yaw,
-                self.aim_pitch
+                self.aim_pitch,
+                self.look_delta[0],
+                self.look_delta[1]
             ]
             .iter()
             .all(|x| x.is_finite()),
             "nonfinite controls"
+        );
+        ensure!(
+            self.look_delta.iter().all(|x| x.abs() <= std::f32::consts::PI),
+            "look turn outside bounds"
         );
         ensure!(
             [
@@ -240,6 +263,16 @@ struct Instance {
     energy_phase: u8,
     restored_suspension: Option<Vec<f32>>,
     restored_contacts: Option<Vec<bool>>,
+    /// Torque `mSteering`: accumulated mouse steering (yaw, pitch), radians.
+    mouse_steering: [f32; 2],
+    /// Player-type mounts move kinematically with their own velocity.
+    motion: Vec3,
+    grounded: bool,
+}
+impl Instance {
+    fn velocity(&self, d: &Definition, b: &RigidBody) -> Vec3 {
+        if d.is_actor() { self.motion } else { b.linvel() }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PendingRespawn {
@@ -283,9 +316,7 @@ fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize
         return transform(&(b.position() * local_pose(t, v.spawn.scale)));
     }
     let base = &d.seats[index];
-    if (index == 2 && d.attachment_mount.is_some())
-        || matches!(d.family, Family::Cannon | Family::Turret)
-    {
+    if index == 2 && d.attachment_mount.is_some() {
         let pivot = d
             .attachment_mount
             .as_ref()
@@ -332,6 +363,10 @@ impl VehiclesWorld {
     }
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         self.catalog.get(id)
+    }
+    /// The definition a live vehicle was spawned from.
+    pub fn definition_of(&self, id: VehicleId) -> Option<&Definition> {
+        self.catalog.get(&self.instances.get(&id)?.spawn.definition)
     }
     pub fn definitions(&self) -> impl Iterator<Item = &Definition> {
         self.catalog.values()
@@ -414,6 +449,9 @@ impl VehiclesWorld {
                 energy_phase: 0,
                 restored_suspension: None,
                 restored_contacts: None,
+                mouse_steering: [0.; 2],
+                motion: Vec3::ZERO,
+                grounded: false,
             },
         );
         Ok(())
@@ -499,6 +537,7 @@ impl VehiclesWorld {
             d.family != Family::Tumble || forced,
             "tumbling occupant cannot manually dismount"
         );
+        let body_velocity = v.velocity(d, b);
         if matches!(d.family, Family::Skis | Family::Tumble) {
             v.seats[seat] = None;
             v.controls[seat] = Controls::default();
@@ -507,7 +546,7 @@ impl VehiclesWorld {
                 vehicle: id,
                 occupant: passenger,
                 transform: mounted,
-                velocity: b.linvel().to_array(),
+                velocity: body_velocity.to_array(),
                 forced,
             });
             return Ok(());
@@ -544,7 +583,7 @@ impl VehiclesWorld {
         });
         ensure!(exit.is_some() || forced, "all dismount positions blocked");
         let (p, impulse) = exit.unwrap_or((start, Vec3::ZERO));
-        let velocity = b.linvel() + b.angvel().cross(p - b.translation()) + impulse;
+        let velocity = body_velocity + b.angvel().cross(p - b.translation()) + impulse;
         v.seats[seat] = None;
         v.controls[seat] = Controls::default();
         v.charge = 0;
@@ -600,8 +639,15 @@ impl VehiclesWorld {
         let point = Vec3::from_array(point);
         let impulse = Vec3::from_array(impulse);
         ensure!(point.is_finite() && impulse.is_finite(), "invalid impulse");
-        let v = self.instances.get(&id).context("unknown vehicle")?;
-        world.bodies[v.body].apply_impulse_at_point(impulse, point, true);
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        let d = &self.catalog[&v.spawn.definition];
+        if d.is_actor() {
+            // Player::applyImpulse: velocity changes by impulse / mass.
+            v.motion += impulse / d.mass;
+            v.grounded &= impulse.y <= 0.;
+        } else {
+            world.bodies[v.body].apply_impulse_at_point(impulse, point, true);
+        }
         Ok(())
     }
     /// Host-owned transition preserves world velocity when starting skis or a tumble.
@@ -624,8 +670,13 @@ impl VehiclesWorld {
     ) -> Result<()> {
         let velocity = Vec3::from_array(velocity);
         ensure!(velocity.is_finite(), "invalid velocity");
-        let v = self.instances.get(&id).context("unknown vehicle")?;
-        world.bodies[v.body].set_linvel(velocity, true);
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        if self.catalog[&v.spawn.definition].is_actor() {
+            v.motion = velocity;
+            v.grounded &= velocity.y <= 0.;
+        } else {
+            world.bodies[v.body].set_linvel(velocity, true);
+        }
         Ok(())
     }
     /// Script onWreck equivalent; root starts deathVehicle and clears weapon ski state.
@@ -811,7 +862,7 @@ impl VehiclesWorld {
             Vec3::from_array(target_velocity).is_finite(),
             "invalid target velocity"
         );
-        let delta = world.bodies[v.body].linvel();
+        let delta = v.velocity(d, &world.bodies[v.body]);
         ensure!(delta.is_finite(), "invalid contact velocity");
         let speed = delta.length();
         if speed >= d.runover_speed {
@@ -846,6 +897,7 @@ impl VehiclesWorld {
             let d = &self.catalog[&v.spawn.definition];
             let control = v.controls.first().copied().unwrap_or_default();
             let alive = v.dead_at.is_none();
+            let driven = alive && v.seats.first().is_some_and(Option::is_some);
             let c = if alive { control } else { Controls::default() };
             let wants_jet = alive && (c.jet || c.vertical > 0.);
             if !wants_jet {
@@ -873,12 +925,47 @@ impl VehiclesWorld {
             let b = &world.bodies[v.body];
             let p = b.translation();
             let rot = *b.rotation();
-            let velocity = b.linvel();
+            let velocity = v.velocity(d, b);
             v.previous_velocity = velocity;
             let forward = rot * (-Vec3::Z);
             let right = rot * Vec3::X;
             let up = rot * Vec3::Y;
             let speed = velocity.dot(forward);
+            // Vehicle::updateMove: mouse steering accumulates, clamped to the
+            // steering angle. FlyingVehicle damps it below maxAutoSpeed.
+            if d.seat_role(0) == SeatRole::MouseDriver {
+                let limit = d.max_steering.max(0.01);
+                let mut steering = v.mouse_steering;
+                if driven {
+                    for (axis, turn) in steering.iter_mut().zip(c.look_delta) {
+                        *axis = (*axis + turn).clamp(-limit, limit);
+                    }
+                } else {
+                    steering = [0.; 2];
+                }
+                if let Some(f) = &d.flight
+                    && velocity.length() < f.max_auto_speed
+                {
+                    let damping = f.auto_input_damping.powf(25. / 96.);
+                    steering.iter_mut().for_each(|x| *x *= damping);
+                }
+                for (axis, turn) in steering.iter_mut().zip(c.look_delta) {
+                    if turn == 0. {
+                        *axis *= STEERING_RETURN_PER_TICK;
+                    }
+                }
+                v.mouse_steering = steering;
+            }
+            let (steer, pitch, roll) = if d.seat_role(0) == SeatRole::MouseDriver {
+                let limit = d.max_steering.max(0.01);
+                (
+                    v.mouse_steering[0] / limit,
+                    v.mouse_steering[1] / limit,
+                    c.strafe,
+                )
+            } else {
+                (c.steer, c.pitch, c.roll)
+            };
             let water = water_height(p.to_array());
             let aabb = world.colliders[v.collider].compute_aabb();
             let submerged = water.filter(|h| h.is_finite()).map_or(0., |h| {
@@ -898,6 +985,14 @@ impl VehiclesWorld {
                     active: true,
                 });
                 v.water = in_water;
+            }
+            if d.is_actor() {
+                actor_step(*id, v, d, c, driven, submerged, world, &mut self.intents);
+                v.jump_held = c.jump;
+                if alive {
+                    weapon_step(self.tick, *id, v, d, world, &mut self.intents);
+                }
+                continue;
             }
             let ground = world
                 .query_pipeline_with_filter(
@@ -947,10 +1042,16 @@ impl VehiclesWorld {
             if alive {
                 match d.family {
                     Family::Wheeled | Family::FlyingWheeled => {
-                        let target = c.steer * d.max_steering;
-                        let rate = if c.steer == 0. { 0.9 } else { 3.125 };
-                        v.steering +=
-                            (target - v.steering).clamp(-rate * FIXED_DT, rate * FIXED_DT);
+                        let target = steer * d.max_steering;
+                        if d.strafe_steering {
+                            // steeringStrafeSteeringRate: 0.1 radian per 32 ms
+                            // tick, returning to center when released.
+                            let rate = if steer == 0. { 0.9 } else { 3.125 };
+                            v.steering +=
+                                (target - v.steering).clamp(-rate * FIXED_DT, rate * FIXED_DT);
+                        } else {
+                            v.steering = target;
+                        }
                         if d.family == Family::FlyingWheeled {
                             let force = if c.throttle >= 0. {
                                 d.thrust
@@ -964,9 +1065,9 @@ impl VehiclesWorld {
                                 true,
                             );
                             b.add_torque(
-                                -up * (c.steer * d.yaw_force)
-                                    + right * (c.pitch * d.pitch_force)
-                                    + forward * (c.roll * d.roll_force),
+                                -up * (steer * d.yaw_force)
+                                    - right * (pitch * d.pitch_force)
+                                    + forward * (roll * d.roll_force),
                                 true,
                             );
                         }
@@ -1004,73 +1105,21 @@ impl VehiclesWorld {
                                 up * (d.energy.jet_force * f.vertical_thrust_multiple)
                             };
                         }
-                        let damping = if speed < f.max_auto_speed {
-                            f.auto_input_damping.powf(25. / 96.)
-                        } else {
-                            1.
-                        };
-                        let steering = c.steer * damping;
-                        let pitch = c.pitch * damping;
+                        // FlyingVehicle::updateForces: squared steering; a
+                        // positive pitch (mouse up with the default vehicle
+                        // mouse invert) dips the nose.
                         let torque = -right * (pitch * pitch.abs() * f.steering_force)
-                            - up * (steering * steering.abs() * f.steering_force)
+                            - up * (steer * steer.abs() * f.steering_force)
                             + forward
-                                * (steering * steering.abs() * f.steering_roll_force
+                                * (steer * steer.abs() * f.steering_roll_force
                                     + f.auto_angular_force * right.dot(Vec3::Y)
                                     - d.roll_force * right.dot(velocity));
                         b.add_force(force, true);
                         b.add_torque(torque, true);
                     }
-                    Family::Horse | Family::Rowboat => {
-                        let horse = d.family == Family::Horse;
-                        let moving = if horse { ground || in_water } else { in_water };
-                        let yaw = -c.steer * 2.5 * FIXED_DT;
-                        let rotation = Quat::from_rotation_y(yaw) * rot;
-                        b.set_rotation(rotation, true);
-                        if moving {
-                            let f = rotation * (-Vec3::Z);
-                            let limit = if in_water {
-                                if c.throttle >= 0. { 8.4 } else { 7.8 }
-                            } else if c.throttle >= 0. {
-                                d.max_speed
-                            } else {
-                                d.reverse_speed
-                            };
-                            let desired =
-                                f * (c.throttle * limit) + right * (c.strafe * d.max_side_speed);
-                            let mut delta = desired - velocity;
-                            delta.y = 0.;
-                            let accel = (d.engine_force / d.mass) * FIXED_DT;
-                            b.apply_impulse(delta.clamp_length_max(accel) * d.mass, true);
-                        }
-                        if horse && ground && c.jump && !v.jump_held {
-                            b.apply_impulse(Vec3::Y * d.jump_speed * d.mass, true);
-                            self.intents.push(Intent::Audio {
-                                vehicle: *id,
-                                id: "HorseJumpSound".into(),
-                            });
-                        }
-                        let animation = if !ground && !in_water {
-                            "jump"
-                        } else if c.throttle > 0.01 {
-                            "run"
-                        } else if c.throttle < -0.01 {
-                            "back"
-                        } else if c.strafe.abs() > 0.01 {
-                            "side"
-                        } else {
-                            "root"
-                        };
-                        if v.animation != animation {
-                            v.animation = animation.into();
-                            self.intents.push(Intent::Animation {
-                                vehicle: *id,
-                                id: animation.into(),
-                            });
-                        }
-                    }
                     Family::Skis => {
-                        let touching = ground;
-                        if touching || in_water {
+                        v.steering = steer * d.max_steering;
+                        if ground || in_water {
                             b.add_force(
                                 forward * (d.thrust * c.throttle)
                                     - right * velocity.dot(right) * 50.,
@@ -1086,15 +1135,16 @@ impl VehiclesWorld {
                             }
                         }
                         b.add_torque(
-                            -up * (c.steer * d.yaw_force)
-                                + right * (c.pitch * d.pitch_force)
-                                + forward * (c.roll * d.roll_force),
+                            -up * (steer * d.yaw_force)
+                                - right * (pitch * d.pitch_force)
+                                + forward * (roll * d.roll_force),
                             true,
                         );
                     }
-                    Family::Tumble => {}
-                    Family::Cannon | Family::Turret => {}
-                    Family::Ball => {}
+                    Family::Tumble | Family::Ball => {}
+                    Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret => {
+                        unreachable!("player-type mounts step above")
+                    }
                 }
             }
             v.jump_held = c.jump;
@@ -1153,6 +1203,7 @@ impl VehiclesWorld {
         self.tick = self.tick.checked_add(1).context("vehicle tick overflow")?;
         let mut impacts = vec![];
         let mut removed = vec![];
+        let mut wrecks = vec![];
         for (id, v) in &self.instances {
             let d = &self.catalog[&v.spawn.definition];
             if matches!(d.family, Family::Skis | Family::Tumble)
@@ -1194,7 +1245,7 @@ impl VehiclesWorld {
                 }
             } else {
                 let b = &world.bodies[v.body];
-                let delta = (v.previous_velocity - b.linvel()).length();
+                let delta = (v.previous_velocity - v.velocity(d, b)).length();
                 let contacting = b.colliders().iter().any(|c| {
                     world
                         .contact_pairs_with(*c)
@@ -1212,6 +1263,16 @@ impl VehiclesWorld {
                     let mut fire = explosion(v, d, projectile, world, 0.);
                     fire.velocity = [0.; 3];
                     self.intents.push(Intent::Fire(fire));
+                }
+                // skiVehicle::onWreck: a hard landing or ending up on its
+                // side throws the skier into a tumble.
+                if d.family == Family::Skis
+                    && v.seats[0].is_some()
+                    && contacting
+                    && (delta >= SKI_WRECK_SPEED || (*b.rotation() * Vec3::Y).y < 0.25)
+                {
+                    wrecks.push(*id);
+                    continue;
                 }
                 if contacting && delta > d.impact_threshold {
                     impacts.push((
@@ -1233,6 +1294,9 @@ impl VehiclesWorld {
         }
         for id in removed {
             self.remove(world, id)?;
+        }
+        for id in wrecks {
+            self.wreck_skis(world, id)?;
         }
         let mut ready = vec![];
         self.respawns.retain(|p| {
@@ -1276,7 +1340,7 @@ impl VehiclesWorld {
                         owner: v.spawn.owner,
                         definition: d.id.clone(),
                         transform: transform(b.position()),
-                        velocity: b.linvel().to_array(),
+                        velocity: v.velocity(d, b).to_array(),
                         angular_velocity: b.angvel().to_array(),
                         damage: v.damage,
                         destroyed: v.dead_at.is_some(),
@@ -1307,7 +1371,10 @@ impl VehiclesWorld {
                         charge: v.charge,
                         energy: v.energy,
                         jetting: v.jetting,
-                        turret_aim: [weapon_control.aim_yaw, weapon_control.aim_pitch],
+                        turret_aim: [
+                            if d.is_actor() { 0. } else { weapon_control.aim_yaw },
+                            weapon_control.aim_pitch.clamp(d.look_pitch[0], d.look_pitch[1]),
+                        ],
                         turret_damage: v.turret_damage,
                         turret_transform: d
                             .attachment_mount
@@ -1338,6 +1405,150 @@ fn explosion(
         velocity: Vec3::Y.to_array(),
     }
 }
+/// Player-type mounts (PlayerData: Horse, Rowboat, Pirate Cannon, Tank
+/// Turret) move like players, per `Player::updateMove`: the rider's look turns
+/// the mount, the move keys run it at its authored speeds and `runForce`, jump
+/// uses `jumpForce`, and it steps up ledges and climbs its run surface angle.
+#[allow(clippy::too_many_arguments)]
+fn actor_step(
+    id: VehicleId,
+    v: &mut Instance,
+    d: &Definition,
+    c: Controls,
+    driven: bool,
+    submerged: f32,
+    world: &mut PhysicsWorld,
+    intents: &mut Vec<Intent>,
+) {
+    let dt = FIXED_DT;
+    let scale = v.spawn.scale;
+    let b = &world.bodies[v.body];
+    let position = b.translation();
+    let mut rotation = *b.rotation();
+    if driven {
+        // mRot.z follows the rider's accumulated mouse turn.
+        rotation = Quat::from_rotation_y(-c.aim_yaw);
+    }
+    let forward = rotation * -Vec3::Z;
+    let right = rotation * Vec3::X;
+    let swimming = if d.family == Family::Rowboat {
+        submerged > 0.05
+    } else {
+        submerged >= 0.9
+    };
+    let [fs, bs, ss] = if swimming {
+        d.underwater_speeds
+    } else {
+        [d.max_speed, d.reverse_speed, d.max_side_speed]
+    };
+    let (throttle, strafe) = if driven { (c.throttle, c.strafe) } else { (0., 0.) };
+    let move_vec = forward * throttle + right * strafe;
+    let move_speed = if throttle > 0. { fs * throttle } else { bs * -throttle }.max(ss * strafe.abs());
+    let desired = move_vec.normalize_or_zero() * move_speed * scale;
+    let mut velocity = v.motion;
+    let horizontal = Vec3::new(velocity.x, 0., velocity.z);
+    let grounded = v.grounded;
+    let horizontal = if grounded || swimming {
+        horizontal + (desired - horizontal).clamp_length_max(d.engine_force / d.mass * dt)
+    } else {
+        horizontal
+    };
+    velocity.x = horizontal.x;
+    velocity.z = horizontal.z;
+    let jumped = driven && grounded && c.jump && !v.jump_held && d.jump_speed > 0.;
+    if jumped {
+        velocity.y = d.jump_speed;
+        intents.push(Intent::Audio {
+            vehicle: id,
+            id: "HorseJumpSound".into(),
+        });
+    }
+    if !grounded || jumped {
+        velocity.y -= VEHICLE_GRAVITY * dt;
+    } else {
+        velocity.y = velocity.y.min(0.);
+    }
+    if submerged > 0. {
+        // Buoyancy against water of density 1, with the body's density.
+        velocity.y += submerged / d.density.max(0.05) * VEHICLE_GRAVITY * dt;
+        velocity *= (1. - submerged * 1.5 * dt).max(0.);
+    }
+    velocity *= (1. - d.drag * dt).max(0.);
+    velocity.y = velocity.y.max(-80.);
+    let collider = &world.colliders[v.collider];
+    let shape = collider.shared_shape().clone();
+    let local = *collider.position_wrt_parent().unwrap_or(&Pose::IDENTITY);
+    let pose = Pose::from_parts(position, rotation) * local;
+    let walkable = d.run_surface_angle.clamp(1., 89.).to_radians();
+    let rising = velocity.y > 0.;
+    let controller = KinematicCharacterController {
+        offset: CharacterLength::Absolute(0.01),
+        autostep: grounded.then_some(CharacterAutostep {
+            max_height: CharacterLength::Absolute(ACTOR_STEP_HEIGHT * scale),
+            min_width: CharacterLength::Absolute(0.1),
+            include_dynamic_bodies: false,
+        }),
+        max_slope_climb_angle: walkable,
+        min_slope_slide_angle: walkable,
+        snap_to_ground: (!rising).then_some(CharacterLength::Absolute(0.2)),
+        ..Default::default()
+    };
+    let query = world.query_pipeline_with_filter(
+        QueryFilter::default()
+            .exclude_rigid_body(v.body)
+            .exclude_sensors(),
+    );
+    let mut normals = Vec::new();
+    let motion = controller.move_shape(
+        dt,
+        &query,
+        shape.as_ref(),
+        &pose,
+        velocity * dt,
+        |hit| normals.push(hit.hit.normal1),
+    );
+    let intended = velocity * dt;
+    let moved = motion.translation;
+    let climbed = moved.y > intended.y.max(0.) + 0.01;
+    for normal in normals {
+        let into = velocity.dot(normal);
+        if into >= 0. {
+            continue;
+        }
+        let across = -Vec3::new(normal.x, 0., normal.z).normalize_or_zero();
+        let expected = intended.dot(across);
+        if normal.y < walkable.cos() && climbed && expected > 0. && moved.dot(across) >= expected * 0.5 {
+            continue;
+        }
+        velocity -= normal * into;
+    }
+    v.grounded = motion.grounded && !rising;
+    if v.grounded {
+        velocity.y = 0.;
+    }
+    v.motion = velocity;
+    world.bodies[v.body].set_next_kinematic_position(Pose::from_parts(position + moved, rotation));
+    if d.family == Family::Horse && v.dead_at.is_none() {
+        let animation = if !v.grounded && !swimming {
+            "jump"
+        } else if throttle > 0.01 {
+            "run"
+        } else if throttle < -0.01 {
+            "back"
+        } else if strafe.abs() > 0.01 {
+            "side"
+        } else {
+            "root"
+        };
+        if v.animation != animation {
+            v.animation = animation.into();
+            intents.push(Intent::Animation {
+                vehicle: id,
+                id: animation.into(),
+            });
+        }
+    }
+}
 fn weapon_step(
     tick: u64,
     id: VehicleId,
@@ -1358,7 +1569,11 @@ fn weapon_step(
         v.charge_started = None;
         return;
     };
-    let c = v.controls[index];
+    let mut c = v.controls[index];
+    if d.is_actor() {
+        c.aim_yaw = 0.;
+    }
+    c.aim_pitch = c.aim_pitch.clamp(d.look_pitch[0], d.look_pitch[1]);
     let ready = v
         .last_shot
         .is_none_or(|last| tick - last >= weapon.cooldown_ticks);
@@ -1471,15 +1686,32 @@ fn prepare_spawn(
             SharedShape::convex_hull(&points).context("degenerate vehicle hull")?,
         ));
     }
+    let mut offset = Pose::IDENTITY;
     let shape = if d.family == Family::Ball {
         let min = Vec3::from_array(d.bounds_min);
         let max = Vec3::from_array(d.bounds_max);
         SharedShape::ball((max - min).max_element() * 0.5 * s.scale)
+    } else if d.is_actor() {
+        // A player's box, as the character controller sweeps it.
+        let (min, max) = d
+            .collision_hulls
+            .iter()
+            .flatten()
+            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
+            });
+        offset = Pose::from_translation((min + max) * 0.5 * s.scale);
+        let half = (max - min) * 0.5 * s.scale;
+        SharedShape::cuboid(half.x, half.y, half.z)
     } else {
         SharedShape::compound(parts)
     };
-    let mut builder = RigidBodyBuilder::dynamic()
-        .pose(pose(&s.transform))
+    let mut builder = if d.is_actor() {
+        RigidBodyBuilder::kinematic_position_based()
+    } else {
+        RigidBodyBuilder::dynamic()
+    }
+    .pose(pose(&s.transform))
         .gravity_scale(if world_gravity > 0. {
             VEHICLE_GRAVITY / world_gravity
         } else {
@@ -1492,11 +1724,8 @@ fn prepare_spawn(
         })
         .angular_damping(d.angular_drag)
         .ccd_enabled(true);
-    if matches!(
-        d.family,
-        Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret
-    ) {
-        builder = builder.lock_rotations();
+    if d.is_actor() {
+        builder = builder.can_sleep(false);
     }
     let prepared_turret = if let Some(mount) = &d.attachment_mount {
         let mut parts = vec![];
@@ -1523,6 +1752,7 @@ fn prepare_spawn(
     Ok((
         builder,
         ColliderBuilder::new(shape)
+            .position(offset)
             .mass_properties(mass_properties(d, s.scale))
             .friction(d.friction)
             .restitution(d.restitution),
@@ -1585,7 +1815,7 @@ mod scale_tests {
     fn native_wheel_geometry_scales_with_collision_and_mass_stays_authored() {
         let pack = Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-009/vehicles.json"
+            "/../../content/vehicles-pack-010/vehicles.json"
         ))
         .unwrap();
         let mut vehicles = VehiclesWorld::new(pack).unwrap();

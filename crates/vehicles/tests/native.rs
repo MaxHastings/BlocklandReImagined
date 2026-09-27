@@ -4,7 +4,7 @@ use rapier3d::prelude::*;
 fn pack() -> Pack {
     Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-009/vehicles.json"
+        "/../../content/vehicles-pack-010/vehicles.json"
     ))
     .unwrap()
 }
@@ -62,7 +62,7 @@ fn native_catalog_assets_and_authored_values() {
     let p = pack();
     p.verify_assets(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-009"
+        "/../../content/vehicles-pack-010"
     ))
     .unwrap();
     assert_eq!(p.definitions.len(), 11);
@@ -912,6 +912,8 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
             Controls {
                 throttle: 1.,
                 steer: 1.,
+                // Mouse-steered vehicles turn by accumulating mouse motion.
+                look_delta: if d.strafe_steering { [0.; 2] } else { [0.02, 0.] },
                 ..Default::default()
             },
         )

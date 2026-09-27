@@ -61,6 +61,8 @@ pub struct VehicleSave {
     pub jump_held: bool,
     pub fire_held: bool,
     pub mounted_once: bool,
+    pub mouse_steering: [f32; 2],
+    pub grounded: bool,
 }
 impl Checkpoint {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
@@ -87,10 +89,11 @@ impl VehiclesWorld {
         let mut vehicles = vec![];
         for v in self.instances.values() {
             let b = world.bodies.get(v.body).context("shared body missing")?;
+            let d = &self.catalog[&v.spawn.definition];
             vehicles.push(VehicleSave {
                 spawn: v.spawn.clone(),
                 transform: transform(b.position()),
-                velocity: b.linvel().to_array(),
+                velocity: v.velocity(d, b).to_array(),
                 angular_velocity: b.angvel().to_array(),
                 sleeping: b.is_sleeping(),
                 seats: v.seats.clone(),
@@ -137,10 +140,12 @@ impl VehiclesWorld {
                 jump_held: v.jump_held,
                 fire_held: v.fire_held,
                 mounted_once: v.mounted_once,
+                mouse_steering: v.mouse_steering,
+                grounded: v.grounded,
             });
         }
         Ok(Checkpoint {
-            schema_version: 1,
+            schema_version: 2,
             content_fingerprint: self.catalog_fingerprint.clone(),
             tick: self.tick,
             vehicles,
@@ -278,6 +283,9 @@ impl VehiclesWorld {
                     energy: saved.energy,
                     jetting: saved.jetting,
                     energy_phase: saved.energy_phase,
+                    mouse_steering: saved.mouse_steering,
+                    motion: Vec3::from_array(saved.velocity),
+                    grounded: saved.grounded,
                 },
             );
         }
@@ -295,7 +303,7 @@ impl VehiclesWorld {
         c: &Checkpoint,
         allowed: &mut impl FnMut(Occupant, &Spawn, usize) -> bool,
     ) -> Result<()> {
-        ensure!(c.schema_version == 1, "unsupported checkpoint schema");
+        ensure!(c.schema_version == 2, "unsupported checkpoint schema");
         ensure!(
             c.content_fingerprint == self.catalog_fingerprint,
             "checkpoint content fingerprint mismatch"
@@ -408,6 +416,9 @@ impl VehiclesWorld {
             ensure!(
                 v.steering.is_finite()
                     && v.steering.abs() <= d.max_steering + 0.001
+                    && v.mouse_steering
+                        .iter()
+                        .all(|x| x.is_finite() && x.abs() <= d.max_steering.max(0.01) + 0.001)
                     && v.water_coverage.is_finite()
                     && (0. ..=1.).contains(&v.water_coverage),
                 "invalid steering/water state"

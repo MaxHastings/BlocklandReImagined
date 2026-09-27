@@ -328,6 +328,10 @@ fn main() -> Result<()> {
         let (shape_min, shape_max) =
             dts_bounds(&files.get(&vp.to_lowercase()).context("source shape")?.1)?;
         let inertia_box = match vector(b, "massBox").map(Vec3::abs) {
+            // FlyingVehicle keeps Vehicle's unit-sphere inertia (0.4 mass on
+            // every axis); only WheeledVehicle reads massBox. A cube of side
+            // sqrt(2.4) has that inertia.
+            _ if family == Family::Flying => Vec3::splat(2.4_f32.sqrt()),
             Some(size) if size.cmpgt(Vec3::ZERO).all() => size,
             _ => native(shape_max - shape_min).abs(),
         };
@@ -531,6 +535,22 @@ fn main() -> Result<()> {
         if !wheels.is_empty() {
             adaptations.push("Torque tire/suspension coefficients mapped to Rapier ray suspension; exact Torque lateral relaxation is retained in evidence, not equivalent in Rapier. Inertia uses the massBox or shape-bounds box".into());
         }
+        // Blockland's WheeledVehicle steers with the strafe keys unless the
+        // datablock opts out (vehicles with pitch control do).
+        // The Tank's gunner aims its TankTurretPlayer, whose look range bounds the barrel.
+        let look = if name == "TankVehicle" {
+            blocks.get("tankturretplayer").context("tank turret player")?
+        } else {
+            b
+        };
+        let strafe_steering = !wheels.is_empty()
+            && !matches!(
+                field(b, "steeringUseStrafeSteering").to_lowercase().as_str(),
+                "false" | "0"
+            );
+        if family == Family::Flying {
+            adaptations.push("FlyingVehicle inertia is the engine's unit sphere (0.4 mass), not massBox".into());
+        }
         definitions.push(Definition {
             id: format!("v20.vehicle.{}", name.to_lowercase()),
             datablock: name.into(),
@@ -620,6 +640,21 @@ fn main() -> Result<()> {
                 number(b, "minImpactSpeed", 250.),
             ),
             impact_damage: number(b, "collDamageMultiplier", 0.),
+            strafe_steering,
+            look_pitch: [
+                -number(look, "maxLookAngle", std::f32::consts::FRAC_PI_2),
+                -number(look, "minLookAngle", -std::f32::consts::FRAC_PI_2),
+            ],
+            underwater_speeds: if actor {
+                // PlayerStandardArmor's values unless the datablock overrides.
+                [
+                    number(b, "maxUnderwaterForwardSpeed", 8.4),
+                    number(b, "maxUnderwaterBackwardSpeed", 7.8),
+                    number(b, "maxUnderwaterSideSpeed", 7.8),
+                ]
+            } else {
+                [0.; 3]
+            },
             runover_speed: number(b, "minRunOverSpeed", f32::MAX),
             runover_damage: number(b, "runOverDamageScale", 0.),
             runover_push: number(b, "runOverPushScale", 0.),

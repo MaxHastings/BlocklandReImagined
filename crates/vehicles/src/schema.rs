@@ -3,8 +3,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
-/// 3 adds tire model orientation, mass center and inertia box.
-pub const SCHEMA_VERSION: u32 = 3;
+/// 4 adds strafe steering, gunner look limits and underwater actor speeds.
+pub const SCHEMA_VERSION: u32 = 4;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -170,6 +170,14 @@ pub struct Definition {
     pub run_surface_angle: f32,
     pub impact_threshold: f32,
     pub impact_damage: f32,
+    /// `steeringUseStrafeSteering`: the strafe keys steer. Otherwise the
+    /// mouse steers and pitches the vehicle (Torque `mSteering`).
+    pub strafe_steering: bool,
+    /// Actor look pitch range, native up-positive radians, from PlayerData
+    /// `maxLookAngle`/`minLookAngle`. Bounds a gunner's barrel.
+    pub look_pitch: [f32; 2],
+    /// PlayerData `maxUnderwaterForward/Backward/SideSpeed`.
+    pub underwater_speeds: [f32; 3],
     pub runover_speed: f32,
     pub runover_damage: f32,
     pub runover_push: f32,
@@ -179,6 +187,47 @@ pub struct Definition {
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
+}
+/// How a seat's occupant controls things. Host input mapping, rider facing
+/// and the client camera all follow it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatRole {
+    /// Turns freely in the seat and rides along.
+    Passenger,
+    /// Drives with the strafe keys steering; the mouse looks around.
+    StrafeDriver,
+    /// Drives with the mouse steering and pitching the vehicle.
+    MouseDriver,
+    /// Controls a player-type mount (horse, rowboat, cannon, turret): the
+    /// mount faces where the rider looks.
+    Actor,
+    /// Aims an attached turret; the view turns with the hull.
+    Gunner,
+}
+impl Definition {
+    /// Families built from PlayerData: they move like players, not rigid bodies.
+    pub fn is_actor(&self) -> bool {
+        matches!(
+            self.family,
+            Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret
+        )
+    }
+    pub fn seat_role(&self, seat: usize) -> SeatRole {
+        let Some(s) = self.seats.get(seat) else {
+            return SeatRole::Passenger;
+        };
+        if self.is_actor() && (s.controls || s.weapon) {
+            SeatRole::Actor
+        } else if s.weapon {
+            SeatRole::Gunner
+        } else if !s.controls {
+            SeatRole::Passenger
+        } else if self.strafe_steering {
+            SeatRole::StrafeDriver
+        } else {
+            SeatRole::MouseDriver
+        }
+    }
 }
 impl Pack {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
@@ -304,6 +353,12 @@ impl Pack {
                 d.mass_center.iter().all(|v| v.is_finite())
                     && d.inertia_box.iter().all(|v| v.is_finite() && *v > 0.),
                 "invalid mass properties"
+            );
+            ensure!(
+                d.look_pitch.iter().all(|v| v.is_finite() && v.abs() <= std::f32::consts::FRAC_PI_2 + 0.001)
+                    && d.look_pitch[0] <= d.look_pitch[1]
+                    && d.underwater_speeds.iter().all(|v| v.is_finite() && *v >= 0.),
+                "invalid actor look/swim parameters"
             );
             for wheel in &d.wheels {
                 ensure!(
