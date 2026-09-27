@@ -84,7 +84,7 @@ impl Default for ContentConfig {
             foliage: "foliage-pack-001".into(),
             weapons: "weapons-pack-008".into(),
             item_presentation: "item-presentation-pack-008".into(),
-            vehicles: "vehicles-pack-010".into(),
+            vehicles: "vehicles-pack-011".into(),
             events: "events-pack-002".into(),
             tutorial: "tutorial-pack-001".into(),
         }

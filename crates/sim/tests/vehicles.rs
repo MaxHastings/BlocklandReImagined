@@ -40,7 +40,7 @@ fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
         root.join("content/weapons-pack-008/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-010/vehicles.json"),
+        root.join("content/vehicles-pack-011/vehicles.json"),
     )?)?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     let owner = s.join("Driver".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
@@ -157,7 +157,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
         root.join("content/weapons-pack-008/weapons.json"),
     )?)?)?;
     s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-010/vehicles.json"),
+        root.join("content/vehicles-pack-011/vehicles.json"),
     )?)?;
     s.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),

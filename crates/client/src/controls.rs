@@ -121,6 +121,12 @@ impl Controls {
         }
         self.vehicle_view = view;
     }
+    /// `setLookLimits` while seated: keep the look pitch in `[low, high]`.
+    pub fn limit_pitch(&mut self, low: f32, high: f32) {
+        if self.vehicle_view.is_none() && low <= high {
+            self.pitch = self.pitch.clamp(low, high);
+        }
+    }
     /// Turn the view with the vehicle it rides.
     pub fn carry_yaw(&mut self, turn: f32) {
         if turn.is_finite() {

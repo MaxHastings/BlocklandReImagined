@@ -3,8 +3,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
-/// 4 adds strafe steering, gunner look limits and underwater actor speeds.
-pub const SCHEMA_VERSION: u32 = 4;
+/// 5 adds the chase camera and seated look limits.
+pub const SCHEMA_VERSION: u32 = 5;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -116,6 +116,20 @@ pub struct FlightSettings {
     pub steering_roll_force: f32,
     pub vertical_thrust_multiple: f32,
 }
+/// Third-person camera while riding (`Vehicle::getCameraTransform`; for
+/// PlayerData mounts the player camera fields).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VehicleCamera {
+    /// `cameraMaxDist`: distance behind the pivot.
+    pub max_dist: f32,
+    /// `cameraOffset` (`cameraVerticalOffset` on PlayerData): pivot height.
+    pub offset: f32,
+    /// `cameraTilt`: the view looks down this many radians.
+    pub tilt: f32,
+    /// `cameraLag`/`cameraDecay`: the camera trails acceleration and eases back.
+    pub lag: f32,
+    pub decay: f32,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Definition {
     pub id: String,
@@ -178,6 +192,11 @@ pub struct Definition {
     pub look_pitch: [f32; 2],
     /// PlayerData `maxUnderwaterForward/Backward/SideSpeed`.
     pub underwater_speeds: [f32; 3],
+    pub camera: VehicleCamera,
+    /// `setLookLimits(lookUpLimit, lookDownLimit)` while seated, as
+    /// [down, up] fractions of the look range from straight down (0) to
+    /// straight up (1); [0, 1] is unlimited.
+    pub look_limits: [f32; 2],
     pub runover_speed: f32,
     pub runover_damage: f32,
     pub runover_push: f32,
@@ -363,6 +382,19 @@ impl Pack {
                         .iter()
                         .all(|v| v.is_finite() && *v >= 0.),
                 "invalid actor look/swim parameters"
+            );
+            let c = &d.camera;
+            ensure!(
+                [c.max_dist, c.offset, c.tilt, c.lag, c.decay]
+                    .iter()
+                    .all(|v| v.is_finite())
+                    && (0. ..=100.).contains(&c.max_dist)
+                    && c.tilt.abs() <= std::f32::consts::FRAC_PI_2
+                    && c.lag >= 0.
+                    && c.decay >= 0.
+                    && d.look_limits.iter().all(|v| (0. ..=1.).contains(v))
+                    && d.look_limits[0] <= d.look_limits[1],
+                "invalid camera or look limits"
             );
             for wheel in &d.wheels {
                 ensure!(

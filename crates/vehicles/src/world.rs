@@ -1868,7 +1868,7 @@ mod scale_tests {
     fn native_wheel_geometry_scales_with_collision_and_mass_stays_authored() {
         let pack = Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-010/vehicles.json"
+            "/../../content/vehicles-pack-011/vehicles.json"
         ))
         .unwrap();
         let mut vehicles = VehiclesWorld::new(pack).unwrap();

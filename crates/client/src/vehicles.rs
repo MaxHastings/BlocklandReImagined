@@ -501,7 +501,7 @@ mod tests {
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]
     fn gunner_barrels_pose_their_look_clip_by_pitch() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-010");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-011");
         let assets = VehicleAssets::load(&root)?;
         for id in ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"] {
             let d = assets.definition(id).unwrap().clone();

@@ -661,6 +661,22 @@ fn main() -> Result<()> {
             } else {
                 [0.; 3]
             },
+            camera: VehicleCamera {
+                max_dist: number(b, "cameraMaxDist", 8.),
+                offset: number(
+                    b,
+                    if actor {
+                        "cameraVerticalOffset"
+                    } else {
+                        "cameraOffset"
+                    },
+                    0.,
+                ),
+                tilt: number(b, "cameraTilt", 0.),
+                lag: number(b, "cameraLag", 0.),
+                decay: number(b, "cameraDecay", 0.),
+            },
+            look_limits: [number(b, "lookDownLimit", 0.), number(b, "lookUpLimit", 1.)],
             runover_speed: number(b, "minRunOverSpeed", f32::MAX),
             runover_damage: number(b, "runOverDamageScale", 0.),
             runover_push: number(b, "runOverPushScale", 0.),

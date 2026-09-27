@@ -183,6 +183,8 @@ pub struct App {
     vehicles: crate::vehicles::ClientVehicles,
     /// Heading of the vehicle the local player rides, last frame.
     mount_heading: Option<f32>,
+    /// `mCameraOffset`: how far the chase camera trails the vehicle.
+    chase_lag: Vec3,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     net_graph: Option<(std::time::Instant, u32)>,
     /// LAN listings from the last discovery query: address -> certificate.
@@ -715,6 +717,7 @@ impl App {
             vehicle_assets,
             vehicles: Default::default(),
             mount_heading: None,
+            chase_lag: Vec3::ZERO,
             music_world: None,
             net_graph: None,
             lan_hosts: BTreeMap::new(),
@@ -841,20 +844,23 @@ impl App {
             .and_then(|v| v.vitals.get(&v.owner))
             .is_none_or(|v| v.alive)
     }
-    /// Authored `cameraMaxDist` of the vehicle the local player rides.
-    fn vehicle_camera(
+    /// The chase camera while riding (`Vehicle::getCameraTransform`):
+    /// distance, pivot above the vehicle and downward view tilt.
+    fn chase_camera(
         assets: &crate::vehicles::VehicleAssets,
+        vehicles: &crate::vehicles::ClientVehicles,
+        lag: Vec3,
         view: &network::View,
-    ) -> Option<f32> {
+    ) -> Option<(f32, Vec3, f32)> {
         let (vehicle, _) = view.vitals.get(&view.owner)?.mounted?;
         let info = view.vehicles.get(&vehicle)?;
-        assets
-            .definition(&info.definition)?
-            .authored
-            .get("cameramaxdist")
-            .and_then(|v| v.trim().parse::<f32>().ok())
-            .filter(|v| v.is_finite() && (1.0..=40.0).contains(v))
-            .or(Some(8.0))
+        let camera = &assets.definition(&info.definition)?.camera;
+        let frame = vehicles.frame(vehicle)?;
+        Some((
+            camera.max_dist.clamp(1.0, 40.0),
+            frame.position + Vec3::Y * camera.offset + lag,
+            camera.tilt,
+        ))
     }
     fn update_net_graph(&mut self) {
         let Some((since, frames)) = self.net_graph.as_mut() else {
@@ -2658,7 +2664,21 @@ impl PlatformApp for App {
                 let riding = mounted.and_then(|(vehicle, seat)| {
                     let info = view.vehicles.get(&vehicle)?;
                     let d = self.vehicle_assets.definition(&info.definition)?;
-                    let forward = self.vehicles.frame(vehicle)?.rotation * Vec3::NEG_Z;
+                    let frame = self.vehicles.frame(vehicle)?;
+                    // The Tank's gunner seat resets the limits (`setLookLimits(1, 0)`).
+                    let role = d.seat_role(usize::from(seat));
+                    if !(role == SeatRole::Gunner && d.attachment_mount.is_some()) {
+                        let [down, up] = d.look_limits;
+                        let bottom = -std::f32::consts::FRAC_PI_2;
+                        self.controls.limit_pitch(
+                            bottom + down * std::f32::consts::PI,
+                            bottom + up * std::f32::consts::PI,
+                        );
+                    }
+                    let dt = elapsed.as_secs_f32().min(0.1);
+                    self.chase_lag -=
+                        (self.chase_lag * d.camera.decay + frame.velocity * d.camera.lag) * dt;
+                    let forward = frame.rotation * Vec3::NEG_Z;
                     Some((
                         d.seat_role(usize::from(seat)),
                         forward.x.atan2(-forward.z),
@@ -2670,9 +2690,14 @@ impl PlatformApp for App {
                         self.controls.set_vehicle_view(Some((heading, pitch)));
                         self.mount_heading = Some(heading);
                     }
-                    Some((SeatRole::Actor, ..)) | None => {
+                    Some((SeatRole::Actor, ..)) => {
                         self.controls.set_vehicle_view(None);
                         self.mount_heading = None;
+                    }
+                    None => {
+                        self.controls.set_vehicle_view(None);
+                        self.mount_heading = None;
+                        self.chase_lag = Vec3::ZERO;
                     }
                     Some((_, heading, _)) => {
                         self.controls.set_vehicle_view(None);
@@ -2899,14 +2924,18 @@ impl PlatformApp for App {
                 .motion
                 .local_eye()
                 .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
+            let chase = third_person
+            .then(|| {
+                Self::chase_camera(&self.vehicle_assets, &self.vehicles, self.chase_lag, view)
+            })
+            .flatten();
             let eye = camera_eye(
                 &self.controls,
                 presented,
                 building,
-                eye,
+                chase.map_or(eye, |(_, pivot, _)| pivot),
                 forward,
-                third_person
-                    .then(|| Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.)),
+                third_person.then(|| chase.map_or(8.0, |(distance, ..)| distance)),
             )?;
             listener = bri_audio::Listener {
                 position: eye.to_array(),
@@ -3778,17 +3807,32 @@ impl PlatformApp for App {
             .motion
             .local_eye()
             .unwrap_or_else(|| local.eye(&PlayerTuning::default()));
-        let camera_distance = Self::vehicle_camera(&self.vehicle_assets, view).unwrap_or(8.0);
+        let chase = third_person
+            .then(|| {
+                Self::chase_camera(&self.vehicle_assets, &self.vehicles, self.chase_lag, view)
+            })
+            .flatten();
         let eye = camera_eye(
             &self.controls,
             self.motion.presented(),
             self.building
                 .as_ref()
                 .context("Camera collision mirror missing")?,
-            eye,
+            chase.map_or(eye, |(_, pivot, _)| pivot),
             forward,
-            third_person.then_some(camera_distance),
+            third_person.then(|| chase.map_or(8.0, |(distance, ..)| distance)),
         )?;
+        // `cameraTilt` turns the chase view down without moving the camera.
+        let (pitch, forward) = match chase {
+            Some((_, _, tilt)) if tilt != 0.0 && self.controls.observer().is_none() => {
+                let pitch = (pitch - tilt).clamp(-1.56, 1.56);
+                (
+                    pitch,
+                    Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos()),
+                )
+            }
+            _ => (pitch, forward),
+        };
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
         let forward = if shake == Vec3::ZERO {
