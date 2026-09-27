@@ -1,5 +1,21 @@
 # Blockland ReImagined
 
+## Setup
+From a fresh clone, one command checks the toolchain (printing the exact
+install command for anything missing), recovers the v20 scripts, generates
+every content pack, builds the client and runs `bri-client --check`:
+
+```sh
+python tools/bootstrap.py --v20 "/path/to/Blockland v20"
+```
+
+The v20 folder holds `base/`, `Add-Ons/` and `saves/` and is only read. Rerun
+the same command (the path is remembered) after pulling: it rebuilds only packs
+that are missing or whose importer inputs changed. If `--check` names missing
+packs, this is the fix. A `content/` folder copied from elsewhere is fine: its
+packs are kept and only the missing ones are built. Details and flags are in
+`docs/content-regeneration.md`.
+
 ## Product contract
 Read `docs/alpha-contract.md` and `docs/progress.md` before substantial work.
 Maxwell's latest priority is the first core-building playtest; read

@@ -614,7 +614,8 @@ mod tests {
         }
     }
     fn assets() -> Result<WeaponDebrisAssets> {
-        WeaponDebrisAssets::load(&root().join("content/weapon-debris-pack-001"))
+        let pack = crate::content::ContentConfig::default().weapon_debris;
+        WeaponDebrisAssets::load(&root().join("content").join(pack))
     }
     fn malformed_pack(root: &Path, shell_patch: serde_json::Value, model_file: &str) {
         std::fs::create_dir_all(root).unwrap();

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
+    content::REGENERATE_HINT,
     platform::{self, PlatformConfig},
 };
 use std::path::PathBuf;
@@ -54,7 +55,7 @@ fn main() -> Result<()> {
         None => default_state_directory()?,
     };
     if args[0] == "--check" {
-        let app = App::load(&content, &state, (1280, 720))?;
+        let app = App::load(&content, &state, (1280, 720)).context(REGENERATE_HINT)?;
         println!(
             "Startup validation passed: {} maps, {} brick definitions. No window or audio device opened.",
             app.content.maps.len(),
@@ -64,7 +65,8 @@ fn main() -> Result<()> {
     }
     // Executing --run explicitly opts into the normal game window and audio device.
     // Library/headless callers use App::load, which always selects silent output.
-    let app = App::load_with_audio(&content, &state, (1280, 720), bri_audio::OutputKind::Device)?;
+    let app = App::load_with_audio(&content, &state, (1280, 720), bri_audio::OutputKind::Device)
+        .context(REGENERATE_HINT)?;
     for warning in app.audio_warnings() {
         bri_console::warn(warning);
     }

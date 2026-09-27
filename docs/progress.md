@@ -2326,3 +2326,29 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   lit player, so everyone sees each light and corona; the old hard-coded
   point light (radius 12, colour 1) is gone. Open: v20's flare ray is also
   blocked by players and vehicles; ours tests map and bricks only.
+- 2026-09-27 One-command setup from a fresh clone. A Mac setup took a long
+  detective hunt: the shipped `content/` matched an older commit, and nothing
+  said which packs HEAD needed or how to build them. `tools/bootstrap.py
+  --v20 <folder>` now checks the toolchain (printing the exact install command
+  per OS), then runs `regenerate_content.py`, builds the client and runs
+  `--check`. Regeneration stamps each pack with a hash of its inputs (importer
+  sources and local path deps, upstream stamps, decompiler pins, v20 listing)
+  and rebuilds missing, interrupted or stale packs plus their dependents;
+  unstamped packs (copied from a package) are kept. It gained `--content`,
+  `--plan`, `--rebuild` and `--keep-stale`; moves an old `client-content.json`
+  override aside; builds the research importers with `--locked` (both
+  lockfiles had drifted); always builds one cargo package set (a narrower set
+  re-unified features and recompiled the client for 6 minutes); skips
+  non-stock add-on geometry failures; and builds dso-sharp off Windows with
+  `dotnet build -p:PublishAot=false -p:RollForward=Major` at the pinned 2.1.0
+  commit. `build_presentation.py` read `content/ui-pack-003` and
+  `avatar-pack-001` by hard-coded name; it now takes `--ui`/`--avatar`.
+  `bri-client --check` names every missing pack and the bootstrap command.
+  Fixed stale tests: 17 -> 21 weapons-pack items, and the weapon-debris tests
+  load the configured pack instead of pack-001.
+  Evidence: a fresh Windows clone ran bootstrap to a passing `--check` in 22
+  min (17 of them the first release build); the same eight packs as before came
+  out byte-identical to the shipped ones; a rerun is an 8 s no-op; editing
+  `bri-weapons-import` plans only weapons, debris, runtime effects, item
+  presentation, worlds and tutorial. Not run: macOS and Linux (WSL could not
+  start its VM, and Maxwell deferred those platforms).
