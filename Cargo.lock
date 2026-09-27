@@ -593,6 +593,8 @@ dependencies = [
  "bri-events",
  "bri-minigames",
  "bri-motor",
+ "bri-package",
+ "bri-package-runtime",
  "bri-physics",
  "bri-vehicles",
  "bri-weapons",

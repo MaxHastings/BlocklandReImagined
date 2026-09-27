@@ -362,6 +362,18 @@ impl Player {
         feet: Vec3,
         tuning: PlayerTuning,
     ) -> Result<Self> {
+        Self::spawn_tagged(physics, owner, (1_u128 << 64) | u128::from(owner), feet, tuning)
+    }
+    /// A character body for something other than a player (package
+    /// entities): the same motor and shape, with the caller's collider tag so
+    /// queries can tell it from players.
+    pub fn spawn_tagged(
+        physics: &mut PhysicsWorld,
+        owner: OwnerId,
+        tag: u128,
+        feet: Vec3,
+        tuning: PlayerTuning,
+    ) -> Result<Self> {
         tuning.validate()?;
         ensure!(
             owner > 0 && feet.is_finite() && feet.abs().max_element() <= 1_000_000.0,
@@ -381,7 +393,7 @@ impl Player {
             RigidBodyBuilder::kinematic_position_based()
                 .pose(pose)
                 .can_sleep(false),
-            ColliderBuilder::new(shape).user_data((1_u128 << 64) | u128::from(owner)),
+            ColliderBuilder::new(shape).user_data(tag),
         );
         physics.detect_collisions(&(), &());
         requeue_new_body(physics, body);
