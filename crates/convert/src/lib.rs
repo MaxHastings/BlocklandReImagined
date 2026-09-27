@@ -15,6 +15,7 @@ pub mod mission;
 pub mod scene_lighting;
 pub mod shape;
 pub mod terrain;
+pub mod tscript;
 pub mod tutorial;
 pub mod water;
 
