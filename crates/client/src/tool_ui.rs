@@ -657,8 +657,7 @@ pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
                 class: o.class_name.clone(),
                 name: o.name.clone(),
                 params: o.params.iter().map(param).collect(),
-                supported: !o.class_name.eq_ignore_ascii_case("Projectile")
-                    && !UNSUPPORTED_OUTPUTS.iter().any(|(class, name)| {
+                supported: !UNSUPPORTED_OUTPUTS.iter().any(|(class, name)| {
                         class.eq_ignore_ascii_case(&o.class_name)
                             && name.eq_ignore_ascii_case(&o.name)
                     }),

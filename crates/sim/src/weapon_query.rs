@@ -1,6 +1,6 @@
 //! Weapon queries against the same native collision world used by players.
 use crate::simulation::Simulation;
-use bri_weapons::{ActorId, Filter, Hit, Nearby, Query, TargetId};
+use bri_weapons::{ActorId, ContactResponse, Filter, Hit, Nearby, ProjectileContact, Query, TargetId};
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::BTreeMap;
@@ -10,6 +10,8 @@ pub struct WeaponQuery<'a> {
     /// Host-owned gameplay policy. This is never supplied by a packet.
     pub affect: &'a dyn Fn(ActorId, TargetId) -> bool,
     pub catch: &'a dyn Fn(ActorId, ActorId) -> bool,
+    /// Zero-delay `onProjectileHit -> Projectile` event rows by brick.
+    pub responses: &'a BTreeMap<u64, ContactResponse>,
     pub truncated_targets: usize,
 }
 
@@ -28,6 +30,16 @@ fn target(tag: u128) -> Option<TargetId> {
 }
 
 impl Query for WeaponQuery<'_> {
+    fn on_contact(&mut self, contact: &ProjectileContact) -> ContactResponse {
+        match contact.target {
+            TargetId::Brick(brick) => self
+                .responses
+                .get(&brick)
+                .copied()
+                .unwrap_or(ContactResponse::Continue),
+            _ => ContactResponse::Continue,
+        }
+    }
     fn sweep(&mut self, start: Vec3, end: Vec3, filter: Filter) -> Option<Hit> {
         let delta = end - start;
         let distance = delta.length();

@@ -222,6 +222,7 @@ impl Session {
             simulation: &self.simulation,
             affect: &affect,
             catch: &catch,
+            responses: &self.events.projectile_responses,
             truncated_targets: 0,
         };
         let events = self.weapons.step(&mut query);

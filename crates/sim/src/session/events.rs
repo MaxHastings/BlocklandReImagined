@@ -39,6 +39,9 @@ pub(super) struct Events {
     installed: BTreeSet<BrickId>,
     scanned: bool,
     origin: u64,
+    /// Projectile outputs of zero-delay `onProjectileHit` rows, applied by the
+    /// weapon runtime at the moment of contact.
+    pub(super) projectile_responses: BTreeMap<BrickId, bri_weapons::ContactResponse>,
     /// Bricks killed with `fakeKillBrick` and the tick they come back.
     respawns: BTreeMap<BrickId, u64>,
     diagnostics: VecDeque<String>,
@@ -136,7 +139,33 @@ impl Session {
             if self.events.installed.remove(&brick_id) {
                 world.remove_brick(id(brick_id));
             }
+            self.events.projectile_responses.remove(&brick_id);
             return;
+        };
+        // `Explode` is the default collision; the others change it.
+        let response = brick.events.iter().find_map(|row| {
+            use bri_weapons::ContactResponse as R;
+            let immediate = row.enabled
+                && row.preserved.is_none()
+                && row.delay_ms == 0
+                && row.input.eq_ignore_ascii_case("onProjectileHit")
+                && row.target == ev::Target::Slot(Slot::Projectile);
+            if !immediate {
+                return None;
+            }
+            match (row.output.to_ascii_lowercase().as_str(), row.params.as_slice()) {
+                ("delete", _) => Some(R::Delete),
+                ("bounce", [ev::Value::Float(f)]) => Some(R::Bounce(*f)),
+                ("redirect", [ev::Value::Vector(v), ev::Value::Bool(n)]) => Some(R::Redirect {
+                    vector: *v,
+                    normalized: *n,
+                }),
+                _ => None,
+            }
+        });
+        match response {
+            Some(response) => self.events.projectile_responses.insert(brick_id, response),
+            None => self.events.projectile_responses.remove(&brick_id),
         };
         let print_count = match &brick.print {
             Some(bri_world::ContentRef::Resolved(print)) => print

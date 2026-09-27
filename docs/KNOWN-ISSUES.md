@@ -4,9 +4,9 @@ Crashes, missing content, unusable controls, disappearing saves or broken core
 flows are blockers: please report them. The items below are known gaps.
 
 - **Wrench events:** all vanilla inputs and outputs are listed. Not yet
-  applied: projectile outputs (`Explode`, `Delete`, `Bounce`, `Redirect`),
-  `BurnPlayer`, `setPlayerScale`, and the Tutorial-only `onToolBreak` input.
-  Rows using them are kept and shown read-only.
+  applied: `BurnPlayer`, `setPlayerScale`, the Tutorial-only `onToolBreak`
+  input, and projectile outputs on delayed rows (immediate `Delete`, `Bounce`
+  and `Redirect` work). Rows using them are kept and shown read-only.
 - **Special bricks:** water bricks are swimmable but river/rapids bricks do not
   push you along yet.
 - **Terrain:** terrain streams without bounds; distance LOD and detail/bump

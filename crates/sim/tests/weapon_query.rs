@@ -47,6 +47,7 @@ fn swept_queries_share_player_map_collision_and_radius_occlusion() {
         simulation: &sim,
         affect: &deny,
         catch: &no_catch,
+        responses: &Default::default(),
         truncated_targets: 0,
     };
     let filter = Filter {
