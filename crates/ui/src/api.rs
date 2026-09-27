@@ -350,6 +350,8 @@ pub struct SaveFileInfo {
 pub enum ServerMode {
     SinglePlayer,
     Lan,
+    /// Reachable by direct IP. No master-server listing exists.
+    Internet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

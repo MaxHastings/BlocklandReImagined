@@ -1018,6 +1018,7 @@ impl App {
             name
         };
         let single = mode == ServerMode::SinglePlayer;
+        let internet = mode == ServerMode::Internet;
         let max_players = if single { 1 } else { max_players };
         let listing_name = local_name.clone();
         let listing_map = self
@@ -1158,8 +1159,9 @@ impl App {
             }
             .parse()?;
             let mut session = Session::new(loaded.simulation);
-            // Every game this client hosts is single-player or LAN.
-            session.set_lan_host(true);
+            // v20 `$Server::LAN`: single-player and LAN hosts keep the looser
+            // brick-damage rule; internet hosts use miniGameCanDamage.
+            session.set_lan_host(!internet);
             session.set_admin_passwords(admin, super_admin)?;
             session.set_tool_catalog(catalog)?;
             session.set_weapon_pack(weapon_pack)?;
@@ -1189,7 +1191,9 @@ impl App {
             )?;
             let address = SocketAddr::from(([127, 0, 0, 1], host.address.port()));
             if !single {
-                // LAN players find this host (and its certificate) by broadcast.
+                // LAN players find this host (and its certificate) by broadcast;
+                // Connect to IP asks the same responder directly, so internet
+                // hosts answer it too.
                 host.advertise(listing_name, listing_map, max_players, identity.clone())
                     .await?;
             }
@@ -1228,9 +1232,7 @@ impl App {
             password.is_empty(),
             "Password authentication is not connected yet"
         );
-        let address: SocketAddr = address
-            .parse()
-            .context("Enter an IP address and port, for example 192.168.1.10:28000")?;
+        let address = parse_join_address(&address)?;
         // Certificates come from LAN discovery, then saved pins, then a direct
         // discovery query to the address (trust on first use, then pinned).
         let pins_file = self.state_dir.join("trusted-hosts.json");
@@ -3745,8 +3747,39 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
+/// Connect to IP input: an IPv4/IPv6 address with an optional port. A bare
+/// address uses the default game port, as Torque's `connect` did.
+fn parse_join_address(text: &str) -> Result<SocketAddr> {
+    let text = text.trim();
+    text.parse::<SocketAddr>()
+        .or_else(|_| {
+            text.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .map(|ip| SocketAddr::new(ip, 28000))
+        })
+        .ok()
+        .context("Enter an IP address and port, for example 203.0.113.10:28000")
+}
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn join_address_accepts_public_ips_with_or_without_port() {
+        use super::parse_join_address;
+        assert_eq!(
+            parse_join_address(" 203.0.113.10:28001 ").unwrap().to_string(),
+            "203.0.113.10:28001"
+        );
+        assert_eq!(
+            parse_join_address("100.64.1.2").unwrap().to_string(),
+            "100.64.1.2:28000"
+        );
+        assert_eq!(
+            parse_join_address("[2001:db8::1]").unwrap().to_string(),
+            "[2001:db8::1]:28000"
+        );
+        assert!(parse_join_address("example.com").is_err());
+    }
     #[test]
     #[ignore = "requires generated native content; no window, GPU or audio device"]
     fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails() -> anyhow::Result<()>

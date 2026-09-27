@@ -63,14 +63,21 @@ impl NativeScreen {
             }
             ScreenId::StartMission => {
                 for name in ["SM_demoBanner1", "SM_demoBanner2"] { s.visible(name, false); }
-                // Public legacy services are excluded. LAN and direct IP remain.
-                s.active("SM_OptInternet", false);
+                // Internet hosts are joined by direct IP; there is no master
+                // server listing.
                 if let Some(n) = s.view.id("SM_PlayerCountMenu") {
                     s.view.state(n).items = (1..=32).map(|i| (i.to_string(), i)).collect();
                 }
-                let lan = core.prefs.str_or(SERVER_TYPE, "SinglePlayer").eq_ignore_ascii_case("LAN");
-                s.radio(if lan { "SM_OptLAN" } else { "SM_OptSinglePlayer" });
-                s.server_type(core, lan);
+                let kind = core.prefs.str_or(SERVER_TYPE, "SinglePlayer");
+                let radio = if kind.eq_ignore_ascii_case("LAN") {
+                    "SM_OptLAN"
+                } else if kind.eq_ignore_ascii_case("Internet") {
+                    "SM_OptInternet"
+                } else {
+                    "SM_OptSinglePlayer"
+                };
+                s.radio(radio);
+                s.server_type(core, radio != "SM_OptSinglePlayer");
             }
             ScreenId::JoinServer => {
                 s.visible("JSG_demoBanner", false); s.visible("JSG_demoBanner2", false);
@@ -116,11 +123,6 @@ impl NativeScreen {
             self.view.set_visible(n, value);
         }
     }
-    fn active(&mut self, name: &str, value: bool) {
-        if let Some(n) = self.view.id(name) {
-            self.view.set_active(n, value);
-        }
-    }
     fn radio(&mut self, name: &str) {
         if let Some(n) = self.view.id(name) {
             self.view.select_radio(n);
@@ -153,8 +155,8 @@ impl NativeScreen {
             };
         }
     }
-    /// startMissionGui::ClickSinglePlayer/ClickLAN: single player greys the
-    /// server options out and plays alone.
+    /// startMissionGui::ClickSinglePlayer/ClickLAN/ClickInternet: single
+    /// player greys the server options out and plays alone.
     fn server_type(&mut self, core: &Core, lan: bool) {
         self.visible("SM_OptionsBlocker", !lan);
         if let Some(n) = self.view.id("SM_PlayerCountMenu") {
@@ -355,24 +357,32 @@ impl NativeScreen {
                 .map(|n| self.view.edit_text(n))
                 .unwrap_or_default()
         };
-        let lan = self.checked("SM_OptLAN");
+        let mode = if self.checked("SM_OptInternet") {
+            ServerMode::Internet
+        } else if self.checked("SM_OptLAN") {
+            ServerMode::Lan
+        } else {
+            ServerMode::SinglePlayer
+        };
         let max_players = self
             .selected("SM_PlayerCountMenu")
             .unwrap_or(1)
             .clamp(1, 32) as u32;
-        core.prefs
-            .set(SERVER_TYPE, if lan { "LAN" } else { "SinglePlayer" });
-        if lan {
+        core.prefs.set(
+            SERVER_TYPE,
+            match mode {
+                ServerMode::SinglePlayer => "SinglePlayer",
+                ServerMode::Lan => "LAN",
+                ServerMode::Internet => "Internet",
+            },
+        );
+        if mode != ServerMode::SinglePlayer {
             core.prefs.set(MAX_PLAYERS, max_players.to_string());
         }
         core.save_settings();
         let action = UiAction::HostGame {
             map: id,
-            mode: if lan {
-                ServerMode::Lan
-            } else {
-                ServerMode::SinglePlayer
-            },
+            mode,
             max_players,
             server_name: self.edit("TxtServerName"),
             password: self.edit("TxtServerPassword"),
@@ -532,7 +542,9 @@ impl Screen for NativeScreen {
             }
             "sm_startmission();" => self.host(core),
             "sm_missionlist.select();" => self.map_preview(core),
-            "startmissiongui.clicklan();" => self.server_type(core, true),
+            "startmissiongui.clicklan();" | "startmissiongui.clickinternet();" => {
+                self.server_type(core, true)
+            }
             "startmissiongui.clicksingleplayer();" => self.server_type(core, false),
             "defaultcontrolsgui.apply();" => {
                 let mouse = (0..=3)
