@@ -2,29 +2,29 @@
 
 `bri-vehicles` implements server-side vehicle state on the **host's shared Rapier world**. It never creates or steps an invisible world. `bri-vehicles-import` is a separate one-time ZIP/datablock/native-model converter; no runtime dependency points back to it. Both crates are now root-workspace members using its shared lockfile. Root reran their tests and Clippy there. Normal Session/client/network integration remains pending.
 
-Latest generated content: `content/vehicles-pack-008/vehicles.json` (schema 3). Packs 001 through 007 are superseded development iterations. Eleven definitions cover the eight vehicle packages, the independently spawnable Tank Turret and hidden Item_Skis ski/tumble dependencies. All 20 package DTS models and 21 DSQ native clip assets are copied from `maps-pass-006`; original package images are copied byte-for-byte into the indexed texture directory. The pack has 77 model/clip/texture asset records, source file SHA-256 and declaration-line evidence for 80 source datablocks. It validates/hash-checks without opening the reference installation at runtime. No required vehicle model is unresolved. Material names, animation node names and source authored metadata remain in native JSON.
+Latest generated content: `content/vehicles-pack-009/vehicles.json` (schema 3). Packs 001 through 008 are superseded development iterations. Eleven definitions cover the eight vehicle packages, the independently spawnable Tank Turret and hidden Item_Skis ski/tumble dependencies. All 20 package DTS models and 21 DSQ native clip assets are copied from `maps-pass-006`; original package images are copied byte-for-byte into the indexed texture directory. The pack has 77 model/clip/texture asset records, source file SHA-256 and declaration-line evidence for 80 source datablocks. It validates/hash-checks without opening the reference installation at runtime. No required vehicle model is unresolved. Material names, animation node names and source authored metadata remain in native JSON.
 
 ## Reproduce
 
 From repository root, with the original installation read-only:
 
 ```powershell
-cargo run --manifest-path crates/vehicles-import/Cargo.toml -- "E:\Downloads\B4v21Launcher\versions\Blockland v20" content/maps-pass-006 content/vehicles-pack-008
+cargo run --manifest-path crates/vehicles-import/Cargo.toml -- "E:\Downloads\B4v21Launcher\versions\Blockland v20" content/maps-pass-006 content/vehicles-pack-009
 cargo test --manifest-path crates/vehicles/Cargo.toml --target-dir crates/vehicles-import/target
 cargo test --manifest-path crates/vehicles-import/Cargo.toml
 cargo clippy --manifest-path crates/vehicles/Cargo.toml --target-dir crates/vehicles-import/target --all-targets -- -D warnings
 cargo clippy --manifest-path crates/vehicles-import/Cargo.toml --all-targets -- -D warnings
-cargo run --manifest-path crates/vehicles/Cargo.toml --target-dir crates/vehicles-import/target --bin vehicle_probe -- content/vehicles-pack-008/vehicles.json artifacts/native-vehicles/probe.json
+cargo run --manifest-path crates/vehicles/Cargo.toml --target-dir crates/vehicles-import/target --bin vehicle_probe -- content/vehicles-pack-009/vehicles.json artifacts/native-vehicles/probe.json
 ```
 
-The converter refuses an existing destination. Tests deliberately load pack 008 and do not silently skip missing content. Tests need no original installation, graphics device, visible window, input automation or audio device. Original assets/recovered scripts remain ignored and must not be committed.
+The converter refuses an existing destination. Tests deliberately load pack 009 and do not silently skip missing content. Tests need no original installation, graphics device, visible window, input automation or audio device. Original assets/recovered scripts remain ignored and must not be committed.
 
 ## Shared host integration
 
 ```rust,ignore
 use bri_vehicles::*;
-let pack = Pack::load("content/vehicles-pack-008/vehicles.json")?;
-pack.verify_assets("content/vehicles-pack-008")?;
+let pack = Pack::load("content/vehicles-pack-009/vehicles.json")?;
+pack.verify_assets("content/vehicles-pack-009")?;
 let mut vehicles = VehiclesWorld::new(pack)?;
 // physics below is bri_sim's existing bri_physics::new_world(), not a second world.
 vehicles.spawn(&mut physics, Spawn {
