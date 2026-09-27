@@ -2856,6 +2856,14 @@ fn camera_eye(
         },
     }
 }
+/// Torque's FOV is horizontal (`GuiTSCtrl::processCameraQuery` takes the
+/// frustum width from it and the height from the aspect ratio).
+fn vertical_fov(horizontal: f32, aspect: f32) -> f32 {
+    if !(aspect.is_finite() && aspect > 0.0) {
+        return horizontal;
+    }
+    2.0 * ((horizontal * 0.5).tan() / aspect).atan()
+}
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -4502,11 +4510,12 @@ impl PlatformApp for App {
             let pitch = (pitch + shake.x.clamp(-0.3, 0.3)).clamp(-1.56, 1.56);
             Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
         };
+        let aspect = frame.size.0 as f32 / frame.size.1 as f32;
         let mut camera = Camera::perspective(
             eye.to_array(),
             (eye + forward).to_array(),
-            frame.size.0 as f32 / frame.size.1 as f32,
-            self.controls.fov(90.0).to_radians(),
+            aspect,
+            vertical_fov(self.controls.fov(90.0).to_radians(), aspect),
             0.05,
             FAR_PLANE,
         );
@@ -4711,6 +4720,15 @@ fn parse_join_address(text: &str) -> Result<SocketAddr> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fov_is_horizontal_like_torque() {
+        let aspect = 16.0 / 9.0;
+        let fov_y = super::vertical_fov(90f32.to_radians(), aspect);
+        // The projected width at fov_y and this aspect spans 90 degrees.
+        let across = 2.0 * ((fov_y * 0.5).tan() * aspect).atan();
+        assert!((across.to_degrees() - 90.0).abs() < 1e-3, "{across}");
+        assert!(fov_y.to_degrees() < 60.0);
+    }
     #[test]
     fn join_address_accepts_public_ips_with_or_without_port() {
         use super::parse_join_address;
