@@ -166,6 +166,59 @@ pub enum Command {
     /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
     /// being typed in, shown to everyone above the chat.
     Talking(bool),
+    /// A ghost-brick move, which stays client-side; the server only animates
+    /// the builder.
+    BuildGesture(BuildGesture),
+}
+
+/// `ServerCmdShiftBrick`, `ServerCmdSuperShiftBrick` and
+/// `ServerCmdRotateBrick` play these on the builder's thread 3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BuildGesture {
+    ShiftUp,
+    ShiftDown,
+    ShiftLeft,
+    ShiftRight,
+    ShiftAway,
+    ShiftTowards,
+    RotateCw,
+    RotateCcw,
+}
+impl BuildGesture {
+    /// The v20 shift test order: z, then y, then x. `x` is away (+) or
+    /// towards (-), `y` left (+) or right (-), `z` up (+) or down (-).
+    pub fn shift(x: i32, y: i32, z: i32) -> Option<Self> {
+        Some(match (z.signum(), y.signum(), x.signum()) {
+            (1, _, _) => Self::ShiftUp,
+            (-1, _, _) => Self::ShiftDown,
+            (0, 1, _) => Self::ShiftLeft,
+            (0, -1, _) => Self::ShiftRight,
+            (0, 0, 1) => Self::ShiftAway,
+            (0, 0, -1) => Self::ShiftTowards,
+            _ => return None,
+        })
+    }
+    /// Positive turns are clockwise.
+    pub fn rotate(dir: i32) -> Option<Self> {
+        match dir.signum() {
+            1 => Some(Self::RotateCw),
+            -1 => Some(Self::RotateCcw),
+            _ => None,
+        }
+    }
+    /// The original avatar sequence name.
+    pub fn sequence(self) -> &'static str {
+        match self {
+            Self::ShiftUp => "shiftUp",
+            Self::ShiftDown => "shiftDown",
+            Self::ShiftLeft => "shiftLeft",
+            Self::ShiftRight => "shiftRight",
+            Self::ShiftAway => "shiftAway",
+            Self::ShiftTowards => "shiftTO",
+            Self::RotateCw => "rotCW",
+            Self::RotateCcw => "rotCCW",
+        }
+    }
 }
 /// The v20 message type of a server chat line (`MessageAll('MsgUploadStart',
 /// ...)`), which clients answer with its GUI sound (`addMessageCallback`).
@@ -271,7 +324,12 @@ struct Peer {
     tutorial: tutorial::Progress,
     /// `%client.isTalking`.
     talking: bool,
+    /// `lastActivateTime` and `activateLevel` for the activate swing.
+    last_activate: Option<u64>,
+    activate_level: u32,
 }
+/// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
+const ACTIVATE_REPEAT_TICKS: u64 = 38;
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
@@ -526,6 +584,8 @@ impl Session {
                 actions: 0,
                 chats: 0,
                 inspection: None,
+                last_activate: None,
+                activate_level: 0,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -643,6 +703,8 @@ impl Session {
                 actions: 0,
                 chats: 0,
                 inspection: None,
+                last_activate: None,
+                activate_level: 0,
                 avatar,
             },
         );
@@ -693,6 +755,24 @@ impl Session {
         self.admin_disconnects.drain(..).collect()
     }
     /// `owner` is resolved from the established connection, not deserialized here.
+    /// `%player.playThread(3, ...)`: a one-shot builder animation every
+    /// client sees, carried as an avatar animation cue.
+    fn play_build_thread(&mut self, tick: u64, owner: OwnerId, sequence: &str) {
+        let Some(peer) = self.peers.get(&owner) else {
+            return;
+        };
+        let position = peer.player.state().feet;
+        self.cues.emit(
+            tick,
+            crate::presentation::CueKind::WeaponAnimation {
+                actor: owner,
+                thread: 3,
+                sequence: sequence.into(),
+                image_hand: None,
+            },
+            position,
+        );
+    }
     pub fn command(&mut self, owner: OwnerId, sequence: u64, command: Command) -> Result<Reply> {
         self.command_with_aim(owner, sequence, command, None)
     }
@@ -899,6 +979,11 @@ impl Session {
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
             }
+            Command::BuildGesture(gesture) => {
+                ensure!(peer.combat.alive, "Dead players cannot build");
+                self.play_build_thread(tick, owner, gesture.sequence());
+                Ok(Reply::Accepted)
+            }
             Command::SwitchSeat(step) => {
                 ensure!(step == 1 || step == -1, "Invalid seat step");
                 self.switch_seat(owner, i32::from(step))?;
@@ -979,6 +1064,7 @@ impl Session {
                 undo.push_back(id);
                 self.cues
                     .emit(tick, crate::presentation::CueKind::Plant, position);
+                self.play_build_thread(tick, owner, "plant");
                 Ok(Reply::Planted(id))
             }
             Command::UseSprayCan { color } => {
@@ -994,7 +1080,24 @@ impl Session {
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
+                // `serverCmdActivateStuff`: clicks within 320 ms build up a
+                // level, and the fifth repeat plays the bigger swing.
+                peer.activate_level = if peer
+                    .last_activate
+                    .is_some_and(|last| tick - last <= ACTIVATE_REPEAT_TICKS)
+                {
+                    peer.activate_level.saturating_add(1)
+                } else {
+                    0
+                };
+                peer.last_activate = Some(tick);
+                let swing = if peer.activate_level >= 5 {
+                    "activate2"
+                } else {
+                    "activate"
+                };
                 let eye = peer.player.eye();
+                self.play_build_thread(tick, owner, swing);
                 let brick_distance = self
                     .simulation
                     .target(eye, direction, 5.0)?

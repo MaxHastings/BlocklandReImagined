@@ -272,6 +272,9 @@ pub struct AvatarAnimationInput {
     /// Current thread-2 action from the authoritative animation cue stream.
     /// Clear this on the corresponding vanilla stop/root cue or image switch.
     pub action: Option<ActionAnimation>,
+    /// Current thread-3 builder or chat animation (`playThread(3, ...)`):
+    /// brick shifts, rotations, plant, undo, activate and talk.
+    pub gesture: Option<ActionAnimation>,
     /// Dead bodies hold the original `death1` sequence.
     pub dead: bool,
     /// The `sit` emote holds the original sit sequence until the player moves.
@@ -404,9 +407,10 @@ impl AvatarMesh {
     ) -> Result<()> {
         ensure!(
             time.is_finite()
-                && animation_input.action.as_ref().is_none_or(|action| {
-                    action.started_at.is_finite() && !action.sequence.is_empty()
-                })
+                && [&animation_input.action, &animation_input.gesture]
+                    .into_iter()
+                    .flatten()
+                    .all(|action| action.started_at.is_finite() && !action.sequence.is_empty())
                 && player
                     .feet
                     .iter()
@@ -540,7 +544,11 @@ impl AvatarMesh {
                 * headside.duration,
             weight: 1.0,
         });
-        if let Some(action) = &animation_input.action {
+        let threads = [(2, &animation_input.action), (3, &animation_input.gesture)];
+        for (thread, action) in threads {
+            let Some(action) = action else {
+                continue;
+            };
             let name = action.sequence.to_ascii_lowercase();
             if name != "root" {
                 let clip = assets
@@ -549,7 +557,7 @@ impl AvatarMesh {
                     .with_context(|| format!("Missing avatar action clip {}", action.sequence))?;
                 ensure!(
                     clip.additive,
-                    "Thread-2 avatar action clip {} must be additive",
+                    "Thread-{thread} avatar action clip {} must be additive",
                     action.sequence
                 );
                 let action_time = (time - action.started_at).max(0.0) as f32;
@@ -624,6 +632,16 @@ impl AvatarMesh {
         self.model_transform = model_transform;
         self.posed_nodes.clone_from(&pose.nodes);
         Ok(())
+    }
+    /// Takes over another mesh's action thread (sequence, direction, time
+    /// and transition), for a rebuilt outfit of the same player.
+    pub fn continue_animation(&mut self, old: &AvatarMesh) {
+        self.mode = old.mode;
+        self.forward = old.forward;
+        self.phase = old.phase;
+        self.last_time = old.last_time;
+        self.channels.clone_from(&old.channels);
+        self.transition.clone_from(&old.transition);
     }
     pub fn upload(
         &mut self,
@@ -1038,6 +1056,30 @@ mod tests {
                 .abs_diff_eq(expected_forward, 1e-5)
         );
         assert!(eye.transform_vector3(-Vec3::Z).y > 0.0);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn rebuilt_outfit_continues_the_running_clip() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let assets = AvatarAssets::load(&root)?;
+        let mut kept = assets.mesh(assets.package.defaults.clone())?;
+        let mut p = player();
+        p.velocity = [0.0, 0.0, -7.0];
+        for frame in 0..20 {
+            kept.pose(&assets, &p, f64::from(frame) / 60.0)?;
+        }
+        let mut rebuilt = assets.mesh(assets.package.defaults.clone())?;
+        rebuilt.continue_animation(&kept);
+        let time = 20.0 / 60.0;
+        kept.pose(&assets, &p, time)?;
+        rebuilt.pose(&assets, &p, time)?;
+        let leg = |mesh: &AvatarMesh| mesh.world_node(&assets, "RightLeg").unwrap();
+        assert!(leg(&kept).abs_diff_eq(leg(&rebuilt), 1e-5));
+        let mut fresh = assets.mesh(assets.package.defaults.clone())?;
+        fresh.pose(&assets, &p, time)?;
+        assert!(!leg(&kept).abs_diff_eq(leg(&fresh), 1e-3));
         Ok(())
     }
 

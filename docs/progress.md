@@ -1806,6 +1806,23 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `spray::tests::burning_blackens_every_slot_until_the_burn_ends`;
   `cargo test -p bri-sim` passed.
 
+- 2026-09-27 Builder animations (protocol 19). v20 plays thread 3 on the
+  builder for `ServerCmdShiftBrick`/`SuperShiftBrick` (shiftUp/Down/Left/
+  Right/Away/TO by first nonzero z, y, x), `ServerCmdRotateBrick` (rotCW/CCW),
+  plant, undo (only when something was undone) and `serverCmdActivateStuff`
+  (activate, or activate2 once five repeats land within 320 ms each), and
+  mounts `brickImage` (`armReady`) while bricks are in hand. The ghost stays
+  client-side, so `Command::BuildGesture` reports shifts and rotations; the
+  server emits the thread-3 `WeaponAnimation` cue for every client, and
+  `Vitals::brick_in_hand` raises the right arm (armReadyRight). The client
+  holds thread 3 per player (`AvatarAnimationInput::gesture`) until the next
+  one or `root`. Rebuilt outfits (spray paint) keep the running action thread
+  (`AvatarMesh::continue_animation`). Not done: the grey brick model in hand
+  (brickWeapon.dts is not in the weapons pack). Verified: sim test
+  `builder_animations_play_on_thread_three_and_bricks_raise_the_arm`;
+  `cargo test -p bri-client --test avatar_animation_render --release -- --ignored`
+  renders every builder clip over the raised arm (`artifacts/avatar-animation/builder-sheet.png`).
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

@@ -247,6 +247,13 @@ impl Session {
         Ok(())
     }
 
+    /// v20 mounts `brickImage` (`armReady`) while bricks are in hand.
+    pub(super) fn brick_in_hand(&self, owner: OwnerId) -> bool {
+        self.peers
+            .get(&owner)
+            .is_some_and(|peer| peer.tutorial.hand.equipped)
+    }
+
     /// `noBreak` bricks and the vehicle pads' `vehicleLimit`.
     pub(super) fn tutorial_check(&self, command: &Command) -> Result<()> {
         if self.tutorial.as_deref().is_none_or(|t| t.completed) {

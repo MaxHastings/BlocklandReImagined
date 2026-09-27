@@ -173,6 +173,8 @@ pub struct App {
     avatar_assets: Arc<crate::avatar::AvatarAssets>,
     avatars: BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
     avatar_actions: BTreeMap<u64, crate::avatar::ActionAnimation>,
+    /// Thread-3 builder and chat animations by player.
+    avatar_gestures: BTreeMap<u64, crate::avatar::ActionAnimation>,
     avatar_action_images: BTreeMap<u64, String>,
     animation_time: f64,
     avatar_preview: Option<crate::avatar::Preview>,
@@ -364,6 +366,7 @@ impl App {
     }
     fn update_avatar_animation_inputs(
         avatar_actions: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,
+        avatar_gestures: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,
         avatar_action_images: &mut BTreeMap<u64, String>,
         weapon_animation_cues: &mut VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
         weapon_animation_drops: &mut u64,
@@ -371,6 +374,7 @@ impl App {
         elapsed: f32,
     ) {
         avatar_actions.retain(|owner, _| view.poses.contains_key(owner));
+        avatar_gestures.retain(|owner, _| view.poses.contains_key(owner));
         avatar_action_images.retain(|owner, _| view.poses.contains_key(owner));
         let identity = |owner: &u64| -> Option<String> {
             let mut parts = Vec::new();
@@ -412,6 +416,22 @@ impl App {
             else {
                 continue;
             };
+            // Thread 3 is not tied to a mounted image: it is replaced by the
+            // next builder or chat animation, or stopped by `root`.
+            if *thread == 3 {
+                if sequence.eq_ignore_ascii_case("root") {
+                    avatar_gestures.remove(actor);
+                } else {
+                    avatar_gestures.insert(
+                        *actor,
+                        crate::avatar::ActionAnimation {
+                            sequence: sequence.clone(),
+                            started_at,
+                        },
+                    );
+                }
+                continue;
+            }
             if *thread != 2 || sequence.eq_ignore_ascii_case("root") {
                 if *thread == 2 {
                     avatar_actions.remove(actor);
@@ -708,6 +728,7 @@ impl App {
             avatar_assets,
             avatars: BTreeMap::new(),
             avatar_actions: BTreeMap::new(),
+            avatar_gestures: BTreeMap::new(),
             avatar_action_images: BTreeMap::new(),
             animation_time: 0.0,
             avatar_preview: None,
@@ -799,6 +820,7 @@ impl App {
         self.attempt.take();
         self.avatars.clear();
         self.avatar_actions.clear();
+        self.avatar_gestures.clear();
         self.avatar_action_images.clear();
         self.controls = Controls::default();
         self.cpu_scene = None;
@@ -2833,6 +2855,7 @@ impl PlatformApp for App {
             // Visible geometry and attached items consume these same original nodes.
             Self::update_avatar_animation_inputs(
                 &mut self.avatar_actions,
+                &mut self.avatar_gestures,
                 &mut self.avatar_action_images,
                 &mut self.weapon_animation_cues,
                 &mut self.weapon_animation_drops,
@@ -2853,8 +2876,13 @@ impl PlatformApp for App {
                     .get(owner)
                     .is_none_or(|mesh| &mesh.appearance != appearance)
                 {
-                    self.avatars
-                        .insert(*owner, self.avatar_assets.mesh(appearance.clone())?);
+                    let mut mesh = self.avatar_assets.mesh(appearance.clone())?;
+                    // Outfit changes (spray paint included) keep the running
+                    // action thread instead of restarting the clip.
+                    if let Some(old) = self.avatars.get(owner) {
+                        mesh.continue_animation(old);
+                    }
+                    self.avatars.insert(*owner, mesh);
                 }
                 let mut ready_hands = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
@@ -2876,6 +2904,11 @@ impl PlatformApp for App {
                     .get_mut(owner)
                     .unwrap()
                     .set_skis(skiing.then_some([0.0, 0.2, 0.64, 1.0]));
+                // v20 mounts `brickImage` (`armReady`) in the right hand while
+                // bricks are in hand.
+                if view.vitals.get(owner).is_some_and(|v| v.brick_in_hand) {
+                    ready_hands.push((0, true));
+                }
                 let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
                 let input = crate::avatar::AvatarAnimationInput {
                     held_tool_pose: if dead {
@@ -2884,6 +2917,7 @@ impl PlatformApp for App {
                         crate::avatar::HeldToolPose::from_mounted_images(ready_hands)
                     },
                     action: self.avatar_actions.get(owner).cloned().filter(|_| !dead),
+                    gesture: self.avatar_gestures.get(owner).cloned().filter(|_| !dead),
                     dead,
                     sitting: !dead
                         && (self.combat.sitting.contains(owner)
@@ -4353,6 +4387,7 @@ image: "v20.image.gunimage".into(),
         let mut discarded = 0;
         App::update_avatar_animation_inputs(
             &mut animations,
+            &mut BTreeMap::new(),
             &mut identities,
             &mut cues,
             &mut discarded,
@@ -4363,6 +4398,7 @@ image: "v20.image.gunimage".into(),
         animation_view.weapons.images.get_mut(&owner).unwrap()[0].state = "Smoke".into();
         App::update_avatar_animation_inputs(
             &mut animations,
+            &mut BTreeMap::new(),
             &mut identities,
             &mut cues,
             &mut discarded,
@@ -4374,6 +4410,7 @@ image: "v20.image.gunimage".into(),
             "v20.image.bowimage".into();
         App::update_avatar_animation_inputs(
             &mut animations,
+            &mut BTreeMap::new(),
             &mut identities,
             &mut cues,
             &mut discarded,

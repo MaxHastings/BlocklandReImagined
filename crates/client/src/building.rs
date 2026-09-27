@@ -13,7 +13,7 @@ use bri_sim::{
     ghost,
     grid::{self, Bounds, Index},
     player::{PlayerState, PlayerTuning},
-    session::{Command, ToolAction, ToolInventory},
+    session::{BuildGesture, Command, ToolAction, ToolInventory},
     simulation::Hit,
 };
 use bri_ui::api::{GameAction, HeldControl, IconRef, ToolInfo, UiAction, UiUpdate};
@@ -919,6 +919,8 @@ impl Building {
                     );
                     Bounds::new(brick, mesh)?;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
                 }
             }
             UiAction::Game(GameAction::RotateBrick { dir }) => {
@@ -928,6 +930,8 @@ impl Building {
                     ghost::rotate(brick, mesh, body_forward(player)?, *dir);
                     Bounds::new(brick, mesh)?;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
                 }
             }
             UiAction::Game(GameAction::CancelBrick) => {
@@ -1293,11 +1297,18 @@ mod tests {
         Bounds::new(&deployed, &mesh).unwrap();
 
         // Looking straight down must not collapse horizontal body-facing shifts.
-        b.ui_action(
-            &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
-            &player(),
-        )
-        .unwrap();
+        let shift = b
+            .ui_action(
+                &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
+                &player(),
+            )
+            .unwrap()
+            .unwrap();
+        // The ghost stays local; the server only animates the builder.
+        assert!(matches!(
+            shift.commands.as_slice(),
+            [Command::BuildGesture(BuildGesture::ShiftAway)]
+        ));
         assert_eq!(b.ghost().unwrap().position[2], deployed.position[2] - 0.5);
         b.ui_action(
             &UiAction::Game(GameAction::SuperShiftBrick { x: 1, y: 0, z: 1 }),

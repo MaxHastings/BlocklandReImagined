@@ -68,6 +68,8 @@ pub struct Vitals {
     pub control: super::ControlObject,
     /// Typing in the chat box (`MsgStartTalking`).
     pub talking: bool,
+    /// Bricks are in hand: the builder raises the right arm.
+    pub brick_in_hand: bool,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -266,6 +268,7 @@ impl Session {
                         mounted: self.mounted(*owner),
                         control: peer.control,
                         talking: peer.talking,
+                        brick_in_hand: self.brick_in_hand(*owner),
                     },
                 )
             })

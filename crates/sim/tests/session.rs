@@ -879,3 +879,84 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
         assert!(error.to_string().contains("Unknown image"), "{error:#}");
     }
 }
+
+#[test]
+fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
+    use bri_sim::{
+        presentation::CueKind,
+        session::{BrickHand, BuildGesture, ToolAction},
+    };
+    let mut s = session();
+    let a = s
+        .join("Maxwell".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    s.take_cues();
+    let mut seq = 0;
+    let mut run = |s: &mut Session, command: Command| {
+        seq += 1;
+        s.command(a, seq, command).unwrap();
+        s.take_cues()
+            .into_iter()
+            .filter_map(|cue| match cue.kind {
+                CueKind::WeaponAnimation {
+                    actor,
+                    thread: 3,
+                    sequence,
+                    image_hand: None,
+                } if actor == a => Some(sequence),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(!s.vitals()[&a].brick_in_hand);
+    run(
+        &mut s,
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: true,
+        }),
+    );
+    assert!(s.vitals()[&a].brick_in_hand);
+    assert_eq!(
+        run(&mut s, Command::BuildGesture(BuildGesture::ShiftTowards)),
+        ["shiftTO"]
+    );
+    assert_eq!(
+        run(&mut s, Command::BuildGesture(BuildGesture::RotateCcw)),
+        ["rotCCW"]
+    );
+    let plant = Command::Plant {
+        definition: "plate".into(),
+        position: [0.5, 0.1, -3.25],
+        quarter_turns: 0,
+        color: 0,
+    };
+    assert_eq!(run(&mut s, plant), ["plant"]);
+    assert_eq!(run(&mut s, Command::Tool(ToolAction::UndoPlant)), ["undo"]);
+    // Nothing left to undo: v20 plays nothing.
+    assert!(run(&mut s, Command::Tool(ToolAction::UndoPlant)).is_empty());
+    // `activateLevel` climbs on clicks within 320 ms; the fifth repeat swings harder.
+    let swings: Vec<_> = (0..6).flat_map(|_| run(&mut s, Command::Activate)).collect();
+    assert_eq!(
+        swings,
+        [
+            "activate",
+            "activate",
+            "activate",
+            "activate",
+            "activate",
+            "activate2"
+        ]
+    );
+    for _ in 0..40 {
+        s.step().unwrap();
+    }
+    assert_eq!(run(&mut s, Command::Activate), ["activate"]);
+    assert_eq!(BuildGesture::shift(1, -1, 1), Some(BuildGesture::ShiftUp));
+    assert_eq!(BuildGesture::shift(1, -1, 0), Some(BuildGesture::ShiftRight));
+    assert_eq!(BuildGesture::shift(0, 0, 0), None);
+}

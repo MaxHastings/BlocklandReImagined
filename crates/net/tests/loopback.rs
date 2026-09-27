@@ -1274,12 +1274,17 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         color: 0,
     };
     a.command(plant(0.5)).await?;
-    wait(&mut a, |c| c.replica.cue_cursor == 1).await?;
-    wait(&mut b, |c| c.replica.cue_cursor == 1).await?;
+    // Planting sounds the plant cue and plays the builder's thread-3 `plant`.
+    wait(&mut a, |c| c.replica.cue_cursor == 2).await?;
+    wait(&mut b, |c| c.replica.cue_cursor == 2).await?;
     let events = a.replica.take_cues();
     assert_eq!(events, b.replica.take_cues());
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
     assert_eq!(events[0].kind, CueKind::Plant);
+    assert!(matches!(
+        &events[1].kind,
+        CueKind::WeaponAnimation { thread: 3, sequence, .. } if sequence == "plant"
+    ));
     assert!(a.command(plant(0.5)).await.is_err());
     let mut late = Client::connect(
         server.address,
@@ -1289,16 +1294,16 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         None,
     )
     .await?;
-    assert_eq!(late.replica.cue_cursor, 1);
+    assert_eq!(late.replica.cue_cursor, 2);
     assert!(late.replica.take_cues().is_empty());
     a.command(plant(2.5)).await?;
-    wait(&mut a, |c| c.replica.cue_cursor == 2).await?;
-    wait(&mut b, |c| c.replica.cue_cursor == 2).await?;
-    wait(&mut late, |c| c.replica.cue_cursor == 2).await?;
+    wait(&mut a, |c| c.replica.cue_cursor == 4).await?;
+    wait(&mut b, |c| c.replica.cue_cursor == 4).await?;
+    wait(&mut late, |c| c.replica.cue_cursor == 4).await?;
     let events = a.replica.take_cues();
     assert_eq!(events, b.replica.take_cues());
     assert_eq!(events, late.replica.take_cues());
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
     wait(&mut a, |c| c.replica.poses[&c.owner].player.grounded).await?;
     send_inputs(
         &mut a,
@@ -1307,7 +1312,7 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
             ..Default::default()
         }],
     )?;
-    wait(&mut b, |c| c.replica.cue_cursor == 3).await?;
+    wait(&mut b, |c| c.replica.cue_cursor == 5).await?;
     let jumps = b.replica.take_cues();
     assert_eq!(jumps.len(), 1);
     assert_eq!(jumps[0].kind, CueKind::Jump);
