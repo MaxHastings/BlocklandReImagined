@@ -19,6 +19,13 @@ struct Inspection {
     wrench_original: Option<Brick>,
 }
 
+/// The print a player last applied, and every brick definition of its aspect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastPrint {
+    pub definitions: Vec<String>,
+    pub print: String,
+}
+
 pub struct ToolUi {
     catalog: ToolCatalog,
     prints: BTreeMap<String, Vec<PrintInfo>>,
@@ -243,7 +250,35 @@ impl ToolUi {
     }
     /// Events close only their nested dialog. Restore the base wrench while
     /// retaining its original property snapshot; other writes finish editing.
-    pub fn command_accepted(&mut self, command: &Command) -> Result<()> {
+    /// Returns v20's remembered print for every brick of the printed aspect
+    /// (`%client.lastPrint[%ar]`), which the next ghost of that aspect uses.
+    pub fn command_accepted(&mut self, command: &Command) -> Result<Option<LastPrint>> {
+        let mut last_print = None;
+        if let Command::Tool(ToolAction::SetPrint {
+            brick,
+            print: Some(print),
+        }) = command
+        {
+            let inspection = self
+                .inspection
+                .as_ref()
+                .context("No active print inspection")?;
+            ensure!(
+                inspection.id == *brick && inspection.mode == InspectMode::Printer,
+                "Accepted print does not match current inspection"
+            );
+            let aspect = &self.catalog.brick_print_aspects[resolved(&inspection.brick.definition)?];
+            last_print = Some(LastPrint {
+                definitions: self
+                    .catalog
+                    .brick_print_aspects
+                    .iter()
+                    .filter(|(_, a)| a.eq_ignore_ascii_case(aspect))
+                    .map(|(definition, _)| definition.clone())
+                    .collect(),
+                print: print.clone(),
+            });
+        }
         if let Command::Tool(ToolAction::SetEvents { brick, events }) = command {
             let inspection = self
                 .inspection
@@ -265,7 +300,7 @@ impl ToolUi {
         } else {
             self.invalidate();
         }
-        Ok(())
+        Ok(last_print)
     }
 
     /// The caller must additionally reject replies from cancelled/replaced

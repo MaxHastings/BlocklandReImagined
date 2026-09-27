@@ -924,6 +924,14 @@ impl Session {
         self.tool_catalog.validate_edit(brick, &edit)?;
         self.item_spawners
             .validate_edit(self.simulation.state(), id, &edit)?;
+        // v20 serverCmdSetPrint remembers the choice for the brick's aspect.
+        let last_print = match &edit {
+            Edit::Print(Some(ContentRef::Resolved(print))) => Some((
+                self.tool_catalog.print_aspect(brick)?.to_ascii_lowercase(),
+                print.clone(),
+            )),
+            _ => None,
+        };
         let edited_events = matches!(edit, Edit::Events(_));
         // `serverCmdSetPrint` records a print change for undo.
         let undo = match &edit {
@@ -934,6 +942,12 @@ impl Session {
         };
         self.simulation.edit(&peer.actor, id, edit)?;
         self.dirty.insert(id);
+        if let Some((aspect, print)) = last_print {
+            self.last_prints
+                .entry(owner)
+                .or_default()
+                .insert(aspect, print);
+        }
         if edited_events && let Some(inspection) = &mut peer.inspection {
             // Event dialogs sit above the still-open wrench. Update only the
             // events we just authored; retain the original wrench property

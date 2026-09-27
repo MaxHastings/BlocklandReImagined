@@ -2133,3 +2133,51 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   unfinished notch. Evidence: `cargo test -p bri-ui --test runtime_input
   wheel_scrolls`, `cargo test -p bri-client --test wheel_flow --release --
   --ignored` (BRI_CONTENT = main checkout content).
+- 2026-09-27 Leftovers group (tests, fx, content pipeline, Linux).
+  - The eight tool tests paused after the v20 tool images merge are rewritten
+    (identity fixtures carry the core tools as pack items; loopback swings a
+    synthetic stock-layout tool pack over QUIC; the aim test uses Activate).
+    `edit_brick` now validates event rows like the wrench path. Two sweep
+    tests: weapons pack counts 21 items; the transition-budget test uses a
+    two-state cycle because a zero-tick self-loop is the wands' timed sparkle.
+  - bot_brick: a player body inserted mid-step lost its island because
+    `detect_collisions` consumed its pending change without an island manager
+    (Rapier debug assert). New player bodies are re-queued. Vehicles'
+    checkpoint re-insert has the same shape; reported to its owner.
+    brick_material_gallery matched stale omission wording; lan_discovery binds
+    a free port through `Server::advertise_on`.
+  - fx daa5bc5: axis-angle image rotations (HateImage "1 0 0 -90" was read as
+    Euler [1,0,0]) and the PlayerSplash ring emitter, in weapons-pack-008,
+    item-presentation-pack-009 and effects-runtime-pack-004.
+  - Mission lighting is baked by `map_bundle` (`scene_lighting.rs`); `.ml`
+    caches are no longer read and `--lighting-cache-root` is gone. Sun from
+    azimuth/elevation; terrain sweep within 0.07-4.5/255 of the engine's caches;
+    interiors 2.8-3.3 after finding the 10-texel lightmap border. map-bundle-016
+    is in use; `terrain_bundle` is removed (map_bundle emits terrain itself).
+    Evidence: `lighting_compare` against map-bundle-015, offscreen
+    interior_preview of 015 vs the new bake.
+  - `tools/regenerate_content.py` rebuilds all 18 ContentConfig packs from a v20
+    folder (docs/content-regeneration.md). A run from an empty checkout
+    against the reference install passed `bri-client --check`; eight packs came
+    out byte-identical, the re-decompile matched `.research/v20-dso` exactly.
+  - Linux: `cargo check`/`build --target x86_64-unknown-linux-gnu` of bri-client
+    is warning-free; linked against an Ubuntu 24.04 sysroot, the binary passes
+    `--check` under WSL. `tools/package_playtest.sh` and `launch_playtest.sh`
+    package it. Window, input, audio and GPU on a Linux desktop remain unverified.
+- 2026-09-27 Printer audit against v20 (`loadPrintedBrickTextures`,
+  `clientCmdOpenPrintSelectorDlg`, `serverCmdSetPrint`). v20 ships five print
+  packs plus Letters: 1x2F 10 prints, 2x2F 7, 2x2R (both 45° print ramps) 7,
+  Letters 53. The 1x1, 1x1F and 1x4x4 print bricks have no print pack and take
+  letters only. All 77 are converted and every set reaches the selector for
+  its aspect (`cargo test -p bri-client --test print_selector -- --ignored`
+  opens the real menu on each aspect and counts the shown buttons). Like v20,
+  the dialog remembers the last tab, so after using Letters the other prints
+  are under the Prints tab. Fixed divergences: the player's last print per
+  aspect (`%client.lastPrint[%ar]`) now goes to the next planted brick of that
+  aspect on the server and to the ghost on the client, instead of always
+  Letters/A. Letter hotkeys work on either tab, because v20 registers every
+  print button's accelerator when the dialog is pushed, hidden scrollers
+  included. No wire change. Evidence:
+  `next_brick_of_the_aspect_takes_the_players_last_print_like_v20`,
+  `last_print_updates_the_ghost_and_later_bricks_of_its_aspect`,
+  `letter_shortcuts_work_on_the_prints_tab`.

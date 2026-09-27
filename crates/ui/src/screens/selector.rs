@@ -630,14 +630,13 @@ impl Screen for PrintSelector {
         if self.request.is_some() {
             return true;
         }
-        let prints = if self.showing_letters {
-            &self.letters
-        } else {
-            &self.prints
-        };
+        // v20 registers every print button's accelerator when the dialog is
+        // pushed, hidden scrollers included, so letters type on either tab.
         let chord = Chord { key, mods };
-        if let Some(print) = prints
+        if let Some(print) = self
+            .prints
             .iter()
+            .chain(&self.letters)
             .find(|p| print_shortcut(&p.name) == Some(chord))
         {
             self.select(print.id.clone(), core);
@@ -941,12 +940,29 @@ mod tests {
     }
 
     #[test]
+    fn letter_shortcuts_work_on_the_prints_tab() {
+        let mut ui = fixture();
+        prints(&mut ui);
+        let mut s = PrintSelector::new(&ui.core);
+        assert!(!s.showing_letters);
+        assert!(s.on_key(Key::Letter('a'), Modifiers::NONE, &mut ui.core));
+        let actions = ui.drain_actions();
+        assert_eq!(
+            actions[0].1,
+            UiAction::SetPrint {
+                print: "letters:A".into()
+            }
+        );
+    }
+
+    #[test]
     fn print_aspect_shortcuts_pending_rejection_and_cancel() {
         let mut ui = fixture();
         prints(&mut ui);
         let mut s = PrintSelector::new(&ui.core);
         assert_eq!(s.prints.len(), 1);
-        assert!(!s.on_key(Key::Letter('a'), Modifiers::NONE, &mut ui.core));
+        assert!(!s.showing_letters);
+        assert!(!s.on_key(Key::Letter('b'), Modifiers::NONE, &mut ui.core));
         s.showing_letters = true;
         s.refresh();
         let shift = Modifiers {

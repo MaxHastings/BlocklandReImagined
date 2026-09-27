@@ -206,6 +206,25 @@ impl Building {
         Ok(())
     }
 
+    /// v20 `serverCmdSetPrint`: later bricks of the printed aspect take the
+    /// player's last print, and a ghost of that aspect changes at once.
+    pub fn remember_print(&mut self, last: &crate::tool_ui::LastPrint) -> Result<()> {
+        ContentRef::Resolved(last.print.clone()).validate()?;
+        for definition in &last.definitions {
+            if let Some(print) = self.default_prints.get_mut(definition) {
+                print.clone_from(&last.print);
+            }
+        }
+        if let Some(ghost) = &mut self.ghost
+            && let ContentRef::Resolved(id) = &ghost.definition
+            && last.definitions.contains(id)
+        {
+            ghost.print = Some(ContentRef::Resolved(last.print.clone()));
+            self.ghost_generation = self.ghost_generation.wrapping_add(1);
+        }
+        Ok(())
+    }
+
     /// Reconcile only changed query geometry/flags. Colors, ownership, events,
     /// palette and player-pose changes never rebuild map physics or the index.
     /// Return whether query geometry changed (not whether any world field did).
@@ -1866,6 +1885,36 @@ mod tests {
         assert!(fresh.pending_equipment.is_empty());
         assert!(!fresh.weapon_fire_down);
         assert_eq!(fresh.tools, ToolInventory::default());
+    }
+
+    #[test]
+    fn last_print_updates_the_ghost_and_later_bricks_of_its_aspect() {
+        let mut b = controller();
+        b.set_catalog(vec![("plate".into(), 1)]).unwrap();
+        b.set_default_prints([("plate".into(), "v20/print/letters/a".into())].into())
+            .unwrap();
+        let p = player();
+        b.ui_action(
+            &UiAction::InstantUseBrick {
+                brick: "plate".into(),
+            },
+            &p,
+        )
+        .unwrap();
+        b.ui_action(&fire(), &p).unwrap();
+        let generation = b.ghost_generation();
+        let last = crate::tool_ui::LastPrint {
+            definitions: vec!["plate".into()],
+            print: "v20/print/2x2f/arrow".into(),
+        };
+        b.remember_print(&last).unwrap();
+        let arrow = Some(ContentRef::Resolved("v20/print/2x2f/arrow".into()));
+        assert_eq!(b.ghost().unwrap().print, arrow);
+        assert_ne!(b.ghost_generation(), generation);
+        assert_eq!(
+            b.default_prints["plate"], "v20/print/2x2f/arrow",
+            "the next plate ghost starts with the last print"
+        );
     }
 
     #[test]

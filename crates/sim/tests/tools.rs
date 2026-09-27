@@ -741,6 +741,36 @@ fn printing_uses_catalog_aspect_letters_default_and_inspection_identity() {
 }
 
 #[test]
+fn next_brick_of_the_aspect_takes_the_players_last_print_like_v20() {
+    let (mut s, owner, id) = setup();
+    inspect(&mut s, owner, 2, InspectMode::Printer);
+    tool(
+        &mut s,
+        owner,
+        3,
+        ToolAction::SetPrint {
+            brick: id,
+            print: Some("print/face".into()),
+        },
+    )
+    .unwrap();
+    let next = plant(&mut s, owner, 4, [1.5, 0.1, -3.25]);
+    assert_eq!(
+        s.simulation().state().bricks[&next].print,
+        Some(ContentRef::Resolved("print/face".into()))
+    );
+    // Other players keep v20's Letters/A default until they print.
+    let other = s
+        .join("Other".into(), Vec3::new(-3.0, 0.05, 0.0), false)
+        .unwrap();
+    let theirs = plant(&mut s, other, 1, [2.5, 0.1, -3.25]);
+    assert_eq!(
+        s.simulation().state().bricks[&theirs].print,
+        Some(ContentRef::Resolved("print/A".into()))
+    );
+}
+
+#[test]
 fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
     let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7);
     brick.source_records.push(SourceRecord {

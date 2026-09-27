@@ -411,6 +411,9 @@ pub struct Session {
     notices: VecDeque<String>,
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
+    /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
+    /// lowercase aspect ratio, used for the next brick of that aspect.
+    last_prints: BTreeMap<OwnerId, BTreeMap<String, String>>,
     avatar_catalog: Option<bri_content::avatar::Package>,
     ownership_scope: Option<String>,
     bulk_window_tick: u64,
@@ -471,6 +474,7 @@ impl Session {
             notices: VecDeque::new(),
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
+            last_prints: BTreeMap::new(),
             avatar_catalog: None,
             ownership_scope: None,
             bulk_window_tick: 0,
@@ -680,6 +684,7 @@ impl Session {
         self.admin_disconnect(owner);
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
         self.weapon_triggers.remove(&owner);
+        self.last_prints.remove(&owner);
         self.departed.insert(
             owner,
             (
@@ -1188,9 +1193,14 @@ impl Session {
                 let default_print = self
                     .tool_catalog
                     .brick_print_aspects
-                    .contains_key(&definition)
-                    .then(|| self.tool_catalog.default_print.clone())
-                    .flatten();
+                    .get(&definition)
+                    .and_then(|aspect| {
+                        self.last_prints
+                            .get(&owner)
+                            .and_then(|last| last.get(&aspect.to_ascii_lowercase()))
+                            .or(self.tool_catalog.default_print.as_ref())
+                    })
+                    .cloned();
                 let mut brick = Brick::new(ContentRef::Resolved(definition), position, owner);
                 brick.quarter_turns = quarter_turns;
                 brick.color = color;

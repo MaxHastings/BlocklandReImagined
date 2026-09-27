@@ -2025,7 +2025,8 @@ impl App {
                     | UiAction::SendWrench { .. }
                     | UiAction::SendEvents { .. }
             ) {
-                self.tool_ui
+                let last_print = self
+                    .tool_ui
                     .command_accepted(
                         pending
                             .command
@@ -2035,6 +2036,13 @@ impl App {
                     .map_err(|e| {
                         format!("Server accepted the edit, but dialog refresh failed: {e:#}")
                     })?;
+                if let Some(last) = last_print
+                    && let Some(building) = self.building.as_mut()
+                {
+                    building
+                        .remember_print(&last)
+                        .map_err(|e| format!("Last print was not remembered: {e:#}"))?;
+                }
             }
             Ok(())
         });
