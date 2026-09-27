@@ -89,12 +89,15 @@ A pre-push hook runs `tools/gate.py` on every push to main. It refuses the
 push unless the commit contains the latest origin/main, no pushed commit undoes
 recent main work (the stale-tree check), protocol VERSION does not go backwards,
 and build, `clippy -D warnings`, `bri-client --check` on the main checkout's
-`content` and `cargo test --workspace -- --include-ignored` pass. Before
-pushing: `git fetch origin main`, rebase onto `origin/main`, then push. Run
-`python tools/gate.py` first to check without pushing, or `--diff-only` for
-the fast history checks. Gate runs use one dedicated worktree and target dir
-in `../.bri-gate` (nothing else builds there) and queue on a lock, so a wait is
-normal; logs are in `../.bri-gate/logs`. Never push with `--no-verify`. If the
+`content` and `cargo test --workspace -- --include-ignored` pass (about 10
+minutes). Push with `python tools/gate.py --push`: with your work committed,
+it rebases onto origin/main, gates and pushes while holding the gate lock, so
+main cannot move under you. A plain `git push origin HEAD:main` also runs the
+gate but fails if main moves meanwhile. `python tools/gate.py` checks without
+pushing; `--diff-only` runs only the fast history checks. Gate runs use one
+dedicated worktree and target dir in `../.bri-gate` (nothing else builds
+there) and queue on a lock, so a wait is normal; logs are in
+`../.bri-gate/logs`. Never push with `--no-verify`. If the
 gate flags an intentional undo, add `Gate-Allow-Undo: <path>` to that commit's
 message. A test already failing on main goes in
 `tools/gate-known-failures.toml` with the owning thread, which removes the

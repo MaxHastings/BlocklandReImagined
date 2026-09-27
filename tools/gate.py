@@ -1,6 +1,7 @@
 """Push gate for main: nothing lands on origin/main unless it passes.
 
     python tools/gate.py                 gate HEAD as if pushing it to main
+    python tools/gate.py --push          rebase, gate and push HEAD to main (preferred)
     python tools/gate.py --diff-only     only the fast history checks
     python tools/gate.py --install-hook  install the shared pre-push hook
     python tools/gate.py --hook ...      (called by the pre-push hook)
@@ -25,6 +26,7 @@ Allowing an intentional undo: add a trailer line to the commit message,
 Commits made by `git revert` ("Revert ...") are allowed automatically.
 """
 import argparse
+import contextlib
 import os
 from pathlib import Path
 import re
@@ -43,6 +45,7 @@ UNDO_FRACTION = 0.6
 PROTOCOL_FILE = "crates/net/src/protocol.rs"
 PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
 LOCK_STALE_SECONDS = 3 * 3600
+LOCK_HELD = False
 
 
 class GateError(Exception):
@@ -213,6 +216,23 @@ def history_check(base, tip):
 # ---------------------------------------------------------------- build/test
 
 
+def process_alive(pid):
+    """Query only; never signals the process."""
+    if not pid.isdigit():
+        return False
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                             capture_output=True, text=True, errors="replace").stdout
+        return f'"{pid}"' in out
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
 class Lock:
     def __init__(self, path, label):
         self.path = path
@@ -232,7 +252,7 @@ class Lock:
                     age = time.time() - self.path.stat().st_mtime
                 except OSError:
                     continue
-                if age > LOCK_STALE_SECONDS:
+                if age > LOCK_STALE_SECONDS or not process_alive(holder.split(" ", 1)[0]):
                     say(f"removing stale gate lock ({holder})")
                     self.path.unlink(missing_ok=True)
                     continue
@@ -330,7 +350,7 @@ def full_gate(sha, root):
     log = root / "logs" / f"{sha[:12]}.log"
     log.write_text("", encoding="utf-8")
     label = f"{git('rev-parse', '--show-toplevel').strip()} {sha[:9]}"
-    with Lock(root / "gate.lock", label):
+    with contextlib.nullcontext() if LOCK_HELD else Lock(root / "gate.lock", label):
         if passed.exists():
             say(f"{sha[:9]} already passed the gate")
             return True
@@ -428,6 +448,35 @@ def gate_commit(sha, diff_only):
     return full_gate(sha, gate_root())
 
 
+def push_main():
+    """Rebase HEAD onto origin/main, gate it and push it, all under the gate
+    lock, so no other gated push can move main between the gate and the push."""
+    global LOCK_HELD
+    root = gate_root()
+    root.mkdir(parents=True, exist_ok=True)
+    label = f"{git('rev-parse', '--show-toplevel').strip()} --push"
+    with Lock(root / "gate.lock", label):
+        LOCK_HELD = True
+        for _attempt in range(3):
+            git("fetch", "-q", "origin", "main")
+            if subprocess.run(["git", "merge-base", "--is-ancestor", "refs/remotes/origin/main",
+                                "HEAD"]).returncode != 0:
+                if git("status", "--porcelain", "--untracked-files=no").strip():
+                    raise GateError("commit or discard your changes first; --push rebases HEAD")
+                say("rebasing onto origin/main")
+                if subprocess.run(["git", "rebase", "-q", "refs/remotes/origin/main"]).returncode:
+                    subprocess.run(["git", "rebase", "--abort"])
+                    raise GateError("rebase onto origin/main conflicts; resolve it by hand")
+            sha = git("rev-parse", "HEAD").strip()
+            if not gate_commit(sha, diff_only=False):
+                return False
+            if subprocess.run(["git", "push", "origin", "HEAD:main"]).returncode == 0:
+                say(f"pushed {sha[:9]} to main")
+                return True
+            say("main moved during the gate (an ungated push?); rebasing and retrying")
+    return False
+
+
 def hook(stdin):
     ok = True
     for line in stdin.read().splitlines():
@@ -481,6 +530,8 @@ def main():
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--install-hook", action="store_true")
     parser.add_argument("--diff-only", action="store_true")
+    parser.add_argument("--push", action="store_true",
+                        help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
                         help="only run the history check on BASE..TIP (used by CI)")
     parser.add_argument("commit", nargs="?", default="HEAD")
@@ -495,6 +546,8 @@ def main():
                 print(f"    {problem}")
             say("history check " + ("FAILED" if problems else "ok"))
             return 1 if problems else 0
+        if args.push:
+            return 0 if push_main() else 1
         if args.hook is not None:
             return 0 if hook(sys.stdin) else 1
         sha = git("rev-parse", args.commit).strip()
