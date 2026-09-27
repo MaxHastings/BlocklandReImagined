@@ -153,6 +153,50 @@ pub(crate) fn append_world_brick(
         .with_context(|| format!("Building native geometry for brick {id}"))
 }
 
+/// v20 temp (ghost) brick look, from `blocklandv20.exe` 0x52e370/0x52e860:
+/// every quad is pushed 0.02 units out along its normals and drawn twice in
+/// the translucent brick pass. The reversed-winding copy shows the far inner
+/// walls in the inside colour (default black); the forward copy is the paint
+/// colour times 1.5. Both flash via `Material::temp_brick_flash` and keep the
+/// normal surface overlays.
+pub fn v20_temp_brick(scene: &mut SceneData) {
+    const INFLATE: f32 = 0.02;
+    for vertex in &mut scene.vertices {
+        let n = glam::Vec3::from(vertex.normal).normalize_or_zero();
+        vertex.position = (glam::Vec3::from(vertex.position) + n * INFLATE).to_array();
+    }
+    let inside_base = scene.vertices.len() as u32;
+    let inside: Vec<_> = scene
+        .vertices
+        .iter()
+        .map(|v| bri_render::scene::SceneVertex {
+            color: [0.0, 0.0, 0.0, 1.0],
+            ..*v
+        })
+        .collect();
+    for vertex in &mut scene.vertices {
+        let [r, g, b, _] = vertex.color;
+        vertex.color = [r * 1.5, g * 1.5, b * 1.5, 1.0];
+    }
+    scene.vertices.extend(inside);
+    let mut indices = Vec::with_capacity(scene.indices.len() * 2);
+    for batch in &mut scene.batches {
+        let start = indices.len() as u32;
+        let original = &scene.indices[batch.indices.start as usize..batch.indices.end as usize];
+        for triangle in original.chunks_exact(3) {
+            indices.extend([triangle[0], triangle[2], triangle[1]].map(|i| i + inside_base));
+        }
+        indices.extend_from_slice(original);
+        batch.indices = start..indices.len() as u32;
+    }
+    scene.indices = indices;
+    for material in &mut scene.materials {
+        material.alpha = bri_render::scene::AlphaMode::Blend;
+        material.temp_brick_flash = true;
+        material.double_sided = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

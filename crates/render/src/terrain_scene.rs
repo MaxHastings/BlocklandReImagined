@@ -348,6 +348,8 @@ mod tests {
                 kind: MaterialKind::Terrain,
                 alpha: AlphaMode::Opaque,
                 double_sided: false,
+                clamp_nearest: false,
+                temp_brick_flash: false,
                 parameters: Some([[0.0; 4]; 3]),
             }],
             ..Default::default()

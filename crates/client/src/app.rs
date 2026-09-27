@@ -2918,14 +2918,7 @@ fn building_action(action: &UiAction) -> bool {
 }
 
 fn translucent_ghost(scene: &mut SceneData) {
-    // Authored literal quad colors may ignore paint alpha. Apply ghost opacity
-    // after building geometry so every surface remains visibly unplanted.
-    for vertex in &mut scene.vertices {
-        vertex.color[3] *= 0.45;
-    }
-    for material in &mut scene.materials {
-        material.alpha = bri_render::scene::AlphaMode::Blend;
-    }
+    crate::world_scene::v20_temp_brick(scene);
 }
 
 fn combine_effect_frames(
@@ -4997,27 +4990,38 @@ image: "v20.image.gunimage".into(),
         Ok(())
     }
     #[test]
-    fn ghost_opacity_includes_literal_authored_faces_without_changing_color() {
+    fn ghost_matches_v20_temp_brick_shells() {
         let mut scene = bri_render::scene::SceneData::default();
         scene
             .materials
             .push(bri_render::scene::Material::vertex_lit("literal", 0));
-        for alpha in [1.0, 0.5] {
+        for x in [0.0, 1.0, 0.0] {
             scene.vertices.push(bri_render::scene::SceneVertex {
-                position: [0.0; 3],
+                position: [x, 0.0, x - 1.0],
                 normal: [0.0, 1.0, 0.0],
                 uv: [0.0; 2],
                 lightmap_uv: [0.0; 2],
-                color: [0.8, 0.6, 0.2, alpha],
+                color: [0.4, 0.6, 0.2, 0.5],
             });
         }
+        scene.indices = vec![0, 1, 2];
+        scene.batches.push(bri_render::scene::MeshBatch {
+            indices: 0..3,
+            material: 0,
+            center: [0.0; 3],
+        });
         super::translucent_ghost(&mut scene);
-        assert_eq!(scene.vertices[0].color, [0.8, 0.6, 0.2, 0.45]);
-        assert_eq!(scene.vertices[1].color[3], 0.225);
-        assert_eq!(
-            scene.materials[0].alpha,
-            bri_render::scene::AlphaMode::Blend
-        );
+        // Outside: paint x1.5, pushed 0.02 along the normal, forward winding.
+        assert_eq!(scene.vertices[0].position, [0.0, 0.02, -1.0]);
+        assert!((scene.vertices[0].color[0] - 0.6).abs() < 1e-6);
+        assert!((scene.vertices[0].color[1] - 0.9).abs() < 1e-6);
+        // Inside: black copy drawn first with reversed winding.
+        assert_eq!(scene.vertices[3].color, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(scene.indices, vec![3, 5, 4, 0, 1, 2]);
+        assert_eq!(scene.batches[0].indices, 0..6);
+        let material = &scene.materials[0];
+        assert_eq!(material.alpha, bri_render::scene::AlphaMode::Blend);
+        assert!(material.temp_brick_flash);
     }
     #[test]
     fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {

@@ -178,6 +178,12 @@ pub struct Material {
     pub kind: MaterialKind,
     pub alpha: AlphaMode,
     pub double_sided: bool,
+    /// v20 `fxBrickBatcher` loads brickSIDE with `GL_CLAMP` and nearest
+    /// magnification; every other brick surface repeats with linear filtering.
+    pub clamp_nearest: bool,
+    /// v20 temp-brick flash: opacity follows `$pref::HUD::tempBrickFlash*`
+    /// (triangle wave 0.3..0.6 over 800 ms) instead of vertex alpha.
+    pub temp_brick_flash: bool,
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
@@ -204,6 +210,8 @@ impl Material {
             kind: MaterialKind::Surface,
             alpha: AlphaMode::Opaque,
             double_sided: false,
+            clamp_nearest: false,
+            temp_brick_flash: false,
             parameters: None,
         }
     }
@@ -1397,8 +1405,8 @@ impl SceneRenderer {
                     AlphaMode::Mask(c) => c,
                     _ => 0.0,
                 },
-                0.0,
-                0.0,
+                if material.clamp_nearest { 1.0 } else { 0.0 },
+                if material.temp_brick_flash { 1.0 } else { 0.0 },
             ]);
             if let Some(groups) = material.parameters {
                 for (i, group) in groups.iter().enumerate() {

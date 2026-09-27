@@ -240,20 +240,39 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_light+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
-    let albedo=textureSample(layer0,tiled,v.uv);
+    // v20 brickSIDE: GL_CLAMP with nearest magnification. Snap to base-level
+    // texel centres and keep the unsnapped derivatives for mip selection.
+    let size=vec2<f32>(textureDimensions(layer0));
+    let dx=dpdx(v.uv);let dy=dpdy(v.uv);
+    let snapped=(floor(clamp(v.uv,vec2<f32>(0.),vec2<f32>(1.))*size-vec2<f32>(0.0001))+vec2<f32>(0.5))/size;
+    let edge=textureSampleGrad(layer0,clamped,clamp(snapped,vec2<f32>(0.5)/size,vec2<f32>(1.)-vec2<f32>(0.5)/size),dx,dy);
+    var albedo=textureSampleGrad(layer0,tiled,v.uv,dx,dy);
+    if material[0].z==1.0 {albedo=edge;}
     var base_color=v.color.rgb;
     if fx.x==6u {base_color=rainbow(fract(time/5.))*max(max(base_color.r,base_color.g),base_color.b);}
     if fx.x==5u {let swirl=0.7+0.3*sin(v.world_position.y*3.+atan2(v.world_position.z,v.world_position.x)*2.-time*3.);base_color*=swirl;}
     var alpha=albedo.a*v.color.a;
     var pigment=display_color(albedo.rgb)*base_color;
-    if material[0].x==3.0 || material[0].x==7.0 {
+    let decal=material[0].x==3.0;
+    if decal {
+        // v20 fxBrickBatcher uses GL_DECAL (0x52d120): lit paint first, then
+        // the raw UNORM overlay mixed by its coverage alpha. Alpha is paint's.
+        pigment=base_color;
+        alpha=v.color.a;
+    }
+    if material[0].x==7.0 {
         // Original brick masks have low coverage alpha (e.g. TOP <=46/255).
         // They overlay pigment on an opaque painted surface, not cut holes.
-        // These images use raw UNORM to preserve authored display-space mixing.
         pigment=mix(base_color,albedo.rgb,albedo.a);
         alpha=v.color.a;
     }
     if fx.x==4u {alpha*=0.5+0.5*cos(time*3.14159265);}
+    if material[0].w==1.0 {
+        // v20 temp brick (0x52e6b4): t = ms mod 800 folded at 400, then
+        // alpha = offset 0.3 + range 0.3 * t/400, ignoring paint alpha.
+        let t=fract(time/0.8)*0.8;
+        alpha=0.3+0.3*min(t,0.8-t)/0.4;
+    }
     if alpha<=material[0].y {discard;}
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
@@ -284,5 +303,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         if fx.x==1u {display+=pigment*(0.12+0.25*fresnel)+camera.sun_color.rgb*specular*0.35;}
         else {display=pigment*(0.25+0.65*horizon)+camera.sun_color.rgb*specular*0.65+vec3<f32>(fresnel*0.12);}
     }
+    // Fixed-function lighting clamps the vertex colour before texturing.
+    if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }

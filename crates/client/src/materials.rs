@@ -32,6 +32,9 @@ impl BrickMaterials {
         let mut out = [0; 6];
         for (i, name) in SURFACES.iter().enumerate() {
             out[i] = self.append(scene, &self.bundle.surfaces[*name]);
+            // v20 fxBrickBatcher slot 3 (brickSIDE) is the only surface loaded
+            // with GL_CLAMP and nearest magnification (0x531f94).
+            scene.materials[out[i]].clamp_nearest = *name == "side";
         }
         // A print-less surface is still painted, not an arbitrary letter. The
         // server assigns original default Letters/A when appropriate.

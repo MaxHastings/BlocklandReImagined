@@ -761,6 +761,8 @@ fn load_terrain(
         kind: MaterialKind::Terrain,
         alpha: AlphaMode::Opaque,
         double_sided: false,
+        clamp_nearest: false,
+        temp_brick_flash: false,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(
