@@ -1232,7 +1232,7 @@ mod tests {
             grounded: false,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
         }
     }
     fn fire() -> UiAction {

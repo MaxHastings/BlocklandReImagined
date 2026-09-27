@@ -1757,6 +1757,31 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Evidence: sim `spray_paint_temporarily_recolours_the_body_band_it_hits`
   and the `spray::tests` band test; `cargo test -p bri-sim` passed.
 
+- 2026-09-27 Torque and v20 player quirks audit (`docs/audits/torque-quirks.md`).
+  The evidence is the TGE 1.x `player.cc` (MBG reference) plus a read-only
+  disassembly of blocklandv20.exe: pickActionAnimation, setActionThread,
+  canJump, and the crouch and jet parts of updateMove. Changes:
+  - **Humping quirk.** Crouch is now v20's crouch pose thread. Crouching sinks
+    over the 0.2 s clip, and releasing reverses from the current pose.
+    Re-pressing crouch while rising restarts from standing, so tapping pumps
+    the hips. The first-person eye follows the same thread.
+  - **Jump rules.** Held jump rehops after jumpDelay (3 Torque ticks). A late
+    jump works up to 224 ms after leaving a surface. Surfaces up to 80 degrees
+    are jumpable. The impulse adds along the surface normal to the current
+    velocity, fades from rise speed 20 to 30, and Blockland's rising guard
+    applies. `PlayerState.jump` replaces `jump_held`, with net VERSION 16
+    (approved by Max).
+  - **Crouch jets.** Thrust goes flat along the facing.
+
+  The picker gates (0.4 3D root threshold, per-frame re-pick, 0.25 s
+  transitions) went to the diagonal walk animation thread.
+
+  Verification: `cargo test -p bri-sim -p bri-client -p bri-net` passed, and
+  clippy is clean on those crates. The offscreen capture
+  `cargo test -p bri-client --test crouch_capture -- --ignored` wrote
+  `artifacts/torque-quirks/crouch-tap.png` and the hip log. The hip rises from
+  0.2445 to 0.5434, snaps to 0.6660 on the re-press, then sinks again.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

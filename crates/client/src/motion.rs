@@ -9,6 +9,7 @@
 //!
 //! Remote players are rendered slightly in the past, interpolating between
 //! buffered authoritative poses on the server's tick timeline.
+use crate::crouch::{CROUCH_SECONDS, CrouchThread};
 use crate::network::View;
 use anyhow::Result;
 use bri_net::protocol::{POSE_INTERVAL, PublicWorld};
@@ -39,8 +40,6 @@ const REMOTE_HISTORY: usize = 32;
 const SNAP_DISTANCE: f32 = 4.0;
 /// Visual correction decay rate per second.
 const CORRECTION_RATE: f32 = 14.0;
-/// Crouch eye-height blend rate per second.
-const EYE_RATE: f32 = 16.0;
 
 #[derive(Default)]
 pub struct Motion {
@@ -51,6 +50,8 @@ pub struct Motion {
     accumulator: f32,
     previous: Option<PlayerState>,
     correction: Vec3,
+    /// The local view follows v20's crouch thread, including its re-crouch snap.
+    crouch: CrouchThread,
     eye_height: Option<f32>,
     remotes: BTreeMap<OwnerId, VecDeque<bri_net::protocol::Pose>>,
     /// Estimated `server_tick - local_seconds * TICK_RATE`.
@@ -220,10 +221,13 @@ impl Motion {
         if steps == MAX_STEPS {
             self.accumulator = self.accumulator.min(TICK);
         }
-        let target = predictor.state().eye(&PlayerTuning::default()).y
-            - predictor.state().feet[1];
-        let eye = self.eye_height.get_or_insert(target);
-        *eye += (target - *eye) * (1.0 - (-EYE_RATE * seconds).exp());
+        let tuning = PlayerTuning::default();
+        self.crouch
+            .update(predictor.state().crouched, seconds, CROUCH_SECONDS);
+        self.eye_height = Some(
+            tuning.stand_eye
+                - (tuning.stand_eye - tuning.crouch_eye) * self.crouch.eye_fraction(CROUCH_SECONDS),
+        );
         if steps == 0 {
             return Ok(None);
         }
@@ -348,7 +352,7 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {

@@ -1,4 +1,5 @@
 //! Native avatar resources, outfit binding and live player pose rendering.
+use crate::crouch::CrouchThread;
 use anyhow::{Context, Result, ensure};
 use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
@@ -179,6 +180,7 @@ impl AvatarAssets {
             last_time: None,
             channels: None,
             transition: None,
+            crouch: CrouchThread::default(),
             posed_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
         })
@@ -219,6 +221,7 @@ pub struct AvatarMesh {
     channels: Option<Channels>,
     /// Frozen source pose and start time of the current action transition.
     transition: Option<(Channels, f64)>,
+    crouch: CrouchThread,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -490,14 +493,16 @@ impl AvatarMesh {
                 weight: 1.0,
             });
         }
-        if player.crouched {
-            let crouch = assets
-                .rig
-                .sequence("crouch")
-                .context("Missing crouch clip")?;
+        let crouch = assets
+            .rig
+            .sequence("crouch")
+            .context("Missing crouch clip")?;
+        self.crouch
+            .update(player.crouched, elapsed, crouch.duration);
+        if let Some(time) = self.crouch.time() {
             layers.push(Layer {
                 animation: crouch,
-                time: crouch.duration,
+                time,
                 weight: 1.0,
             });
         }
@@ -713,7 +718,7 @@ impl Preview {
                 grounded: true,
                 crouched: false,
                 jetting: false,
-                jump_held: false,
+                jump: Default::default(),
             },
             0.0,
         )?;
@@ -778,7 +783,7 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
         }
     }
     #[test]

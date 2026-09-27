@@ -420,7 +420,7 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(c.orbit_focus(&presented), None);

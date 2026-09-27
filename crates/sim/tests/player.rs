@@ -182,13 +182,56 @@ fn walking_speed_jump_edge_and_landing() {
     world.step();
     step(&mut p, &mut world, jump, 45);
     assert!(p.state().feet[1] > 3.0, "{:?}", p.state());
-    step(&mut p, &mut world, jump, 220);
+    step(&mut p, &mut world, MoveInput::default(), 220);
     assert!(p.state().grounded);
     assert!(p.state().feet[1] < 0.02);
-    assert!(!p.step(&mut world, jump).unwrap().jumped);
-    world.step();
-    step(&mut p, &mut world, MoveInput::default(), 1);
+    // v20 jumps whenever jump is held and jumpDelay has run out: holding it
+    // hops again after the landing tick plus 3 Torque ticks of contact.
+    let mut landed_at = None;
+    let mut rehop_after = None;
     assert!(p.step(&mut world, jump).unwrap().jumped);
+    world.step();
+    for tick in 0..400 {
+        let events = p.step(&mut world, jump).unwrap();
+        world.step();
+        if events.landed {
+            landed_at = Some(tick);
+        }
+        if events.jumped {
+            rehop_after = landed_at.map(|landed| tick - landed);
+            break;
+        }
+    }
+    assert_eq!(rehop_after, Some(13), "{landed_at:?}");
+}
+#[test]
+fn a_jump_stays_available_briefly_after_walking_off_a_ledge() {
+    let mut world = bri_physics::new_world();
+    world.insert_collider(
+        ColliderBuilder::cuboid(2.0, 0.5, 2.0).translation(Vector::new(0.0, -0.5, 0.0)),
+        None,
+    );
+    world.detect_collisions(&(), &());
+    let mut p = spawn(&mut world);
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    let mut airborne = 0;
+    for _ in 0..400 {
+        p.step(&mut world, walk).unwrap();
+        world.step();
+        if !p.state().grounded {
+            airborne += 1;
+            if airborne == 20 {
+                break;
+            }
+        }
+    }
+    assert_eq!(airborne, 20, "{:?}", p.state());
+    let late = MoveInput { jump: true, ..walk };
+    assert!(p.step(&mut world, late).unwrap().jumped, "{:?}", p.state());
+    assert!(p.state().velocity[1] > 8.0, "{:?}", p.state());
 }
 #[test]
 fn crouch_clearance_wall_slide_and_camera_occlusion() {
@@ -522,8 +565,12 @@ fn jumping_under_a_v20_lintel_bumps_the_head_and_keeps_walking() {
     assert!(p.step(&mut w, jump).unwrap().jumped);
     w.step();
     let mut peak = 0.0_f32;
+    let walk = MoveInput {
+        jump: false,
+        ..jump
+    };
     for _ in 0..60 {
-        p.step(&mut w, jump).unwrap();
+        p.step(&mut w, walk).unwrap();
         w.step();
         peak = peak.max(p.state().feet[1]);
     }
@@ -534,4 +581,67 @@ fn jumping_under_a_v20_lintel_bumps_the_head_and_keeps_walking() {
         p.state()
     );
     assert!(p.state().velocity[2] < -6.5, "{:?}", p.state());
+}
+#[test]
+fn jumps_add_to_slope_velocity_along_the_surface_normal() {
+    // v20 adds jumpForce along the surface normal to the current velocity, so
+    // a jump while running up a ramp carries the run's climb with it.
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    let degrees = 25.0_f32;
+    ramp(&mut w, 1.0, 6.0, 6.0 * degrees.to_radians().tan());
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    for _ in 0..240 {
+        if p.state().feet[1] > 1.0 {
+            break;
+        }
+        p.step(&mut w, walk).unwrap();
+        w.step();
+    }
+    assert!(
+        p.state().grounded && p.state().feet[1] > 1.0,
+        "{:?}",
+        p.state()
+    );
+    let jump = MoveInput { jump: true, ..walk };
+    assert!(p.step(&mut w, jump).unwrap().jumped);
+    let expected = 7.0 * degrees.to_radians().sin() + 12.0 * degrees.to_radians().cos();
+    let rise = p.state().velocity[1];
+    assert!((rise - expected).abs() < 0.5, "{rise} vs {expected}");
+}
+#[test]
+fn crouched_jets_push_flat_along_the_facing_without_lift() {
+    let mut world = scene();
+    let mut p = spawn(&mut world);
+    // Jet up first, then crouch-jet with no move input: v20 thrusts along the
+    // body's forward axis only, so the player dashes forward and sinks.
+    step(
+        &mut p,
+        &mut world,
+        MoveInput {
+            jet: true,
+            ..Default::default()
+        },
+        240,
+    );
+    let start = p.state().clone();
+    step(
+        &mut p,
+        &mut world,
+        MoveInput {
+            jet: true,
+            crouch: true,
+            ..Default::default()
+        },
+        60,
+    );
+    let s = p.state();
+    assert!(s.crouched && s.jetting);
+    // Half a second of 2000/90 thrust forward (-Z at yaw 0), less drag.
+    assert!(s.velocity[2] < start.velocity[2] - 10.0, "{s:?}");
+    assert!(s.velocity[0].abs() < 0.01, "{s:?}");
+    assert!(s.velocity[1] < start.velocity[1] - 5.0, "{s:?}");
 }

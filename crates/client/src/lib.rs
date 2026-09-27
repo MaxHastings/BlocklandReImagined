@@ -8,6 +8,7 @@ pub mod brick_debris;
 pub mod building;
 pub mod content;
 pub mod controls;
+pub mod crouch;
 pub mod effects;
 pub mod explosion_shapes;
 pub mod foliage;

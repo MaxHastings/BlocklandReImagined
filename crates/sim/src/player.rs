@@ -12,8 +12,20 @@ use std::collections::BTreeSet;
 
 /// Original engine tick; v20 per-tick constants are converted with it.
 const TORQUE_TICK: f32 = 0.032;
+/// `sTractionDistance`: how far below the feet contact is found.
+const JUMP_TRACTION: f32 = 0.03 + 0.005;
+/// `PlayerStandardArmor.minJumpSpeed`/`maxJumpSpeed`: upward speeds over
+/// which the jump impulse fades out.
+const MIN_JUMP_SPEED: f32 = 20.0;
+const MAX_JUMP_SPEED: f32 = 30.0;
 /// `PlayerStandardArmor.maxFreelookAngle`: how far free look turns the head.
 pub const MAX_FREELOOK: f32 = 3.0;
+/// `PlayerStandardArmor.jumpDelay`: 3 Torque ticks of jumpable contact
+/// between jumps, so holding jump hops again 96 ms after each landing.
+const JUMP_DELAY_TICKS: u8 = 12;
+/// `JumpSkipContactsMax` is 8: a jump stays available for 7 Torque ticks
+/// (224 ms) after leaving a jumpable surface.
+const JUMP_WINDOW_TICKS: u8 = 27;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveInput {
@@ -64,7 +76,27 @@ pub struct PlayerState {
     pub grounded: bool,
     pub crouched: bool,
     pub jetting: bool,
-    pub jump_held: bool,
+    #[serde(default)]
+    pub jump: JumpState,
+}
+/// v20 jump bookkeeping (`Player::canJump` and the jump in `updateMove`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct JumpState {
+    /// Contact ticks left before another jump (`mJumpDelay`).
+    pub delay: u8,
+    /// Ticks since the last jumpable contact (`mJumpSurfaceLastContact`).
+    pub since_contact: u8,
+    /// Last jumpable surface normal (`mJumpSurfaceNormal`).
+    pub normal: [f32; 3],
+}
+impl Default for JumpState {
+    fn default() -> Self {
+        Self {
+            delay: 0,
+            since_contact: JUMP_WINDOW_TICKS,
+            normal: [0.0, 1.0, 0.0],
+        }
+    }
 }
 impl PlayerState {
     pub fn forward(&self) -> Vec3 {
@@ -120,6 +152,7 @@ pub struct PlayerTuning {
     pub step_height: f32,
     pub ground_snap: f32,
     pub slope_degrees: f32,
+    pub jump_surface_degrees: f32,
 }
 impl Default for PlayerTuning {
     fn default() -> Self {
@@ -167,6 +200,7 @@ impl Default for PlayerTuning {
             step_height: 1.0,
             ground_snap: 0.2,
             slope_degrees: 70.0,
+            jump_surface_degrees: 80.0,
         }
     }
 }
@@ -224,6 +258,7 @@ impl PlayerTuning {
             self.step_height,
             self.ground_snap,
             self.slope_degrees,
+            self.jump_surface_degrees,
         ];
         ensure!(
             values
@@ -231,6 +266,7 @@ impl PlayerTuning {
                 .all(|n| n.is_finite() && *n > 0.0 && *n <= 1000.0)
                 && self.crouch_height < self.stand_height
                 && self.slope_degrees < 90.0
+                && self.jump_surface_degrees < 90.0
                 && self.horizontal_resist_speed < self.horizontal_max_speed
                 && self.up_resist_speed < self.up_max_speed,
             "Invalid player tuning"
@@ -294,7 +330,7 @@ impl Player {
                 grounded: false,
                 crouched: false,
                 jetting: false,
-                jump_held: false,
+                jump: Default::default(),
             },
             tuning,
             body,
@@ -552,15 +588,60 @@ impl Player {
         let surface_y = ground.map_or(0.0, |normal| {
             -(normal.x * velocity.x + normal.z * velocity.z) / normal.y
         });
-        let jumped = input.jump && !self.state.jump_held && was_grounded;
-        self.state.jump_held = input.jump;
+        if was_grounded && !input.jet {
+            velocity.y = surface_y;
+        }
+        // v20 jumps while jump is held, from any surface up to jumpSurfaceAngle,
+        // shortly after leaving one, and adds the impulse to current velocity.
+        let jump_contact = query
+            .cast_shape(
+                &pose,
+                Vector::new(0.0, -1.0, 0.0),
+                shape.as_ref(),
+                ShapeCastOptions {
+                    max_time_of_impact: JUMP_TRACTION,
+                    compute_impact_geometry_on_penetration: true,
+                    ..Default::default()
+                },
+            )
+            .map(|(_, hit)| Vec3::from(hit.normal1.to_array()))
+            .filter(|normal| normal.y > t.jump_surface_degrees.to_radians().cos());
+        let jump = &mut self.state.jump;
+        if let Some(normal) = jump_contact {
+            jump.normal = normal.to_array();
+        }
+        let previous = Vec3::from(self.state.velocity);
+        // Blockland's canJump also refuses while rising faster than 3 unless
+        // moving faster than 4 overall.
+        let jumped = input.jump
+            && jump.delay == 0
+            && jump.since_contact < JUMP_WINDOW_TICKS
+            && (previous.y <= 3.0 || previous.length() > 4.0)
+            && previous.y <= MAX_JUMP_SPEED;
         if jumped {
-            velocity.y = t.jump_speed;
+            let normal = Vec3::from(jump.normal);
+            let rise_scale = if previous.y <= MIN_JUMP_SPEED {
+                1.0
+            } else {
+                1.0 - (previous.y - MIN_JUMP_SPEED) / (MAX_JUMP_SPEED - MIN_JUMP_SPEED)
+            };
+            // Facing away from the surface also pushes the jump along the move.
+            let direction = move_vec.normalize_or_zero();
+            let away = direction.dot(normal);
+            if away > 0.0 {
+                velocity += direction * t.jump_speed * away;
+            }
+            velocity.y += normal.y * t.jump_speed * rise_scale;
+            jump.delay = JUMP_DELAY_TICKS;
+            jump.since_contact = JUMP_WINDOW_TICKS;
+        } else if jump_contact.is_some() {
+            jump.delay = jump.delay.saturating_sub(1);
+            jump.since_contact = 0;
+        } else {
+            jump.since_contact = jump.since_contact.saturating_add(1).min(JUMP_WINDOW_TICKS);
         }
         if !was_grounded || jumped || input.jet {
             velocity.y -= t.gravity * dt;
-        } else {
-            velocity.y = surface_y;
         }
         if let Some((_, coverage)) = liquid {
             // v20: holding jump swims up (hard from a near standstill, less when
@@ -581,12 +662,19 @@ impl Player {
             }
         }
         if input.jet {
-            // Thrust leans into the move direction; it strengthens while falling.
-            let mut thrust = (move_vec + Vec3::Y * t.jet_lift).normalize();
-            let falling = -self.state.velocity[1];
-            if falling > 0.0 {
-                thrust.y *= 1.0 + 0.5 * (falling * 0.05).min(1.0);
-            }
+            // Crouched jets push flat along the body's facing with no lift
+            // (v20 updateMove near 0x5afbcf). Otherwise thrust leans into the
+            // move direction and strengthens while falling.
+            let thrust = if self.state.crouched {
+                forward
+            } else {
+                let mut thrust = (move_vec + Vec3::Y * t.jet_lift).normalize();
+                let falling = -self.state.velocity[1];
+                if falling > 0.0 {
+                    thrust.y *= 1.0 + 0.5 * (falling * 0.05).min(1.0);
+                }
+                thrust
+            };
             velocity += thrust * t.jet_acceleration * dt;
         }
         let horizontal_speed = Vec3::new(velocity.x, 0.0, velocity.z).length();

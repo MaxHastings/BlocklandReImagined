@@ -18,7 +18,7 @@ fn player() -> PlayerState {
         grounded: true,
         crouched: false,
         jetting: false,
-        jump_held: false,
+        jump: Default::default(),
     }
 }
 
@@ -111,7 +111,7 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
     state.crouched = false;
     state.jetting = false;
     state.velocity = [0.0; 3];
-    state.jump_held = false;
+    state.jump = Default::default();
     time += 1.0 / 60.0;
     sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &no_tool)?;
     Ok(())
