@@ -960,3 +960,46 @@ fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
     assert_eq!(BuildGesture::shift(1, -1, 0), Some(BuildGesture::ShiftRight));
     assert_eq!(BuildGesture::shift(0, 0, 0), None);
 }
+
+#[test]
+fn chat_talks_on_thread_three_for_fifty_ms_per_character() {
+    use bri_sim::presentation::CueKind;
+    let mut s = session();
+    let a = s
+        .join("Maxwell".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    s.take_cues();
+    let talk = |s: &mut Session| {
+        s.take_cues()
+            .into_iter()
+            .filter_map(|cue| match cue.kind {
+                CueKind::WeaponAnimation {
+                    actor,
+                    thread: 3,
+                    sequence,
+                    ..
+                } if actor == a => Some(sequence),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Ten characters: 500 ms, 60 ticks.
+    s.command(a, 1, Command::Chat("hello blox".into())).unwrap();
+    assert_eq!(talk(&mut s), ["talk"]);
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    assert!(talk(&mut s).is_empty());
+    s.step().unwrap();
+    assert_eq!(talk(&mut s), ["root"]);
+    // `serverCmdTeamMessageSent` talks before it looks for a team.
+    assert!(s.command(a, 2, Command::TeamChat("hi".into())).is_err());
+    assert_eq!(talk(&mut s), ["talk"]);
+    for _ in 0..13 {
+        s.step().unwrap();
+    }
+    assert_eq!(talk(&mut s), ["root"]);
+}

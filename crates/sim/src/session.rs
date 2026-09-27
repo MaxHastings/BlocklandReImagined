@@ -327,9 +327,14 @@ struct Peer {
     /// `lastActivateTime` and `activateLevel` for the activate swing.
     last_activate: Option<u64>,
     activate_level: u32,
+    /// Ticks of pending `schedule(strlen(%text) * 50, playThread, 3, root)`
+    /// calls from chat, one per message.
+    talk_stops: VecDeque<u64>,
 }
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
+/// Chat talks for 50 ms per character: 6 ticks at 120 ticks per second.
+const TALK_TICKS_PER_CHAR: u64 = 6;
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
@@ -589,6 +594,7 @@ impl Session {
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
+                talk_stops: VecDeque::new(),
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -708,6 +714,7 @@ impl Session {
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
+                talk_stops: VecDeque::new(),
                 avatar,
             },
         );
@@ -758,9 +765,9 @@ impl Session {
         self.admin_disconnects.drain(..).collect()
     }
     /// `owner` is resolved from the established connection, not deserialized here.
-    /// `%player.playThread(3, ...)`: a one-shot builder animation every
+    /// `%player.playThread(3, ...)`: a builder or chat animation every
     /// client sees, carried as an avatar animation cue.
-    fn play_build_thread(&mut self, tick: u64, owner: OwnerId, sequence: &str) {
+    fn play_thread_three(&mut self, tick: u64, owner: OwnerId, sequence: &str) {
         let Some(peer) = self.peers.get(&owner) else {
             return;
         };
@@ -775,6 +782,35 @@ impl Session {
             },
             position,
         );
+    }
+    /// `serverCmdMessageSent` and `serverCmdTeamMessageSent`: talk, then
+    /// return thread 3 to root after 50 ms per character of the message.
+    fn start_talking(&mut self, tick: u64, owner: OwnerId, text_len: usize) {
+        self.play_thread_three(tick, owner, "talk");
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            let chars = u64::try_from(text_len).unwrap_or(u64::MAX);
+            peer.talk_stops
+                .push_back(tick.saturating_add(chars.saturating_mul(TALK_TICKS_PER_CHAR)));
+        }
+    }
+    /// Fires due chat `root` schedules. Each message stops thread 3 on its own
+    /// timer, whatever plays on it by then, as the original schedules do.
+    fn stop_talking(&mut self, tick: u64) {
+        let due: Vec<_> = self
+            .peers
+            .iter_mut()
+            .flat_map(|(owner, peer)| {
+                let mut stops = 0;
+                while peer.talk_stops.front().is_some_and(|stop| *stop <= tick) {
+                    peer.talk_stops.pop_front();
+                    stops += 1;
+                }
+                std::iter::repeat_n(*owner, stops)
+            })
+            .collect();
+        for owner in due {
+            self.play_thread_three(tick, owner, "root");
+        }
     }
     pub fn command(&mut self, owner: OwnerId, sequence: u64, command: Command) -> Result<Reply> {
         self.command_with_aim(owner, sequence, command, None)
@@ -937,6 +973,7 @@ impl Session {
                 );
                 peer.talking = false;
                 let name = peer.name.clone();
+                self.start_talking(tick, owner, text.len());
                 self.team_chat(owner, &name, &text)?;
                 Ok(Reply::Accepted)
             }
@@ -984,7 +1021,7 @@ impl Session {
             }
             Command::BuildGesture(gesture) => {
                 ensure!(peer.combat.alive, "Dead players cannot build");
-                self.play_build_thread(tick, owner, gesture.sequence());
+                self.play_thread_three(tick, owner, gesture.sequence());
                 Ok(Reply::Accepted)
             }
             Command::SwitchSeat(step) => {
@@ -1067,7 +1104,7 @@ impl Session {
                 undo.push_back(id);
                 self.cues
                     .emit(tick, crate::presentation::CueKind::Plant, position);
-                self.play_build_thread(tick, owner, "plant");
+                self.play_thread_three(tick, owner, "plant");
                 Ok(Reply::Planted(id))
             }
             Command::UseSprayCan { color } => {
@@ -1100,7 +1137,7 @@ impl Session {
                     "activate"
                 };
                 let eye = peer.player.eye();
-                self.play_build_thread(tick, owner, swing);
+                self.play_thread_three(tick, owner, swing);
                 let brick_distance = self
                     .simulation
                     .target(eye, direction, 5.0)?
@@ -1132,6 +1169,7 @@ impl Session {
                     .checked_add(1)
                     .context("Chat IDs exhausted")?;
                 peer.talking = false;
+                let text_len = text.len();
                 self.chat.push_back(ChatLine {
                     id: self.next_chat,
                     owner,
@@ -1144,12 +1182,14 @@ impl Session {
                 if self.chat.len() > 100 {
                     self.chat.pop_front();
                 }
+                self.start_talking(tick, owner, text_len);
                 Ok(Reply::Accepted)
             }
         }
     }
     pub fn step(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
+        self.stop_talking(tick);
         self.step_bots()?;
         let mut touches = Vec::new();
         let mut impacts = Vec::new();

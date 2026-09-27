@@ -294,7 +294,8 @@ fn capture(label: &str, case: &str) -> Result<Vec<f32>> {
     Ok(steps)
 }
 
-/// v20 `playThread(3, ...)` builder animations over the raised brick arm.
+/// v20 `playThread(3, ...)` builder and chat animations over the raised
+/// brick arm.
 #[test]
 #[ignore = "requires original native avatar package and an offscreen GPU"]
 fn builder_animations_render_on_the_original_avatar() -> Result<()> {
@@ -322,6 +323,7 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
         "plant",
         "undo",
         "activate2",
+        "talk",
     ];
     let mut sheet = image::RgbaImage::new(CELL.0 * STEPS, CELL.1 * gestures.len() as u32);
     let mut report = Vec::new();

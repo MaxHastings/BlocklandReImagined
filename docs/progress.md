@@ -1823,6 +1823,16 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `cargo test -p bri-client --test avatar_animation_render --release -- --ignored`
   renders every builder clip over the raised arm (`artifacts/avatar-animation/builder-sheet.png`).
 
+- 2026-09-27 Chat talk animation. `serverCmdMessageSent` and
+  `serverCmdTeamMessageSent` play thread 3 `talk` (the looping hip bob) and
+  schedule `playThread(3, root)` after `strlen(%text) * 50` ms. The session
+  now emits the `talk` cue on chat and team chat (team chat talks even when
+  the sender has no team, as v20 does) and a `root` cue when each message's
+  own timer runs out, even if a builder animation replaced talk by then.
+  No protocol change. Verified: sim test
+  `chat_talks_on_thread_three_for_fifty_ms_per_character`; the talk row of
+  `artifacts/avatar-animation/builder-sheet.png`.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

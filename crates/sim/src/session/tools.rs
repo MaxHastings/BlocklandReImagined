@@ -851,7 +851,7 @@ impl Session {
                 self.dirty.insert(id);
                 peer.inspection = None;
                 let tick = self.simulation.state().tick;
-                self.play_build_thread(tick, owner, "undo");
+                self.play_thread_three(tick, owner, "undo");
                 return Ok(Reply::Undone(Some(id)));
             }
             return Ok(Reply::Undone(None));
