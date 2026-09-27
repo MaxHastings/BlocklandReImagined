@@ -66,6 +66,7 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         player.state().feet[1] > 1.0,
         "Submerged player did not rise"
     );
+    assert!(player.state().crouched, "v20 crouches fully submerged players");
     // v20 swim push 0.5 per 32 ms against drag 0.1 * viscosity 40.
     assert!(
         (-3.9..-3.6).contains(&player.state().velocity[2]),
@@ -87,6 +88,7 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         player.state().velocity[2].abs() < 0.001,
         "Liquid drag did not stop idle momentum"
     );
+    assert!(!player.state().crouched, "a floating player stands");
     // Holding crouch dives to the bottom and holds the player there.
     for _ in 0..360 {
         player

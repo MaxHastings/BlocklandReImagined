@@ -194,6 +194,32 @@ impl CollisionMirror {
         self.physics.detect_collisions(&(), &());
         Ok(true)
     }
+    /// Every liquid with its v20 `waterColor`: each water brick in the colour
+    /// it is painted in `palette`, then map water.
+    pub fn tinted_waters(
+        &self,
+        bricks: &BTreeMap<BrickId, Brick>,
+        palette: &[[f32; 4]],
+    ) -> Vec<crate::water::TintedWater> {
+        let bricks = self.brick_waters.iter().map(|(id, w)| {
+            let paint = bricks
+                .get(id)
+                .and_then(|b| palette.get(usize::from(b.color)))
+                .copied()
+                .unwrap_or([1.0; 4]);
+            crate::water::TintedWater {
+                water: w.clone(),
+                color: crate::water::brick_water_color(paint),
+                brick: true,
+            }
+        });
+        let map = self.map_waters.iter().map(|w| crate::water::TintedWater {
+            water: w.clone(),
+            color: crate::water::MAP_WATER_COLOR,
+            brick: false,
+        });
+        bricks.chain(map).collect()
+    }
     pub fn physics(&self) -> &PhysicsWorld {
         &self.physics
     }

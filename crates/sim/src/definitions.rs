@@ -51,7 +51,12 @@ pub fn brick_water(brick: &Placed, definition: &Definition) -> Option<bri_conten
     if definition.special != Special::Water {
         return None;
     }
-    let (min, max) = brick_box(brick, &definition.mesh);
+    // `createWaterZone` grows the brick's box by 0.1 in height, then sets its
+    // centre 0.1 low: the zone reaches 0.15 below the brick and its surface
+    // sits 0.05 under the brick's top.
+    let (mut min, mut max) = brick_box(brick, &definition.mesh);
+    min.y -= 0.15;
+    max.y -= 0.05;
     let image = || bri_content::environment::Image {
         file: "brick-water".into(),
         source: String::new(),

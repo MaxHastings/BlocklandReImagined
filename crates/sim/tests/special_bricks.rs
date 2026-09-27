@@ -231,7 +231,11 @@ fn water_bricks_are_swimmable_not_solid() -> anyhow::Result<()> {
     let mut h = Harness::new()?;
     let water = h.plant(WATER, -4, -20, 0)?;
     let (min, max) = h.s.simulation().brick_box(water).unwrap();
-    assert!(h.s.simulation().liquids().iter().any(|w| w.max[1] == max.y));
+    // `createWaterZone`'s box sits 0.15 below the brick and 0.05 under its top.
+    assert!(h.s.simulation().liquids().iter().any(|w| {
+        (w.max[1] - (max.y - 0.05)).abs() < 1e-4 && (w.min[1] - (min.y - 0.15)).abs() < 1e-4
+    }));
+    h.s.take_cues();
     // Walking in sinks into the water instead of standing on top of it.
     let mut inside = None;
     for _ in 0..600 {
@@ -246,5 +250,17 @@ fn water_bricks_are_swimmable_not_solid() -> anyhow::Result<()> {
         feet.y < max.y - 0.5,
         "player at {feet} should be inside the water {min}..{max}"
     );
+    // The brick is taller than the player, so walking in covers the body at
+    // once. v20 splashes only on partial coverage, so this entry is silent.
+    let splashes: Vec<_> = h
+        .s
+        .take_cues()
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            bri_sim::presentation::CueKind::Water { entered, speed, .. } => Some((entered, speed)),
+            _ => None,
+        })
+        .collect();
+    assert!(splashes.is_empty(), "{splashes:?}");
     Ok(())
 }

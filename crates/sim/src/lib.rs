@@ -14,4 +14,5 @@ pub mod simulation;
 pub mod spawn;
 pub mod tool_catalog;
 pub mod tutorial;
+pub mod water;
 pub mod weapon_query;

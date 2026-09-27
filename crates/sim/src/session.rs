@@ -55,20 +55,6 @@ pub use tools::{InspectMode, ToolAction, ToolCatalog};
 pub use undo::UNDO_QUEUE_SIZE;
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 
-/// The surface height of water covering any part of this player's body.
-fn water_surface(
-    waters: &[bri_content::water::Water],
-    state: &crate::player::PlayerState,
-    tuning: &PlayerTuning,
-) -> Option<f32> {
-    let height = if state.crouched {
-        tuning.crouch_height
-    } else {
-        tuning.stand_height
-    };
-    bri_content::water::submersion(waters, state.feet, height).map(|(w, _)| w.max[1])
-}
-
 /// Queued inputs above which the server simulates extra ticks to catch up.
 const INPUT_TARGET: usize = 6;
 /// Bound on buffered inputs (half a second at the 120 Hz input rate).
@@ -440,6 +426,8 @@ struct Peer {
     /// Ticks of pending `schedule(strlen(%text) * 50, playThread, 3, root)`
     /// calls from chat, one per message.
     talk_stops: VecDeque<u64>,
+    /// v20's splash arming and `inLiquid` exit-sound state.
+    water: crate::water::SplashState,
 }
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
@@ -769,6 +757,7 @@ impl Session {
                 last_activate: None,
                 activate_level: 0,
                 talk_stops: VecDeque::new(),
+                water: Default::default(),
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -921,6 +910,7 @@ impl Session {
                 last_activate: None,
                 activate_level: 0,
                 talk_stops: VecDeque::new(),
+                water: Default::default(),
                 avatar,
             },
         );
@@ -1558,8 +1548,7 @@ impl Session {
                         ..Default::default()
                     }
                 };
-                let wet_before =
-                    water_surface(&liquids, peer.player.state(), peer.player.tuning());
+                let before = Vec3::from(peer.player.state().feet);
                 let motion = peer.player.step_in_water(
                     &mut self.simulation.physics,
                     input,
@@ -1569,14 +1558,20 @@ impl Session {
                 if Vec3::from(state.velocity).length() > 0.5 {
                     peer.sitting = false;
                 }
-                let wet = water_surface(&liquids, state, peer.player.tuning());
-                if let Some(surface) = wet.or(wet_before).filter(|_| wet.is_some() != wet_before.is_some()) {
-                    let speed = Vec3::from(state.velocity).length();
+                let height = crate::water::body_height(state, peer.player.tuning());
+                let deepest = crate::water::deepest(&liquids, state.feet, height);
+                let speed = Vec3::from(state.velocity).length();
+                let moved = Vec3::from(state.feet) != before;
+                if let Some(crossing) =
+                    peer.water.step(deepest.map_or(0.0, |(_, c)| c), speed, moved)
+                {
+                    // The splash sits on the surface at `pos.z + height * coverage`.
+                    let surface = deepest.map_or(state.feet[1], |(i, _)| liquids[i].max[1]);
                     self.cues.emit(
                         tick,
                         crate::presentation::CueKind::Water {
                             actor: owner,
-                            entered: wet.is_some(),
+                            entered: crossing == crate::water::Crossing::Splash,
                             speed: speed.min(10000.0),
                         },
                         [state.feet[0], surface, state.feet[2]],
