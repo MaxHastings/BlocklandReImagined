@@ -5,11 +5,10 @@ after root supplies the final release executable and SHA-256. It never builds,
 launches or tests the visible game. It refuses an existing release directory,
 missing selected content and content paths that escape the content root.
 
-The packager parses `ContentConfig::default` from
-`crates/client/src/content.rs`, then applies the same optional
-`content/client-content.json` override that `ClientContent::load` honors. The
-package receives a normalized `content/client-content.json` containing every
-effective package selection and the terrain region. It copies only those 14
+The packager reads the package list the client loads: `content/packages.json`
+when present, otherwise `crates/package/base-packages.json`
+(`docs/architecture/packages.md`). The package receives that list as
+`content/packages.json`. It copies only those 14
 selected package directories with all nested files; it excludes research,
 community and unintegrated debris content. Inputs with symbolic links or
 junctions are rejected.
@@ -20,7 +19,7 @@ Package layout:
 BlocklandReImagined-alpha-<version>/
   bri-client.exe
   content/
-    client-content.json
+    packages.json
     <15 selected native packages, recursively copied>
   PLAYTEST.md
   KNOWN-ISSUES.md

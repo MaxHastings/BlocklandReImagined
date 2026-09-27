@@ -13,6 +13,7 @@ use bri_ui::{
     pack::Pack,
     schema::{PACK_SCHEMA_VERSION, UiPack},
 };
+use bri_package::{environment::Environment, packages::PackageSet};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Digest;
 use std::{
@@ -44,89 +45,16 @@ pub const LOADABLE_MAPS: &[&str] = &[
     "v20/add-ons/map_tutorial/tutorial.mis",
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ContentConfig {
-    pub schema_version: u32,
-    pub map_bundle: String,
-    pub brick_catalog: String,
-    pub geometry: String,
-    pub effects: String,
-    pub worlds: String,
-    pub ui_pack: String,
-    pub brick_materials: String,
-    pub avatar: String,
-    pub effects_runtime: String,
-    pub audio: String,
-    pub weather: String,
-    pub foliage: String,
-    pub weapons: String,
-    pub item_presentation: String,
-    pub weapon_debris: String,
-    pub vehicles: String,
-    pub events: String,
-    pub tutorial: String,
-}
-impl Default for ContentConfig {
-    fn default() -> Self {
-        Self {
-            schema_version: 1,
-            map_bundle: "map-bundle-016".into(),
-            brick_catalog: "stock-catalog-004".into(),
-            geometry: "maps-pass-007".into(),
-            effects: "effects-pass-004".into(),
-            worlds: "worlds-pass-005".into(),
-            ui_pack: "ui-pack-003".into(),
-            brick_materials: "brick-materials-001".into(),
-            avatar: "avatar-pack-001".into(),
-            effects_runtime: "effects-runtime-pack-004".into(),
-            audio: "audio-pack-001".into(),
-            weather: "weather-pack-001".into(),
-            foliage: "foliage-pack-001".into(),
-            weapons: "weapons-pack-009".into(),
-            item_presentation: "item-presentation-pack-010".into(),
-            weapon_debris: "weapon-debris-pack-003".into(),
-            vehicles: "vehicles-pack-011".into(),
-            events: "events-pack-002".into(),
-            tutorial: "tutorial-pack-001".into(),
-        }
-    }
-}
-
 /// How a source checkout creates or refreshes its content (tools/bootstrap.py).
 pub const REGENERATE_HINT: &str = "If content packs are missing or out of date, regenerate them from a source checkout with: python tools/bootstrap.py --v20 \"<Blockland v20 folder>\" (docs/content-regeneration.md)";
-
-impl ContentConfig {
-    /// Every pack directory this configuration loads, in declaration order.
-    pub fn pack_names(&self) -> Vec<&str> {
-        vec![
-            &self.map_bundle,
-            &self.brick_catalog,
-            &self.geometry,
-            &self.effects,
-            &self.worlds,
-            &self.ui_pack,
-            &self.brick_materials,
-            &self.avatar,
-            &self.effects_runtime,
-            &self.audio,
-            &self.weather,
-            &self.foliage,
-            &self.weapons,
-            &self.item_presentation,
-            &self.weapon_debris,
-            &self.vehicles,
-            &self.events,
-            &self.tutorial,
-        ]
-    }
-}
 
 /// Send-friendly handles for a background hosting/loading worker. These paths
 /// contain generated native content only; Rc<Pack> never crosses threads.
 #[derive(Debug, Clone)]
 pub struct ContentPaths {
     pub root: PathBuf,
+    /// The packages.json this content was resolved from.
+    pub packages: PackageSet,
     pub map_bundle: PathBuf,
     pub brick_catalog: PathBuf,
     pub geometry: PathBuf,
@@ -317,54 +245,53 @@ fn file(root: &Path, name: &str, limit: u64) -> Result<PathBuf> {
 }
 
 impl ContentPaths {
-    pub fn resolve(root: &Path, config: &ContentConfig) -> Result<Self> {
-        ensure!(
-            config.schema_version == 1,
-            "Unsupported client content config schema {}",
-            config.schema_version
-        );
+    pub fn resolve(root: &Path, packages: &PackageSet) -> Result<Self> {
+        packages.validate().into_result()?;
         let given = root;
         let root = root
             .canonicalize()
             .with_context(|| format!("Content directory {} is missing", root.display()))?;
-        // Name every absent pack at once so one regeneration run fixes them all.
-        let missing: Vec<&str> = config
-            .pack_names()
-            .into_iter()
-            .filter(|name| !root.join(name).is_dir())
+        // Name every absent package at once so one regeneration run fixes them all.
+        let missing: Vec<String> = packages
+            .packages
+            .iter()
+            .filter(|p| !root.join(&p.dir).is_dir())
+            .map(|p| format!("{} ({})", p.id, p.dir))
             .collect();
         ensure!(
             missing.is_empty(),
-            "Content packs missing from {}: {}",
+            "Content packages missing from {}: {}",
             given.display(),
             missing.join(", ")
         );
-        let package = |name: &str| -> Result<PathBuf> {
-            let path = contained(&root, name)?;
-            ensure!(path.is_dir(), "Expected native package directory: {name}");
-            Ok(path)
-        };
+        let role = |role: &str| packages.role_dir(&root, role);
         Ok(Self {
-            map_bundle: package(&config.map_bundle)?,
-            brick_catalog: package(&config.brick_catalog)?,
-            geometry: package(&config.geometry)?,
-            effects: package(&config.effects)?,
-            worlds: package(&config.worlds)?,
-            ui_pack: package(&config.ui_pack)?,
-            brick_materials: package(&config.brick_materials)?,
-            avatar: package(&config.avatar)?,
-            effects_runtime: package(&config.effects_runtime)?,
-            audio: package(&config.audio)?,
-            weather: package(&config.weather)?,
-            foliage: package(&config.foliage)?,
-            weapons: package(&config.weapons)?,
-            item_presentation: package(&config.item_presentation)?,
-            weapon_debris: package(&config.weapon_debris)?,
-            vehicles: package(&config.vehicles)?,
-            events: package(&config.events)?,
-            tutorial: package(&config.tutorial)?,
+            map_bundle: role("map_bundle")?,
+            brick_catalog: role("brick_catalog")?,
+            geometry: role("geometry")?,
+            effects: role("effects")?,
+            worlds: role("worlds")?,
+            ui_pack: role("ui_pack")?,
+            brick_materials: role("brick_materials")?,
+            avatar: role("avatar")?,
+            effects_runtime: role("effects_runtime")?,
+            audio: role("audio")?,
+            weather: role("weather")?,
+            foliage: role("foliage")?,
+            weapons: role("weapons")?,
+            item_presentation: role("item_presentation")?,
+            weapon_debris: role("weapon_debris")?,
+            vehicles: role("vehicles")?,
+            events: role("events")?,
+            tutorial: role("tutorial")?,
+            packages: packages.clone(),
             root,
         })
+    }
+
+    /// Hash every package this content loads. Blocking: run it on a worker.
+    pub fn environment(&self) -> Result<Environment> {
+        Environment::load(&self.root, &self.packages)
     }
 
     /// Expensive geometry decoding and collider construction belongs on the host
@@ -476,21 +403,14 @@ impl ContentPaths {
 }
 
 impl ClientContent {
-    /// Optional root/client-content.json overrides versioned package locations.
+    /// Loads the packages listed by `root/packages.json`, or the base game's
+    /// packages when the content root has none.
     pub fn load(root: &Path) -> Result<Self> {
-        let config = if root.join("client-content.json").exists() {
-            read_json(
-                &file(root, "client-content.json", INDEX_LIMIT)?,
-                INDEX_LIMIT,
-            )?
-        } else {
-            ContentConfig::default()
-        };
-        Self::load_config(root, &config)
+        Self::load_packages(root, &PackageSet::load_root(root)?)
     }
 
-    pub fn load_config(root: &Path, config: &ContentConfig) -> Result<Self> {
-        let paths = ContentPaths::resolve(root, config)?;
+    pub fn load_packages(root: &Path, packages: &PackageSet) -> Result<Self> {
+        let paths = ContentPaths::resolve(root, packages)?;
         let weapons = bri_net::content_identity::WeaponContent::load(&paths.weapons)?;
         let item_physics = bri_net::content_identity::ItemPhysicsContent::load(
             &paths.item_presentation,
@@ -1132,15 +1052,8 @@ mod tests {
     #[test]
     fn config_and_paths_are_send_without_ui_pack() {
         fn send<T: Send + Sync>() {}
-        send::<ContentConfig>();
+        send::<PackageSet>();
         send::<ContentPaths>();
-    }
-    #[test]
-    fn old_content_config_defaults_native_item_presentation_path() {
-        let config: ContentConfig =
-            serde_json::from_str(r#"{"schema_version":1,"weapons":"weapons-pack-009"}"#).unwrap();
-        assert_eq!(config.item_presentation, "item-presentation-pack-010");
-        assert!(serde_json::from_str::<ContentConfig>(r#"{"item_presentaton":"typo"}"#).is_err());
     }
     #[test]
     fn portable_content_paths_reject_traversal_and_alias_spellings() {
@@ -1161,9 +1074,9 @@ mod tests {
     }
     #[test]
     fn invalid_config_fails_before_filesystem_loading() {
-        let c = ContentConfig {
+        let c = PackageSet {
             schema_version: 99,
-            ..Default::default()
+            ..PackageSet::base()
         };
         assert!(
             ContentPaths::resolve(Path::new("nonexistent"), &c)

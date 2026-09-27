@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Linux counterpart of package_playtest.ps1: copy the release client and the
-# content packs ContentConfig selects into dist/, with a checksummed manifest.
+# content packs the package list selects into dist/, with a checksummed manifest.
 #
 #   tools/package_playtest.sh --version a8 --sha256 <release-client-sha256>
 #   tools/package_playtest.sh --validate-only
@@ -63,21 +63,16 @@ PY
 
 if [[ -n "$verify" ]]; then verify_package "$verify"; exit 0; fi
 
-# ContentConfig::default, optionally overridden by content/client-content.json.
+# The base package list, or content/packages.json when present: role=dir.
 declare -A packs
-source_rs="$repo/crates/client/src/content.rs"
-for field in "${fields[@]}"; do
-    name="$(grep -E "^\s*$field:\s*\"[^\"]+\"\.into\(\)," "$source_rs" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
-    [[ -n "$name" ]] || die "cannot parse ContentConfig::default for $field; update the packager"
+list="$repo/crates/package/base-packages.json"
+[[ -f "$repo/content/packages.json" ]] && list="$repo/content/packages.json"
+while IFS='=' read -r field name; do
     packs[$field]="$name"
+done < <(python3 -c 'import json,sys; [print(p["role"] + "=" + p["dir"]) for p in json.load(open(sys.argv[1]))["packages"] if p.get("role")]' "$list")
+for field in "${fields[@]}"; do
+    [[ -n "${packs[$field]+x}" ]] || die "$list has no package for the $field role"
 done
-override="$repo/content/client-content.json"
-if [[ -f "$override" ]]; then
-    while IFS='=' read -r field name; do
-        [[ -n "${packs[$field]+x}" || "$field" == schema_version ]] || die "unknown ContentConfig field $field"
-        [[ "$field" == schema_version ]] || packs[$field]="$name"
-    done < <(python3 -c 'import json,sys; [print(f"{k}={v}") for k,v in json.load(open(sys.argv[1])).items()]' "$override")
-fi
 
 [[ -f "$executable" && ! -L "$executable" && -s "$executable" ]] || die "release client missing; build it first: $executable"
 sha="$(sha256sum "$executable" | cut -d' ' -f1)"
@@ -111,15 +106,7 @@ trap 'rm -rf "$release"' ERR
 install -m 755 "$executable" "$release/bri-client"
 cp "$repo/docs/PLAYTEST.md" "$repo/docs/KNOWN-ISSUES.md" "$release/"
 install -m 755 "$repo/tools/launch_playtest.sh" "$release/launch.sh"
-{
-    echo '{'
-    echo '  "schema_version": 1,'
-    for i in "${!fields[@]}"; do
-        comma=','; [[ $i -eq $((${#fields[@]} - 1)) ]] && comma=''
-        echo "  \"${fields[$i]}\": \"${packs[${fields[$i]}]}\"$comma"
-    done
-    echo '}'
-} > "$release/content/client-content.json"
+cp "$list" "$release/content/packages.json"
 for field in "${fields[@]}"; do
     cp -r "$repo/content/${packs[$field]}" "$release/content/"
 done
@@ -132,7 +119,7 @@ for path in files:
     data = (root / path).read_bytes()
     entries.append({'path': path, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
 manifest = {'schema_version': 1, 'version': version, 'executable': 'bri-client',
-            'content_config': 'content/client-content.json', 'files': entries}
+            'content_config': 'content/packages.json', 'files': entries}
 (root / 'MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
 PY
 trap - ERR

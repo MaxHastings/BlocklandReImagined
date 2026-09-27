@@ -324,6 +324,10 @@ impl Session {
         }
         self.private_notices.push_back((owner, notice));
     }
+    /// A server chat line only `owner` sees.
+    pub fn private_chat(&mut self, owner: OwnerId, text: String) {
+        self.notify(owner, Notice::Chat(text));
+    }
     /// Server-authored chat line (owner 0) visible to everyone.
     pub(super) fn system_chat(&mut self, text: String) {
         self.system_message(None, text);

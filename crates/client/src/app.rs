@@ -1450,23 +1450,8 @@ impl App {
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&map, None)?;
                     let visual = load_map_bundle(&paths.map_bundle, &map)?;
-                    let identity = content_identity::fingerprint_runtime(
-                        &paths.brick_catalog,
-                        &paths.geometry,
-                        &paths.map_bundle,
-                        &paths.brick_materials,
-                        &paths.effects,
-                        &paths.avatar,
-                    )?;
-                    let identity =
-                        content_identity::with_effects_runtime(&identity, &paths.effects_runtime)?;
-                    let identity = content_identity::with_audio(&identity, &paths.audio)?;
-                    let identity = content_identity::with_weather(&identity, &paths.weather)?;
-                    let identity = content_identity::with_foliage(&identity, &paths.foliage)?;
-                    let identity = weapons.extend_identity(&identity);
-                    let identity = item_physics.extend_identity(&identity);
-                    let identity = content_identity::with_vehicles(&identity, &paths.vehicles)?;
-                    let identity = content_identity::with_events(&identity, &paths.events)?;
+                    // Every package this host loaded, hashed: what joiners must match.
+                    let identity = paths.environment()?;
                     let vehicle_pack =
                         bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?;
                     let meshes = Arc::new(
@@ -1566,7 +1551,7 @@ impl App {
                 session,
                 ServerOptions {
                     bind,
-                    content_id: identity.clone(),
+                    environment: identity.clone(),
                     spawn_points,
                     // LAN hosts keep one identity so joiners' saved trust stays valid.
                     certificate: if single {
@@ -1584,7 +1569,7 @@ impl App {
                 // LAN players find this host (and its certificate) by broadcast;
                 // Connect to IP asks the same responder directly, so internet
                 // hosts answer it too.
-                host.advertise(listing_name, listing_map, max_players, identity.clone())
+                host.advertise(listing_name, listing_map, max_players, identity.digest())
                     .await?;
             }
             if internet {
@@ -1594,7 +1579,7 @@ impl App {
                 address,
                 &host.certificate,
                 player,
-                identity,
+                identity.client_packages(),
                 None,
                 Some(host.host_token.clone()),
                 &native_identity,
@@ -1707,35 +1692,14 @@ impl App {
                     &weapons,
                 )?;
                 physics_snapshot.ensure_same(&item_physics)?;
-                let identity = content_identity::fingerprint_runtime(
-                    &identity_paths.brick_catalog,
-                    &identity_paths.geometry,
-                    &identity_paths.map_bundle,
-                    &identity_paths.brick_materials,
-                    &identity_paths.effects,
-                    &identity_paths.avatar,
-                )?;
-                let identity = content_identity::with_effects_runtime(
-                    &identity,
-                    &identity_paths.effects_runtime,
-                )?;
-                let identity = content_identity::with_audio(&identity, &identity_paths.audio)?;
-                let identity = content_identity::with_weather(&identity, &identity_paths.weather)?;
-                let identity = content_identity::with_foliage(&identity, &identity_paths.foliage)?;
-                content_identity::with_events(
-                    &content_identity::with_vehicles(
-                        &item_physics.extend_identity(&weapons.extend_identity(&identity)),
-                        &identity_paths.vehicles,
-                    )?,
-                    &identity_paths.events,
-                )
+                identity_paths.environment()
             })
             .await??;
             let client = Client::connect_with_identity(
                 address,
                 &certificate,
                 player,
-                identity,
+                identity.client_packages(),
                 None,
                 None,
                 &native_identity,

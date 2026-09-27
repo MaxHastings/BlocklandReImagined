@@ -614,7 +614,10 @@ mod tests {
         }
     }
     fn assets() -> Result<WeaponDebrisAssets> {
-        let pack = crate::content::ContentConfig::default().weapon_debris;
+        let pack = bri_package::packages::PackageSet::base()
+            .role("weapon_debris")?
+            .dir
+            .clone();
         WeaponDebrisAssets::load(&root().join("content").join(pack))
     }
     fn malformed_pack(root: &Path, shell_patch: serde_json::Value, model_file: &str) {

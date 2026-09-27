@@ -14,9 +14,9 @@ every pack the client loads in dependency order and ends with
 audio device). The v20 path is remembered in `content/_regeneration/`, so later
 runs need no arguments; `BRI_V20` also works.
 
-The pack names come from `ContentConfig::default` in
-`crates/client/src/content.rs`, so the output always matches what the client
-loads. When the client's `--check` reports missing packs, rerunning bootstrap
+The pack names come from the base package list,
+`crates/package/base-packages.json`, so the output always matches what the
+client loads. When the client's `--check` reports missing packs, rerunning bootstrap
 builds exactly those.
 
 Platform status (2026-09-27): the Windows path is verified from a fresh clone.
@@ -92,8 +92,8 @@ prints a plan and then:
 - rebuilds packs whose inputs changed, and everything built from them;
 - keeps current packs, and keeps packs that have no stamp (copied from a
   playtest package or an older checkout) untouched;
-- moves a `client-content.json` override (which pins older pack names) aside to
-  `client-content.json.disabled`, so the client loads the packs built here.
+- moves a `content/packages.json` override (which pins older pack names) aside
+  to `packages.json.disabled`, so the client loads the packs built here.
 
 Flags (`regenerate_content.py`; `bootstrap.py` takes the ones marked *):
 
