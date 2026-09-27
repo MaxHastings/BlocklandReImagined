@@ -14,24 +14,103 @@ impl WeaponsWorld {
         ensure!(self.events.len() < 8192, "Command event budget");
         let def = self.pack.items.get(item).context("Unknown item")?;
         ensure!(def.sport, "Not a sports item");
-        let a = self.actors.get(&id).context("Unknown actor")?;
+        let image = def.image.clone();
         ensure!(
-            a.images[0].is_none() && self.tick >= a.ball_ready,
+            self.mount_ball(id, &image).is_some(),
             "Cannot hold ball now"
         );
-        let mut image = def.image.clone();
+        Ok(())
+    }
+    /// `passBallCheck`: empty hands and no ball timeout mount the ball's image
+    /// (its horse variant on a horse) and play the catch sound one unit
+    /// below the eye. Returns the mounted image.
+    pub(super) fn mount_ball(&mut self, id: ActorId, image: &str) -> Option<String> {
+        let a = self.actors.get(&id)?;
+        if a.images[0].is_some() || self.tick < a.ball_ready {
+            return None;
+        }
         let horse = native_id(
             "image",
-            &format!("horse{}", image.rsplit('.').next().unwrap()),
+            &format!("horse{}", image.rsplit('.').next().unwrap_or_default()),
         );
-        if a.frame.horse && self.pack.images.contains_key(&horse) {
-            image = horse;
-        }
+        let image = if a.frame.horse && self.pack.images.contains_key(&horse) {
+            horse
+        } else {
+            image.to_owned()
+        };
+        let sound = a.frame.eye - Vec3::Y;
         let mut a = self.actors.remove(&id).unwrap();
         self.mount(id, &mut a, &image, 0);
         a.ball_ready = self.tick + 36;
         self.actors.insert(id, a);
-        Ok(())
+        self.events.push(Event::Sound {
+            source: TargetId::Actor(id),
+            profile: "weaponSwitchSound".into(),
+            position: sound,
+        });
+        Some(image)
+    }
+    /// The minigame's StartBall (`armor::onAdd`, `updatePlayerBalls`): mounted
+    /// into empty hands without the catch timeout.
+    pub fn start_ball(&mut self, id: ActorId, image: &str) -> Result<bool> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        ensure!(self.pack.images.contains_key(image), "Unknown ball image");
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        a.ball_ready = 0;
+        Ok(self.mount_ball(id, image).is_some())
+    }
+    /// A player walked into a ball projectile (`armor::onCollision`). The host
+    /// has already checked contact and that both share a minigame.
+    pub fn grab_ball(&mut self, id: ActorId, projectile: u64) -> Result<bool> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        let p = self
+            .projectiles
+            .get(&projectile)
+            .context("Unknown projectile")?;
+        let image = self.pack.projectiles[&p.definition]
+            .sport_image
+            .clone()
+            .context("Not a ball")?;
+        let Some(image) = self.mount_ball(id, &image) else {
+            return Ok(false);
+        };
+        self.projectiles.remove(&projectile);
+        self.events.push(Event::Removed { projectile });
+        self.events.push(Event::BallCaught {
+            actor: id,
+            projectile,
+            image,
+        });
+        Ok(true)
+    }
+    /// Touching a ball item mounts it instead of filling a tool slot.
+    pub fn is_ball_drop(&self, drop: u64) -> bool {
+        self.drops
+            .get(&drop)
+            .and_then(|d| self.pack.items.get(&d.item))
+            .is_some_and(|item| item.sport)
+    }
+    pub fn pickup_ball(&mut self, id: ActorId, drop: u64) -> Result<bool> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        let d = self.drops.get(&drop).context("Unknown drop")?;
+        ensure!(
+            id != d.source || self.tick >= d.pickup_after,
+            "Pickup cooldown"
+        );
+        let image = self
+            .pack
+            .items
+            .get(&d.item)
+            .filter(|i| i.sport)
+            .context("Not a ball")?
+            .image
+            .clone();
+        if self.mount_ball(id, &image).is_none() {
+            return Ok(false);
+        }
+        self.drops.remove(&drop);
+        self.events.push(Event::DropRemoved { drop });
+        Ok(true)
     }
     pub fn sport_action(&mut self, id: ActorId, action: SportAction) -> Result<u64> {
         ensure!(

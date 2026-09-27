@@ -1076,7 +1076,10 @@ impl WeaponsWorld {
                 } else if name == "wrenchimage" {
                     self.animation(id, "wrench");
                 } else if name.contains("sword")
-                    || matches!(name.as_str(), "hammerimage" | "wandimage" | "adminwandimage")
+                    || matches!(
+                        name.as_str(),
+                        "hammerimage" | "wandimage" | "adminwandimage"
+                    )
                 {
                     self.animation(id, "armattack");
                 }
@@ -1407,41 +1410,25 @@ impl WeaponsWorld {
                             position: hit.position,
                         });
                     } else if q.can_catch(p.source, target)
-                        && let Some(mut a) = self.actors.remove(&target)
+                        && let Some(image) = self.mount_ball(target, image)
                     {
-                        if a.images[0].is_none() && self.tick >= a.ball_ready {
-                            let horse = native_id(
-                                "image",
-                                &format!("horse{}", image.rsplit('.').next().unwrap()),
-                            );
-                            let image = if a.frame.horse && self.pack.images.contains_key(&horse) {
-                                horse
-                            } else {
-                                image.clone()
-                            };
-                            self.mount(target, &mut a, &image, 0);
-                            a.ball_ready = self.tick + 36;
-                            if d.name.eq_ignore_ascii_case("footballProjectile") && !p.bounced {
-                                let delta = a.frame.position - p.origin;
-                                self.events.push(Event::FootballCatch {
-                                    source: p.source,
-                                    catcher: target,
-                                    distance_feet: (Vec3::new(delta.x, 0.0, delta.z).length()
-                                        * 1.875)
-                                        .round()
-                                        as u32,
-                                    was_thrown: p.was_thrown,
-                                });
-                            }
-                            self.actors.insert(target, a);
-                            self.events.push(Event::BallCaught {
-                                actor: target,
-                                projectile: p.id,
-                                image,
+                        if d.name.eq_ignore_ascii_case("footballProjectile") && !p.bounced {
+                            let catcher = self.actors[&target].frame.position;
+                            let delta = catcher - p.origin;
+                            self.events.push(Event::FootballCatch {
+                                source: p.source,
+                                catcher: target,
+                                distance_feet: (Vec3::new(delta.x, 0.0, delta.z).length() * 1.875)
+                                    .round() as u32,
+                                was_thrown: p.was_thrown,
                             });
-                            return false;
                         }
-                        self.actors.insert(target, a);
+                        self.events.push(Event::BallCaught {
+                            actor: target,
+                            projectile: p.id,
+                            image,
+                        });
+                        return false;
                     }
                 }
             } else if allowed {
@@ -1524,11 +1511,43 @@ impl WeaponsWorld {
                 } else {
                     "soccerBallItem"
                 };
+                let item = native_id("weapon", item);
                 self.events.push(Event::BallRest {
                     projectile: p.id,
-                    item: native_id("weapon", item),
+                    item: item.clone(),
                     position: p.position,
                 });
+                // `onRest`: a popping item facing the ball's travel.
+                if self.drops.len() < MAX_DROPS {
+                    let drop = self.next_id;
+                    self.next_id += 1;
+                    let travel = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
+                    let rotation = if travel.length_squared() > 1e-6 {
+                        Quat::from_rotation_arc(Vec3::NEG_Z, travel.normalize())
+                    } else {
+                        Quat::IDENTITY
+                    };
+                    self.drops.insert(
+                        drop,
+                        Drop {
+                            rotation,
+                            scale: p.scale,
+                            id: drop,
+                            item: item.clone(),
+                            position: p.position,
+                            velocity: Vec3::ZERO,
+                            source: p.source,
+                            pickup_after: self.tick,
+                            expires: self.tick + 1200,
+                        },
+                    );
+                    self.events.push(Event::Dropped {
+                        drop,
+                        item,
+                        position: p.position,
+                        velocity: Vec3::ZERO,
+                    });
+                }
                 return false;
             }
             remaining *= 1.0 - hit.fraction;

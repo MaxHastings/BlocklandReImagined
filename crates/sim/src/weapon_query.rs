@@ -1,8 +1,10 @@
 //! Weapon queries against the same native collision world used by players.
 use crate::simulation::Simulation;
-use bri_weapons::{ActorId, ContactResponse, Filter, Hit, Nearby, ProjectileContact, Query, TargetId};
-use rapier3d::parry::query::ShapeCastOptions;
+use bri_weapons::{
+    ActorId, ContactResponse, Filter, Hit, Nearby, ProjectileContact, Query, TargetId,
+};
 use glam::{Quat, Vec3};
+use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 use std::collections::BTreeMap;
 
@@ -184,10 +186,7 @@ impl Query for WeaponQuery<'_> {
             ) || (!filter.world_only && target(collider.user_data).is_some())
         };
         let shape = Cuboid::new(Vector::from_array(half.max(Vec3::splat(0.001)).to_array()));
-        let pose = Pose::from_parts(
-            Vector::from_array(start.to_array()),
-            rotation,
-        );
+        let pose = Pose::from_parts(Vector::from_array(start.to_array()), rotation);
         let physical = self
             .simulation
             .physics

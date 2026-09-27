@@ -1,6 +1,8 @@
 //! Contact-driven host pickups. No remote position or Pickup command exists.
 use super::*;
 use bri_weapons::{ActorId, ItemBounds};
+/// Item_Sports ball shapes are about 0.36 units in radius.
+const BALL_RADIUS: f32 = 0.36;
 impl Session {
     /// Native authored DTS bounds converted offline; immutable during a session.
     /// Prepare all static objects before publishing any new catalog/state.
@@ -90,9 +92,42 @@ impl Session {
         }
         // Deterministic connection order arbitrates simultaneous contact. Outside
         // minigames v20 permits pickups even from another builder's brick.
-        for (&owner, peer) in &self.peers {
+        // Balls in flight or at rest collide with players in v20
+        // (`armor::onCollision` and `passBallCheck`).
+        let balls: Vec<(u64, ActorId, ItemBounds)> = self
+            .weapons
+            .projectiles()
+            .filter(|p| {
+                self.weapons
+                    .pack
+                    .projectiles
+                    .get(&p.definition)
+                    .is_some_and(|d| d.sport_image.is_some())
+            })
+            .map(|p| {
+                let r = BALL_RADIUS * p.scale;
+                let bounds = ItemBounds {
+                    min: (p.position - Vec3::splat(r)).to_array(),
+                    max: (p.position + Vec3::splat(r)).to_array(),
+                };
+                (p.id, p.source, bounds)
+            })
+            .collect();
+        let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
+        for owner in owners {
+            let peer = &self.peers[&owner];
+            if !peer.combat.alive {
+                continue;
+            }
             let actor = ActorId(owner);
             let contact = peer.player.world_bounds();
+            let game = self.game_of(owner);
+            for (projectile, source, bounds) in &balls {
+                // `sportIsInSameMinigame`: both in one game or both outside.
+                if bounds.overlaps(&contact) && self.game_of(source.0) == game {
+                    let _ = self.weapons.grab_ball(actor, *projectile);
+                }
+            }
             for id in self.item_spawners.contacts(contact) {
                 let item = &self.item_spawners.items[&id];
                 if tick < item.available_at {
@@ -120,7 +155,14 @@ impl Session {
             }
             for id in dynamic.query(contact) {
                 // Another peer can have consumed this candidate earlier this tick.
-                let _ = self.weapons.pickup(actor, id);
+                if self.weapons.is_ball_drop(id) {
+                    let source = self.weapons.drops().find(|d| d.id == id).map(|d| d.source);
+                    if source.is_some_and(|s| s.0 == 0 || self.game_of(s.0) == game) {
+                        let _ = self.weapons.pickup_ball(actor, id);
+                    }
+                } else {
+                    let _ = self.weapons.pickup(actor, id);
+                }
             }
         }
         Ok(())

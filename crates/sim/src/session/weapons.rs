@@ -234,7 +234,24 @@ impl Session {
             TargetId::Actor(target) => splash.contains(&(source.0, target.0)),
             other => affect(source, other),
         };
-        let catch = |_: ActorId, _: ActorId| false; // pending minigame/sports host policy
+        // `passBallCheck`: a living player catches a ball thrown from the
+        // same minigame, or when neither is in one (`sportIsInSameMinigame`).
+        let games: BTreeMap<OwnerId, Option<bri_minigames::GameId>> = self
+            .peers
+            .keys()
+            .map(|owner| (*owner, self.game_of(*owner)))
+            .collect();
+        let alive: BTreeSet<OwnerId> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.combat.alive)
+            .map(|(owner, _)| *owner)
+            .collect();
+        let catch = |source: ActorId, target: ActorId| {
+            alive.contains(&target.0)
+                && games.get(&source.0).copied().flatten()
+                    == games.get(&target.0).copied().flatten()
+        };
         let mut query = crate::weapon_query::WeaponQuery {
             simulation: &self.simulation,
             affect: &affect,
@@ -266,7 +283,15 @@ impl Session {
                 | WeaponEvent::Removed { .. }
                 | WeaponEvent::Bounced { .. }
                 | WeaponEvent::Dropped { .. }
-                | WeaponEvent::DropRemoved { .. } => {} // authoritative view
+                | WeaponEvent::DropRemoved { .. }
+                | WeaponEvent::BallCaught { .. }
+                | WeaponEvent::BallRest { .. } => {} // authoritative view
+                WeaponEvent::FootballCatch {
+                    source,
+                    catcher,
+                    distance_feet,
+                    was_thrown,
+                } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
                 WeaponEvent::Diagnostic { message, .. } => {
                     if self.notices.len() == 64 {
                         self.notices.pop_front();
@@ -447,6 +472,29 @@ impl Session {
             }
         }
         Ok(())
+    }
+    /// `CatchFootballMessage`: bottom prints for the passer and receiver, and
+    /// a server-wide announcement when a thrown pass sets the record.
+    fn football_catch(&mut self, source: OwnerId, catcher: OwnerId, feet: u32, thrown: bool) {
+        let name = |owner: OwnerId| self.peers.get(&owner).map(|p| p.name.clone());
+        let (Some(receiver), passer) = (name(catcher), name(source)) else {
+            return;
+        };
+        let passer = passer.unwrap_or_default();
+        let (color, white, red) = ("<color:ffff00>", "<color:FFFFFF>", "<color:FF0000>");
+        let prefix = format!("<bitmap:base/client/ui/CI/star> {color}FOOTBALL -");
+        let mut base = format!("{red}at{white} {feet}ft!");
+        if thrown && source != catcher && feet > self.football_record {
+            self.football_record = feet;
+            self.system_chat(format!(
+                "{color}{passer} {red}&{color} {receiver} {red}set a new football record, {white}{feet}ft!"
+            ));
+            base.push_str(&format!(" {red}<just:center>NEW RECORD!!!"));
+        }
+        let text = format!("{prefix} {red}To {color}{receiver} {base}");
+        self.notify(source, Notice::Bottom { text, seconds: 5.0 });
+        let text = format!("{prefix} {red}From {color}{passer} {base}");
+        self.notify(catcher, Notice::Bottom { text, seconds: 5.0 });
     }
     fn note_weapon_gap(&mut self, name: &str, count: u64) {
         let entry = self.weapon_gaps.entry(name.into()).or_default();

@@ -486,6 +486,8 @@ impl Session {
         }
         self.weapons.trigger(ActorId(victim), false)?;
         self.weapon_triggers.remove(&victim);
+        // `armor::onDisabled` drops a held ball before the body goes limp.
+        let _ = self.weapons.drop_ball(ActorId(victim));
         let _ = self.weapons.equip(ActorId(victim), None);
         let feet = self.peers[&victim].player.state().feet;
         self.cues.emit(
@@ -887,6 +889,11 @@ impl Session {
             .collect();
         self.weapons.set_inventory(ActorId(owner), &slots)?;
         self.weapon_triggers.remove(&owner);
+        if let Some(ball) = equipment.and_then(|e| e.start_ball.as_deref())
+            && self.is_alive(owner)
+        {
+            self.weapons.start_ball(ActorId(owner), ball)?;
+        }
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.inspection = None;
         }
@@ -902,11 +909,12 @@ impl Session {
             // The corpse is this same player: an early respawn removes it now.
             if !peer.combat.alive && !peer.combat.corpse_cleared {
                 let corpse = Vec3::from(peer.player.state().feet);
-                let _ = self
-                    .weapons
-                    .spawn(DEATH_PROJECTILE, ActorId(owner), corpse, Vec3::ZERO, 1.0);
+                let _ =
+                    self.weapons
+                        .spawn(DEATH_PROJECTILE, ActorId(owner), corpse, Vec3::ZERO, 1.0);
             }
-            peer.player.teleport(&mut self.simulation.physics, feet, yaw)?;
+            peer.player
+                .teleport(&mut self.simulation.physics, feet, yaw)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.combat.health = MAX_HEALTH;
             peer.combat.alive = true;

@@ -348,6 +348,8 @@ pub struct Session {
     weapons: bri_weapons::WeaponsWorld,
     weapon_triggers: BTreeMap<OwnerId, VecDeque<weapons::Trigger>>,
     weapon_gaps: BTreeMap<String, u64>,
+    /// `$Pref::Server::FootballRecord`, in feet, for this server run.
+    football_record: u32,
     cues: crate::presentation::Cues,
     simulation: Simulation,
     peers: BTreeMap<OwnerId, Peer>,
@@ -408,6 +410,7 @@ impl Session {
             spawn_loadout: ToolInventory::default(),
             weapon_triggers: BTreeMap::new(),
             weapon_gaps: BTreeMap::new(),
+            football_record: 0,
             weapons,
             cues: Default::default(),
             simulation,
