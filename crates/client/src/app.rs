@@ -2205,7 +2205,6 @@ impl PlatformApp for App {
     fn tick(&mut self, elapsed: Duration) -> Result<()> {
         let mut listener = bri_audio::Listener::default();
         self.animation_time += elapsed.as_secs_f64().min(0.25);
-        self.controls.tick(elapsed.as_secs_f32());
         self.poll_network()?;
         self.poll_files();
         let alive = self.local_alive();

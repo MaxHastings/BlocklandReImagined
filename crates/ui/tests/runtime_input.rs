@@ -465,3 +465,31 @@ fn pending_direct_join_cancel_emits_transport_cancellation() {
         })
     ));
 }
+#[test]
+fn keyboard_turn_looks_at_the_preferred_rate_while_held() {
+    let mut u = ui();
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::Left)), "turnLeft");
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::PageUp)), "panUp");
+    u.core.prefs.set("$pref::Input::KeyboardTurnSpeed", "0.25");
+    play(&mut u);
+    down(&mut u, Key::Left);
+    down(&mut u, Key::PageUp);
+    assert!(actions(&mut u).is_empty(), "turning is a rate, not a hold");
+    u.update(500);
+    // 0.25 × 4 rad/s × 0.1 s (frames are capped at 100 ms).
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::Look {
+            yaw: -0.1,
+            pitch: -0.1
+        })]
+    );
+    up(&mut u, Key::Left);
+    up(&mut u, Key::PageUp);
+    u.update(50);
+    assert!(actions(&mut u).is_empty());
+}

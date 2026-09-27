@@ -266,6 +266,22 @@ fn main() -> Result<()> {
         ui.core.push(ScreenId::Options);
         ui.update(0);
         render(&ui, "options", &mut renderer, &mut report)?;
+        click(&mut ui, ScreenId::Options, "OptGraphicsResolutionMenu")?;
+        render(&ui, "options-resolution-menu", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
+        for pane in ["Audio", "Controls", "AdvGraphics"] {
+            click(
+                &mut ui,
+                ScreenId::Options,
+                &format!("optionsDlg.setPane({pane});"),
+            )?;
+            render(
+                &ui,
+                &format!("options-{}", pane.to_lowercase()),
+                &mut renderer,
+                &mut report,
+            )?;
+        }
         key(&mut ui, Key::Escape);
         ui.apply(UiUpdate::Players {
             rows: vec![PlayerRow {

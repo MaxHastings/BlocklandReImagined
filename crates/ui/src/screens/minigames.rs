@@ -191,7 +191,7 @@ impl Screen for MiniGameScreen {
         self.refresh(core); true
     }
     fn on_key(&mut self,key:Key,_:Modifiers,core:&mut Core)->bool{
-        if key==Key::Escape&&self.view.open_popup.is_none(){core.pop(self.id);true}else{false}
+        if key==Key::Escape{core.pop(self.id);true}else{false}
     }
     fn on_event(&mut self,ev:&ViewEvent,core:&mut Core){
         if !self.view.node(ev.node).state.active{return;}

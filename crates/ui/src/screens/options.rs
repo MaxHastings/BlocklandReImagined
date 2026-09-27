@@ -1,17 +1,25 @@
 //! Native options and input capture. Script strings identify authored widgets;
-//! they are never evaluated. Unsupported renderer/network preferences stay
-//! visibly disabled until a runtime adapter exists.
+//! they are never evaluated. Settings that only configured Torque's renderer,
+//! audio drivers or network stack are hidden and the remaining authored rows
+//! close up, so every visible control does something.
 use super::*;
 use crate::api::{BindInput, UiAction};
 use crate::binds::{BindMap, RemapOutcome};
 use crate::input::Chord;
 use crate::prefs::Prefs;
+use crate::ui::Callback;
 use crate::view::EventKind;
+use std::collections::HashMap;
 
 const FULLSCREEN: &str = "$pref::Video::fullScreen";
 const NO_VSYNC: &str = "$pref::Video::disableVerticalSync";
 const RESOLUTION: &str = "$pref::Video::resolution";
-const LOCAL_PREFS: &[&str] = &[
+pub const CHAT_SIZE: &str = "$Pref::Gui::ChatSize";
+pub const KEYBOARD_TURN_SPEED: &str = "$pref::Input::KeyboardTurnSpeed";
+/// Checkbox preferences the native game honours.
+const CHECKBOX_PREFS: &[&str] = &[
+    FULLSCREEN,
+    NO_VSYNC,
     "$pref::precipitationOn",
     "$Pref::Audio::PlayMusic",
     "$Pref::Audio::MenuSounds",
@@ -31,6 +39,27 @@ const LOCAL_PREFS: &[&str] = &[
     "$pref::Input::ReverseBrickScroll",
     "$pref::Input::noobjet",
     "$pref::Input::MouseInvert",
+];
+/// Other authored controls with native behaviour.
+const SUPPORTED_CONTROLS: &[&str] = &[
+    "OptGraphicsResolutionMenu",
+    "OptAudioVolumeMaster",
+    "OptAudioVolumeShell",
+    "OptAudioVolumeSim",
+    "SliderControlsMouseSensitivity",
+    "slider_KeyboardTurnSpeed",
+    "Opt_ChatLineTime",
+    "Opt_MaxChatLines",
+    "OptRemapList",
+];
+const CHAT_SIZE_RADIO: &str = "OPT_ChatSize";
+const VALUE_CLASSES: &[&str] = &[
+    "GuiCheckBoxCtrl",
+    "GuiRadioCtrl",
+    "GuiSliderCtrl",
+    "GuiPopUpMenuCtrl",
+    "GuiTextEditCtrl",
+    "GuiTextListCtrl",
 ];
 const VOLUMES: &[(&str, &str, &str)] = &[
     (
@@ -76,6 +105,115 @@ fn put_display(p: &mut Prefs, d: DisplaySettings) {
     p.set_bool(NO_VSYNC, !d.vsync);
 }
 
+/// `$Pref::Gui::ChatSize` (0–10, v20 default 4) selects the chat HUD font
+/// profiles `BlockChatTextSize<n>Profile` and friends.
+pub fn chat_size(p: &Prefs) -> i64 {
+    p.i64_or(CHAT_SIZE, 4).clamp(0, 10)
+}
+
+fn supported(v: &View, n: NodeId) -> bool {
+    let c = &v.node(n).ctrl;
+    let name = c.name.as_deref().unwrap_or_default();
+    c.variable
+        .as_deref()
+        .is_some_and(|var| CHECKBOX_PREFS.iter().any(|p| p.eq_ignore_ascii_case(var)))
+        || SUPPORTED_CONTROLS.contains(&name)
+        || name.starts_with(CHAT_SIZE_RADIO)
+}
+
+fn is_value(v: &View, n: NodeId) -> bool {
+    VALUE_CLASSES.contains(&v.node(n).ctrl.class.as_str())
+}
+
+/// Authored option sections are swatches whose first row is a title bar
+/// swatch at (2, 2).
+fn is_section(v: &View, n: NodeId) -> bool {
+    let node = v.node(n);
+    node.ctrl.class == "GuiSwatchCtrl"
+        && node.children.iter().any(|&k| {
+            let c = &v.node(k).ctrl;
+            c.class == "GuiSwatchCtrl" && c.position == [2, 2]
+        })
+}
+
+fn section_title(v: &View, n: NodeId) -> String {
+    v.node(n)
+        .children
+        .iter()
+        .find(|&&k| v.node(k).ctrl.class == "GuiTextCtrl" && v.node(k).ctrl.position[1] <= 3)
+        .map(|&k| v.text_of(k))
+        .unwrap_or_default()
+}
+
+fn find_section(v: &View, title: &str) -> Option<NodeId> {
+    v.walk()
+        .find(|&n| is_section(v, n) && section_title(v, n) == title)
+}
+
+fn shows_values(v: &View, n: NodeId) -> bool {
+    v.node(n).state.visible
+        && (is_value(v, n) || v.node(n).children.iter().any(|&k| shows_values(v, k)))
+}
+
+/// A label names the control that starts just right of it on its row.
+fn labels(label: &Control, value: &Control) -> bool {
+    let gap = value.position[0] - (label.position[0] + label.extent[0]);
+    (-4..=24).contains(&gap)
+        && label.position[1] < value.position[1] + value.extent[1]
+        && value.position[1] < label.position[1] + label.extent[1]
+}
+
+/// Hide a section's labels whose control is gone, then move the
+/// remaining rows up over the rows that are now empty. Returns the bottom
+/// of the visible content in section coordinates.
+fn close_rows(v: &mut View, section: NodeId) -> i32 {
+    let body: Vec<NodeId> = v
+        .node(section)
+        .children
+        .iter()
+        .copied()
+        .filter(|&k| v.node(k).ctrl.position[1] > 3)
+        .collect();
+    for &k in &body {
+        if v.node(k).ctrl.class == "GuiTextCtrl"
+            && !body.iter().any(|&o| {
+                is_value(v, o)
+                    && v.node(o).state.visible
+                    && labels(&v.node(k).ctrl, &v.node(o).ctrl)
+            })
+        {
+            v.set_visible(k, false);
+        }
+    }
+    let mut rows: Vec<i32> = body.iter().map(|&k| v.node(k).ctrl.position[1]).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    let mut shifts = Vec::with_capacity(rows.len());
+    let mut shift = 0;
+    for (i, &row) in rows.iter().enumerate() {
+        shifts.push((row, shift));
+        let kept = body
+            .iter()
+            .any(|&k| v.node(k).ctrl.position[1] == row && v.node(k).state.visible);
+        if !kept && let Some(next) = rows.get(i + 1) {
+            shift += next - row;
+        }
+    }
+    let mut bottom = 23;
+    for &k in &body {
+        if !v.node(k).state.visible {
+            continue;
+        }
+        let c = &mut v.nodes[k].ctrl;
+        c.position[1] -= shifts
+            .iter()
+            .find(|(row, _)| *row == c.position[1])
+            .map_or(0, |(_, s)| *s);
+        bottom = bottom.max(c.position[1] + c.extent[1]);
+    }
+    bottom
+}
+
 pub struct Options {
     view: View,
     draft: Prefs,
@@ -86,7 +224,6 @@ pub struct Options {
     pending_display: Option<(RequestId, DisplaySettings, bool)>,
     pending_enabled: Vec<NodeId>,
     resolutions: Vec<(u32, u32)>,
-    clear_confirm: bool,
     committed: bool,
 }
 
@@ -118,44 +255,16 @@ impl Options {
             pending_display: None,
             pending_enabled: Vec::new(),
             resolutions,
-            clear_confirm: false,
             committed: false,
         };
+        s.native_layout();
         // Duplicate authored names occur throughout Options. Preference identity
         // is the variable on each node, never the last matching widget name.
         for n in s.view.walk().collect::<Vec<_>>() {
-            let c = s.view.node(n).ctrl.clone();
-            if c.command.as_deref() == Some("optionsDlg.applyGraphics();")
-                && c.class == "GuiBitmapButtonCtrl"
+            if let Some(var) = s.view.node(n).ctrl.variable.clone()
+                && var.starts_with('$')
             {
-                s.view.set_visible(n, false);
-            }
-            if c.text
-                .as_deref()
-                .is_some_and(|t| t.contains("must reconnect to the server"))
-            {
-                s.view
-                    .set_text(n, "Native QUIC uses automatic packet scheduling.");
-            }
-            if matches!(
-                c.class.as_str(),
-                "GuiCheckBoxCtrl"
-                    | "GuiRadioCtrl"
-                    | "GuiSliderCtrl"
-                    | "GuiTextEditCtrl"
-                    | "GuiPopUpMenuCtrl"
-            ) {
-                s.view.set_active(n, false);
-            }
-            if let Some(var) = c.variable.as_deref().filter(|v| v.starts_with('$')) {
-                s.view.set_bool(n, core.prefs.bool_or(var, false));
-                if LOCAL_PREFS.iter().any(|p| p.eq_ignore_ascii_case(var))
-                    || [FULLSCREEN, NO_VSYNC]
-                        .iter()
-                        .any(|p| p.eq_ignore_ascii_case(var))
-                {
-                    s.view.set_active(n, true);
-                }
+                s.view.set_bool(n, core.prefs.bool_or(&var, false));
             }
         }
         s.menu(
@@ -169,17 +278,7 @@ impl Options {
                 .iter()
                 .position(|r| *r == current.resolution)
                 .unwrap_or(0) as i64,
-            true,
         );
-        for (name, label) in [
-            ("OptGraphicsDriverMenu", "Native"),
-            ("OptGraphicsBPPMenu", "32"),
-            ("OptGraphicsHzMenu", "Desktop"),
-            ("OptScreenshotMenu", "PNG"),
-            ("OptAudioDriverList", "Native"),
-        ] {
-            s.menu(name, vec![(label.into(), 0)], 0, false);
-        }
         for &(name, pref, _) in VOLUMES {
             s.slider(name, core.prefs.f32_or(pref, 1.0).clamp(0.0, 1.0));
         }
@@ -189,6 +288,10 @@ impl Options {
                 .f32_or("$pref::Input::MouseSensitivity", 0.75)
                 .clamp(0.02, 2.0),
         );
+        s.slider(
+            "slider_KeyboardTurnSpeed",
+            core.prefs.f32_or(KEYBOARD_TURN_SPEED, 0.5).clamp(0.02, 1.0),
+        );
         for (name, pref, fallback) in [
             ("Opt_ChatLineTime", "$Pref::Chat::LineTime", 6500),
             ("Opt_MaxChatLines", "$Pref::Chat::MaxDisplayLines", 8),
@@ -196,62 +299,142 @@ impl Options {
             if let Some(n) = s.view.id(name) {
                 s.view
                     .set_text(n, core.prefs.i64_or(pref, fallback).to_string());
-                s.view.set_active(n, true);
             }
         }
-        let parent = window(&s.view).unwrap_or(s.view.root);
-        let mut cancel = ctrl(
-            "GuiButtonCtrl",
-            "GuiButtonProfile",
-            Rect::new(370, 430, 80, 27),
-        );
-        cancel.text = Some("Cancel".into());
-        cancel.command = Some("native.options.cancel".into());
-        s.view.add(parent, cancel);
-        let mut note = text(
-            "GuiTextProfile",
-            Rect::new(12, 426, 240, 36),
-            "Disabled settings await runtime support. Done saves; Cancel discards edits.",
-        );
-        note.class = "GuiMLTextCtrl".into();
-        note.name = Some("NativeOptionsStatus".into());
-        s.view.add(parent, note);
+        s.set_chat_size(chat_size(&core.prefs));
         s.pane("Graphics");
         s.refresh_binds(core);
         s.smart_toggle();
         s
     }
-    fn menu(&mut self, name: &str, items: Vec<(String, i64)>, selected: i64, enabled: bool) {
+
+    /// Hide the Torque-only settings and close up the authored layout
+    /// around the ones that remain.
+    fn native_layout(&mut self) {
+        let v = &mut self.view;
+        for n in v.walk().collect::<Vec<_>>() {
+            let c = &v.node(n).ctrl;
+            let hide = (is_value(v, n) && !supported(v, n))
+                || c.name.as_deref().is_some_and(|n| n.ends_with("Blocker"))
+                || c.name.as_deref() == Some("OptNetworkPane")
+                || c.command.as_deref() == Some("optionsDlg.setPane(Network);")
+                // The Advanced pane's Apply only applied Torque renderer state.
+                || (c.class == "GuiBitmapButtonCtrl"
+                    && c.command.as_deref() == Some("optionsDlg.applyGraphics();"));
+            if hide {
+                v.set_visible(n, false);
+            }
+        }
+        let sections: Vec<NodeId> = v.walk().filter(|&n| is_section(v, n)).collect();
+        for &n in &sections {
+            if !shows_values(v, n) {
+                v.set_visible(n, false);
+            }
+        }
+        let mut bottoms = HashMap::new();
+        for &n in &sections {
+            if v.node(n).state.visible {
+                bottoms.insert(n, close_rows(v, n));
+            }
+        }
+        // Graphics: the quality row is gone; its side fillers go with it and
+        // the two settings sections reach down to the footer strip.
+        if let Some(pane) = v.id("OptGraphicsPane") {
+            for k in v.node(pane).children.clone() {
+                let c = &v.node(k).ctrl;
+                if c.class == "GuiSwatchCtrl"
+                    && v.node(k).children.is_empty()
+                    && c.position[1] == 192
+                {
+                    v.set_visible(k, false);
+                }
+            }
+        }
+        for title in ["Display Settings", "Gui Settings"] {
+            if let Some(n) = find_section(v, title) {
+                v.nodes[n].ctrl.extent[1] = 322;
+            }
+        }
+        // Gui Settings keeps two columns; the right one lost its first row.
+        let show_hud = v
+            .walk()
+            .find(|&n| v.node(n).ctrl.variable.as_deref() == Some("$pref::HUD::showToolTips"));
+        if let Some(n) = show_hud {
+            v.nodes[n].ctrl.position[1] = 27;
+        }
+        // Audio: Volume takes the driver section's place.
+        if let Some(n) = find_section(v, "Volume") {
+            v.nodes[n].ctrl.position[1] = 7;
+            v.nodes[n].ctrl.extent[1] = 301;
+        }
+        // Advanced: stack the remaining sections of the scrolled page.
+        let page = v.walk().find(|&n| {
+            v.node(n)
+                .children
+                .iter()
+                .any(|&k| is_section(v, k) && section_title(v, k) == "Gui Options")
+        });
+        if let Some(page) = page {
+            let mut kids = v.node(page).children.clone();
+            kids.sort_by_key(|&k| v.node(k).ctrl.position[1]);
+            let mut y = 0;
+            for k in kids {
+                if !v.node(k).state.visible {
+                    continue;
+                }
+                let bottom = bottoms.get(&k).copied().unwrap_or(v.node(k).ctrl.extent[1]);
+                let c = &mut v.nodes[k].ctrl;
+                c.position[1] = y;
+                c.extent[1] = bottom + 6;
+                y += c.extent[1] + 3;
+            }
+            v.nodes[page].ctrl.extent[1] = y;
+        }
+        // Tabs close ranks without Network.
+        let mut tabs: Vec<NodeId> = v
+            .walk()
+            .filter(|&n| {
+                v.node(n).state.visible
+                    && v.node(n)
+                        .ctrl
+                        .command
+                        .as_deref()
+                        .is_some_and(|c| c.starts_with("optionsDlg.setPane("))
+            })
+            .collect();
+        tabs.sort_by_key(|&n| v.node(n).ctrl.position[0]);
+        for (i, n) in tabs.into_iter().enumerate() {
+            v.nodes[n].ctrl.position[0] = 12 + 90 * i as i32;
+        }
+    }
+    fn menu(&mut self, name: &str, items: Vec<(String, i64)>, selected: i64) {
         if let Some(n) = self.view.id(name) {
             self.view.state(n).items = items;
             self.view.select(n, Some(selected));
-            self.view.set_active(n, enabled);
         }
     }
     fn slider(&mut self, name: &str, value: f32) {
         if let Some(n) = self.view.id(name) {
             self.view.set_num(n, value);
-            self.view.set_active(n, true);
         }
     }
-    fn status(&mut self, text: &str) {
-        if let Some(n) = self.view.id("NativeOptionsStatus") {
-            self.view.set_text(n, text);
+    fn set_chat_size(&mut self, size: i64) {
+        self.draft.set(CHAT_SIZE, size.to_string());
+        if let Some(n) = self.view.id(&format!("{CHAT_SIZE_RADIO}{size}")) {
+            self.view.select_radio(n);
+        }
+        if let Some(n) = self.view.id("ExampleChat") {
+            self.view.nodes[n].ctrl.style = format!("HUDChatTextEditSize{size}Profile");
         }
     }
     fn pane(&mut self, name: &str) {
-        for p in ["Graphics", "Audio", "Network", "Controls", "AdvGraphics"] {
+        for p in ["Graphics", "Audio", "Controls", "AdvGraphics"] {
             if let Some(n) = self.view.id(&format!("Opt{p}Pane")) {
                 self.view.set_visible(n, p == name);
             }
         }
-        self.view.open_popup = None;
+        self.view.close_popup();
         self.view.focus = None;
-        self.status(if name == "Network" {
-            "Legacy network tuning is unavailable with native QUIC networking."
-        } else {
-            "Disabled settings await runtime support. Done saves; Cancel discards edits."
-        });
     }
     fn smart_toggle(&mut self) {
         if let Some(n) = self.view.id("Opt_SSSmartToggle") {
@@ -282,22 +465,29 @@ impl Options {
     fn collect(&mut self) -> Result<(), String> {
         for n in self.view.walk().collect::<Vec<_>>() {
             let c = &self.view.node(n).ctrl;
-            if self.view.node(n).state.active
+            if self.view.node(n).state.visible
                 && c.class == "GuiCheckBoxCtrl"
                 && let Some(var) = c.variable.clone()
             {
                 self.draft.set_bool(&var, self.view.bool_value(n));
             }
         }
-        if let Some(n) = self.view.id("SliderControlsMouseSensitivity") {
-            let v = self.view.num(n);
-            if !v.is_finite() {
-                return Err("Mouse sensitivity must be a finite number.".into());
-            }
-            self.draft.set(
+        for (name, pref, lo, hi) in [
+            (
+                "SliderControlsMouseSensitivity",
                 "$pref::Input::MouseSensitivity",
-                v.clamp(0.02, 2.0).to_string(),
-            );
+                0.02,
+                2.0,
+            ),
+            ("slider_KeyboardTurnSpeed", KEYBOARD_TURN_SPEED, 0.02, 1.0),
+        ] {
+            if let Some(n) = self.view.id(name) {
+                let v = self.view.num(n);
+                if !v.is_finite() {
+                    return Err("Sliders must hold finite numbers.".into());
+                }
+                self.draft.set(pref, v.clamp(lo, hi).to_string());
+            }
         }
         for &(name, pref, _) in VOLUMES {
             if let Some(n) = self.view.id(name) {
@@ -308,9 +498,21 @@ impl Options {
                 self.draft.set(pref, v.clamp(0.0, 1.0).to_string());
             }
         }
-        for (name, pref, min, max) in [
-            ("Opt_ChatLineTime", "$Pref::Chat::LineTime", 0, 30000),
-            ("Opt_MaxChatLines", "$Pref::Chat::MaxDisplayLines", 4, 100),
+        for (name, label, pref, min, max) in [
+            (
+                "Opt_ChatLineTime",
+                "Chat Line Time",
+                "$Pref::Chat::LineTime",
+                0,
+                30000,
+            ),
+            (
+                "Opt_MaxChatLines",
+                "Max Chat Lines",
+                "$Pref::Chat::MaxDisplayLines",
+                4,
+                100,
+            ),
         ] {
             if let Some(n) = self.view.id(name) {
                 let v = self
@@ -318,7 +520,7 @@ impl Options {
                     .edit_text(n)
                     .trim()
                     .parse::<i64>()
-                    .map_err(|_| format!("{name} must be a whole number."))?
+                    .map_err(|_| format!("{label} must be a whole number."))?
                     .clamp(min, max);
                 self.draft.set(pref, v.to_string());
                 self.view.set_text(n, v.to_string());
@@ -344,12 +546,14 @@ impl Options {
             .unwrap_or(self.applied_display.resolution);
         d
     }
+    /// Apply (`close` = false) or Done/Escape (`close` = true). A changed
+    /// display mode is requested first; the dialog commits once it lands.
     fn apply(&mut self, core: &mut Core, close: bool) {
         if self.pending_display.is_some() {
             return;
         }
         if let Err(e) = self.collect() {
-            self.status(&e);
+            core.message_ok("Options", &e);
             return;
         }
         let d = self.selected_display();
@@ -368,24 +572,18 @@ impl Options {
                 .walk()
                 .filter(|&n| {
                     self.view.node(n).state.active
-                        && matches!(
-                            self.view.node(n).ctrl.class.as_str(),
-                            "GuiButtonCtrl"
-                                | "GuiBitmapButtonCtrl"
-                                | "GuiCheckBoxCtrl"
-                                | "GuiSliderCtrl"
-                                | "GuiPopUpMenuCtrl"
-                                | "GuiTextEditCtrl"
-                                | "GuiTextListCtrl"
-                        )
+                        && (is_value(&self.view, n)
+                            || matches!(
+                                self.view.node(n).ctrl.class.as_str(),
+                                "GuiButtonCtrl" | "GuiBitmapButtonCtrl"
+                            ))
                 })
                 .collect();
             for &n in &self.pending_enabled {
                 self.view.set_active(n, false);
             }
             self.view.focus = None;
-            self.view.open_popup = None;
-            self.status("Applying display settings...");
+            self.view.close_popup();
         } else if close {
             self.commit(core);
         }
@@ -418,13 +616,6 @@ impl Options {
         }
         self.committed = true;
         core.save_settings();
-        core.pop(ScreenId::Options);
-    }
-    fn cancel(&mut self, core: &mut Core) {
-        if self.pending_display.is_some() {
-            self.status("Waiting for the display request before closing.");
-            return;
-        }
         core.pop(ScreenId::Options);
     }
     fn begin_remap(&mut self, core: &mut Core, all: bool) {
@@ -475,20 +666,12 @@ impl Screen for Options {
     fn on_update(&mut self, core: &mut Core) {
         self.refresh_binds(core);
     }
-    fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
-        if key == Key::Escape {
-            self.cancel(core);
-            true
-        } else {
-            false
-        }
-    }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
         if self.pending_display.is_some() || !self.view.node(ev.node).state.active {
             return;
         }
         if ev.kind == EventKind::Close {
-            self.cancel(core);
+            self.apply(core, true);
             return;
         }
         if ev.kind == EventKind::Changed {
@@ -509,7 +692,7 @@ impl Screen for Options {
             return;
         }
         if self.view.id("OptRemapList") == Some(ev.node) {
-            if matches!(ev.kind, EventKind::Submit | EventKind::DoubleClick) {
+            if ev.kind == EventKind::Submit {
                 self.begin_remap(core, false);
             }
             return;
@@ -522,35 +705,30 @@ impl Screen for Options {
             self.pane(pane);
             return;
         }
+        if let Some(size) = cmd
+            .strip_prefix("OPT_SetChatSize(")
+            .and_then(|c| c.strip_suffix(");"))
+            .and_then(|c| c.parse().ok())
+        {
+            self.set_chat_size(size);
+            return;
+        }
         match cmd.as_str() {
             "Canvas.popDialog(optionsDlg);" => self.apply(core, true),
-            "native.options.cancel" => self.cancel(core),
             "optionsDlg.applyGraphics();" => self.apply(core, false),
             "optionsDlg.RemapAll();" => self.begin_remap(core, true),
-            "optionsDlg.clearAllBinds();" => {
-                if self.clear_confirm {
-                    for c in &core.remap_commands {
-                        core.binds.unbind_command(c);
-                    }
-                    self.clear_confirm = false;
-                    self.view.set_text(ev.node, "Clear All");
-                    self.refresh_binds(core);
-                } else {
-                    self.clear_confirm = true;
-                    self.view.set_text(ev.node, "Confirm Clear");
-                    self.status("Click Confirm Clear again to clear remappable controls; Cancel restores them.");
-                }
-            }
+            "optionsDlg.clearAllBinds();" => core.message_yes_no(
+                "Clear All Binds?",
+                "Are you sure you want to clear your control configuration?",
+                Callback::ClearBinds,
+            ),
             "canvas.pushDialog(DefaultControlsGui);" => core.push(ScreenId::DefaultControls),
             "Canvas.pushDialog(AvatarGui);" => {
-                if core.binds != self.saved_binds
-                    || (core.settings.mouse_type, core.settings.keyboard_type)
-                        != self.saved_hardware
-                {
-                    self.status("Save or cancel control changes before opening Player Appearance.");
-                } else {
-                    core.push(ScreenId::Avatar);
-                }
+                // Remaps are live, as in v20; Player Appearance saves settings
+                // with the current controls, so they become the baseline.
+                self.saved_binds = core.binds.clone();
+                self.saved_hardware = (core.settings.mouse_type, core.settings.keyboard_type);
+                core.push(ScreenId::Avatar);
             }
             _ => {}
         }
@@ -577,11 +755,10 @@ impl Screen for Options {
                 self.applied_display = d;
                 put_display(&mut self.draft, d);
                 put_display(&mut core.prefs, d);
-                self.status("Display settings applied.");
                 if close {
                     self.commit(core);
                 } else {
-                    // Applying display is its own committed boundary; Cancel retains it.
+                    // Applying display is its own committed boundary.
                     let mut settings = core.settings.clone();
                     let mut prefs = core.prefs.clone();
                     put_display(&mut prefs, d);
@@ -592,7 +769,7 @@ impl Screen for Options {
                     core.request(UiAction::SaveSettings(Box::new(settings)));
                 }
             }
-            Err(reason) => self.status(&format!("Display settings rejected: {reason}")),
+            Err(reason) => core.message_ok("Display Settings", reason),
         }
         true
     }
@@ -847,6 +1024,9 @@ mod tests {
             ("GuiTextListCtrl", "OptRemapList", "", ""),
             ("GuiButtonCtrl", "apply", "", "optionsDlg.applyGraphics();"),
             ("GuiButtonCtrl", "done", "", "Canvas.popDialog(optionsDlg);"),
+            ("GuiButtonCtrl", "clear", "", "optionsDlg.clearAllBinds();"),
+            ("GuiRadioCtrl", "OPT_ChatSize2", "", "OPT_SetChatSize(2);"),
+            ("GuiRadioCtrl", "OPT_ChatSize4", "", "OPT_SetChatSize(4);"),
         ] {
             let mut c = ctrl(class, "GuiDefaultProfile", Rect::new(0, 0, 100, 20));
             c.name = Some(name.into());
@@ -855,6 +1035,9 @@ mod tests {
             }
             if !command.is_empty() {
                 c.command = Some(command.into());
+            }
+            if name == "done" {
+                c.accelerator = Some("escape".into());
             }
             layout.children.push(c);
         }
@@ -891,6 +1074,7 @@ mod tests {
             BindInput::Key(Chord::plain(Key::Letter('s'))),
             "movebackward",
         );
+        ui.core.remap_commands = vec!["moveforward".into(), "movebackward".into()];
         ui.core.prefs.set(RESOLUTION, "640 480 32");
         ui.drain_actions();
         ui
@@ -945,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn audio_preferences_use_seeded_defaults_and_cancel_does_not_preview() {
+    fn audio_preferences_use_seeded_defaults_and_apply_only_on_done() {
         let mut ui = fixture();
         for pref in AUDIO_PREFS {
             ui.core
@@ -963,7 +1147,6 @@ mod tests {
         assert!(ui.drain_sounds().is_empty());
         assert!(ui.drain_actions().is_empty());
         assert_eq!(ui.core.prefs, before);
-        options.on_key(Key::Escape, Modifiers::NONE, &mut ui.core);
         options.on_sleep(&mut ui.core);
         assert_eq!(ui.core.prefs, before);
         assert!(ui.drain_actions().is_empty());
@@ -984,7 +1167,7 @@ mod tests {
                 .view
                 .node(options.view.id("unsupported").unwrap())
                 .state
-                .active
+                .visible
         );
         assert!(ui.drain_actions().is_empty());
         click(&mut options, "done", &mut ui);
@@ -1017,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_discards_draft_audio_prefs_and_remaps() {
+    fn closing_without_done_discards_draft_audio_prefs_and_remaps() {
         let mut ui = fixture();
         let before = ui.core.binds.clone();
         let mut s = Options::new(&ui.core);
@@ -1026,7 +1209,6 @@ mod tests {
         let n = s.view.id("OptAudioVolumeMaster").unwrap();
         s.view.set_num(n, 0.25);
         ui.core.binds.force_remap("moveforward", key(Key::Up));
-        s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core);
         s.on_sleep(&mut ui.core);
         assert_eq!(ui.core.binds, before);
         assert!(!ui.core.options_open);
@@ -1048,7 +1230,7 @@ mod tests {
             .find(|&n| s.view.node(n).ctrl.variable.as_deref() == Some("$pref::HUD::HideBrickBox"))
             .unwrap();
         s.view.set_bool(n, true);
-        assert!(!s.view.node(s.view.id("unsupported").unwrap()).state.active);
+        assert!(!s.view.node(s.view.id("unsupported").unwrap()).state.visible);
         click(&mut s, "done", &mut ui);
         assert_eq!(ui.core.chat.max_lines, 100);
         assert!(ui.core.hud.prefs.hide_brick_box);
@@ -1064,6 +1246,60 @@ mod tests {
                 .iter()
                 .any(|(_, a)| matches!(a, UiAction::ApplyDisplay { .. }))
         );
+    }
+    #[test]
+    fn escape_is_done_as_in_v20() {
+        let mut ui = fixture();
+        ui.core.push(ScreenId::Options);
+        ui.apply(UiUpdate::Maps(vec![]));
+        assert_eq!(ui.top_id(), ScreenId::Options);
+        ui.core.binds.force_remap("moveforward", key(Key::Up));
+        ui.handle_input(InputEvent::KeyDown {
+            key: Key::Escape,
+            mods: Modifiers::NONE,
+            repeat: false,
+        });
+        assert!(!ui.is_open(ScreenId::Options));
+        assert_eq!(ui.core.binds.binding_of("moveforward"), Some(key(Key::Up)));
+        assert!(
+            ui.drain_actions()
+                .iter()
+                .any(|(_, a)| matches!(a, UiAction::SaveSettings(_)))
+        );
+    }
+    #[test]
+    fn clear_all_confirms_then_unbinds_only_remappable_controls() {
+        let mut ui = fixture();
+        ui.core.binds.bind(key(Key::F(9)), "toggleConsole");
+        let mut s = Options::new(&ui.core);
+        click(&mut s, "clear", &mut ui);
+        ui.apply(UiUpdate::Maps(vec![]));
+        assert_eq!(ui.top_id(), ScreenId::MessageBox);
+        assert!(ui.core.binds.binding_of("moveforward").is_some());
+        ui.handle_input(InputEvent::KeyDown {
+            key: Key::Return,
+            mods: Modifiers::NONE,
+            repeat: false,
+        });
+        assert!(!ui.is_open(ScreenId::MessageBox));
+        assert_eq!(ui.core.binds.binding_of("moveforward"), None);
+        assert_eq!(ui.core.binds.binding_of("movebackward"), None);
+        assert_eq!(
+            ui.core.binds.binding_of("toggleConsole"),
+            Some(key(Key::F(9)))
+        );
+    }
+    #[test]
+    fn chat_size_radio_restyles_example_and_saves_on_done() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let four = s.view.id("OPT_ChatSize4").unwrap();
+        assert!(s.view.bool_value(four), "v20 default chat size is 4");
+        click(&mut s, "OPT_ChatSize2", &mut ui);
+        assert!(s.view.bool_value(s.view.id("OPT_ChatSize2").unwrap()));
+        assert_eq!(ui.core.prefs.get(CHAT_SIZE), None);
+        click(&mut s, "done", &mut ui);
+        assert_eq!(chat_size(&ui.core.prefs), 2);
     }
     #[test]
     fn display_rejection_does_not_commit_then_success_retains_applied_boundary() {

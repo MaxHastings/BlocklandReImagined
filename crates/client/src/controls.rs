@@ -74,16 +74,6 @@ impl Controls {
     fn axis(&self, positive: HeldControl, negative: HeldControl) -> f32 {
         u8::from(self.held(positive)) as f32 - u8::from(self.held(negative)) as f32
     }
-    pub fn tick(&mut self, seconds: f32) {
-        if !seconds.is_finite() {
-            return;
-        }
-        let amount = seconds.clamp(0.0, 0.1) * 2.0;
-        self.look(
-            self.axis(HeldControl::TurnRight, HeldControl::TurnLeft) * amount,
-            self.axis(HeldControl::LookUp, HeldControl::LookDown) * amount,
-        );
-    }
     /// Fly the observer camera; returns true while it is active.
     pub fn fly(&mut self, seconds: f32) -> bool {
         let Some(mut position) = self.free_camera else {

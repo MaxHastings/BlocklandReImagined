@@ -140,6 +140,18 @@ pub enum Callback {
     MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
 }
 
+/// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
+/// follows mouse Y, so positive looks down.
+const KEYBOARD_TURN: [(&str, f32, f32); 4] = [
+    ("turnleft", -1.0, 0.0),
+    ("turnright", 1.0, 0.0),
+    ("panup", 0.0, -1.0),
+    ("pandown", 0.0, 1.0),
+];
+/// Radians per second at `KeyboardTurnSpeed` 1.0 (the v20 default 0.5 turns
+/// at 2 rad/s).
+const KEYBOARD_TURN_RATE: f32 = 4.0;
+
 /// What kind of answer a pending request is waiting for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pending {
@@ -486,6 +498,30 @@ impl Core {
         }
     }
 
+    /// turnLeft/turnRight/panUp/panDown: `$mvYaw*Speed =
+    /// $pref::Input::KeyboardTurnSpeed` while held, as a look rate.
+    fn keyboard_turn(&mut self, dt_ms: u64) {
+        let (mut yaw, mut pitch) = (0.0, 0.0);
+        for (cmd, dy, dp) in KEYBOARD_TURN {
+            if self.held.values().any(|h| h.eq_ignore_ascii_case(cmd)) {
+                yaw += dy;
+                pitch += dp;
+            }
+        }
+        if yaw == 0.0 && pitch == 0.0 {
+            return;
+        }
+        let speed = self
+            .prefs
+            .f32_or(screens::options::KEYBOARD_TURN_SPEED, 0.5)
+            .clamp(0.02, 1.0);
+        let step = speed * KEYBOARD_TURN_RATE * (dt_ms.min(100) as f32 / 1000.0);
+        self.game(GameAction::Look {
+            yaw: yaw * step,
+            pitch: pitch * step,
+        });
+    }
+
     fn one_button_jet(&self) -> bool {
         self.prefs.bool_or("$pref::Input::noobjet", false) || self.settings.mouse_type == 0
     }
@@ -505,15 +541,15 @@ impl Core {
                 "mousefire" => HeldControl::Fire,
                 "walk" => HeldControl::Walk,
                 "togglefreelook" => HeldControl::FreeLook,
-                "turnleft" => HeldControl::TurnLeft,
-                "turnright" => HeldControl::TurnRight,
-                "panup" => HeldControl::LookUp,
-                "pandown" => HeldControl::LookDown,
                 _ => return None,
             })
         };
         if let Some(h) = held(&c) {
             self.held_control(h, down);
+            return true;
+        }
+        // Keyboard turning is applied while held, in `Ui::update`.
+        if KEYBOARD_TURN.iter().any(|(cmd, _, _)| c == *cmd) {
             return true;
         }
         let shift = |c: &str| -> Option<(bool, i32, i32, i32)> {
@@ -1554,7 +1590,7 @@ impl Ui {
                 for d in &mut self.dialogs {
                     d.view_mut().pressed = None;
                     d.view_mut().mouse_leave();
-                    d.view_mut().open_popup = None;
+                    d.view_mut().close_popup();
                 }
                 self.flush();
             }
@@ -1575,20 +1611,27 @@ impl Ui {
             self.flush();
             return;
         }
-        // 2. The top screen's own key handling (remap capture, text entry).
         let top = self.dialogs.len().checked_sub(1);
+        // 2. An open dropdown list owns the keyboard (Escape closes only it).
+        if self.with_target(top, |s, _| s.view().open_popup_node().is_some()) {
+            let mut out = Vec::new();
+            self.with_target(top, |s, _| s.view_mut().key(key, mods, &mut out));
+            self.dispatch(top, out);
+            return;
+        }
+        // 3. The top screen's own key handling (remap capture, text entry).
         if self.with_target(top, |s, c| s.on_key(key, mods, c)) {
             self.flush();
             return;
         }
-        // 3. Focused text control.
+        // 4. Focused text control.
         let mut out = Vec::new();
         let used = self.with_target(top, |s, _| s.view_mut().key(key, mods, &mut out));
         if used {
             self.dispatch(top, out);
             return;
         }
-        // 4. Accelerators, topmost screen first (fire on repeat too).
+        // 5. Accelerators, topmost screen first (fire on repeat too).
         let n = self.dialogs.len();
         for i in (0..=n).rev() {
             let idx = i.checked_sub(1);
@@ -1609,7 +1652,7 @@ impl Ui {
                 break;
             }
         }
-        // 5. Gameplay binds (key repeats are not delivered to bound
+        // 6. Gameplay binds (key repeats are not delivered to bound
         //    functions; v20 repeats bricks itself).
         if repeat || self.core.held.contains_key(&HeldInput::Key(key)) || !self.game_input_active()
         {
@@ -1645,6 +1688,7 @@ impl Ui {
     pub fn update(&mut self, dt_ms: u64) {
         let c = &mut self.core;
         c.time_ms = c.time_ms.saturating_add(dt_ms);
+        c.keyboard_turn(dt_ms);
         c.damage_flash = (c.damage_flash - dt_ms as f32 / 1000.0).max(0.0);
         let now = c.time_ms;
         for cmd in c.repeater.due(now) {

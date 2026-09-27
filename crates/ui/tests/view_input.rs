@@ -130,9 +130,9 @@ fn radios_checkbox_popup() {
     // Popup opens on click, Escape closes it, a row click selects.
     v.state(pop).items = vec![("Four".into(), 4), ("Eight".into(), 8)];
     click(&mut v, &pack, 20, 185);
-    assert_eq!(v.open_popup, Some(pop));
+    assert_eq!(v.open_popup_node(), Some(pop));
     assert!(v.key(Key::Escape, Modifiers::NONE, &mut out));
-    assert_eq!(v.open_popup, None);
+    assert_eq!(v.open_popup_node(), None);
     click(&mut v, &pack, 20, 185);
     let ev = click(&mut v, &pack, 20, 198 + 16 + 4);
     assert_eq!(v.selected(pop), Some(8));
@@ -181,5 +181,70 @@ fn resize_rules_scale_layouts() {
             (1024, 768)
         ),
         Rect::new(0, 448, 608, 40)
+    );
+}
+
+#[test]
+fn long_popup_scrolls_and_takes_keyboard_and_drag_selection() {
+    let pack = Pack::from_parts(UiPack::default(), ".".into());
+    let mut v = View::new(&layout());
+    v.layout(640, 480);
+    let pop = v.id("pop").unwrap();
+    v.state(pop).items = (0..30).map(|i| (format!("Item {i}"), i * 10)).collect();
+    // Rows are 16px; the default 200px popup height shows 12 of 30.
+    click(&mut v, &pack, 20, 185);
+    assert_eq!(
+        v.open_popup_node(),
+        Some(pop),
+        "release over the control keeps it open"
+    );
+    assert!(v.wheel(-3), "wheel scrolls the open list");
+    let ev = click(&mut v, &pack, 20, 198 + 1 + 8);
+    assert_eq!(
+        v.selected(pop),
+        Some(30),
+        "first visible row after scrolling"
+    );
+    assert!(ev.contains(&ViewEvent {
+        node: pop,
+        kind: EventKind::Changed
+    }));
+    assert_eq!(v.open_popup_node(), None);
+
+    let mut out = Vec::new();
+    click(&mut v, &pack, 20, 185);
+    for k in [Key::Down, Key::Down, Key::Return] {
+        assert!(v.key(k, Modifiers::NONE, &mut out));
+    }
+    assert_eq!(
+        v.selected(pop),
+        Some(50),
+        "keyboard starts at the selection"
+    );
+    click(&mut v, &pack, 20, 185);
+    for k in [Key::End, Key::Return] {
+        v.key(k, Modifiers::NONE, &mut out);
+    }
+    assert_eq!(v.selected(pop), Some(290), "End reaches the last item");
+    click(&mut v, &pack, 20, 185);
+    assert!(
+        v.key(Key::Letter('q'), Modifiers::NONE, &mut out),
+        "an open list owns the keyboard"
+    );
+    v.key(Key::Escape, Modifiers::NONE, &mut out);
+    assert_eq!(v.selected(pop), Some(290));
+
+    // Press on the control, drag onto a row, release: Torque drag-select.
+    let mut out = Vec::new();
+    v.mouse_move(20, 185, &mut out);
+    v.mouse_down(MouseButton::Left, 20, 185, &pack, &mut out);
+    let row = v.open_popup_node().map(|_| 198 + 1 + 16 * 2 + 8).unwrap();
+    v.mouse_move(20, row, &mut out);
+    v.mouse_up(MouseButton::Left, 20, row, &pack, &mut out);
+    assert_eq!(v.open_popup_node(), None);
+    assert_eq!(
+        v.selected(pop),
+        Some(200),
+        "End scrolled the list to items 18-29"
     );
 }

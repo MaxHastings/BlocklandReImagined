@@ -76,6 +76,12 @@ impl NativeScreen {
             ScreenId::About => s.set("aboutText", "Blockland ReImagined\nOriginal Blockland by Eric Hartman and contributors.\nNative engine rewrite — development build."),
             ScreenId::MessageInput(ch) => {
                 s.set("NMH_Channel", if ch == ChatChannel::Say { "SAY:" } else { "TEAM:" });
+                let size = super::options::chat_size(&core.prefs);
+                for (name, style) in [("NMH_Type", "HUDChatTextEditSize"), ("NMH_Channel", "BlockChatChannelSize")] {
+                    if let Some(n) = s.view.id(name) {
+                        s.view.nodes[n].ctrl.style = format!("{style}{size}Profile");
+                    }
+                }
                 s.view.focus = s.view.id("NMH_Type");
             }
             ScreenId::ManualJoin => s.view.focus = s.view.id("MJ_txtIP"),
@@ -440,7 +446,7 @@ impl Screen for NativeScreen {
         true
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
-        if key == Key::Escape && self.view.open_popup.is_none() {
+        if key == Key::Escape {
             self.cancel(core);
             return self.id != ScreenId::Play;
         }
@@ -592,9 +598,12 @@ impl MessageScreen {
                 core.binds.force_remap(command, *input);
                 core.save_settings();
             }
+            // optionsDlg.clearAllBinds: only the remappable controls; Options
+            // saves them when it closes.
             Callback::ClearBinds => {
-                core.binds.entries.clear();
-                core.save_settings();
+                for c in core.remap_commands.clone() {
+                    core.binds.unbind_command(&c);
+                }
             }
             Callback::DefaultBinds => core.push(ScreenId::DefaultControls),
             Callback::OverwriteSave {

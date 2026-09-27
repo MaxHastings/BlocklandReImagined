@@ -244,7 +244,10 @@ fn hud(core: &Core) -> View {
         &mut v,
         Rect::new(4, 4, (w - 80).max(1), (h / 2).max(1)),
         &chat,
-        "BlockChatTextProfile",
+        &format!(
+            "BlockChatTextSize{}Profile",
+            super::options::chat_size(&core.prefs)
+        ),
     );
     if let Some(text) = &core.net_graph {
         fill(&mut v, Rect::new(w - 220, 4, 216, 20), [0, 0, 0, 128]);

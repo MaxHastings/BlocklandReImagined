@@ -96,6 +96,54 @@ pub struct ViewEvent {
     pub kind: EventKind,
 }
 
+/// An open GuiPopUpMenuCtrl list (GuiPopupTextListCtrl in Torque).
+#[derive(Debug, Clone, Copy)]
+struct Popup {
+    node: NodeId,
+    /// List rectangle including its 1px frame.
+    rect: Rect,
+    row_h: i32,
+    /// Rows visible at once; fewer than the item count adds a scroll bar.
+    rows: usize,
+    /// First visible item.
+    scroll: usize,
+    /// Highlighted item (mouse hover or keyboard cursor).
+    hover: Option<usize>,
+    /// Opened by the current press: releasing over a row selects it.
+    dragging: bool,
+}
+
+impl Popup {
+    fn scroll_bar(&self, items: usize) -> Option<Rect> {
+        (items > self.rows).then(|| {
+            Rect::new(
+                self.rect.right() - 1 - POPUP_BAR,
+                self.rect.y + 1,
+                POPUP_BAR,
+                self.rect.h - 2,
+            )
+        })
+    }
+    fn row_at(&self, x: i32, y: i32, items: usize) -> Option<usize> {
+        let in_bar = self.scroll_bar(items).is_some_and(|b| b.contains(x, y));
+        (self.rect.contains(x, y) && !in_bar)
+            .then(|| self.scroll + ((y - self.rect.y - 1).max(0) / self.row_h.max(1)) as usize)
+            .filter(|&i| i < items && i < self.scroll + self.rows)
+    }
+    fn scroll_to(&mut self, i: usize, items: usize) {
+        if i < self.scroll {
+            self.scroll = i;
+        } else if i >= self.scroll + self.rows {
+            self.scroll = i + 1 - self.rows;
+        }
+        self.scroll = self.scroll.min(items.saturating_sub(self.rows));
+    }
+}
+
+/// Popup list scroll bar width (the blockscroll arrow pieces are 14px wide).
+const POPUP_BAR: i32 = 14;
+const SCROLL_SKIN: &str = "base/client/ui/blockscroll";
+
 #[derive(Debug, Clone)]
 pub struct View {
     pub nodes: Vec<Node>,
@@ -104,16 +152,13 @@ pub struct View {
     pub hover: Option<NodeId>,
     pub pressed: Option<(NodeId, MouseButton)>,
     pub focus: Option<NodeId>,
-    pub open_popup: Option<NodeId>,
+    popup: Option<Popup>,
     last_click: Option<(NodeId, u64)>,
     pub time_ms: u64,
     canvas: (i32, i32),
     /// Last mouse position (logical pixels).
     pub mouse: (i32, i32),
     close_hot: bool,
-    popup_hover: Option<usize>,
-    popup_rect_cached: Option<Rect>,
-    popup_row_cached: i32,
     /// Text-list row height used for scroll extents (set from the pack by
     /// the owning screen; 16 is Torque's default for 14px fonts).
     pub row_height_hint: i32,
@@ -145,15 +190,12 @@ impl View {
             hover: None,
             pressed: None,
             focus: None,
-            open_popup: None,
+            popup: None,
             last_click: None,
             time_ms: 0,
             canvas: (640, 480),
             mouse: (-1, -1),
             close_hot: false,
-            popup_hover: None,
-            popup_rect_cached: None,
-            popup_row_cached: 16,
             row_height_hint: 16,
         };
         v.root = v.insert(layout, None);
@@ -385,7 +427,7 @@ impl View {
 
     pub fn draw(&self, pack: &Pack, dl: &mut DrawList) {
         self.draw_node(pack, dl, self.root);
-        if let Some(p) = self.open_popup {
+        if let Some(p) = &self.popup {
             self.draw_popup_list(pack, dl, p);
         }
     }
@@ -980,9 +1022,8 @@ impl View {
     }
 
     fn draw_scroll_arrow(&self, pack: &Pack, dl: &mut DrawList, r: Rect, part: usize) {
-        let img = "base/client/ui/blockscroll";
-        if let Some(src) = self.skin_piece(pack, img, part * scroll::STATES) {
-            self.piece(dl, img, src, r);
+        if let Some(src) = self.skin_piece(pack, SCROLL_SKIN, part * scroll::STATES) {
+            self.piece(dl, SCROLL_SKIN, src, r);
         }
     }
 
@@ -1001,26 +1042,50 @@ impl View {
         if bw == 0 {
             return;
         }
+        self.draw_scrollbar(
+            pack,
+            dl,
+            img,
+            Rect::new(r.right() - bw, r.y, bw, r.h),
+            self.content_height(id),
+            r.h,
+            n.state.scroll_y,
+        );
+    }
+
+    /// Arrows, page track and a thumb sized for `visible` of `content`
+    /// pixels scrolled by `offset`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_scrollbar(
+        &self,
+        pack: &Pack,
+        dl: &mut DrawList,
+        img: &str,
+        bar: Rect,
+        content: i32,
+        visible: i32,
+        offset: i32,
+    ) {
         let get = |part: usize| self.skin_piece(pack, img, part * scroll::STATES);
         let (Some(up), Some(dn), Some(page)) =
             (get(scroll::UP), get(scroll::DOWN), get(scroll::PAGE))
         else {
             return;
         };
-        let x = r.right() - bw;
+        let (x, bw) = (bar.x, bar.w);
         let uh = up[3] as i32;
         let dh = dn[3] as i32;
-        self.piece(dl, img, page, Rect::new(x, r.y + uh, bw, r.h - uh - dh));
-        self.piece(dl, img, up, Rect::new(x, r.y, bw, uh));
-        self.piece(dl, img, dn, Rect::new(x, r.bottom() - dh, bw, dh));
-        let content = self.content_height(id).max(1);
-        let track = r.h - uh - dh;
-        if content > r.h && track > 12 {
-            let th = ((track as i64 * r.h as i64) / content as i64).max(16) as i32;
-            let max_scroll = content - r.h;
-            let ty = r.y
+        self.piece(dl, img, page, Rect::new(x, bar.y + uh, bw, bar.h - uh - dh));
+        self.piece(dl, img, up, Rect::new(x, bar.y, bw, uh));
+        self.piece(dl, img, dn, Rect::new(x, bar.bottom() - dh, bw, dh));
+        let content = content.max(1);
+        let track = bar.h - uh - dh;
+        if content > visible && track > 12 {
+            let th = ((track as i64 * visible as i64) / content as i64).max(16) as i32;
+            let max_scroll = content - visible;
+            let ty = bar.y
                 + uh
-                + ((track - th) as i64 * n.state.scroll_y as i64 / max_scroll.max(1) as i64) as i32;
+                + ((track - th) as i64 * offset as i64 / max_scroll.max(1) as i64) as i32;
             if let (Some(t0), Some(t1), Some(t2)) = (
                 get(scroll::THUMB_TOP),
                 get(scroll::THUMB),
@@ -1086,55 +1151,185 @@ impl View {
         }
     }
 
-    fn draw_popup_list(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
-        let r = self.popup_rect(pack, id);
-        let n = &self.nodes[id];
-        let Some(style) = self.style(pack, id) else {
+    fn draw_popup_list(&self, pack: &Pack, dl: &mut DrawList, p: &Popup) {
+        let n = &self.nodes[p.node];
+        let Some(style) = self.style(pack, p.node) else {
             return;
         };
-        dl.fill(r, [255, 255, 255, 255]);
+        let r = p.rect;
+        dl.fill(r, WHITE);
         dl.frame(r, geom::BLACK);
-        let rh = self.popup_row_height(pack, id);
-        let sel = self.selected(id);
-        for (i, (text, item)) in n.state.items.iter().enumerate() {
-            let row = Rect::new(r.x + 1, r.y + 1 + i as i32 * rh, r.w - 2, rh);
-            if Some(i) == self.popup_hover || (self.popup_hover.is_none() && Some(*item) == sel) {
+        let bar = p.scroll_bar(n.state.items.len());
+        let text_w = r.w - 2 - bar.map_or(0, |b| b.w);
+        let visible = n.state.items.iter().enumerate().skip(p.scroll).take(p.rows);
+        for (row, (i, (text, _))) in visible.enumerate() {
+            let row = Rect::new(r.x + 1, r.y + 1 + row as i32 * p.row_h, text_w, p.row_h);
+            if Some(i) == p.hover {
                 dl.fill(row, style.fill_color_hl.unwrap_or([171, 171, 171, 255]));
             }
-            let t = Rect::new(row.x + 3, row.y, row.w - 6, rh);
-            self.draw_text_in(
+            let t = Rect::new(row.x + 3, row.y, row.w - 6, p.row_h);
+            if dl.push_clip(t) {
+                self.draw_text_in(
+                    pack,
+                    dl,
+                    p.node,
+                    t,
+                    text,
+                    Some(Justify::Left),
+                    Some(geom::BLACK),
+                );
+                dl.pop_clip();
+            }
+        }
+        if let Some(bar) = bar {
+            self.draw_scrollbar(
                 pack,
                 dl,
-                id,
-                t,
-                text,
-                Some(Justify::Left),
-                Some(geom::BLACK),
+                SCROLL_SKIN,
+                bar,
+                n.state.items.len() as i32 * p.row_h,
+                p.rows as i32 * p.row_h,
+                p.scroll as i32 * p.row_h,
             );
         }
     }
 
-    fn popup_row_height(&self, pack: &Pack, id: NodeId) -> i32 {
-        self.list_row_height(pack, id)
-            .max(self.nodes[id].rect.h - 2)
-    }
-
-    fn popup_rect(&self, pack: &Pack, id: NodeId) -> Rect {
+    /// Lay out the list for `id` below the control (above it when the canvas
+    /// has no room), at least as wide as its widest item, with the selected
+    /// item highlighted and scrolled into view.
+    fn open_popup(&mut self, pack: &Pack, id: NodeId) {
         let n = &self.nodes[id];
-        let rh = self.popup_row_height(pack, id);
+        let items = n.state.items.len();
+        let font = self
+            .style(pack, id)
+            .and_then(|s| Self::font_id(pack, s))
+            .and_then(|f| Font::get(pack, f));
+        let row_h = self.list_row_height(pack, id).max(n.rect.h - 2);
         let max_rows = n
             .ctrl
             .field("maxPopupHeight")
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(200)
-            / rh.max(1);
-        let rows = (n.state.items.len() as i32).min(max_rows.max(8)).max(1);
-        let h = rows * rh + 2;
+            / row_h.max(1);
+        let rows = items.min(max_rows.max(1) as usize).max(1);
+        let bar = if rows < items { POPUP_BAR } else { 0 };
+        let widest = font.map_or(0, |f| {
+            n.state
+                .items
+                .iter()
+                .map(|(t, _)| f.width(t))
+                .max()
+                .unwrap_or(0)
+        });
+        let w = n.rect.w.max(widest + 8 + bar).min(self.canvas.0);
+        let h = rows as i32 * row_h + 2;
         let mut y = n.rect.bottom();
         if y + h > self.canvas.1 {
             y = (n.rect.y - h).max(0);
         }
-        Rect::new(n.rect.x, y, n.rect.w.max(100), h)
+        let x = n.rect.x.min(self.canvas.0 - w).max(0);
+        let selected = self
+            .selected(id)
+            .and_then(|s| n.state.items.iter().position(|(_, i)| *i == s));
+        let mut p = Popup {
+            node: id,
+            rect: Rect::new(x, y, w, h),
+            row_h,
+            rows,
+            scroll: 0,
+            hover: selected,
+            dragging: true,
+        };
+        if let Some(i) = selected {
+            p.scroll_to(i, items);
+        }
+        self.popup = Some(p);
+    }
+
+    /// The control whose list is open, if any.
+    pub fn open_popup_node(&self) -> Option<NodeId> {
+        self.popup.map(|p| p.node)
+    }
+
+    pub fn close_popup(&mut self) {
+        self.popup = None;
+    }
+
+    fn choose_popup_item(&mut self, p: Popup, i: usize, out: &mut Vec<ViewEvent>) {
+        self.popup = None;
+        if let Some((_, item)) = self.nodes[p.node].state.items.get(i).cloned() {
+            self.nodes[p.node].state.value = Value::Selected(Some(item));
+            out.push(ViewEvent {
+                node: p.node,
+                kind: EventKind::Changed,
+            });
+        }
+    }
+
+    fn scroll_popup(&mut self, rows: i32) {
+        if let Some(p) = &mut self.popup {
+            let items = self.nodes[p.node].state.items.len();
+            let max = items.saturating_sub(p.rows) as i32;
+            p.scroll = (p.scroll as i32 + rows).clamp(0, max) as usize;
+        }
+    }
+
+    /// Mouse press while a list is open: rows choose, the scroll bar
+    /// scrolls, anything else closes the list without reaching the control
+    /// underneath.
+    fn popup_mouse_down(&mut self, mut p: Popup, x: i32, y: i32, out: &mut Vec<ViewEvent>) {
+        let items = self.nodes[p.node].state.items.len();
+        if let Some(i) = p.row_at(x, y, items) {
+            self.choose_popup_item(p, i, out);
+        } else if let Some(bar) = p.scroll_bar(items).filter(|b| b.contains(x, y)) {
+            let step = if y < bar.y + POPUP_BAR {
+                -1
+            } else if y >= bar.bottom() - POPUP_BAR {
+                1
+            } else if y < bar.y + bar.h / 2 {
+                -(p.rows as i32)
+            } else {
+                p.rows as i32
+            };
+            p.dragging = false;
+            self.popup = Some(p);
+            self.scroll_popup(step);
+        } else {
+            self.popup = None;
+        }
+    }
+
+    /// Keyboard while a list is open. The list owns every key so nothing
+    /// leaks to the dialog or gameplay underneath.
+    fn popup_key(&mut self, mut p: Popup, key: Key, out: &mut Vec<ViewEvent>) {
+        let items = self.nodes[p.node].state.items.len();
+        let last = items.saturating_sub(1);
+        let cur = p.hover;
+        let next = match key {
+            Key::Escape => {
+                self.popup = None;
+                return;
+            }
+            Key::Return | Key::NumpadEnter => {
+                match cur {
+                    Some(i) => self.choose_popup_item(p, i, out),
+                    None => self.popup = None,
+                }
+                return;
+            }
+            Key::Up => cur.map_or(last, |i| i.saturating_sub(1)),
+            Key::Down => cur.map_or(0, |i| (i + 1).min(last)),
+            Key::PageUp => cur.map_or(0, |i| i.saturating_sub(p.rows)),
+            Key::PageDown => cur.map_or(0, |i| (i + p.rows).min(last)),
+            Key::Home => 0,
+            Key::End => last,
+            _ => return,
+        };
+        if items > 0 {
+            p.hover = Some(next);
+            p.scroll_to(next, items);
+            self.popup = Some(p);
+        }
     }
 
     // ------------------------------------------------------------------ input
@@ -1201,17 +1396,15 @@ impl View {
     pub fn mouse_leave(&mut self) {
         self.hover = None;
         self.close_hot = false;
-        self.popup_hover = None;
     }
 
     pub fn mouse_move(&mut self, x: i32, y: i32, out: &mut Vec<ViewEvent>) {
         self.mouse = (x, y);
-        if let Some(p) = self.open_popup {
-            let pr = self.popup_rect_cached;
-            self.popup_hover = pr
-                .filter(|r| r.contains(x, y))
-                .map(|r| ((y - r.y - 1) / self.popup_row_cached.max(1)) as usize)
-                .filter(|i| *i < self.nodes[p].state.items.len());
+        if let Some(p) = &mut self.popup {
+            let items = self.nodes[p.node].state.items.len();
+            if let Some(i) = p.row_at(x, y, items) {
+                p.hover = Some(i);
+            }
             return;
         }
         if let Some((id, MouseButton::Left)) = self.pressed
@@ -1265,20 +1458,8 @@ impl View {
         out: &mut Vec<ViewEvent>,
     ) {
         self.mouse = (x, y);
-        if let Some(p) = self.open_popup.take() {
-            let r = self.popup_rect(pack, p);
-            if r.contains(x, y) {
-                let rh = self.popup_row_height(pack, p);
-                let i = ((y - r.y - 1) / rh) as usize;
-                if let Some((_, item)) = self.nodes[p].state.items.get(i).cloned() {
-                    self.nodes[p].state.value = Value::Selected(Some(item));
-                    out.push(ViewEvent {
-                        node: p,
-                        kind: EventKind::Changed,
-                    });
-                }
-            }
-            self.popup_hover = None;
+        if let Some(p) = self.popup {
+            self.popup_mouse_down(p, x, y, out);
             return;
         }
         let Some(t) = self.target(x, y) else {
@@ -1299,6 +1480,11 @@ impl View {
                     node: t,
                     kind: EventKind::Changed,
                 });
+            }
+            "GuiPopUpMenuCtrl"
+                if b == MouseButton::Left && !self.nodes[t].state.items.is_empty() =>
+            {
+                self.open_popup(pack, t);
             }
             "GuiScrollCtrl" if b == MouseButton::Left => {
                 let r = self.nodes[t].rect;
@@ -1341,10 +1527,23 @@ impl View {
         b: MouseButton,
         x: i32,
         y: i32,
-        pack: &Pack,
+        _pack: &Pack,
         out: &mut Vec<ViewEvent>,
     ) {
         self.mouse = (x, y);
+        if let Some(mut open) = self.popup {
+            // Press-drag-release over a row picks it, like Torque's list.
+            let items = self.nodes[open.node].state.items.len();
+            match open.row_at(x, y, items) {
+                Some(i) if open.dragging => self.choose_popup_item(open, i, out),
+                _ => {
+                    open.dragging = false;
+                    self.popup = Some(open);
+                }
+            }
+            self.pressed = None;
+            return;
+        }
         let Some((p, pb)) = self.pressed.take() else {
             return;
         };
@@ -1385,12 +1584,6 @@ impl View {
                     node: p,
                     kind: EventKind::Click,
                 });
-            }
-            ("GuiPopUpMenuCtrl", MouseButton::Left) if !self.nodes[p].state.items.is_empty() => {
-                self.open_popup = Some(p);
-                self.popup_rect_cached = Some(self.popup_rect(pack, p));
-                self.popup_row_cached = self.popup_row_height(pack, p);
-                self.popup_hover = None;
             }
             ("GuiBitmapButtonCtrl" | "GuiButtonCtrl", MouseButton::Left) => {
                 let double = self
@@ -1439,6 +1632,10 @@ impl View {
     /// Mouse wheel: scroll the innermost scroll control under the cursor.
     /// Returns true if consumed.
     pub fn wheel(&mut self, delta: i32) -> bool {
+        if self.popup.is_some() {
+            self.scroll_popup(-delta);
+            return true;
+        }
         let Some(mut id) = self.hit(self.mouse.0, self.mouse.1) else {
             return false;
         };
@@ -1461,8 +1658,8 @@ impl View {
 
     /// Keyboard for the focused edit control. Returns true if consumed.
     pub fn key(&mut self, key: Key, mods: Modifiers, out: &mut Vec<ViewEvent>) -> bool {
-        if self.open_popup.is_some() && key == Key::Escape {
-            self.open_popup = None;
+        if let Some(p) = self.popup {
+            self.popup_key(p, key, out);
             return true;
         }
         let Some(f) = self.focus else { return false };

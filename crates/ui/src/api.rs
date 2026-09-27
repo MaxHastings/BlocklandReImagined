@@ -387,10 +387,6 @@ pub enum HeldControl {
     /// FOV = zoom FOV while held.
     Zoom,
     FreeLook,
-    TurnLeft,
-    TurnRight,
-    LookUp,
-    LookDown,
 }
 
 /// Gameplay requests produced from key binds (client-script behaviour such as
