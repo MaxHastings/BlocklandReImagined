@@ -165,11 +165,7 @@ fn main() -> Result<()> {
         humans[0],
         1,
         Command::LoadBuild {
-            build: Box::new(bri_world::build::SavedBuild {
-                schema_version: 1,
-                ownership_scope: None,
-                world: spawners,
-            }),
+            build: Box::new(bri_world::build::SavedBuild::new(spawners)),
             ownership: false,
         },
     )?;

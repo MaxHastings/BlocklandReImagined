@@ -234,11 +234,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
     });
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
-    let build = bri_world::build::SavedBuild {
-        schema_version: 1,
-        ownership_scope: None,
-        world,
-    };
+    let build = bri_world::build::SavedBuild::new(world);
     use sha2::Digest;
     let folder = state
         .join("saves")

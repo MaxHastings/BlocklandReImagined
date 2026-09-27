@@ -415,7 +415,6 @@ pub struct Session {
     /// lowercase aspect ratio, used for the next brick of that aspect.
     last_prints: BTreeMap<OwnerId, BTreeMap<String, String>>,
     avatar_catalog: Option<bri_content::avatar::Package>,
-    ownership_scope: Option<String>,
     bulk_window_tick: u64,
     bulk_requests: u32,
     admin: admin::AdminRuntime,
@@ -434,12 +433,14 @@ pub struct Session {
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
-        // Existing native owners cannot be claimed by the next unauthenticated join.
-        let next_owner = simulation
-            .state()
+        // Existing native owners, and every number the world has recorded
+        // for a player, stay out of reach of new joins.
+        let world = simulation.state();
+        let next_owner = world
             .bricks
             .values()
             .map(|b| b.owner)
+            .chain(world.owners.keys().copied())
             .max()
             .unwrap_or(0)
             .saturating_add(1);
@@ -476,7 +477,6 @@ impl Session {
             undo: BTreeMap::new(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
-            ownership_scope: None,
             bulk_window_tick: 0,
             bulk_requests: 0,
             admin: admin::AdminRuntime::default(),
@@ -549,17 +549,6 @@ impl Session {
             .get(&owner)
             .is_some_and(|p| p.actor.administrator)
     }
-    pub fn set_ownership_scope(&mut self, scope: String) -> Result<()> {
-        ensure!(
-            self.peers.is_empty()
-                && self.departed.is_empty()
-                && !scope.is_empty()
-                && scope.len() <= 128,
-            "Invalid/live ownership scope change"
-        );
-        self.ownership_scope = Some(scope);
-        Ok(())
-    }
     /// Spawn/admin are local server decisions, never fields from a join packet.
     pub fn join(&mut self, name: String, spawn: Vec3, administrator: bool) -> Result<OwnerId> {
         self.join_verified(name, spawn, administrator, None)
@@ -588,8 +577,33 @@ impl Session {
             !name.trim().is_empty() && name.len() <= 48 && !name.chars().any(char::is_control),
             "Invalid player name"
         );
-        let owner = self.next_owner;
-        let next = owner.checked_add(1).context("Owner IDs exhausted")?;
+        // A returning player builds under the owner number they had in this
+        // world, so their bricks are theirs again after a restart. A number
+        // still held by a live or resumable connection is not handed out
+        // twice; that connection gets a fresh number instead.
+        let record = principal
+            .filter(|_| !is_bot)
+            .map(|p| bri_world::OwnerRecord::new(p.0, name.clone()));
+        let returning = record
+            .as_ref()
+            .and_then(|r| self.simulation.state().owner_of(&r.principal))
+            .filter(|n| !self.peers.contains_key(n) && !self.departed.contains_key(n));
+        let owner = match returning {
+            Some(owner) => owner,
+            None => {
+                // Spent even if the join fails below, so a claimed number is
+                // never offered again.
+                let owner = self.next_owner;
+                self.next_owner = owner.checked_add(1).context("Owner IDs exhausted")?;
+                owner
+            }
+        };
+        if let Some(record) = record {
+            let known = self.simulation.state().owner_of(&record.principal).is_some();
+            if returning.is_some() || !known {
+                self.simulation.claim_owner(owner, record)?;
+            }
+        }
         let role = self.admin_connect(owner, name.clone(), trusted_host, is_bot, principal)?;
         let player = match Player::spawn(
             &mut self.simulation.physics,
@@ -652,7 +666,6 @@ impl Session {
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
-        self.next_owner = next;
         if !is_bot {
             self.announce(owner, "connected.", "ClientJoinSound");
         }
@@ -1161,10 +1174,7 @@ impl Session {
                     }
                 }
                 Ok(Reply::Saved(Box::new(bri_world::build::SavedBuild::capture(
-                    &world,
-                    self.ownership_scope.clone(),
-                    events,
-                    ownership,
+                    &world, events, ownership,
                 )?)))
             }
             Command::LoadBuild { build, ownership } => {

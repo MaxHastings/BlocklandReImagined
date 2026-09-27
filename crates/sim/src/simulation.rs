@@ -154,6 +154,14 @@ impl Simulation {
     pub fn state(&self) -> &World {
         self.authority.state()
     }
+    /// Record which principal an owner number belongs to in this world.
+    pub fn claim_owner(
+        &mut self,
+        owner: bri_world::OwnerId,
+        record: bri_world::OwnerRecord,
+    ) -> Result<()> {
+        self.authority.claim_owner(owner, record)
+    }
     /// Check every brick of a load against the brick definitions before any
     /// of it is published.
     pub fn preflight_load(&self, plan: &bri_world::build::LoadPlan) -> Result<()> {

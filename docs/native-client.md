@@ -141,11 +141,14 @@ Overwriting a local save first retains its prior bytes under `.history/`, then
 publishes a flushed replacement. Publication requires filesystem hard-link support;
 failure leaves the prior save intact. Names are case-insensitive across platforms.
 
-Native `.world.json` build files wrap a versioned world plus an opaque ownership
-scope. The scope grants no privileges. Same-session loads can preserve owners;
-other-session/imported owner numbers map to reserved unclaimed identities. Loading
-without ownership assigns the loading host. Future joins cannot claim imported
-numbers. Queued actions are omitted; authored events, prints and retained source
+Native `.world.json` build files wrap a versioned world. The world's owner
+table records which player (public-key principal) each owner number is. A
+player who joins gets back the number the world has for their principal, so
+their bricks are theirs again after a restart. Loading a build with ownership
+gives each recorded builder's bricks to that player's number on this server;
+owner numbers with no principal (imports, anonymous builds) map to fresh,
+unclaimed numbers. Loading without ownership assigns the loading host. Future
+joins cannot claim unclaimed or recorded numbers. Queued actions are omitted; authored events, prints and retained source
 records survive. Save options can exclude events/ownership and their corresponding
 legacy records. Both wrapped saves and earlier converted world files are readable;
 dedicated startup also accepts these wrapped builds.

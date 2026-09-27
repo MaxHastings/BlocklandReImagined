@@ -352,7 +352,7 @@ pub fn start_with_admin_store_and_limit(
     start_configured(session, options, max_players, Some(store), true)
 }
 fn start_configured(
-    mut session: Session,
+    session: Session,
     options: ServerOptions,
     max_players: usize,
     admin_store: Option<AdminStore>,
@@ -383,7 +383,6 @@ fn start_configured(
     getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS randomness failed: {e}"))?;
     let host_token = ResumeToken(bytes);
     let host_key = token_key(&host_token);
-    session.set_ownership_scope(format!("{:x}", Sha256::digest(bytes)))?;
     let players = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let task = tokio::spawn(run(
         players.clone(),

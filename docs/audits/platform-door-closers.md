@@ -21,7 +21,11 @@ that landed it.
 - **One id grammar (contract 4):** `namespace:kind/name` defined in
   `bri_package::id`, shared with the mod platform lane. Moving existing content
   ids onto it: pending.
-- **Owner identity (contract 3, a):** pending.
+- **Owner identity (contract 3, a):** fixed. `World.owners` maps each owner
+  number to the builder's principal and last name; a returning principal gets
+  its number back on join, saved builds carry the table instead of an opaque
+  session scope, and loads give recorded builders their bricks on any server.
+  Trust now also covers offline builders in the table.
 - **Avatar part names (contract 3):** pending.
 
 ## How to read the priorities
