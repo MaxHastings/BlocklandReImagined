@@ -219,8 +219,7 @@ impl ClientAudio {
             CueKind::WrenchHit => "tool.wrench.hit",
             CueKind::Pain { cry: true, .. } => "player.pain_cry",
             CueKind::Death { .. } => "player.death_cry",
-            // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20,
-            // `exitSplashSoundVelocity` 5.
+            // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20.
             CueKind::Water {
                 entered: true,
                 speed,
@@ -230,8 +229,8 @@ impl ClientAudio {
                 s if s >= 10.0 => "player.water.impact_medium",
                 _ => "player.water.impact_easy",
             },
-            CueKind::Water { speed, .. } if *speed > 5.0 => "player.water.exit",
-            CueKind::Water { .. } => return,
+            // The server sends an exit only past `exitSplashSoundVelocity`.
+            CueKind::Water { .. } => "player.water.exit",
             // Emote, spawn and corpse sounds belong to their explosions.
             CueKind::Pain { .. }
             | CueKind::Burn { .. }

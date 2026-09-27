@@ -96,6 +96,10 @@ fn effects() -> Arc<EffectsPack> {
                 emitter("v20/emitter/vehicleburnemitter", 0.),
                 emitter("v20/emitter/vehiclesplashemitter", 0.1),
                 emitter("v20/emitter/vehiclesplashmistemitter", 0.25),
+                emitter("v20/emitter/playerfoamdropletsemitter", 0.),
+                emitter("v20/emitter/playerfoamemitter", 0.),
+                emitter("v20/emitter/playerbubbleemitter", 0.),
+                emitter("v20/emitter/playersplash", 0.3),
             ],
         },
         Manifest {
@@ -299,6 +303,60 @@ fn jets_burning_vehicles_and_splashes_follow_their_sources() -> Result<()> {
         "{:?}",
         fx.diagnostics.messages
     );
+    Ok(())
+}
+
+#[test]
+fn froth_follows_the_surface_and_bubbles_follow_a_splash() -> Result<()> {
+    use bri_client::actor_effects::Swimmer;
+    let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+    let water = bri_content::water::Water::volume([-8., -4., -8.], [8., 1., 8.]);
+    fx.set_liquids(vec![bri_sim::water::TintedWater {
+        water,
+        color: [0., 0., 1., 0.75],
+        brick: true,
+    }]);
+    let swimmer = |feet: Vec3, speed: f32| Swimmer {
+        actor: 7,
+        feet,
+        height: 2.65,
+        velocity: Vec3::X * speed,
+    };
+    // Standing still in the shallows makes no froth.
+    fx.update_water(0.1, &[swimmer(Vec3::ZERO, 0.)])?;
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(fx.world().source_count(), 0);
+    // Wading makes both foam emitters run at the surface.
+    fx.update_water(0.1, &[swimmer(Vec3::ZERO, 5.)])?;
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(fx.world().source_count(), 2);
+    assert!(fx.world().particle_count() > 0);
+    // Fully under or out of the water, the froth drains.
+    fx.update_water(0.1, &[swimmer(Vec3::new(0., -3.9, 0.), 5.)])?;
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(fx.world().source_count(), 0);
+    // A splash adds its ring and bubbles for `bubbleEmitTime` only.
+    fx.cue(&cue(
+        1,
+        CueKind::Water {
+            actor: 7,
+            entered: true,
+            speed: 12.,
+        },
+    ));
+    fx.update_water(0.05, &[swimmer(Vec3::new(0., -3.9, 0.), 0.)])?;
+    fx.advance(0.05, head, &[], &[], &[])?;
+    assert_eq!(fx.world().source_count(), 2, "ring and bubbles");
+    fx.update_water(0.06, &[swimmer(Vec3::new(0., -3.9, 0.), 0.)])?;
+    fx.advance(0.2, head, &[], &[], &[])?;
+    fx.advance(0.2, head, &[], &[], &[])?;
+    assert_eq!(fx.world().source_count(), 0);
+    // A player who leaves the view takes their emitters along.
+    fx.update_water(0.1, &[swimmer(Vec3::ZERO, 5.)])?;
+    fx.update_water(0.1, &[])?;
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(fx.world().source_count(), 0);
+    assert!(fx.diagnostics.messages.is_empty(), "{:?}", fx.diagnostics.messages);
     Ok(())
 }
 

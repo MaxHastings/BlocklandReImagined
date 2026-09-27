@@ -344,6 +344,13 @@ impl Motion {
         }
         &self.presented
     }
+    /// The local collision mirror, with the liquids prediction swims in.
+    pub fn collision(&self) -> Option<&CollisionMirror> {
+        self.predictor
+            .as_ref()
+            .map(|p| p.world())
+            .or(self.mirror.as_ref())
+    }
     pub fn presented(&self) -> &BTreeMap<OwnerId, PlayerState> {
         &self.presented
     }

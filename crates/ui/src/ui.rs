@@ -256,6 +256,8 @@ pub struct Core {
     pub energy: Option<f32>,
     /// Current whiteout opacity (0..=1), fading over time.
     pub whiteout: f32,
+    /// `GameRenderFilters`' liquid tints for the camera, drawn in order.
+    pub underwater: Vec<[f32; 4]>,
     pub net_graph: Option<String>,
     pub lagging: bool,
     pub shape_names: bool,
@@ -367,6 +369,7 @@ impl Core {
         self.damage_flash = 0.0;
         self.energy = None;
         self.whiteout = 0.0;
+        self.underwater.clear();
         self.lagging = false;
         self.super_shift = false;
         self.zoom_on = false;
@@ -1015,6 +1018,7 @@ impl Ui {
             damage_flash: 0.0,
             energy: None,
             whiteout: 0.0,
+            underwater: Vec::new(),
             net_graph: None,
             lagging: false,
             shape_names: true,
@@ -1421,6 +1425,13 @@ impl Ui {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
                 }
+            }
+            UiUpdate::Underwater(tints) => {
+                c.underwater = tints
+                    .into_iter()
+                    .filter(|t| t.iter().all(|v| v.is_finite()))
+                    .take(2)
+                    .collect();
             }
             UiUpdate::Energy(energy) => {
                 c.energy = energy.filter(|e| e.is_finite()).map(|e| e.clamp(0.0, 1.0));

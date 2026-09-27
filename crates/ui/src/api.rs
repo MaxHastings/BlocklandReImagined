@@ -1079,6 +1079,9 @@ pub enum UiUpdate {
     Energy(Option<f32>),
     /// White screen (`setWhiteout`) that fades over a second per unit.
     Whiteout(f32),
+    /// The camera's liquid tints (`GameRenderFilters`): a water brick zone's
+    /// colour and/or map water's, alpha already clamped.
+    Underwater(Vec<[f32; 4]>),
     /// Net graph text (`toggleNetGraph`); None hides it.
     NetGraph(Option<String>),
     Players {

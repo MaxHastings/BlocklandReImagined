@@ -628,6 +628,16 @@ impl App {
                 flare_visible: flare_visible(position)?,
             });
         }
+        let swimmers: Vec<_> = presented
+            .iter()
+            .map(|(owner, player)| crate::actor_effects::Swimmer {
+                actor: *owner,
+                feet: Vec3::from(player.feet),
+                height: bri_sim::water::body_height(player),
+                velocity: Vec3::from(player.velocity),
+            })
+            .collect();
+        actor_effects.update_water(elapsed, &swimmers)?;
         actor_effects.advance(elapsed, pose, &jets, &burning, &lights)
     }
     fn reset_weapon_effect_session(&mut self, session: RequestId, checkpoint_cursor: u64) {
@@ -4036,6 +4046,10 @@ impl PlatformApp for App {
             && let Some(building) = &self.building
         {
             let presented = self.motion.presented();
+            let liquids = self.motion.collision().map_or_else(Vec::new, |m| {
+                m.tinted_waters(&view.world.bricks, &view.world.palette)
+            });
+            let waters: Vec<_> = liquids.iter().map(|w| w.water.clone()).collect();
             // Sample every body, including the hidden first-person body, once.
             // Visible geometry and attached items consume these same original nodes.
             Self::update_avatar_animation_inputs(
@@ -4158,6 +4172,12 @@ impl PlatformApp for App {
                     } else {
                         self.motion.ticked(*owner).cloned()
                     },
+                    water_coverage: bri_sim::water::deepest(
+                        &waters,
+                        player.feet,
+                        bri_sim::water::body_height(player),
+                    )
+                    .map_or(0.0, |(_, c)| c),
                 };
                 self.avatars.get_mut(owner).unwrap().pose_with_animation(
                     &self.avatar_assets,
@@ -4207,6 +4227,11 @@ impl PlatformApp for App {
                 forward: forward.to_array(),
                 up: Vec3::Y.to_array(),
             };
+            // v20 tints the screen with the liquid the camera is in, and
+            // colours player splashes and froth with the liquid they touch.
+            self.ui
+                .apply(UiUpdate::Underwater(bri_sim::water::screen_tints(&liquids, eye)));
+            self.actor_effects.set_liquids(liquids);
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
             self.world_items.set_palette(&view.world.palette);
             self.weapon_effects.set_palette(&view.world.palette);

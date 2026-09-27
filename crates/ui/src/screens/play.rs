@@ -211,6 +211,14 @@ fn hud(core: &Core) -> View {
             [255, 255, 255, (core.whiteout * 255.0) as u8],
         );
     }
+    for tint in &core.underwater {
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        fill(
+            &mut v,
+            Rect::new(0, 0, w, h),
+            [byte(tint[0]), byte(tint[1]), byte(tint[2]), byte(tint[3])],
+        );
+    }
     if m.boxes_visible {
         let cell = (w / 10).clamp(1, 64);
         let width = cell * 10;

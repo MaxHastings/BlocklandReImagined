@@ -479,6 +479,9 @@ pub struct AvatarAnimationInput {
     /// own rotation and velocity, not from the render-interpolated body or the
     /// live mouse yaw; mixing those breaks the exact tie at 45 degrees.
     pub tick_state: Option<PlayerState>,
+    /// The fraction of the body in liquid, for `pickActionAnimation`'s
+    /// water rules.
+    pub water_coverage: f32,
 }
 
 /// `sAnimationTransitionTime`, and the shorter jump transition.
@@ -510,13 +513,22 @@ const PICK_TIE: f32 = 1e-4;
 /// clips carry no ground motion, so their directions are the table defaults:
 /// run +Y, back -Y and side -X (left). Only the side clip is reused in
 /// reverse, for strafing right. Crouching maps these to the crouch clips.
-pub fn locomotion(player: &PlayerState) -> LocomotionAction {
+///
+/// Then water (0x5a3308): over 60% covered always holds the root pose, as does
+/// any coverage while off the ground or sinking faster than 0.1. (v20 also
+/// roots a wading player holding jump; remote players' triggers are not
+/// replicated, so that clause is left out.)
+pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
     let forward = |sequence| LocomotionAction {
         sequence,
         forward: true,
     };
     if player.jetting {
         return forward("root");
+    }
+    let root = if player.crouched { "crouch" } else { "root" };
+    if coverage > 0.6 || (coverage > 0.01 && (!player.grounded || player.velocity[1] < -0.1)) {
+        return forward(root);
     }
     if !player.grounded {
         return forward(if player.velocity[1] < -10.0 {
@@ -636,7 +648,12 @@ impl AvatarMesh {
         // v20 picks every client frame: it kept `delayTicks` but dropped the
         // test that would hold an action for `sNewAnimationTickTime`.
         let next = Some(scripted.map_or_else(
-            || locomotion(animation_input.tick_state.as_ref().unwrap_or(player)),
+            || {
+                locomotion(
+                    animation_input.tick_state.as_ref().unwrap_or(player),
+                    animation_input.water_coverage,
+                )
+            },
             |sequence| LocomotionAction {
                 sequence,
                 forward: true,
@@ -1040,37 +1057,52 @@ mod tests {
         }
     }
     #[test]
+    fn water_holds_the_root_pose_like_v20() {
+        let mut p = player();
+        p.velocity = [0.0, 0.0, -7.0];
+        assert_eq!(locomotion(&p, 0.5).sequence, "run", "wading runs");
+        assert_eq!(locomotion(&p, 0.7).sequence, "root", "deeper stands");
+        p.velocity = [0.0, -0.2, -7.0];
+        assert_eq!(locomotion(&p, 0.3).sequence, "root", "sinking");
+        p.velocity = [0.0, -20.0, 0.0];
+        p.grounded = false;
+        assert_eq!(locomotion(&p, 0.0).sequence, "fall");
+        assert_eq!(locomotion(&p, 0.3).sequence, "root", "no fall in water");
+        p.crouched = true;
+        assert_eq!(locomotion(&p, 1.0).sequence, "crouch");
+    }
+    #[test]
     fn movement_pose_uses_body_facing_and_distinguishes_air_crouch_and_strafe() {
         let mut p = player();
-        assert_eq!(locomotion(&p).sequence, "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
         p.velocity = [0.0, 0.0, -7.0];
-        assert_eq!(locomotion(&p).sequence, "run");
+        assert_eq!(locomotion(&p, 0.0).sequence, "run");
         p.yaw = std::f32::consts::PI;
-        assert_eq!(locomotion(&p).sequence, "back");
+        assert_eq!(locomotion(&p, 0.0).sequence, "back");
         p.crouched = true;
-        assert_eq!(locomotion(&p).sequence, "crouchback");
+        assert_eq!(locomotion(&p, 0.0).sequence, "crouchback");
         p.velocity = [3.0, 0.0, 0.0];
-        assert_eq!(locomotion(&p).sequence, "crouchside");
+        assert_eq!(locomotion(&p, 0.0).sequence, "crouchside");
         p.velocity = [0.0; 3];
-        assert_eq!(locomotion(&p).sequence, "crouch");
+        assert_eq!(locomotion(&p, 0.0).sequence, "crouch");
         p.grounded = false;
         p.velocity[1] = 4.0;
-        assert_eq!(locomotion(&p).sequence, "jump");
+        assert_eq!(locomotion(&p, 0.0).sequence, "jump");
         p.velocity[1] = -4.0;
-        assert_eq!(locomotion(&p).sequence, "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
         p.velocity[1] = -12.0;
-        assert_eq!(locomotion(&p).sequence, "fall");
+        assert_eq!(locomotion(&p, 0.0).sequence, "fall");
         p.jetting = true;
-        assert_eq!(locomotion(&p).sequence, "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
         p.velocity[1] = 4.0;
-        assert_eq!(locomotion(&p).sequence, "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
     }
 
     #[test]
     fn pick_follows_torque_action_list_order_and_reverses_side_for_right() {
         let mut p = player();
         let action = |p: &PlayerState| {
-            let a = locomotion(p);
+            let a = locomotion(p, 0.0);
             (a.sequence, a.forward)
         };
         // Yaw 0 faces -Z with +X on the right.

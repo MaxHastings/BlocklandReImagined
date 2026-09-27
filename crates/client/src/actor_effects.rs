@@ -4,8 +4,8 @@
 //! cues and the presented poses; no gameplay authority.
 use anyhow::Result;
 use bri_fx_runtime::{
-    EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, SourceOptions, SourceTransform,
-    StopMode,
+    BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
+    SourceTransform, StopMode,
 };
 use bri_sim::presentation::{Cue, CueKind};
 use glam::{Mat4, Quat, Vec3};
@@ -24,14 +24,14 @@ const VEHICLE_SPLASH: [&str; 2] = [
     "v20/emitter/vehiclesplashmistemitter",
 ];
 
-/// `PlayerStandardArmor.splashEmitter[0..2]` burst for `PlayerSplash.lifetimeMS`
-/// where a player breaks the surface.
-const PLAYER_SPLASH: [&str; 3] = [
+/// `PlayerStandardArmor.splashEmitter[0..1]`: the froth `Player::updateFroth`
+/// emits where the surface crosses a moving player's body.
+const PLAYER_FROTH: [&str; 2] = [
     "v20/emitter/playerfoamdropletsemitter",
     "v20/emitter/playerfoamemitter",
-    "v20/emitter/playerbubbleemitter",
 ];
-const PLAYER_SPLASH_SECONDS: f32 = 0.3;
+/// `splashEmitter[2]`, emitted at the body for `bubbleEmitTime` after a splash.
+const PLAYER_BUBBLES: &str = "v20/emitter/playerbubbleemitter";
 /// `PlayerSplash`'s expanding rings, which the effects importer converts from
 /// `SplashData` into a finite emitter of ring particles.
 const PLAYER_SPLASH_RING: &str = "v20/emitter/playersplash";
@@ -94,6 +94,47 @@ struct Playback {
     sources: Vec<Source>,
 }
 
+/// A player's liquid emitters: froth at the surface, bubbles after a splash.
+#[derive(Default)]
+struct Froth {
+    foam: [Option<EffectHandle>; 2],
+    bubbles: Option<EffectHandle>,
+    /// `mBubbleEmitterTime` left under `bubbleEmitTime`.
+    bubble_left: f32,
+}
+
+/// A presented player for liquid effects.
+#[derive(Clone, Copy, Debug)]
+pub struct Swimmer {
+    pub actor: u64,
+    pub feet: Vec3,
+    pub height: f32,
+    pub velocity: Vec3,
+}
+
+/// Blockland's liquid colour override on player splash emitters: the
+/// `waterColor` at full alpha fading to clear, blending by the colour's alpha.
+fn liquid_options(color: [f32; 4]) -> SourceOptions {
+    let [r, g, b, _] = color;
+    SourceOptions {
+        colors: Some([
+            [r, g, b, 1.0],
+            [r, g, b, 1.0],
+            [r, g, b, 0.0],
+            [r, g, b, 0.0],
+        ]),
+        recolor: Some(Recolor {
+            rgb: [r, g, b],
+            blend: Some(if bri_sim::water::tint_blends_alpha(color) {
+                BlendMode::Alpha
+            } else {
+                BlendMode::Additive
+            }),
+        }),
+        ..Default::default()
+    }
+}
+
 /// An explosion's `CameraShake`, amplitude fixed on first sight of the camera.
 struct Shake {
     spec: bri_weapons::CameraShake,
@@ -113,6 +154,8 @@ pub struct ActorEffects {
     jets: BTreeMap<(u64, u8), EffectHandle>,
     burning: BTreeMap<u64, EffectHandle>,
     lights: BTreeMap<u64, EffectHandle>,
+    froth: BTreeMap<u64, Froth>,
+    liquids: Vec<bri_sim::water::TintedWater>,
     cursor: u64,
     pub diagnostics: Diagnostics,
 }
@@ -132,6 +175,8 @@ impl ActorEffects {
             jets: BTreeMap::new(),
             burning: BTreeMap::new(),
             lights: BTreeMap::new(),
+            froth: BTreeMap::new(),
+            liquids: Vec::new(),
             cursor: 0,
             diagnostics: Diagnostics::default(),
         })
@@ -160,6 +205,7 @@ impl ActorEffects {
         self.jets.clear();
         self.burning.clear();
         self.lights.clear();
+        self.froth.clear();
         self.cursor = checkpoint_cursor;
     }
     fn note(&mut self, message: String) {
@@ -205,28 +251,30 @@ impl ActorEffects {
                 effect,
                 active,
             } => self.vehicle_effect(*vehicle, effect, *active),
-            CueKind::Water { entered: true, .. } => {
+            // `Player::updateSplash`: the `PlayerSplash` ring in the liquid's
+            // colour, then bubbles at the body for `bubbleEmitTime`.
+            CueKind::Water {
+                actor,
+                entered: true,
+                ..
+            } => {
+                let position = Vec3::from(cue.position);
                 let at = SourceTransform {
-                    position: Vec3::from(cue.position),
+                    position,
                     ..Default::default()
                 };
-                for emitter in PLAYER_SPLASH {
-                    let started = self
-                        .world
-                        .start_emitter(emitter, at, SourceOptions::default())
-                        .and_then(|h| self.world.set_remaining_lifetime(h, PLAYER_SPLASH_SECONDS));
-                    if started.is_err() {
-                        self.note(format!("Player splash emitter unavailable: {emitter}"));
-                    }
-                }
-                let ring =
-                    self.world
-                        .start_emitter(PLAYER_SPLASH_RING, at, SourceOptions::default());
+                let options = SourceOptions {
+                    colors: None,
+                    ..liquid_options(self.liquid_color(position - Vec3::Y * 0.01))
+                };
+                let ring = self.world.start_emitter(PLAYER_SPLASH_RING, at, options);
                 if ring.is_err() {
                     self.note(format!(
                         "Player splash emitter unavailable: {PLAYER_SPLASH_RING}"
                     ));
                 }
+                self.froth.entry(*actor).or_default().bubble_left =
+                    bri_sim::water::BUBBLE_SECONDS;
             }
             CueKind::WeaponEffect { definition, .. } => {
                 if let Some(spec) = self
@@ -250,6 +298,68 @@ impl ActorEffects {
             }
             _ => {}
         }
+    }
+
+    /// The liquids players can be in this frame, with their colours.
+    pub fn set_liquids(&mut self, liquids: Vec<bri_sim::water::TintedWater>) {
+        self.liquids = liquids;
+    }
+
+    /// The `waterColor` of the liquid at `point`: a water brick zone first,
+    /// else map water, else the map default.
+    fn liquid_color(&self, point: Vec3) -> [f32; 4] {
+        let inside = |brick: bool| {
+            self.liquids
+                .iter()
+                .find(|w| w.brick == brick && bri_sim::water::contains(&w.water, point))
+        };
+        inside(true)
+            .or_else(|| inside(false))
+            .map_or(bri_sim::water::MAP_WATER_COLOR, |w| w.color)
+    }
+
+    /// `Player::updateFroth` for each presented player: foam at the surface
+    /// while partly submerged, running `speed * splashFreqMod` ms of emitter
+    /// time per second, and bubbles at the body after a splash. v20 checks
+    /// neither mounting nor death here.
+    pub fn update_water(&mut self, dt: f32, swimmers: &[Swimmer]) -> Result<()> {
+        anyhow::ensure!(
+            dt.is_finite() && (0.0..=86400.0).contains(&dt),
+            "Invalid actor effects timestep"
+        );
+        let world = &mut self.world;
+        self.froth.retain(|actor, froth| {
+            let keep = swimmers.iter().any(|s| s.actor == *actor);
+            if !keep {
+                for h in froth.foam.iter().chain([&froth.bubbles]).flatten() {
+                    world.stop(*h, StopMode::Drain);
+                }
+            }
+            keep
+        });
+        let waters: Vec<_> = self.liquids.iter().map(|w| w.water.clone()).collect();
+        for s in swimmers {
+            if !(s.feet.is_finite() && s.velocity.is_finite() && s.height.is_finite()) {
+                continue;
+            }
+            let deepest = bri_sim::water::deepest(&waters, s.feet.to_array(), s.height);
+            let rate = bri_sim::water::froth_rate(s.velocity.length());
+            let foam = deepest
+                .and_then(|(i, coverage)| {
+                    bri_sim::water::froth_point(s.feet, s.height, coverage)
+                        .map(|p| (p, self.liquids[i].color))
+                })
+                .filter(|_| rate > 0.0);
+            let bubble_color = self.liquid_color(s.feet);
+            let froth = self.froth.entry(s.actor).or_default();
+            froth.bubble_left = (froth.bubble_left - dt).max(0.0);
+            for (slot, emitter) in froth.foam.iter_mut().zip(PLAYER_FROTH) {
+                sync_liquid_source(&mut self.world, slot, emitter, foam, rate)?;
+            }
+            let bubbles = (froth.bubble_left > 0.0).then_some((s.feet, bubble_color));
+            sync_liquid_source(&mut self.world, &mut froth.bubbles, PLAYER_BUBBLES, bubbles, 1.0)?;
+        }
+        Ok(())
     }
 
     fn image(&mut self, name: &str) -> Option<bri_weapons::Image> {
@@ -600,6 +710,42 @@ pub fn muzzle(
         Quat::from_rotation_arc(Vec3::Y, direction.normalize_or(Vec3::Y)),
         position + rotation * local,
     ))
+}
+
+/// Keep a liquid emitter at `wanted` in its liquid's colour, running its
+/// emission clock at `rate`; it drains when not wanted.
+fn sync_liquid_source(
+    world: &mut EffectsWorld,
+    slot: &mut Option<EffectHandle>,
+    emitter: &str,
+    wanted: Option<(Vec3, [f32; 4])>,
+    rate: f32,
+) -> Result<()> {
+    if slot.is_some_and(|h| !world.is_active(h)) {
+        *slot = None;
+    }
+    let Some((position, color)) = wanted else {
+        if let Some(h) = slot.take() {
+            world.stop(h, StopMode::Drain);
+        }
+        return Ok(());
+    };
+    let transform = SourceTransform {
+        position,
+        ..Default::default()
+    };
+    let options = SourceOptions {
+        time_scale: rate.clamp(0.001, 1000.0),
+        ..liquid_options(color)
+    };
+    match *slot {
+        Some(h) => {
+            world.update_source(h, transform)?;
+            world.update_options(h, options)?;
+        }
+        None => *slot = world.start_emitter(emitter, transform, options).ok(),
+    }
+    Ok(())
 }
 
 /// Keep one continuous emitter per key; removed keys drain.
