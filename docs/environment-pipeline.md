@@ -10,12 +10,8 @@ declared sky image memory before uploading textures.
 
 The current client uses `content/map-bundle-014`, covering all 14 reference maps.
 Primary geometry and resources come from the new E: reference via maps-pass-006.
-Six missions use explicitly supplied secondary lighting caches after checking
-mission CRCs and byte identity of the secondary mission/referenced geometry.
-Tutorial's two interior chunks have a unique complete slot/dimension association;
-ambiguous associations reject. Resource CRC sentinel fields still cannot prove
-that a cached image was generated from its accompanying geometry. Independent
-lighting bake/visual acceptance remains work.
+Mission lighting is baked from the reference originals by the converter; see
+content-conversion.md. Remaining lighting gaps are listed there.
 
 Environment schema 2 corrects a schema-1 conversion error: DML slot 6 (zero based)
 is a reflection map; cloud layers start at slot 7. The first pack mistakenly drew

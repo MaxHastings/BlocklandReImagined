@@ -60,24 +60,16 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
         args.len() >= 4,
-        "Usage: map_bundle <v20-root> <converted-dir> <new-output-dir> [--lighting-cache-root <secondary-root>] [--core-script <recovered-core-cs>] <mission-virtual-path> ..."
+        "Usage: map_bundle <v20-root> <converted-dir> <new-output-dir> [--core-script <recovered-core-cs>] <mission-virtual-path> ..."
     );
     let root = PathBuf::from(&args[0]).canonicalize()?;
     let content = PathBuf::from(&args[1]).canonicalize()?;
     let output = PathBuf::from(&args[2]);
     let mut missions = Vec::new();
-    let mut secondary_root = None;
     let mut core_script = None;
     let mut at = 3;
     while at < args.len() {
-        if args[at] == "--lighting-cache-root" {
-            ensure!(secondary_root.is_none(), "Duplicate lighting cache root");
-            at += 1;
-            secondary_root = Some(
-                PathBuf::from(args.get(at).context("Missing secondary cache root")?)
-                    .canonicalize()?,
-            );
-        } else if args[at] == "--core-script" {
+        if args[at] == "--core-script" {
             ensure!(core_script.is_none(), "Duplicate core script");
             at += 1;
             core_script = Some(PathBuf::from(args.get(at).context("Missing core script")?));
@@ -94,11 +86,7 @@ fn main() -> Result<()> {
         .context("Output has no parent")?
         .canonicalize()?;
     ensure!(
-        !parent.starts_with(&root)
-            && !parent.starts_with(&content)
-            && secondary_root
-                .as_ref()
-                .is_none_or(|p| !parent.starts_with(p)),
+        !parent.starts_with(&root) && !parent.starts_with(&content),
         "Output must be outside original/native source content"
     );
     let manifest: serde_json::Value =
@@ -371,17 +359,28 @@ fn main() -> Result<()> {
             scene.id.clone(),
             bri_convert::water::convert(&root, scene, environments.get(&scene.id), &output)?,
         );
+        let source = |id: &str| -> Result<String> {
+            let file = assets.get(id).context("Unknown lit asset")?;
+            records
+                .iter()
+                .find(|r| r["output"].as_str() == Some(file.as_str()))
+                .and_then(|r| r["virtual_path"].as_str())
+                .map(str::to_owned)
+                .context("Lit asset has no conversion record")
+        };
+        // Mission lighting is baked from the originals; `.ml` caches are not read.
         lighting.insert(
             scene.id.clone(),
-            bri_convert::lighting::bake(
+            bri_convert::scene_lighting::bake_scene(
                 &root,
-                path,
                 scene,
                 &assets,
                 &content,
+                &source,
+                terrains.get(&scene.id).map_or(&[][..], Vec::as_slice),
                 &output,
-                secondary_root.as_deref(),
-            )?,
+            )
+            .with_context(|| format!("Lighting {}", scene.id))?,
         );
     }
     let report = serde_json::json!({"schema_version":1,"maps":maps,"assets":assets,"textures":textures,"bindings":bindings,"lighting":lighting,"environments":environments,"waters":waters,"terrains":terrains,"static_datablocks":declarations.entries,"static_script_sha256":script_hash,"static_script_diagnostics":declarations.diagnostics,"unresolved_textures":unresolved,"scope":"native architecture/terrain/static models/water, original textures/lighting/skies and initial static shape states; remaining dynamic map behavior, water fidelity and weather require integration"});
