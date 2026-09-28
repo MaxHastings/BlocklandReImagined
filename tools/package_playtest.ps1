@@ -319,8 +319,12 @@ foreach ($package in @($effective.list.packages)) {
 }
 
 # Add-Ons every build ships, turned on (content/addons/<id>): the
-# Duplicator. The Stress Lab ones join them with -StressLab.
-$modSources = @(@{ root = (Join-Path $RepoRoot 'packages/duplicator'); dir = 'addons'; required = $false })
+# Duplicator and the showcase Add-Ons (the Gravity Gun and the Steel
+# Ball). The Stress Lab ones join them with -StressLab.
+$modSources = @(
+    @{ root = (Join-Path $RepoRoot 'packages/duplicator'); dir = 'addons'; required = $false },
+    @{ root = (Join-Path $RepoRoot 'packages/showcase'); dir = 'addons'; required = $true }
+)
 if ($StressLab) { $modSources += @{ root = (Join-Path $RepoRoot 'packages/stresslab'); dir = 'stresslab'; required = $true } }
 $modPackages = @()
 foreach ($source in $modSources) {
@@ -335,9 +339,13 @@ foreach ($source in $modSources) {
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
         $files = @(Get-PackageFiles $dir.FullName)
         # Keep in step with bri_package::library's default side: server
-        # kinds only, client kinds (model, hud) only, else shared.
-        $kinds = @($manifest.provides | ForEach-Object { [string]$_.kind })
-        $side = if (@($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
+        # kinds only, client kinds (model, hud) only, else shared. An
+        # Add-On that is only client code (no provides) is presentation:
+        # client.
+        $kinds = @($manifest.provides | Where-Object { $_ } | ForEach-Object { [string]$_.kind })
+        $side = if ($kinds.Count -eq 0 -and $null -ne $manifest.client) { 'client' }
+            elseif ($kinds.Count -eq 0) { 'shared' }
+            elseif (@($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
             elseif (@($kinds | Where-Object { $_ -notin @('model','hud') }).Count -eq 0) { 'client' }
             else { 'shared' }
         $modPackages += [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $dir.FullName; dir = "$($source.dir)/$($manifest.id)"; files = $files.Count }

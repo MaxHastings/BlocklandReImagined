@@ -22,12 +22,12 @@ mod debris;
 mod events;
 mod quotas;
 use quotas::Quota;
-mod admin_world;
 mod admin_players;
-mod trust;
-mod map_change;
+mod admin_world;
 mod inventory;
+mod map_change;
 mod special;
+mod trust;
 mod tutorial;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod vehicles;
@@ -36,15 +36,12 @@ pub use vehicles::{VehicleInfo, VehiclePose};
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
+mod blueprints;
+mod movables;
+mod packages;
+mod spray;
 mod tools;
 mod undo;
-mod blueprints;
-mod spray;
-mod packages;
-pub use packages::{
-    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand, PackageSave,
-    PackageStateView, PackageStats, WorldSave,
-};
 pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
     MapListing, disconnect_message,
@@ -54,6 +51,10 @@ pub use combat::{
     DEATH_PROJECTILE, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
+pub use packages::{
+    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
+    PackageSave, PackageStateView, PackageStats, WorldSave,
+};
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
 /// the same `playThread(1, armReadyBoth)`).
@@ -63,8 +64,8 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use tools::{InspectMode, ToolAction, ToolCatalog};
-pub use undo::UNDO_QUEUE_SIZE;
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
+pub use undo::UNDO_QUEUE_SIZE;
 
 /// Queued inputs above which the server simulates extra ticks to catch up.
 const INPUT_TARGET: usize = 6;
@@ -212,7 +213,10 @@ pub enum Command {
     Talking(bool),
     /// `SteeringPrefsEvent`: the client's `$pref::Input::UseStrafeSteering`
     /// and `$pref::Input::UseAutoReturnSteering` (both on until it says).
-    SteeringPrefs { strafe: bool, auto_return: bool },
+    SteeringPrefs {
+        strafe: bool,
+        auto_return: bool,
+    },
     /// A ghost-brick move, which stays client-side; the server only animates
     /// the builder.
     BuildGesture(BuildGesture),
@@ -575,6 +579,8 @@ pub struct Session {
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
     breakables: breakables::Breakables,
+    /// Holds, pushes and Add-On vehicles (`physics` operations).
+    movables: movables::Movables,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -595,6 +601,7 @@ impl Session {
             events: Default::default(),
             archetypes: Default::default(),
             breakables: Default::default(),
+            movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
             tutorial: None,
@@ -824,7 +831,11 @@ impl Session {
             }
         };
         if let Some(record) = record {
-            let known = self.simulation.state().owner_of(&record.principal).is_some();
+            let known = self
+                .simulation
+                .state()
+                .owner_of(&record.principal)
+                .is_some();
             if returning.is_some() || !known {
                 self.simulation.claim_owner(owner, record)?;
             }
@@ -968,6 +979,7 @@ impl Session {
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
         self.forget_blueprint(owner);
+        self.forget_mover(owner);
         self.departed.insert(
             owner,
             (
@@ -1761,8 +1773,7 @@ impl Session {
         let tick = self.simulation.state().tick;
         // Abandoned builds turn public on the minute (v20 checked every
         // five, with each server post).
-        if self.admin.settings.public_domain_timeout_minutes > 0 && tick.is_multiple_of(60 * 120)
-        {
+        if self.admin.settings.public_domain_timeout_minutes > 0 && tick.is_multiple_of(60 * 120) {
             self.refresh_trust();
         }
         self.stop_talking(tick);
@@ -1840,7 +1851,15 @@ impl Session {
                             triggers.push((owner, trigger, now));
                         }
                     }
-                    peer.tutorial.abilities().apply(peer.input)
+                    // A tool that takes the jet button keeps it from jetting.
+                    let tool_jet = self
+                        .weapons
+                        .image_state(bri_weapons::ActorId(owner), 0)
+                        .is_some_and(|(image, _)| image.commands.jet.is_some());
+                    crate::prediction::motor_input(
+                        peer.tutorial.abilities().apply(peer.input),
+                        tool_jet,
+                    )
                 } else {
                     MoveInput {
                         yaw: peer.input.yaw,
@@ -1869,7 +1888,8 @@ impl Session {
                 let speed = Vec3::from(state.velocity).length();
                 let moved = Vec3::from(state.feet) != before;
                 if let Some(crossing) =
-                    peer.water.step(deepest.map_or(0.0, |(_, c)| c), speed, moved)
+                    peer.water
+                        .step(deepest.map_or(0.0, |(_, c)| c), speed, moved)
                 {
                     // The splash sits on the surface at `pos.z + height * coverage`.
                     let surface = deepest.map_or(state.feet[1], |(i, _)| liquids[i].max[1]);
@@ -1910,6 +1930,16 @@ impl Session {
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, trigger, down) in triggers {
+            // An Add-On tool's jet command (v20 `onTrigger` slot 4).
+            if trigger == 4
+                && down
+                && let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .and_then(|(image, _)| image.commands.jet.clone())
+            {
+                self.addon_tool_fire(owner, &command);
+            }
             // The sports balls' `onBallTrigger` alternate actions.
             if self.weapons.holds_ball(bri_weapons::ActorId(owner)) {
                 let _ = self
@@ -1922,6 +1952,7 @@ impl Session {
         }
         self.drive_package_entities(entity_moves);
         contain("packages", self.step_packages());
+        self.step_holds();
         contain("vehicles", self.vehicle_pre_step());
         contain("physics", self.simulation.step());
         contain("vehicles", self.vehicle_post_step());

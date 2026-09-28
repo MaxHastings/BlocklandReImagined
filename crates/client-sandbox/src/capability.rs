@@ -34,6 +34,10 @@ pub enum Capability {
     /// Exchange messages with the Add-On's own server script.
     #[serde(rename = "net.message")]
     NetMessage,
+    /// Read what the player's game already shows: where players and
+    /// vehicles are, and the server's public Add-On state.
+    #[serde(rename = "world.read")]
+    WorldRead,
     /// Fetch from URLs (video streams, web images). Reveals the player's
     /// address to whoever runs the URL.
     #[serde(rename = "net.http")]
@@ -55,6 +59,7 @@ impl Capability {
         Self::Audio,
         Self::InputFocused,
         Self::NetMessage,
+        Self::WorldRead,
         Self::NetHttp,
         Self::FilesAddOnFolder,
         Self::Native,
@@ -67,6 +72,7 @@ impl Capability {
             Self::Audio => "audio",
             Self::InputFocused => "input.focused",
             Self::NetMessage => "net.message",
+            Self::WorldRead => "world.read",
             Self::NetHttp => "net.http",
             Self::FilesAddOnFolder => "files.addon_folder",
             Self::Native => "native",
@@ -83,7 +89,8 @@ impl Capability {
             | Self::RenderShader
             | Self::Audio
             | Self::InputFocused
-            | Self::NetMessage => Tier::Sandboxed,
+            | Self::NetMessage
+            | Self::WorldRead => Tier::Sandboxed,
             Self::NetHttp | Self::FilesAddOnFolder | Self::Native => Tier::Elevated,
         }
     }
@@ -103,6 +110,7 @@ impl Capability {
             Self::Audio => "Play sounds that come with it",
             Self::InputFocused => "Read your keys while its panel is selected",
             Self::NetMessage => "Talk to its part running on the server",
+            Self::WorldRead => "See where players and vehicles are, as your screen shows them",
             Self::NetHttp => {
                 "Load things from the internet, which shows your IP address to those sites"
             }
@@ -124,13 +132,15 @@ pub struct UnknownFunction;
 pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunction> {
     Ok(match name {
         "log" | "random" => None,
-        "mesh_create" | "material_create" | "material_set" | "draw" | "camera" => {
-            Some(Capability::RenderLayer)
-        }
+        "mesh_create" | "material_create" | "material_set" | "material_blend" | "draw"
+        | "draw_with" | "camera" | "environment" => Some(Capability::RenderLayer),
         "shader" => Some(Capability::RenderShader),
-        "sound_play" => Some(Capability::Audio),
+        "sound_play" | "sound_at" => Some(Capability::Audio),
         "key_down" => Some(Capability::InputFocused),
         "send" | "recv" => Some(Capability::NetMessage),
+        "players" | "vehicles" | "entities" | "vehicle_kind" | "state_num" | "local_player" => {
+            Some(Capability::WorldRead)
+        }
         _ => return Err(UnknownFunction),
     })
 }

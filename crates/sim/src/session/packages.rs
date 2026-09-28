@@ -209,11 +209,11 @@ impl PackageSave {
     }
 }
 
-struct Entity {
+pub(super) struct Entity {
     kind: String,
     package: String,
     model: String,
-    body: Player,
+    pub(super) body: Player,
     health: f32,
     label: String,
     steer: (Vec3, bool),
@@ -261,11 +261,11 @@ impl GeneratedWorld {
 }
 
 pub(super) struct PackageHost {
-    catalog: Arc<Catalog>,
+    pub(super) catalog: Arc<Catalog>,
     runtime: Runtime,
     store: Store,
     world: Option<GeneratedWorld>,
-    entities: BTreeMap<u64, Entity>,
+    pub(super) entities: BTreeMap<u64, Entity>,
     next_entity: u64,
     /// Keyed by the durable player, so reconnecting does not reset a
     /// cooldown (stress campaign W3).
@@ -274,6 +274,9 @@ pub(super) struct PackageHost {
     output: VecDeque<String>,
     /// Deaths since the last tick, for `on_death` hooks: victim, killer.
     deaths: VecDeque<(OwnerId, Option<OwnerId>)>,
+    /// Players whose items were set afresh since the last tick, for
+    /// `on_loadout` hooks.
+    loadouts: VecDeque<OwnerId>,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -521,6 +524,7 @@ impl Session {
             diagnostics: VecDeque::new(),
             output: VecDeque::new(),
             deaths: VecDeque::new(),
+            loadouts: VecDeque::new(),
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -780,13 +784,30 @@ impl Session {
                 .peers
                 .iter()
                 .filter(|(o, _)| !self.bots.is_bot(**o))
-                .map(|(owner, p)| PlayerView {
-                    id: *owner,
-                    key: self.player_key(*owner),
-                    name: p.name.clone(),
-                    position: p.player.state().feet,
-                    alive: p.combat.alive,
-                    admin: p.actor.administrator,
+                .map(|(owner, p)| {
+                    let item = self
+                        .weapons
+                        .actor(bri_weapons::ActorId(*owner))
+                        .and_then(|a| a.inventory.get(a.selected?)?.clone())
+                        .unwrap_or_default();
+                    PlayerView {
+                        id: *owner,
+                        key: self.player_key(*owner),
+                        name: p.name.clone(),
+                        position: p.player.state().feet,
+                        alive: p.combat.alive,
+                        admin: p.actor.administrator,
+                        eye: p.player.eye().to_array(),
+                        look: p.player.state().forward().to_array(),
+                        velocity: p.player.state().velocity,
+                        item,
+                        minigame: self
+                            .minigames
+                            .player(p.combat.player)
+                            .ok()
+                            .and_then(|m| m.game)
+                            .map(|g| g.0),
+                    }
                 })
                 .collect(),
             entities: host
@@ -808,6 +829,8 @@ impl Session {
                         .collect()
                 })
                 .unwrap_or_default(),
+            objects: self.movable_views(),
+            holds: self.hold_views(),
         }
     }
     /// Give a joining player every package's player defaults and run
@@ -1276,7 +1299,14 @@ impl Session {
                             1 => "Copied 1 brick".to_string(),
                             n => format!("Copied {n} bricks"),
                         };
-                        self.notify(player, Notice::Bottom { text, seconds: 2.0, hide_bar: false });
+                        self.notify(
+                            player,
+                            Notice::Bottom {
+                                text,
+                                seconds: 2.0,
+                                hide_bar: false,
+                            },
+                        );
                     }
                     Err(error) => self.center_print(player, format!("{error:#}")),
                 }
@@ -1290,6 +1320,12 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.give_tool(player, &item, equip)
             }
+            op @ (Op::Push { .. }
+            | Op::Tumble { .. }
+            | Op::Hold { .. }
+            | Op::LetGo { .. }
+            | Op::SpawnVehicle { .. }
+            | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
         }
     }
     /// One chat line from `package` on behalf of `caller`, within their share.
@@ -1828,22 +1864,49 @@ impl Session {
             Some(reach) => {
                 let eye = peer.player.eye();
                 let hit = self.simulation.target(eye, direction, reach)?;
-                hit.map(|hit| script::Aim {
-                    look: hit
-                        .brick
-                        .and_then(|b| self.simulation.state().bricks.get(&b)?.look.clone())
-                        .map(|l| (l.block, l.state)),
-                    tag: hit.brick.and_then(|b| {
-                        let world = host.world.as_ref()?;
-                        world
-                            .voxels
-                            .get(&b)
-                            .map(|v| world.def.materials[v.material].id.clone())
+                // Also the nearest movable object before the brick, reported
+                // beside it: a script aiming at bricks sees what it did.
+                let object = self
+                    .aim_object(
+                        owner,
+                        eye,
+                        direction,
+                        hit.as_ref().map_or(reach, |h| h.distance),
+                    )
+                    .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
+                    .map(|(object, at, distance)| script::AimObject {
+                        object,
+                        position: at.to_array(),
+                        distance,
+                        movable: self.may_move(owner, object),
+                    });
+                match hit {
+                    Some(hit) => Some(script::Aim {
+                        look: hit
+                            .brick
+                            .and_then(|b| self.simulation.state().bricks.get(&b)?.look.clone())
+                            .map(|l| (l.block, l.state)),
+                        tag: hit.brick.and_then(|b| {
+                            let world = host.world.as_ref()?;
+                            world
+                                .voxels
+                                .get(&b)
+                                .map(|v| world.def.materials[v.material].id.clone())
+                        }),
+                        brick: hit.brick,
+                        position: hit.position.to_array(),
+                        distance: hit.distance,
+                        object,
                     }),
-                    brick: hit.brick,
-                    position: hit.position.to_array(),
-                    distance: hit.distance,
-                })
+                    None => object.map(|o| script::Aim {
+                        brick: None,
+                        tag: None,
+                        look: None,
+                        position: o.position,
+                        distance: o.distance,
+                        object: Some(o),
+                    }),
+                }
             }
             None => None,
         };
@@ -1893,6 +1956,7 @@ impl Session {
     /// streaming around players, and `on_tick` hooks.
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
+        self.deliver_loadouts();
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };
@@ -2162,6 +2226,46 @@ impl Session {
     /// `on_death(victim, killer)` for every death since the last tick, in
     /// order. Deaths the hooks cause are delivered next tick, so a hook can
     /// never recurse.
+    /// A player's items were set afresh: `on_loadout` hooks hear of it next
+    /// tick.
+    pub(super) fn package_loadout(&mut self, owner: OwnerId) {
+        if let Some(host) = self.packages.as_mut()
+            && !self.bots.is_bot(owner)
+            && host.loadouts.len() < 1024
+            && !host.loadouts.contains(&owner)
+        {
+            host.loadouts.push_back(owner);
+        }
+    }
+    fn deliver_loadouts(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let owners = std::mem::take(&mut host.loadouts);
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_loadout)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for owner in owners {
+            if !self.peers.contains_key(&owner) {
+                continue;
+            }
+            for package in &hooks {
+                let _ = self.run_package(
+                    package,
+                    "on_loadout",
+                    vec![Dynamic::from_int(owner as i64)],
+                    Budget::Command,
+                    None,
+                    None,
+                    None,
+                );
+                self.charge_work(package);
+            }
+        }
+    }
     fn deliver_deaths(&mut self) {
         let Some(host) = self.packages.as_mut() else {
             return;

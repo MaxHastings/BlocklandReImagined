@@ -194,6 +194,17 @@ impl ClientAudio {
                 .insert(format!("Unbound audio trigger: {key}"));
         }
     }
+    /// Play a sound from outside the pack (an Add-On's own clip).
+    pub fn play_asset(
+        &mut self,
+        asset: Arc<bri_audio::SoundAsset>,
+        placement: Placement,
+        gain: f32,
+    ) {
+        if self.runtime.play_asset(asset, placement, gain).is_err() {
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
     pub fn profile(&mut self, profile: &str, placement: Placement) {
         self.enqueue(profile.into(), placement, profile);
     }

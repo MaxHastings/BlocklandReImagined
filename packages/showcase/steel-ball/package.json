@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "steel-ball",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Steel Ball",
+  "description": "A heavy, perfectly round, polished steel ball that rolls with real weight and shoves players and vehicles aside. In minigames it breaks bricks it hits hard enough, like a rocket. Left click rolls one out, right click hurls it; type /steelball for the ball.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["physics", "player", "chat"],
+  "dependencies": { "steel-ball-kit": "^1.0.0" },
+  "provides": [
+    { "kind": "behaviour", "id": "steel-ball:behaviour/main", "file": "behaviour.json" },
+    { "kind": "script", "id": "steel-ball:script/main", "file": "steel.rhai" }
+  ]
+}

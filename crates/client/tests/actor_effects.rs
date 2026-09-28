@@ -158,6 +158,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             min_shot_ticks: 0,
             states,
             command: None,
+            commands: Default::default(),
             shot: None,
         },
     )
@@ -317,7 +318,7 @@ fn jets_burning_vehicles_and_splashes_follow_their_sources() -> Result<()> {
 /// full rate on the ground, fading linearly to none 4 units up.
 #[test]
 fn jet_dust_kicks_up_below_four_units_and_fades_with_height() -> Result<()> {
-    use bri_client::actor_effects::{jet_dust, JET_GROUND_DISTANCE, JET_GROUND_LIFT};
+    use bri_client::actor_effects::{JET_GROUND_DISTANCE, JET_GROUND_LIFT, jet_dust};
     assert_eq!((JET_GROUND_DISTANCE, JET_GROUND_LIFT), (4.0, 0.1));
     let at = Vec3::new(3., 10., 0.);
     let dust = |foot, height: f32| jet_dust(7, foot, at, Vec3::NEG_Y, Some((height, Vec3::Y)));
@@ -341,7 +342,11 @@ fn jet_dust_kicks_up_below_four_units_and_fades_with_height() -> Result<()> {
     assert_eq!(fx.jet_dust_count(), 1);
     fx.update_jet_dust(&[])?;
     assert_eq!(fx.jet_dust_count(), 0);
-    assert!(fx.diagnostics.messages.is_empty(), "{:?}", fx.diagnostics.messages);
+    assert!(
+        fx.diagnostics.messages.is_empty(),
+        "{:?}",
+        fx.diagnostics.messages
+    );
     Ok(())
 }
 
@@ -395,7 +400,11 @@ fn froth_follows_the_surface_and_bubbles_follow_a_splash() -> Result<()> {
     fx.update_water(0.1, &[])?;
     fx.advance(0.1, head, &[], &[], &[])?;
     assert_eq!(fx.world().source_count(), 0);
-    assert!(fx.diagnostics.messages.is_empty(), "{:?}", fx.diagnostics.messages);
+    assert!(
+        fx.diagnostics.messages.is_empty(),
+        "{:?}",
+        fx.diagnostics.messages
+    );
     Ok(())
 }
 
@@ -511,7 +520,11 @@ fn player_lights_shine_and_flare_at_the_hand_until_switched_off() -> Result<()> 
     fx.advance(0.1, head, &[], &[], &[])?;
     assert_eq!(fx.light_count(), 0);
     assert!(fx.world().snapshot(&camera).lights.is_empty());
-    assert!(fx.diagnostics.messages.is_empty(), "{:?}", fx.diagnostics.messages);
+    assert!(
+        fx.diagnostics.messages.is_empty(),
+        "{:?}",
+        fx.diagnostics.messages
+    );
     Ok(())
 }
 
@@ -527,7 +540,11 @@ fn teleports_sparkle_briefly_and_camera_orbs_follow_the_stream() -> Result<()> {
             player: true,
         },
     ));
-    assert_eq!(fx.image_count(), 1, "PlayerTeleportImage takes the emote slot");
+    assert_eq!(
+        fx.image_count(),
+        1,
+        "PlayerTeleportImage takes the emote slot"
+    );
     fx.advance(0.1, back, &[], &[], &[])?;
     assert!(fx.world().particle_count() > 0);
     assert!(fx.world().source_count() >= 1);
@@ -588,7 +605,11 @@ fn hard_landings_shake_the_camera_by_speed_past_ten() -> Result<()> {
         let mut peak = 0f32;
         for _ in 0..40 {
             fx.advance(0.02, head, &[], &[], &[])?;
-            peak = peak.max(fx.camera_shake(Vec3::new(500.0, 0.0, 0.0)).abs().max_element());
+            peak = peak.max(
+                fx.camera_shake(Vec3::new(500.0, 0.0, 0.0))
+                    .abs()
+                    .max_element(),
+            );
         }
         Ok(peak)
     };

@@ -618,6 +618,8 @@ pub fn lower(
         protect_direct: truth(b, "protectPassengersDirect"),
         protect_radius: truth(b, "protectPassengersRadius"),
         protect_burn: truth(b, "protectPassengersBurn"),
+        smash: None,
+        shove: false,
         authored: b.fields.clone(),
         adaptations,
     })

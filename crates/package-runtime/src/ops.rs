@@ -6,6 +6,52 @@ use std::collections::BTreeMap;
 
 /// Variables an entity may be given when it is spawned.
 pub const MAX_SPAWN_VARS: usize = 16;
+/// Fastest a script may set anything moving, units per second.
+pub const MAX_PUSH_SPEED: f32 = 200.0;
+/// The mass scripts see for a player or entity body (Torque's player
+/// `mass` is 90 as well).
+pub const PLAYER_MASS: f32 = 90.0;
+/// Farthest ahead of a player's eye a held object may float.
+pub const MAX_HOLD_DISTANCE: f32 = 32.0;
+
+/// Something in the world that moves: a player, a vehicle (any loose
+/// physics body: cars, balls, tumbling bodies) or a package entity.
+/// Scripts name one as `"player:3"`, `"vehicle:12"` or `"entity:7"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ObjectRef {
+    Player(u64),
+    Vehicle(u64),
+    Entity(u64),
+}
+impl ObjectRef {
+    pub fn parse(text: &str) -> Option<Self> {
+        let (kind, id) = text.split_once(':')?;
+        let id: u64 = id.parse().ok()?;
+        match kind {
+            "player" => Some(Self::Player(id)),
+            "vehicle" => Some(Self::Vehicle(id)),
+            "entity" => Some(Self::Entity(id)),
+            _ => None,
+        }
+    }
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Player(_) => "player",
+            Self::Vehicle(_) => "vehicle",
+            Self::Entity(_) => "entity",
+        }
+    }
+    pub fn id(self) -> u64 {
+        match self {
+            Self::Player(id) | Self::Vehicle(id) | Self::Entity(id) => id,
+        }
+    }
+}
+impl std::fmt::Display for ObjectRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.kind(), self.id())
+    }
+}
 
 /// Every capability a manifest may declare (with plain-language words in
 /// `bri_package::capability`).
@@ -113,6 +159,46 @@ pub enum Op {
         item: String,
         equip: bool,
     },
+    /// Change an object's velocity by `velocity` (units per second). `by`
+    /// is the player credited when what it hits is hurt or broken.
+    Push {
+        target: ObjectRef,
+        velocity: [f32; 3],
+        by: Option<u64>,
+    },
+    /// Knock a player off their feet into a tumble, flying at `velocity`.
+    Tumble {
+        player: u64,
+        velocity: [f32; 3],
+        by: Option<u64>,
+    },
+    /// Keep `target` floating `distance` ahead of `player`'s eye, where
+    /// they look, until let go. The engine pulls it there every tick; heavy
+    /// things lag. A player holds one thing at a time.
+    Hold {
+        player: u64,
+        target: ObjectRef,
+        distance: f32,
+    },
+    /// Let go of what `player` holds.
+    LetGo {
+        player: u64,
+    },
+    /// Spawn a vehicle definition (`namespace:vehicle/name`) of this package
+    /// or one it depends on, turned `yaw` radians and moving at `velocity`.
+    /// `owner` is the player it belongs to (their trust and minigame rules
+    /// apply), or the world.
+    SpawnVehicle {
+        definition: String,
+        position: [f32; 3],
+        yaw: f32,
+        velocity: [f32; 3],
+        owner: Option<u64>,
+    },
+    /// Remove a vehicle this package spawned.
+    RemoveVehicle {
+        vehicle: u64,
+    },
 }
 impl Op {
     pub fn capability(&self) -> &'static str {
@@ -132,6 +218,12 @@ impl Op {
             | Self::SetArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. } => "player",
+            Self::Push { .. }
+            | Self::Tumble { .. }
+            | Self::Hold { .. }
+            | Self::LetGo { .. }
+            | Self::SpawnVehicle { .. }
+            | Self::RemoveVehicle { .. } => "physics",
         }
     }
     /// Shape limits, independent of who asks.
@@ -191,6 +283,26 @@ impl Op {
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
             Self::CopyBuild { limit, tool, .. } => (1..=10_000).contains(limit) && item(tool),
             Self::GiveItem { item: id, .. } => item(id),
+            Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
+                finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
+            }
+            Self::Hold { distance, .. } => {
+                distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
+            }
+            Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::SpawnVehicle {
+                definition,
+                position,
+                yaw,
+                velocity,
+                ..
+            } => {
+                bri_package::id::is_content_ref(definition, Some("vehicle"))
+                    && finite(position)
+                    && yaw.is_finite()
+                    && finite(velocity)
+                    && glam_length(velocity) <= MAX_PUSH_SPEED
+            }
         };
         if ok {
             Ok(())
@@ -198,6 +310,10 @@ impl Op {
             Err(format!("{self:?} is outside the operation's limits"))
         }
     }
+}
+
+fn glam_length(v: &[f32; 3]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
 /// Check an operation a package asked for. This is the single capability
@@ -246,5 +362,11 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Broadcast { .. } => "broadcast",
         Op::CopyBuild { .. } => "copy_build",
         Op::GiveItem { .. } => "give_item",
+        Op::Push { .. } => "push",
+        Op::Tumble { .. } => "tumble",
+        Op::Hold { .. } => "hold",
+        Op::LetGo { .. } => "let_go",
+        Op::SpawnVehicle { .. } => "spawn_vehicle",
+        Op::RemoveVehicle { .. } => "remove_vehicle",
     }
 }

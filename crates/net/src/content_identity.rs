@@ -47,10 +47,12 @@ pub fn brick_catalog_providers(
     content_root: &Path,
     packages: &bri_package::packages::PackageSet,
 ) -> Result<Vec<(String, PathBuf)>> {
-    Ok(kind_providers(content_root, packages, "brick-catalog/stock-catalog.json")?
-        .into_iter()
-        .map(|(dir, abs)| (dir, abs.join("brick-catalog")))
-        .collect())
+    Ok(
+        kind_providers(content_root, packages, "brick-catalog/stock-catalog.json")?
+            .into_iter()
+            .map(|(dir, abs)| (dir, abs.join("brick-catalog")))
+            .collect(),
+    )
 }
 fn read_weapons(root: &Path) -> Result<(PathBuf, Vec<u8>, bri_weapons::Pack)> {
     let manifest = contained(root, "weapons.json")?;
@@ -83,7 +85,12 @@ impl WeaponContent {
         let mut total = bytes.len() as u64;
         let mut parts = Vec::new();
         for (dir, abs) in extras {
-            let add_on = || format!("Add-On {}: weapons.json", bri_package::library::add_on_label(abs, dir));
+            let add_on = || {
+                format!(
+                    "Add-On {}: weapons.json",
+                    bri_package::library::add_on_label(abs, dir)
+                )
+            };
             let abs = abs.canonicalize().with_context(add_on)?;
             let (manifest, part_bytes, part) = read_weapons(&abs).with_context(add_on)?;
             let key = format!("{dir}/weapons.json");
@@ -97,7 +104,9 @@ impl WeaponContent {
             .iter()
             .map(|r| (None, root.clone(), r))
             .chain(parts.iter().flat_map(|(dir, abs, part)| {
-                part.resources.iter().map(move |r| (Some(dir.clone()), abs.clone(), r))
+                part.resources
+                    .iter()
+                    .map(move |r| (Some(dir.clone()), abs.clone(), r))
             }))
             .collect::<Vec<_>>();
         for (dir, root, resource) in resources {
@@ -123,9 +132,14 @@ impl WeaponContent {
                 files.insert(key, path);
             }
         }
-        let (mut pack, notes) =
-            pack.merge(parts.into_iter().map(|(dir, _, part)| (dir, part)).collect());
-        pack.diagnostics.extend(notes.into_iter().map(|n| format!("merge: {n}")));
+        let (mut pack, notes) = pack.merge(
+            parts
+                .into_iter()
+                .map(|(dir, _, part)| (dir, part))
+                .collect(),
+        );
+        pack.diagnostics
+            .extend(notes.into_iter().map(|n| format!("merge: {n}")));
         pack.validate()?;
         // The bounded reads above supplied the actual parsed definitions. Require
         // identical bytes during hashing so a replacement cannot mix snapshots.
@@ -278,16 +292,20 @@ impl ItemPhysicsContent {
             if !abs.join("item-physics.json").is_file() {
                 continue;
             }
-            let manifest_bytes = bounded_bytes(&contained(&abs, "presentation.json")?, WEAPON_INDEX_LIMIT)?;
-            let physics_bytes = bounded_bytes(&contained(&abs, "item-physics.json")?, 2 * 1024 * 1024)?;
-            let weapons_bytes = bounded_bytes(&contained(&abs, "weapons.json")?, WEAPON_INDEX_LIMIT)?;
+            let manifest_bytes =
+                bounded_bytes(&contained(&abs, "presentation.json")?, WEAPON_INDEX_LIMIT)?;
+            let physics_bytes =
+                bounded_bytes(&contained(&abs, "item-physics.json")?, 2 * 1024 * 1024)?;
+            let weapons_bytes =
+                bounded_bytes(&contained(&abs, "weapons.json")?, WEAPON_INDEX_LIMIT)?;
             let manifest: PhysicsManifest = serde_json::from_slice(&manifest_bytes)?;
             let physics: PhysicsCatalog = serde_json::from_slice(&physics_bytes)?;
             ensure!(
                 manifest.schema_version == 2
                     && physics.schema_version == 1
                     && manifest.weapons_sha256 == format!("{:x}", Sha256::digest(&weapons_bytes))
-                    && manifest.item_physics_sha256 == format!("{:x}", Sha256::digest(&physics_bytes)),
+                    && manifest.item_physics_sha256
+                        == format!("{:x}", Sha256::digest(&physics_bytes)),
                 "Add-On {}: item-physics.json does not match weapons.json; run the Add-On importer again",
                 bri_package::library::add_on_label(&abs, dir)
             );
@@ -445,12 +463,6 @@ fn contained(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-
-
-
-
-
-
 fn hash_files_bounded(
     domain: &[u8],
     files: BTreeMap<String, PathBuf>,
@@ -542,6 +554,7 @@ mod tests {
                     min_shot_ticks: 0,
                     states: vec![],
                     command: None,
+                    commands: Default::default(),
                     shot: None,
                 },
             );
@@ -604,7 +617,11 @@ mod tests {
         assert!(before.ensure_same(&changed).is_err());
         pack.diagnostics.push("definition metadata change".into());
         write_weapons(&root, &pack);
-        assert!(changed.ensure_same(&WeaponContent::load(&root).unwrap()).is_err());
+        assert!(
+            changed
+                .ensure_same(&WeaponContent::load(&root).unwrap())
+                .is_err()
+        );
     }
     #[test]
     fn weapons_resources_are_contained_and_have_count_file_and_total_budgets() {

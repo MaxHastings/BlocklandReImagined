@@ -22,7 +22,7 @@ pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 
 #[derive(Default)]
 pub(super) struct Vehicles {
-    world: Option<veh::VehiclesWorld>,
+    pub(super) world: Option<veh::VehiclesWorld>,
     by_brick: BTreeMap<BrickId, VehicleId>,
     brick_of: BTreeMap<VehicleId, BrickId>,
     colors: BTreeMap<VehicleId, Option<u8>>,
@@ -302,63 +302,24 @@ impl Session {
         let bri_world::ContentRef::Resolved(definition) = &spawn.vehicle else {
             return Ok(());
         };
-        let Some(world) = &self.vehicles.world else {
-            return Ok(());
-        };
-        let Some(def) = world.definition(definition) else {
-            return Ok(());
-        };
-        // `fxDTSBrick::spawnVehicle`: the server's totals, player-type
-        // mounts (horses, boats, cannons, turrets) apart from physics
-        // vehicles (`$Pref::Server::MaxPlayerVehicles_Total` and
-        // `MaxPhysVehicles_Total`).
-        let actor = def.is_actor();
-        let settings = &self.admin.settings;
-        let (limit, noun) = if actor {
-            (settings.player_vehicles, "player-vehicle")
-        } else {
-            (settings.physics_vehicles, "physics-vehicle")
-        };
-        let snapshot = world.snapshot(&self.simulation.physics);
-        let same_kind: Vec<_> = snapshot
+        if self
             .vehicles
-            .iter()
-            .filter(|v| {
-                world
-                    .definition(&v.definition)
-                    .is_some_and(|d| d.is_actor() == actor)
-            })
-            .collect();
-        // Before the totals, an Internet server's per-builder quota
-        // (`$Pref::Server::Quota::Vehicle` and `Quota::Player`).
-        let quota = if actor {
-            settings.per_player.players
-        } else {
-            settings.per_player.vehicles
-        };
-        let owned = same_kind
-            .iter()
-            .filter(|v| v.owner == veh::OwnerId(brick.owner))
-            .count();
-        if !self.lan_host && owned >= quota as usize {
-            let text = if quota == 1 {
-                format!("\u{E000}You already have a {noun}")
-            } else {
-                format!("\u{E000}You already have {quota} {noun}s")
-            };
+            .world
+            .as_ref()
+            .is_none_or(|w| w.definition(definition).is_none())
+        {
+            return Ok(());
+        }
+        if let Err(text) = self.vehicle_room(brick.owner, definition) {
             self.notify(brick.owner, Notice::Center { text, seconds: 2.0 });
             return Ok(());
         }
-        let count = same_kind.len();
-        if count >= limit as usize {
-            let text = if limit == 1 {
-                format!("\u{E000}Server is limited to 1 {noun}")
-            } else {
-                format!("\u{E000}Server is limited to {limit} {noun}s")
-            };
-            self.notify(brick.owner, Notice::Center { text, seconds: 2.0 });
-            return Ok(());
-        }
+        let def = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition(definition))
+            .context("checked above")?;
         let transform = self.spawn_transform(&brick, def);
         let game = self.owner_game(brick.owner);
         let respawn_ms = game
@@ -386,6 +347,62 @@ impl Session {
         self.vehicles.colors.insert(id, spawn_color(&brick));
         Ok(())
     }
+    /// Whether `owner` may have one more vehicle of `definition`, or the
+    /// line they are told: `fxDTSBrick::spawnVehicle`'s server totals,
+    /// player-type mounts (horses, boats, cannons, turrets) apart from
+    /// physics vehicles (`$Pref::Server::MaxPlayerVehicles_Total` and
+    /// `MaxPhysVehicles_Total`), and before them an Internet server's
+    /// per-builder quota (`$Pref::Server::Quota::Vehicle` and
+    /// `Quota::Player`). Add-On vehicles count like any other.
+    pub(super) fn vehicle_room(&self, owner: OwnerId, definition: &str) -> Result<(), String> {
+        let Some(world) = &self.vehicles.world else {
+            return Err("\u{E000}This server has no vehicles".into());
+        };
+        let Some(def) = world.definition(definition) else {
+            return Err(format!("\u{E000}Unknown vehicle {definition}"));
+        };
+        let actor = def.is_actor();
+        let settings = &self.admin.settings;
+        let (limit, noun) = if actor {
+            (settings.player_vehicles, "player-vehicle")
+        } else {
+            (settings.physics_vehicles, "physics-vehicle")
+        };
+        let snapshot = world.snapshot(&self.simulation.physics);
+        let same_kind: Vec<_> = snapshot
+            .vehicles
+            .iter()
+            .filter(|v| {
+                world
+                    .definition(&v.definition)
+                    .is_some_and(|d| d.is_actor() == actor)
+            })
+            .collect();
+        let quota = if actor {
+            settings.per_player.players
+        } else {
+            settings.per_player.vehicles
+        };
+        let owned = same_kind
+            .iter()
+            .filter(|v| v.owner == veh::OwnerId(owner))
+            .count();
+        if !self.lan_host && owned >= quota as usize {
+            return Err(if quota == 1 {
+                format!("\u{E000}You already have a {noun}")
+            } else {
+                format!("\u{E000}You already have {quota} {noun}s")
+            });
+        }
+        if same_kind.len() >= limit as usize {
+            return Err(if limit == 1 {
+                format!("\u{E000}Server is limited to 1 {noun}")
+            } else {
+                format!("\u{E000}Server is limited to {limit} {noun}s")
+            });
+        }
+        Ok(())
+    }
     fn tag_vehicle(&mut self, id: VehicleId) {
         if let Some(world) = &self.vehicles.world {
             for collider in world.colliders_of(&self.simulation.physics, id) {
@@ -394,7 +411,7 @@ impl Session {
             }
         }
     }
-    fn remove_vehicle(&mut self, id: VehicleId) -> Result<()> {
+    pub(super) fn remove_vehicle(&mut self, id: VehicleId) -> Result<()> {
         if let Some(world) = &mut self.vehicles.world {
             if let Some(spawn) = self.vehicles.brick_of.get(&id) {
                 world.cancel_spawn(&mut self.simulation.physics, SpawnId(*spawn))?;
@@ -1089,7 +1106,7 @@ impl Session {
         self.start_tumble(owner, transform, velocity, 1.0)
     }
     /// Spawn a helper vehicle no brick owns (skis, tumble) moving at `velocity`.
-    fn spawn_transient(
+    pub(super) fn spawn_transient(
         &mut self,
         owner: OwnerId,
         definition: &str,
@@ -1312,18 +1329,37 @@ impl Session {
                         self.spawn_vehicle_for(brick)?;
                     }
                 }
+                Intent::Struck {
+                    vehicle,
+                    owner,
+                    other,
+                    point,
+                    ..
+                } => self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?,
                 Intent::RunOver {
+                    vehicle,
                     owner,
                     target,
                     damage,
                     velocity,
-                    ..
                 } => {
                     let victim = target.0;
-                    if !self.can_damage_player(owner.0, victim, false) {
+                    // Whoever threw or holds the vehicle runs the victim
+                    // over, not its driver or owner.
+                    let owner = self
+                        .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
+                        .unwrap_or(owner.0);
+                    let hurts = self.can_damage_player(owner, victim, false);
+                    let shoves = self
+                        .vehicles
+                        .world
+                        .as_ref()
+                        .and_then(|w| w.definition_of(vehicle))
+                        .is_some_and(|d| d.shove);
+                    if !hurts && !shoves {
                         continue;
                     }
-                    if damage > 0.0 {
+                    if hurts && damage > 0.0 {
                         self.damage_player(
                             victim,
                             damage,
@@ -1331,8 +1367,17 @@ impl Session {
                                 name: "Vehicle".into(),
                                 direct: false,
                             },
-                            Some(owner.0),
+                            Some(owner),
                         )?;
+                    }
+                    if shoves {
+                        // Bowled over: the victim tumbles away from it, so
+                        // the vehicle rolls on through instead of stopping
+                        // against a standing player.
+                        if self.is_alive(victim) {
+                            self.tumble_player(victim, Vec3::from(velocity) + Vec3::Y * 4.0)?;
+                        }
+                        continue;
                     }
                     // setVelocity: the push replaces the player's velocity.
                     if let Some(peer) = self.peers.get_mut(&victim) {

@@ -436,6 +436,75 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn top_studs_stay_world_aligned_at_every_angle_like_v20() {
+        // A 2x2 TOP quad with the UVs v20's generator gives it (Torque corners
+        // +x-y, -x-y, -x+y, +x+y map to (0,0), (2,0), (2,2), (0,2)).
+        let mut top = mesh();
+        top.quads[0].surface = Surface::Top;
+        top.quads[0].vertices = [
+            ([0.5, 0.2, 0.5], [0.0, 0.0]),
+            ([-0.5, 0.2, 0.5], [2.0, 0.0]),
+            ([-0.5, 0.2, -0.5], [2.0, 2.0]),
+            ([0.5, 0.2, -0.5], [0.0, 2.0]),
+        ]
+        .map(|(position, uv)| Vertex {
+            position,
+            normal: [0.0, 1.0, 0.0],
+            uv,
+        });
+        let side = mesh();
+        let meshes = BTreeMap::from([
+            ("definition/a".into(), top),
+            ("definition/side".into(), side),
+        ]);
+        let mut per_angle = vec![];
+        for turns in 0..4u8 {
+            let mut world = world();
+            let mut b = brick([0.0; 3]);
+            b.quarter_turns = turns;
+            world.bricks.insert(1, b);
+            let scene = build_world_scene(&world, &meshes, 4).unwrap();
+            // The emitter's per-angle table: (v,-u), (u,v), (-v,u), (-u,-v).
+            let [u, v] = [2.0, 0.0];
+            let expected = [[v, -u], [u, v], [-v, u], [-u, -v]][turns as usize];
+            assert_eq!(scene.vertices[1].uv, expected, "angle {turns}");
+            // World-space UV gradient (per unit x and z) from three corners.
+            let [a, b, _, d] = [0, 1, 2, 3].map(|i| scene.vertices[i]);
+            let gradient = |p: [f32; 3], q: [f32; 3], uv: [f32; 2], wv: [f32; 2]| {
+                let dx = q[0] - p[0] + q[2] - p[2];
+                [(wv[0] - uv[0]) / dx, (wv[1] - uv[1]) / dx]
+            };
+            let along_one = gradient(a.position, b.position, a.uv, b.uv);
+            let along_other = gradient(a.position, d.position, a.uv, d.uv);
+            let x_first = (b.position[0] - a.position[0]).abs() > 0.5;
+            let (per_x, per_z) = if x_first {
+                (along_one, along_other)
+            } else {
+                (along_other, along_one)
+            };
+            per_angle.push([per_x, per_z]);
+        }
+        // v20 maps TOP as u = -2z + c, v = 2x + c' (native units, two studs
+        // per unit) for every angle.
+        assert!(
+            per_angle.iter().all(|g| g
+                .as_flattened()
+                .iter()
+                .zip([0.0, 2.0, -2.0, 0.0])
+                .all(|(a, b)| (a - b).abs() < 0.0001)),
+            "{per_angle:?}"
+        );
+        // Other surfaces keep their datablock UVs whatever the angle.
+        let mut world = world();
+        let mut b = brick([0.0; 3]);
+        b.definition = ContentRef::Resolved("definition/side".into());
+        b.quarter_turns = 2;
+        world.bricks.insert(1, b);
+        let scene = build_world_scene(&world, &meshes, 4).unwrap();
+        assert_eq!(scene.vertices[0].uv, [0.25, 0.75]);
+    }
+
+    #[test]
     fn opaque_coalescing_and_missing_or_overbudget_worlds_reject() {
         let meshes = BTreeMap::from([("definition/a".into(), mesh())]);
         let mut world = world();

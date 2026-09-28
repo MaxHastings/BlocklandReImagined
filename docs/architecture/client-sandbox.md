@@ -161,12 +161,33 @@ the Add-On. Floats must be finite.
 | `material_create(shader) -> material` | `render.layer` | A material using one of the Add-On's shaders. |
 | `material_set(material, slot, x, y, z, w)` | `render.layer` | One of four vec4 parameters (`bri_draw.params`). |
 | `draw(mesh, material, matrix_ptr)` | `render.layer` | Draw this frame, with a column-major model matrix. |
+| `draw_with(mesh, material, matrix_ptr, params_ptr)` | `render.layer` | Draw with this draw's own four vec4 parameters (16 f32) in place of the material's: one material draws many things. |
+| `material_blend(material, mode)` | `render.layer` | 0 solid (the default), 1 glow (added over the scene), 2 see-through (alpha blended); glow and see-through write no depth and draw both faces. |
 | `camera(ptr)` | `render.layer` | Writes the camera's eye and forward direction (6 f32, world units, Y up). |
+| `environment(ptr)` | `render.layer` | Writes the scene's lighting (12 f32): the direction sunlight travels, the sun's colour, the ambient colour, the fog and horizon colour. |
 | `shader(name_ptr, len) -> shader` | `render.shader` | One of the Add-On's shader files, checked at load. |
-| `sound_play(name_ptr, len, volume) -> i32` | `audio` | A sound file the Add-On lists. |
+| `sound_play(name_ptr, len, volume) -> i32` | `audio` | A sound file the Add-On lists, at the player's ears. |
+| `sound_at(name_ptr, len, volume, x, y, z) -> i32` | `audio` | The same, placed in the world: full within 10 units, gone by 90, on the effects channel. |
 | `key_down(key) -> i32` | `input.focused` | 1 if the key is down *and* the Add-On's panel has focus; always 0 otherwise. |
 | `send(ptr, len) -> i32` | `net.message` | A message to the Add-On's own server script. |
 | `recv(ptr, capacity) -> i32` | `net.message` | The next message from its server script: its length, -1 when none, or -2 - length when the buffer is too small. |
+| `local_player() -> i32` | `world.read` | The viewing player's id. |
+| `players(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` players as the game draws them, 16 f32 each: id, flags (1 the viewer, 2 alive), feet xyz, eye xyz, look xyz, velocity xyz, 2 unused. Returns how many. |
+| `entities(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` Add-On creatures as drawn, 8 f32 each: id, feet xyz, yaw, 3 unused. Returns how many. |
+| `vehicle_kind(ptr, len) -> i32` | `world.read` | Names a vehicle definition (`namespace:vehicle/name`) the Add-On wants to find; returns its kind number (64 at most). |
+| `vehicles(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` vehicles as drawn, 16 f32 each: id, kind (from `vehicle_kind`, -1 otherwise), position xyz, rotation xyzw, velocity xyz, radius of a sphere round its box, 3 unused. Returns how many. |
+| `state_num(pkg_ptr, pkg_len, key_ptr, key_len, player, index) -> f32` | `world.read` | A number of an Add-On's public state the player receives: a server-wide key (`player` -1) or that player's; an array gives its `index`th element, true and false are 1 and 0; NaN when there is none. |
+
+`world.read` offers only what the player's own screen and HUD already show
+(public state keys, poses the game draws), so it is sandboxed, not
+elevated. Ids arrive as f32 (exact to 16 million). The game builds the
+world for a frame only when a running Add-On declares the capability.
+
+The showcase Add-Ons use these: `steel-ball-fx` draws one mirror-steel
+sphere per Steel Ball, and `gravity-gun-fx` draws beams, force fields,
+shockwaves and GPU particle systems from each player's `beam` state
+(`packages/showcase`, tested in `crates/client-sandbox/tests/showcase.rs`,
+which with `--ignored` renders them offscreen to PNGs).
 
 Planned, same shape: `ui.panel` (draw into a panel the engine places),
 `render.texture` (images from the Add-On, render targets), `video.screen`

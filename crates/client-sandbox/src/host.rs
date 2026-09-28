@@ -18,6 +18,7 @@ use crate::addon::AddOnCode;
 use crate::capability::{self, Capability, Tier};
 use crate::shader::Shader;
 use crate::trust::TrustLevel;
+use crate::world::World;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -259,6 +260,8 @@ impl Sandbox {
             focused: false,
             keys: BTreeSet::new(),
             camera: [0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
+            world: Arc::new(World::default()),
+            kinds: Vec::new(),
             random: 0x9e37_79b9_7f4a_7c15
                 ^ u64::from_str_radix(&code.code_hash[..16], 16).unwrap_or(1),
             violation: None,
@@ -339,6 +342,25 @@ pub struct Material {
     /// Index into the Add-On's shaders.
     pub shader: usize,
     pub params: [[f32; 4]; 4],
+    pub blend: Blend,
+}
+
+/// How a material's colour meets what is already drawn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Blend {
+    /// Solid: writes depth; alpha blends over what is behind.
+    #[default]
+    Opaque,
+    /// Glow: adds its colour (times alpha), writes no depth, both faces.
+    Additive,
+    /// See-through: alpha blends, writes no depth, both faces.
+    Translucent,
+}
+impl Blend {
+    pub const ALL: [Blend; 3] = [Blend::Opaque, Blend::Additive, Blend::Translucent];
+    pub fn from_code(code: i32) -> Option<Self> {
+        Self::ALL.get(usize::try_from(code).ok()?).copied()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -347,6 +369,8 @@ pub struct Draw {
     pub material: usize,
     /// Column-major model matrix, in world units.
     pub model: [f32; 16],
+    /// This draw's own parameters in place of its material's (`draw_with`).
+    pub params: Option<[[f32; 4]; 4]>,
 }
 
 /// Everything the Add-On's render layer holds.
@@ -361,12 +385,24 @@ pub struct Layer {
 pub struct Frame {
     pub draws: Vec<Draw>,
     pub triangles: u64,
-    /// Sound files (from the Add-On) and volume.
-    pub sounds: Vec<(String, f32)>,
+    /// Sounds to play (from the Add-On's own files).
+    pub sounds: Vec<Sound>,
     /// Messages to the Add-On's server script.
     pub outbox: Vec<Vec<u8>>,
     pub log: Vec<String>,
     log_bytes: usize,
+}
+
+/// One sound an Add-On asked for this frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sound {
+    /// One of the files its `client.sounds` lists.
+    pub name: String,
+    /// 0 to 1.
+    pub volume: f32,
+    /// Where in the world it plays (fading with distance), or `None` for
+    /// the player's ears.
+    pub at: Option<[f32; 3]>,
 }
 
 /// What the engine tells an Add-On each frame.
@@ -383,6 +419,8 @@ pub struct FrameInput {
     /// Where the player's camera is and looks, in world units (Y up).
     pub eye: [f32; 3],
     pub forward: [f32; 3],
+    /// What the game shows this frame, for `world.read`.
+    pub world: Arc<World>,
 }
 
 struct HostState {
@@ -397,6 +435,9 @@ struct HostState {
     focused: bool,
     keys: BTreeSet<u32>,
     camera: [f32; 6],
+    world: Arc<World>,
+    /// Vehicle definitions the Add-On named with `vehicle_kind`.
+    kinds: Vec<String>,
     random: u64,
     /// Set by a host function just before it traps, so the reason survives.
     violation: Option<Stopped>,
@@ -431,6 +472,7 @@ impl AddOn {
             state.focused = input.focused;
             let (eye, forward) = (input.eye, input.forward);
             state.camera = [eye[0], eye[1], eye[2], forward[0], forward[1], forward[2]];
+            state.world = input.world;
             state.keys = if input.focused {
                 input.keys_down.into_iter().collect()
             } else {
@@ -574,6 +616,105 @@ fn text(caller: &mut Host<'_>, ptr: i32, len: i32, max: usize) -> wasmtime::Resu
     String::from_utf8(bytes).map_err(|_| misuse(caller, "text that is not UTF-8"))
 }
 
+/// Queue one of the Add-On's sounds; past the frame's allowance it is
+/// dropped (-1), since sounds are cosmetic.
+fn queue_sound(
+    caller: &mut Host<'_>,
+    ptr: i32,
+    len: i32,
+    volume: f32,
+    at: Option<[f32; 3]>,
+) -> wasmtime::Result<i32> {
+    let name = text(caller, ptr, len, 256)?;
+    if !caller.data().sounds.contains(&name) {
+        return Err(misuse(caller, format!("no sound `{name}` in this Add-On")));
+    }
+    let limit = caller.data().budgets.sounds_per_frame;
+    let frame = &mut caller.data_mut().frame;
+    if frame.sounds.len() >= limit {
+        return Ok(-1);
+    }
+    frame.sounds.push(Sound {
+        name,
+        volume: if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        at,
+    });
+    Ok(0)
+}
+
+/// Queue one draw, with the material's parameters or its own (16 floats at
+/// `params`).
+fn push_draw(
+    caller: &mut Host<'_>,
+    mesh: i32,
+    material: i32,
+    matrix: i32,
+    params: Option<i32>,
+) -> wasmtime::Result<()> {
+    let budgets = caller.data().budgets.clone();
+    if caller.data().frame.draws.len() >= budgets.draws_per_frame {
+        return Err(over(
+            caller,
+            format!("more than {} draws a frame", budgets.draws_per_frame),
+        ));
+    }
+    let (mesh, material) = (mesh as u32 as usize, material as u32 as usize);
+    let Some(triangles) = caller
+        .data()
+        .layer
+        .meshes
+        .get(mesh)
+        .map(|m| m.indices.len() as u64 / 3)
+    else {
+        return Err(misuse(caller, format!("no mesh {mesh}")));
+    };
+    if material >= caller.data().layer.materials.len() {
+        return Err(misuse(caller, format!("no material {material}")));
+    }
+    if caller.data().frame.triangles + triangles > budgets.triangles_per_frame {
+        return Err(over(
+            caller,
+            format!(
+                "more than {} triangles a frame",
+                budgets.triangles_per_frame
+            ),
+        ));
+    }
+    let values = floats(&read(caller, matrix, 64, 64)?);
+    if !values.iter().all(|v| v.is_finite() && v.abs() <= 1.0e6) {
+        return Err(misuse(caller, "a transform that is not a finite number"));
+    }
+    let mut model = [0.0; 16];
+    model.copy_from_slice(&values);
+    let params = match params {
+        Some(ptr) => {
+            let values = floats(&read(caller, ptr, 64, 64)?);
+            if !values.iter().all(|v| v.is_finite()) {
+                return Err(misuse(caller, "a parameter that is not a finite number"));
+            }
+            let mut p = [[0.0; 4]; 4];
+            for (i, v) in values.iter().enumerate() {
+                p[i / 4][i % 4] = *v;
+            }
+            Some(p)
+        }
+        None => None,
+    };
+    let frame = &mut caller.data_mut().frame;
+    frame.triangles += triangles;
+    frame.draws.push(Draw {
+        mesh,
+        material,
+        model,
+        params,
+    });
+    Ok(())
+}
+
 /// Define the host functions of every declared capability, and nothing
 /// else: an import of anything undeclared cannot link.
 fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasmtime::Result<()> {
@@ -681,6 +822,7 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
                 state.layer.materials.push(Material {
                     shader: shader as usize,
                     params: [[0.0; 4]; 4],
+                    blend: Blend::Opaque,
                 });
                 Ok(state.layer.materials.len() as i32 - 1)
             },
@@ -733,52 +875,50 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             m,
             "draw",
             |mut caller: Host<'_>, mesh: i32, material: i32, matrix: i32| -> wasmtime::Result<()> {
-                let budgets = caller.data().budgets.clone();
-                if caller.data().frame.draws.len() >= budgets.draws_per_frame {
-                    return Err(over(
-                        &mut caller,
-                        format!("more than {} draws a frame", budgets.draws_per_frame),
-                    ));
-                }
-                let (mesh, material) = (mesh as u32 as usize, material as u32 as usize);
-                let Some(triangles) = caller
-                    .data()
-                    .layer
-                    .meshes
-                    .get(mesh)
-                    .map(|m| m.indices.len() as u64 / 3)
-                else {
-                    return Err(misuse(&mut caller, format!("no mesh {mesh}")));
+                push_draw(&mut caller, mesh, material, matrix, None)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "draw_with",
+            |mut caller: Host<'_>,
+             mesh: i32,
+             material: i32,
+             matrix: i32,
+             params: i32|
+             -> wasmtime::Result<()> {
+                push_draw(&mut caller, mesh, material, matrix, Some(params))
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "material_blend",
+            |mut caller: Host<'_>, material: i32, mode: i32| -> wasmtime::Result<()> {
+                let Some(blend) = Blend::from_code(mode) else {
+                    return Err(misuse(&mut caller, format!("no blend mode {mode}")));
                 };
-                if material >= caller.data().layer.materials.len() {
-                    return Err(misuse(&mut caller, format!("no material {material}")));
+                let state = caller.data_mut();
+                match state.layer.materials.get_mut(material as u32 as usize) {
+                    Some(m) => {
+                        m.blend = blend;
+                        Ok(())
+                    }
+                    None => Err(misuse(&mut caller, format!("no material {material}"))),
                 }
-                if caller.data().frame.triangles + triangles > budgets.triangles_per_frame {
-                    return Err(over(
-                        &mut caller,
-                        format!(
-                            "more than {} triangles a frame",
-                            budgets.triangles_per_frame
-                        ),
-                    ));
-                }
-                let values = floats(&read(&mut caller, matrix, 64, 64)?);
-                if !values.iter().all(|v| v.is_finite() && v.abs() <= 1.0e6) {
-                    return Err(misuse(
-                        &mut caller,
-                        "a transform that is not a finite number",
-                    ));
-                }
-                let mut model = [0.0; 16];
-                model.copy_from_slice(&values);
-                let frame = &mut caller.data_mut().frame;
-                frame.triangles += triangles;
-                frame.draws.push(Draw {
-                    mesh,
-                    material,
-                    model,
-                });
-                Ok(())
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "environment",
+            |mut caller: Host<'_>, ptr: i32| -> wasmtime::Result<()> {
+                let bytes: Vec<u8> = caller
+                    .data()
+                    .world
+                    .environment_record()
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect();
+                write(&mut caller, ptr, &bytes)
             },
         )?;
     }
@@ -803,27 +943,24 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             m,
             "sound_play",
             |mut caller: Host<'_>, ptr: i32, len: i32, volume: f32| -> wasmtime::Result<i32> {
-                let name = text(&mut caller, ptr, len, 256)?;
-                if !caller.data().sounds.contains(&name) {
-                    return Err(misuse(
-                        &mut caller,
-                        format!("no sound `{name}` in this Add-On"),
-                    ));
+                queue_sound(&mut caller, ptr, len, volume, None)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "sound_at",
+            |mut caller: Host<'_>,
+             ptr: i32,
+             len: i32,
+             volume: f32,
+             x: f32,
+             y: f32,
+             z: f32|
+             -> wasmtime::Result<i32> {
+                if ![x, y, z].iter().all(|v| v.is_finite() && v.abs() <= 1.0e6) {
+                    return Err(misuse(&mut caller, "a place that is not a finite number"));
                 }
-                let limit = caller.data().budgets.sounds_per_frame;
-                let frame = &mut caller.data_mut().frame;
-                if frame.sounds.len() >= limit {
-                    return Ok(-1); // Dropped, not fatal: sounds are cosmetic.
-                }
-                frame.sounds.push((
-                    name,
-                    if volume.is_finite() {
-                        volume.clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    },
-                ));
-                Ok(0)
+                queue_sound(&mut caller, ptr, len, volume, Some([x, y, z]))
             },
         )?;
     }
@@ -863,6 +1000,80 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
                 write(&mut caller, ptr, &message)?;
                 caller.data_mut().inbox.pop_front();
                 Ok(message.len() as i32)
+            },
+        )?;
+    }
+    if has(Capability::WorldRead) {
+        linker.func_wrap(m, "local_player", |caller: Host<'_>| -> i32 {
+            caller.data().world.local as i32
+        })?;
+        linker.func_wrap(
+            m,
+            "players",
+            |mut caller: Host<'_>, ptr: i32, capacity: i32| -> wasmtime::Result<i32> {
+                let records = caller.data().world.player_records(capacity.max(0) as usize);
+                let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
+                write(&mut caller, ptr, &bytes)?;
+                Ok((records.len() / crate::world::PLAYER_RECORD) as i32)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "entities",
+            |mut caller: Host<'_>, ptr: i32, capacity: i32| -> wasmtime::Result<i32> {
+                let records = caller.data().world.entity_records(capacity.max(0) as usize);
+                let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
+                write(&mut caller, ptr, &bytes)?;
+                Ok((records.len() / crate::world::ENTITY_RECORD) as i32)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "vehicle_kind",
+            |mut caller: Host<'_>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
+                let name = text(&mut caller, ptr, len, 160)?;
+                let state = caller.data_mut();
+                if let Some(i) = state.kinds.iter().position(|k| *k == name) {
+                    return Ok(i as i32);
+                }
+                if state.kinds.len() >= crate::world::MAX_KINDS {
+                    let n = crate::world::MAX_KINDS;
+                    return Err(over(&mut caller, format!("more than {n} vehicle kinds")));
+                }
+                state.kinds.push(name);
+                Ok(state.kinds.len() as i32 - 1)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "vehicles",
+            |mut caller: Host<'_>, ptr: i32, capacity: i32| -> wasmtime::Result<i32> {
+                let state = caller.data();
+                let records = state
+                    .world
+                    .vehicle_records(&state.kinds, capacity.max(0) as usize);
+                let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
+                write(&mut caller, ptr, &bytes)?;
+                Ok((records.len() / crate::world::VEHICLE_RECORD) as i32)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "state_num",
+            |mut caller: Host<'_>,
+             package_ptr: i32,
+             package_len: i32,
+             key_ptr: i32,
+             key_len: i32,
+             player: i32,
+             index: i32|
+             -> wasmtime::Result<f32> {
+                let package = text(&mut caller, package_ptr, package_len, 64)?;
+                let key = text(&mut caller, key_ptr, key_len, 64)?;
+                Ok(caller
+                    .data()
+                    .world
+                    .state_number(&package, &key, i64::from(player), index))
             },
         )?;
     }

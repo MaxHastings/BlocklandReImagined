@@ -49,6 +49,7 @@ fn player(id: u64) -> PlayerView {
         position: [0.0; 3],
         alive: true,
         admin: true,
+        ..Default::default()
     }
 }
 fn call<'a>(function: &'a str, args: Vec<Dynamic>, snapshot: &Arc<Snapshot>) -> Call<'a> {
@@ -160,6 +161,7 @@ fn mining_economy_runs_on_server_state_only() {
             look: None,
             position: [0.0; 3],
             distance: 2.0,
+            object: None,
         });
         c.state = state.clone();
         let out = runtime

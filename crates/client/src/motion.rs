@@ -268,6 +268,13 @@ impl Motion {
     }
     /// Advance local time and run fixed prediction ticks. Returns the newest
     /// input sequence and the recent inputs to send when any tick ran.
+    /// Whether the tool in hand takes the jet button, so right click runs
+    /// it without jetting (as the host does).
+    pub fn set_tool_jet(&mut self, takes: bool) {
+        if let Some(predictor) = &mut self.predictor {
+            predictor.set_tool_jet(takes);
+        }
+    }
     pub fn advance(
         &mut self,
         seconds: f32,

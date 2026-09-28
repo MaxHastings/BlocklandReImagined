@@ -1041,6 +1041,7 @@ impl Session {
         if let Some(peer) = self.peers.get_mut(&owner) {
             peer.inspection = None;
         }
+        self.package_loadout(owner);
         Ok(())
     }
 
@@ -1115,6 +1116,8 @@ impl Session {
         let _ = self
             .weapons
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
+        // Joining starts with the default tools: Add-Ons hand out theirs.
+        self.package_loadout(owner);
         Ok(())
     }
 

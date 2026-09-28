@@ -157,6 +157,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 min_shot_ticks: 0,
                 states,
                 command: None,
+                commands: Default::default(),
                 shot: None,
             },
         );
@@ -340,7 +341,13 @@ impl Game {
         id
     }
     fn bricks(&self) -> BTreeMap<BrickId, Brick> {
-        self.s.simulation().state().bricks.clone().into_iter().collect()
+        self.s
+            .simulation()
+            .state()
+            .bricks
+            .clone()
+            .into_iter()
+            .collect()
     }
     fn center_prints(&self, owner: OwnerId) -> Vec<String> {
         self.log
@@ -2152,7 +2159,7 @@ fn player_saves_cannot_starve_the_administrator_build_budget() {
     assert!(
         !format!("{blocked:?}").contains("rate exceeded"),
         "a player's saves blocked the administrator: {blocked:?}"
-    );    // The host saving twice in a window (save, load, save over it) is its
+    ); // The host saving twice in a window (save, load, save over it) is its
     // own work, not a player hogging the slots.
     g.fresh_window();
     for _ in 0..2 {
@@ -2166,12 +2173,22 @@ fn player_saves_cannot_starve_the_administrator_build_budget() {
 #[test]
 fn players_sharing_a_name_are_numbered() {
     let mut s = plain();
-    let a = s.join("Blockhead".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
-    let b = s.join("blockhead".into(), Vec3::new(3.0, 0.05, 0.0), false).unwrap();
-    let c = s.join("Blockhead".into(), Vec3::new(6.0, 0.05, 0.0), false).unwrap();
+    let a = s
+        .join("Blockhead".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let b = s
+        .join("blockhead".into(), Vec3::new(3.0, 0.05, 0.0), false)
+        .unwrap();
+    let c = s
+        .join("Blockhead".into(), Vec3::new(6.0, 0.05, 0.0), false)
+        .unwrap();
     let long = "x".repeat(48);
-    let d = s.join(long.clone(), Vec3::new(9.0, 0.05, 0.0), false).unwrap();
-    let e = s.join(long.clone(), Vec3::new(12.0, 0.05, 0.0), false).unwrap();
+    let d = s
+        .join(long.clone(), Vec3::new(9.0, 0.05, 0.0), false)
+        .unwrap();
+    let e = s
+        .join(long.clone(), Vec3::new(12.0, 0.05, 0.0), false)
+        .unwrap();
     let names = s.names();
     assert_eq!(names[&a], "Blockhead");
     assert_eq!(names[&b], "blockhead 2");
@@ -2186,8 +2203,12 @@ fn players_sharing_a_name_are_numbered() {
 #[test]
 fn host_server_settings_limit_bricks_plant_rate_and_chat() {
     let mut s = plain();
-    let host = s.join("Host".into(), Vec3::new(0.0, 0.05, 6.0), true).unwrap();
-    let guest = s.join("Guest".into(), Vec3::new(4.0, 0.05, 6.0), false).unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 6.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(4.0, 0.05, 6.0), false)
+        .unwrap();
     let mut seq = BTreeMap::<OwnerId, u64>::new();
     let mut send = |s: &mut Session, owner: OwnerId, command: Command| {
         let n = seq.entry(owner).or_default();
@@ -2201,8 +2222,23 @@ fn host_server_settings_limit_bricks_plant_rate_and_chat() {
         ..ServerSettings::default()
     };
     // Only the host may change them.
-    assert!(send(&mut s, guest, admin(Action::HostConfigure { settings: settings.clone() })).is_err());
-    let Ok(Reply::Admin(reply)) = send(&mut s, host, admin(Action::HostConfigure { settings: settings.clone() })) else {
+    assert!(
+        send(
+            &mut s,
+            guest,
+            admin(Action::HostConfigure {
+                settings: settings.clone()
+            })
+        )
+        .is_err()
+    );
+    let Ok(Reply::Admin(reply)) = send(
+        &mut s,
+        host,
+        admin(Action::HostConfigure {
+            settings: settings.clone(),
+        }),
+    ) else {
         panic!("the host configures")
     };
     assert_eq!(reply.snapshot.options, Some(settings));
@@ -2213,18 +2249,26 @@ fn host_server_settings_limit_bricks_plant_rate_and_chat() {
         color: 0,
     };
     let limit = |r: anyhow::Result<Reply>| {
-        r.unwrap_err().downcast_ref::<bri_sim::simulation::PlantFailure>().copied()
+        r.unwrap_err()
+            .downcast_ref::<bri_sim::simulation::PlantFailure>()
+            .copied()
             == Some(bri_sim::simulation::PlantFailure::Limit)
     };
     assert!(send(&mut s, guest, plant(0.0)).is_ok());
     assert!(send(&mut s, guest, plant(2.0)).is_ok());
-    assert!(limit(send(&mut s, guest, plant(4.0))), "third plant in a second");
+    assert!(
+        limit(send(&mut s, guest, plant(4.0))),
+        "third plant in a second"
+    );
     for _ in 0..121 {
         s.step().unwrap();
     }
     assert!(send(&mut s, guest, plant(4.0)).is_ok());
     assert!(send(&mut s, host, plant(6.0)).is_ok());
-    assert!(limit(send(&mut s, host, plant(8.0))), "the server's brick limit");
+    assert!(
+        limit(send(&mut s, host, plant(8.0))),
+        "the server's brick limit"
+    );
     assert!(send(&mut s, guest, Command::Chat("hello there".into())).is_ok());
     assert_eq!(s.chat().last().unwrap().text, "hello");
 }
@@ -2245,7 +2289,10 @@ fn abandoned_bricks_turn_public_after_the_hosts_timeout() {
     let shared = g.plant(a, SHARED_BRICK);
     g.s.disconnect(a).unwrap();
     g.swing(b, Some(HAMMER), SHARED_BRICK);
-    assert!(g.bricks().contains_key(&shared), "still Ann's a moment later");
+    assert!(
+        g.bricks().contains_key(&shared),
+        "still Ann's a moment later"
+    );
     // Trust is looked at on the minute, so by the second one it is public.
     g.steps(2 * 60 * 120);
     g.swing(b, Some(HAMMER), SHARED_BRICK);
@@ -2257,14 +2304,17 @@ fn the_etard_filter_holds_back_chat_and_says_why() {
     let mut g = Game::new(tooled());
     let a = g.s.join("Ann".into(), A_SPAWN, false).unwrap();
     g.s.take_private_notices();
-    g.s.command(a, 1, Command::Chat("r u there".into())).unwrap();
-    assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == a
-        && matches!(n, Notice::Chat(t) if t.contains("Please use full words"))));
+    g.s.command(a, 1, Command::Chat("r u there".into()))
+        .unwrap();
+    assert!(g.s.take_private_notices().iter().any(
+        |(o, n)| *o == a && matches!(n, Notice::Chat(t) if t.contains("Please use full words"))
+    ));
     g.s.set_server_settings(bri_admin::ServerSettings {
         chat_filter: false,
         ..Default::default()
     })
     .unwrap();
-    g.s.command(a, 2, Command::Chat("r u there".into())).unwrap();
+    g.s.command(a, 2, Command::Chat("r u there".into()))
+        .unwrap();
     assert!(g.s.take_private_notices().is_empty());
 }

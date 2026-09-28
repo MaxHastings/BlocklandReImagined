@@ -50,6 +50,21 @@ copy `user-state/` across to keep settings, saves and identity.
   ghost (super shift moves it by its own size), plant it with Numpad Enter,
   and Ctrl+Z takes the whole copy back. A copy that cannot all be planted
   (overlap, floating, someone else's bricks, brick limit) plants nothing.
+- **Gravity Gun** (an Add-On, on by default): everyone gets one; `/gravitygun`
+  puts it in your hand. Right click grabs what you aim at (players,
+  vehicles, Steel Balls, Add-On creatures) and right click again drops it,
+  without jetting; left click punts;
+  hold left click to charge a throw and release to throw. Heavy things lag
+  and sag in the beam. In a minigame, a thrown vehicle that lands on
+  someone kills them and the kill is yours; outside minigames you can only
+  move players and vehicles whose owners trust you, and nobody is hurt.
+- **Steel Ball** (an Add-On, on by default): everyone gets the steel ball
+  item; `/steelball` puts it in your hand. Left click rolls a heavy
+  polished ball out, right click hurls one; you keep three, and
+  `/clearballs` puts them away. It rolls with real weight, bowls players
+  over and shoves vehicles aside; in a minigame it hurts, and a hard hit
+  knocks bricks out like a rocket. It is also a seatless vehicle on the
+  Vehicle Spawn brick's list. Try throwing one with the Gravity Gun.
 - **Deathmatch:** Escape → Mini-Games → Create. The default rules give everyone
   a gun and rocket launcher. Shoot, fall, die, watch the respawn countdown and
   click to respawn. Kill messages appear in chat. The player list (F2) shows scores.
