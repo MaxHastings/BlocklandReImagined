@@ -578,7 +578,11 @@ fn pirate_cannon_shows_its_charge_as_a_bottom_print() -> anyhow::Result<()> {
         .take_private_notices()
         .into_iter()
         .filter_map(|(to, n)| match n {
-            Notice::Bottom { text, seconds } if to == owner && seconds == 1.0 => Some(text),
+            Notice::Bottom {
+                text,
+                seconds,
+                hide_bar: true,
+            } if to == owner && seconds == 1.0 => Some(text),
             _ => None,
         })
         .collect();

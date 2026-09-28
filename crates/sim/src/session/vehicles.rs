@@ -1241,6 +1241,7 @@ impl Session {
                     Notice::Bottom {
                         text: cannon_strength(charge, steps),
                         seconds: 1.0,
+                        hide_bar: true,
                     },
                 ),
                 // The blast is heard from the `initialExplosionProjectile`'s

@@ -1046,6 +1046,7 @@ impl Session {
                             "{TROPHY}{C3} Goal Completed! - Shooting - Time: {time}\n({hit}/{launched} targets hit with {accuracy}% accuracy)"
                         ),
                         seconds: 8.0,
+                        hide_bar: false,
                     },
                 );
                 self.clear_center(owner);
@@ -1217,6 +1218,7 @@ impl Session {
             Notice::Bottom {
                 text: String::new(),
                 seconds: 0.0,
+                hide_bar: false,
             },
         );
         let text = format!(
@@ -1293,6 +1295,7 @@ impl Session {
             Notice::Bottom {
                 text: format!("{TROPHY}{C3} Goal Completed! - {goal} - Time: {time}"),
                 seconds: 3.0,
+                hide_bar: false,
             },
         );
     }

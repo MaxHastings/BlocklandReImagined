@@ -17,7 +17,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 41: `Command::GhostBrick` and `Vitals::ghost`, so others see a ghost brick.
 /// 42: copied builds (`Notice::Blueprint`, `Command::PlaceBlueprint`) and
 /// Add-On tool images (`Image::command`).
-pub const VERSION: u32 = 42;
+/// 43: `Notice::Bottom::hide_bar` and `Projectile::heading` (a stuck
+/// arrow's direction).
+pub const VERSION: u32 = 43;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

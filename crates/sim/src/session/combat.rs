@@ -100,6 +100,11 @@ pub enum Notice {
     Bottom {
         text: String,
         seconds: f32,
+        /// `bottomPrintBar` hidden: the global `bottomPrint(%client, ...)`
+        /// passes its line count as `hideBar`; `commandToClient` prints and
+        /// `GameConnection::BottomPrint` keep the bar.
+        #[serde(default)]
+        hide_bar: bool,
     },
     /// Invitation from a minigame owner, answered with Accept/Reject.
     Invite {
@@ -927,6 +932,7 @@ impl Session {
                                 mg::MessageKind::Bottom { seconds } => Notice::Bottom {
                                     text: text.clone(),
                                     seconds: f32::from(seconds),
+                                    hide_bar: false,
                                 },
                             };
                             self.notify(owner, notice);

@@ -3273,11 +3273,15 @@ impl App {
                                 seconds,
                             }
                         }
-                        bri_sim::session::Notice::Bottom { text, seconds } => {
+                        bri_sim::session::Notice::Bottom {
+                            text,
+                            seconds,
+                            hide_bar,
+                        } => {
                             UiUpdate::BottomPrint {
                                 text: print_markup(&self.ui.core.binds, &text),
                                 seconds,
-                                hide_bar: false,
+                                hide_bar,
                             }
                         }
                         bri_sim::session::Notice::Abilities(abilities) => {
