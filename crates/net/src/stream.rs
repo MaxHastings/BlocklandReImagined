@@ -517,4 +517,77 @@ mod tests {
         // Its launch, its bounce and its end; nothing while it flies.
         assert_eq!(sent, [(6, 1, 0), (150, 1, 0), (204, 0, 1)]);
     }
+
+    #[test]
+    fn held_movement_keeps_every_input_once() {
+        use crate::protocol::{MAX_MOVEMENT_BATCH, merge_movement};
+        let input = |forward: f32| bri_sim::player::MoveInput {
+            forward,
+            ..Default::default()
+        };
+        let batch = |newest: u64, first: u64| {
+            (
+                newest,
+                (first..=newest)
+                    .map(|s| input(s as f32 / 1000.0))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        // Overlapping redundancy: 5..=10 then 7..=12 is 5..=12.
+        let (newest, inputs) = merge_movement(batch(10, 5), batch(12, 7));
+        assert_eq!(newest, 12);
+        assert_eq!(inputs, batch(12, 5).1);
+        // Adjacent: 1..=3 then 4..=6.
+        assert_eq!(merge_movement(batch(3, 1), batch(6, 4)).1, batch(6, 1).1);
+        // A gap or an older batch: only the newer one.
+        assert_eq!(merge_movement(batch(3, 1), batch(9, 6)).1, batch(9, 6).1);
+        assert_eq!(merge_movement(batch(9, 6), batch(8, 5)).1, batch(8, 5).1);
+        // Bounded.
+        let (_, long) = merge_movement(batch(40, 1), batch(80, 41));
+        assert_eq!(long.len(), MAX_MOVEMENT_BATCH);
+        assert_eq!(long.last(), Some(&input(0.08)));
+    }
+
+    #[test]
+    fn moving_entities_send_only_where_they_are() {
+        use crate::protocol::EntityDelta;
+        use bri_sim::session::EntityInfo;
+        let zombie = |id, x: f32| EntityInfo {
+            id,
+            kind: "zombies:zombie".into(),
+            model: "zombies:model/zombie".into(),
+            position: [x, 0.0, 0.0],
+            yaw: 0.5,
+            label: "Zombie".into(),
+        };
+        let mut host = BTreeMap::new();
+        let mut client = BTreeMap::new();
+        let first = EntityDelta::between(&mut host, vec![zombie(1, 0.0), zombie(2, 5.0)]).unwrap();
+        assert_eq!(first.changed.len(), 2);
+        first.apply(&mut client).unwrap();
+        assert_eq!(
+            EntityDelta::between(&mut host, vec![zombie(1, 0.0), zombie(2, 5.0)]),
+            None
+        );
+        let mut renamed = zombie(2, 6.0);
+        renamed.label = "Boss".into();
+        let next = EntityDelta::between(
+            &mut host,
+            vec![zombie(1, 0.5), renamed.clone(), zombie(3, 9.0)],
+        )
+        .unwrap();
+        assert_eq!(next.moved, [(1, [0.5, 0.0, 0.0], 0.5)]);
+        assert_eq!(next.changed, [renamed, zombie(3, 9.0)]);
+        next.apply(&mut client).unwrap();
+        let gone = EntityDelta::between(&mut host, vec![zombie(3, 9.0)]).unwrap();
+        assert_eq!(gone.removed, [1, 2]);
+        gone.apply(&mut client).unwrap();
+        assert_eq!(client, host);
+        // A move of an entity the client never had is refused.
+        let bad = EntityDelta {
+            moved: vec![(9, [0.0; 3], 0.0)],
+            ..Default::default()
+        };
+        assert!(bad.apply(&mut client).is_err());
+    }
 }

@@ -458,18 +458,31 @@ async fn bandwidth_table() -> Result<()> {
         clients[0].replica.world.bricks.len()
     );
     finish(clients, server).await?;
-    let (report, clients, server) = explosion().await?;
+    let (_, clients, server) = explosion().await?;
     eprintln!("  bricks knocked out: {}", knocked_out(&clients[0]));
-    let _ = report;
     finish(clients, server).await?;
-    let (_, clients, server) = scene("8 players firing rockets", empty_world(), 8, |i| {
-        Act::Shoot {
-            yaw: -1.2 + 0.3 * i as f32,
-            pitch: 0.2,
-        }
-    })
-    .await?;
+    let (_, clients, server) = rocket_fight().await?;
     finish(clients, server).await?;
+    // Vehicles need the converted vehicle pack; their datagram is priced
+    // here instead. A parked vehicle settles like a still player.
+    let jeep = bri_net::protocol::Datagram::Vehicle(bri_sim::session::VehiclePose {
+        id: 1000,
+        tick: 1_000_000,
+        position: [12.5, 1.25, -40.0],
+        rotation: [0.01, 0.7, 0.01, 0.7],
+        velocity: [8.0, 0.1, -3.0],
+        steering: 0.2,
+        wheel_suspension: vec![0.1; 4],
+        wheel_rotation: vec![1.5; 4],
+        wheel_contact: vec![true; 4],
+        turret_aim: [0.0; 2],
+        jetting: false,
+    });
+    let size = bri_net::codec::encode_datagram_item(&jeep)?.len();
+    eprintln!(
+        "a driving four-wheel vehicle: {size} B per pose, {} B/s to each player at 40 Hz",
+        size * 40
+    );
     for bricks in [10_000, 100_000] {
         let server = host(big_world(bricks))?;
         let before = server.traffic.sample();
@@ -483,6 +496,17 @@ async fn bandwidth_table() -> Result<()> {
         finish(clients, server).await?;
     }
     Ok(())
+}
+
+/// Eight players each hold down a rocket launcher, aimed apart.
+async fn rocket_fight() -> Result<(Report, Vec<Client>, ServerHandle)> {
+    scene("8 players firing rockets", empty_world(), 8, |i| {
+        Act::Shoot {
+            yaw: -1.2 + 0.3 * i as f32,
+            pitch: 0.2,
+        }
+    })
+    .await
 }
 
 /// One player fires rockets into a wall of 640 plates while seven watch.
@@ -511,4 +535,57 @@ fn knocked_out(client: &Client) -> usize {
         .values()
         .filter(|b| !b.visible)
         .count()
+}
+
+// Budgets: about twice what each scene measured when they were set (see the
+// audit), and far below what it cost before. A failure means a change made
+// the network heavier; measure with the table above and either fix it or
+// raise the budget in the audit with the reason.
+
+/// Eight players standing still, as a real client sends input.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_idle_server_stays_under_its_byte_budget() -> Result<()> {
+    let (report, clients, server) =
+        scene("idle freebuild", empty_world(), 8, |_| Act::Idle).await?;
+    finish(clients, server).await?;
+    // 653 KB/s before the audit; 14 KB/s after.
+    assert!(
+        report.host_rate() < 30_000.0,
+        "idle host sends {:.0} B/s",
+        report.host_rate()
+    );
+    // Still players' poses go out for a few intervals, then once a second.
+    let poses = report.rate(report.host.messages(Kind::Pose));
+    assert!(poses < 300.0, "idle host sends {poses:.0} poses/s");
+    Ok(())
+}
+
+/// Rockets knocking hundreds of bricks out of a wall while seven watch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_explosion_stays_under_its_byte_budget() -> Result<()> {
+    let (report, clients, server) = explosion().await?;
+    let knocked = knocked_out(&clients[0]);
+    finish(clients, server).await?;
+    assert!(knocked >= 64, "the scene knocked out only {knocked} bricks");
+    // 701 KB/s before the audit; 31 KB/s after.
+    assert!(
+        report.host_rate() < 70_000.0,
+        "explosion host sends {:.0} B/s",
+        report.host_rate()
+    );
+    Ok(())
+}
+
+/// Projectiles in flight cost nothing: clients coast them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rocket_fight_stays_under_its_byte_budget() -> Result<()> {
+    let (report, clients, server) = rocket_fight().await?;
+    finish(clients, server).await?;
+    let updates = report.rate(report.host.bytes(Kind::Update));
+    // 221 KB/s of world updates before the audit; 13 KB/s after.
+    assert!(
+        updates < 30_000.0,
+        "rocket fight world updates {updates:.0} B/s"
+    );
+    Ok(())
 }

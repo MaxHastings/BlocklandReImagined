@@ -1038,7 +1038,7 @@ async fn run(
     weapons.reset(session.weapon_view(), session.simulation().state().tick, session.projectile_falls());
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
-    let mut entities = session.package_entities();
+    let mut entities: BTreeMap<u64, _> = session.package_entities().into_iter().map(|e| (e.id, e)).collect();
     // What each client last received of package state (per viewer).
     let mut package_views: BTreeMap<OwnerId, bri_sim::session::PackageStateView> = BTreeMap::new();
     let mut minigames = Vec::new();
@@ -1108,7 +1108,7 @@ async fn run(
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
@@ -1206,7 +1206,7 @@ async fn run(
                 let current_palette=&session.simulation().state().palette;let changed_palette=if &palette!=current_palette{palette=current_palette.clone();Some(palette.clone())}else{None};
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
                 let changed_vitals=crate::stream::changed_entries(&mut vitals,session.vitals());
-                let current_entities=session.package_entities();let changed_entities=if entities!=current_entities{entities=current_entities;Some(entities.clone())}else{None};
+                let changed_entities=EntityDelta::between(&mut entities,session.package_entities());
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};

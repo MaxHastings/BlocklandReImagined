@@ -25,6 +25,30 @@ pub const VERSION: u32 = 43;
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
 pub const MAX_MOVEMENT_BATCH: usize = 48;
+/// Least time between two movement datagrams (about 70 Hz): a client
+/// drawing faster than 60 frames a second holds a frame's inputs for the
+/// next datagram instead of doubling its upload.
+pub const MOVEMENT_GAP: std::time::Duration = std::time::Duration::from_millis(14);
+/// Join a held movement batch with the next one (each the newest sequence
+/// and its consecutive inputs, oldest first), keeping every input the newer
+/// batch does not repeat, up to [`MAX_MOVEMENT_BATCH`].
+pub fn merge_movement(
+    older: (u64, Vec<MoveInput>),
+    newer: (u64, Vec<MoveInput>),
+) -> (u64, Vec<MoveInput>) {
+    let ((old_newest, old), (newest, new)) = (older, newer);
+    let old_first = (old_newest + 1).saturating_sub(old.len() as u64);
+    let new_first = (newest + 1).saturating_sub(new.len() as u64);
+    if newest <= old_newest || new_first > old_newest + 1 {
+        return (newest, new);
+    }
+    let keep = (new_first.saturating_sub(old_first) as usize).min(old.len());
+    let mut inputs = old[..keep].to_vec();
+    inputs.extend(new);
+    let excess = inputs.len().saturating_sub(MAX_MOVEMENT_BATCH);
+    inputs.drain(..excess);
+    (newest, inputs)
+}
 /// Unreliable datagram payload bound. QUIC's minimum 1200-byte path MTU less
 /// packet and frame overhead still carries it, so an encodable datagram is
 /// always sendable.
@@ -240,12 +264,17 @@ impl Movement {
 /// Items of the unreliable state datagrams from the host. A datagram is an
 /// array of them ([`crate::codec::pack_datagrams`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Variants travel as one-letter names: every item carries its tag.
 pub enum Datagram {
     /// This client's own pose: what its prediction reconciles with.
+    #[serde(rename = "p")]
     Pose(Pose),
     /// Another player's pose.
+    #[serde(rename = "r")]
     Remote(RemotePose),
+    #[serde(rename = "v")]
     Vehicle(bri_sim::session::VehiclePose),
+    #[serde(rename = "o")]
     Orb(Orb),
 }
 /// Where an admin's free camera is: its `cameraImage` orb, seen by others.
@@ -263,21 +292,27 @@ pub struct Pose {
 }
 /// Another player's pose: what drawing them needs, without the state only
 /// their own prediction uses (jump timers, jet energy, the input they were
-/// acknowledged up to).
+/// acknowledged up to). Velocity and look angles are quantized well below
+/// what anyone can see: a centimetre a second, a ten-thousandth of a radian.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemotePose {
     pub tick: u64,
     pub owner: OwnerId,
     pub feet: [f32; 3],
-    pub velocity: [f32; 3],
-    pub yaw: f32,
-    pub pitch: f32,
-    pub head_yaw: f32,
+    /// Centimetres per second.
+    pub velocity: [i16; 3],
+    /// Yaw, pitch and head turn in ten-thousandths of a radian.
+    pub look: [i16; 3],
     pub grounded: bool,
     pub crouched: bool,
     pub jetting: bool,
     pub archetype: bri_sim::archetype::ArchetypeId,
     pub scale: f32,
+}
+const CENTIMETRES: f32 = 100.0;
+const LOOK_UNITS: f32 = 10_000.0;
+fn quantize(value: f32, scale: f32) -> i16 {
+    (value * scale).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 impl RemotePose {
     pub fn of(tick: u64, p: &PlayerState) -> Self {
@@ -285,10 +320,8 @@ impl RemotePose {
             tick,
             owner: p.owner,
             feet: p.feet,
-            velocity: p.velocity,
-            yaw: p.yaw,
-            pitch: p.pitch,
-            head_yaw: p.head_yaw,
+            velocity: p.velocity.map(|v| quantize(v, CENTIMETRES)),
+            look: [p.yaw, p.pitch, p.head_yaw].map(|a| quantize(a, LOOK_UNITS)),
             grounded: p.grounded,
             crouched: p.crouched,
             jetting: p.jetting,
@@ -298,16 +331,17 @@ impl RemotePose {
     }
     /// As a pose, with the owner-only state at its defaults.
     pub fn into_pose(self) -> Pose {
+        let [yaw, pitch, head_yaw] = self.look.map(|a| f32::from(a) / LOOK_UNITS);
         Pose {
             tick: self.tick,
             acknowledged_input: 0,
             player: PlayerState {
                 owner: self.owner,
                 feet: self.feet,
-                velocity: self.velocity,
-                yaw: self.yaw,
-                pitch: self.pitch,
-                head_yaw: self.head_yaw,
+                velocity: self.velocity.map(|v| f32::from(v) / CENTIMETRES),
+                yaw,
+                pitch,
+                head_yaw,
                 grounded: self.grounded,
                 crouched: self.crouched,
                 jetting: self.jetting,
@@ -541,9 +575,9 @@ pub struct Delta {
     pub time_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broken_shapes: Option<BTreeSet<u32>>,
-    /// Package entities, when any moved or changed.
+    /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entities: Option<Vec<bri_sim::session::EntityInfo>>,
+    pub entities: Option<EntityDelta>,
 }
 impl Delta {
     /// Nothing changed but the tick (and the cursor).
@@ -602,6 +636,61 @@ pub struct WeaponDelta {
     pub removed: Vec<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drops: Option<Vec<bri_weapons::Drop>>,
+}
+/// What changed among package entities.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EntityDelta {
+    /// New entities, and ones whose kind, model or label changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<bri_sim::session::EntityInfo>,
+    /// Entities that only moved or turned: id, position and yaw.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved: Vec<(u64, [f32; 3], f32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<u64>,
+}
+impl EntityDelta {
+    /// The changes from `last` to `current`; `last` becomes `current`.
+    pub fn between(
+        last: &mut BTreeMap<u64, bri_sim::session::EntityInfo>,
+        current: Vec<bri_sim::session::EntityInfo>,
+    ) -> Option<Self> {
+        let mut delta = Self::default();
+        let current: BTreeMap<u64, _> = current.into_iter().map(|e| (e.id, e)).collect();
+        for (id, e) in &current {
+            match last.get(id) {
+                Some(old) if old == e => {}
+                Some(old) if old.kind == e.kind && old.model == e.model && old.label == e.label => {
+                    delta.moved.push((*id, e.position, e.yaw))
+                }
+                _ => delta.changed.push(e.clone()),
+            }
+        }
+        delta.removed = last.keys().filter(|id| !current.contains_key(id)).copied().collect();
+        *last = current;
+        (delta != Self::default()).then_some(delta)
+    }
+    pub fn apply(&self, entities: &mut BTreeMap<u64, bri_sim::session::EntityInfo>) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.changed.len() <= 1024 && self.moved.len() <= 1024 && self.removed.len() <= 1024,
+            "Too many package entity changes"
+        );
+        for (id, position, yaw) in &self.moved {
+            let e = entities.get_mut(id).ok_or_else(|| anyhow::anyhow!("Unknown package entity moved"))?;
+            e.position = *position;
+            e.yaw = *yaw;
+            e.validate()?;
+        }
+        for e in &self.changed {
+            e.validate()?;
+            entities.insert(e.id, e.clone());
+        }
+        for id in &self.removed {
+            entities.remove(id);
+        }
+        anyhow::ensure!(entities.len() <= 1024, "Too many package entities");
+        Ok(())
+    }
 }
 /// Most ticks one update coasts projectiles: a host that stalls longer has
 /// removed or corrected them by the time it sends again.

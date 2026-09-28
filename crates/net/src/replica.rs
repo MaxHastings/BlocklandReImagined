@@ -268,9 +268,14 @@ impl Replica {
         if let Some(shapes) = &delta.broken_shapes {
             validate_broken_shapes(shapes)?;
         }
-        if let Some(entities) = &delta.entities {
-            validate_entities(entities)?;
-        }
+        let entities = match &delta.entities {
+            Some(changes) => {
+                let mut entities = self.entities.clone();
+                changes.apply(&mut entities)?;
+                Some(entities)
+            }
+            None => None,
+        };
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -326,8 +331,8 @@ impl Replica {
         if let Some(shapes) = delta.broken_shapes {
             self.broken_shapes = shapes;
         }
-        if let Some(entities) = delta.entities {
-            self.entities = entities.into_iter().map(|e| (e.id, e)).collect();
+        if let Some(entities) = entities {
+            self.entities = entities;
         }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();
