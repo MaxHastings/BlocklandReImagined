@@ -39,6 +39,9 @@ pub const MAX_FPS: &str = "$pref::Video::MaxFps";
 /// The Max FPS menu's choices; 0 is Unlimited.
 pub const MAX_FPS_CHOICES: &[u32] = &[30, 60, 75, 120, 144, 165, 240, 0];
 const MAX_FPS_MENU: &str = "OptGraphicsMaxFpsMenu";
+/// The UI Size menu (`$pref::Gui::Scale`, percent; 0 is Auto).
+const UI_SCALE_MENU: &str = "OptGraphicsUiScaleMenu";
+pub const UI_SCALE_CHOICES: &[i64] = &[0, 100, 125, 150, 200, 250, 300];
 const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
 /// Not a v20 setting: music bricks' volume (v20 only had Play Music).
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
@@ -716,6 +719,14 @@ impl Options {
             })
             .collect();
         s.menu(MAX_FPS_MENU, fps_items, i64::from(fps));
+        let scale = core.prefs.i64_or(crate::ui::UI_SCALE, 0).max(0);
+        let scale_items = UI_SCALE_CHOICES
+            .iter()
+            .copied()
+            .chain((!UI_SCALE_CHOICES.contains(&scale)).then_some(scale))
+            .map(|p| (if p == 0 { "Auto".into() } else { format!("{p}%") }, p))
+            .collect();
+        s.menu(UI_SCALE_MENU, scale_items, scale);
         s.refresh_quality();
         s.refresh_readouts();
         s.pane("Graphics");
@@ -840,7 +851,11 @@ impl Options {
                     .map(|&k| v.node(k).ctrl.clone())
                     .find(|k| k.class == "GuiTextCtrl" && labels(k, &menu));
                 let mut y = below;
-                for (name, text) in [(QUALITY_MENU, "Quality:"), (MAX_FPS_MENU, "Max FPS:")] {
+                for (name, text) in [
+                    (QUALITY_MENU, "Quality:"),
+                    (MAX_FPS_MENU, "Max FPS:"),
+                    (UI_SCALE_MENU, "UI Size:"),
+                ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
                     m.position[1] = y;
@@ -1121,6 +1136,14 @@ impl Options {
             .and_then(|n| self.view.selected(n))
         {
             self.draft.set(MAX_FPS, fps.clamp(0, 1000).to_string());
+        }
+        if let Some(scale) = self
+            .view
+            .id(UI_SCALE_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft
+                .set(crate::ui::UI_SCALE, scale.clamp(0, 800).to_string());
         }
         for &(name, pref, _) in VOLUMES {
             if let Some(n) = self.view.id(name) {
@@ -2033,6 +2056,28 @@ mod tests {
         let s = Options::new(&ui.core);
         let menu = s.view.id(QUALITY_MENU).unwrap();
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("Ultra"));
+    }
+
+    #[test]
+    fn ui_size_menu_saves_the_scale_and_the_interface_follows() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(UI_SCALE_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Auto"));
+        s.view.select(menu, Some(150));
+        click(&mut s, "done", &mut ui);
+        assert_eq!(saved_prefs(&mut ui).get(crate::ui::UI_SCALE), Some("150"));
+        // 1920x1080: Auto is 2x; 150% gives 1280x720 logical pixels.
+        ui.resize((1920, 1080), None);
+        assert_eq!(ui.scale(), 1.5);
+        assert_eq!(ui.logical_size(), (1280, 720));
+        // Never below the 640x480 layouts: 300% fits 2.25x at 1080p.
+        ui.core.prefs.set(crate::ui::UI_SCALE, "300");
+        ui.update(0);
+        assert_eq!(ui.scale(), 2.25);
+        ui.core.prefs.set(crate::ui::UI_SCALE, "0");
+        ui.update(0);
+        assert_eq!(ui.scale(), 2.0);
     }
 
     #[test]

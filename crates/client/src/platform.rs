@@ -515,7 +515,7 @@ impl Runner {
             g.resize(size);
         }
         if size.width > 0 && size.height > 0 {
-            let scale = self.config.app.ui().config().scale;
+            let scale = self.config.app.ui().host_scale();
             self.config
                 .app
                 .ui_mut()

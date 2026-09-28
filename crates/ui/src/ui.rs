@@ -72,6 +72,20 @@ fn menu_hover_sound(screen: ScreenId, name: &str) -> Option<UiSound> {
     Some(UiSound { profile, trigger })
 }
 
+/// Not a v20 setting: the interface size in percent (0 = automatic, the
+/// largest whole scale that keeps 640x480 logical pixels).
+pub const UI_SCALE: &str = "$pref::Gui::Scale";
+/// The scale `$pref::Gui::Scale` asks for in a window of `size`, never so
+/// large that fewer than 640x480 logical pixels remain (the layouts' floor).
+pub fn preferred_scale(prefs: &crate::prefs::Prefs, size: (u32, u32)) -> Option<f32> {
+    let percent = prefs.i64_or(UI_SCALE, 0);
+    if percent <= 0 {
+        return None;
+    }
+    let fit = (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0).max(1.0);
+    Some((percent as f32 / 100.0).clamp(1.0, fit))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiConfig {
     /// Window size in physical pixels.
@@ -947,6 +961,10 @@ pub struct Ui {
     /// A global bind consumed the last key press; drop the character it
     /// types (the `~` that opened the console must not appear in it).
     swallow_char: bool,
+    /// The scale the host asked for; the player's UI size replaces it.
+    host_scale: Option<f32>,
+    /// `$pref::Gui::Scale` as last applied.
+    applied_scale_pref: i64,
 }
 
 impl Ui {
@@ -1093,7 +1111,10 @@ impl Ui {
             sounds: Vec::new(),
             dropped_sounds: 0,
             swallow_char: false,
+            host_scale: cfg.scale,
+            applied_scale_pref: 0,
         };
+        ui.apply_scale_pref();
         if ui.core.settings.binds.is_none() {
             ui.core.push(ScreenId::DefaultControls);
         }
@@ -1121,10 +1142,23 @@ impl Ui {
 
     /// Window resized or UI scale changed.
     pub fn resize(&mut self, size: (u32, u32), scale: Option<f32>) {
+        self.host_scale = scale;
         self.cfg.size = size;
-        self.cfg.scale = scale;
+        self.cfg.scale = preferred_scale(&self.core.prefs, size).or(scale);
         self.core.logical = self.cfg.logical();
         self.relayout();
+    }
+    /// The scale the host configured (the player's UI size aside).
+    pub fn host_scale(&self) -> Option<f32> {
+        self.host_scale
+    }
+    /// Follow a changed UI size preference (Options, console).
+    fn apply_scale_pref(&mut self) {
+        let pref = self.core.prefs.i64_or(UI_SCALE, 0);
+        if pref != self.applied_scale_pref {
+            self.applied_scale_pref = pref;
+            self.resize(self.cfg.size, self.host_scale);
+        }
     }
 
     fn relayout(&mut self) {
@@ -1963,6 +1997,7 @@ impl Ui {
 
     /// Advance timers (animations, key repeat, print timeouts).
     pub fn update(&mut self, dt_ms: u64) {
+        self.apply_scale_pref();
         let c = &mut self.core;
         c.time_ms = c.time_ms.saturating_add(dt_ms);
         c.keyboard_turn(dt_ms);
