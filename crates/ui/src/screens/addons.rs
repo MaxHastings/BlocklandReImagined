@@ -305,17 +305,17 @@ impl AddOns {
 /// The details panel for one package.
 pub fn details(r: &AddOnRow) -> String {
     let mut out = format!("<font:Impact:18>{}\n<font:Arial:14>", r.name);
-    match (r.version.is_empty(), r.locked) {
-        (true, true) => out.push_str("Part of the base game"),
-        (false, true) => out.push_str(&format!("Version {} - part of the base game", r.version)),
-        (_, false) => out.push_str(&format!("Version {}", r.version)),
+    let mut subtitle = Vec::new();
+    if !r.version.is_empty() {
+        subtitle.push(format!("Version {}", r.version));
+    }
+    if r.locked {
+        subtitle.push("Part of the base game".to_string());
     }
     if r.importable {
-        if !r.version.is_empty() || r.locked {
-            out.push_str(" - ");
-        }
-        out.push_str("Old Blockland add-on, not imported yet");
+        subtitle.push("Old Blockland add-on, not imported yet".to_string());
     }
+    out.push_str(&subtitle.join(" - "));
     out.push('\n');
     if !r.problems.is_empty() {
         out.push_str(if r.broken {
@@ -330,7 +330,9 @@ pub fn details(r: &AddOnRow) -> String {
     if !r.description.is_empty() {
         out.push_str(&format!("\n{}\n", r.description));
     }
-    out.push_str(&format!("\nRuns: {}\n", r.runs));
+    if !r.runs.is_empty() {
+        out.push_str(&format!("\nRuns: {}\n", r.runs));
+    }
     for (label, list) in [
         ("Adds", &r.provides),
         ("Needs", &r.needs),

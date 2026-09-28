@@ -277,7 +277,7 @@ pub fn start_import(
             .and_then(|o| {
                 if o.status.success() {
                     Ok(format!(
-                        "Imported {name}. It is off until you turn it on. What converted and what needs work is in {dir}/IMPORT-REPORT.md."
+                        "Imported {name}. It starts off; its report is {dir}/IMPORT-REPORT.md."
                     ))
                 } else {
                     let err = String::from_utf8_lossy(&o.stderr);
