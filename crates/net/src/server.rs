@@ -269,9 +269,46 @@ fn encode_transfer(transfer: WorldTransfer) -> Frame {
     });
     Frame::Pending(frames)
 }
+/// Frames a peer's writer has not sent yet. Bounded in frames and in bytes:
+/// a joining peer receives a legal world of up to the transfer budget while
+/// every tick's deltas queue behind it, so the bound must be generous in
+/// count and firm in bytes (stress campaign W7).
+const RELIABLE_BACKLOG_FRAMES: usize = 8192;
+const RELIABLE_BACKLOG_BYTES: usize = 64 * 1024 * 1024;
+#[derive(Clone)]
+struct Outbox {
+    frames: mpsc::Sender<Frame>,
+    bytes: Arc<std::sync::atomic::AtomicUsize>,
+}
+fn outbox() -> (Outbox, mpsc::Receiver<Frame>, Arc<std::sync::atomic::AtomicUsize>) {
+    let (frames, receiver) = mpsc::channel::<Frame>(RELIABLE_BACKLOG_FRAMES);
+    let bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    (
+        Outbox {
+            frames,
+            bytes: bytes.clone(),
+        },
+        receiver,
+        bytes,
+    )
+}
+impl Outbox {
+    fn try_send(&self, frame: Frame) -> Result<()> {
+        let size = match &frame {
+            Frame::Ready(bytes) => bytes.len(),
+            Frame::Pending(_) => 0,
+        };
+        let queued = self.bytes.fetch_add(size, Ordering::Relaxed) + size;
+        if queued > RELIABLE_BACKLOG_BYTES || self.frames.try_send(frame).is_err() {
+            self.bytes.fetch_sub(size, Ordering::Relaxed);
+            anyhow::bail!("Reliable backlog exceeded");
+        }
+        Ok(())
+    }
+}
 struct Peer {
     connection: Connection,
-    out: mpsc::Sender<Frame>,
+    out: Outbox,
     generation: usize,
     /// May send bulk requests (administrators); read by the connection task.
     bulk: Arc<AtomicBool>,
@@ -319,7 +356,7 @@ enum Event {
         hello: Hello,
         principal: Option<Principal>,
         connection: Connection,
-        out: mpsc::Sender<Frame>,
+        out: Outbox,
         bulk: Arc<AtomicBool>,
         answer: oneshot::Sender<Result<OwnerId, String>>,
     },
@@ -497,7 +534,7 @@ async fn connection_task(
             return Ok(());
         }
     };
-    let (out, mut output) = mpsc::channel::<Frame>(32);
+    let (out, mut output, queued) = outbox();
     let (answer, accepted) = oneshot::channel();
     let bulk = Arc::new(AtomicBool::new(false));
     events
@@ -526,7 +563,10 @@ async fn connection_task(
     let write = async {
         while let Some(frame) = output.recv().await {
             match frame {
-                Frame::Ready(bytes) => write_timed(&mut send, &bytes).await?,
+                Frame::Ready(bytes) => {
+                    write_timed(&mut send, &bytes).await?;
+                    queued.fetch_sub(bytes.len(), Ordering::Relaxed);
+                }
                 Frame::Pending(mut ready) => {
                     let encoded = ready.wait_for(Option::is_some).await?.clone();
                     let frames = encoded
