@@ -723,10 +723,22 @@ fn hide_empty_fillers(v: &mut View, pane: NodeId) {
     }
 }
 
-/// Graphics: Display Settings grows to hold the added menus, Shadow
-/// Quality (the one quality section left) sits under it, and Gui Settings
-/// runs the full height beside them, so nothing is clipped and no empty
-/// band is left where v20's other quality sections were.
+/// The bottom of a section's visible rows, in section coordinates.
+fn content_bottom(v: &View, section: NodeId) -> i32 {
+    v.node(section)
+        .children
+        .iter()
+        .filter(|&&k| v.node(k).state.visible)
+        .map(|&k| v.node(k).ctrl.position[1] + v.node(k).ctrl.extent[1])
+        .max()
+        .unwrap_or(0)
+}
+
+/// Graphics: Display Settings grows to hold the added rows, and Shadow
+/// Quality (the one quality section left) goes under whichever column has
+/// room for it, the other column running the full height. Nothing is
+/// clipped and no empty band is left where v20's other quality sections
+/// were.
 fn graphics_pane(v: &mut View) {
     let (Some(pane), Some(display), Some(gui), Some(shadow)) = (
         v.id("OptGraphicsPane"),
@@ -737,21 +749,22 @@ fn graphics_pane(v: &mut View) {
         return;
     };
     hide_empty_fillers(v, pane);
-    let content = v
-        .node(display)
-        .children
-        .iter()
-        .filter(|&&k| v.node(k).state.visible)
-        .map(|&k| v.node(k).ctrl.position[1] + v.node(k).ctrl.extent[1])
-        .max()
-        .unwrap_or(0);
     let d = v.node(display).ctrl.clone();
-    let height = d.extent[1].max(content + 8);
-    v.nodes[display].ctrl.extent[1] = height;
-    let top = d.position[1] + height + 3;
+    let g = v.node(gui).ctrl.clone();
+    let display_h = d.extent[1].max(content_bottom(v, display) + 8);
+    let gui_h = g.extent[1].max(content_bottom(v, gui) + 8);
+    let shadow_h = content_bottom(v, shadow) + 8;
+    let (above, full) = if d.position[1] + display_h + 3 + shadow_h <= PANE_BOTTOM {
+        ((display, d.clone(), display_h), gui)
+    } else {
+        ((gui, g.clone(), gui_h), display)
+    };
+    let (column, c, height) = above;
+    v.nodes[column].ctrl.extent[1] = height;
+    let top = c.position[1] + height + 3;
     let s = &mut v.nodes[shadow].ctrl;
-    s.position = [d.position[0], top];
-    s.extent = [d.extent[0], (PANE_BOTTOM - top).max(s.extent[1])];
+    s.position = [c.position[0], top];
+    s.extent = [c.extent[0], PANE_BOTTOM - top];
     let width = s.extent[0];
     // The title bar spans the widened section.
     for k in v.node(shadow).children.clone() {
@@ -760,8 +773,8 @@ fn graphics_pane(v: &mut View) {
             c.extent[0] = width - 4;
         }
     }
-    let g = &mut v.nodes[gui].ctrl;
-    g.extent[1] = PANE_BOTTOM - g.position[1];
+    let f = &mut v.nodes[full].ctrl;
+    f.extent[1] = PANE_BOTTOM - f.position[1];
 }
 
 /// Audio: the driver panel under Volume is gone; Volume and Audio Options
