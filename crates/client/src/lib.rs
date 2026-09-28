@@ -11,6 +11,7 @@ pub mod client_code;
 pub mod console;
 pub mod content;
 pub mod controls;
+pub mod cosmetic;
 pub use bri_sim::crouch;
 pub mod effects;
 pub mod explosion_debris;

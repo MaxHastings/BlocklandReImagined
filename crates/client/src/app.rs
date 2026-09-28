@@ -378,6 +378,8 @@ pub struct App {
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
     explosion_debris: crate::explosion_debris::ExplosionDebris,
+    /// Presentation faults absorbed instead of closing the game.
+    pub cosmetic_faults: crate::cosmetic::CosmeticFaults,
     /// Ejected gun casings (`stateEjectShell`) and their GPU model.
     weapon_shells: crate::weapon_debris::WeaponDebris,
     shell_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
@@ -1312,6 +1314,7 @@ impl App {
             actor_effects,
             explosion_shapes,
             explosion_debris,
+            cosmetic_faults: Default::default(),
             weapon_shells,
             shell_gpu: None,
             weapon_cues: VecDeque::new(),
@@ -4847,14 +4850,16 @@ impl PlatformApp for App {
                     )
                     .map_or(0.0, |(_, c)| c),
                 };
-                self.avatars.get_mut(owner).unwrap().pose_with_animation(
+                let posed = self.avatars.get_mut(owner).unwrap().pose_with_animation(
                     &self.avatar_assets,
                     player,
                     self.animation_time,
                     &input,
-                )?;
+                );
+                self.cosmetic_faults.absorb("avatar pose", posed);
             }
-            self.effects.sync(view.world.clone(), meshes)?;
+            let synced = self.effects.sync(view.world.clone(), meshes);
+            self.cosmetic_faults.absorb("world effects", synced);
             self.foliage.advance(game_elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.
             let (eye, yaw, pitch) = Self::view_camera(
@@ -4885,7 +4890,7 @@ impl PlatformApp for App {
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
             self.world_items.set_palette(&view.world.palette);
             self.weapon_effects.set_palette(&view.world.palette);
-            self.world_items.sync(
+            let items = self.world_items.sync(
                 &view.weapons,
                 crate::world_items::WorldItemFrame {
                     tick: view.tick,
@@ -4917,17 +4922,21 @@ impl PlatformApp for App {
                         velocity: Vec3::from_array(player.velocity),
                     })
                 },
-            )?;
-            Self::update_weapon_effect_parts(
+            );
+            self.cosmetic_faults.absorb("held and dropped items", items);
+            let parts = Self::update_weapon_effect_parts(
                 &mut self.weapon_effects,
                 &mut self.weapon_cues,
                 &self.world_items,
                 &view.weapons,
                 game_elapsed.as_secs_f32(),
-            )?;
-            self.actor_effects
-                .update_debris_trails(&self.explosion_debris.trails())?;
-            Self::update_actor_effects(
+            );
+            self.cosmetic_faults.absorb("weapon effects", parts);
+            let trails = self
+                .actor_effects
+                .update_debris_trails(&self.explosion_debris.trails());
+            self.cosmetic_faults.absorb("explosion debris", trails);
+            let actors = Self::update_actor_effects(
                 &mut self.actor_effects,
                 &self.avatar_assets,
                 &self.avatars,
@@ -4946,7 +4955,8 @@ impl PlatformApp for App {
                     let hit = building.target(from, direction, length).ok()??;
                     Some((hit.distance, hit.normal))
                 },
-            )?;
+            );
+            self.cosmetic_faults.absorb("player and vehicle effects", actors);
             self.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {
@@ -4986,12 +4996,14 @@ impl PlatformApp for App {
                     .or_else(|_| world_items.mounted_node(actor, hand, image, "muzzlePoint"))
                     .ok()
             };
-            self.weapon_shells.cues(&shells, eject, |actor| {
+            let queued = self.weapon_shells.cues(&shells, eject, |actor| {
                 presented
                     .get(&actor)
                     .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity))
-            })?;
-            self.weapon_shells
+            });
+            self.cosmetic_faults.absorb("gun casings", queued);
+            let moved = self
+                .weapon_shells
                 .advance(game_elapsed.as_secs_f32(), eject, |from, to| {
                     let delta = to - from;
                     let length = delta.length();
@@ -5003,26 +5015,31 @@ impl PlatformApp for App {
                         fraction: (hit.distance / length).clamp(0., 1.),
                         normal: hit.normal.normalize(),
                     })
-                })?;
+                });
+            self.cosmetic_faults.absorb("gun casings", moved);
             self.audio
                 .sync_projectiles(&view.weapons.projectiles, &self.content.weapons.pack);
             let kills = std::mem::take(&mut self.brick_kills);
-            if self.brick_debris.cues(&kills, building)? > 0 {
+            let thrown = self.brick_debris.cues(&kills, building);
+            if self.cosmetic_faults.absorb("brick debris", thrown).unwrap_or(0) > 0 {
                 // Newly dead bricks are not hidden bricks to reveal.
                 self.hidden_uploaded = None;
             }
-            self.brick_debris
-                .advance(game_elapsed.as_secs_f32().min(0.25), building)?;
+            let moved = self
+                .brick_debris
+                .advance(game_elapsed.as_secs_f32().min(0.25), building);
+            self.cosmetic_faults.absorb("brick debris", moved);
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
-            self.effects.advance(
+            let advanced = self.effects.advance(
                 game_elapsed.as_secs_f32(),
                 eye,
                 Vec3::ZERO,
                 |id, from, to| building.effect_visible(id, from, to),
-            )?;
-            self.weather.advance(
+            );
+            self.cosmetic_faults.absorb("world effects", advanced);
+            let weather = self.weather.advance(
                 game_elapsed.as_secs_f32(),
                 bri_weather::CameraState {
                     position: eye,
@@ -5032,7 +5049,8 @@ impl PlatformApp for App {
                     velocity: Vec3::from_array(local.velocity),
                 },
                 building,
-            )?;
+            );
+            self.cosmetic_faults.absorb("weather", weather);
         }
         self.audio.tick(elapsed.as_secs_f32(), listener);
         Ok(())
