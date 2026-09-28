@@ -425,6 +425,7 @@ pub struct App {
     weapon_animation_cursor: u64,
     effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     gpu_scene: Option<GpuScene>,
+    light_volume: LightVolumeState,
     /// Map static shapes' index ranges, and the smashed ones `gpu_scene`
     /// no longer draws.
     shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
@@ -1369,6 +1370,7 @@ impl App {
             weapon_animation_cursor: 0,
             effects_renderer: None,
             gpu_scene: None,
+            light_volume: LightVolumeState::default(),
             shape_indices: BTreeMap::new(),
             gpu_broken: BTreeSet::new(),
             gpu_terrain: Vec::new(),
@@ -1528,6 +1530,7 @@ impl App {
         self.avatar_action_images.clear();
         self.controls = Controls::default();
         self.cpu_scene = None;
+        self.light_volume = LightVolumeState::default();
         self.cpu_terrain.clear();
         self.gpu_scene = None;
         self.gpu_terrain.clear();
@@ -3504,6 +3507,7 @@ impl App {
             self.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
             self.weather.set_map(&prepared.map_id, prepared.waters)?;
+            self.light_volume = LightVolumeState::start(&prepared.scene);
             self.cpu_scene = Some(prepared.scene);
             self.shape_indices = prepared.shape_indices;
             self.cpu_terrain = prepared.terrain;
@@ -4438,6 +4442,62 @@ fn ghost_key(building: &crate::building::Building) -> u64 {
 
 fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrickLook) {
     crate::world_scene::v20_temp_brick(scene, look);
+}
+
+/// The map's baked interior light (`bri_render::light_volume`), baked on its
+/// own thread after the map loads and uploaded once per renderer. Until it
+/// arrives, vertex-lit meshes see only the sun and point lights.
+#[derive(Default)]
+struct LightVolumeState {
+    baking: Option<std::sync::mpsc::Receiver<bri_render::light_volume::LightVolume>>,
+    volume: Option<bri_render::light_volume::LightVolume>,
+    uploaded: bool,
+}
+impl LightVolumeState {
+    /// Cells of at least 2 units, at most a million (4 MB): about 4.7 units
+    /// across the whole Bedroom.
+    const MIN_CELL: f32 = 2.0;
+    const MAX_CELLS: usize = 1_000_000;
+    fn start(scene: &SceneData) -> Self {
+        let Some(baker) = bri_render::light_volume::Baker::new(scene) else {
+            return Self::default();
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("light volume".into())
+            .spawn(move || {
+                let _ = tx.send(baker.bake(Self::MIN_CELL, Self::MAX_CELLS));
+            });
+        Self {
+            baking: spawned.ok().map(|_| rx),
+            ..Self::default()
+        }
+    }
+    fn upload(
+        &mut self,
+        renderer: &mut SceneRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
+        if let Some(rx) = &self.baking {
+            match rx.try_recv() {
+                Ok(volume) => {
+                    self.volume = Some(volume);
+                    self.baking = None;
+                    self.uploaded = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.baking = None,
+            }
+        }
+        if !self.uploaded
+            && let Some(volume) = &self.volume
+        {
+            renderer.set_light_volume(device, queue, Some(volume))?;
+            self.uploaded = true;
+        }
+        Ok(())
+    }
 }
 
 fn combine_effect_frames(
@@ -6348,6 +6408,7 @@ impl PlatformApp for App {
         if self.gpu_scene.is_none() {
             self.gpu_broken.clear();
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
+            self.light_volume.uploaded = false;
             self.gpu_terrain = self
                 .cpu_terrain
                 .iter()
@@ -6362,6 +6423,7 @@ impl PlatformApp for App {
                 })
                 .collect::<Result<_>>()?;
         }
+        self.light_volume.upload(renderer, frame.device, frame.queue)?;
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {

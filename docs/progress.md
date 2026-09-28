@@ -3553,3 +3553,43 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   longer lists the join trust prompt as unbuilt; only elevated client code
   is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
   packaging test needs Windows (not run in the cloud).
+
+## 2026-09-28 Map lamps light players and bricks (client-only, no network)
+
+- Report: on the lamp's bars in BedroomDark a player is a black silhouette.
+  Evidence: neither Bedroom mission has a light object. The lamp is only in
+  `bedroom.dif`'s baked lightmaps, and `lightBulbA` is a breakable `Glass`
+  shape. BedroomDark and KitchenDark author a black sun and ambient, so
+  vertex-lit meshes (players, items, vehicles, bricks, map shapes) got no
+  light anywhere except from player lights. Of the 14 stock missions, none
+  has a point light object; only the four interiors' lightmaps carry lamp
+  light (Bedroom, BedroomDark, Kitchen, KitchenDark, plus Tutorial's).
+- The engine family lit a shape with the lightmap colour of the interior
+  surface under it (`SceneObject::getLightingAmbientColor`, OpenMBG pinned
+  commit). No trace of it was found in `blocklandv20.exe`: its terrain scale
+  constant (255/31) and the commented 0.57735 ambient direction are absent.
+  So v20 itself most likely left players black here. Default chosen for
+  player satisfaction: light them.
+- `bri_render::light_volume` bakes a grid from a map's lightmapped surfaces
+  on a background thread after the map loads (cells of at least 2 units and
+  at most a million: 4.7 units for Bedroom, 2.5 s; Kitchen 3.2 units, 5-6 s).
+  Each cell holds the brighter of the lightmap under it and the mean
+  lightmap over 48 directions, so the Bedroom lamp's lit shade lights a
+  player on its unlit bars. Cells inside walls hold no light, so filtering
+  never pulls light toward black. Vertex-lit surfaces take the brighter of
+  their sun lighting and the volume, with a 0.7 + 0.3 form term. Maps with a
+  bright sun keep their look; nothing gets darker; outdoor maps have no
+  lightmapped surfaces and bake nothing.
+- Breaking the bulb keeps v20's rule (burst, no sound, no respawn until the
+  mission reloads). The room's light stays because it is baked; the volume
+  follows the room, so objects stay consistent with what the walls show.
+  Turning the lamp off would need a lamp-free relight of `bedroom.dif`.
+- Evidence: `cargo test -p bri-render --release --test light_volume`
+  (a lit floor and a lit shade light a stand-in; dark rooms stay black;
+  walls hold no light; the cell budget holds; the shader matches the CPU
+  mirror; a dimmer volume never dims daylight), and with `--ignored`:
+  every stock map bakes in under 30 s with the Bedroom bulb and Kitchen
+  lights lit around them; an offscreen BedroomDark render of a player-sized
+  box on the lamp bars goes from black (0,0,0) to (197,197,197).
+  `cargo test -p bri-render --release`, `cargo test -p bri-client --lib
+  --release`, clippy `-D warnings` on both crates.
