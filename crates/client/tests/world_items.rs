@@ -550,6 +550,7 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
         origin: Vec3::ZERO,
         was_thrown: false,
         paint: None,
+        heading: None,
     };
     let nose = |adapter: &WorldItems| {
         let (_, t) = adapter
@@ -575,5 +576,13 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
         "stuck arrow points along its flight, not up: {}",
         nose(&adapter)
     );
+    // A player who joins after it stuck gets the replicated heading.
+    let mut joiner = WorldItems::new(packs()?.0, packs()?.1, WorldItemLimits::default())?;
+    let stuck = bri_weapons::Projectile {
+        heading: Some(flying.normalize()),
+        ..arrow(Vec3::ZERO, 20)
+    };
+    joiner.sync(&view(stuck), later, |_| None)?;
+    assert!(nose(&joiner).abs_diff_eq(flying.normalize(), 1e-4));
     Ok(())
 }

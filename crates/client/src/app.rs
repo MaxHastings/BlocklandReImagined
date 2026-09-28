@@ -6865,6 +6865,7 @@ mod tests {
         let mut view = bri_sim::session::WeaponView::default();
         view.projectiles.push(bri_weapons::Projectile {
             paint: None,
+            heading: None,
             id: 1,
             definition: trail.id.clone(),
             source: bri_weapons::ActorId(1),

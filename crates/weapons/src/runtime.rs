@@ -373,6 +373,10 @@ pub struct Projectile {
     /// Palette index of a colour spray can's paint (`colorID`).
     #[serde(default)]
     pub paint: Option<u8>,
+    /// The direction a stuck projectile flew in: its velocity is zero, but
+    /// its model keeps pointing that way (v20 keeps the last transform).
+    #[serde(default)]
+    pub heading: Option<Vec3>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Drop {
@@ -861,6 +865,7 @@ impl WeaponsWorld {
                 origin: position,
                 was_thrown: false,
                 paint: None,
+                heading: None,
             },
         );
         self.events.push(Event::Spawned {
@@ -1512,6 +1517,7 @@ impl WeaponsWorld {
                     .to_degrees();
                 if incidence < d.bounce_angle / 2.0 {
                     p.stuck = true;
+                    p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
                     self.effect(p, &d.stick_effect, Some(normal));
                     return true;
