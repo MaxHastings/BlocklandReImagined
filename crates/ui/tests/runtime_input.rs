@@ -123,7 +123,9 @@ fn fixture() -> Rc<Pack> {
             let mut icon = node("GuiBitmapCtrl", "HUD_SuperShift", 731, "");
             icon.extent = [184, 37];
             icon.visible = false;
-            vec![icon]
+            let mut crosshair = node("GuiCrossHairHud", "Crosshair", 224, "");
+            crosshair.extent = [32, 32];
+            vec![icon, crosshair]
         }),
         ("LoadingGui", vec![]),
         ("defaultControlsGui", vec![]),
@@ -617,6 +619,32 @@ fn super_shift_toggle_shows_the_hud_icon_on_the_bottom_edge() {
     up(&mut u, Key::LAlt);
     u.update(16);
     assert!(!shown(&u).0);
+}
+#[test]
+fn crosshair_shows_only_in_first_person_and_hides_with_names() {
+    let mut u = ui();
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::F(5))), "ToggleShapeNameHud");
+    play(&mut u);
+    let shown = |u: &Ui| {
+        let v = u.screen(ScreenId::Play).unwrap().view();
+        v.node(v.id("Crosshair").unwrap()).state.visible
+    };
+    u.update(16);
+    assert!(shown(&u));
+    // GuiCrossHairHud draws nothing unless the connection is first person.
+    u.apply(UiUpdate::FirstPerson(false));
+    u.update(16);
+    assert!(!shown(&u));
+    u.apply(UiUpdate::FirstPerson(true));
+    u.update(16);
+    assert!(shown(&u));
+    // F5 toggles player names and the crosshair together.
+    down(&mut u, Key::F(5));
+    up(&mut u, Key::F(5));
+    u.update(16);
+    assert!(!shown(&u));
 }
 #[test]
 fn ski_crash_whiteout_takes_the_stronger_flash_and_fades() {

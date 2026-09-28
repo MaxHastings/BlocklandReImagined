@@ -1082,6 +1082,9 @@ pub enum UiUpdate {
     /// The camera's liquid tints (`GameRenderFilters`): a water brick zone's
     /// colour and/or map water's, alpha already clamped.
     Underwater(Vec<[f32; 4]>),
+    /// Whether the camera is a first-person eye; the crosshair shows only
+    /// then (`GuiCrossHairHud` checks `isFirstPerson`).
+    FirstPerson(bool),
     /// Net graph text (`toggleNetGraph`); None hides it.
     NetGraph(Option<String>),
     Players {

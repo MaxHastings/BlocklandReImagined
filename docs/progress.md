@@ -3001,3 +3001,16 @@ real integrated GPU; needs a weaker PC.
   "identity changed", PR #1's 4 GB unprompted download, unverified host
   names. Evidence: `cargo test -p bri-client-sandbox`, `-p bri-net`,
   `-p bri-client --lib`, clippy `-D warnings` on those three (Linux).
+- 2026-09-28 third-person crosshair (branch `claude/crosshair-v20`). Max saw
+  the crosshair centred on his own head in third person (a15). v20's scripts
+  never hide it on a camera switch (`toggleFirstPerson` only flips
+  $firstPerson, c:20897); the engine's `GuiCrossHairHud::onRender` returns
+  unless the control object is a Player or Vehicle and the connection is
+  first person (the TGE code Torque3D kept, T3D/fps/guiCrossHairHud.cpp
+  116-122). It never projects the crosshair onto the aim point. Our HUD drew
+  it every frame. Now the client sends `UiUpdate::FirstPerson` each frame and
+  the PlayGui shows `Crosshair` only in first person, which also hides it for
+  the dead orbit camera and observers. F5 (`ToggleShapeNameHud`) now hides it
+  with player names, as in v20 (c:5890). Evidence: new
+  `crosshair_shows_only_in_first_person_and_hides_with_names`,
+  `cargo test -p bri-ui`, `cargo check -p bri-client`.

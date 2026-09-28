@@ -262,6 +262,8 @@ pub struct Core {
     pub net_graph: Option<String>,
     pub lagging: bool,
     pub shape_names: bool,
+    /// The camera is a player's or vehicle's first-person eye.
+    pub first_person: bool,
     pub super_shift: bool,
     super_shift_time: u64,
     pub zoom_on: bool,
@@ -1023,6 +1025,7 @@ impl Ui {
             net_graph: None,
             lagging: false,
             shape_names: true,
+            first_person: true,
             super_shift: false,
             super_shift_time: 0,
             zoom_on: false,
@@ -1422,6 +1425,7 @@ impl Ui {
             }
             UiUpdate::PlantError(e) => c.plant_error = Some((e, c.time_ms + 800)),
             UiUpdate::NetGraph(text) => c.net_graph = text,
+            UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));

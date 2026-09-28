@@ -4159,6 +4159,7 @@ impl PlatformApp for App {
             self.ui.core.request(action);
         }
         let third_person = self.third_person_view();
+        self.ui.apply(UiUpdate::FirstPerson(!third_person));
         let weapon_checkpoint = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
             a.view
                 .as_ref()

@@ -441,6 +441,11 @@ impl Screen for Play {
         if let Some(n) = self.view.id("LagIcon") {
             self.view.set_visible(n, core.lagging);
         }
+        // GuiCrossHairHud::onRender draws only while a first-person player or
+        // vehicle is the control object; ToggleShapeNameHud (F5) hides it too.
+        if let Some(n) = self.view.id("Crosshair") {
+            self.view.set_visible(n, core.shape_names && core.first_person);
+        }
         // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs.
         let center = core.center_print.as_ref().map(|(text, _)| text);
         self.print(

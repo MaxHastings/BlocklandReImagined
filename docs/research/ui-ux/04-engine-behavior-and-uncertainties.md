@@ -93,7 +93,7 @@ no public source.
 ### 1.6 HUD controls
 | Control | Engine behaviour | Status |
 |---|---|---|
-| `GuiCrossHairHud` | In Torque3D it renders only for a first-person player control object (T3D:T3D/fps/guiCrossHairHud.cpp:116–122). In v20 it is toggled by F5 together with names | **[E]**; **[M]**: was the crosshair visible in 3rd person in v20? |
+| `GuiCrossHairHud` | In Torque3D it renders only for a first-person player control object (T3D:T3D/fps/guiCrossHairHud.cpp:116–122). In v20 it is toggled by F5 together with names | **[E]**. Hidden in third person and free camera (engine `isFirstPerson` check; scripts never re-show it) |
 | `GuiShapeNameHud` | Draws names over players, fading with distance (`distanceFade`, `verticalOffset`, T3D:T3D/fps/guiShapeNameHud.cpp:110–284) | **[E]**. Its authored white child swatch (g:1624) is not visible in play **[A]** |
 | `GuiHealthBarHud` | Energy/health bars (hidden in v20 unless the server enables them) | **[E]** |
 | `GuiAnimatedBitmapCtrl` | Frame sequence `<name>_00…` (Ghosting). Frame rate unknown | **[A]** |
