@@ -45,6 +45,12 @@ fn default_content_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("content"))
 }
 fn main() -> Result<()> {
+    let result = game();
+    // A startup error's message must reach the log and terminal before exit.
+    bri_crash::finish();
+    result
+}
+fn game() -> Result<()> {
     // A release build has no console window; when started from a terminal,
     // use that terminal for --help, --check and the echoed log.
     bri_crash::attach_parent_console();

@@ -8,7 +8,7 @@ use std::{
     time::SystemTime,
 };
 use windows_sys::Win32::{
-    Foundation::{GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE},
+    Foundation::{CloseHandle, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL},
     System::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, SetStdHandle},
@@ -27,6 +27,44 @@ pub(crate) fn attach_parent_console() {
     // SAFETY: no preconditions; fails harmlessly without a parent console
     // or when this process already has one.
     unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+}
+
+/// The stderr tee, kept so `finish` can drain it before the process exits.
+/// Handles are stored as integers: raw handles are not `Send`.
+struct Tee {
+    write: usize,
+    original: usize,
+    reader: std::thread::JoinHandle<File>,
+}
+
+static TEE: std::sync::Mutex<Option<Tee>> = std::sync::Mutex::new(None);
+
+/// Put the original stderr back, close the pipe and wait for the reader to
+/// write everything already sent; returns the session log. Without this,
+/// bytes still in the pipe when the process exits (a startup error, a panic
+/// message) are lost from both the log and the terminal whenever the reader
+/// thread has not run yet.
+fn drain() -> Option<File> {
+    let tee = TEE.lock().unwrap_or_else(|e| e.into_inner()).take()?;
+    // SAFETY: restores the handle this process had before the tee, then
+    // closes the pipe's write end, which the tee owns and nothing else uses.
+    unsafe {
+        SetStdHandle(STD_ERROR_HANDLE, tee.original as HANDLE);
+        CloseHandle(tee.write as HANDLE);
+    }
+    tee.reader.join().ok()
+}
+
+/// Deliver everything written so far and stop teeing (the program's end).
+pub(crate) fn finish() {
+    drain();
+}
+
+/// Deliver everything written so far, then keep teeing into the same log.
+pub(crate) fn flush() {
+    if let Some(log) = drain() {
+        let _ = tee_stderr(log);
+    }
 }
 
 pub(crate) fn install(log: File) -> io::Result<()> {
@@ -55,7 +93,7 @@ fn tee_stderr(mut log: File) -> io::Result<()> {
     let echo = (!original.is_null() && original != INVALID_HANDLE_VALUE)
         // SAFETY: a valid standard handle; ManuallyDrop keeps it open.
         .then(|| ManuallyDrop::new(unsafe { File::from_raw_handle(original as RawHandle) }));
-    std::thread::Builder::new()
+    let reader = std::thread::Builder::new()
         .name("bri-log".into())
         .spawn(move || {
             let mut echo = echo;
@@ -69,11 +107,17 @@ fn tee_stderr(mut log: File) -> io::Result<()> {
                     let _ = echo.write_all(&buffer[..n]);
                 }
             }
+            log
         })?;
-    // SAFETY: `write` is the pipe's write end, kept open for the process.
+    // SAFETY: `write` is the pipe's write end, kept open until `finish`.
     if unsafe { SetStdHandle(STD_ERROR_HANDLE, write) } == 0 {
         return Err(io::Error::last_os_error());
     }
+    *TEE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Tee {
+        write: write as usize,
+        original: original as usize,
+        reader,
+    });
     Ok(())
 }
 

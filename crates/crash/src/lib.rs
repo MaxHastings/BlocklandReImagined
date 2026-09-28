@@ -115,12 +115,23 @@ pub fn install(program: &str, candidates: &[PathBuf]) -> io::Result<Capture> {
             );
         }
         previous(info);
+        // The process may end right after this: deliver the message now.
+        #[cfg(windows)]
+        windows::flush();
     }));
     Ok(Capture {
         directory,
         session_log,
         previous_crash,
     })
+}
+
+/// Deliver everything written to stderr so far to the session log and the
+/// terminal, and stop teeing. Call it as the program's last step; the panic
+/// hook calls it when the main thread panics.
+pub fn finish() {
+    #[cfg(windows)]
+    windows::finish();
 }
 
 /// A windowed (GUI subsystem) build has no console. Started from a
