@@ -1,6 +1,6 @@
 # v20 fidelity audit: weapons, vehicles, explosions and player feel
 
-Date: 2026-09-28. Branch `claude/v20-fidelity`, from main 1932015. Rows 18 to 23
+Date: 2026-09-28. Branch `claude/v20-fidelity`, from main 1932015. Rows 18 to 25
 came from Max's a16 play reports the same day.
 Question: which sounds, effects, numbers and messages that v20's stock
 datablocks and scripts define does the game drop or get wrong? Max's
@@ -84,6 +84,8 @@ lineage instead of the v20 binary, the row says "inherited".
 | 21 | Gun casing collision | Cosmetic | A ray starting inside a brick returned a zero normal. Casing debris raised an error that closed the game (a16 multiplayer crash) | **Fixed** d08cab4: the casing is dropped, counted and logged once. 40bf926 does the same for every per-frame presentation subsystem (`CosmeticFaults`) |
 | 22 | Brick break sound | `BrickBreak` on `AudioClientClose3d` (3D, 10/60). One `BrickBreakSoundEvent` per brick explosion, which groups up to 100 bricks (`startNewBrickExplosion`/`sendBrickExplosion`; one per blast is inferred) | One full-volume copy per killed brick. A 30-brick blast stacked to the 16-voice cap and sounded like one maximum-volume sound | **Fixed** 41b0dcf: one per blast, at its origin. Harness 3 pins the descriptions |
 | 23 | Looking straight up or down | Look limits exactly ±90° (`minLookAngle`/`maxLookAngle`). The eye is yaw then pitch; `getCameraTransform` composes `cameraTilt` past vertical. m.dts's look sequences never move the Eye node | The render camera switched to a fixed +Z up within 0.8° of vertical, so the view snapped roll, stopped turning with yaw and disagreed with the held tool. The chase camera's pitch was clamped at 89.4°, a 15° dead zone | **Fixed** e308f4b: one yaw-then-pitch basis (`Camera::oriented`) for the camera, effects, weather and listener |
+| 24 | Throwing the spear | spear.dts's `fire` sequence hides both spear objects while it is thrown | The empty posed image got zero-size GPU buffers and the shadow pass bound them: a16 crashed ("buffer slice can not be empty") | **Fixed** 93678a0a: posed geometry gets placeholder buffers and empty scenes are skipped. Only the spear hides every object; the bow hides just its arrow |
+| 25 | Stuck arrows | A stuck projectile keeps its last render transform | Sticking zeroes the velocity and the model was oriented from velocity, so stuck arrows pointed straight up | **Fixed** 9d016bfe: the client keeps each projectile's last flight direction. A player who joins after an arrow stuck still sees it upright (the direction is not replicated) |
 
 ### Player feel constants
 
