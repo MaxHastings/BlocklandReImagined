@@ -5068,7 +5068,7 @@ impl PlatformApp for App {
                     }
                 }
                 _ => Err(anyhow::anyhow!(
-                    "This feature is not connected to native gameplay yet. It remains required before the alpha handoff."
+                    "This isn't available yet."
                 )),
             };
             self.answer(id, result);

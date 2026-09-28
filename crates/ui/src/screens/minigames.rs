@@ -168,7 +168,7 @@ impl MiniGameScreen {
     }
     fn status(&mut self,core:&Core){
         let key=match self.kind {Kind::List=>"NativeMiniGameListStatus",Kind::Rules=>"NativeMiniGameRulesStatus",Kind::Invite=>"NativeMiniGameInviteStatus"};
-        let status=if !core.minigames.ready{"Mini-game controls are unavailable until the host provides session state.".to_string()}else{core.minigames.status.clone()};
+        let status=if !core.minigames.ready{"Waiting for the server's mini-games.".to_string()}else{core.minigames.status.clone()};
         if let Some(n)=self.view.id(key){self.view.set_text(n,&status);}else{
             let parent=window(&self.view).unwrap_or(self.view.root);
             let mut c=text("GuiTextProfile",Rect::new(12,440,560,24),&status); c.name=Some(key.into());c.class="GuiMLTextCtrl".into();self.view.add(parent,c);

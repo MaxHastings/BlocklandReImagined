@@ -124,7 +124,7 @@ impl AdminScreen {
             _ => "",
         };
         let mut view = if id == ScreenId::AdminCredentials {
-            native_dialog("Native Server Credentials")
+            native_dialog("Server Passwords")
         } else {
             layout_view(core, layout)
         };
@@ -221,7 +221,7 @@ impl AdminScreen {
                 text(
                     "GuiTextProfile",
                     Rect::new(15, 266, 390, 22),
-                    "Native controls; changes require host acknowledgement.",
+                    "Changes take effect once the server accepts them.",
                 ),
             );
         }

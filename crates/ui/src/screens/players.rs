@@ -195,7 +195,8 @@ impl Screen for Players {
         if !matches!(kind, Some(Pending::MiniGame(_))) { return false; }
         core.minigames.status = result.as_ref().map_or_else(|e| e.clone(), |_| "Mini-game request completed.".into());
         self.refresh(core);
-        true
+        // A refusal falls through to the shared notice every screen uses.
+        result.is_ok()
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         if key == Key::Escape {

@@ -132,7 +132,7 @@ impl NativeScreen {
             ScreenId::Connecting | ScreenId::Loading | ScreenId::EscapeMenu | ScreenId::Play => {}
             _ => {
                 s.set("MBOKFrame", "Interface under construction");
-                s.set("MBOKText", &format!("{id:?} is not connected yet. It remains required before the alpha handoff."));
+                s.set("MBOKText", "This screen isn't available yet.");
             }
         }
         s.refresh(core);
@@ -765,7 +765,7 @@ impl Screen for NativeScreen {
             "" => {}
             _ => core.message_ok(
                 "Interface under construction",
-                "This action still needs its native implementation before the alpha handoff.",
+                "This isn't available yet.",
             ),
         }
     }
