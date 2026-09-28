@@ -138,6 +138,7 @@ const MAP: &str = "v20/add-ons/map_slate/slate.mis";
 const SPAWN_BRICK: &str = "v20/brick/brickvehiclespawndata";
 const CUBE: &str = "v20/brick/brick2x2data";
 const WALL: &str = "v20/brick/brick2x4data";
+const WATER: &str = "v20/brick/brick32xwaterdata";
 const GUN: &str = "v20.weapon.gunitem";
 const ROCKETS: &str = "v20.weapon.rocketlauncheritem";
 const SIZE: (u32, u32) = (1920, 1080);
@@ -176,14 +177,17 @@ enum Scene {
     Weapons,
     /// 16 rocket launchers firing volleys into a 4,000-brick pile.
     Blast,
+    /// A lake of 64 32x32 water bricks.
+    Water,
 }
 impl Scene {
-    const ALL: [Scene; 5] = [
+    const ALL: [Scene; 6] = [
         Scene::Idle,
         Scene::Emitters,
         Scene::Vehicles,
         Scene::Weapons,
         Scene::Blast,
+        Scene::Water,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -192,6 +196,7 @@ impl Scene {
             Scene::Vehicles => "vehicles",
             Scene::Weapons => "weapons",
             Scene::Blast => "blast",
+            Scene::Water => "water",
         }
     }
 }
@@ -345,6 +350,7 @@ impl Setup {
         let cube = height(CUBE)?;
         let wall = height(WALL)?;
         let spawner = height(SPAWN_BRICK)?;
+        let water = height(WATER)?;
         let mut shooters: Vec<Shooter> = Vec::new();
         let mut shoot = |at: Vec3, target: Vec3, slot: usize| {
             let (yaw, pitch) = aim(at + Vec3::Y * 2.3, target);
@@ -428,6 +434,17 @@ impl Setup {
                     let z = if rockets { 8.0 } else { 14.0 };
                     let aim_at = target + Vec3::new(x * 0.5, wall * 3.0, 0.0);
                     shoot(ahead(x, z) + Vec3::Y * 0.1, aim_at, usize::from(rockets));
+                }
+            }
+            Scene::Water => {
+                for i in 0..64usize {
+                    let (col, row) = ((i % 8) as f32, (i / 8) as f32);
+                    let at = ahead(col * 16.0 - 56.0, 12.0 + row * 16.0);
+                    add(Brick::new(
+                        ContentRef::Resolved(WATER.into()),
+                        [at.x, at.y + water * 0.5, at.z],
+                        builder,
+                    ));
                 }
             }
             Scene::Blast => {
