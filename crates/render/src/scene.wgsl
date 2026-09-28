@@ -48,6 +48,23 @@ struct Shadows {
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
 @group(0) @binding(8) var<uniform> shadows:Shadows;
 @group(0) @binding(9) var shadow_point:sampler;
+// Baked interior light for vertex-lit surfaces (light_volume.rs): RGB
+// premultiplied by the cell's share outside walls. placement: origin, cell
+// size; dimensions, 1 when a volume is bound.
+struct LightVolume { origin_cell:vec4<f32>, dims:vec4<f32> };
+@group(0) @binding(10) var light_volume:texture_3d<f32>;
+@group(0) @binding(11) var<uniform> volume:LightVolume;
+// Mirrors LightVolume::light.
+fn baked_surroundings(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    if volume.dims.w==0.0 {return vec3<f32>(0.0);}
+    let t=(position-volume.origin_cell.xyz)/(volume.origin_cell.w*volume.dims.xyz);
+    if any(t<vec3<f32>(0.0)) || any(t>vec3<f32>(1.0)) {return vec3<f32>(0.0);}
+    let s=textureSampleLevel(light_volume,clamped_exact,t,0.0);
+    if s.a<0.01 {return vec3<f32>(0.0);}
+    let n=normal/max(length(normal),0.0001);
+    let form=0.7+0.3*max(dot(n,vec3<f32>(-0.57735,0.57735,0.57735)),0.0);
+    return s.rgb*(min(s.a*2.0,1.0)/s.a)*form;
+}
 struct ShadowCoord { uv:vec2<f32>, depth:f32, cascade:i32, strength:f32 };
 fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     var out:ShadowCoord;
@@ -366,7 +383,9 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         let facing=max(dot(normal,-direction),0.0)*strength;
         var sun=0.0;
         if facing>0.0 {sun=facing*sun_visibility(v.world_position,normal);}
-        illumination=camera.ambient.rgb+camera.sun_color.rgb*sun
+        // Interior lights exist only in lightmaps; the brighter of the sun
+        // and that baked light, so dark maps' lamps light players and bricks.
+        illumination=max(camera.ambient.rgb+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
             +point_illumination(v.world_position,v.normal)*strength;
         if fx.x==3u {
             // Glow aims the normal at the sun, 1/min(1, sun rgb) long.

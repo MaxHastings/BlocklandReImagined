@@ -1055,6 +1055,7 @@ fn camera_group(
     lights: &wgpu::Buffer,
     filtering: TextureFiltering,
     shadows: &crate::shadow::ShadowMaps,
+    volume: &VolumeBinding,
 ) -> wgpu::BindGroup {
     let filtered = |address_mode| {
         let filter = if filtering.sharp {
@@ -1126,6 +1127,14 @@ fn camera_group(
             binding: 9,
             resource: wgpu::BindingResource::Sampler(&shadows.point),
         },
+        wgpu::BindGroupEntry {
+            binding: 10,
+            resource: wgpu::BindingResource::TextureView(&volume.view),
+        },
+        wgpu::BindGroupEntry {
+            binding: 11,
+            resource: volume.parameters.as_entire_binding(),
+        },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
@@ -1142,6 +1151,67 @@ pub struct ShadowCasters<'a> {
 }
 
 pub const MAX_POINT_LIGHTS: usize = 256;
+
+/// The light volume texture and its placement: origin and cell size, then
+/// dimensions and 1 when enabled (an empty 1x1x1 volume is bound otherwise).
+struct VolumeBinding {
+    view: wgpu::TextureView,
+    parameters: wgpu::Buffer,
+}
+impl VolumeBinding {
+    fn new(
+        device: &wgpu::Device,
+        volume: Option<(&wgpu::Queue, &crate::light_volume::LightVolume)>,
+    ) -> Self {
+        let dims = volume.map_or([1; 3], |(_, v)| v.dims);
+        let size = wgpu::Extent3d {
+            width: dims[0],
+            height: dims[1],
+            depth_or_array_layers: dims[2],
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("light volume"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut parameters = [0f32; 8];
+        if let Some((queue, volume)) = volume {
+            queue.write_texture(
+                texture.as_image_copy(),
+                bytemuck::cast_slice(&volume.texels),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(dims[0] * 4),
+                    rows_per_image: Some(dims[1]),
+                },
+                size,
+            );
+            parameters = [
+                volume.origin[0],
+                volume.origin[1],
+                volume.origin[2],
+                volume.cell,
+                dims[0] as f32,
+                dims[1] as f32,
+                dims[2] as f32,
+                1.0,
+            ];
+        }
+        Self {
+            view: texture.create_view(&Default::default()),
+            parameters: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("light volume placement"),
+                contents: bytemuck::cast_slice(&parameters),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }),
+        }
+    }
+}
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1154,6 +1224,7 @@ pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
+    volume: VolumeBinding,
     camera_layout: wgpu::BindGroupLayout,
     camera_group: wgpu::BindGroup,
     material_layout: wgpu::BindGroupLayout,
@@ -1243,6 +1314,26 @@ impl SceneRenderer {
                     binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -1367,6 +1458,7 @@ impl SceneRenderer {
         let filtering = TextureFiltering::default();
         let shadows =
             crate::shadow::ShadowMaps::new(device, shadows, &material_layout, &vertex_layouts());
+        let volume = VolumeBinding::new(device, None);
         let camera_group = camera_group(
             device,
             &camera_layout,
@@ -1374,6 +1466,7 @@ impl SceneRenderer {
             &light_buffer,
             filtering,
             &shadows,
+            &volume,
         );
         Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1383,6 +1476,7 @@ impl SceneRenderer {
             }),
             camera_buffer,
             light_buffer,
+            volume,
             camera_layout,
             camera_group,
             material_layout,
@@ -1655,8 +1749,40 @@ impl SceneRenderer {
                 &self.light_buffer,
                 filtering,
                 &self.shadows,
+                &self.volume,
             );
         }
+    }
+    /// Baked interior light for vertex-lit surfaces (see `crate::light_volume`);
+    /// None removes it. Rebuilds only the camera bind group.
+    pub fn set_light_volume(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        volume: Option<&crate::light_volume::LightVolume>,
+    ) -> Result<()> {
+        if let Some(volume) = volume {
+            ensure!(
+                volume.dims.iter().all(|d| (1..=2048).contains(d))
+                    && volume.texels.len()
+                        == volume.dims.iter().map(|d| *d as usize).product::<usize>()
+                    && volume.cell.is_finite()
+                    && volume.cell > 0.0
+                    && volume.origin.iter().all(|v| v.is_finite()),
+                "Invalid light volume"
+            );
+        }
+        self.volume = VolumeBinding::new(device, volume.map(|v| (queue, v)));
+        self.camera_group = camera_group(
+            device,
+            &self.camera_layout,
+            &self.camera_buffer,
+            &self.light_buffer,
+            self.filtering,
+            &self.shadows,
+            &self.volume,
+        );
+        Ok(())
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.

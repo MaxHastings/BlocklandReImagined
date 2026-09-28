@@ -3807,3 +3807,64 @@ break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
   package scripts run; the 50 ms bound is unchanged. After: 0 failures in
   60 loaded runs, worst 25 ms. With the per-tick cap switched off the test
   still fails (1.4 s of CPU in one tick).
+## 2026-09-28 Map lamps light players and bricks (client-only, no network)
+
+- Report: on the lamp's bars in BedroomDark a player is a black silhouette.
+  Evidence: neither Bedroom mission has a light object. The lamp is only in
+  `bedroom.dif`'s baked lightmaps, and `lightBulbA` is a breakable `Glass`
+  shape. BedroomDark and KitchenDark author a black sun and ambient, so
+  vertex-lit meshes (players, items, vehicles, bricks, map shapes) got no
+  light anywhere except from player lights. Of the 14 stock missions, none
+  has a point light object; only the four interiors' lightmaps carry lamp
+  light (Bedroom, BedroomDark, Kitchen, KitchenDark, plus Tutorial's).
+- The engine family lit a shape with the lightmap colour of the interior
+  surface under it (`SceneObject::getLightingAmbientColor`, OpenMBG pinned
+  commit). No trace of it was found in `blocklandv20.exe`: its terrain scale
+  constant (255/31) and the commented 0.57735 ambient direction are absent.
+  So v20 itself most likely left players black here. Default chosen for
+  player satisfaction: light them.
+- `bri_render::light_volume` bakes a grid from a map's lightmapped surfaces
+  on a background thread after the map loads (cells of at least 2 units and
+  at most a million: 4.7 units for Bedroom, 2.5 s; Kitchen 3.2 units, 5-6 s).
+  Each cell holds the brighter of the lightmap under it and the mean
+  lightmap over 48 directions, so the Bedroom lamp's lit shade lights a
+  player on its unlit bars. Cells inside walls hold no light, so filtering
+  never pulls light toward black. Vertex-lit surfaces take the brighter of
+  their sun lighting and the volume, with a 0.7 + 0.3 form term. Maps with a
+  bright sun keep their look; nothing gets darker; outdoor maps have no
+  lightmapped surfaces and bake nothing.
+- Breaking the bulb keeps v20's rule (burst, no sound, no respawn until the
+  mission reloads). The room's light stays because it is baked; the volume
+  follows the room, so objects stay consistent with what the walls show.
+  Turning the lamp off would need a lamp-free relight of `bedroom.dif`.
+- Evidence: `cargo test -p bri-render --release --test light_volume`
+  (a lit floor and a lit shade light a stand-in; dark rooms stay black;
+  walls hold no light; the cell budget holds; the shader matches the CPU
+  mirror; a dimmer volume never dims daylight), and with `--ignored`:
+  every stock map bakes in under 30 s with the Bedroom bulb and Kitchen
+  lights lit around them; an offscreen BedroomDark render of a player-sized
+  box on the lamp bars goes from black (0,0,0) to (197,197,197).
+  `cargo test -p bri-render --release`, `cargo test -p bri-client --lib
+  --release`, clippy `-D warnings` on both crates.
+- Follow-up (gate sent 9b37a574 back): the stock-map test's 30 s
+  wall-clock bound failed in the gate's debug build (Bedroom 42 s, every
+  cell casting 49 rays). The bake now casts 24 directions and does it only
+  where needed: it bakes every 8th cell, interpolates blocks that touch no
+  geometry and whose open corners agree within 12/255, halves failing
+  blocks down to 2, and bakes what is left. The one ray down still runs for
+  every cell, because it changes sharply over a small lit block. Casting
+  from every cell remains available (`Baker::bake_every_cell`) as the
+  reference: on a test room with a small lit block, the fast bake casts
+  under half the rays, its mean texel error is under 1/255 and its worst is
+  at most 24/255. Release timings on this PC, one test thread: Bedroom
+  0.39 s (8.0 M rays of 20.6 M), BedroomDark 0.38 s, Kitchen 1.66 s
+  (11.8 M of 19.7 M), Tutorial 0.18 s; before this change they were 2.5 s
+  and 5-6 s. The client starts the bake as soon as the map's scene is read,
+  so it runs alongside the rest of loading. It stores the result under
+  `<state>/light-volumes/<sha256>.lightvolume`, keyed by the bake format,
+  its settings, every lightmapped triangle and lightmap. Later loads read
+  it instead of baking, and bad or foreign files are refused and rebaked.
+  Tests bound work by rays cast, not time: under two thirds of casting from
+  every cell on each stock map. Debug build: `cargo test -p bri-render`
+  passes (69 s including the build); the ignored light-volume map tests
+  pass in 52 s.
