@@ -49,8 +49,9 @@ impl PackageShelf {
     /// List every client-side Add-On of `environment` (loaded from `set`
     /// under `root`). Base game content (entries with a role) is never
     /// offered: a joiner on another build cannot run it anyway, and one on
-    /// the same build already has it. Fails if a package cannot be sent,
-    /// naming it.
+    /// the same build already has it. A package that cannot be sent (a file
+    /// servers never send, say) is left off the shelf, named on stderr:
+    /// joiners play without it rather than the host not hosting.
     pub fn new(root: &Path, set: &PackageSet, environment: &Environment) -> Result<Self> {
         let entry_of = |id: &str| {
             set.packages
@@ -65,14 +66,20 @@ impl PackageShelf {
             }
         }
         let mut shelf = Self {
-            offered,
+            offered: Vec::new(),
             listings: BTreeMap::new(),
             objects: BTreeMap::new(),
         };
-        for package in &shelf.offered {
+        for package in offered {
             let entry = entry_of(&package.id)?;
             let dir = package_dir(root, entry)?;
-            let listing = Listing::of(&dir, package)?;
+            let listing = match Listing::of(&dir, &package) {
+                Ok(listing) => listing,
+                Err(error) => {
+                    eprintln!("Not offering {package} to joiners: {error:#}");
+                    continue;
+                }
+            };
             for file in &listing.files {
                 let path = dir.join(&file.path);
                 shelf
@@ -85,6 +92,7 @@ impl PackageShelf {
                     });
             }
             shelf.listings.insert(package.hash.clone(), listing);
+            shelf.offered.push(package);
         }
         Ok(shelf)
     }
@@ -235,24 +243,33 @@ pub async fn fetch_missing_pinned(
             bail!("Expected the server's package list");
         };
         Environment::validate_refs(&offered)?;
-        let offered: Vec<PackageRef> = offered.into_iter().filter(|p| !have.contains(p)).collect();
+        let mut offered: Vec<PackageRef> =
+            offered.into_iter().filter(|p| !have.contains(p)).collect();
         let mut listings = Vec::new();
+        // One package the server cannot send, or sends unsafely, is left
+        // out; the join goes ahead without it.
+        let mut skipped = Vec::new();
         for package in &offered {
             if cache.installed(package).is_some() {
                 continue;
             }
-            let DownloadReply::Listing(listing) = ask(DownloadRequest::Listing {
+            let listing = match ask(DownloadRequest::Listing {
                 hash: package.hash.clone(),
             })
             .await?
-            else {
-                bail!("Expected the file list of {package}");
+            {
+                DownloadReply::Listing(listing) => listing,
+                _ => bail!("Expected the file list of {package}"),
             };
-            listing
-                .validate(package)
-                .with_context(|| format!("Package {package} from the server is unsafe"))?;
-            listings.push(*listing);
+            match listing.validate(package) {
+                Ok(()) => listings.push(*listing),
+                Err(error) => {
+                    eprintln!("Package {package} from the server is unsafe, left out: {error:#}");
+                    skipped.push(package.clone());
+                }
+            }
         }
+        offered.retain(|p| !skipped.contains(p));
         // Objects are shared between packages; each downloads once.
         let total: u64 = listings
             .iter()
@@ -307,13 +324,20 @@ pub async fn fetch_missing_pinned(
         let _ = cache.prune(bri_package::sync::CACHE_BYTES, &offered);
         let mut fetched = Vec::new();
         for package in offered {
-            let dir = match listings.iter().find(|l| l.package == package) {
+            let installed = match listings.iter().find(|l| l.package == package) {
                 Some(listing) => cache
                     .install(listing)
-                    .with_context(|| format!("Installing package {package}"))?,
+                    .with_context(|| format!("Installing package {package}")),
                 None => cache
                     .installed(&package)
-                    .context("Cached package disappeared")?,
+                    .context("Cached package disappeared"),
+            };
+            let dir = match installed {
+                Ok(dir) => dir,
+                Err(error) => {
+                    eprintln!("Left out: {error:#}");
+                    continue;
+                }
             };
             fetched.push(Fetched {
                 downloaded: downloaded.get(&package.hash).copied().unwrap_or(0),

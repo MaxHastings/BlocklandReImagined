@@ -4181,6 +4181,93 @@ this machine and checks its fields, wheels, threads and that it holds height
 on lift at 45), `cargo test -p bri-client --lib threads_pick`. Not seen in a
 window: the propeller and how the plane and carpet feel need Max's playtest.
 
+## 2026-09-28 Brick debris limit in Options (branch `claude/project-thread-76ojrm`)
+
+Max wanted more knocked-out brick debris, with each player choosing how much
+physics their PC takes. v20's Graphics pane already had a Physics Quality
+section (`OPT_PhysicsQuality0..4`, `$pref::PhysicsQuality`, stock default 1
+High) that this client hid. It is shown again beside Shadow Quality and sets
+the debris limit, stored as v20's own `$pref::Physics::MaxBricks`:
+
+| Physics Quality | Off | Low | Medium | High (default) | Best |
+|---|---|---|---|---|---|
+| Debris bricks at once | 0 | 128 | 256 | 512 | 2048 |
+
+The console's `maxdebris` sets any other limit, 0 to 4096; Options then shows
+no radio selected and keeps it. Off throws nothing: bricks still die and
+vanish. Still client-only, nothing sent, no protocol change.
+
+A CPU budget keeps a weak PC from hitching: the client times its debris work
+each frame (cues, pushes, physics), learns what one moving brick costs on
+this PC (skipping the frame that threw them, which pays for the spawn), and
+keeps only as many as 6 ms pays for. Two frames running over 6 ms, the oldest
+beyond that go. A disconnect keeps what it learned. Bricks removed early
+(over the limit or the budget) no longer pop: they stop colliding and fade
+over 0.35 s where they were heading, unless no frame drew them yet. Also
+fixed: every brick one blast killed re-shoved the debris already flying, so
+a 40-brick blast pushed older debris 40 times, to top speed.
+
+`debris_probe` now costs a big blast at each limit in this thread's CPU
+cycles (`QueryThreadCycleTime`, converted with the run's thread CPU time),
+not wall clock, with work counts (bodies, moving, touching pairs, solid
+surroundings). Golden Gate at its middle, 4.2 GHz, 6 ms budget; "budgeted"
+is a second blast after the first taught the budget:
+
+- Stock rocket (radius 5, 38 bricks): 1-2 ms peak, 0.3-0.5 ms average, any
+  limit.
+- 1024 bricks in one blast: Low 5.6 ms peak / 1.7 ms average over the first
+  second; Medium 7.3 / 2.9; High 9.6 / 5.3; Best raw 20 / 10.4, budgeted
+  12.7 / 5.6 holding 868.
+- 4096 bricks: High 12.7 / 4.2; Best raw 32 / 17.2 (2048 bodies, 3248
+  touching pairs), budgeted 14.9 / 5.8 holding 767; 4096 raw 89 / 51,
+  budgeted 16.2 / 5.9 holding 933.
+
+About 7-10 us per moving brick per frame here, 2 physics steps (120 Hz).
+The first blast of a session can still hitch once at Best on a slow PC,
+before anything is learned.
+
+Evidence: `cargo test -p bri-client --lib brick_debris` (13 passed; new:
+limit and Off, learned budget and shedding, fade-out ghosts, one shove per
+blast), `cargo test -p bri-ui --lib options` (Physics Quality radios, Done,
+console value), clippy on bri-client and bri-ui clean, offscreen
+`ui_runtime_probe` render of the Graphics pane, `cargo run --release -p
+bri-client --bin debris_probe -- <content> <report.json>`. Not seen in a
+window: how blasts look and feel at each preset is Max's playtest.
+## 2026-09-28 Joins no longer refuse over Add-Ons (branch `claude/join-addons`)
+
+lpsroo, on a20, could not join Wilfred's host: "can't join unless I have
+Add-Ons". A join downloaded what the host offered and asked again, and the
+host refused that second join over anything still different. Three things
+reached that refusal: base game content that differs between two installs
+(the host never offers it), an Add-On the host cannot send (a file servers
+never send; the host then could not host at all), and a download or load
+that failed. Max's rule is that a join downloads everything it can and
+never fails over Add-Ons.
+
+Now the join after downloading carries `accept_differences` (protocol 49):
+the host lets the player in with whatever still differs and tells them in
+chat, by package id and version, what they joined without. A package the
+host cannot send is left off its download shelf, not fatal to hosting. A
+download that fails, or a package that is unsafe or fails to install, is
+left out and the join goes ahead; so does a downloaded set that fails to
+load (the join retries with none) or whose bricks, weapons or vehicles fail
+to load in the game (the player joins without them and is told in chat).
+The first join still refuses once, which is what tells the joiner to
+download.
+
+Default picked: let the player in even when base game content differs.
+The host is authoritative; what the joiner lacks may look or behave
+differently, and the chat line says so. The Can't Join dialog now only
+appears against hosts on older builds.
+
+Evidence: `cargo test -p bri-net -p bri-package` (new
+`package_sync::a_join_goes_ahead_without_content_the_host_cannot_send`,
+which first reproduces the a20 refusal after downloading and then joins
+with the downloaded Add-On, the other two named in chat;
+`a_failed_download_joins_without_the_add_ons`), `cargo test -p bri-client
+--test add_on_fallbacks`, and the ignored
+`add_on_join::a_guest_joins_a_host_running_every_repository_add_on`
+(host with every repository Add-On, the showcase ones included).
 ## 2026-09-28 Riding horse players (branch `claude/project-thread-c06rfc`)
 
 Max's a19 playtest: the Horse Ray turned him into a horse and the other
@@ -4339,3 +4426,35 @@ show the new buttons fitting under the list. Not seen in a window: Max's
 playtest over the Internet with a second player.
 Follow-up outside this lane: the brick chain kill (`debris.rs`) still
 removes stranded bricks one at a time with a physics refresh each.
+## 2026-09-28 Guests hammer their own spawn bricks (branch `claude/project-thread-7p7umh`)
+
+Playtest a20 (5b476a991): an Internet guest placed a vehicle spawn, set it to
+the Blockhead Bot, and could not hammer the brick back; the host could.
+
+- Cause: v20 flags the Spawn Point and Vehicle Spawn datablocks
+  `indestructable = 1`, and our `Simulation::remove` refused such bricks for
+  anyone but an administrator (the hammer and wand asked the same rule
+  first). The host is Super Admin, so only guests hit it. In v20 the flag
+  only keeps explosions off a brick: `hammerImage::onHitObject` asks the
+  chain kill and trust, nothing else, and `killBrick` removes any brick.
+  Undoing a planted spawn brick failed the same way for guests.
+- Fix: removal no longer checks the flag; the hammer and player wand no
+  longer ask it. Explosions (`ProjectileData::onExplode` path) and the chain
+  kill still skip indestructible bricks, as before.
+- Ruled out with the loopback test: the brick's owner is the guest, not the
+  host or the map; it stays theirs after they leave and rejoin with the same
+  identity; the swing lands on the brick once the bot walks off (a swing at
+  the bot itself hits the player, as in v20). The client does no hammer
+  prediction. Killing the brick takes its bot or vehicle with it, like
+  `fxDTSBrick::onDeath`, through the existing reconcile.
+
+Evidence: `cargo test -p bri-net --test loopback
+a_guest_hammers_their_own_bot_spawn_brick_after_rejoining` (host plus guest
+over QUIC with default trust; failed before the fix with the brick still
+standing, passes after, and the bot leaves with the brick);
+`cargo test -p bri-sim --test tools
+builders_hammer_and_undo_their_own_indestructible_bricks` (replaces the test
+that asserted the old rule); with content, `cargo test -p bri-sim --test
+vehicles a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it
+-- --ignored` (stock Vehicle Spawn and Jeep, non-admin guest); full
+`cargo test -p bri-sim -p bri-net`. Not seen in a window: Max's playtest.

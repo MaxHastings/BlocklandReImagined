@@ -56,6 +56,26 @@ impl std::fmt::Display for PackagesDiffer {
     }
 }
 impl std::error::Error for PackagesDiffer {}
+/// What a player who joined without some of the server's shared content
+/// is told: which packages, and that what they add may be missing.
+pub fn unavailable_notice(missing: &[bri_package::environment::Mismatch]) -> String {
+    let names: Vec<String> = missing
+        .iter()
+        .map(|m| match m {
+            bri_package::environment::Mismatch::Missing(p)
+            | bri_package::environment::Mismatch::Different { server: p, .. } => {
+                format!("{} {}", p.id, p.version)
+            }
+            bri_package::environment::Mismatch::Extra(p) => {
+                format!("{} {} (yours, not the server's)", p.id, p.version)
+            }
+        })
+        .collect();
+    format!(
+        "You joined without some of this server's content, which could not be downloaded, so what it adds may be missing or behave differently: {}",
+        names.join(", ")
+    )
+}
 
 pub struct Client {
     endpoint: quinn::Endpoint,
@@ -71,6 +91,9 @@ pub struct Client {
     pub certificate: Vec<u8>,
     /// The host's listing from the handshake (its name for saved servers).
     pub listing: Listing,
+    /// Shared packages the server runs that this client joined without:
+    /// never offered (base game content), or their download or load failed.
+    pub unavailable: Vec<bri_package::environment::PackageRef>,
     pub replica: Replica,
     /// A changed map whose bricks are still streaming in.
     changing_map: Option<WorldAssembly>,
@@ -143,6 +166,7 @@ impl Client {
             host,
             None,
             Progress::default(),
+            false,
         )
         .await
     }
@@ -177,7 +201,11 @@ impl Client {
     /// fetched packages and the left-out ones, loads the server's set, and
     /// returns the package list the client now runs; the server checks
     /// that list again. Nothing asks the player: a join downloads what it
-    /// needs, as v20 did. Returns what was fetched and what was left out.
+    /// needs, as v20 did. What the server does not offer, or what fails to
+    /// download or load, is joined without ([`Client::unavailable`]); the
+    /// server tells the player what is missing. `load` may run twice: once
+    /// more with nothing fetched when the fetched packages fail to load.
+    /// Returns what was fetched and what was left out.
     #[allow(clippy::too_many_arguments)]
     pub async fn connect_fetching(
         address: SocketAddr,
@@ -188,7 +216,7 @@ impl Client {
         identity: &ClientIdentity,
         cache: &bri_package::sync::Cache,
         progress: Progress,
-        load: impl FnOnce(
+        mut load: impl FnMut(
             &[crate::packages::Fetched],
             &[bri_package::environment::PackageRef],
         ) -> Result<Vec<bri_package::environment::PackageRef>>,
@@ -237,22 +265,51 @@ impl Client {
                 _ => None,
             })
             .collect();
+        // Whatever cannot be downloaded or loaded is joined without: the
+        // server names it to the player once they are in.
         let fetched =
-            crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)
+            match crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)
                 .await
-                .context("Downloading the server's Add-Ons")?;
-        let packages = load(&fetched, &dropped)?;
-        let client = Self::connect_pinned(
+            {
+                Ok(fetched) => fetched,
+                Err(error) => {
+                    eprintln!("Joining without the server's Add-Ons: {error:#}");
+                    Vec::new()
+                }
+            };
+        let (fetched, packages) = match load(&fetched, &dropped) {
+            Ok(packages) => (fetched, packages),
+            Err(error) if !fetched.is_empty() => {
+                eprintln!("Joining without the server's Add-Ons: {error:#}");
+                (Vec::new(), load(&[], &dropped)?)
+            }
+            Err(error) => return Err(error),
+        };
+        let mut client = Self::connect_inner(
             address,
             pin,
             name,
             packages,
             None,
             host,
-            identity,
+            Some(identity),
             progress,
+            true,
         )
         .await?;
+        client.unavailable = differ
+            .0
+            .iter()
+            .filter_map(|m| match m {
+                bri_package::environment::Mismatch::Missing(server)
+                | bri_package::environment::Mismatch::Different { server, .. }
+                    if m.blocks_join() && !fetched.iter().any(|f| f.package == *server) =>
+                {
+                    Some(server.clone())
+                }
+                _ => None,
+            })
+            .collect();
         Ok((client, fetched, dropped))
     }
     /// Connects like [`Client::connect_with_identity`], reporting the
@@ -302,6 +359,7 @@ impl Client {
             host,
             Some(identity),
             progress,
+            false,
         )
         .await
     }
@@ -315,6 +373,7 @@ impl Client {
         host: Option<ResumeToken>,
         identity: Option<&ClientIdentity>,
         progress: Progress,
+        accept_differences: bool,
     ) -> Result<Self> {
         progress.begin(Stage::Connecting, Unit::Steps, None);
         let Opened {
@@ -333,6 +392,7 @@ impl Client {
             resume,
             host,
             identity: None,
+            accept_differences,
         };
         if let Some(identity) = identity {
             let server_fingerprint: [u8; 32] = sha2::Sha256::digest(&certificate).into();
@@ -468,6 +528,7 @@ impl Client {
             resume,
             certificate,
             listing,
+            unavailable: Vec::new(),
             replica,
             changing_map: None,
             progress,

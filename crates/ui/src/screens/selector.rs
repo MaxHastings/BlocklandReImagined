@@ -90,7 +90,10 @@ impl BrickSelector {
         self.slots.clear();
         let parent = self.view.id("BSD_Window").unwrap_or(self.view.root);
         let layout = CatalogLayout::build(&self.catalog);
-        self.view.add(parent, text("GuiTextProfile", Rect::new(8, 58, 48, 18), "Search:"));
+        self.view.add(
+            parent,
+            text("GuiTextProfile", Rect::new(8, 58, 48, 18), "Search:"),
+        );
         let search = self.view.add(
             parent,
             named(
@@ -341,6 +344,18 @@ impl BrickSelector {
         self.refresh(core);
     }
 
+    fn clear_search(&mut self, core: &mut Core) {
+        core.selector.search.clear();
+        core.selector.clicked_brick = None;
+        if let Some(n) = self.view.id(SEARCH) {
+            self.view.set_text(n, "");
+        }
+        self.view.focus = None;
+        self.fill_results("");
+        self.view.layout(core.logical.0, core.logical.1);
+        self.refresh(core);
+    }
+
     fn favorite(&mut self, number: u8, core: &mut Core) {
         if core.selector.click_fav(number, &core.bricks) {
             core.save_settings();
@@ -380,8 +395,11 @@ impl Screen for BrickSelector {
         }
         if self.view.node(ev.node).ctrl.name.as_deref() == Some(SEARCH) {
             if ev.kind == EventKind::Changed {
-                core.selector.search = self.view.text_of(ev.node);
+                core.selector.search = self.view.edit_text(ev.node);
                 let query = core.selector.search.clone();
+                // Highlight the brick Enter would pick.
+                core.selector.clicked_brick = CatalogLayout::best_match(&self.catalog, &query);
+                core.selector.clicked_slot = None;
                 self.fill_results(&query);
                 self.view.layout(core.logical.0, core.logical.1);
                 self.refresh(core);
@@ -438,12 +456,27 @@ impl Screen for BrickSelector {
         self.refresh(core);
     }
     fn on_key(&mut self, key: Key, mods: Modifiers, core: &mut Core) -> bool {
+        let search = self.view.id(SEARCH);
+        let in_search = self.view.focus.is_some() && self.view.focus == search;
         if key == Key::Escape {
-            core.pop(self.id());
+            // Escape clears a search first, then closes.
+            if !core.selector.search.is_empty() {
+                self.clear_search(core);
+            } else {
+                core.pop(self.id());
+            }
             return true;
         }
-        // Typing in the search box: its keys are text, not shortcuts.
-        if self.view.focus.is_some() && self.view.focus == self.view.id(SEARCH) {
+        if in_search {
+            // Enter takes the best match straight into the hand to build
+            // with, like right-clicking its tile.
+            if matches!(key, Key::Return | Key::NumpadEnter) {
+                if let Some(b) = CatalogLayout::best_match(&self.catalog, &core.selector.search) {
+                    self.buy(core, Some(b));
+                }
+                return true;
+            }
+            // Other keys typed into the box are text, not shortcuts.
             return false;
         }
         if self.request.is_some() || core.is_pending(&Pending::Buy) {
@@ -456,6 +489,15 @@ impl Screen for BrickSelector {
         if buy_binding || matches!(key, Key::Return | Key::NumpadEnter) {
             self.buy(core, None);
             return true;
+        }
+        // Typing a letter anywhere in the selector starts a search; the
+        // character itself follows as text into the focused box.
+        if let (Key::Letter(_), Some(n)) = (key, search)
+            && !(mods.ctrl || mods.alt || mods.cmd)
+        {
+            self.view.focus = Some(n);
+            self.view.state(n).cursor = self.view.edit_text(n).chars().count();
+            return false;
         }
         if mods.is_empty() {
             match key {
@@ -911,6 +953,73 @@ mod tests {
         assert!(ui.core.selector.search.is_empty());
         assert!(!s.view.is_shown(results));
         assert!(s.view.is_shown(s.view.id("BSD_Brick0").unwrap()));
+    }
+
+    /// Type `text` as characters into the selector, feeding its events back.
+    fn type_text(s: &mut BrickSelector, text: &str, core: &mut Core) {
+        for ch in text.chars() {
+            let key = Key::Letter(ch.to_ascii_lowercase());
+            if ch.is_ascii_alphabetic() && s.on_key(key, Modifiers::NONE, core) {
+                continue;
+            }
+            let mut out = Vec::new();
+            s.view.char(ch, &mut out);
+            for ev in out {
+                s.on_event(&ev, core);
+            }
+        }
+    }
+
+    #[test]
+    fn typing_starts_a_search_escape_clears_it_and_enter_takes_the_best_match() {
+        let mut ui = fixture();
+        let mut s = BrickSelector::new(&ui.core);
+        s.on_wake(&mut ui.core);
+        ui.drain_actions();
+        let search = s.view.id(SEARCH).unwrap();
+        assert_eq!(s.view.focus, None);
+        type_text(&mut s, "th", &mut ui.core);
+        assert_eq!(
+            s.view.focus,
+            Some(search),
+            "a letter focuses the search box"
+        );
+        assert_eq!(ui.core.selector.search, "th");
+        assert_eq!(
+            ui.core.selector.clicked_brick,
+            Some(2),
+            "Third is highlighted"
+        );
+        assert!(s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core));
+        assert!(
+            ui.core.selector.search.is_empty(),
+            "Escape clears the search"
+        );
+        assert!(
+            !ui.core
+                .cmds
+                .contains(&StackCmd::Pop(ScreenId::BrickSelector))
+        );
+        assert_eq!(s.view.focus, None);
+        type_text(&mut s, "Econd", &mut ui.core);
+        assert_eq!(ui.core.selector.clicked_brick, Some(1));
+        assert!(s.on_key(Key::Return, Modifiers::NONE, &mut ui.core));
+        let actions = ui.drain_actions();
+        assert!(
+            actions.iter().any(
+                |(_, a)| matches!(a, UiAction::InstantUseBrick { brick } if brick == "brick:1")
+            ),
+            "Enter puts the best match in hand"
+        );
+        let mut ui = fixture();
+        let mut s = BrickSelector::new(&ui.core);
+        s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core);
+        assert!(
+            ui.core
+                .cmds
+                .contains(&StackCmd::Pop(ScreenId::BrickSelector)),
+            "Escape with no search closes"
+        );
     }
 
     #[test]

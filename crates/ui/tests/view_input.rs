@@ -285,3 +285,181 @@ fn scroll_panes_move_their_content_by_wheel_arrows_track_and_thumb() {
     assert_eq!(v.node(scroll).state.scroll_y, 300);
     assert_eq!(v.node(page).rect.y, 10 - 300);
 }
+
+fn typed(v: &mut View, s: &str) {
+    let mut out = Vec::new();
+    for ch in s.chars() {
+        assert!(v.char(ch, &mut out), "an open list takes typed characters");
+    }
+}
+
+fn row_texts(v: &View) -> Vec<String> {
+    v.popup_rows().into_iter().map(|(t, _)| t).collect()
+}
+
+#[test]
+fn popup_filter_ranks_prefix_then_substring_and_pins_none() {
+    use bri_ui::view::filter_popup_items;
+    let items: Vec<(String, i64)> = [
+        " NONE",
+        "Blue Light",
+        "Vehicle Bubbles",
+        "Bubbles",
+        "Vehicle Smoke",
+        "vehicle fire",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, t)| (t.to_string(), i as i64))
+    .collect();
+    assert_eq!(
+        filter_popup_items(&items, ""),
+        vec![0, 1, 2, 3, 4, 5],
+        "empty query keeps the list"
+    );
+    assert_eq!(
+        filter_popup_items(&items, "VEHICLE"),
+        vec![0, 2, 4, 5],
+        "case-insensitive, NONE pinned"
+    );
+    assert_eq!(
+        filter_popup_items(&items, "bub"),
+        vec![0, 3, 2],
+        "prefix matches before substring matches"
+    );
+    assert_eq!(
+        filter_popup_items(&items, "zzz"),
+        vec![0],
+        "only NONE when nothing matches"
+    );
+    let events: Vec<(String, i64)> = ["-", "fakeKillBrick", "fireRelay", "toggle"]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.to_string(), i as i64))
+        .collect();
+    assert_eq!(
+        filter_popup_items(&events, "f"),
+        vec![0, 1, 2],
+        "the event editor's '-' is pinned too"
+    );
+}
+
+#[test]
+fn typing_into_an_open_popup_filters_completes_and_keys_pick() {
+    let pack = Pack::from_parts(UiPack::default(), ".".into());
+    let mut v = View::new(&layout());
+    v.layout(640, 480);
+    let pop = v.id("pop").unwrap();
+    v.state(pop).items = [
+        " NONE",
+        "Blue Light",
+        "Vehicle Bubbles",
+        "Bubbles",
+        "Vehicle Smoke",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, t)| (t.to_string(), i as i64))
+    .collect();
+    v.select(pop, Some(1));
+    let mut out = Vec::new();
+
+    // Opens with an empty query, the full list and the choice highlighted.
+    click(&mut v, &pack, 20, 185);
+    assert_eq!(v.popup_query(), Some(""));
+    assert_eq!(row_texts(&v).len(), 5);
+    assert_eq!(v.popup_highlight().map(|(_, i)| i), Some(1));
+    assert_eq!(v.popup_ghost(), None);
+
+    // Typing filters at once; the top match is highlighted and ghost-completed.
+    typed(&mut v, "veh");
+    assert_eq!(row_texts(&v), [" NONE", "Vehicle Bubbles", "Vehicle Smoke"]);
+    assert_eq!(v.popup_highlight().map(|(_, i)| i), Some(2));
+    assert_eq!(v.popup_ghost().as_deref(), Some("icle Bubbles"));
+    // Down moves to the next match; Up then Up reaches the pinned NONE.
+    v.key(Key::Down, Modifiers::NONE, &mut out);
+    assert_eq!(v.popup_highlight().map(|(_, i)| i), Some(4));
+    assert_eq!(v.popup_ghost().as_deref(), Some("icle Smoke"));
+    v.key(Key::Up, Modifiers::NONE, &mut out);
+    v.key(Key::Up, Modifiers::NONE, &mut out);
+    assert_eq!(v.popup_highlight().map(|(_, i)| i), Some(0));
+    assert_eq!(v.popup_ghost(), None, "NONE does not start with the query");
+
+    // Backspace widens the filter; Escape clears it, then closes.
+    v.key(Key::Backspace, Modifiers::NONE, &mut out);
+    assert_eq!(v.popup_query(), Some("ve"));
+    typed(&mut v, "hicle s");
+    assert_eq!(row_texts(&v), [" NONE", "Vehicle Smoke"]);
+    assert!(v.key(Key::Escape, Modifiers::NONE, &mut out));
+    assert_eq!(v.popup_query(), Some(""), "Escape clears the query first");
+    assert_eq!(row_texts(&v).len(), 5, "empty query restores the list");
+    assert_eq!(v.popup_highlight().map(|(_, i)| i), Some(1));
+    assert!(v.key(Key::Escape, Modifiers::NONE, &mut out));
+    assert_eq!(v.open_popup_node(), None, "a second Escape closes");
+    assert_eq!(v.selected(pop), Some(1), "closing changes nothing");
+
+    // Enter takes the highlighted match.
+    click(&mut v, &pack, 20, 185);
+    typed(&mut v, "BUB");
+    assert_eq!(row_texts(&v), [" NONE", "Bubbles", "Vehicle Bubbles"]);
+    out.clear();
+    assert!(v.key(Key::Return, Modifiers::NONE, &mut out));
+    assert_eq!(v.selected(pop), Some(3));
+    assert!(out.contains(&ViewEvent {
+        node: pop,
+        kind: EventKind::Changed
+    }));
+
+    // Tab accepts too, and a reopened list starts unfiltered.
+    click(&mut v, &pack, 20, 185);
+    assert_eq!(v.popup_query(), Some(""));
+    typed(&mut v, "smo");
+    assert!(v.key(Key::Tab, Modifiers::NONE, &mut out));
+    assert_eq!(v.selected(pop), Some(4));
+
+    // Clicking a row of the filtered list picks that row's item.
+    click(&mut v, &pack, 20, 185);
+    typed(&mut v, "vehicle");
+    let ev = click(&mut v, &pack, 20, 198 + 16 + 4);
+    assert_eq!(
+        v.selected(pop),
+        Some(2),
+        "second shown row, not second item"
+    );
+    assert!(ev.contains(&ViewEvent {
+        node: pop,
+        kind: EventKind::Changed
+    }));
+
+    // Nothing matching: Enter closes without changing the choice.
+    click(&mut v, &pack, 20, 185);
+    typed(&mut v, "zzz");
+    assert_eq!(v.popup_highlight(), None);
+    v.key(Key::Return, Modifiers::NONE, &mut out);
+    assert_eq!(v.open_popup_node(), None);
+    assert_eq!(v.selected(pop), Some(2));
+}
+
+#[test]
+fn popup_filter_stays_fast_on_long_lists() {
+    let pack = Pack::from_parts(UiPack::default(), ".".into());
+    let mut v = View::new(&layout());
+    v.layout(640, 480);
+    let pop = v.id("pop").unwrap();
+    v.state(pop).items = (0..20_000)
+        .map(|i| (format!("Emitter {i:05}"), i))
+        .collect();
+    click(&mut v, &pack, 20, 185);
+    let start = std::time::Instant::now();
+    typed(&mut v, "emitter 1999");
+    assert_eq!(v.popup_rows().len(), 10);
+    assert!(
+        start.elapsed().as_millis() < 500,
+        "12 refilters of 20k rows took {:?}",
+        start.elapsed()
+    );
+    let mut out = Vec::new();
+    v.key(Key::End, Modifiers::NONE, &mut out);
+    v.key(Key::Return, Modifiers::NONE, &mut out);
+    assert_eq!(v.selected(pop), Some(19_999));
+}
