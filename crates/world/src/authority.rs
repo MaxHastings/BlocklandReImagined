@@ -582,4 +582,78 @@ mod tests {
         assert!(server.mutate(1, |b| b.color = 99).is_err());
         assert_eq!(server.state(), &before);
     }
+
+    /// One colour rule: a brick's paint and every event `Color` parameter
+    /// index the world's palette, on every way a brick is admitted.
+    #[test]
+    fn paint_and_event_colours_share_one_palette_rule() {
+        let actor = Actor {
+            owner: 7,
+            ..Default::default()
+        };
+        let mut brick = Brick::new(ContentRef::Resolved("brick/test".into()), [9.0; 3], 7);
+        brick.color = 2;
+        brick.events = vec![row("setColor", 5), row("setColor", 7)];
+        assert_eq!(brick.colors().collect::<Vec<_>>(), [2, 5, 7]);
+        brick.validate(8).unwrap();
+        let error = brick.validate(7).unwrap_err().to_string();
+        assert_eq!(error, "Color 7 outside the 7-color palette");
+        let mut remapped = brick.clone();
+        remapped.recolor(|c| c + 1);
+        assert_eq!(remapped.colors().collect::<Vec<_>>(), [3, 6, 8]);
+
+        let mut authority = Authority::new(fixture()).unwrap();
+        let before = authority.state().clone();
+        let mut outside = brick.clone();
+        outside.events[1] = row("setColor", 8);
+        assert!(
+            authority
+                .plant(&actor, outside.clone(), |_, _| Ok(()))
+                .is_err()
+        );
+        assert!(authority.edit(&actor, 1, Edit::Color(8)).is_err());
+        assert!(
+            authority
+                .edit(&actor, 1, Edit::Events(vec![row("setColor", 8)]))
+                .is_err()
+        );
+        assert!(
+            authority
+                .mutate(1, |b| b.events = vec![row("setColor", 8)])
+                .is_err()
+        );
+        assert!(
+            authority
+                .keep_unloaded(&before.palette, vec![outside])
+                .is_err()
+        );
+        assert_eq!(authority.state(), &before);
+        authority
+            .edit(&actor, 1, Edit::Events(vec![row("setColor", 7)]))
+            .unwrap();
+        authority.plant(&actor, brick, |_, _| Ok(())).unwrap();
+    }
+
+    /// Loading a save remaps its event colours with its paint, into the
+    /// merged palette.
+    #[test]
+    fn loading_a_save_remaps_event_colours_with_paint() {
+        let target = fixture();
+        let mut saved = World::new("save".into(), "map/test".into(), vec![[0.5; 4], [1.0; 4]]);
+        let mut brick = Brick::new(ContentRef::Resolved("brick/test".into()), [20.0; 3], 7);
+        brick.events = vec![row("setColor", 0), row("setColor", 1)];
+        saved.bricks.insert(1, brick);
+        saved.next_brick_id = 2;
+        let plan = crate::build::LoadPlan::prepare(
+            &target,
+            crate::build::SavedBuild::new(saved),
+            7,
+            false,
+            9,
+        )
+        .unwrap();
+        // [0.5; 4] is new (index 8); [1.0; 4] is the world's colour 0.
+        let loaded = plan.bricks().values().next().unwrap();
+        assert_eq!(loaded.colors().collect::<Vec<_>>(), [8, 8, 0]);
+    }
 }
