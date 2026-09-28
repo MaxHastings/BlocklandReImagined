@@ -65,6 +65,16 @@ every 60 s into its state directory and keeps 3; passing the newest as its
 on the tick thread; bricks are a persistent map, so that clone shares them
 rather than copying. The windowed client host does not autosave yet.
 
+Every world a server accepts can be saved and streamed (stress campaign W7).
+`Brick::stored_bound` is an allocation-free upper bound on a brick's JSON save
+entry, escapes included, and so on its network encoding. `Authority` keeps the
+sum over the world's bricks and refuses any plant, edit, event mutation or
+build load that would take it past `MAX_STORED_BYTES` (the 1 GiB
+`persistence::MAX_SAVE_BYTES` less 64 MiB for owners and the rest), naming the
+budget. Shrinking is always allowed, so a world loaded over the budget can
+still be trimmed. Ordinary bricks take about 450 bytes, so `MAX_BRICKS` of
+them fit; bricks carrying large event lists reach the budget sooner.
+
 ## Original saves
 
 ```powershell

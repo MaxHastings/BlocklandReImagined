@@ -29,7 +29,9 @@ The runtime dependency graph contains no Torque readers.
   bytes so any encodable one fits a minimum-MTU QUIC path.
 - World transfer: a Welcome or MapChanged checkpoint carries everything but the
   bricks, plus `world_bricks`, the count that follows as `WorldChunk` frames of
-  at most 4,096 bricks. The authority loop takes only an O(1) snapshot of the
+  at most 4,096 bricks and 8 MiB by `Brick::stored_bound` (stress campaign
+  W7: a count alone let about 30 event-heavy bricks overflow a frame, so no
+  client could join). The authority loop takes only an O(1) snapshot of the
   persistent brick map (`bri_world::Bricks`, an `imbl::OrdMap`); stripping
   source records, chunking and compression run on a blocking thread, and the
   peer's writer sends the frames at that point in its ordered stream. Clients

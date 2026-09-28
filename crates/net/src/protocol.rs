@@ -103,7 +103,10 @@ impl Hello {
             "Invalid content identity"
         );
         if let Some(proof) = &self.identity {
-            anyhow::ensure!(proof.signature.len() == 64, "Invalid identity signature length");
+            anyhow::ensure!(
+                proof.signature.len() == 64,
+                "Invalid identity signature length"
+            );
         }
         Ok(())
     }
@@ -274,9 +277,13 @@ impl Checkpoint {
         (checkpoint, world.bricks.clone())
     }
 }
-/// Bricks per `WorldChunk` frame. A world of any size streams as bounded
+/// Most bricks per `WorldChunk` frame. A world of any size streams as bounded
 /// frames after its checkpoint instead of one monolithic message.
 pub const WORLD_CHUNK: usize = 4096;
+/// Most [`bri_world::Brick::stored_bound`] bytes per `WorldChunk`: well inside
+/// a frame however heavy each brick is, since a count alone does not bound
+/// bytes (a few thousand event-laden bricks are gigabytes).
+pub const WORLD_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 /// A checkpoint message (Welcome or MapChanged) and the bricks that follow it.
 pub struct WorldTransfer {
     pub head: Message,
@@ -288,13 +295,19 @@ impl WorldTransfer {
     pub fn encode(self) -> anyhow::Result<Vec<Vec<u8>>> {
         let mut frames = vec![crate::codec::encode(&self.head)?];
         let mut chunk = Vec::with_capacity(WORLD_CHUNK);
+        let mut bytes = 0;
         for (id, brick) in &self.bricks {
-            chunk.push((*id, public_brick(brick)));
-            if chunk.len() == WORLD_CHUNK {
+            let brick = public_brick(brick);
+            let size = brick.stored_bound();
+            if !chunk.is_empty() && (chunk.len() == WORLD_CHUNK || bytes + size > WORLD_CHUNK_BYTES)
+            {
                 frames.push(crate::codec::encode(&Message::WorldChunk(std::mem::take(
                     &mut chunk,
                 )))?);
+                bytes = 0;
             }
+            bytes += size;
+            chunk.push((*id, brick));
         }
         if !chunk.is_empty() {
             frames.push(crate::codec::encode(&Message::WorldChunk(chunk))?);
@@ -320,8 +333,7 @@ impl WorldAssembly {
         self.checkpoint.world.bricks.len() as u64 == self.checkpoint.world_bricks
     }
     pub fn add(&mut self, chunk: Vec<(BrickId, Brick)>) -> anyhow::Result<()> {
-        let remaining =
-            self.checkpoint.world_bricks - self.checkpoint.world.bricks.len() as u64;
+        let remaining = self.checkpoint.world_bricks - self.checkpoint.world.bricks.len() as u64;
         anyhow::ensure!(
             !chunk.is_empty() && chunk.len() <= WORLD_CHUNK && chunk.len() as u64 <= remaining,
             "Invalid world chunk"

@@ -5,7 +5,9 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-pub const MAX_SAVE_BYTES: u64 = 512 * 1024 * 1024;
+/// Large enough for [`crate::MAX_BRICKS`] ordinary bricks (about 450 bytes
+/// each); admission keeps every world under it ([`crate::MAX_STORED_BYTES`]).
+pub const MAX_SAVE_BYTES: u64 = 1024 * 1024 * 1024;
 pub fn decode(bytes: &[u8]) -> Result<World> {
     ensure!(
         bytes.len() as u64 <= MAX_SAVE_BYTES,

@@ -16,6 +16,15 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 
 pub fn session() -> Session {
+    session_with(World::new(
+        "Stress".into(),
+        "fixture".into(),
+        vec![[1.0; 4], [0.0; 4]],
+    ))
+}
+
+/// The synthetic session over `world`, whose bricks use the `plate` definition.
+pub fn session_with(world: World) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -54,7 +63,7 @@ pub fn session() -> Session {
     };
     let mut session = Session::new(
         Simulation::new(
-            World::new("Stress".into(), "fixture".into(), vec![[1.0; 4], [0.0; 4]]),
+            world,
             defs,
             vec![
                 ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
