@@ -69,6 +69,8 @@ pub struct Vitals {
     pub control: super::ControlObject,
     /// Typing in the chat box (`MsgStartTalking`).
     pub talking: bool,
+    /// Seated by the sit emote.
+    pub sitting: bool,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -332,6 +334,7 @@ impl Session {
                         mounted: self.mounted(*owner),
                         control: peer.control,
                         talking: peer.talking,
+                        sitting: peer.sitting,
                     },
                 )
             })

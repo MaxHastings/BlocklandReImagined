@@ -509,11 +509,6 @@ impl App {
                 self.weapon_animation_drops = self.weapon_animation_drops.saturating_add(1);
             }
         }
-        if let bri_sim::presentation::CueKind::Emote { actor, name } = &cue.kind
-            && name == "sit"
-        {
-            self.combat.sitting.insert(*actor);
-        }
         self.audio.cue(&cue);
         // The engine explosion operation looks like v20's rocket blast.
         let cue = match &cue.kind {
@@ -1516,7 +1511,6 @@ impl App {
                 c.died_at
                     .entry(*owner)
                     .or_insert_with(std::time::Instant::now);
-                c.sitting.remove(owner);
             } else {
                 c.died_at.remove(owner);
             }
@@ -1532,11 +1526,6 @@ impl App {
                     },
                     bri_audio::Placement::World(pose.player.feet),
                 );
-            }
-            if let Some(pose) = view.poses.get(owner)
-                && glam::Vec3::from(pose.player.velocity).length() > 0.5
-            {
-                c.sitting.remove(owner);
             }
         }
         c.died_at.retain(|owner, _| view.vitals.contains_key(owner));
@@ -3538,7 +3527,6 @@ struct CombatPresentation {
     countdown: Option<u64>,
     died_at: std::collections::BTreeMap<bri_world::OwnerId, std::time::Instant>,
     lights: std::collections::BTreeMap<bri_world::OwnerId, bool>,
-    sitting: std::collections::BTreeSet<bri_world::OwnerId>,
     minigame_revision: u64,
     minigame_state: Option<MiniGameUiState>,
     /// Energy bar fraction last shown, in hundredths.
@@ -4145,7 +4133,7 @@ impl PlatformApp for App {
                     gesture: self.avatar_gestures.get(owner).cloned().filter(|_| !dead),
                     dead,
                     sitting: !dead
-                        && (self.combat.sitting.contains(owner)
+                        && (view.vitals.get(owner).is_some_and(|v| v.sitting)
                             || view
                                 .vitals
                                 .get(owner)

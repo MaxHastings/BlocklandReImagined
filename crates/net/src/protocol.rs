@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 34: `Challenge` carries the server `Listing` (join list and reachability probes).
 /// 35: player archetypes, control targets, block looks, per-viewer package
 /// state (`PackageState`), typed package refusals and package downloads.
-pub const VERSION: u32 = 35;
+/// 36: `Vitals::sitting`, the sit emote as replicated state.
+pub const VERSION: u32 = 36;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

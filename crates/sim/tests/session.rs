@@ -1397,3 +1397,25 @@ fn kicked_and_banned_players_are_told_why_and_for_how_long() {
     );
     assert!(say(DisconnectReason::FailedPasswords).contains("wrong admin passwords"));
 }
+
+#[test]
+fn sitting_is_replicated_state_that_moving_ends() {
+    let mut s = session();
+    let owner = s
+        .join("Sitter".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    s.command(owner, 1, Command::Emote("sit".into())).unwrap();
+    s.step().unwrap();
+    // Vitals reach every client, including one who joins after the emote.
+    let late = s
+        .join("Latecomer".into(), Vec3::new(4.0, 0.05, 0.0), false)
+        .unwrap();
+    s.step().unwrap();
+    assert!(s.vitals()[&owner].sitting);
+    assert!(!s.vitals()[&late].sitting);
+    walk(&mut s, owner, 1, 30);
+    assert!(!s.vitals()[&owner].sitting);
+}

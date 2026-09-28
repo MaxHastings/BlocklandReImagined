@@ -431,6 +431,9 @@ struct Peer {
     tutorial: tutorial::Progress,
     /// `%client.isTalking`.
     talking: bool,
+    /// Seated by the sit emote until they move, mount or die. Lasting state,
+    /// so it replicates in vitals and late joiners see it.
+    sitting: bool,
     /// `lastActivateTime` and `activateLevel` for the activate swing.
     last_activate: Option<u64>,
     activate_level: u32,
@@ -748,6 +751,7 @@ impl Session {
                 tutorial: Default::default(),
                 temp_color: None,
                 talking: false,
+                sitting: false,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -899,6 +903,7 @@ impl Session {
                 tutorial: Default::default(),
                 temp_color: None,
                 talking: false,
+                sitting: false,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -1207,6 +1212,9 @@ impl Session {
             Command::Emote(name) => {
                 ensure!(EMOTES.contains(&name.as_str()), "Unknown emote");
                 ensure!(peer.combat.alive, "Dead players cannot emote");
+                if name == "sit" {
+                    peer.sitting = true;
+                }
                 let feet = peer.player.state().feet;
                 // `serverCmdAlarm`: the emote is an AlarmProjectile at the eye.
                 if name == "alarm" {
@@ -1488,6 +1496,9 @@ impl Session {
         let mut entity_moves = Vec::new();
         let liquids = self.simulation.liquids();
         for (&owner, peer) in self.peers.iter_mut() {
+            if !peer.combat.alive || self.vehicles.is_mounted(owner) {
+                peer.sitting = false;
+            }
             if self.vehicles.is_mounted(owner) {
                 peer.input_budget = (peer.input_budget + 1.0).min(combat_input_burst());
                 // Seated players drive; consume inputs without the walking motor.
@@ -1555,6 +1566,9 @@ impl Session {
                     &liquids,
                 )?;
                 let state = peer.player.state();
+                if Vec3::from(state.velocity).length() > 0.5 {
+                    peer.sitting = false;
+                }
                 let wet = water_surface(&liquids, state, peer.player.tuning());
                 if let Some(surface) = wet.or(wet_before).filter(|_| wet.is_some() != wet_before.is_some()) {
                     let speed = Vec3::from(state.velocity).length();
