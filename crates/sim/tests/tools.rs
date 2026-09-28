@@ -405,13 +405,23 @@ fn aim(s: &mut Session, owner: u64, _seq: u64, target: [f32; 3]) {
         .into_iter()
         .find(|p| p.owner == owner)
         .unwrap();
-    let d = Vec3::from(target) - p.eye(&PlayerTuning::default());
+    // The Eye node sits ahead of the body along its yaw, so face the target
+    // from the feet first and pitch from the eye that yaw puts in place;
+    // aiming from the current eye flips a target under the player behind it.
+    let flat = Vec3::from(target) - Vec3::from(p.feet);
+    let yaw = if flat.x.abs() + flat.z.abs() > 1e-4 {
+        flat.x.atan2(-flat.z)
+    } else {
+        p.yaw
+    };
+    let facing = bri_sim::player::PlayerState { yaw, ..p.clone() };
+    let d = Vec3::from(target) - facing.eye(&PlayerTuning::default());
     let sequence = move_sequence(s);
     s.movement(
         owner,
         sequence,
         MoveInput {
-            yaw: d.x.atan2(-d.z),
+            yaw,
             pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()),
             ..Default::default()
         },
@@ -892,11 +902,16 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
 
 #[test]
 fn hammer_ranges_and_map_occlusion_are_authoritative() {
+    // `hammerImage::onFire` casts from `getEyePoint()` (the m.dts Eye node,
+    // 2.156 above the feet) 5 units, or 5.5 looking steeply down. Straight
+    // down onto a plate (top 0.2) reaches from feet up to about 3.54. The
+    // node is 0.141 ahead of the body, so the player stands that far back to
+    // look straight down on the plate.
     for (position, spawn, succeeds) in [
         ([0.5, 2.5, -4.75], Vec3::new(0.5, 0.1, 0.0), true),
         ([0.5, 2.5, -5.75], Vec3::new(0.5, 0.1, 0.0), false),
-        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.1, -0.25), true),
-        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.4, -0.25), false),
+        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.3, -0.109), true),
+        ([0.5, 0.1, -0.25], Vec3::new(0.5, 3.8, -0.109), false),
     ] {
         let mut brick = Brick::new(ContentRef::Resolved("plate".into()), position, 0);
         brick.raycast = false;
