@@ -112,9 +112,12 @@ fn a_player_starts_single_player_and_walks_using_only_clicks_and_keys() -> Resul
         play(&mut app, &idle)?;
     }
     eprintln!("loading screen showed {statuses:?}");
+    // Frames sample the screen, so only the long map load is certain to be
+    // seen; a small local world downloads between two frames. The download's
+    // brick counts are pinned by the net loopback test
+    // (join_reports_the_world_download_in_bricks).
     ensure!(
-        statuses.iter().any(|s| s.starts_with("LOADING MAP"))
-            && statuses.iter().any(|s| s.starts_with("RECEIVING WORLD")),
+        statuses.iter().any(|s| s.starts_with("LOADING MAP")),
         "Loading screen stages: {statuses:?}"
     );
     // Let the spawn settle before measuring movement.
