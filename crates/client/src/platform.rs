@@ -350,6 +350,8 @@ struct Runner {
     config: PlatformConfig,
     /// Recent GPU device losses, to stop retrying a GPU that keeps failing.
     gpu_losses: Vec<Instant>,
+    /// `BRI_RECORD_INPUT=<file>`: every input and tick, for replay tests.
+    recorder: Option<crate::playback::Recorder>,
     window: Option<Arc<Window>>,
     graphics: Option<Graphics>,
     focused: bool,
@@ -383,6 +385,11 @@ pub fn run(config: PlatformConfig) -> Result<()> {
     let windowed = PhysicalSize::new(config.size.0, config.size.1);
     let mut runner = Runner {
         gpu_losses: Vec::new(),
+        recorder: std::env::var_os("BRI_RECORD_INPUT").and_then(|path| {
+            crate::playback::Recorder::create(std::path::Path::new(&path))
+                .map_err(|error| bri_console::warn(format!("{error:#}")))
+                .ok()
+        }),
         config,
         window: None,
         graphics: None,
@@ -421,6 +428,9 @@ impl Runner {
         event_loop.exit();
     }
     fn input(&mut self, event: InputEvent) {
+        if let Some(recorder) = &mut self.recorder {
+            recorder.event(event);
+        }
         self.config.app.ui_mut().handle_input(event);
     }
     fn focused_text(&self) -> bool {
@@ -1203,6 +1213,12 @@ impl ApplicationHandler for Runner {
                 .app
                 .ui_mut()
                 .update(elapsed.as_millis().min(250) as u64);
+            if let Some(recorder) = &mut self.recorder
+                && let Err(error) = recorder.frame(elapsed)
+            {
+                bri_console::warn(format!("Input recording stopped: {error:#}"));
+                self.recorder = None;
+            }
             if let Err(e) = self.config.app.tick(elapsed) {
                 self.fail(event_loop, e);
                 return;

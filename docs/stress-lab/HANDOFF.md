@@ -370,6 +370,21 @@ game with different assumptions uses it.
   pickup) and more event hooks in W8's (leave, brick planted) when a second
   mode needs each.
 
+### Next steps
+
+1. Draw block faces (E32): decode package textures into scene images and
+   give a block brick's six surfaces overlay materials, the way prints get
+   theirs (`world_scene::append_world_brick`); pick a flipbook's frame from
+   the time since the brick's state changed and rebuild only that chunk.
+2. A final saturation round: one more experiment per seam family,
+   including the tier-2 cases above once sandboxed client code exists, and
+   fog of war for entities (W13's audience rule applied to `EntityInfo`).
+3. Predict a driven entity on its driver's client like a player (E27), by
+   replicating its body state per tick as poses are.
+4. Animate package box models (a walk bob, a turn), and let archetypes pick
+   v20 shapes other than the Blockhead and horse.
+5. The windowed host's autosave (W2) lands with the first impressions work.
+
 ### Saturation evidence
 
 Max's criterion: deliberately orthogonal experiments across nine seam

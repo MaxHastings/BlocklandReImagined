@@ -1219,9 +1219,11 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
     let owner = a.owner;
     let token = a.resume.clone();
     let mut appearance = package.defaults.clone();
-    appearance.parts.insert("hat".into(), 1);
-    appearance.parts.insert("accent".into(), 1);
-    appearance.parts.insert("hip".into(), 1);
+    appearance
+        .parts
+        .insert("hat".into(), package.parts["hat"][1].clone());
+    appearance.parts.insert("accent".into(), "visor".into());
+    appearance.parts.insert("hip".into(), "skirthip".into());
     appearance.face = package.faces[1].clone();
     appearance
         .colors
@@ -1245,7 +1247,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
     invalid.face = "../../outside.png".into();
     assert!(a.command(Command::Avatar(invalid)).await.is_err());
     let mut invalid = appearance.clone();
-    invalid.parts.insert("hat".into(), 63);
+    invalid.parts.insert("hat".into(), "nosuchhat".into());
     assert!(a.command(Command::Avatar(invalid)).await.is_err());
     let mut invalid = appearance.clone();
     invalid.colors.insert("lleg".into(), [1.1, 0.0, 0.0, 1.0]);

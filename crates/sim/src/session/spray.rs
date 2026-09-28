@@ -47,8 +47,8 @@ impl TempColor {
 /// `SetTempColor`'s height bands above the feet, as avatar colour slots.
 /// Packs, hats and accents only colour when worn. The chest band also
 /// removes the decal.
-fn band(height: f32, parts: &BTreeMap<String, usize>) -> (Vec<&'static str>, bool) {
-    let worn = |slot: &&str| parts.get(*slot).is_some_and(|i| *i > 0);
+fn band(height: f32, parts: &BTreeMap<String, String>) -> (Vec<&'static str>, bool) {
+    let worn = |slot: &&str| parts.get(*slot).is_some_and(|p| !p.eq_ignore_ascii_case("none"));
     if height < 0.63 {
         (vec!["lleg", "rleg"], false)
     } else if height < 1.04 {
@@ -165,12 +165,12 @@ mod tests {
 
     #[test]
     fn bands_follow_set_temp_color_heights() {
-        let mut parts = BTreeMap::from([("pack".to_string(), 0), ("hat".to_string(), 2)]);
+        let mut parts = BTreeMap::from([("pack".to_string(), "none".to_string()), ("hat".to_string(), "helmet".to_string())]);
         assert_eq!(band(0.3, &parts), (vec!["lleg", "rleg"], false));
         assert_eq!(band(0.8, &parts), (vec!["hip", "lhand", "rhand"], false));
         assert_eq!(band(1.5, &parts), (vec!["torso", "larm", "rarm"], true));
         assert_eq!(band(1.9, &parts), (vec![], false));
-        parts.insert("secondpack".into(), 1);
+        parts.insert("secondpack".into(), "quiver".into());
         assert_eq!(band(1.9, &parts), (vec!["secondpack"], false));
         assert_eq!(band(2.2, &parts), (vec!["head"], false));
         assert_eq!(band(2.5, &parts), (vec!["hat"], false));

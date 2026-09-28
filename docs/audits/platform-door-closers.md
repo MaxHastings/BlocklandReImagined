@@ -22,14 +22,28 @@ that landed it.
   package; client-only differences are told to the player instead. The old
   fingerprint chain in `content_identity.rs` is removed.
 - **One id grammar (contract 4):** `namespace:kind/name` defined in
-  `bri_package::id`, shared with the mod platform lane. Moving existing content
-  ids onto it: pending.
+  `bri_package::id`, shared with the mod platform lane, with `id::native` and
+  `id::Minter` for converted names (including `v20:file/<path>`). New content
+  uses it. Renaming the base packs' three legacy spellings (about 400 code
+  literals, 12 importers, pack regeneration) is deferred by the coordinator to
+  the vanilla-as-packages phase, together with multi-pack loading; the survey
+  and plan are in `docs/architecture/packages.md`.
 - **Owner identity (contract 3, a):** fixed. `World.owners` maps each owner
   number to the builder's principal and last name; a returning principal gets
   its number back on join, saved builds carry the table instead of an opaque
   session scope, and loads give recorded builders their bricks on any server.
   Trust now also covers offline builders in the table.
-- **Avatar part names (contract 3):** pending.
+- **Partial load (contract 3):** fixed. A world or build brick whose
+  definition this server lacks no longer refuses the whole load: it moves to
+  `World.unloaded`, kept exactly and saved again (and offered again when a
+  build is loaded elsewhere), and the load reports "N bricks were not loaded
+  ..." by definition in chat, at map load and in `bri-server`'s log.
+- **Avatar part names (contract 3):** fixed. `Appearance.parts` (saved,
+  sent and replicated) and the settings file's avatar prefs name the chosen
+  part (`hat: "helmet"`, `accent: "visor"`). The avatar pack keeps its
+  defaults as v20-style positions in its own lists and names them on load;
+  v20 prefs are named once when imported. A saved part the pack no longer
+  has falls back to the pack default instead of failing the avatar.
 
 ## How to read the priorities
 

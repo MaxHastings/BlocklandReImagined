@@ -125,6 +125,51 @@ impl ContentId {
     }
 }
 
+/// Mint an id for content converted from another format, whose names
+/// (Torque datablock names, virtual file paths) do not follow the grammar:
+/// lowercase, `\` becomes `/`, and every other character outside
+/// `a-z 0-9 _ - . /` becomes `_` (`64x cube.blb` is `64x_cube.blb`,
+/// `horsearmor::activate` is `horsearmor__activate`). Files referenced by
+/// path use the kind `file` (`v20:file/add-ons/brick_large_cubes/64x_cube.blb`).
+/// Use [`Minter`] when minting many ids, so two sources that map to the same
+/// id are refused instead of silently merged.
+pub fn native(namespace: &str, kind: &str, source: &str) -> Result<ContentId, String> {
+    let name: String = source
+        .trim()
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            '\\' => '/',
+            c @ ('a'..='z' | '0'..='9' | '_' | '-' | '.' | '/') => c,
+            _ => '_',
+        })
+        .collect();
+    ContentId::parse(&format!("{namespace}:{kind}/{}", name.trim_matches('/')))
+        .map_err(|problem| format!("cannot name `{source}` as {namespace}:{kind}: {problem}"))
+}
+
+/// Mints ids with [`native`] and refuses two different sources that map to
+/// the same id (`Brick 2x2` and `brick_2x2`).
+#[derive(Debug, Default)]
+pub struct Minter {
+    sources: std::collections::BTreeMap<ContentId, String>,
+}
+
+impl Minter {
+    pub fn mint(&mut self, namespace: &str, kind: &str, source: &str) -> Result<ContentId, String> {
+        let id = native(namespace, kind, source)?;
+        match self.sources.get(&id) {
+            Some(first) if first != source => Err(format!(
+                "`{source}` and `{first}` would both be named {id}; rename one"
+            )),
+            Some(_) => Ok(id),
+            None => {
+                self.sources.insert(id.clone(), source.to_string());
+                Ok(id)
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for ContentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}/{}", self.namespace, self.kind, self.name)
@@ -263,6 +308,30 @@ mod tests {
         assert!(ContentId::parse("creeper:creature/Big").is_err());
         assert!(ContentId::parse("creeper:creature/../x").is_err());
         assert!(ContentId::parse("creeper:creature/a//b").is_err());
+    }
+
+    #[test]
+    fn converted_names_are_mapped_into_the_grammar() {
+        let id = |kind, source| native("v20", kind, source).unwrap().to_string();
+        assert_eq!(id("brick", "brick1x1Data"), "v20:brick/brick1x1data");
+        assert_eq!(id("weapon", "GunItem"), "v20:weapon/gunitem");
+        assert_eq!(
+            id("file", "Add-Ons\\Brick_Large_Cubes\\64x Cube.blb"),
+            "v20:file/add-ons/brick_large_cubes/64x_cube.blb"
+        );
+        assert_eq!(id("vehicle", "horsearmor::activate"), "v20:vehicle/horsearmor__activate");
+        assert_eq!(
+            id("sound", "rocketExplodeSound (alternate definition)"),
+            "v20:sound/rocketexplodesound__alternate_definition_"
+        );
+        assert!(native("v20", "file", "a//b").is_err());
+        assert!(native("v20", "file", &"x".repeat(65)).is_err());
+        let mut minter = Minter::default();
+        assert!(minter.mint("v20", "brick", "Brick 2x2").is_ok());
+        assert!(minter.mint("v20", "brick", "Brick 2x2").is_ok(), "same source twice");
+        let clash = minter.mint("v20", "brick", "brick_2x2").unwrap_err();
+        assert!(clash.contains("Brick 2x2"), "{clash}");
+        assert!(minter.mint("addon", "brick", "brick_2x2").is_ok(), "other namespace");
     }
 
     #[test]

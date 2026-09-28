@@ -24,7 +24,8 @@ fn definitions() -> Definitions {
         id: CUBE.into(),
         footprint_studs: [4, 4],
         height_plates: 10,
-        attachment_rows: vec!["bbbb".into(); 4],
+        // One row per stud row per plate layer: 4 deep x 10 plates.
+        attachment_rows: vec!["bbbb".into(); 40],
         collision_boxes: vec![],
         needs_external_collision: false,
         coverage: None,

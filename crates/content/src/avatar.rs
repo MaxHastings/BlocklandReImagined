@@ -24,10 +24,13 @@ pub struct Source {
     pub constructor_line: usize,
 }
 
+/// A player's avatar, as saved and sent. Parts are named by the part chosen
+/// (`hat: "helmet"`, `accent: "visor"`), never by position in the pack's
+/// lists, so adding or reordering parts keeps everyone's avatar.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Appearance {
-    pub parts: BTreeMap<String, usize>,
+    pub parts: BTreeMap<String, String>,
     pub colors: BTreeMap<String, [f32; 4]>,
     pub face: String,
     pub decal: String,
@@ -39,7 +42,9 @@ impl Appearance {
                 && self.colors.len() <= 13
                 && self.face.len() <= 256
                 && self.decal.len() <= 256
-                && self.parts.iter().all(|(k, v)| k.len() <= 32 && *v < 64)
+                && self.parts.iter().all(|(k, v)| {
+                    k.len() <= 32 && !v.is_empty() && v.len() <= 64 && v.is_ascii()
+                })
                 && self.colors.iter().all(|(k, c)| k.len() <= 32
                     && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))),
             "Invalid avatar appearance bounds"
@@ -57,7 +62,10 @@ pub struct Texture {
     pub height: u32,
 }
 
+/// The avatar pack. Its file stores the default appearance the way v20's
+/// prefs do, as positions in its own part lists; loading names them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "PackageFile", into = "PackageFile")]
 pub struct Package {
     pub schema_version: u32,
     pub id: String,
@@ -70,6 +78,111 @@ pub struct Package {
     pub surfaces: BTreeMap<String, String>,
     pub textures: BTreeMap<String, Texture>,
     pub defaults: Appearance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PackageFile {
+    schema_version: u32,
+    id: String,
+    rig: String,
+    rig_sha256: String,
+    parts: BTreeMap<String, Vec<String>>,
+    accents_allowed: BTreeMap<String, Vec<String>>,
+    faces: Vec<String>,
+    decals: Vec<String>,
+    surfaces: BTreeMap<String, String>,
+    textures: BTreeMap<String, Texture>,
+    defaults: PackDefaults,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PackDefaults {
+    parts: BTreeMap<String, usize>,
+    colors: BTreeMap<String, [f32; 4]>,
+    face: String,
+    decal: String,
+}
+impl TryFrom<PackageFile> for Package {
+    type Error = anyhow::Error;
+    fn try_from(file: PackageFile) -> Result<Self> {
+        let hat = file
+            .defaults
+            .parts
+            .get("hat")
+            .and_then(|i| file.parts.get("hat")?.get(*i))
+            .map(|h| h.to_ascii_lowercase())
+            .unwrap_or_default();
+        let mut parts = BTreeMap::new();
+        for (slot, index) in &file.defaults.parts {
+            let choices = if slot == "accent" {
+                file.accents_allowed.get(&hat)
+            } else {
+                file.parts.get(slot)
+            };
+            let name = match choices.and_then(|c| c.get(*index)) {
+                Some(name) => name.to_ascii_lowercase(),
+                None if slot == "accent" && *index == 0 => "none".into(),
+                None => anyhow::bail!("Avatar pack default {slot}:{index} names no part"),
+            };
+            parts.insert(slot.clone(), name);
+        }
+        Ok(Self {
+            schema_version: file.schema_version,
+            id: file.id,
+            rig: file.rig,
+            rig_sha256: file.rig_sha256,
+            parts: file.parts,
+            accents_allowed: file.accents_allowed,
+            faces: file.faces,
+            decals: file.decals,
+            surfaces: file.surfaces,
+            textures: file.textures,
+            defaults: Appearance {
+                parts,
+                colors: file.defaults.colors,
+                face: file.defaults.face,
+                decal: file.defaults.decal,
+            },
+        })
+    }
+}
+impl From<Package> for PackageFile {
+    fn from(package: Package) -> Self {
+        let hat = package.defaults.parts.get("hat").cloned().unwrap_or_default();
+        let parts = package
+            .defaults
+            .parts
+            .iter()
+            .map(|(slot, name)| {
+                let choices = if slot == "accent" {
+                    package.accents_allowed.get(&hat)
+                } else {
+                    package.parts.get(slot)
+                };
+                let index = choices
+                    .and_then(|c| c.iter().position(|n| n.eq_ignore_ascii_case(name)))
+                    .unwrap_or(0);
+                (slot.clone(), index)
+            })
+            .collect();
+        Self {
+            schema_version: package.schema_version,
+            id: package.id,
+            rig: package.rig,
+            rig_sha256: package.rig_sha256,
+            parts: package.parts,
+            accents_allowed: package.accents_allowed,
+            faces: package.faces,
+            decals: package.decals,
+            surfaces: package.surfaces,
+            textures: package.textures,
+            defaults: PackDefaults {
+                parts,
+                colors: package.defaults.colors,
+                face: package.defaults.face,
+                decal: package.defaults.decal,
+            },
+        }
+    }
 }
 
 pub struct Outfit {
@@ -136,7 +249,7 @@ impl Package {
         Ok(())
     }
 
-    /// Resolve stock indices and names into visible named objects. Geometry is
+    /// Resolve chosen part names into visible named objects. Geometry is
     /// not duplicated into the network state. Unknown choices reject atomically.
     pub fn resolve(&self, appearance: &Appearance) -> Result<Outfit> {
         appearance.validate_bounds()?;
@@ -161,17 +274,22 @@ impl Package {
             "Unknown avatar slot/color"
         );
         let part = |slot: &str| -> Result<String> {
-            let index = appearance
+            let choices = self
+                .parts
+                .get(slot)
+                .ok_or_else(|| anyhow::anyhow!("Unknown avatar slot {slot}"))?;
+            let name = match appearance
                 .parts
                 .get(slot)
                 .or_else(|| self.defaults.parts.get(slot))
-                .copied()
-                .unwrap_or(0);
-            Ok(self
-                .parts
-                .get(slot)
-                .and_then(|p| p.get(index))
-                .ok_or_else(|| anyhow::anyhow!("Invalid avatar choice {slot}:{index}"))?
+            {
+                Some(name) => name.as_str(),
+                None => choices.first().map_or("none", String::as_str),
+            };
+            Ok(choices
+                .iter()
+                .find(|choice| choice.eq_ignore_ascii_case(name))
+                .ok_or_else(|| anyhow::anyhow!("Invalid avatar choice {slot}:{name}"))?
                 .to_ascii_lowercase())
         };
         let color = |slot: &str| -> Result<[f32; 4]> {
@@ -229,11 +347,13 @@ impl Package {
             .parts
             .get("accent")
             .or_else(|| self.defaults.parts.get("accent"))
-            .copied()
-            .unwrap_or(0);
-        let selected = self.accents_allowed.get(&hat).and_then(|v| v.get(accent));
+            .map_or("none", String::as_str);
+        let selected = self
+            .accents_allowed
+            .get(&hat)
+            .and_then(|v| v.iter().find(|a| a.eq_ignore_ascii_case(accent)));
         ensure!(
-            accent == 0 || selected.is_some(),
+            accent.eq_ignore_ascii_case("none") || selected.is_some(),
             "Invalid accent for selected hat"
         );
         if let Some(node) = selected.filter(|s| !s.eq_ignore_ascii_case("none")) {

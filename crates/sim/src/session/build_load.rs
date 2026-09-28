@@ -70,6 +70,13 @@ impl Session {
         }
         self.next_owner = plan.next_owner;
         let (palette, bricks) = plan.into_parts();
+        // Bricks without a definition here are kept with the world, not
+        // placed, and the rest of the save still loads.
+        let (bricks, unloaded) = self.simulation.split_placeable(bricks);
+        let skipped = crate::simulation::unloaded_summary(&unloaded);
+        if !unloaded.is_empty() {
+            self.simulation.keep_unloaded(&palette, unloaded)?;
+        }
         let total = bricks.len();
         let tick = self.simulation.state().tick;
         self.loading = Some(Box::new(Loading {
@@ -86,6 +93,9 @@ impl Session {
             Some(MessageTag::UploadStart),
             "Loading bricks. Please wait.".into(),
         );
+        if let Some(skipped) = skipped {
+            self.system_chat(skipped);
+        }
         Ok(total)
     }
 

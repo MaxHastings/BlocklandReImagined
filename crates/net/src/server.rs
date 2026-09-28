@@ -406,7 +406,12 @@ pub fn transport() -> quinn::TransportConfig {
         .datagram_receive_buffer_size(Some(64 * 1024))
         .datagram_send_buffer_size(64 * 1024)
         .keep_alive_interval(Some(Duration::from_secs(2)))
-        .max_idle_timeout(Some(Duration::from_secs(15).try_into().unwrap()));
+        .max_idle_timeout(Some(Duration::from_secs(15).try_into().unwrap()))
+        // Players' links lose packets at random (Wi-Fi, mobile); loss-based
+        // Cubic reads that as congestion and stalled reliable replies for
+        // 3-8 s at 5% loss in the soak test. BBR paces by measured bandwidth
+        // and RTT: the same link answers within ~0.5 s.
+        .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
     t
 }
 pub fn start(session: Session, options: ServerOptions) -> Result<ServerHandle> {

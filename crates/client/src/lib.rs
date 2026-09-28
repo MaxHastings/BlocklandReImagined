@@ -23,6 +23,7 @@ pub mod motion;
 pub mod network;
 pub mod packages;
 pub mod platform;
+pub mod playback;
 pub mod saves;
 pub mod settings;
 pub mod tool_ui;

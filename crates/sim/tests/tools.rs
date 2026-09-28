@@ -1326,3 +1326,123 @@ fn tutorial_layout_swaps_keep_their_item_spawns_between_publishes() {
         .collect();
     assert_eq!(items, [bri_weapons::CORE_TOOLS[0]]);
 }
+
+#[test]
+fn admin_destructo_wand_breaks_bricks_from_afar() {
+    use bri_admin::{Action, Request};
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.5, 0.05, 0.0), true)
+        .unwrap();
+    let id = plant(&mut s, admin, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, admin, 1, [0.5, 0.1, -3.25]);
+    s.command(
+        admin,
+        2,
+        Command::Admin(Request::new(Action::DestructoWand)),
+    )
+    .unwrap();
+    assert_eq!(
+        s.weapon_view().images[&admin][0].image,
+        "v20.image.adminwandimage"
+    );
+    hold_still(&mut s, admin);
+    s.command(admin, 3, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..40 {
+        s.step().unwrap();
+    }
+    assert!(!s.simulation().state().bricks.contains_key(&id));
+}
+
+fn bricks(s: &Session) -> Vec<u64> {
+    s.simulation().state().bricks.keys().copied().collect()
+}
+
+#[test]
+fn hammer_only_breaks_bricks_that_hold_nothing_up() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    let low = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let high = plant(&mut s, owner, 2, [0.5, 0.3, -3.25]);
+    assert!(s.simulation().will_cause_chain_kill(low).unwrap());
+    assert!(!s.simulation().will_cause_chain_kill(high).unwrap());
+    // Swinging at the bottom of the stack does nothing, silently.
+    aim(&mut s, owner, 3, [0.5, 0.1, -3.01]);
+    swing(&mut s, owner, 4, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low, high]);
+    assert!(center_prints(&mut s, owner).is_empty());
+    // Top first, then the one underneath.
+    aim(&mut s, owner, 5, [0.5, 0.3, -3.01]);
+    swing(&mut s, owner, 6, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low]);
+    aim(&mut s, owner, 7, [0.5, 0.1, -3.01]);
+    swing(&mut s, owner, 8, 0).unwrap();
+    assert!(bricks(&s).is_empty());
+}
+
+#[test]
+fn hammer_breaks_a_brick_whose_load_is_still_held_up_elsewhere() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(1.0, 0.05, 0.0), false)
+        .unwrap();
+    let left = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let right = plant(&mut s, owner, 2, [1.5, 0.1, -3.25]);
+    let bridge = plant(&mut s, owner, 3, [1.0, 0.3, -3.25]);
+    assert!(!s.simulation().will_cause_chain_kill(left).unwrap());
+    aim(&mut s, owner, 4, [0.25, 0.1, -3.01]);
+    swing(&mut s, owner, 5, 0).unwrap();
+    assert_eq!(bricks(&s), vec![right, bridge]);
+    // Now the right post alone carries the bridge.
+    aim(&mut s, owner, 6, [1.75, 0.1, -3.01]);
+    swing(&mut s, owner, 7, 0).unwrap();
+    assert_eq!(bricks(&s), vec![right, bridge]);
+}
+
+#[test]
+fn wand_breaks_anywhere_and_the_stranded_bricks_above_die_with_it() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let middle = plant(&mut s, owner, 2, [0.5, 0.3, -3.25]);
+    let top = plant(&mut s, owner, 3, [0.5, 0.5, -3.25]);
+    assert_eq!(s.simulation().stranded_by(middle).unwrap(), vec![top]);
+    let low = bricks(&s)[0];
+    assert_eq!(s.simulation().stranded_by(low).unwrap(), vec![middle, top]);
+    s.use_wand(owner).unwrap();
+    aim(&mut s, owner, 4, [0.5, 0.1, -3.01]);
+    hold_still(&mut s, owner);
+    s.command(owner, 5, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..40 {
+        s.step().unwrap();
+    }
+    assert!(bricks(&s).is_empty());
+}
+
+#[test]
+fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    // An administrator may build on anyone's bricks.
+    let guest = s
+        .join("Guest".into(), Vec3::new(3.0, 0.05, 1.0), true)
+        .unwrap();
+    let low = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let high = plant(&mut s, guest, 1, [0.5, 0.3, -3.25]);
+    center_prints(&mut s, owner);
+    tool(&mut s, owner, 2, ToolAction::UndoBrick).unwrap();
+    assert_eq!(bricks(&s), vec![low, high]);
+    assert_eq!(
+        center_prints(&mut s, owner),
+        vec!["Guest does not trust you enough to do that.".to_string()]
+    );
+}

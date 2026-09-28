@@ -384,7 +384,7 @@ fn aim(s: &Session, owner: u64) -> MoveInput {
     }
 }
 #[test]
-fn build_load_preflights_every_definition_and_preserves_existing_players() {
+fn build_load_keeps_unknown_bricks_aside_and_preserves_existing_players() {
     use bri_world::{Brick, ContentRef, build::SavedBuild};
     let mut s = session();
     let host = s
@@ -403,31 +403,37 @@ fn build_load_preflights_every_definition_and_preserves_existing_players() {
         Brick::new(ContentRef::Resolved("missing".into()), [2.5, 0.1, -3.25], 1),
     );
     world.next_brick_id = 3;
-    let mut saved = SavedBuild::capture(&world, true, true).unwrap();
+    let saved = SavedBuild::capture(&world, true, true).unwrap();
     let before = s.snapshot();
     let cmd = |b: SavedBuild| Command::LoadBuild {
         build: Box::new(b),
         ownership: true,
     };
-    assert!(s.command(host, 1, cmd(saved.clone())).is_err());
-    assert_eq!(
-        s.snapshot(),
-        before,
-        "Partial publication after invalid second brick"
-    );
-    saved.world.bricks.get_mut(&2).unwrap().definition = ContentRef::Resolved("plate".into());
     assert!(s.command(guest, 1, cmd(saved.clone())).is_err());
+    assert_eq!(s.snapshot(), before, "Only the host may load");
+    // The brick with no definition here is kept aside; the rest loads.
     assert_eq!(
-        s.command(host, 2, cmd(saved)).unwrap(),
-        Reply::Loaded { bricks: 2 }
+        s.command(host, 1, cmd(saved)).unwrap(),
+        Reply::Loaded { bricks: 1 }
     );
     assert_eq!(s.snapshot().players, before.players);
     s.step().unwrap();
     assert!(!s.build_loading(), "Small saves finish in one batch");
     let after = s.snapshot();
-    assert_eq!(after.world.bricks.len(), 2);
+    assert_eq!(after.world.bricks.len(), 1);
     assert_eq!(after.world.bricks[&1].owner, 3);
-    assert_eq!(after.world.bricks[&2].owner, 3);
+    assert_eq!(after.world.unloaded.len(), 1);
+    assert_eq!(
+        after.world.unloaded[0].definition,
+        ContentRef::Resolved("missing".into())
+    );
+    assert_eq!(after.world.unloaded[0].owner, 3);
+    assert!(
+        s.chat()
+            .iter()
+            .any(|l| l.text.starts_with("1 bricks were not loaded") && l.text.contains("1 missing")),
+        "The load says what it skipped"
+    );
     let newcomer = s
         .join("Newcomer".into(), Vec3::new(6.0, 0.05, 0.0), false)
         .unwrap();
@@ -446,6 +452,7 @@ fn build_load_preflights_every_definition_and_preserves_existing_players() {
         panic!()
     };
     assert_eq!(build.world.bricks, after.world.bricks);
+    assert_eq!(build.world.unloaded, after.world.unloaded, "Saved again");
     assert!(build.world.owners.is_empty(), "No principals built here");
     for _ in 0..30 {
         s.step().unwrap();

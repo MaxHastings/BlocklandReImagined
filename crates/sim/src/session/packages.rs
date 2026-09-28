@@ -1348,7 +1348,7 @@ impl Session {
             administrator: true,
             ..Default::default()
         };
-        self.kill_brick(
+        self.kill_one_brick(
             &admin,
             brick,
             blast.unwrap_or_else(|| super::debris::BrickBlast::pop(center)),

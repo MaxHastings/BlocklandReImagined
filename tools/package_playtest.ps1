@@ -9,7 +9,9 @@ param(
     [string]$VerifyPackage,
     # Also ship the Stress Lab mod packages (packages/stresslab), enabled in
     # content/packages.json; the release folder gets a -stress-lab suffix.
-    [switch]$StressLab
+    [switch]$StressLab,
+    # Tools the client runs, shipped beside bri-client.exe from the same build.
+    [string[]]$CompanionExecutables = @('bri-import-addon.exe')
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -125,6 +127,14 @@ if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) { throw "Relea
 $exeInfo = Get-Item -LiteralPath $ExecutablePath
 if (($exeInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $exeInfo.Length -lt 1) { throw 'Release executable is empty or linked.' }
 $executableSha256 = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$companions = @(foreach ($name in $CompanionExecutables) {
+    if ($name -notmatch '^[A-Za-z0-9._-]+\.exe$') { throw "Companion executable must be a bare .exe name: $name" }
+    $path = Join-Path (Split-Path -Parent $ExecutablePath) $name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Companion executable is missing; build it with the client: $path" }
+    $info = Get-Item -LiteralPath $path
+    if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $info.Length -lt 1) { throw "Companion executable is empty or linked: $path" }
+    [pscustomobject]@{ name = $name; path = $path; bytes = $info.Length }
+})
 $effective = Get-EffectivePackages $RepoRoot
 $sourceContent = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'content'))
 $selected = @()
@@ -173,7 +183,7 @@ if ($ValidateOnly) {
     $configSource = $effective.source
     [pscustomobject]@{ selected_packages = $selected; content_files = $contentFiles; content_bytes = $contentBytes;
         executable_bytes = $exeInfo.Length; estimated_package_bytes = [long]$contentBytes + [long]$exeInfo.Length;
-        executable_sha256 = $executableSha256; package_count = $selected.Count; content_config_source = $configSource; mod_packages = $modPackages } | ConvertTo-Json -Depth 6
+        executable_sha256 = $executableSha256; package_count = $selected.Count; content_config_source = $configSource; mod_packages = $modPackages; companion_executables = $companions } | ConvertTo-Json -Depth 6
     return
 }
 if ([string]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'Supply -Version using 1–64 letters, digits, dot, underscore or dash.' }
@@ -186,6 +196,7 @@ if (Test-Path -LiteralPath $releasePath) { throw "Refusing to overwrite an exist
 [IO.Directory]::CreateDirectory($releasePath) | Out-Null
 try {
     Copy-Item -LiteralPath $ExecutablePath -Destination (Join-Path $releasePath 'bri-client.exe')
+    foreach ($companion in $companions) { Copy-Item -LiteralPath $companion.path -Destination (Join-Path $releasePath $companion.name) }
     foreach ($packageInput in $docInputs) { Copy-Item -LiteralPath $packageInput.source -Destination (Join-Path $releasePath $packageInput.destination) }
     $packagedContent = Join-Path $releasePath 'content'
     [IO.Directory]::CreateDirectory($packagedContent) | Out-Null

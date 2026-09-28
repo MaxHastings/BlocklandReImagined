@@ -42,3 +42,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 bri-weather = { path = "../weather" }
 
 bri-foliage = { path = "../foliage" }
+
+[dev-dependencies]
+tempfile = "3"

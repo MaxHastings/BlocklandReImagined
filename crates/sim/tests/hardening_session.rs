@@ -801,7 +801,7 @@ fn avatar_and_forged_identity_fields_are_rejected() {
         g.cmd(
             b,
             Command::Avatar(bri_content::avatar::Appearance {
-                parts: [("hat".to_string(), usize::MAX)].into(),
+                parts: [("hat".to_string(), "../../hat".repeat(1000))].into(),
                 colors: [("hat".to_string(), [f32::NAN; 4])].into(),
                 face: "../../face".repeat(1000),
                 decal: String::new(),
