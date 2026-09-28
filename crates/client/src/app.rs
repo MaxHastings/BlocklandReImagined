@@ -1249,6 +1249,29 @@ impl App {
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref())
     }
+    /// How many cosmetic entities this client simulates and draws, for the
+    /// headless performance probes.
+    pub fn entity_counts(&self) -> serde_json::Value {
+        let world = |w: &bri_fx_runtime::EffectsWorld| {
+            serde_json::json!({ "sources": w.source_count(), "particles": w.particle_count() })
+        };
+        let drawn = self.effects_renderer.as_ref().map(|r| r.stats());
+        serde_json::json!({
+            "brick_effects": world(&self.effects.world),
+            "brick_effects_deferred": self.effects.deferred,
+            "weapon_effects": world(self.weapon_effects.world()),
+            "actor_effects": world(self.actor_effects.world()),
+            "particles_drawn": drawn.map_or(0, |s| s.instances),
+            "particle_draw_calls": drawn.map_or(0, |s| s.draw_calls),
+            "particle_upload_bytes": drawn.map_or(0, |s| s.uploaded_bytes),
+            "avatars": self.avatars.len(),
+            "vehicles": self.network_view().map_or(0, |v| v.vehicles.len()),
+            "projectiles": self.network_view().map_or(0, |v| v.weapons.projectiles.len()),
+            "explosion_debris": self.explosion_debris.models().count(),
+            "shells": self.weapon_shells.active_count(),
+            "brick_debris": self.brick_debris.len(),
+        })
+    }
     /// Map whose scene is installed and drawn.
     pub fn scene_map(&self) -> Option<&str> {
         self.scene_map.as_deref()
