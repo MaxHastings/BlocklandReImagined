@@ -9,9 +9,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Superseded PR runs are cancelled; every push to main gets a full run so
+# main's history shows which commit broke it.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
