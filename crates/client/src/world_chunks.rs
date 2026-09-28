@@ -105,6 +105,9 @@ pub struct ChunkedWorld {
     total_triangles: usize,
     /// Visible bricks drawn elsewhere for now (easing to a new colour).
     left_out: BTreeSet<u64>,
+    /// Bricks left out for failing validation; any change to one rebuilds
+    /// its chunk, since it may now be valid.
+    invalid: BTreeSet<u64>,
 }
 
 /// Rebuilt chunks; `None` removes a chunk that no longer holds visible bricks.
@@ -176,10 +179,12 @@ impl ChunkedWorld {
         let mut dirty = BTreeSet::new();
         let mut moves = Vec::new();
         let was_out = &self.left_out;
+        let was_invalid = &self.invalid;
         let mut change = |id: u64, old: Option<&Brick>, new: Option<&Brick>| {
             let (out_before, out_now) = (was_out.contains(&id), left_out.contains(&id));
             if let (Some(old), Some(new)) = (old, new)
                 && same_appearance(old, new)
+                && !was_invalid.contains(&id)
                 && out_before == out_now
             {
                 return;
@@ -254,17 +259,29 @@ impl ChunkedWorld {
                 staged.get_mut(&to).context("Chunk move target")?.insert(id);
             }
         }
-        // Validate and count every brick being rebuilt before allocating;
-        // each distinct mesh is validated once, not once per placement.
+        // Leave out bricks that fail validation, then count every brick being
+        // rebuilt before allocating; each distinct mesh is validated once,
+        // not once per placement.
         let mut counts = BTreeMap::new();
         let mut validated = std::collections::HashSet::new();
+        let mut invalid = self.invalid.clone();
+        invalid.retain(|id| next.bricks.contains_key(id));
+        for ids in staged.values_mut() {
+            ids.retain(|id| {
+                let drawable =
+                    crate::world_scene::drawable(*id, &next.bricks[id], next.palette.len());
+                if drawable {
+                    invalid.remove(id);
+                } else {
+                    invalid.insert(*id);
+                }
+                drawable
+            });
+        }
         for (key, ids) in &staged {
             let mut count = 0usize;
             for id in ids {
                 let brick = &next.bricks[id];
-                brick
-                    .validate(next.palette.len())
-                    .with_context(|| format!("Invalid replicated brick {id}"))?;
                 let ContentRef::Resolved(definition) = &brick.definition else {
                     anyhow::bail!(
                         "Visible brick {id} has an unresolved definition: {:?}",
@@ -310,6 +327,7 @@ impl ChunkedWorld {
         self.total_triangles = total;
         self.source = Some(next);
         self.left_out = left_out.clone();
+        self.invalid = invalid;
         Ok(changes)
     }
 }
@@ -613,6 +631,23 @@ pub(crate) mod tests {
         let painted = Arc::new(painted);
         update(&mut state, &painted, Some(&[1]));
         assert_eq!(state.chunk_bricks(key), 1);
+    }
+
+    /// An invalid replicated brick stays out of its chunk instead of ending
+    /// the game, and joins it once a later update makes it valid.
+    #[test]
+    fn invalid_bricks_are_left_out_of_their_chunk() {
+        let mut state = ChunkedWorld::default();
+        let mut bad = brick([2.0, 1.0, 1.0]);
+        bad.events = vec![crate::world_scene::tests::set_color(2)];
+        let base = world([(1, brick([1.0; 3])), (2, bad.clone())]);
+        update(&mut state, &base, None);
+        let key = chunk_key([1.0; 3]);
+        assert_eq!((state.chunk_count(), state.chunk_bricks(key)), (1, 1));
+        bad.events = vec![crate::world_scene::tests::set_color(1)];
+        let fixed = world([(1, brick([1.0; 3])), (2, bad)]);
+        update(&mut state, &fixed, Some(&[2]));
+        assert_eq!(state.chunk_bricks(key), 2);
     }
 
     #[test]

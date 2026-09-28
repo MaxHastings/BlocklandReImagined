@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -229,6 +229,26 @@ impl Brick {
             look: None,
         }
     }
+    /// Every palette index this brick names: its paint, then each event
+    /// `Color` parameter. The one colour rule: all of them must index the
+    /// world's palette, and anything that remaps colours remaps all of them.
+    pub fn colors(&self) -> impl Iterator<Item = u8> + '_ {
+        std::iter::once(self.color).chain(self.events.iter().flat_map(|e| {
+            e.params.iter().filter_map(|v| match v {
+                EventValue::Color(c) => Some(*c),
+                _ => None,
+            })
+        }))
+    }
+    /// Map every palette index [`Brick::colors`] names through `remap`.
+    pub fn recolor(&mut self, mut remap: impl FnMut(u8) -> u8) {
+        self.color = remap(self.color);
+        for value in self.events.iter_mut().flat_map(|e| &mut e.params) {
+            if let EventValue::Color(c) = value {
+                *c = remap(*c);
+            }
+        }
+    }
     pub fn transform(&self) -> glam::Mat4 {
         glam::Mat4::from_translation(glam::Vec3::from(self.position))
             * glam::Mat4::from_rotation_y(
@@ -303,10 +323,10 @@ impl Brick {
                 .all(|v| v.is_finite() && v.abs() <= 1_000_000.0),
             "Invalid brick position"
         );
-        ensure!(
-            self.quarter_turns < 4 && (self.color as usize) < palette_len,
-            "Invalid brick angle/color"
-        );
+        ensure!(self.quarter_turns < 4, "Invalid brick angle");
+        if let Some(c) = self.colors().find(|c| usize::from(*c) >= palette_len) {
+            bail!("Color {c} outside the {palette_len}-color palette");
+        }
         ensure!(
             self.color_effect <= 6 && self.shape_effect <= 2,
             "Invalid effect code"
@@ -362,9 +382,6 @@ impl Brick {
             }
             for value in &e.params {
                 match value {
-                    EventValue::Color(c) => {
-                        ensure!((*c as usize) < palette_len, "Event color outside palette")
-                    }
                     EventValue::Text(t) => {
                         ensure!(t.chars().count() <= 200, "Event text too long")
                     }

@@ -3984,3 +3984,36 @@ Evidence: `cargo test -p bri-client --lib world_scene` (new
 `tools/brick_reference.py`; families 1.12, fx 1.26), clippy on bri-render and
 bri-client clean. Not seen in a window: Max's playtest.
 
+## 2026-09-28 Third-person vehicle camera (branch `claude/vehicle-camera`)
+
+Playtesters called the third-person camera buggy in a Jeep. Ours orbited a
+pivot 7.5 above the vehicle with the mouse's pitch (and, for mouse-steered
+drivers, with the vehicle's own pitch), and gave passengers the vehicle's
+13-unit camera. Read from blocklandv20.exe: the driver's control object is
+the vehicle, so `Player::getCameraTransform` (0x5ab7d0) hands third person to
+`Vehicle::getCameraTransform` (0x56cc10), which Blockland rewrote. With
+`cameraRoll` off (every stock vehicle) it keeps the camera level behind the
+vehicle's heading: the vehicle's transform, or with `$mvFreeLook` held the
+rider's head turned by head yaw and pitched by `cameraTilt`, levelled to its
+horizontal heading (`getCameraParameters` 0x56b440 returns an identity
+rotation). The camera goes `(cameraMaxDist - cameraMinDist) * pos` back from
+the world-box center; its height over the vehicle origin is `cameraOffset`
+times its level distance over `cameraMaxDist`; it looks along the heading
+with `-cameraTilt` as the vertical component (atan 0.4 = 21.8 degrees for the
+Jeep). A ray from 2 above the box center to 1.1x the camera (mask 0x300000c:
+terrain, interiors, bricks) places it: a hit before the camera puts it at the
+hit, backed off by `0.8 * max(1 + n.d, 0.05)`; a hit in the extra tenth eases
+that back-off in. `cameraLag`/`cameraDecay` are never read, so the client's
+trailing offset is gone. Passengers keep `Player`'s camera (no control
+object, 0x5a7480 returns the player's own camera fields), now around their
+seat. Gunners and player-type mounts are unchanged.
+
+Code: `crates/client/src/vehicle_camera.rs` (`driver_view`), used by
+`App::view_camera`; `Controls::free_look`. Defaults picked: the world box is
+the converted shape bounds' center (not the DTS header box); the free-look
+head pitch is left out of the levelled heading (it only matters with the
+vehicle rolled); vehicle scale is not applied (the client does not know it);
+the passenger camera does not tilt or roll with the seat (v20's does; our
+view has no roll). Evidence: `cargo test -p bri-client --lib vehicle_camera`.
+Not seen in a window: needs Max's playtest in a Jeep, driving and as a
+passenger.
