@@ -27,6 +27,8 @@ try {
     $exe = Join-Path $fixture 'bin/bri-client.exe'
     [IO.File]::WriteAllBytes($exe, [byte[]](0x4d,0x5a,0x01,0x02))
     $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+    # A stand-in for the standalone launcher: the packager only appends to it.
+    [IO.File]::WriteAllBytes((Join-Path $fixture 'bin/BlocklandReImagined.exe'), [byte[]](0x4d,0x5a,0x03,0x04))
     $dist = Join-Path $temp 'dist'
     & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @()
     $package = Join-Path $dist 'BlocklandReImagined-alpha-test-fixture'
@@ -34,6 +36,17 @@ try {
     if (Test-Path (Join-Path $package 'Launch-Playtest.cmd')) { throw 'Unexpected old launcher filename.' }
     foreach ($doc in @('TESTER-GUIDE.md','FEATURES.md')) { if (-not (Test-Path (Join-Path $package $doc))) { throw "Expected $doc in the release folder." } }
     & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyPackage $package
+    if (-not (Test-Path "$package.zip" -PathType Leaf)) { throw 'Expected the release zip beside the folder.' }
+    $standalone = Join-Path "$package-standalone" 'BlocklandReImagined.exe'
+    if (-not (Test-Path $standalone -PathType Leaf)) { throw 'Expected the standalone BlocklandReImagined.exe.' }
+    & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyStandalone $standalone
+    $bytes = [IO.File]::ReadAllBytes($standalone)
+    $bytes[10] = $bytes[10] -bxor 0xff
+    $damaged = Join-Path $temp 'damaged.exe'
+    [IO.File]::WriteAllBytes($damaged, $bytes)
+    $caught = $false
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -VerifyStandalone $damaged } catch { $caught = $true }
+    if (-not $caught) { throw 'Verifier accepted a damaged standalone payload.' }
     [IO.Directory]::CreateDirectory((Join-Path $package 'logs')) | Out-Null
     [IO.Directory]::CreateDirectory((Join-Path $package 'user-state')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $package 'logs/session.log'), 'mutable')

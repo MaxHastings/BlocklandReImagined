@@ -20,6 +20,13 @@ param(
     # "Run anyway").
     [string]$SignCertificateThumbprint,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
+    # The standalone launcher (crates/launcher), built with the client. The
+    # release also ships as <release>.zip and as one self-contained
+    # <release>-standalone/BlocklandReImagined.exe carrying that zip.
+    [string]$LauncherName = 'BlocklandReImagined.exe',
+    [switch]$NoStandalone,
+    # Check a standalone exe: its payload's hash and the release inside it.
+    [string]$VerifyStandalone,
     # Packaging tests use a stand-in executable that cannot report a version.
     [switch]$SkipVersionCheck
 )
@@ -128,8 +135,112 @@ function Verify-PlaytestPackage([string]$Path) {
     Write-Host "Verified $($listed.Count) files for package version $($manifest.version)."
 }
 
+# Standalone exe footer (crates/launcher): payload SHA-256, u64 length, magic.
+$script:StandaloneMagic = [Text.Encoding]::ASCII.GetBytes('BRISFX01')
+
+# Zip the release folder under its own name. Entries use forward slashes
+# (ZipFile.CreateFromDirectory on Windows PowerShell writes backslashes).
+function New-ReleaseZip([string]$Folder,[string]$Zip) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $top = Split-Path -Leaf $Folder
+    $paths = @(Get-PackageFiles $Folder | ForEach-Object { Get-RelativePackagePath $Folder $_.FullName })
+    [Array]::Sort($paths, [StringComparer]::Ordinal)
+    $archive = [IO.Compression.ZipFile]::Open($Zip, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        $archive.CreateEntry("$top/") | Out-Null
+        foreach ($relative in $paths) {
+            $file = Join-Path $Folder ($relative.Replace('/',[IO.Path]::DirectorySeparatorChar))
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, "$top/$relative", [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    } finally { $archive.Dispose() }
+}
+
+function New-StandaloneExe([string]$Stub,[string]$Zip,[string]$Out) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $output = [IO.File]::Open($Out,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write)
+    try {
+        $stubStream = [IO.File]::OpenRead($Stub)
+        try { $stubStream.CopyTo($output) } finally { $stubStream.Dispose() }
+        $zipStream = [IO.File]::OpenRead($Zip)
+        try { $hash = $sha.ComputeHash($zipStream); $zipStream.Position = 0; $zipStream.CopyTo($output); $length = $zipStream.Length } finally { $zipStream.Dispose() }
+        $output.Write($hash,0,32)
+        $output.Write([BitConverter]::GetBytes([UInt64]$length),0,8)
+        $output.Write($script:StandaloneMagic,0,8)
+    } finally { $output.Dispose(); $sha.Dispose() }
+}
+
+# Where the payload ends: before an Authenticode signature, if any.
+function Get-StandaloneEnd([IO.BinaryReader]$Reader) {
+    $stream = $Reader.BaseStream
+    $end = $stream.Length
+    if ($end -lt 64) { return $end }
+    $stream.Position = 0x3c; $pe = $Reader.ReadUInt32()
+    if ($pe + 26 -gt $end) { return $end }
+    $stream.Position = $pe
+    if ($Reader.ReadUInt32() -ne 0x4550) { return $end }
+    $stream.Position = $pe + 24
+    $magic = $Reader.ReadUInt16()
+    $directories = if ($magic -eq 0x20b) { $pe + 24 + 112 } elseif ($magic -eq 0x10b) { $pe + 24 + 96 } else { return $end }
+    $stream.Position = $directories + 32
+    $offset = $Reader.ReadUInt32(); $size = $Reader.ReadUInt32()
+    if ($offset -gt 0 -and $size -gt 0 -and $offset + $size -le $end) { return [long]$offset }
+    return $end
+}
+
+function Verify-StandaloneExe([string]$Path) {
+    $exe = (Resolve-Path -LiteralPath $Path).Path
+    $stream = [IO.File]::OpenRead($exe)
+    $reader = [IO.BinaryReader]::new($stream)
+    $temp = Join-Path ([IO.Path]::GetTempPath()) "bri-standalone-verify-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        $end = Get-StandaloneEnd $reader
+        $found = $false
+        foreach ($pad in 0..7) {
+            $at = $end - 48 - $pad
+            if ($at -lt 0) { break }
+            $stream.Position = $at
+            $footer = $reader.ReadBytes(48)
+            if ([Text.Encoding]::ASCII.GetString($footer,40,8) -eq 'BRISFX01') { $found = $true; break }
+        }
+        if (-not $found) { throw "No game payload in $exe." }
+        $length = [BitConverter]::ToUInt64($footer,32)
+        if ($length -gt $at) { throw 'Standalone payload is truncated.' }
+        [IO.Directory]::CreateDirectory($temp) | Out-Null
+        $zip = Join-Path $temp 'payload.zip'
+        $out = [IO.File]::Create($zip)
+        try {
+            $stream.Position = $at - $length
+            $buffer = New-Object byte[] 1048576
+            $left = [long]$length
+            while ($left -gt 0) {
+                $n = $stream.Read($buffer,0,[int][Math]::Min($buffer.Length,$left))
+                if ($n -le 0) { throw 'Standalone payload is truncated.' }
+                $out.Write($buffer,0,$n); $left -= $n
+            }
+        } finally { $out.Dispose() }
+        $expected = -join ($footer[0..31] | ForEach-Object { $_.ToString('x2') })
+        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -cne $expected) { throw "Standalone payload checksum mismatch: $actual" }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $unpacked = Join-Path $temp 'release'
+        [IO.Compression.ZipFile]::ExtractToDirectory($zip,$unpacked)
+        $tops = @(Get-ChildItem -LiteralPath $unpacked -Force)
+        if ($tops.Count -ne 1 -or -not $tops[0].PSIsContainer) { throw 'Standalone payload must hold exactly one release folder.' }
+        Verify-PlaytestPackage $tops[0].FullName
+        Write-Host "Verified standalone payload $expected ($length bytes)."
+    } finally {
+        $reader.Dispose()
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
+    }
+}
+
 if (-not [string]::IsNullOrWhiteSpace($VerifyPackage)) {
     Verify-PlaytestPackage $VerifyPackage
+    return
+}
+if (-not [string]::IsNullOrWhiteSpace($VerifyStandalone)) {
+    Verify-StandaloneExe $VerifyStandalone
     return
 }
 
@@ -145,6 +256,12 @@ $companions = @(foreach ($name in $CompanionExecutables) {
     if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $info.Length -lt 1) { throw "Companion executable is empty or linked: $path" }
     [pscustomobject]@{ name = $name; path = $path; bytes = $info.Length }
 })
+$launcherPath = $null
+if (-not $NoStandalone) {
+    if ($LauncherName -notmatch '^[A-Za-z0-9._-]+\.exe$') { throw "Launcher must be a bare .exe name: $LauncherName" }
+    $launcherPath = Join-Path (Split-Path -Parent $ExecutablePath) $LauncherName
+    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) { throw "Standalone launcher is missing; build it with the client (cargo build --release -p bri-launcher) or pass -NoStandalone: $launcherPath" }
+}
 function Find-SignTool {
     $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
     if ($null -ne $onPath) { return $onPath.Source }
@@ -243,7 +360,8 @@ if ($ValidateOnly) {
     $configSource = $effective.source
     [pscustomobject]@{ selected_packages = $selected; content_files = $contentFiles; content_bytes = $contentBytes;
         executable_bytes = $exeInfo.Length; estimated_package_bytes = [long]$contentBytes + [long]$exeInfo.Length;
-        executable_sha256 = $executableSha256; package_count = $selected.Count; content_config_source = $configSource; mod_packages = $modPackages; companion_executables = $companions } | ConvertTo-Json -Depth 6
+        executable_sha256 = $executableSha256; package_count = $selected.Count; content_config_source = $configSource; mod_packages = $modPackages; companion_executables = $companions;
+        standalone_launcher = $launcherPath } | ConvertTo-Json -Depth 6
     return
 }
 if ([string]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'Supply -Version using 1–64 letters, digits, dot, underscore or dash.' }
@@ -255,7 +373,12 @@ if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint) -and $SignCert
 [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
 $suffix = if ($StressLab) { '-stress-lab' } else { '' }
 $releasePath = Join-Path $DestinationRoot "BlocklandReImagined-alpha-$Version$suffix"
-if (Test-Path -LiteralPath $releasePath) { throw "Refusing to overwrite an existing playtest release: $releasePath" }
+$zipPath = "$releasePath.zip"
+$standaloneDir = "$releasePath-standalone"
+$standaloneExe = Join-Path $standaloneDir 'BlocklandReImagined.exe'
+foreach ($existing in @($releasePath, $zipPath, $standaloneDir)) {
+    if (Test-Path -LiteralPath $existing) { throw "Refusing to overwrite an existing playtest release: $existing" }
+}
 [IO.Directory]::CreateDirectory($releasePath) | Out-Null
 try {
     Copy-Item -LiteralPath $ExecutablePath -Destination (Join-Path $releasePath 'bri-client.exe')
@@ -289,7 +412,20 @@ try {
     Write-Host "Created $releasePath"
     Write-Host "Copied $contentFiles native content files ($contentBytes bytes), release executable $($exeInfo.Length) bytes."
     Write-Host 'The manifest lists every package file except itself; verify with -VerifyPackage.'
+    # The folder as one zip (what testers download), and the same zip inside
+    # one exe that unpacks itself per user (docs/playtest-package-layout.md).
+    New-ReleaseZip $releasePath $zipPath
+    Write-Host "Created $zipPath ($((Get-Item -LiteralPath $zipPath).Length) bytes)"
+    if (-not $NoStandalone) {
+        [IO.Directory]::CreateDirectory($standaloneDir) | Out-Null
+        New-StandaloneExe $launcherPath $zipPath $standaloneExe
+        if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint)) { Invoke-CodeSigning $standaloneDir }
+        Verify-StandaloneExe $standaloneExe
+        Write-Host "Created $standaloneExe ($((Get-Item -LiteralPath $standaloneExe).Length) bytes)"
+    }
 } catch {
+    foreach ($partial in @($zipPath, $standaloneExe)) { if (Test-Path -LiteralPath $partial -PathType Leaf) { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue } }
+    if (Test-Path -LiteralPath $standaloneDir -PathType Container) { Remove-Item -LiteralPath $standaloneDir -Force -ErrorAction SilentlyContinue }
     $safeRoot = [IO.Path]::GetFullPath($DestinationRoot).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     $safeTarget = [IO.Path]::GetFullPath($releasePath)
     if ($safeTarget.StartsWith($safeRoot,[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $safeTarget -PathType Container)) {

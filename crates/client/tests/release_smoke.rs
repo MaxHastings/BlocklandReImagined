@@ -137,6 +137,52 @@ fn use_test_ports() -> u16 {
     port
 }
 
+/// The standalone `BlocklandReImagined.exe` (BRI_STANDALONE_EXE): it unpacks
+/// into a per-user folder (a scratch one here), reuses that install on the
+/// next start, and the game it runs passes startup validation there.
+#[test]
+#[ignore = "needs BRI_STANDALONE_EXE: a packaged standalone exe"]
+fn standalone_exe_unpacks_per_user_and_starts_the_game() -> Result<()> {
+    let Some(exe) = std::env::var_os("BRI_STANDALONE_EXE").map(PathBuf::from) else {
+        eprintln!("BRI_STANDALONE_EXE is not set; nothing to check");
+        return Ok(());
+    };
+    let root = std::env::temp_dir().join(format!("bri-standalone-smoke-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let run = |args: &[&str]| -> Result<std::process::Output> {
+        let out = std::process::Command::new(&exe)
+            .args(args)
+            .env("BRI_STANDALONE_ROOT", &root)
+            .env("BRI_NO_DIALOGS", "1")
+            .output()
+            .with_context(|| format!("running {}", exe.display()))?;
+        ensure!(out.status.success(), "{} {args:?} failed: {}", exe.display(), String::from_utf8_lossy(&out.stderr));
+        Ok(out)
+    };
+    let started = Instant::now();
+    let out = run(&["--extract-only"])?;
+    let game = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    eprintln!("unpacked into {} in {:?}", game.display(), started.elapsed());
+    ensure!(game == root.join("Game"), "the game unpacks into the per-user folder, not {}", game.display());
+    for file in ["bri-client.exe", "bri-import-addon.exe", "MANIFEST.json", "content/packages.json"] {
+        ensure!(game.join(file).is_file(), "the install has {file}");
+    }
+    // Something the player adds survives the next start, which reuses the install.
+    let drop = game.join("content").join(bri_package::library::DROP_DIR);
+    std::fs::create_dir_all(&drop)?;
+    std::fs::write(drop.join("Keep_Me.zip"), b"PK")?;
+    let started = Instant::now();
+    run(&["--extract-only"])?;
+    ensure!(started.elapsed() < Duration::from_secs(5), "the second start reuses the install");
+    ensure!(drop.join("Keep_Me.zip").is_file(), "the player's Add-On is still there");
+    let out = run(&["--check"])?;
+    let said = String::from_utf8_lossy(&out.stdout);
+    ensure!(said.contains("Startup validation passed"), "the game starts from the install: {said}");
+    ensure!(!exe.parent().is_some_and(|d| d.join("content").exists()), "nothing is written beside the exe");
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
 #[test]
 #[ignore = "needs BRI_RELEASE_DIR: a scratch copy of a packaged release; offscreen GPU, loopback UDP"]
 fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -> Result<()> {

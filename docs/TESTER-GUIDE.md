@@ -15,6 +15,11 @@ keys are in `PLAYTEST.md`.
 3. Run `Launch.cmd`. A console window opens next to the game; leave it
    open while you play. Nothing else needs installing, and you don't need
    the original Blockland.
+   Or use `BlocklandReImagined.exe` on its own: put it anywhere and run
+   it. It unpacks the game into your user folder
+   (`%LOCALAPPDATA%\BlocklandReImagined`) on first start, which takes a
+   few seconds, and keeps your settings, saves and Add-Ons there. A newer
+   exe updates the game and keeps them.
 4. **"Windows protected your PC"**: the game isn't signed yet. Click **More
    info**, check the name is `Launch.cmd` or `bri-client.exe`, then **Run
    anyway**. If Windows blocked the download itself, right-click the zip,
