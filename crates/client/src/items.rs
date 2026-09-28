@@ -407,6 +407,7 @@ impl ItemAssets {
             "Unknown item physics schema"
         );
         let mut manifest = manifest;
+        euler_to_matrix_images(&mut manifest.images, &pack);
         // Where each model and texture file lives: the base presentation
         // directory unless an extra package provided it.
         let mut origin: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
@@ -418,8 +419,13 @@ impl ItemAssets {
             let bytes = crate::materials::read_resource(&abs, "presentation.json", 8 * 1024 * 1024)?;
             let part: Presentation = serde_json::from_slice(&bytes)?;
             ensure!(part.schema_version == 2, "{dir}: unknown item presentation schema");
-            checked_read(&abs, "weapons.json", &part.weapons_sha256, 32 * 1024 * 1024)
-                .with_context(|| format!("{dir}: presentation does not match its weapons pack"))?;
+            let weapons =
+                checked_read(&abs, "weapons.json", &part.weapons_sha256, 32 * 1024 * 1024)
+                    .with_context(|| {
+                        format!("{dir}: presentation does not match its weapons pack")
+                    })?;
+            let mut part = part;
+            euler_to_matrix_images(&mut part.images, &bri_weapons::Pack::from_json(&weapons)?);
             let physics = checked_read(&abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
             let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
             for (key, model) in part.models {
@@ -720,6 +726,26 @@ impl ItemAssets {
         let result = instance * pose.nodes[index];
         ensure!(result.is_finite(), "Invalid item node transform");
         Ok(result)
+    }
+}
+/// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
+/// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
+fn euler_to_matrix_images(
+    images: &mut BTreeMap<String, ImagePresentation>,
+    pack: &bri_weapons::Pack,
+) {
+    for (id, image) in images.iter_mut() {
+        let Some(name) = pack.images.get(id).map(|i| i.name.as_str()) else {
+            continue;
+        };
+        for (field, degrees) in [
+            ("rotation", &mut image.source_rotation_degrees),
+            ("eyeRotation", &mut image.eye_rotation_degrees),
+        ] {
+            if bri_weapons::rotation::is_euler_to_matrix(pack, name, field) {
+                *degrees = bri_weapons::rotation::euler_to_matrix(*degrees);
+            }
+        }
     }
 }
 /// Engine-family Euler composition Ry(-y)*Rx(-x)*Rz(-z), then native basis.

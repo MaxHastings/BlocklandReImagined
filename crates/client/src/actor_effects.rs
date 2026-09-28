@@ -240,6 +240,10 @@ impl ActorEffects {
         weapons: Arc<bri_weapons::Pack>,
         limits: EffectsLimits,
     ) -> Result<Self> {
+        // Image emitters follow the image's rotation, eulerToMatrix included.
+        let mut corrected = (*weapons).clone();
+        bri_weapons::rotation::correct_image_rotations(&mut corrected);
+        let weapons = Arc::new(corrected);
         Ok(Self {
             world: EffectsWorld::new(pack, limits, 0x4143544f52)?,
             shakes: Vec::new(),
