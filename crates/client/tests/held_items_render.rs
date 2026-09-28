@@ -163,6 +163,7 @@ fn start_ball_is_held_and_thrown_and_akimbo_raises_both_arms() -> Result<()> {
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
         mode: ServerMode::SinglePlayer,
+        game_mode: None,
         max_players: 1,
         server_name: "Held item render".into(),
         password: String::new(),

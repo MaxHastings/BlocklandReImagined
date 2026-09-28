@@ -353,6 +353,7 @@ impl App {
             self.content.maps.extend(worlds);
         }
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
+        self.ui.apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
         self.package_catalog = client;
         self.server_packages = server;
         Ok(())
@@ -913,6 +914,7 @@ impl App {
         );
         ui.set_console_commands(crate::console::commands());
         ui.apply(UiUpdate::Maps(content.maps.clone()));
+        ui.apply(UiUpdate::GameModes(crate::packages::modes(server_packages.as_ref())));
         let backgrounds = content
             .ui_pack
             .data
@@ -1440,6 +1442,7 @@ impl App {
         id: RequestId,
         map: String,
         mode: ServerMode,
+        game_mode: Option<String>,
         max_players: u32,
         name: String,
         password: String,
@@ -1453,21 +1456,21 @@ impl App {
         let admin = bri_admin::Secret::new(admin)?;
         let super_admin = bri_admin::Secret::new(super_admin)?;
         ensure!((1..=64).contains(&max_players), "Invalid player limit");
+        // What runs: the chosen game mode's Add-Ons, or (Custom) every
+        // enabled Add-On that fits the map. A package world stands on its
+        // environment map; the packages then generate the ground.
+        let hosted = crate::packages::hosted(self.server_packages.as_ref(), &map, game_mode.as_deref())?;
+        let map = hosted.map;
         ensure!(
             self.content.maps.iter().any(|m| m.id == map),
             "This map has no usable native bundle yet"
         );
         let paths = self.content.paths.clone();
         let paths_for_maps = paths.clone();
-        // A package world stands on its environment map; the packages then
-        // generate the ground and bring their gameplay.
-        let package_world = self
-            .server_packages
-            .clone()
-            .and_then(|c| c.world().filter(|(_, id, _)| **id == map).map(|(_, _, w)| w.environment.clone()).map(|base| (c, base)));
-        let base_map = package_world.as_ref().map_or_else(|| map.clone(), |(_, base)| base.clone());
+        let base_map = hosted.base_map;
+        let package_world = hosted.catalog;
         let package_save = package_world.as_ref().map(|_| {
-            self.state_dir.join("packages").join(format!("{}.save.json", map.replace([':', '/'], "-")))
+            self.state_dir.join("packages").join(format!("{}.save.json", hosted.save_key.replace([':', '/'], "-")))
         });
         // Admin Change Map choices (the Tutorial has its own entry point).
         let map_list: Vec<_> = self
@@ -1646,13 +1649,17 @@ impl App {
             };
             let mut spawn_points = loaded.spawn_points.clone();
             let mut session = setup.session(loaded)?;
-            if let Some((catalog, _)) = package_world {
+            if let Some(catalog) = package_world {
                 let save = match package_save.as_ref().map(std::fs::read) {
                     Some(Ok(bytes)) => Some(bri_sim::session::PackageSave::decode(&bytes)?),
                     _ => None,
                 };
-                spawn_points = session.install_packages(catalog, save)?;
-                ensure!(!spawn_points.is_empty(), "The package world generated no ground to stand on");
+                let world = catalog.world().is_some();
+                let generated = session.install_packages(catalog, save)?;
+                if world {
+                    ensure!(!generated.is_empty(), "The package world generated no ground to stand on");
+                    spawn_points = generated;
+                }
                 if let Some(dir) = package_save.as_ref().and_then(|p| p.parent()) {
                     std::fs::create_dir_all(dir)?;
                 }
@@ -4053,6 +4060,7 @@ impl PlatformApp for App {
                 UiAction::HostGame {
                     map,
                     mode,
+                    game_mode,
                     max_players,
                     server_name,
                     password,
@@ -4066,6 +4074,7 @@ impl PlatformApp for App {
                         id,
                         map,
                         mode,
+                        game_mode,
                         max_players,
                         server_name,
                         password,
@@ -4338,6 +4347,7 @@ impl PlatformApp for App {
                         id,
                         "v20/add-ons/map_tutorial/tutorial.mis".into(),
                         ServerMode::SinglePlayer,
+                        None,
                         1,
                         "Tutorial".into(),
                         String::new(),
@@ -5275,7 +5285,7 @@ mod tests {
         assert_eq!(app.content.item_physics.bounds.len(), 21);
         app.ui.core.request(UiAction::HostGame {
             map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
-            mode: ServerMode::SinglePlayer,
+            mode: ServerMode::SinglePlayer, game_mode: None,
             max_players: 1,
             server_name: "Weapon catalog test".into(),
             password: String::new(),

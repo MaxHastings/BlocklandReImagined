@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "name": "Stress Lab",
+  "description": "Dig through layered ground for ore, sell it for Bits and keep clear of the creepers.",
+  "map": "stresslab-world:world/strata",
+  "add_ons": ["stresslab-world", "stresslab-economy", "stresslab-creeper", "stresslab-hud"]
+}

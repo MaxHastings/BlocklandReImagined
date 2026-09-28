@@ -51,6 +51,78 @@ fn show(value: Option<&serde_json::Value>) -> String {
         Some(other) => other.to_string().chars().take(24).collect(),
     }
 }
+/// What a hosted game runs: the packages, the map players see chosen, the
+/// base map it stands on and the key its package state is saved under.
+#[derive(Debug)]
+pub struct Hosted {
+    pub catalog: Option<Arc<Catalog>>,
+    pub map: String,
+    pub base_map: String,
+    pub save_key: String,
+}
+/// Resolve Start Game's choice of `map` and game `mode` (None: Custom).
+/// Custom on a package world runs every enabled Add-On except those needing
+/// another world; Custom on a base map runs the plain base game. A mode runs
+/// its own Add-Ons, on its own map when it names one.
+pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> Result<Hosted> {
+    let problems = |p: Vec<bri_package::diag::Diagnostic>| {
+        anyhow::anyhow!(p.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))
+    };
+    let (catalog, map, save_key) = match (server, mode) {
+        (None, Some(mode)) => anyhow::bail!("The game mode {mode} is not turned on in Add-Ons"),
+        (None, None) => (None, map.to_owned(), map.to_owned()),
+        (Some(server), Some(mode)) => {
+            let def = server
+                .modes()
+                .find(|(id, _)| id.as_str() == mode)
+                .map(|(_, m)| m.clone())
+                .with_context(|| format!("The game mode {mode} is not turned on in Add-Ons"))?;
+            let catalog = server.for_mode(mode).map_err(problems)?;
+            let map = def.map.clone().unwrap_or_else(|| map.to_owned());
+            if let Some((_, world, _)) = catalog.world() {
+                anyhow::ensure!(*world == map, "{} plays on its own world", def.name);
+            } else {
+                anyhow::ensure!(!map.contains(':'), "{} does not bring that world; pick a map", def.name);
+            }
+            let key = format!("{mode}-{map}");
+            (Some(catalog), map, key)
+        }
+        (Some(server), None) if server.packages.values().any(|p| p.worlds.contains_key(map)) => {
+            (Some(server.for_world(map).map_err(problems)?), map.to_owned(), map.to_owned())
+        }
+        (Some(_), None) if map.contains(':') => anyhow::bail!("No Add-On that is turned on provides {map}"),
+        (Some(_), None) => (None, map.to_owned(), map.to_owned()),
+    };
+    // Nothing to run: host the plain base game.
+    let catalog = catalog.filter(|c| c.world().is_some() || c.behaviours().next().is_some());
+    let base_map = catalog
+        .as_ref()
+        .and_then(|c| c.world().map(|(_, _, w)| w.environment.clone()))
+        .unwrap_or_else(|| map.clone());
+    Ok(Hosted {
+        catalog: catalog.map(Arc::new),
+        map,
+        base_map,
+        save_key,
+    })
+}
+/// Start Game's game modes: every mode an enabled Add-On declares.
+pub fn modes(server: Option<&Arc<Catalog>>) -> Vec<bri_ui::api::GameModeInfo> {
+    let Some(server) = server else {
+        return Vec::new();
+    };
+    let mut out: Vec<_> = server
+        .modes()
+        .map(|(id, m)| bri_ui::api::GameModeInfo {
+            id: id.clone(),
+            name: m.name.clone(),
+            description: m.description.clone(),
+            map: m.map.clone(),
+        })
+        .collect();
+    out.sort_by_key(|m| m.name.to_ascii_lowercase());
+    out
+}
 /// Start Game entries for the world providers a host can run, standing on
 /// their environment map (whose preview they borrow).
 pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_ui::api::MapInfo> {
@@ -63,7 +135,8 @@ pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_u
             Some(bri_ui::api::MapInfo {
                 id: id.clone(),
                 name: p.manifest.name.clone(),
-                description: format!("{} (package {} {})", p.manifest.description, p.id(), p.manifest.version),
+                // Player-facing: "Add-On", never "package".
+                description: format!("{} (Add-On {} {})", p.manifest.description, p.id(), p.manifest.version),
                 preview: base.preview.clone(),
             })
         })
@@ -201,18 +274,54 @@ mod tests {
     use bri_package::packages::{PackageEntry, PackageSet, Side};
 
     fn catalog() -> Catalog {
+        load(false)
+    }
+    fn load(server: bool) -> Catalog {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/stresslab");
+        let bricks = PackageEntry {
+            id: "v20-bricks".into(),
+            version: "4.0.0".into(),
+            side: Side::Shared,
+            dir: "unused".into(),
+            role: Some("brick_catalog".into()),
+        };
         let packages = [
             ("stresslab-world", Side::Server),
             ("stresslab-creeper", Side::Server),
             ("stresslab-creeper-model", Side::Client),
             ("stresslab-economy", Side::Server),
             ("stresslab-hud", Side::Client),
+            ("stresslab-mode", Side::Server),
         ]
         .into_iter()
         .map(|(id, side)| PackageEntry { id: id.into(), version: "1.0.0".into(), side, dir: id.into(), role: None })
+        .chain([bricks])
         .collect();
-        Catalog::load(&root, &PackageSet { schema_version: 1, packages }, false).unwrap()
+        Catalog::load(&root, &PackageSet { schema_version: 1, packages }, server).unwrap()
+    }
+
+    #[test]
+    fn hosting_runs_the_chosen_mode_or_the_plain_base_game() {
+        let server = Arc::new(load(true));
+        let strata = "stresslab-world:world/strata";
+        let infos = modes(Some(&server));
+        assert_eq!(infos.len(), 1);
+        assert_eq!((infos[0].name.as_str(), infos[0].map.as_deref()), ("Stress Lab", Some(strata)));
+        // The mode picks its own world, whatever map Start Game had selected.
+        let mode = hosted(Some(&server), "Slate", Some(&infos[0].id)).unwrap();
+        assert_eq!(mode.map, strata);
+        assert_ne!(mode.base_map, strata, "stands on the world's environment");
+        assert_eq!(mode.save_key, format!("{}-{strata}", infos[0].id));
+        assert!(mode.catalog.as_ref().is_some_and(|c| c.world().is_some()));
+        // Custom on the package world runs the Add-Ons made for it.
+        let world = hosted(Some(&server), strata, None).unwrap();
+        assert!(world.catalog.is_some_and(|c| c.packages.contains_key("stresslab-creeper")));
+        // Custom on a base map runs no Add-On rules.
+        let base = hosted(Some(&server), "Slate", None).unwrap();
+        assert!(base.catalog.is_none());
+        assert_eq!((base.map.as_str(), base.save_key.as_str()), ("Slate", "Slate"));
+        let off = hosted(None, "Slate", Some(&infos[0].id)).unwrap_err().to_string();
+        assert!(off.contains("not turned on in Add-Ons"), "{off}");
     }
 
     #[test]

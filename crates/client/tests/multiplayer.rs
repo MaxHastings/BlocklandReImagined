@@ -187,7 +187,7 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
 
     host.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
-        mode: ServerMode::Internet,
+        mode: ServerMode::Internet, game_mode: None,
         max_players: 8,
         server_name: "Multiplayer probe".into(),
         password: String::new(),

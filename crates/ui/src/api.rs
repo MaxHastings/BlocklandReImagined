@@ -33,6 +33,17 @@ pub enum IconRef {
 
 // ----------------------------------------------------------------- catalogs
 
+/// A game mode an enabled Add-On declares, for Start Game.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameModeInfo {
+    /// Content id the host understands (`package:mode/name`).
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// The map id it always plays on, or None when the host picks.
+    pub map: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapInfo {
     /// Stable id the host understands (e.g. the converted map bundle id).
@@ -542,6 +553,9 @@ pub enum UiAction {
     HostGame {
         map: String,
         mode: ServerMode,
+        /// A game mode an enabled Add-On declares (content id), or None for
+        /// Custom: every enabled Add-On that fits the map.
+        game_mode: Option<String>,
         max_players: u32,
         server_name: String,
         password: String,
@@ -991,6 +1005,8 @@ pub enum UiUpdate {
     },
     Connection(ConnectionState),
     Maps(Vec<MapInfo>),
+    /// Game modes the enabled Add-Ons declare (Start Game).
+    GameModes(Vec<GameModeInfo>),
     LanServers {
         servers: Vec<ServerInfo>,
         querying: bool,

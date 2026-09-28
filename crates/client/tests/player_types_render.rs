@@ -177,6 +177,7 @@ fn horse_players_draw_as_horses_and_fuel_jets_show_energy() -> Result<()> {
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
         mode: ServerMode::SinglePlayer,
+        game_mode: None,
         max_players: 1,
         server_name: "Player type render".into(),
         password: String::new(),

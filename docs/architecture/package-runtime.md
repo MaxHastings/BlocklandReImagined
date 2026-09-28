@@ -27,6 +27,7 @@ file:
 | `entity` | server | An entity kind: name, model id, speed, scale, health, think function and interval. |
 | `model` | client | A box model: coloured boxes, colours per entity label. |
 | `hud` | client | A HUD panel: title, colours, rows bound to public state, keys bound to commands. |
+| `mode` | server | A game mode: name, description, optional map, and the Add-Ons it runs. |
 
 **Clients never receive or run package code.** Server kinds may only appear
 in packages listed with `"side": "server"`; models and HUD panels only in
@@ -34,6 +35,40 @@ in packages listed with `"side": "server"`; models and HUD panels only in
 `package.side.server_content` or `package.side.client_content`. Clients load
 only their `client`/`shared` packages; the server tells them everything
 else through replicated data (entities carry their model id).
+
+## Game modes
+
+Start Game's **Game Mode** button (above Start) opens a list, like v21's
+gamemodes: **Custom** first, then every `mode` an enabled Add-On declares,
+sorted by name, with its description and map. The choice is the
+`$Pref::Server::GameMode` pref (empty for Custom). A mode that names a map
+locks the map list to it.
+
+```json
+{ "schema_version": 1, "name": "Stress Lab",
+  "description": "Dig through layered ground for ore ...",
+  "map": "stresslab-world:world/strata",
+  "add_ons": ["stresslab-world", "stresslab-economy", "stresslab-creeper", "stresslab-hud"] }
+```
+
+`add_ons` may name only the mode's own package and its direct dependencies
+(`set.mode.add_on`), so turning the mode on turns on what it runs. A `map`
+with a `:` must be a world one of those Add-Ons (or their dependencies)
+provides (`set.mode.map`); a plain map name is a base map. Name, 1–48
+characters; description, up to 512; up to 64 Add-Ons.
+
+What a host runs (`crates/client/src/packages.rs` `hosted`):
+
+- **A mode** runs its package, its `add_ons` and their dependencies
+  (`Catalog::for_mode`) on its map, or on the selected map when it names
+  none. Its state saves under `<mode>-<map>`.
+- **Custom on a package world** runs every enabled Add-On except those that
+  need a different world (`Catalog::for_world`), as before modes existed.
+- **Custom on a base map** runs no Add-On rules: the plain base game.
+
+Several world providers may be enabled at once; only a hosted game must
+settle on one (`set.world.conflict`, raised by `for_mode`/`for_world`).
+`packages/stresslab/stresslab-mode` is the worked example.
 
 ## The seams
 

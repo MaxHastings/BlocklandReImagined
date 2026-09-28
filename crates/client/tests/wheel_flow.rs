@@ -65,6 +65,7 @@ fn wheel_scrolls_the_brick_bar_in_the_real_app() -> Result<()> {
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
         mode: ServerMode::SinglePlayer,
+        game_mode: None,
         max_players: 1,
         server_name: "Wheel".into(),
         password: String::new(),

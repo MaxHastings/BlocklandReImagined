@@ -7,6 +7,7 @@ pub mod admin;
 pub mod avatar;
 pub mod console;
 pub mod menus;
+pub mod modes;
 pub mod minigames;
 pub mod options;
 pub mod play;
@@ -70,6 +71,8 @@ pub enum ScreenId {
     PackageDownload,
     /// A join refused over differing add-ons (native).
     AddOnMismatch,
+    /// Start Game's game mode picker (native; v20 had none).
+    GameModes,
 }
 
 pub trait Screen {
@@ -160,6 +163,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::AddOns => return Box::new(addons::AddOns::new(core)),
         ScreenId::PackageDownload => return Box::new(addons::PackageDownload::new(core)),
         ScreenId::AddOnMismatch => return Box::new(addons::Mismatch::new(core)),
+        ScreenId::GameModes => return Box::new(modes::GameModes::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),
