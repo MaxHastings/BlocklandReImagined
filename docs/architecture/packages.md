@@ -36,6 +36,45 @@ reserved for the game itself (`id::is_reserved`).
 Versions are `major.minor.patch`; dependency requirements are `*`, `=1.2.3`,
 `>=1.2` or `^1.2` (`id::Version`, `id::Requirement`).
 
+### Converted content
+
+Importers name converted content with `id::native(namespace, kind, source)`
+(or `id::Minter`, which also refuses two sources that land on the same id).
+It lowercases, turns `\` into `/`, and turns every other character outside
+`a-z 0-9 _ - . /` into `_`. Files referenced by path use the kind `file`:
+
+```text
+brick1x1Data                              -> v20:brick/brick1x1data
+horsearmor::activate                      -> v20:vehicle/horsearmor__activate
+Add-Ons/Brick_Large_Cubes/64x Cube.blb    -> v20:file/add-ons/brick_large_cubes/64x_cube.blb
+```
+
+### Legacy spellings still in the base packs
+
+The base packs and the code that reads them predate this grammar. A survey
+of the 17 client-side base packs (2026-09-27) found 5,617 id occurrences
+(1,755 distinct) in three spellings, plus about 400 literals in about 110
+`.rs` files:
+
+| Spelling | Used for | Example |
+|---|---|---|
+| `v20/kind/name` | bricks, prints, sounds, clips, music, emitters, particles, lights, explosions, events, weather | `v20/brick/brick1x1data` |
+| `v20.kind.name` | weapons, images, projectiles, shapes, vehicles, players, foliage, weapon debris | `v20.weapon.gunitem` |
+| `v20/<path>` | files by virtual path: maps, meshes, textures, interiors | `v20/add-ons/map_slate/slate.mis` |
+
+Names that the grammar cannot hold as-is: spaces (`64x cube.blb`,
+`synth 4/synth4_00.wav`), `::` (`v20.vehicle.horsearmor::activate`), a
+parenthesised suffix (`rocketexplodesound (alternate definition)`) and `#`
+(`slatestormrevised.mis#weather-9`). `id::native` maps each of them. No name
+in the survey is longer than 64 characters.
+
+Rename plan, scheduled with the vanilla-as-packages phase and multi-pack
+loading, not before: every importer mints through `id::native`; one change
+rewrites the runtime literals to `v20:kind/name` (paths to `v20:file/...`)
+and points `base-packages.json` at packs regenerated from that importer
+commit. Until then, new content (mods, Stress Lab packages) uses the grammar
+and the base packs keep their spellings.
+
 ## `packages.json`: what a peer loads
 
 The client and the dedicated server both read `packages.json` from their
@@ -117,6 +156,5 @@ Base packages carry no `package.json`; `packages.json` describes them.
 ## Not built yet
 
 Dependency resolution, downloading missing packages, and archives are the mod
-platform lane's. Content inside the base packages still uses older id
-spellings (`v20/brick/...`, `v20.weapon....`) until those packs are
-regenerated under the grammar above; see the audit.
+platform lane's. Renaming the base packs' ids follows the plan under
+"Legacy spellings" above.
