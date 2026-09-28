@@ -30,8 +30,7 @@ fn session() -> Session {
     };
     let catalog = Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
     let world = World::new("Samples".into(), "samples".into(), vec![[1.0; 4]]);
-    let mut session =
-        Session::new(Simulation::new(world, Definitions::default(), vec![]).unwrap());
+    let mut session = Session::new(Simulation::new(world, Definitions::default(), vec![]).unwrap());
     session.install_packages(Arc::new(catalog), None).unwrap();
     session
 }
@@ -61,8 +60,12 @@ fn run(s: &mut Session, ticks: usize) {
 #[test]
 fn survival_points_award_living_players_and_greet_them() {
     let mut s = session();
-    let host = s.join("Host".into(), Vec3::new(0.0, 1.0, 0.0), true).unwrap();
-    let guest = s.join("Guest".into(), Vec3::new(4.0, 1.0, 0.0), false).unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 1.0, 0.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(4.0, 1.0, 0.0), false)
+        .unwrap();
     let greeted = s.take_private_notices();
     for owner in [host, guest] {
         assert!(
@@ -79,14 +82,22 @@ fn survival_points_award_living_players_and_greet_them() {
     let ns = &view.packages[RULE];
     assert_eq!(ns.players[&guest]["points"], 2);
     assert_eq!(ns.global["awarded"], 4);
-    assert!(s.package_diagnostics().is_empty(), "{:?}", s.package_diagnostics());
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:?}",
+        s.package_diagnostics()
+    );
 }
 
 #[test]
 fn survival_points_leaderboard_and_admin_reset() {
     let mut s = session();
-    let host = s.join("Host".into(), Vec3::new(0.0, 1.0, 0.0), true).unwrap();
-    let guest = s.join("Guest".into(), Vec3::new(4.0, 1.0, 0.0), false).unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 1.0, 0.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(4.0, 1.0, 0.0), false)
+        .unwrap();
     run(&mut s, EVERY + 1);
     send(&mut s, guest, 1, "top").unwrap();
     run(&mut s, 1);
@@ -103,5 +114,9 @@ fn survival_points_leaderboard_and_admin_reset() {
     send(&mut s, host, 1, "reset").unwrap();
     run(&mut s, 1);
     assert_eq!(points(&s, guest, "best"), 0);
-    assert!(s.chat().iter().any(|l| l.text == "Survival Points were reset."));
+    assert!(
+        s.chat()
+            .iter()
+            .any(|l| l.text == "Survival Points were reset.")
+    );
 }

@@ -31,7 +31,11 @@ fn set() -> PackageSet {
 fn samples_load_on_server_and_client() {
     let server = Catalog::load(&root(), &set(), true).unwrap_or_else(|e| panic!("{e:#?}"));
     Runtime::compile(&server).unwrap_or_else(|e| panic!("{e:#?}"));
-    assert!(server.packages["sample-survival-points"].behaviour.is_some());
+    assert!(
+        server.packages["sample-survival-points"]
+            .behaviour
+            .is_some()
+    );
     // A client never receives the rule's script, only the HUD and weapon.
     let client = Catalog::load(&root(), &set(), false).unwrap_or_else(|e| panic!("{e:#?}"));
     assert_eq!(
@@ -58,7 +62,11 @@ fn sample_hud_binds_only_public_keys_and_real_commands() {
         let key = if b.player { &keys.player } else { &keys.global }
             .get(&b.key)
             .unwrap_or_else(|| panic!("{} is not declared", row.bind));
-        assert!(key.public, "{} is private, so the HUD would stay blank", row.bind);
+        assert!(
+            key.public,
+            "{} is private, so the HUD would stay blank",
+            row.bind
+        );
     }
     for k in &panel.keys {
         let command = rule(&k.package)
