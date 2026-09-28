@@ -72,6 +72,8 @@ pub struct Vitals {
     pub talking: bool,
     /// Seated by the sit emote.
     pub sitting: bool,
+    /// The unplanted ghost brick others see.
+    pub ghost: Option<super::GhostBrick>,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -336,6 +338,7 @@ impl Session {
                         control: peer.control,
                         talking: peer.talking,
                         sitting: peer.sitting,
+                        ghost: self.ghost_brick(*owner),
                     },
                 )
             })

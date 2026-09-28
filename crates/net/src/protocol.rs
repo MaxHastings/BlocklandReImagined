@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 38: `bsd` and `hug` emote cues, which older clients reject as invalid.
 /// 39: `VehiclePose::wheel_contact` for the tire emitters.
 /// 40: the host's Server Settings in the admin snapshot.
-pub const VERSION: u32 = 40;
+pub const VERSION: u32 = 41;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

@@ -194,6 +194,8 @@ pub enum Command {
     ControlPlayer,
     /// The client's brick inventory state, which only it knows.
     BrickHand(BrickHand),
+    /// The client's unplanted ghost brick moved, or went away.
+    GhostBrick(Option<GhostBrick>),
     /// `serverCmdWand` (`/wand`): hold the player wand.
     Wand,
     /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
@@ -259,9 +261,38 @@ impl Command {
             | Command::DropPlayerAtCamera(_)
             | Command::ControlPlayer
             | Command::BrickHand(_)
+            | Command::GhostBrick(_)
             | Command::Talking(_) => (false, None),
         };
         Preconditions { alive, build }
+    }
+}
+/// A player's unplanted ghost brick (`tempBrick`). v20 ghosted it to every
+/// client: others see it translucent, in its colour and shape, following the
+/// owner's moves and turns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GhostBrick {
+    pub definition: String,
+    pub position: [f32; 3],
+    pub quarter_turns: u8,
+    pub color: u8,
+    pub print: Option<String>,
+}
+impl GhostBrick {
+    pub fn validate(&self) -> Result<()> {
+        let id = |s: &str| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control);
+        ensure!(
+            id(&self.definition)
+                && self.print.as_deref().is_none_or(id)
+                && self
+                    .position
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+                && self.quarter_turns < 4,
+            "Invalid ghost brick"
+        );
+        Ok(())
     }
 }
 /// `ServerCmdShiftBrick`, `ServerCmdSuperShiftBrick` and
@@ -416,6 +447,9 @@ struct Peer {
     /// (`$Pref::Server::MaxBricksPerSecond`).
     plants: u32,
     saves: u32,
+    /// Ghost brick reports this window; they have their own budget so a
+    /// builder moving a ghost never starves real actions.
+    ghost_reports: u32,
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
@@ -436,6 +470,8 @@ struct Peer {
     /// Seated by the sit emote until they move, mount or die. Lasting state,
     /// so it replicates in vitals and late joiners see it.
     sitting: bool,
+    /// The unplanted ghost brick the client last reported (`tempBrick`).
+    ghost: Option<GhostBrick>,
     /// `lastActivateTime` and `activateLevel` for the activate swing.
     last_activate: Option<u64>,
     activate_level: u32,
@@ -796,6 +832,7 @@ impl Session {
                 current_color: 0,
                 talking: false,
                 sitting: false,
+                ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -810,6 +847,7 @@ impl Session {
                 chats: 0,
                 plants: 0,
                 saves: 0,
+                ghost_reports: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -981,6 +1019,7 @@ impl Session {
                 current_color: 0,
                 talking: false,
                 sitting: false,
+                ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -995,6 +1034,7 @@ impl Session {
                 chats: 0,
                 plants: 0,
                 saves: 0,
+                ghost_reports: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -1188,9 +1228,15 @@ impl Session {
                 peer.chats = 0;
                 peer.plants = 0;
                 peer.saves = 0;
+                peer.ghost_reports = 0;
             }
-            peer.actions = peer.actions.saturating_add(1);
-            ensure!(peer.actions <= 60, "Action command rate exceeded");
+            if matches!(command, Command::GhostBrick(_)) {
+                peer.ghost_reports = peer.ghost_reports.saturating_add(1);
+                ensure!(peer.ghost_reports <= 30, "Ghost brick report rate exceeded");
+            } else {
+                peer.actions = peer.actions.saturating_add(1);
+                ensure!(peer.actions <= 60, "Action command rate exceeded");
+            }
             (peer.combat.alive, peer.combat.player)
         };
         let needs = command.preconditions();
@@ -1409,6 +1455,10 @@ impl Session {
             }
             Command::BrickHand(hand) => {
                 self.set_brick_hand(owner, hand)?;
+                Ok(Reply::Accepted)
+            }
+            Command::GhostBrick(ghost) => {
+                self.set_ghost_brick(owner, ghost)?;
                 Ok(Reply::Accepted)
             }
             Command::BuildGesture(gesture) => {
@@ -1639,6 +1689,7 @@ impl Session {
                     peer.input = peer.body_input(input);
                 }
                 driving.push((owner, peer.input));
+                peer.player.look(&peer.input);
                 peer.player.hold(&mut self.simulation.physics);
                 continue;
             }

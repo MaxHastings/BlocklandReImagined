@@ -3285,3 +3285,31 @@ the first copy). No wire change.
   -p bri-client --lib weapon_debris -- --include-ignored`, `cargo test -p
   bri-client --lib audio -- --include-ignored`, `cargo test -p bri-sim --test
   session deploying_a_brick -- --ignored`.
+- 2026-09-28 What other players see (branch `claude/remote-anim`). Max
+  reported three multiplayer gaps. (1) Another player's wrench swing went
+  much too far. Cause: held images were drawn at their highest detail,
+  `detail9999`, the mesh only the holder's first-person view reaches in v20.
+  The wrench, hammer, sword and other tools' `fire` sequences animate only
+  that mesh (`Wrench9999`, `FPhammer9999`), so others saw the item's
+  first-person swing on top of the arm's `wrench`/`armattack` thread. Other
+  players' images (and the holder's own third-person view) now use the
+  largest detail below 9999 (`detail32`/`detail100`), which the swing leaves
+  still, as in v20; the local first-person view is unchanged. The arm
+  threads themselves already matched: a new two-client loopback
+  (`crates/client/tests/remote_poses.rs`) swings the hammer and wrench from
+  each side while looking down and pins the watcher's hand pose to the
+  swinger's own (measured equal to 0.001 rad). (2) A rider's look did not reach
+  others: the server consumed a mounted player's moves for the vehicle but
+  never applied their pitch or free-look head turn, so remote riders sat
+  frozen. `Player::look` now applies them each mounted tick (v20
+  `updateMove` still turns `mHead` while mounted), for every mount.
+  (3) Other players' ghost bricks were invisible (v20 ghosted `tempBrick` to
+  everyone). The client reports its ghost (`Command::GhostBrick`, at most
+  10 per second, removal at once, with its own 30/s budget outside the 60/s
+  action budget); the server keeps it only while its owner lives with bricks
+  in hand and replicates it in `Vitals::ghost`; clients draw others' ghosts
+  translucent in their colour and shape. Protocol 40 -> 41. Evidence:
+  `cargo test -p bri-client --lib -- --ignored others_see_held_tools`,
+  `cargo test -p bri-net --test loopback ghost_bricks look_pitch`,
+  `cargo test -p bri-sim --test vehicles -- --ignored riders_keep`,
+  `cargo test -p bri-client --test remote_poses --release -- --ignored`.

@@ -92,6 +92,8 @@ pub struct ItemAssets {
 /// Resource bindings persist while the host updates only posed geometry.
 pub struct ItemMesh {
     pub data: SceneData,
+    /// Draws the first-person `detail9999` mesh; see `visible_detail`.
+    pub first_person: bool,
     model: String,
     tint: [f32; 4],
 }
@@ -114,7 +116,7 @@ impl ItemMesh {
             ..Default::default()
         };
         let bindings: Vec<_> = (0..shape.materials.len()).collect();
-        if let Some(detail) = visible_detail(shape) {
+        if let Some(detail) = visible_detail(shape, self.first_person) {
             scratch.append_shape(
                 ShapeInstance {
                     shape,
@@ -142,14 +144,30 @@ impl ItemMesh {
         Ok(changed)
     }
 }
-fn visible_detail(shape: &Shape) -> Option<usize> {
-    shape
-        .details
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| !d.collision)
-        .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
-        .map(|(i, _)| i)
+/// Blockland's tools and weapons carry a `detail9999` mesh that only the
+/// holder's first-person view reaches, and their `fire` sequences animate
+/// only that mesh. Everyone else sees the held image at its ordinary detail,
+/// which the swing leaves still (the arm's thread does the swinging).
+const FIRST_PERSON_DETAIL: f32 = 9999.0;
+
+fn visible_detail(shape: &Shape, first_person: bool) -> Option<usize> {
+    let visible = || {
+        shape
+            .details
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.collision)
+    };
+    let largest = |details: &mut dyn Iterator<Item = (usize, &bri_content::shape::Detail)>| {
+        details
+            .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
+            .map(|(i, _)| i)
+    };
+    if first_person {
+        return largest(&mut visible());
+    }
+    largest(&mut visible().filter(|(_, d)| d.pixel_threshold < FIRST_PERSON_DETAIL))
+        .or_else(|| largest(&mut visible()))
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -300,6 +318,7 @@ impl ItemAssets {
     pub fn mesh(&self, model: &str, tint: [f32; 4]) -> Result<ItemMesh> {
         Ok(ItemMesh {
             data: self.model_scene(model, tint, Mat4::IDENTITY, None, 0.)?,
+            first_person: false,
             model: model.into(),
             tint,
         })
@@ -764,6 +783,37 @@ mod bounds_tests {
     use super::*;
     fn root() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+    #[test]
+    #[ignore = "requires generated native item content; CPU only"]
+    fn others_see_held_tools_at_their_third_person_detail() -> Result<()> {
+        // The `fire` sequences swing only the first-person detail9999 mesh;
+        // drawing that for other players doubled the arm's swing.
+        let root = root();
+        let assets = ItemAssets::load(
+            &root.join("content/item-presentation-pack-010"),
+            &root.join("content/weapons-pack-009"),
+        )?;
+        for image in ["v20.image.wrenchimage", "v20.image.hammerimage"] {
+            let model = assets.presentation.images[image].model.clone();
+            let shape = assets.shape(&model)?;
+            let name = |detail: Option<usize>| detail.map(|d| shape.details[d].name.clone());
+            assert_eq!(name(visible_detail(shape, true)).as_deref(), Some("detail9999"));
+            assert_eq!(name(visible_detail(shape, false)).as_deref(), Some("detail32"));
+            let posed = |first_person: bool, seconds: f32| -> Result<Vec<Vec3>> {
+                let mut mesh = assets.mesh(&model, [1.; 4])?;
+                mesh.first_person = first_person;
+                mesh.pose(&assets, Mat4::IDENTITY, Some("fire"), seconds)?;
+                Ok(mesh.data.vertices.iter().map(|v| Vec3::from(v.position)).collect())
+            };
+            let moved = |first_person| -> Result<f32> {
+                let (rest, swung) = (posed(first_person, 0.)?, posed(first_person, 0.15)?);
+                Ok(rest.iter().zip(&swung).map(|(a, b)| a.distance(*b)).fold(0., f32::max))
+            };
+            assert!(moved(true)? > 0.05, "{image}: first-person swing");
+            assert!(moved(false)? < 1e-5, "{image}: others see the arm swing it");
+        }
+        Ok(())
     }
     #[test]
     #[ignore = "requires generated native item content; CPU only"]

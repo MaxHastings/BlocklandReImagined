@@ -350,12 +350,18 @@ impl HostSetup {
 }
 /// Request ID for unsolicited state reports; their replies are not awaited.
 const REPORT_REQUEST: RequestId = RequestId::MAX;
+/// How often a moving ghost brick is reported to the server.
+const GHOST_REPORT_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct App {
     /// Movement the server's map rules currently allow (the Tutorial's lessons).
     abilities: bri_sim::session::Abilities,
     /// Last brick inventory state reported to the server.
     brick_hand: Option<bri_sim::session::BrickHand>,
+    /// Last ghost brick reported to the server, and when.
+    ghost_report: Option<(Option<bri_sim::session::GhostBrick>, std::time::Instant)>,
+    /// Other players' ghost bricks as uploaded, by owner.
+    remote_ghosts: BTreeMap<bri_world::OwnerId, (bri_sim::session::GhostBrick, Option<GpuScene>)>,
     pub(crate) item_assets: Arc<crate::items::ItemAssets>,
     item_ui: crate::item_ui::ItemUi,
     world_items: crate::world_items::WorldItems,
@@ -1146,6 +1152,10 @@ impl App {
     pub fn avatar_scene(&self, owner: bri_world::OwnerId) -> Option<&SceneData> {
         self.avatars.get(&owner).map(|avatar| &avatar.data)
     }
+    /// A body's posed node in the world, as drawn this frame.
+    pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {
+        self.avatars.get(&owner)?.world_node(&self.avatar_assets, name)
+    }
     pub fn building(&self) -> Option<&crate::building::Building> {
         self.building.as_ref()
     }
@@ -1307,6 +1317,8 @@ impl App {
             attempt: None,
             abilities: Default::default(),
             brick_hand: None,
+            ghost_report: None,
+            remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
             cpu_terrain: Vec::new(),
             renderer: None,
@@ -1456,6 +1468,8 @@ impl App {
         self.scene_map = None;
         self.abilities = Default::default();
         self.brick_hand = None;
+        self.ghost_report = None;
+        self.remote_ghosts.clear();
         self.foliage.clear();
         self.weather.clear();
         self.audio.clear();
@@ -1520,6 +1534,7 @@ impl App {
         self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.remote_ghosts.clear();
         self.motion.reset();
         self.vehicles.clear();
         self.music_world = None;
@@ -3472,6 +3487,32 @@ impl App {
                     .is_ok()
             {
                 self.brick_hand = Some(hand);
+            }
+            // Others see the ghost too (v20 ghosted `tempBrick`). Moves are
+            // sent at most ten times a second; putting it away goes at once.
+            let ghost = building.ghost().and_then(|ghost| {
+                let id = |r: &bri_world::ContentRef| match r {
+                    bri_world::ContentRef::Resolved(id) => Some(id.clone()),
+                    _ => None,
+                };
+                Some(bri_sim::session::GhostBrick {
+                    definition: id(&ghost.definition)?,
+                    position: ghost.position,
+                    quarter_turns: ghost.quarter_turns,
+                    color: ghost.color,
+                    print: ghost.print.as_ref().and_then(id),
+                })
+            });
+            let due = self.ghost_report.as_ref().is_none_or(|(sent, at)| {
+                *sent != ghost
+                    && (ghost.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
+            });
+            if due
+                && a.worker
+                    .request(REPORT_REQUEST, Command::GhostBrick(ghost.clone()))
+                    .is_ok()
+            {
+                self.ghost_report = Some((ghost, std::time::Instant::now()));
             }
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
@@ -5898,6 +5939,7 @@ impl PlatformApp for App {
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.remote_ghosts.clear();
         self.debris_models.clear();
         self.package_models.clear();
         self.hidden_gpu = None;
@@ -5941,6 +5983,7 @@ impl PlatformApp for App {
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
+        self.remote_ghosts.clear();
         self.debris_models.clear();
         self.package_models.clear();
         self.hidden_gpu = None;
@@ -6077,6 +6120,57 @@ impl PlatformApp for App {
                 }
             }
             self.ghost_uploaded = ghost_key(building);
+        }
+        // Other players' ghost bricks, translucent in their colour and shape.
+        self.remote_ghosts.retain(|owner, (ghost, _)| {
+            *owner != view.owner
+                && view
+                    .vitals
+                    .get(owner)
+                    .and_then(|v| v.ghost.as_ref())
+                    .is_some_and(|now| now == ghost)
+        });
+        for (owner, vitals) in &view.vitals {
+            let Some(ghost) = vitals.ghost.as_ref().filter(|_| *owner != view.owner) else {
+                continue;
+            };
+            if self.remote_ghosts.contains_key(owner) {
+                continue;
+            }
+            let mut brick = bri_world::Brick::new(
+                bri_world::ContentRef::Resolved(ghost.definition.clone()),
+                ghost.position,
+                *owner,
+            );
+            brick.quarter_turns = ghost.quarter_turns;
+            brick.color = ghost.color;
+            brick.print = ghost.print.clone().map(bri_world::ContentRef::Resolved);
+            let world = bri_net::protocol::PublicWorld {
+                name: "Remote unplanted ghost".into(),
+                map_id: view.world.map_id.clone(),
+                palette: view.world.palette.clone(),
+                bricks: bri_world::Bricks::unit(0, brick),
+            };
+            // A brick this client cannot draw shows nothing.
+            let gpu = match (&self.meshes, &self.materials) {
+                (Some(meshes), Some(materials)) => {
+                    crate::world_scene::build_world_scene_materials(
+                        &world,
+                        meshes,
+                        100_000,
+                        Some(materials),
+                    )
+                    .ok()
+                    .filter(|data| !data.indices.is_empty())
+                    .map(|mut data| {
+                        translucent_ghost(&mut data);
+                        renderer.upload(frame.device, frame.queue, &data)
+                    })
+                    .transpose()?
+                }
+                _ => None,
+            };
+            self.remote_ghosts.insert(*owner, (ghost.clone(), gpu));
         }
         if let Some(building) = &self.building
             && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
@@ -6370,6 +6464,7 @@ impl PlatformApp for App {
         if let Some(ghost) = &self.ghost_gpu {
             scenes.push(ghost);
         }
+        scenes.extend(self.remote_ghosts.values().filter_map(|(_, gpu)| gpu.as_ref()));
         if let Some(hidden) = &self.hidden_gpu {
             scenes.push(hidden);
         }

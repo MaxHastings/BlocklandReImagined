@@ -2390,3 +2390,97 @@ async fn a_host_autosaves_on_its_timer_and_returns_its_final_world() -> Result<(
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ghost_bricks_replicate_to_other_players_and_leave_with_the_bricks() -> Result<()> {
+    use bri_sim::session::{BrickHand, GhostBrick};
+    let server = server::start(session(), options())?;
+    let connect = |name: &str| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            name.into(),
+            Vec::new(),
+            None,
+        )
+    };
+    let mut builder = connect("Builder").await?;
+    let mut other = connect("Other").await?;
+    let id = builder.owner;
+    let hand = |equipped: bool, ghost: bool| {
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped,
+            ghost,
+        })
+    };
+    let ghost = |x: f32, quarter_turns: u8| GhostBrick {
+        definition: "plate".into(),
+        position: [x, 0.1, 2.0],
+        quarter_turns,
+        color: 1,
+        print: None,
+    };
+    builder.command(hand(true, true)).await?;
+    builder
+        .command(Command::GhostBrick(Some(ghost(1.0, 0))))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica.vitals.get(&id).and_then(|v| v.ghost.as_ref()) == Some(&ghost(1.0, 0))
+    })
+    .await?;
+    // Moves and turns follow; a late joiner sees where it is now.
+    builder
+        .command(Command::GhostBrick(Some(ghost(1.5, 3))))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica.vitals.get(&id).and_then(|v| v.ghost.as_ref()) == Some(&ghost(1.5, 3))
+    })
+    .await?;
+    let late = connect("Late").await?;
+    assert_eq!(late.replica.vitals[&id].ghost, Some(ghost(1.5, 3)));
+    // Unknown bricks and bad positions are refused and change nothing.
+    let mut unknown = ghost(0.0, 0);
+    unknown.definition = "no-such-brick".into();
+    assert!(builder.command(Command::GhostBrick(Some(unknown))).await.is_err());
+    let mut far = ghost(0.0, 0);
+    far.position[0] = f32::NAN;
+    assert!(builder.command(Command::GhostBrick(Some(far))).await.is_err());
+    // Putting the bricks away takes the ghost with them.
+    builder.command(hand(false, true)).await?;
+    wait(&mut other, |c| c.replica.vitals.get(&id).is_some_and(|v| v.ghost.is_none())).await?;
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn look_pitch_and_head_turn_reach_other_players() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let connect = |name: &str| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            name.into(),
+            Vec::new(),
+            None,
+        )
+    };
+    let mut looker = connect("Looker").await?;
+    let mut other = connect("Other").await?;
+    let id = looker.owner;
+    let input = MoveInput {
+        yaw: 0.4,
+        pitch: -0.7,
+        head_yaw: 1.2,
+        ..Default::default()
+    };
+    send_inputs(&mut looker, &[input; 4])?;
+    wait(&mut other, |c| {
+        c.replica.poses.get(&id).is_some_and(|p| {
+            (p.player.pitch + 0.7).abs() < 1e-4 && (p.player.head_yaw - 1.2).abs() < 1e-4
+        })
+    })
+    .await?;
+    server.stop().await?;
+    Ok(())
+}

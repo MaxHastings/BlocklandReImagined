@@ -80,12 +80,15 @@ pub struct WorldItemDiagnostics {
 struct ModelKey {
     model: String,
     tint: [u32; 4],
+    /// The holder's own first-person image, drawn at its first-person detail.
+    first_person: bool,
 }
 impl ModelKey {
     fn new(model: &str, tint: [f32; 4]) -> Self {
         Self {
             model: model.into(),
             tint: tint.map(f32::to_bits),
+            first_person: false,
         }
     }
     fn tint(&self) -> [f32; 4] {
@@ -472,7 +475,10 @@ impl WorldItems {
             );
             candidates.push(Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
-                model: ModelKey::new(&image.model, image.tint),
+                model: ModelKey {
+                    first_person: local_first,
+                    ..ModelKey::new(&image.model, image.tint)
+                },
                 pose: pose_key,
                 transform: SceneTransform {
                     transform,
@@ -670,7 +676,8 @@ impl WorldItems {
             let mut model = if let Some(model) = cache.remove(&key) {
                 model
             } else {
-                let mesh = self.assets.mesh(&key.model, key.tint())?;
+                let mut mesh = self.assets.mesh(&key.model, key.tint())?;
+                mesh.first_person = key.first_person;
                 if mesh.data.vertices.is_empty() {
                     self.missing(format!("Model {} has no visible geometry", key.model));
                     continue;
