@@ -65,6 +65,8 @@ pub struct NodeState {
     pub frame: usize,
     /// Text-list row height from the profile font (`View::measure`).
     pub row_height: i32,
+    /// How far the player dragged this window from its laid-out place.
+    pub moved: (i32, i32),
 }
 
 #[derive(Debug, Clone)]
@@ -177,12 +179,22 @@ pub struct View {
     /// Scroll control whose thumb is being dragged: (control, grab offset,
     /// up arrow height, down arrow height).
     scroll_drag: Option<(NodeId, i32, i32, i32)>,
+    /// Window being dragged by its title bar: (window, last mouse x, y).
+    window_drag: Option<(NodeId, i32, i32)>,
     last_click: Option<(NodeId, u64)>,
     pub time_ms: u64,
     canvas: (i32, i32),
     /// Last mouse position (logical pixels).
     pub mouse: (i32, i32),
     close_hot: bool,
+}
+
+/// `r` moved as little as possible to lie inside `within` (its top-left
+/// corner stays visible when it is the larger).
+fn keep_inside(r: Rect, within: Rect) -> Rect {
+    let x = r.x.min(within.right() - r.w).max(within.x);
+    let y = r.y.min(within.bottom() - r.h).max(within.y);
+    Rect::new(x, y, r.w, r.h)
 }
 
 fn authored_rect(c: &Control) -> Rect {
@@ -213,6 +225,7 @@ impl View {
             focus: None,
             popup: None,
             scroll_drag: None,
+            window_drag: None,
             last_click: None,
             time_ms: 0,
             canvas: (640, 480),
@@ -241,6 +254,7 @@ impl View {
                 cursor: 0,
                 frame: 0,
                 row_height: 16,
+                moved: (0, 0),
             },
             ctrl,
             parent,
@@ -443,6 +457,10 @@ impl View {
                 (parent_rect.w, parent_rect.h),
             );
             let mut abs = r.offset(parent_rect.x, parent_rect.y);
+            let moved = self.nodes[k].state.moved;
+            if moved != (0, 0) {
+                abs = keep_inside(abs.offset(moved.0, moved.1), parent_rect);
+            }
             if is_scroll {
                 abs = abs.offset(0, -scroll_y);
             }
@@ -1117,6 +1135,30 @@ impl View {
         }
     }
 
+    /// The window skin's title bar: its top edge piece.
+    fn title_height(&self, pack: &Pack, id: NodeId) -> i32 {
+        self.style(pack, id)
+            .and_then(|s| s.bitmap.as_deref())
+            .and_then(|img| pack.data.skins.get(img))
+            .and_then(|skin| skin.pieces.get(win::TOP))
+            .map_or(20, |q| q[3] as i32)
+    }
+
+    /// Move a window by (dx, dy), keeping it inside its parent (the screen).
+    fn drag_window(&mut self, id: NodeId, dx: i32, dy: i32) {
+        let r = self.nodes[id].rect;
+        let parent = self.nodes[id]
+            .parent
+            .map_or(Rect::new(0, 0, self.canvas.0, self.canvas.1), |p| {
+                self.nodes[p].rect
+            });
+        let to = keep_inside(r.offset(dx, dy), parent);
+        let moved = &mut self.nodes[id].state.moved;
+        moved.0 += to.x - r.x;
+        moved.1 += to.y - r.y;
+        self.relayout();
+    }
+
     fn close_rect(&self, id: NodeId, cw: i32, ch: i32) -> Rect {
         let r = self.nodes[id].rect;
         Rect::new(r.right() - cw - 4, r.y + 3, cw, ch)
@@ -1635,6 +1677,7 @@ impl View {
     pub fn mouse_leave(&mut self) {
         self.hover = None;
         self.scroll_drag = None;
+        self.window_drag = None;
         self.close_hot = false;
     }
 
@@ -1649,6 +1692,11 @@ impl View {
         }
         if let Some((id, grab, uh, dh)) = self.scroll_drag {
             self.drag_scroll(id, y - grab, uh, dh);
+            return;
+        }
+        if let Some((id, lx, ly)) = self.window_drag {
+            self.drag_window(id, x - lx, y - ly);
+            self.window_drag = Some((id, x, y));
             return;
         }
         if let Some((id, MouseButton::Left)) = self.pressed
@@ -1712,6 +1760,16 @@ impl View {
         };
         self.pressed = Some((t, b));
         let class = self.nodes[t].ctrl.class.clone();
+        // GuiWindowCtrl::onMouseDown: a press on the title bar, off the close
+        // box, drags the window (`canMove`).
+        if class == "GuiWindowCtrl"
+            && b == MouseButton::Left
+            && self.nodes[t].ctrl.field("canMove") != Some("0")
+            && y < self.nodes[t].rect.y + self.title_height(pack, t)
+            && !self.close_rect(t, 16, 16).contains(x, y)
+        {
+            self.window_drag = Some((t, x, y));
+        }
         match class.as_str() {
             "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => {
                 self.focus = Some(t);
@@ -1793,6 +1851,7 @@ impl View {
     ) {
         self.mouse = (x, y);
         self.scroll_drag = None;
+        self.window_drag = None;
         if let Some(mut open) = self.popup {
             // Press-drag-release over a row picks it, like Torque's list.
             let items = self.nodes[open.node].state.items.len();

@@ -421,3 +421,58 @@ fn options_tabs_fit_short_and_wide_windows() {
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+/// Max: in v20 the Escape menu (any window) could be dragged by its title
+/// bar. It moves with the mouse and stays on screen.
+#[test]
+fn windows_drag_by_their_title_bar_and_stay_on_screen() {
+    use bri_ui::input::{InputEvent, MouseButton};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let mut u = ui(&Rc::new(pack));
+    u.core.push(ScreenId::EscapeMenu);
+    u.update(0);
+    let window = |u: &Ui| {
+        let v = u.screen(ScreenId::EscapeMenu).unwrap().view();
+        let n = v
+            .walk()
+            .find(|&n| v.node(n).ctrl.class == "GuiWindowCtrl")
+            .expect("escapeMenu has a window");
+        v.node(n).rect
+    };
+    let start = window(&u);
+    let drag = |u: &mut Ui, from: (i32, i32), to: (i32, i32)| {
+        let (fx, fy) = (from.0 as f32, from.1 as f32);
+        u.handle_input(InputEvent::MouseMove { x: fx, y: fy });
+        u.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x: fx,
+            y: fy,
+        });
+        let (tx, ty) = (to.0 as f32, to.1 as f32);
+        u.handle_input(InputEvent::MouseMove { x: tx, y: ty });
+        u.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x: tx,
+            y: ty,
+        });
+    };
+    let grab = (start.x + 30, start.y + 6);
+    drag(&mut u, grab, (grab.0 - 100, grab.1 + 50));
+    let moved = window(&u);
+    assert_eq!((moved.x, moved.y), (start.x - 100, start.y + 50));
+    // Pulled far past the corner, it stops at the screen's edge.
+    let grab = (moved.x + 30, moved.y + 6);
+    drag(&mut u, grab, (grab.0 - 5000, grab.1 - 5000));
+    let edge = window(&u);
+    assert_eq!((edge.x, edge.y), (0, 0));
+    // Pressing inside the window, off its title bar, moves nothing.
+    drag(
+        &mut u,
+        (edge.x + 30, edge.bottom() - 4),
+        (edge.x + 300, edge.bottom() + 100),
+    );
+    assert_eq!(window(&u), edge);
+}
