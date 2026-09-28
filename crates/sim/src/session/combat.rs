@@ -1220,16 +1220,22 @@ impl Session {
             {
                 continue;
             }
-            // Falling damage follows the minigame rule; the sandbox default
-            // (`$pref::Server::FallingDamage`) is off.
+            // `Armor::onImpact`: a mini-game's own Falling Damage rule, or
+            // outside mini-games the host's `$Pref::Server::FallingDamage`
+            // (Advanced Config; on in v20's server/defaults.cs).
+            let outside = self.admin.settings.falling_damage;
             let allowed = self
                 .minigames
                 .target_for_player(peer.combat.player)
                 .map(|target| {
-                    self.minigames.can_damage(
+                    match self.minigames.can_damage(
                         DamageSource::Environment(EnvironmentDamage::Falling),
                         target,
-                    ) == Decision::Allow
+                    ) {
+                        Decision::Allow => true,
+                        Decision::OutsideMinigames => outside,
+                        _ => false,
+                    }
                 })
                 .unwrap_or(false);
             if allowed {
