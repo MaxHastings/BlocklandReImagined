@@ -28,6 +28,7 @@ Playtest builds are packaged for Windows. They carry the v20 menus and maps,
 building and tools, wrench events, weapons, vehicles, mini-games, bots,
 save/load, direct-IP multiplayer and Add-Ons. [docs/STATUS.md](docs/STATUS.md)
 names the current build and what is open. See
+the [tester guide](docs/TESTER-GUIDE.md), the [feature list](docs/FEATURES.md),
 [playtest instructions](docs/PLAYTEST.md), [known issues](docs/KNOWN-ISSUES.md),
 [what v20 features are still missing](docs/audits/v20-parity.md) and
 [the playtest gate](docs/playtest-contract.md).

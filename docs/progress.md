@@ -3512,3 +3512,21 @@ bri-world -p bri-net` green apart from tests that need generated content
 crate. Not covered: the client renderer and audio (need a window), fx-runtime
 particles beyond the debris/weapon paths, and `.bls` text import.
 
+
+## 2026-09-28 Tester guide and feature list
+
+- Outside testers asked for a feature list: what is done and what still
+  needs doing. `docs/TESTER-GUIDE.md` (install, first start, LAN and
+  internet play by direct IP, where logs and crash files go, what to send,
+  known limits) and `docs/FEATURES.md` (v20 features done, partly done and
+  missing; what goes beyond v20; Add-Ons; what importing a v20 Add-On
+  brings and leaves out) now ship at the top of every release folder
+  (`package_playtest.ps1`, `package_playtest.sh`, the packaging test and
+  `playtest-package-layout.md`). Every claim was checked against the code
+  or the audits (`v20-parity.md`, `v20-fidelity.md`,
+  `v20-client-scripts.md`, `spike-addon-import.md`). Only UDP 28000 needs
+  forwarding for internet play: 28050 answers LAN discovery and is never
+  needed to join (`docs/architecture/hosting.md`). The modding guide no
+  longer lists the join trust prompt as unbuilt; only elevated client code
+  is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
+  packaging test needs Windows (not run in the cloud).

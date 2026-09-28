@@ -308,7 +308,6 @@ This guide changes in the same change as these land.
 - **Drawing blocks**: `block` and `texture` content (per-face textures,
   flipbooks and states a script switches with `set_block_state`) load,
   save and replicate, but the renderer does not draw block faces yet.
-- **Asking players to trust client code on join**: client code (section 6)
-  runs in games you host; on someone else's server it runs only for code
-  the player has already trusted, and the join-screen prompt that asks is
-  not built yet.
+- **Elevated client code**: joining asks "Trust and join" before a
+  server's sandboxed client code runs (section 6), but code asking for
+  `net.http` or `files.addon_folder` is not offered to joiners yet.
