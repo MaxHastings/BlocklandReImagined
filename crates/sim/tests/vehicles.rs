@@ -1006,3 +1006,98 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
     assert_eq!(s.vitals()[&rider].ride.map(|r| r.mount), Some(bot));
     Ok(())
 }
+
+/// Playtest a20: a guest could not hammer their own vehicle spawn brick back.
+/// v20's `indestructable` only keeps explosions off spawn bricks; the hammer
+/// asks trust alone, and `fxDTSBrick::onDeath` deletes the brick's vehicle.
+#[test]
+#[ignore = "requires the converted native vehicle, weapon and brick packs"]
+fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it() -> anyhow::Result<()> {
+    use bri_sim::session::{ToolCatalog, WrenchProperties};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let definitions = Definitions::load(
+        &root.join("content/stock-catalog-004"),
+        &root.join("content/maps-pass-008"),
+    )?;
+    assert!(definitions.entries[SPAWN].indestructible);
+    let height = definitions.entries[SPAWN].mesh.height_plates as f32 * 0.2;
+    let world = World::new("Hammer".into(), "test".into(), vec![[1.0, 0.0, 0.0, 1.0]]);
+    let mut s = Session::new(Simulation::new(
+        world,
+        definitions,
+        vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
+    )?);
+    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
+        root.join("content/weapons-pack-009/weapons.json"),
+    )?)?)?;
+    s.set_vehicle_pack(bri_vehicles::Pack::load(
+        root.join("content/vehicles-pack-011/vehicles.json"),
+    )?)?;
+    s.set_tool_catalog(ToolCatalog {
+        vehicles: [JEEP.to_string()].into(),
+        vehicle_bricks: [SPAWN.to_string()].into(),
+        ..Default::default()
+    })?;
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 4.5)])?;
+    let host = s.join("Host".into(), Vec3::new(4.0, 0.05, 4.5), true)?;
+    let guest = s.join("Guest".into(), Vec3::new(0.0, 0.05, 4.5), false)?;
+    assert!(!s.is_administrator(guest));
+    let mut sequence = 0;
+    let mut look = MoveInput::default();
+    let mut idle = |s: &mut Session, ticks: usize, look: MoveInput| -> anyhow::Result<()> {
+        for _ in 0..ticks {
+            sequence += 1;
+            s.movement(guest, sequence, look)?;
+            s.movement(host, sequence, MoveInput::default())?;
+            s.step()?;
+        }
+        Ok(())
+    };
+    idle(&mut s, 60, look)?;
+    let bri_sim::session::Reply::Planted(brick) = s.command(
+        guest,
+        1,
+        Command::Plant {
+            definition: SPAWN.into(),
+            position: [0.0, height * 0.5, 0.0],
+            quarter_turns: 0,
+            color: 0,
+        },
+    )?
+    else {
+        anyhow::bail!("spawn brick not planted")
+    };
+    assert_eq!(s.simulation().state().bricks[&brick].owner, guest);
+    s.edit_brick(
+        guest,
+        brick,
+        bri_world::authority::Edit::Properties(WrenchProperties {
+            vehicle: Some(JEEP.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )?;
+    idle(&mut s, 30, look)?;
+    assert_eq!(s.vehicle_infos().len(), 1, "the brick spawned its jeep");
+    // Swing at the brick's near edge, clear of the jeep parked above it.
+    let (min, max) = s.simulation().brick_box(brick).unwrap();
+    let edge = Vec3::new(0.0, max.y - 0.05, max.z - 0.3);
+    assert!(edge.z > min.z);
+    let d = (edge - Vec3::new(0.0, 2.4, 4.5)).normalize();
+    look.yaw = d.x.atan2(-d.z);
+    look.pitch = d.y.asin();
+    s.equip_tool(guest, Some(0))?;
+    idle(&mut s, 2, look)?;
+    s.command(guest, 2, Command::WeaponTrigger { down: true })?;
+    idle(&mut s, 12, look)?;
+    s.command(guest, 3, Command::WeaponTrigger { down: false })?;
+    idle(&mut s, 4, look)?;
+    assert!(
+        !s.simulation().state().bricks.contains_key(&brick),
+        "the builder's hammer breaks their own spawn brick"
+    );
+    assert!(s.vehicle_infos().is_empty(), "the jeep goes with its brick");
+    Ok(())
+}

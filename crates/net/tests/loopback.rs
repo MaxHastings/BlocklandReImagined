@@ -23,6 +23,11 @@ use rapier3d::prelude::*;
 use sha2::Digest;
 use std::time::Duration;
 fn session() -> Session {
+    session_with_sturdy(&[])
+}
+/// The plate fixture, plus plates under `sturdy` ids marked like v20's
+/// `indestructable` special bricks (spawn points and vehicle spawns).
+fn session_with_sturdy(sturdy: &[&str]) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -46,18 +51,17 @@ fn session() -> Session {
         .build()
         .shared_shape()
         .clone();
+    let definition = |indestructible| Definition {
+        mesh: mesh.clone(),
+        collision: collision.clone(),
+        shape: shape.clone(),
+        indestructible,
+        special: Default::default(),
+    };
     let defs = Definitions {
-        entries: [(
-            "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-            },
-        )]
-        .into(),
+        entries: std::iter::once(("plate".to_string(), definition(false)))
+            .chain(sturdy.iter().map(|id| (id.to_string(), definition(true))))
+            .collect(),
     };
     let mut session = Session::new(
         Simulation::new(
@@ -2659,5 +2663,133 @@ async fn look_pitch_and_head_turn_reach_other_players() -> Result<()> {
     })
     .await?;
     server.stop().await?;
+    Ok(())
+}
+
+/// Playtest a20: a guest planted a vehicle spawn brick, set it to the
+/// Blockhead Bot and could not hammer it back, though the host could. v20's
+/// `indestructable` spawn bricks only shrug off explosions: `hammerImage::
+/// onHitObject` asks nothing but the chain kill and trust, so the builder
+/// always breaks their own, and `fxDTSBrick::onDeath` takes the spawned bot
+/// or vehicle with it. Over real QUIC, with the host present and trust left
+/// at its defaults, after the builder rejoins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<()> {
+    use bri_sim::session::{ToolCatalog, WrenchProperties};
+    const SPAWN: &str = "vehicle_spawn";
+    let mut game = session_with_sturdy(&[SPAWN]);
+    game.set_weapon_pack(tool_pack())?;
+    game.set_vehicle_pack(bri_vehicles::Pack {
+        schema_version: bri_vehicles::schema::SCHEMA_VERSION,
+        definitions: vec![],
+        assets: vec![],
+        evidence: vec![],
+        unresolved: vec![],
+        animation_aliases: Default::default(),
+    })?;
+    game.set_tool_catalog(ToolCatalog {
+        vehicles: ["bot.blockhead".to_string()].into(),
+        vehicle_bricks: [SPAWN.to_string()].into(),
+        ..Default::default()
+    })?;
+    let server = server::start(game, options())?;
+    let mut host = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        Vec::new(),
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let dir = tempfile::tempdir()?;
+    let identity = ClientIdentity::load_or_create(dir.path().join("guest.identity"))?;
+    let connect = || {
+        Client::connect_with_identity(
+            server.address,
+            &server.certificate,
+            "Guest".into(),
+            Vec::new(),
+            None,
+            None,
+            &identity,
+        )
+    };
+    let mut guest = connect().await?;
+    let owner = guest.owner;
+    let Reply::Planted(brick) = guest
+        .command(Command::Plant {
+            definition: SPAWN.into(),
+            position: [0.5, 0.1, -3.25],
+            quarter_turns: 0,
+            color: 0,
+        })
+        .await?
+    else {
+        panic!("the spawn brick plants")
+    };
+    wait(&mut guest, |c| c.replica.world.bricks.contains_key(&brick)).await?;
+    assert_eq!(guest.replica.world.bricks[&brick].owner, owner);
+    aim(&mut guest).await?;
+    let (opened, _, _) = swing(&mut guest, 1)
+        .await?
+        .expect("the builder's wrench opens their spawn brick");
+    assert_eq!(opened, brick);
+    guest
+        .command(Command::Tool(ToolAction::SetWrench {
+            brick,
+            properties: WrenchProperties {
+                vehicle: Some("bot.blockhead".into()),
+                raycast: true,
+                colliding: true,
+                visible: true,
+                ..Default::default()
+            },
+        }))
+        .await?;
+    wait(&mut host, |c| c.replica.names.len() == 3).await?;
+    let bot = *host
+        .replica
+        .names
+        .keys()
+        .find(|o| ![owner, host.owner].contains(o))
+        .expect("the brick spawned its bot");
+
+    // Leave and come back: the brick is still the guest's.
+    guest.close();
+    drop(guest);
+    wait(&mut host, |c| !c.replica.names.contains_key(&owner)).await?;
+    let mut guest = connect().await?;
+    assert_eq!(guest.owner, owner);
+    assert_eq!(guest.replica.world.bricks[&brick].owner, owner);
+
+    // The bot wanders off its brick, so the swing lands on the brick.
+    let spot = Vec3::new(0.5, 0.1, -3.25);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let feet = Vec3::from(guest.replica.poses[&bot].player.feet);
+            if Vec3::new(feet.x - spot.x, 0.0, feet.z - spot.z).length() > 2.5 {
+                break;
+            }
+            guest.receive().await?;
+        }
+        Result::<()>::Ok(())
+    })
+    .await
+    .context("the bot never left its brick")??;
+    aim(&mut guest).await?;
+    assert!(swing(&mut guest, 0).await?.is_none());
+    wait(&mut guest, |c| {
+        !c.replica.world.bricks.contains_key(&brick) && !c.replica.names.contains_key(&bot)
+    })
+    .await?;
+    wait(&mut host, |c| {
+        !c.replica.world.bricks.contains_key(&brick) && !c.replica.names.contains_key(&bot)
+    })
+    .await?;
+    drop(guest);
+    drop(host);
+    let report = server.stop().await?;
+    assert!(report.final_world.bricks.is_empty());
     Ok(())
 }
