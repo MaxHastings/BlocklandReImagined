@@ -471,6 +471,8 @@ pub struct App {
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
     motion: crate::motion::Motion,
+    /// Projectiles, drops and package entities smoothed between host updates.
+    ghosts: crate::ghosts::Ghosts,
     vehicle_assets: crate::vehicles::VehicleAssets,
     vehicles: crate::vehicles::ClientVehicles,
     /// Heading of the vehicle the local player rides, last frame.
@@ -1389,6 +1391,7 @@ impl App {
             preview_request: None,
             preview_dirty: false,
             motion: Default::default(),
+            ghosts: Default::default(),
             vehicle_assets,
             vehicles: Default::default(),
             mount_heading: None,
@@ -1536,6 +1539,7 @@ impl App {
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.motion.reset();
+        self.ghosts.clear();
         self.vehicles.clear();
         self.music_world = None;
         self.controls.clear_observer();
@@ -4792,6 +4796,42 @@ impl PlatformApp for App {
             && let Some(building) = &self.building
         {
             let presented = self.motion.presented();
+            // Balls, projectiles, dropped items and package entities move at
+            // the frame rate between the host's 20 Hz updates.
+            let projectiles = &self.content.weapons.pack.projectiles;
+            self.ghosts.update(
+                game_elapsed.as_secs_f32(),
+                view.tick,
+                &view.weapons,
+                &view.entities,
+                |id| {
+                    let d = projectiles.get(id)?;
+                    let gravity = if d.ballistic { 9.81 * d.gravity } else { 0.0 };
+                    Some(crate::ghosts::Flight {
+                        acceleration: Vec3::NEG_Y * gravity,
+                        lifetime: d.lifetime_ticks,
+                        // Balls and grenades bounce; the rest stop until the
+                        // host says what the contact did.
+                        bounce: (d.ballistic && d.elasticity > 0.0).then_some(
+                            crate::ghosts::Bounce {
+                                elasticity: d.elasticity,
+                                friction: d.friction,
+                                rest_speed: d.rest_speed,
+                            },
+                        ),
+                    })
+                },
+                |from, to| {
+                    let length = (to - from).length();
+                    let hit = building.solid_segment(from, to).ok()??;
+                    Some(crate::ghosts::Hit {
+                        position: hit.position,
+                        normal: hit.normal,
+                        fraction: hit.distance / length,
+                    })
+                },
+            );
+            let weapons = self.ghosts.weapons();
             let liquids = self.motion.collision().map_or_else(Vec::new, |m| {
                 m.tinted_waters(&view.world.bricks, &view.world.palette)
             });
@@ -4978,7 +5018,7 @@ impl PlatformApp for App {
             self.world_items.set_palette(&view.world.palette);
             self.weapon_effects.set_palette(&view.world.palette);
             let items = self.world_items.sync(
-                &view.weapons,
+                weapons,
                 crate::world_items::WorldItemFrame {
                     tick: view.tick,
                     seconds: self.animation_time,
@@ -5015,7 +5055,7 @@ impl PlatformApp for App {
                 &mut self.weapon_effects,
                 &mut self.weapon_cues,
                 &self.world_items,
-                &view.weapons,
+                weapons,
                 game_elapsed.as_secs_f32(),
             );
             self.cosmetic_faults.absorb("weapon effects", parts);
@@ -5105,7 +5145,7 @@ impl PlatformApp for App {
                 });
             self.cosmetic_faults.absorb("gun casings", moved);
             self.audio
-                .sync_projectiles(&view.weapons.projectiles, &self.content.weapons.pack);
+                .sync_projectiles(&weapons.projectiles, &self.content.weapons.pack);
             let kills = std::mem::take(&mut self.brick_kills);
             let thrown = self.brick_debris.cues(&kills, building);
             if self.cosmetic_faults.absorb("brick debris", thrown).unwrap_or(0) > 0 {
@@ -6073,7 +6113,8 @@ impl PlatformApp for App {
         // place of the Blockhead (not the local player in first person).
         let package_catalog = packages_for(&self.package_catalog, view);
         let mut package_placements: Vec<_> =
-            crate::packages::entity_placements(&view.entities).collect();
+            crate::packages::entity_placements(self.ghosts.entities_at(view.tick, &view.entities))
+                .collect();
         if let Some(catalog) = package_catalog {
             for (owner, placement) in
                 crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
@@ -6211,7 +6252,7 @@ impl PlatformApp for App {
                     .ok()
                     .filter(|data| !data.indices.is_empty())
                     .map(|mut data| {
-                        translucent_ghost(&mut data);
+                        translucent_ghost(&mut data, &ghost_look);
                         renderer.upload(frame.device, frame.queue, &data)
                     })
                     .transpose()?

@@ -24,6 +24,7 @@ pub mod items;
 pub mod materials;
 pub mod minigame_ui;
 pub mod gamepad;
+pub mod ghosts;
 pub mod mods;
 pub mod motion;
 pub mod network;

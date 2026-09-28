@@ -3347,3 +3347,29 @@ the first copy). No wire change.
   machine, Custom runs it), `cargo test -p bri-sim --lib blueprint`,
   `cargo test -p bri-client --lib a_copied_build`. Not seen in a window:
   Max's playtest.
+- 2026-09-28 Smooth replicated motion (branch `claude/smoothing`). Max saw
+  the football and soccer ball move at the server's update rate. Audit of
+  what the client drew between host updates: the local player is predicted
+  and remote players interpolate (`motion.rs`); vehicles interpolate, but the
+  driven vehicle popped on each 40 Hz pose; projectiles (thrown and kicked
+  balls included), dropped items and package entities were drawn straight
+  from the 20 Hz reliable deltas, stepping every 50 ms; brick, explosion and
+  shell debris are client-side cosmetics advanced every frame already. New
+  `crates/client/src/ghosts.rs` does what Torque's ghosts did: projectiles and
+  drops fly on the client from their newest update with the host's tick
+  integration, gravity (`gravityMod`, Item gravity 20) and Torque's
+  `Projectile` bounce (reflect, friction, elasticity) against the client's
+  map and bricks; package entities interpolate a jitter-sized delay behind.
+  A disagreeing update keeps the drawn pose where it was and decays the
+  difference (Torque's warp); the stream clock slews rather than jumps.
+  Projectiles fly their whole lifetime from one update, so the host may send
+  a projectile once plus its corrections (for the bandwidth lane). The
+  driven vehicle now warps onto corrected poses too. No protocol change.
+  Evidence: `cargo test -p bri-client --test ghost_smoothing` samples every
+  144 Hz frame of a bouncing ball and a sliding entity on loopback, with
+  80 ms latency plus 60 ms jitter, and with spawn-and-impact updates only:
+  worst frame step at most 1.41x the true motion, no stalled frames, worst
+  error 0.38 units at bounces; the same measure on raw snapshots shows an
+  8.45x step and 435 of 506 frames stalled. `cargo test -p bri-client --lib
+  -- ghosts vehicles`. Remote players' clock (`Motion::observe_clock`) still
+  jumps forward on an early pose; that belongs to the remote-animation lane.
