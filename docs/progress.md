@@ -3458,3 +3458,11 @@ plus a 64-player crowd capped at 32 pushers: ~1 ms/frame in debug).
   --ignored` (the new hammer test fails on the old scheduler),
   `cargo test -p bri-sim --test events_native -- --ignored`. The event
   checkpoint gained defaulted fields. No wire change.
+- 2026-09-28 Remote swing test flake (branch `claude/remote-poses-flake`).
+  `remote_poses` compared the peak hand turn each client sampled over
+  wall-clock frames; under parallel load frames were far apart and the two
+  sides caught different points near the peak (1.018 vs 1.058 rad, limit
+  0.05). Frames now advance at most 4 ms of game time and the windows count
+  game time, so sampling stays dense however slow the machine is; checks
+  unchanged. Evidence: 12 runs six at a time pass, worst gap 0.006 rad; six
+  more with the `claude/smoothing` pose clock applied pass.
