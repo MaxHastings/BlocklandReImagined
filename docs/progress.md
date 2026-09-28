@@ -2609,3 +2609,46 @@ game mode picker once the Stress Lab landed (da5668e).
   points to living players, greets on join, runs the leaderboard, refuses
   a non-admin reset and allows the host's), `cargo test -p bri-weapons
   --test sample_addon` (the bubble fires, harmless and shoving).
+## 2026-09-28 — first-impressions audit and three robustness fixes
+
+- `docs/audits/first-impressions.md` ranks 20 things a new player would find
+  missing, rough or fragile on main `1599ef2`, with evidence for each.
+- Settings: a damaged or older `settings.json` no longer stops startup. Missing
+  fields take defaults; a damaged file is copied to
+  `settings.damaged-<time>.json`, readable sections are kept, and the player is
+  told in plain words (`settings::recover`).
+- Saves: one unreadable save no longer empties the Save and Load lists. It is
+  listed as damaged (`SaveFileInfo::damaged`) and can be saved over.
+- Messages: the Connection Failed dialog explains transport and join failures
+  in plain words (`bri_ui::models::disconnect::explain`); kicks and bans close
+  with the reason and ban length, and a banned rejoin is told how long is left.
+  No protocol change: the close reason is free text.
+- Evidence: `cargo test -p bri-ui --lib`, `-p bri-sim --lib --test session`,
+  `-p bri-client --lib`, `-p bri-net --lib`; clippy `-D warnings` on those
+  four crates with `--all-targets`.
+
+## 2026-09-28 — autosave and unsaved-changes prompt for hosted games
+
+- Single-player, LAN and Internet games hosted from the client autosave every
+  60 s into the map's own save folder (`autosave-<unix ms>.world.json`, newest
+  three kept), so they appear in Load Bricks as "Autosave" with their date. An
+  interval with no world change writes nothing, so idle play never pushes out
+  older autosaves (`saves::Store::autosaver`).
+- When a hosted game ends (Disconnect, Quit, the window's close button, a
+  crash of the host loop) its final world is kept the same way. Quitting waits
+  up to 15 s for the host to stop and write it (`App` drop, `Worker::finish`).
+- Leaving or quitting a hosted game whose world changed since it was last
+  saved under a name asks first ("Unsaved Changes"); loads and map changes do
+  not count until they settle. Closing the window asks too; a second close
+  quits.
+- The server-side mechanism is PR #1's `ServerOptions::autosave` /
+  `server::Autosave` and `bri_world::persistence::autosave`, ported unchanged
+  (plus `autosave_bytes` and `is_autosave`) so PR #1 can drop its copy.
+  `bri-server` autosaves as PR #1 had it.
+- Evidence: `cargo test -p bri-world --lib`, `-p bri-net --lib --test
+  loopback`, `-p bri-ui --lib --tests`, `-p bri-client --lib --test transport`,
+  `-p bri-sim --lib --test session`; clippy `-D warnings --all-targets` on those
+  crates. New tests: `hosted_games_autosave_changes_into_the_load_list`,
+  `a_host_autosaves_on_its_timer_and_returns_its_final_world`,
+  `leaving_a_host_with_unsaved_changes_asks_about_them_first`, and the
+  transport test now checks the final world is kept.

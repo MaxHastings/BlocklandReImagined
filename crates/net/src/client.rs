@@ -245,6 +245,7 @@ impl Client {
         );
         let (events, incoming) = mpsc::channel(128);
         let reliable_events = events.clone();
+        let reader_connection = connection.clone();
         let reader = tokio::spawn(async move {
             loop {
                 let message = async {
@@ -264,9 +265,13 @@ impl Client {
                         }
                     }
                     Err(error) => {
-                        let _ = reliable_events
-                            .send(Incoming::Closed(error.to_string()))
-                            .await;
+                        // A read fails with a bare "connection lost"; the
+                        // server's close frame (a kick's message, a
+                        // shutdown) is the reason the player should see.
+                        let reason = reader_connection
+                            .close_reason()
+                            .map_or_else(|| error.to_string(), |r| r.to_string());
+                        let _ = reliable_events.send(Incoming::Closed(reason)).await;
                         break;
                     }
                 }

@@ -540,6 +540,7 @@ fn options() -> ServerOptions {
         ],
         certificate: None,
         map_loader: None,
+        autosave: None,
     }
 }
 
@@ -879,16 +880,19 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
     else {
         panic!("authorized kick returns its confirmation")
     };
-    assert!(
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if target.receive().await.is_err() {
-                    break;
-                }
+    // The kicked player learns why: the server's close frame, not a bare
+    // "connection lost".
+    let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Err(error) = target.receive().await {
+                break format!("{error:#}");
             }
-        })
-        .await
-        .is_ok()
+        }
+    })
+    .await?;
+    assert!(
+        closed.contains("closed by peer: You were kicked"),
+        "{closed}"
     );
 
     guest.close();
@@ -2149,5 +2153,36 @@ async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
     let reply = first.command(Command::Chat("still here".into())).await;
     assert!(reply.is_ok(), "{reply:?}");
     server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_autosaves_on_its_timer_and_returns_its_final_world() -> Result<()> {
+    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let log = saved.clone();
+    let server = server::start(
+        session(),
+        ServerOptions {
+            autosave: Some(server::Autosave {
+                every: Duration::from_secs(1),
+                save: std::sync::Arc::new(move |world: &World| {
+                    log.lock().unwrap().push(world.revision);
+                    Ok(())
+                }),
+            }),
+            ..options()
+        },
+    )?;
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    let report = server.stop().await?;
+    let saves = saved.lock().unwrap().len() as u64;
+    assert!(saves >= 1, "the timer autosaved");
+    assert_eq!(report.autosaves, saves);
+    assert_eq!(report.autosave_failures, 0);
+    // A clean stop hands back the world for the caller to keep.
+    assert_eq!(
+        report.native_world.map_id,
+        session().simulation().state().map_id
+    );
     Ok(())
 }

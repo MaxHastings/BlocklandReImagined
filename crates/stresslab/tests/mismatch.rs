@@ -71,6 +71,7 @@ async fn differing_packages_are_named_at_join() -> Result<()> {
             spawn_points: spawns,
             certificate: None,
             map_loader: None,
+            autosave: None,
         },
     )?;
 

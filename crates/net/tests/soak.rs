@@ -110,6 +110,7 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
             spawn_points: vec![Vec3::new(0.0, 0.05, 0.0), Vec3::new(3.0, 0.05, 0.0)],
             certificate: None,
             map_loader: None,
+            autosave: None,
         },
     )?;
     let link = ImpairedLink::start(server.address, Impairment::BAD_WIFI, seed).await?;

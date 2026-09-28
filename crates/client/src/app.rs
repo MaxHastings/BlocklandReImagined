@@ -100,6 +100,12 @@ struct Attempt {
     /// screen; the network client reports its part into the same one.
     progress: bri_progress::Progress,
     progress_seen: u64,
+    /// Hosts: the world revision last saved under a name (or entered, or
+    /// loaded). `None` takes the next revision seen.
+    saved_revision: Option<u64>,
+    /// Hosts: a load or map change is still rebuilding the world until this
+    /// time; its changes are not the player's unsaved work.
+    settling: Option<std::time::Instant>,
 }
 struct PendingAction {
     action: UiAction,
@@ -335,6 +341,11 @@ pub struct App {
     combat: CombatPresentation,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
+    /// Transport tasks still stopping a host and keeping its world; quitting
+    /// waits for them.
+    closing: Vec<tokio::task::JoinHandle<()>>,
+    /// When the window's close button last asked about unsaved changes.
+    close_asked: Option<std::time::Instant>,
 }
 impl App {
     /// Enable mod packages from another root than the content root (tools
@@ -894,7 +905,10 @@ impl App {
             Arc::new(content.weapons.pack.clone()),
             Default::default(),
         )?;
-        let mut saved = settings::load(&state_dir.join("settings.json"))?;
+        let settings::Recovered {
+            settings: mut saved,
+            notice: settings_notice,
+        } = settings::recover(&state_dir.join("settings.json"));
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
         let graphics = crate::graphics::Graphics::from_settings(&saved);
         let audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
@@ -913,6 +927,12 @@ impl App {
             saved,
         );
         ui.set_console_commands(crate::console::commands());
+        if let Some(text) = settings_notice {
+            ui.apply(UiUpdate::MessageBox {
+                title: "Settings Problem".into(),
+                text,
+            });
+        }
         ui.apply(UiUpdate::Maps(content.maps.clone()));
         ui.apply(UiUpdate::GameModes(crate::packages::modes(server_packages.as_ref())));
         let backgrounds = content
@@ -936,6 +956,8 @@ impl App {
             ui,
             saves: crate::saves::Store::new(state_dir, &content),
             file_jobs: Default::default(),
+            closing: Vec::new(),
+            close_asked: None,
             content,
             controls: Controls::default(),
             state_dir: state_dir.into(),
@@ -1102,7 +1124,11 @@ impl App {
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
-        self.attempt.take();
+        if let Some(mut attempt) = self.attempt.take() {
+            self.closing.retain(|task| !task.is_finished());
+            self.closing.extend(attempt.worker.finish());
+        }
+        self.ui.apply(UiUpdate::UnsavedChanges(false));
         self.avatars.clear();
         self.mount_meshes.clear();
         self.avatar_actions.clear();
@@ -1515,6 +1541,7 @@ impl App {
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
+        let saves = self.saves.clone();
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -1665,6 +1692,9 @@ impl App {
                 }
             }
             session.set_admin_passwords(admin, super_admin)?;
+            // Single-player and hosted games autosave into the map's saves, and
+            // keep the world they end with (v20 lost unsaved builds).
+            let autosaver = saves.autosaver(session.simulation().state());
             let map_loader: server::MapLoader = {
                 let paths = paths_for_maps.clone();
                 Arc::new(move |map: &str| setup.session(paths.load_map(map, None)?))
@@ -1682,6 +1712,10 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
+                    autosave: Some(server::Autosave {
+                        every: crate::saves::AUTOSAVE_EVERY,
+                        save: autosaver.clone(),
+                    }),
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),
@@ -1712,6 +1746,7 @@ impl App {
                 client,
                 host: Some(host),
                 package_save,
+                keep_world: Some(autosaver),
             })
         });
         self.attempt = Some(Attempt {
@@ -1733,6 +1768,8 @@ impl App {
             reloading: false,
             progress,
             progress_seen: 0,
+            saved_revision: None,
+            settling: None,
         });
         Ok(())
     }
@@ -1858,7 +1895,12 @@ impl App {
             })
             .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
-            Ok(Connected { client, host: None, package_save: None })
+            Ok(Connected {
+                client,
+                host: None,
+                package_save: None,
+                keep_world: None,
+            })
         });
         self.attempt = Some(Attempt {
             id,
@@ -1879,6 +1921,8 @@ impl App {
             reloading: false,
             progress,
             progress_seen: 0,
+            saved_revision: None,
+            settling: None,
         });
         Ok(())
     }
@@ -2224,6 +2268,12 @@ impl App {
         };
         let result = match result {
             Ok(crate::saves::Outcome::Listed(entries)) => {
+                // A save finished: what the host has now is saved under a name.
+                if matches!(request.action, UiAction::SaveBricks { .. })
+                    && let Some(a) = self.attempt.as_mut().filter(|a| a.local)
+                {
+                    a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
+                }
                 let maps = entries
                     .iter()
                     .map(|e| e.info.map.clone())
@@ -2252,7 +2302,13 @@ impl App {
                         },
                         request.action,
                     ) {
-                        Ok(()) => return, // Complete only after authoritative acceptance.
+                        Ok(()) => {
+                            // The loaded build arrives in batches; it matches its file.
+                            if let Some(a) = self.attempt.as_mut() {
+                                a.settling = Some(std::time::Instant::now() + SETTLE);
+                            }
+                            return; // Complete only after authoritative acceptance.
+                        }
                         Err(error) => Err(error),
                     }
                 } else {
@@ -2327,6 +2383,8 @@ impl App {
                 }
                 network::Event::Ready => a.ready = true,
                 network::Event::MapChanged(map) => {
+                    a.saved_revision = None;
+                    a.settling = Some(std::time::Instant::now() + SETTLE);
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
                     let paths = self.content.paths.clone();
@@ -2973,14 +3031,54 @@ impl App {
             self.disconnect();
             return Ok(());
         }
+        self.track_unsaved(&mut a);
         self.attempt = Some(a);
         Ok(())
     }
+    /// Tell the menus whether leaving would drop changes the host has not
+    /// saved under a name.
+    fn track_unsaved(&mut self, a: &mut Attempt) {
+        let now = std::time::Instant::now();
+        let unsaved = match a.view.as_ref().map(|v| v.world_revision) {
+            Some(revision) if a.local && a.entered => {
+                match a.settling {
+                    Some(until) if now < until => {
+                        // Still rebuilding: follow it, and wait for it to go quiet.
+                        if a.saved_revision != Some(revision) {
+                            a.settling = Some(now + SETTLE);
+                        }
+                        a.saved_revision = Some(revision);
+                    }
+                    Some(_) => a.settling = None,
+                    None => {}
+                }
+                *a.saved_revision.get_or_insert(revision) != revision
+            }
+            _ => false,
+        };
+        if unsaved != self.ui.core.unsaved_changes {
+            self.ui.apply_session(a.id, UiUpdate::UnsavedChanges(unsaved));
+        }
+    }
 }
+/// How long a load or map change must stop changing the world before later
+/// changes count as unsaved.
+const SETTLE: Duration = Duration::from_secs(3);
 /// Chat strings are plain user content, never UI markup/color instructions.
 impl Drop for App {
     fn drop(&mut self) {
         self.disconnect();
+        // Let a hosted game stop and keep its world before the runtime (and
+        // every task on it) goes away.
+        let closing = std::mem::take(&mut self.closing);
+        if !closing.is_empty() && tokio::runtime::Handle::try_current().is_err() {
+            self.runtime.block_on(async {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+                for task in closing {
+                    let _ = tokio::time::timeout_at(deadline, task).await;
+                }
+            });
+        }
     }
 }
 /// Eye of the camera in control: the free camera itself, an orbit around the
@@ -4544,6 +4642,18 @@ impl PlatformApp for App {
         self.hidden_uploaded = None;
         self.depth = None;
         Ok(())
+    }
+    fn close_requested(&mut self) -> bool {
+        // Closing again while being asked quits, so the window can always close.
+        let asked = self
+            .close_asked
+            .replace(std::time::Instant::now())
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(30));
+        if !self.ui.core.unsaved_changes || asked {
+            return true;
+        }
+        self.ui.core.confirm_unsaved(bri_ui::ui::Callback::Quit);
+        false
     }
     fn gpu_stopped(&mut self) {
         self.item_ui.gpu_stopped();

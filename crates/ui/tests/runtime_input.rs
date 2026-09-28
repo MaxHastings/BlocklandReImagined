@@ -675,3 +675,26 @@ fn start_game_hosts_the_chosen_game_mode_on_its_map() {
         "{hosted:?}"
     );
 }
+
+#[test]
+fn leaving_a_host_with_unsaved_changes_asks_about_them_first() {
+    let mut u = ui();
+    play(&mut u);
+    u.apply(UiUpdate::UnsavedChanges(true));
+    assert!(u.core.unsaved_changes);
+    down(&mut u, Key::Escape);
+    click(&mut u, ScreenId::EscapeMenu, "disconnect");
+    down(&mut u, Key::Escape);
+    assert!(actions(&mut u).is_empty(), "declining keeps the game");
+    click(&mut u, ScreenId::EscapeMenu, "disconnect");
+    down(&mut u, Key::Return);
+    assert_eq!(actions(&mut u), vec![UiAction::Disconnect]);
+    // The question names the unsaved build, not just leaving.
+    u.core.confirm_unsaved(bri_ui::ui::Callback::Quit);
+    let Some(bri_ui::ui::StackCmd::Message(message)) = u.core.cmds.last() else {
+        panic!("a question was asked");
+    };
+    assert_eq!(message.title, "Unsaved Changes");
+    assert!(message.text.contains("autosave"));
+    assert_eq!(message.on_yes, bri_ui::ui::Callback::Quit);
+}

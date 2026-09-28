@@ -44,7 +44,7 @@ pub use packages::{
 };
 pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
-    MapListing,
+    MapListing, disconnect_message,
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, Vitals};
@@ -427,6 +427,8 @@ pub struct Session {
     bulk_requests: u32,
     admin: admin::AdminRuntime,
     admin_disconnects: VecDeque<OwnerId>,
+    /// Plain-words close message for a pending admin disconnect.
+    admin_disconnect_messages: BTreeMap<OwnerId, String>,
     /// v20 `$Server::LAN`: single-player and LAN hosts use the looser brick
     /// damage rules.
     lan_host: bool,
@@ -493,6 +495,7 @@ impl Session {
             bulk_requests: 0,
             admin: admin::AdminRuntime::default(),
             admin_disconnects: VecDeque::new(),
+            admin_disconnect_messages: BTreeMap::new(),
             lan_host: false,
             loading: None,
             time_scale: 1.0,
@@ -879,6 +882,13 @@ impl Session {
     pub fn take_admin_disconnects(&mut self) -> Vec<OwnerId> {
         self.admin_disconnects.drain(..).collect()
     }
+    /// What to tell `owner`, taken from [`Self::take_admin_disconnects`], as
+    /// the connection closes.
+    pub fn take_admin_disconnect_message(&mut self, owner: OwnerId) -> String {
+        self.admin_disconnect_messages
+            .remove(&owner)
+            .unwrap_or_else(|| "You were removed from the server.".into())
+    }
     /// `owner` is resolved from the established connection, not deserialized here.
     /// `%player.playThread(3, ...)`: a builder or chat animation every
     /// client sees, carried as an avatar animation cue.
@@ -975,6 +985,8 @@ impl Session {
                 .as_secs();
             let call = self.admin_request(owner, request.clone(), now, &mut persist)?;
             self.admin_disconnects.extend(call.disconnects);
+            self.admin_disconnect_messages
+                .extend(call.disconnect_messages);
             return Ok(Reply::Admin(Box::new(call.reply)));
         }
         if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command

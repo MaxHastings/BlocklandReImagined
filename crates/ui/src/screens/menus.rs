@@ -672,9 +672,11 @@ impl Screen for NativeScreen {
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
         // Exact allowlist only: never evaluate script or infer arbitrary actions.
         match command.as_str() {
+            "quit();" if core.unsaved_changes => core.confirm_unsaved(Callback::Quit),
             "quit();" => {
                 core.request(UiAction::Quit);
             }
+            "quitgame();" if core.unsaved_changes => core.confirm_unsaved(Callback::Quit),
             "quitgame();" => {
                 core.message_yes_no("Quit", "Quit Blockland ReImagined?", Callback::Quit)
             }
@@ -720,6 +722,9 @@ impl Screen for NativeScreen {
             "mj_connect();" | "joinservergui.join();" => self.join(core),
             "connectinggui::cancel();" => self.cancel(core),
             "disconnect();" if self.id == ScreenId::Loading => self.cancel(core),
+            "escapefromgame();" if core.unsaved_changes => {
+                core.confirm_unsaved(Callback::Disconnect)
+            }
             "escapefromgame();" => {
                 core.message_yes_no("Disconnect", "Leave this game?", Callback::Disconnect)
             }

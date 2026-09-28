@@ -215,6 +215,8 @@ pub struct Core {
     pub add_ons: crate::api::AddOnsView,
     /// Differing add-ons behind the last refused join (Can't Join dialog).
     pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
+    /// See `UiUpdate::UnsavedChanges`.
+    pub unsaved_changes: bool,
     // live state
     pub conn: ConnectionState,
     pub hud: HudModel,
@@ -428,6 +430,16 @@ impl Core {
             yes_no: false,
             on_yes: Callback::None,
         }));
+    }
+    /// Ask before leaving a hosted game whose world changed since it was last
+    /// saved. The autosave keeps it either way; this is about a named save.
+    pub fn confirm_unsaved(&mut self, on_yes: Callback) {
+        self.message_yes_no(
+            "Unsaved Changes",
+            "Your build has changes you haven't saved. It is kept as an autosave you can \
+             load later from Load Bricks, but not under a name of your own.\n\nLeave anyway?",
+            on_yes,
+        );
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
         self.cmds.push(StackCmd::Message(MessageBox {
@@ -938,6 +950,7 @@ impl Ui {
             save_context: None,
             add_ons: Default::default(),
             add_on_mismatch: None,
+            unsaved_changes: false,
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
@@ -1284,10 +1297,14 @@ impl Ui {
                     c.pop(ScreenId::Connecting);
                 }
                 if let Some(r) = failed {
+                    bri_console::warn(format!("Connection failed: {r}"));
                     if c.add_on_mismatch.is_some() {
                         c.push(ScreenId::AddOnMismatch);
                     } else {
-                        c.message_ok("Connection Failed", &r);
+                        c.message_ok(
+                            "Connection Failed",
+                            &crate::models::disconnect::explain(&r),
+                        );
                     }
                 }
             }
@@ -1448,6 +1465,7 @@ impl Ui {
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
             UiUpdate::AddOns(view) => c.add_ons = view,
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
+            UiUpdate::UnsavedChanges(unsaved) => c.unsaved_changes = unsaved,
             UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
             UiUpdate::DisplayChanged {
                 resolution,

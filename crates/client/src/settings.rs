@@ -34,36 +34,145 @@ pub fn startup_display(settings: &Settings) -> StartupDisplay {
     }
 }
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Stored {
     schema_version: u32,
     settings: Settings,
 }
+const SCHEMA: u32 = 1;
 pub fn load(path: &Path) -> Result<Settings> {
+    let Some(bytes) = read(path)? else {
+        return Ok(Settings::default());
+    };
+    let stored: Stored = serde_json::from_slice(&bytes)
+        .context("Invalid native client settings; preserve the file for recovery")?;
+    ensure!(
+        stored.schema_version == SCHEMA,
+        "Unsupported settings schema {}",
+        stored.schema_version
+    );
+    Ok(stored.settings)
+}
+fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     let mut bytes = Vec::new();
     match File::open(path) {
         Ok(file) => {
             file.take(LIMIT + 1).read_to_end(&mut bytes)?;
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     }
     ensure!(
         bytes.len() as u64 <= LIMIT,
         "Settings file exceeds size limit"
     );
-    let stored: Stored = serde_json::from_slice(&bytes)
-        .context("Invalid native client settings; preserve the file for recovery")?;
-    ensure!(
-        stored.schema_version == 1,
-        "Unsupported settings schema {}",
-        stored.schema_version
-    );
-    Ok(stored.settings)
+    Ok(Some(bytes))
+}
+
+/// Settings for startup, and what the player should be told when the file
+/// could not be used as it was.
+#[derive(Debug)]
+pub struct Recovered {
+    pub settings: Settings,
+    pub notice: Option<String>,
+}
+
+/// Like [`load`], but a damaged file never stops the game. The original is
+/// copied next to it as `settings.damaged-<unix seconds>.json`, every section
+/// that still reads is kept, the rest take their defaults, and the result is
+/// written back so the next start is clean.
+pub fn recover(path: &Path) -> Recovered {
+    let error = match load(path) {
+        Ok(settings) => {
+            return Recovered {
+                settings,
+                notice: None,
+            };
+        }
+        Err(error) => error,
+    };
+    let bytes = match read(path) {
+        Ok(Some(bytes)) => bytes,
+        // Unreadable (permissions, a folder in the way): nothing to keep or copy.
+        _ => {
+            bri_console::warn(format!("Settings could not be read: {error:#}"));
+            return Recovered {
+                settings: Settings::default(),
+                notice: Some(format!(
+                    "Your settings could not be read, so the game started with default settings. \
+                     Changes may not save until this is fixed.\n\nFile: {}",
+                    path.display()
+                )),
+            };
+        }
+    };
+    let (settings, kept) = salvage(&bytes);
+    let backup = path.with_file_name(format!(
+        "settings.damaged-{}.json",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    ));
+    let backed_up = bri_files::create_new(&backup, &bytes).is_ok();
+    bri_console::warn(format!(
+        "Settings file was damaged ({error:#}); kept {kept} section(s){}",
+        if backed_up {
+            format!(", original copied to {}", backup.display())
+        } else {
+            String::new()
+        }
+    ));
+    // Only overwrite the original once a copy of it exists.
+    if backed_up && let Err(error) = save(path, &settings) {
+        bri_console::warn(format!("Recovered settings could not be saved: {error:#}"));
+    }
+    let what = if kept > 0 {
+        "Some of your settings could not be read. The rest were kept and the missing ones are back to their defaults."
+    } else {
+        "Your settings could not be read, so they are back to their defaults."
+    };
+    let copy = if backed_up {
+        format!(
+            "\n\nA copy of the old file was saved as {}",
+            backup.display()
+        )
+    } else {
+        String::new()
+    };
+    Recovered {
+        settings,
+        notice: Some(format!("{what}{copy}")),
+    }
+}
+
+/// Keep every top-level section of the stored settings that still reads on its
+/// own; the rest take their defaults. Returns the settings and how many
+/// sections were kept.
+fn salvage(bytes: &[u8]) -> (Settings, usize) {
+    let stored = serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|v| v.get("settings").cloned());
+    let Some(serde_json::Value::Object(fields)) = stored else {
+        return (Settings::default(), 0);
+    };
+    let mut current = serde_json::to_value(Settings::default()).expect("settings serialize");
+    let mut kept = 0;
+    for (key, value) in fields {
+        let mut candidate = current.clone();
+        let Some(slot) = candidate.get_mut(&key) else {
+            continue;
+        };
+        *slot = value;
+        if serde_json::from_value::<Settings>(candidate.clone()).is_ok() {
+            current = candidate;
+            kept += 1;
+        }
+    }
+    let settings = serde_json::from_value(current).unwrap_or_default();
+    (settings, kept)
 }
 pub fn save(path: &Path, settings: &Settings) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(&Stored {
-        schema_version: 1,
+        schema_version: SCHEMA,
         settings: settings.clone(),
     })?;
     ensure!(bytes.len() as u64 <= LIMIT, "Settings exceed size limit");
@@ -154,5 +263,90 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"broken");
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(dir).unwrap();
+    }
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bri-settings-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+    fn backups(dir: &Path) -> Vec<Vec<u8>> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("settings.damaged-")
+            })
+            .map(|p| std::fs::read(p).unwrap())
+            .collect()
+    }
+    #[test]
+    fn damaged_settings_start_with_defaults_keep_a_copy_and_tell_the_player() {
+        let dir = scratch("damaged");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"broken").unwrap();
+        let recovered = recover(&path);
+        assert_eq!(recovered.settings, Settings::default());
+        let notice = recovered.notice.unwrap();
+        assert!(notice.contains("back to their defaults"), "{notice}");
+        assert!(notice.contains("settings.damaged-"), "{notice}");
+        assert_eq!(backups(&dir), vec![b"broken".to_vec()]);
+        // The replacement reads cleanly, so the next start says nothing.
+        assert_eq!(load(&path).unwrap(), Settings::default());
+        assert!(recover(&path).notice.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_bad_section_keeps_the_rest_and_missing_fields_take_defaults() {
+        let dir = scratch("partial");
+        let path = dir.join("settings.json");
+        // `binds` has the wrong shape, `mouse_type` and others are missing, and
+        // a field from a newer build is present.
+        std::fs::write(
+            &path,
+            br#"{"schema_version":1,"settings":{"prefs":{"$pref::Input::MouseSensitivity":"1.5"},"binds":"nope","keyboard_type":1,"from_the_future":true}}"#,
+        )
+        .unwrap();
+        let recovered = recover(&path);
+        assert_eq!(
+            recovered
+                .settings
+                .prefs
+                .get("$pref::Input::MouseSensitivity")
+                .map(String::as_str),
+            Some("1.5")
+        );
+        assert_eq!(recovered.settings.keyboard_type, 1);
+        assert_eq!(recovered.settings.binds, None);
+        assert!(recovered.notice.unwrap().contains("The rest were kept"));
+        assert_eq!(backups(&dir).len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn older_files_missing_newer_fields_load_without_a_notice() {
+        let dir = scratch("older");
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            br#"{"schema_version":1,"settings":{"prefs":{"a":"b"}}}"#,
+        )
+        .unwrap();
+        let recovered = recover(&path);
+        assert!(recovered.notice.is_none());
+        assert_eq!(
+            recovered.settings.prefs.get("a").map(String::as_str),
+            Some("b")
+        );
+        assert!(backups(&dir).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -253,6 +253,10 @@ impl Session {
                         "\u{E003}{name}\u{E002} was kicked for spamming trust invites."
                     ));
                     self.admin_disconnects.push_back(invite.from);
+                    self.admin_disconnect_messages.insert(
+                        invite.from,
+                        "You were kicked for spamming trust invites.".into(),
+                    );
                     return Ok(());
                 }
             }
