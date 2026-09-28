@@ -1,0 +1,15 @@
+[package]
+name = "bri-package"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Package manifests, content-addressed data archives, the client package cache and the server environment manifest"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
