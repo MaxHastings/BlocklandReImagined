@@ -292,6 +292,14 @@ pub fn chat_command(
         "fetch" => (Capability::Teleport, Action::Fetch { target: find_player(snapshot, &joined)? }),
         "find" => (Capability::Teleport, Action::Find { target: find_player(snapshot, &joined)? }),
         "warp" => (Capability::Teleport, Action::Warp),
+        // `serverCmdSpy`: watch a player through a corpse camera; `/ret`
+        // returns (any player may return to their own body).
+        "spy" => (
+            Capability::Spy,
+            Action::Spy {
+                target: find_player(snapshot, &joined)?,
+            },
+        ),
         "timescale" => (
             Capability::TimeScale,
             Action::TimeScale {
@@ -467,10 +475,40 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn spy_watches_a_player_named_in_chat_for_admins_only() -> Result<()> {
+        let mut s = snapshot(Role::Admin);
+        s.supported.insert(Capability::Spy);
+        s.players.push(bri_sim::session::AdminPlayer {
+            connection: 9,
+            name: "Builder".into(),
+            identity_label: String::new(),
+            role: Role::Player,
+            owner: false,
+            local: false,
+            bot: false,
+            persistent_identity: true,
+        });
+        let Some(Command::Admin(request)) = chat_command("spy", &["buil".into()], &s)? else {
+            panic!("missing request")
+        };
+        assert_eq!(
+            request.action,
+            Action::Spy {
+                target: ConnectionId(9)
+            }
+        );
+        s.role = Role::Player;
+        assert!(chat_command("spy", &["buil".into()], &s).is_err());
+        Ok(())
+    }
+    #[test]
     fn advanced_config_defaults_are_the_hosts() {
         let d = bri_admin::ServerSettings::default();
         assert_eq!(options(&d), ui::AdminOptions::default());
-        assert_eq!(host_settings(&ui::AdminOptions::default(), &d.name, d.max_players), d);
+        assert_eq!(
+            host_settings(&ui::AdminOptions::default(), &d.name, d.max_players),
+            d
+        );
         let mut saved = ui::AdminOptions {
             max_chat_length: 40,
             random_brick_color: true,
@@ -480,7 +518,10 @@ mod tests {
         assert_eq!((s.max_chat_length, s.random_brick_color), (40, true));
         assert_eq!((s.name.as_str(), s.max_players), ("Build", 12));
         saved.max_chat_length = 5000;
-        assert_eq!(host_settings(&saved, "Build", 12).max_chat_length, d.max_chat_length);
+        assert_eq!(
+            host_settings(&saved, "Build", 12).max_chat_length,
+            d.max_chat_length
+        );
     }
     #[test]
     fn rejected_password_and_wrong_reply_never_report_success() {

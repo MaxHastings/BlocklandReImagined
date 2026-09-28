@@ -268,3 +268,25 @@ fn admin_drop_at_camera_costs_a_point_and_respawns_at_once_in_minigames() {
     assert!(s.is_alive(a));
     assert_eq!(s.vitals()[&a].score, score);
 }
+
+#[test]
+fn anyone_may_ask_for_the_brick_count() {
+    let mut s = session();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    s.take_private_notices();
+    // `/brickCount` names no Add-On and no Add-On declares it.
+    let typed = Command::Package(bri_sim::session::PackageCommand {
+        package: String::new(),
+        command: "brickCount".into(),
+        args: vec![],
+    });
+    s.command(a, 1, typed).unwrap();
+    let told = s.take_private_notices();
+    assert!(
+        told.iter()
+            .any(|(o, n)| *o == a && matches!(n, Notice::Chat(t) if t == "0 bricks")),
+        "{told:?}"
+    );
+}
