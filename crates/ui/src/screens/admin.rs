@@ -873,8 +873,12 @@ impl Screen for AdminScreen {
             "admingui::spy();" => {
                 core.admin_request(AdminAction::Spy { target });
             }
+            // `AdminGui_Wand` pops adminGui and escapeMenu too, so the
+            // wand is in hand the moment it is picked.
             "admingui_wand();" => {
                 core.admin_request(AdminAction::Wand);
+                core.pop(ScreenId::Admin);
+                core.pop(ScreenId::EscapeMenu);
             }
             "canvas.pushdialog(unbangui);" => core.push(ScreenId::AdminUnban),
             "canvas.pushdialog(changemapgui);" => core.push(ScreenId::AdminMaps),

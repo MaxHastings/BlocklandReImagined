@@ -11,10 +11,6 @@ use std::{
     sync::Arc,
 };
 
-/// Bricks in one of v20's brick explosion messages (`sendBrickExplosion`),
-/// each heard as one break sound.
-const BRICKS_PER_BREAK_SOUND: u32 = 100;
-
 pub struct ClientAudio {
     runtime: AudioRuntime,
     pending: VecDeque<(String, Placement)>,
@@ -34,10 +30,15 @@ pub struct ClientAudio {
     master: f32,
     mute_in_background: bool,
     focused: bool,
-    /// The last brick blast heard (tick, origin) and how many of its bricks
-    /// have arrived since its last break sound.
-    last_break: Option<(u64, [f32; 3], u32)>,
+    /// Tick of the last brick break heard; see [`BREAK_SOUND_GAP_MS`].
+    last_break: Option<u64>,
 }
+/// v20's client schedules a `BrickBreakSoundEvent` for a dying brick only
+/// when its death time is at least 80 ms from the last one scheduled, for
+/// any brick (`blocklandv20.exe` 0x539c10-0x539c57, last time at 0x81ac44).
+/// A chain kill or blast of many bricks is therefore one break sound, heard
+/// at the first brick.
+pub const BREAK_SOUND_GAP_MS: u64 = 80;
 /// Attached-sound entity keys for projectiles, apart from other entities.
 fn projectile_entity(id: u64) -> EntityKey {
     EntityKey(id | 1 << 63)
@@ -222,21 +223,18 @@ impl ClientAudio {
             }
             CueKind::Jump => "player.jump",
             CueKind::Plant => "brick.plant",
-            // v20 sends one `BrickBreakSoundEvent` per brick explosion, not
-            // per brick: a blast groups up to 100 bricks
-            // (`startNewBrickExplosion`/`sendBrickExplosion`), heard at the
-            // blast, and starts a new group every 100. Its bricks arrive as
-            // cues of one tick and origin.
-            CueKind::BrickKill { origin, .. } => {
-                if let Some((tick, at, count)) = &mut self.last_break
-                    && (*tick, *at) == (cue.tick, *origin)
-                    && *count < BRICKS_PER_BREAK_SOUND
+            // One break sound per `BREAK_SOUND_GAP_MS`, at the brick
+            // (the event plays at the ghost brick's own transform).
+            CueKind::BrickKill { .. } => {
+                let gap = BREAK_SOUND_GAP_MS * u64::from(bri_weapons::TICK_HZ);
+                if self
+                    .last_break
+                    .is_some_and(|last| cue.tick.abs_diff(last) * 1000 < gap)
                 {
-                    *count += 1;
                     return;
                 }
-                self.last_break = Some((cue.tick, *origin, 1));
-                self.trigger("brick.break", Placement::World(*origin));
+                self.last_break = Some(cue.tick);
+                self.trigger("brick.break", Placement::World(cue.position));
                 return;
             }
             CueKind::HammerHit => "tool.hammer.hit",
@@ -483,7 +481,8 @@ mod tests {
         assert_eq!(audio.stats().real_voices, 0);
         assert_eq!(audio.stats().non_finite_samples, 0);
         assert!(audio.warnings.is_empty());
-        // A blast's bricks make one break sound, heard at the blast.
+        // A Destructo Wand chain kill pops every brick from its own spot;
+        // like a blast, it makes one break sound, heard at the first brick.
         let kill = |id: u64, tick: u64, brick: u64| Cue {
             id,
             tick,
@@ -496,9 +495,9 @@ mod tests {
                 color_effect: 0,
                 shape_effect: 0,
                 print: None,
-                origin: [1000., 1., 0.],
-                force: 1.,
-                radius: 1.,
+                origin: [1000., 0., brick as f32],
+                force: 12.,
+                radius: 0.,
             },
         };
         let breaks = |audio: &ClientAudio| audio.requested.get("brick.break").copied();
@@ -506,13 +505,22 @@ mod tests {
             audio.cue(&kill(brick, 50, brick));
         }
         assert_eq!(breaks(&audio), Some(1));
-        audio.cue(&kill(31, 51, 1));
-        assert_eq!(breaks(&audio), Some(2), "the next blast is heard");
-        // A 250-brick blast is three of v20's 100-brick explosions.
+        assert_eq!(
+            audio.pending.back().map(|(_, p)| *p),
+            Some(Placement::World([1000., 1., 1.]))
+        );
+        // 80 ms is 9.6 ticks at 120 Hz: a death 9 ticks on is silent, the
+        // next one 10 ticks on is heard.
+        audio.cue(&kill(31, 59, 1));
+        assert_eq!(breaks(&audio), Some(1), "within 80 ms of the last");
+        audio.cue(&kill(32, 60, 1));
+        assert_eq!(breaks(&audio), Some(2), "80 ms later");
+        // A 250-brick blast arrives as three of v20's 100-brick explosion
+        // messages in one tick; the client gate makes it one sound.
         for brick in 1..=250 {
-            audio.cue(&kill(100 + brick, 60, brick));
+            audio.cue(&kill(100 + brick, 120, brick));
         }
-        assert_eq!(breaks(&audio), Some(5));
+        assert_eq!(breaks(&audio), Some(3));
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
         Ok(())
