@@ -25,7 +25,9 @@ struct Running {
 pub enum Host<'a> {
     /// This player hosts it; their enabled Add-Ons are their own choice.
     Local,
-    /// Someone else's server, by its identity key.
+    /// Someone else's server, by its identity key
+    /// ([`crate::network::host_trust_key`]). An empty key is a host whose
+    /// identity is unknown, which nothing is trusted for.
     Remote(&'a str),
 }
 
@@ -109,6 +111,7 @@ impl ClientCode {
         for code in &self.code {
             let granted = match (&host, &trust) {
                 (Host::Local, _) => Some(TrustLevel::Sandboxed),
+                (Host::Remote(""), _) => None,
                 (Host::Remote(server), Some(store)) => {
                     store.granted(server, &CodeSummary::from(code))
                 }
@@ -287,6 +290,8 @@ mod tests {
     use super::*;
     use bri_package::packages::PackageEntry;
 
+    const HOST: &str = "host-key:00112233445566778899aabbccddeeff";
+
     fn sample_set() -> (std::path::PathBuf, PackageSet) {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
         let set = PackageSet {
@@ -371,7 +376,7 @@ mod tests {
         };
         let mut code = ClientCode::load(&root, &empty);
         let state = tempfile::tempdir().unwrap();
-        code.start(Host::Remote("203.0.113.10:28000"), state.path());
+        code.start(Host::Remote(HOST), state.path());
         code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X);
         assert!(code.running().is_empty());
         assert!(code.take_messages().is_empty());
@@ -385,20 +390,37 @@ mod tests {
         let (root, set) = sample_set();
         let mut code = ClientCode::load(&root, &set);
         let state = tempfile::tempdir().unwrap();
-        code.start(Host::Remote("203.0.113.10:28000"), state.path());
+        code.start(Host::Remote(HOST), state.path());
         assert!(code.running().is_empty());
         assert!(code.take_messages()[0].contains("not trusted this server"));
 
         let mut store = TrustStore::default();
         let summary = CodeSummary::from(&code.code()[0]);
-        let bri_client_sandbox::TrustDecision::Ask(prompt) =
-            store.decide("203.0.113.10:28000", "Test", &[summary])
+        let bri_client_sandbox::TrustDecision::Ask(prompt) = store.decide(HOST, "Test", &[summary])
         else {
             panic!()
         };
         store.accept(&prompt, "Test");
         store.save(state.path()).unwrap();
-        code.start(Host::Remote("203.0.113.10:28000"), state.path());
+        code.start(Host::Remote(HOST), state.path());
         assert_eq!(code.running(), ["Spinning Cube"]);
+
+        // Another host, or one whose identity is unknown, gets nothing from
+        // that grant.
+        code.start(
+            Host::Remote("host-key:ffeeddccbbaa99887766554433221100"),
+            state.path(),
+        );
+        assert!(code.running().is_empty());
+        code.start(Host::Remote(""), state.path());
+        assert!(code.running().is_empty());
+    }
+
+    #[test]
+    fn trust_is_keyed_by_the_host_certificate_not_its_address() {
+        let key = crate::network::host_trust_key(b"certificate");
+        assert_eq!(key.len(), "host-key:".len() + 32);
+        assert!(key.starts_with("host-key:"));
+        assert_ne!(key, crate::network::host_trust_key(b"another certificate"));
     }
 }

@@ -25,6 +25,10 @@ pub struct Connected {
 }
 #[derive(Clone)]
 pub struct View {
+    /// The host's identity for per-server trust (`addon-trust.json`):
+    /// `host-key:` and the hex of its certificate's key. Not the address,
+    /// which another host can take over.
+    pub host_key: String,
     pub weapons: bri_sim::session::WeaponView,
     pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
     pub owner: OwnerId,
@@ -252,6 +256,13 @@ struct WorldState {
     log: Arc<WorldLog>,
     mods: Arc<bri_package_runtime::Catalog>,
 }
+/// How per-server trust names the host that presented `certificate`.
+pub fn host_trust_key(certificate: &[u8]) -> String {
+    format!(
+        "host-key:{}",
+        bri_net::discovery::hex(&bri_net::invite::host_key(certificate))
+    )
+}
 fn publish(
     client: &Client,
     world: &WorldState,
@@ -259,6 +270,7 @@ fn publish(
     sender: &watch::Sender<Option<View>>,
 ) {
     sender.send_replace(Some(View {
+        host_key: host_trust_key(&client.certificate),
         weapons: client.replica.weapons.clone(),
         tools: client.replica.tools.clone(),
         owner: client.owner,

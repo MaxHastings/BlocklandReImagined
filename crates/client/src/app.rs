@@ -3143,12 +3143,14 @@ impl App {
             a.entered = true;
             self.reconnects = 0;
             // A game this player hosts runs their own Add-Ons' code; someone
-            // else's server runs only code the player trusted there.
+            // else's server runs only code the player trusted for its host
+            // key (never its address, which another host can take over).
+            let server = a.view.as_ref().map_or_else(String::new, |v| v.host_key.clone());
             self.client_code.start(
                 if a.local {
                     crate::client_code::Host::Local
                 } else {
-                    crate::client_code::Host::Remote(&a.name)
+                    crate::client_code::Host::Remote(&server)
                 },
                 &self.state_dir,
             );
