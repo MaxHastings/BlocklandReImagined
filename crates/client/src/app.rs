@@ -2543,6 +2543,16 @@ impl App {
             }
             None => result,
         };
+        // A click the server refuses (nothing in hand yet, just after a
+        // respawn or Change Map) shows nothing, as in v20; the reason goes
+        // to the log only.
+        let result = match (&pending.command, result) {
+            (Some(Command::WeaponTrigger { .. }), Err(reason)) => {
+                bri_console::echo(format!("Trigger ignored: {reason}"));
+                Ok(())
+            }
+            (_, result) => result,
+        };
         self.ui.apply_session(
             attempt.id,
             UiUpdate::ActionResult {
