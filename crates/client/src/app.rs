@@ -1252,9 +1252,7 @@ impl App {
     /// How many cosmetic entities this client simulates and draws, for the
     /// headless performance probes.
     pub fn entity_counts(&self) -> serde_json::Value {
-        let world = |w: &bri_fx_runtime::EffectsWorld| {
-            serde_json::json!({ "sources": w.source_count(), "particles": w.particle_count() })
-        };
+        let world = |w: &bri_fx_runtime::EffectsWorld| serde_json::json!({ "sources": w.source_count(), "particles": w.particle_count() });
         let drawn = self.effects_renderer.as_ref().map(|r| r.stats());
         serde_json::json!({
             "brick_effects": world(&self.effects.world),
@@ -2690,12 +2688,14 @@ impl App {
                         crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped)?;
                     // Content that does not resolve reloads too: applying it
                     // names the problem and the join goes ahead without it.
-                    let reload = crate::content::ContentPaths::resolve(&package_root, &set)
-                        .map_or(true, |fresh| {
+                    let reload = crate::content::ContentPaths::resolve(&package_root, &set).map_or(
+                        true,
+                        |fresh| {
                             fresh.brick_extras != paths.brick_extras
                                 || fresh.weapon_extras != paths.weapon_extras
                                 || fresh.vehicle_extras != paths.vehicle_extras
-                        });
+                        },
+                    );
                     if reload {
                         client.close();
                         if let Ok(mut slot) = needs_add_ons.lock() {
@@ -3673,7 +3673,8 @@ impl App {
                     Ok(()) => return Ok(()),
                     Err(error) => {
                         self.join_notices.clear();
-                        reason = format!("Could not join again with the server's Add-Ons: {error:#}");
+                        reason =
+                            format!("Could not join again with the server's Add-Ons: {error:#}");
                         bri_console::warn(&reason);
                     }
                 }
@@ -4747,19 +4748,42 @@ impl LightVolumeState {
     }
 }
 
+/// One frame of sprites from the three effect worlds, farthest first. Each
+/// world's snapshot is already sorted from `eye`, so they merge in one pass;
+/// equally distant sprites keep world order, as a stable sort of the three
+/// lists end to end would.
 fn combine_effect_frames(
     mut world: bri_fx_runtime::FrameEffects,
     others: [bri_fx_runtime::FrameEffects; 2],
     eye: Vec3,
 ) -> (bri_fx_runtime::FrameEffects, usize) {
-    for other in others {
-        world.particles.extend(other.particles);
-        world.lights.extend(other.lights);
+    let [weapon, actor] = others;
+    let lists = [
+        std::mem::take(&mut world.particles),
+        weapon.particles,
+        actor.particles,
+    ];
+    let total = lists.iter().map(Vec::len).sum();
+    let mut heads = [0usize; 3];
+    let mut merged = Vec::with_capacity(total);
+    while merged.len() < total {
+        let mut best: Option<(usize, f32)> = None;
+        for (i, list) in lists.iter().enumerate() {
+            if let Some(p) = list.get(heads[i]) {
+                let d = eye.distance_squared(p.position);
+                // Strictly farther wins; a tie keeps the earlier list.
+                if best.is_none_or(|(_, b)| d.total_cmp(&b).is_gt()) {
+                    best = Some((i, d));
+                }
+            }
+        }
+        let (i, _) = best.expect("a list with sprites left");
+        merged.push(lists[i][heads[i]]);
+        heads[i] += 1;
     }
-    world.particles.sort_by(|a, b| {
-        eye.distance_squared(b.position)
-            .total_cmp(&eye.distance_squared(a.position))
-    });
+    world.particles = merged;
+    world.lights.extend(weapon.lights);
+    world.lights.extend(actor.lights);
     world.lights.sort_by(|a, b| {
         eye.distance_squared(a.position)
             .total_cmp(&eye.distance_squared(b.position))
@@ -5896,7 +5920,8 @@ impl PlatformApp for App {
                 }
                 UiAction::RequestSaveList { .. } | UiAction::LoadBricks { .. } => {
                     // Saves dropped in while the game runs convert too.
-                    if matches!(action, UiAction::RequestSaveList { .. }) && self.old_saves_started {
+                    if matches!(action, UiAction::RequestSaveList { .. }) && self.old_saves_started
+                    {
                         self.old_saves.start();
                     }
                     let result = (|| {
@@ -6806,7 +6831,8 @@ impl PlatformApp for App {
                 })
                 .collect::<Result<_>>()?;
         }
-        self.light_volume.upload(renderer, frame.device, frame.queue)?;
+        self.light_volume
+            .upload(renderer, frame.device, frame.queue)?;
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {
@@ -7154,9 +7180,12 @@ impl PlatformApp for App {
                 u64::from(frame.size.0) * u64::from(frame.size.1),
             );
         }
-        let world_frame = self.effects.world.snapshot(&effects_camera);
-        let weapon_frame = self.weapon_effects.world().snapshot(&effects_camera);
-        let actor_frame = self.actor_effects.world().snapshot(&effects_camera);
+        let world_frame = self.effects.world.snapshot_in_view(&effects_camera);
+        let weapon_frame = self
+            .weapon_effects
+            .world()
+            .snapshot_in_view(&effects_camera);
+        let actor_frame = self.actor_effects.world().snapshot_in_view(&effects_camera);
         let (effects_frame, deferred_lights) =
             combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
