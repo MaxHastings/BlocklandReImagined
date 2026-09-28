@@ -579,14 +579,14 @@ fn keyboard_turn_looks_at_the_preferred_rate_while_held() {
     down(&mut u, Key::PageUp);
     assert!(actions(&mut u).is_empty(), "turning is a rate, not a hold");
     u.update(500);
-    // 0.25 × 4 rad/s × 0.1 s (frames are capped at 100 ms).
-    assert_eq!(
-        actions(&mut u),
-        vec![UiAction::Game(GameAction::Look {
-            yaw: -0.1,
-            pitch: -0.1
-        })]
-    );
+    // v20's getNextMove adds `KeyboardTurnSpeed` radians to every 32 ms move
+    // (blocklandv20.exe 0x59571e): 0.25 / 0.032 s × 0.1 s (frames are capped
+    // at 100 ms).
+    let step = 0.25 / 0.032 * 0.1;
+    let Some(UiAction::Game(GameAction::Look { yaw, pitch })) = actions(&mut u).pop() else {
+        panic!("no look action");
+    };
+    assert!((yaw + step).abs() < 1e-5 && (pitch + step).abs() < 1e-5, "{yaw} {pitch}");
     up(&mut u, Key::Left);
     up(&mut u, Key::PageUp);
     u.update(50);

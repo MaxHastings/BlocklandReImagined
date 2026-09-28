@@ -132,7 +132,11 @@ impl PlayerState {
                 } else {
                     tuning.stand_eye
                 }
-            + Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()) * tuning.eye_forward
+            + self.eye_ahead(tuning)
+    }
+    /// How far the `Eye` node sits ahead of the body along its facing.
+    pub fn eye_ahead(&self, tuning: &PlayerTuning) -> Vec3 {
+        Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()) * tuning.eye_forward
     }
 }
 /// The collision body's shape.
@@ -660,10 +664,13 @@ impl Player {
         let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
         physics.bodies[self.body].set_position(pose, true);
     }
-    /// The eye on the crouch thread, the height the camera shows.
+    /// The eye on the crouch thread, the height the camera shows, and the
+    /// `Eye` node's lead ahead of the body (`getEyePoint`).
     pub fn eye(&self) -> Vec3 {
         let fraction = self.crouch.eye_fraction(crate::crouch::CROUCH_SECONDS);
-        Vec3::from(self.state.feet) + Vec3::Y * self.tuning.eye_height(fraction)
+        Vec3::from(self.state.feet)
+            + Vec3::Y * self.tuning.eye_height(fraction)
+            + self.state.eye_ahead(&self.tuning)
     }
     /// Corpses stop blocking players and weapons; respawn makes them solid.
     pub fn set_solid(&self, physics: &mut PhysicsWorld, solid: bool) {
