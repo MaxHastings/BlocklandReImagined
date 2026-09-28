@@ -92,7 +92,8 @@ pub struct UiConfig {
     pub size: (u32, u32),
     /// Logical→physical scale. `None` = automatic: the largest integer
     /// scale that keeps at least 640x480 logical pixels (Torque's minimum
-    /// canvas), so pixel art and bitmap fonts stay crisp.
+    /// canvas), so pixel art and bitmap fonts stay crisp. A window smaller
+    /// than that scales down to fit it, so no dialog is cut off.
     pub scale: Option<f32>,
     pub platform: Platform,
 }
@@ -102,8 +103,12 @@ impl UiConfig {
         match self.scale {
             Some(s) if s.is_finite() && s > 0.0 => s.clamp(0.5, 8.0),
             _ => {
-                let s = (self.size.0 / 640).min(self.size.1 / 480).max(1);
-                s as f32
+                let fit = (self.size.0 as f32 / 640.0).min(self.size.1 as f32 / 480.0);
+                if fit >= 1.0 {
+                    fit.floor()
+                } else {
+                    fit.max(0.5)
+                }
             }
         }
     }
