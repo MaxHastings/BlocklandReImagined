@@ -523,6 +523,26 @@ pub fn convert(inputs: &Inputs, out: &Path) -> Result<Report> {
         pack.data.avatar.accents_allowed = per;
     }
 
+    // Help pages: `HelpDlg::onWake` lists `*.hfl` (v20 ships them in base/help/).
+    for p in vfs.list("base/help/") {
+        if !p.to_ascii_lowercase().ends_with(".hfl") {
+            continue;
+        }
+        let name = Path::new(&p)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        pack.data.help.push(bri_ui::schema::HelpPage {
+            name,
+            text: data::help_text(&vfs.read(&p)?),
+        });
+    }
+    pack.data.help.sort_by_key(|h| data::help_order(&h.name));
+    if pack.data.help.is_empty() {
+        pack.warnings.push("no help pages in base/help/".into());
+    }
+
     // 8. Maps: every mission under Add-Ons (loose or zipped).
     let mut seen = BTreeSet::new();
     for p in vfs.list("Add-Ons/") {

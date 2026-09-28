@@ -766,6 +766,10 @@ impl Screen for NativeScreen {
             "canvas.pushdialog(avatargui);" => core.push(ScreenId::Avatar),
             "canvas.pushdialog(aboutdlg);" => core.push(ScreenId::About),
             "canvas.pushdialog(\"manualjoin\");" => core.push(ScreenId::ManualJoin),
+            c if c.starts_with("gethelp(") => {
+                let page = c.split('"').nth(1).map(str::to_string);
+                core.get_help(page);
+            }
             "mm_tutorial();" => {
                 core.request(UiAction::StartTutorial);
             }

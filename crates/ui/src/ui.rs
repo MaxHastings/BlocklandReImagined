@@ -217,6 +217,10 @@ pub struct Core {
     pub remap_target: Option<usize>,
     pub remap_all: bool,
     pub options_open: bool,
+    /// HelpDlg is open (F1 closes it again).
+    pub help_open: bool,
+    /// The page `getHelp` asked HelpDlg to open on.
+    pub help_page: Option<String>,
     pub print_letters_visible: bool,
     // catalogs
     pub maps: Vec<MapInfo>,
@@ -449,6 +453,19 @@ impl Core {
     }
     pub fn is_pending(&self, kind: &Pending) -> bool {
         self.pending.values().any(|p| p == kind)
+    }
+    /// `getHelp(name)`: HelpDlg on that page.
+    pub fn get_help(&mut self, page: Option<String>) {
+        self.help_page = page;
+        self.push(ScreenId::Help);
+    }
+    /// `contextHelp` (F1): close HelpDlg if it is open, else open it.
+    pub fn context_help(&mut self) {
+        if self.help_open {
+            self.pop(ScreenId::Help);
+        } else {
+            self.get_help(None);
+        }
     }
     pub fn game(&mut self, g: GameAction) {
         self.request(UiAction::Game(g));
@@ -868,9 +885,11 @@ impl Core {
                     let mut o = Outbox::default();
                     self.hud.direct_select_inv(i, &bsd_key, &mut o);
                     self.apply_outbox(o);
+                } else if other == "contexthelp();" {
+                    self.context_help();
                 } else {
-                    // Context help and debug render modes are recognised but inert.
-                    return matches!(other, "contexthelp();" | "cycledebugrendermode");
+                    // Debug render modes are recognised but inert.
+                    return other == "cycledebugrendermode";
                 }
             }
         }
@@ -1035,6 +1054,8 @@ impl Ui {
             remap_target: None,
             remap_all: false,
             options_open: false,
+            help_open: false,
+            help_page: None,
             print_letters_visible: false,
             maps: Vec::new(),
             game_modes: Vec::new(),

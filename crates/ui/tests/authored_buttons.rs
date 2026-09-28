@@ -117,10 +117,7 @@ fn menu_buttons_are_all_built() {
         }
     }
     // Still to build; see docs/audits/v20-parity.md. Shrinks to empty.
-    let known = [
-        "MainMenu: getHelp(\"1. Credits\");",
-        "StartMission: canvas.pushDialog(MusicFilesGui);",
-    ];
+    let known = ["StartMission: canvas.pushDialog(MusicFilesGui);"];
     assert_eq!(all, known, "unbuilt buttons changed");
 }
 
@@ -223,4 +220,56 @@ fn advanced_config_saves_the_next_hosts_settings() {
     );
     assert!(u.screen(ScreenId::ServerConfig).is_none());
     assert_eq!(u.core.prefs.get("$Pref::Server::MaxChatLen"), Some("64"));
+}
+
+#[test]
+fn credits_and_f1_open_the_help_pages() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(mut pack) = Pack::load(&dir) else {
+        return;
+    };
+    pack.data.data.help = ["0. Credits", "1. Controls"]
+        .map(|name| bri_ui::schema::HelpPage {
+            name: name.into(),
+            text: format!("{name} text"),
+        })
+        .to_vec();
+    let mut u = ui(&Rc::new(pack));
+    u.core.push(ScreenId::MainMenu);
+    u.update(0);
+    let node = u
+        .screen(ScreenId::MainMenu)
+        .unwrap()
+        .view()
+        .by_command("getHelp(\"1. Credits\");")
+        .unwrap();
+    let i = u
+        .dialogs
+        .iter()
+        .rposition(|s| s.id() == ScreenId::MainMenu)
+        .unwrap();
+    let (dialogs, core) = (&mut u.dialogs, &mut u.core);
+    dialogs[i].on_event(
+        &ViewEvent {
+            node,
+            kind: EventKind::Click,
+        },
+        core,
+    );
+    u.update(0);
+    let v = u
+        .screen(ScreenId::Help)
+        .expect("Credits opens HelpDlg")
+        .view();
+    let list = v.id("HelpFileList").unwrap();
+    assert_eq!(v.node(list).state.items.len(), 2);
+    assert_eq!(v.selected(list), Some(0));
+    assert_eq!(v.text_of(v.id("HelpText").unwrap()), "0. Credits text");
+    // F1 (`contextHelp`) closes it, and opens it again.
+    u.core.context_help();
+    u.update(0);
+    assert!(u.screen(ScreenId::Help).is_none());
+    u.core.context_help();
+    u.update(0);
+    assert!(u.screen(ScreenId::Help).is_some());
 }
