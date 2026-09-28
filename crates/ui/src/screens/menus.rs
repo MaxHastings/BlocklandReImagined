@@ -610,7 +610,10 @@ impl Screen for NativeScreen {
             "canvas.pushdialog(startmissiongui);" => core.push(ScreenId::StartMission),
             "canvas.pushdialog(joinservergui);" => core.push(ScreenId::JoinServer),
             "canvas.pushdialog(optionsdlg);" => core.push(ScreenId::Options),
-            "nativeaddons" => core.push(ScreenId::AddOns),
+            // v20 Start Game's Add-Ons tab opens the same Add-Ons screen.
+            "nativeaddons" | "canvas.pushdialog(addonsgui);" | "canvas.pushdialog(addonsgui)" => {
+                core.push(ScreenId::AddOns)
+            }
             "canvas.pushdialog(avatargui);" => core.push(ScreenId::Avatar),
             "canvas.pushdialog(aboutdlg);" => core.push(ScreenId::About),
             "canvas.pushdialog(\"manualjoin\");" => core.push(ScreenId::ManualJoin),
