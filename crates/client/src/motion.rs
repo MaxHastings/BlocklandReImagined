@@ -45,6 +45,9 @@ const CORRECTION_RATE: f32 = 14.0;
 const CLOCK_SLEW: f64 = 0.05;
 /// Clock disagreements beyond this many ticks snap (a stall, a map change).
 const CLOCK_SNAP: f64 = 60.0;
+/// Larger disagreements close faster, over about this many seconds, so a
+/// hitch never leaves remotes lagging for long.
+const CLOCK_CATCH_UP: f64 = 2.0;
 
 #[derive(Default)]
 pub struct Motion {
@@ -280,7 +283,8 @@ impl Motion {
         if let Some(offset) = self.clock_offset {
             let shown = self.shown_offset.unwrap_or(offset);
             let error = offset - shown;
-            let step = CLOCK_SLEW * f64::from(seconds) * TICK_RATE;
+            let step = (CLOCK_SLEW * TICK_RATE).max(error.abs() / CLOCK_CATCH_UP)
+                * f64::from(seconds);
             self.shown_offset = Some(if error.abs() > CLOCK_SNAP {
                 offset
             } else {
@@ -509,6 +513,22 @@ mod tests {
             }
         }
         assert!(worst <= CLOCK_SLEW + 1e-6, "clock rate off by {worst}");
+    }
+    /// After a hitch leaves the clock 40 ticks behind, it catches up within
+    /// a few seconds instead of creeping at the 5% slew.
+    #[test]
+    fn server_clock_catches_up_after_a_hitch() {
+        let mut motion = Motion::default();
+        motion.observe_clock(3);
+        motion.advance(0.01, MoveInput::default(), 1).unwrap();
+        let start = motion.server_tick().unwrap();
+        motion.observe_clock(3 + 40 + 1);
+        let mut seconds = 0.0;
+        while motion.server_tick().unwrap() - start - seconds * TICK_RATE < 39.0 {
+            motion.advance(1.0 / 144.0, MoveInput::default(), 1).unwrap();
+            seconds += 1.0 / 144.0;
+            assert!(seconds < 5.0, "still behind after {seconds} s");
+        }
     }
     #[test]
     fn remote_samples_interpolate_extrapolate_and_wrap_yaw() {
