@@ -3094,8 +3094,11 @@ real integrated GPU; needs a weaker PC.
 - Adaptations: the skis collide as the box around their hulls, and their
   `bodyFriction` is applied at the centre of mass, because Rapier's contacts
   on the original hull spun sliding skis round.
-- Open: tire emitters (`SkiEmitter`) for every vehicle; the importer's
-  collision-damage default (0 instead of 0.05) for every vehicle.
+- Follow-up (protocol 39): tire spray for every wheeled vehicle from the
+  decoded `WheeledVehicle::advanceTime` rule, with wheel ground contact now
+  replicated; vehicle crash damage removed, because v20 never applies
+  `collDamage*` (only networks it), and every vehicle plays its own impact
+  sounds. The first version of the audit had the damage backwards.
 - Evidence: `cargo test -p bri-vehicles` (new `tests/skis.rs`),
   `cargo test -p bri-weapons -- --ignored`,
   `cargo test -p bri-sim --test vehicles -- --ignored`.

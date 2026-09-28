@@ -112,6 +112,64 @@ struct Froth {
     bubble_left: f32,
 }
 
+/// One wheel's tire emitter this frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TireSpray {
+    pub vehicle: u64,
+    pub wheel: usize,
+    /// Native emitter id of the datablock's `tireEmitter`.
+    pub emitter: String,
+    /// Where the tire meets the ground.
+    pub position: Vec3,
+    /// Seconds of emitter time per second; zero stops the spray.
+    pub rate: f32,
+}
+
+/// `WheeledVehicle::advanceTime` (blocklandv20.exe 0x571c60): moving faster
+/// than 1, every wheel on the ground runs its `tireEmitter` at its contact
+/// point for `dt × speed / maxWheelSpeed` of emitter time, straight up.
+pub fn tire_sprays(
+    vehicle: u64,
+    d: &bri_vehicles::Definition,
+    frame: &crate::vehicles::VehicleFrame,
+) -> Vec<TireSpray> {
+    let Some(name) = d
+        .authored
+        .get("tireemitter")
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+    else {
+        return Vec::new();
+    };
+    let emitter = format!("v20/emitter/{}", name.to_ascii_lowercase());
+    let speed = frame.velocity.length();
+    let rate = if speed > 1.0 && d.max_speed > 0.0 {
+        speed / d.max_speed
+    } else {
+        0.0
+    };
+    d.wheels
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let suspension = frame
+                .wheel_suspension
+                .get(i)
+                .copied()
+                .unwrap_or(w.rest_length);
+            let hub = Vec3::from(w.position) - Vec3::Y * (suspension + w.radius);
+            let touching = frame.wheel_contact.get(i).copied().unwrap_or(false);
+            TireSpray {
+                vehicle,
+                wheel: i,
+                emitter: emitter.clone(),
+                position: frame.position + frame.rotation * hub,
+                rate: if touching { rate } else { 0.0 },
+            }
+        })
+        .collect()
+}
+
 /// A presented player for liquid effects.
 #[derive(Clone, Copy, Debug)]
 pub struct Swimmer {
@@ -164,6 +222,8 @@ pub struct ActorEffects {
     burning: BTreeMap<u64, EffectHandle>,
     lights: BTreeMap<u64, EffectHandle>,
     froth: BTreeMap<u64, Froth>,
+    /// Tire emitters by (vehicle, wheel).
+    tires: BTreeMap<(u64, usize), EffectHandle>,
     liquids: Vec<bri_sim::water::TintedWater>,
     orbs: BTreeMap<u64, EffectHandle>,
     /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
@@ -188,6 +248,7 @@ impl ActorEffects {
             burning: BTreeMap::new(),
             lights: BTreeMap::new(),
             froth: BTreeMap::new(),
+            tires: BTreeMap::new(),
             liquids: Vec::new(),
             orbs: BTreeMap::new(),
             orb_eyes: Vec::new(),
@@ -228,6 +289,7 @@ impl ActorEffects {
         self.burning.clear();
         self.lights.clear();
         self.froth.clear();
+        self.tires.clear();
         self.orbs.clear();
         self.orb_eyes.clear();
         self.cursor = checkpoint_cursor;
@@ -368,6 +430,44 @@ impl ActorEffects {
     /// while partly submerged, running `speed * splashFreqMod` ms of emitter
     /// time per second, and bubbles at the body after a splash. v20 checks
     /// neither mounting nor death here.
+    /// Keep one emitter per spraying wheel; wheels that stop let their
+    /// particles drain.
+    pub fn update_tires(&mut self, sprays: &[TireSpray]) -> Result<()> {
+        let world = &mut self.world;
+        self.tires.retain(|key, handle| {
+            let keep = sprays
+                .iter()
+                .any(|s| (s.vehicle, s.wheel) == *key && s.rate > 0.0);
+            if !keep {
+                world.stop(*handle, StopMode::Drain);
+            }
+            keep && world.is_active(*handle)
+        });
+        for s in sprays.iter().filter(|s| s.rate > 0.0 && s.position.is_finite()) {
+            let transform = SourceTransform {
+                position: s.position,
+                ..Default::default()
+            };
+            let options = SourceOptions {
+                time_scale: s.rate.clamp(0.001, 1000.0),
+                ..Default::default()
+            };
+            match self.tires.get(&(s.vehicle, s.wheel)) {
+                Some(&h) => {
+                    self.world.update_source(h, transform)?;
+                    self.world.update_options(h, options)?;
+                }
+                None => match self.world.start_emitter(&s.emitter, transform, options) {
+                    Ok(h) => {
+                        self.tires.insert((s.vehicle, s.wheel), h);
+                    }
+                    Err(_) => self.note(format!("Tire emitter unavailable: {}", s.emitter)),
+                },
+            }
+        }
+        Ok(())
+    }
+
     pub fn update_water(&mut self, dt: f32, swimmers: &[Swimmer]) -> Result<()> {
         anyhow::ensure!(
             dt.is_finite() && (0.0..=86400.0).contains(&dt),

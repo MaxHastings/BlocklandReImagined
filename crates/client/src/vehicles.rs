@@ -266,6 +266,7 @@ pub struct VehicleFrame {
     pub steering: f32,
     pub wheel_suspension: Vec<f32>,
     pub wheel_rotation: Vec<f32>,
+    pub wheel_contact: Vec<bool>,
     pub turret_aim: [f32; 2],
 }
 
@@ -496,6 +497,7 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
         steering: pose.steering,
         wheel_suspension: pose.wheel_suspension.clone(),
         wheel_rotation: pose.wheel_rotation.clone(),
+        wheel_contact: pose.wheel_contact.clone(),
         turret_aim: pose.turret_aim,
     }
 }
@@ -521,6 +523,7 @@ fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
                 wheel_suspension: lerp(&fa.wheel_suspension, &fb.wheel_suspension),
                 // Wheel spin wraps; take the newer value rather than blending.
                 wheel_rotation: fb.wheel_rotation,
+                wheel_contact: fb.wheel_contact,
                 turret_aim: [
                     fa.turret_aim[0] + (fb.turret_aim[0] - fa.turret_aim[0]) * t,
                     fa.turret_aim[1] + (fb.turret_aim[1] - fa.turret_aim[1]) * t,
@@ -548,6 +551,7 @@ mod tests {
             steering: 0.0,
             wheel_suspension: vec![0.4],
             wheel_rotation: vec![0.0],
+            wheel_contact: vec![true],
             turret_aim: [0.0; 2],
             jetting: false,
         }

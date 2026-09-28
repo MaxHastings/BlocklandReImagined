@@ -12,7 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 37: admin camera `Orb` datagrams, the camera view in movement datagrams
 /// and the `Teleport` cue.
 /// 38: `bsd` and `hug` emote cues, which older clients reject as invalid.
-pub const VERSION: u32 = 38;
+/// 39: `VehiclePose::wheel_contact` for the tire emitters.
+pub const VERSION: u32 = 39;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

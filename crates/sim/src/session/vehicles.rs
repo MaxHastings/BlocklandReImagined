@@ -75,6 +75,8 @@ pub struct VehiclePose {
     pub steering: f32,
     pub wheel_suspension: Vec<f32>,
     pub wheel_rotation: Vec<f32>,
+    /// Wheels on the ground, for the client's tire emitters.
+    pub wheel_contact: Vec<bool>,
     pub turret_aim: [f32; 2],
     pub jetting: bool,
 }
@@ -200,6 +202,7 @@ impl Session {
                 steering: v.steering,
                 wheel_suspension: v.wheel_suspension,
                 wheel_rotation: v.wheel_rotation,
+                wheel_contact: v.wheel_contact,
                 turret_aim: v.turret_aim,
                 jetting: v.jetting,
             })

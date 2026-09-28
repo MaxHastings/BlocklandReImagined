@@ -197,6 +197,10 @@ pub struct VehicleSnapshot {
     pub seats: Vec<SeatSnapshot>,
     pub wheel_suspension: Vec<f32>,
     pub wheel_rotation: Vec<f32>,
+    /// Each wheel touching the ground (`mWheel[i].surface.contact`): the
+    /// client sprays the tire emitter from those.
+    #[serde(default)]
+    pub wheel_contact: Vec<bool>,
     pub steering: f32,
     pub animation: String,
     pub charge: u8,
@@ -1601,6 +1605,14 @@ impl VehiclesWorld {
                         }),
                         wheel_rotation: v.controller.as_ref().map_or_else(Vec::new, |c| {
                             c.wheels().iter().map(|w| w.rotation).collect()
+                        }),
+                        wheel_contact: v.restored_contacts.clone().unwrap_or_else(|| {
+                            v.controller.as_ref().map_or_else(Vec::new, |c| {
+                                c.wheels()
+                                    .iter()
+                                    .map(|w| w.raycast_info().is_in_contact)
+                                    .collect()
+                            })
                         }),
                         steering: v.steering,
                         animation: v.animation.clone(),

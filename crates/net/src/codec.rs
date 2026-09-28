@@ -296,6 +296,7 @@ mod tests {
             steering: 1.0,
             wheel_suspension: vec![1.0; 16],
             wheel_rotation: vec![1.0; 16],
+            wheel_contact: vec![true; 16],
             turret_aim: [1.0; 2],
             jetting: true,
         });

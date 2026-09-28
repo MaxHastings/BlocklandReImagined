@@ -711,6 +711,28 @@ impl App {
             })
             .collect();
         actor_effects.update_water(elapsed, &swimmers)?;
+        let mut sprays = Vec::new();
+        for (id, info) in &view.vehicles {
+            let (Some(d), Some(frame)) = (
+                vehicle_assets.definition(&info.definition),
+                vehicles.frame(*id),
+            ) else {
+                continue;
+            };
+            sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
+        }
+        actor_effects.update_tires(&sprays)?;
+        let mut sprays = Vec::new();
+        for (id, info) in &view.vehicles {
+            let (Some(d), Some(frame)) = (
+                vehicle_assets.definition(&info.definition),
+                vehicles.frame(*id),
+            ) else {
+                continue;
+            };
+            sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
+        }
+        actor_effects.update_tires(&sprays)?;
         // Other admins' free cameras; the controller does not see its own
         // (`firstPersonParticles = 0`).
         actor_effects.set_orbs(
