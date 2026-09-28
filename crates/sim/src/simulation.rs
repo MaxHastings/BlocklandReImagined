@@ -313,8 +313,9 @@ impl Simulation {
         let defs = &self.definitions;
         let index = &self.index;
         let physics = &self.physics;
+        let terrain = self.terrain.as_ref();
         let id = self.authority.plant(builder.actor, brick, |world, brick| {
-            validate_placement(world, defs, index, physics, builder, brick)
+            validate_placement(world, defs, index, physics, terrain, builder, brick)
         })?;
         let brick = &self.authority.state().bricks[&id];
         self.handles.insert(
@@ -692,6 +693,7 @@ fn validate_placement(
     defs: &Definitions,
     index: &Index,
     physics: &PhysicsWorld,
+    terrain: Option<&crate::map::TerrainStream>,
     builder: &Builder<'_>,
     brick: &Brick,
 ) -> Result<()> {
@@ -767,45 +769,15 @@ fn validate_placement(
         }
     }
     if !supported {
-        supported = map_supported(physics, brick, &definition.mesh, bounds);
+        // The chain-kill root test: a brick the map holds up stays ground.
+        supported = on_ground(physics, terrain, bounds);
     }
     if !supported {
         return Err(PlantFailure::Float.into());
     }
     Ok(())
 }
-/// Whether a brick's downward studs rest on the map (interiors and statics)
-/// rather than only on other bricks.
-fn map_supported(
-    physics: &PhysicsWorld,
-    brick: &Brick,
-    mesh: &bri_content::brick::Brick,
-    bounds: Bounds,
-) -> bool {
-    let map_filter = |_: ColliderHandle, c: &Collider| c.user_data == MAP_TAG;
-    let query = physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_filter));
-    for z in bounds.min[2]..bounds.max()[2] {
-        for x in bounds.min[0]..bounds.max()[0] {
-            for y in bounds.min[1]..bounds.max()[1] {
-                if !b"bd".contains(&bounds.cell([x, y, z], brick.quarter_turns, mesh)) {
-                    continue;
-                }
-                let origin = Vector::new(
-                    (x as f32 + 0.5) * 0.5,
-                    y as f32 * 0.2 + 0.002,
-                    (z as f32 + 0.5) * 0.5,
-                );
-                if query
-                    .cast_ray_and_get_normal(&Ray::new(origin, -Vector::Y), 0.205, true)
-                    .is_some_and(|(_, h)| h.normal.y > 0.5)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
+/// The one "rests on the map" rule, for planting and chain-kill alike.
 /// v20's plant-time ground probe, approximately: a ray from the brick's top
 /// down to 0.1 below its bottom at each footprint cell finds map floor no
 /// higher than 0.1 above the bottom, or terrain reaches above the bottom.
