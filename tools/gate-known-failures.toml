@@ -11,11 +11,6 @@
 # Baseline on main, 2026-09-27.
 
 [[failure]]
-test = "app_flow.rs::native_host_cancel_rehost_chat_compositor_disconnect_and_settings"
-owner = "Hammer rules and Destructo Wand"
-reason = "Times out waiting for 'authoritative plant undo removes render/query brick' since d8b8bb4."
-
-[[failure]]
 test = "native_weapon_pack_and_core_tools_expose_all_21_item_choices"
 owner = "seats thread (paused)"
 reason = "weapons-pack-009 now carries the four core tools itself (21 items, 'wrench' lower case); the test expects 17 plus appended core tools."
