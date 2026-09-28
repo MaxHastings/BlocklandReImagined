@@ -61,9 +61,14 @@ fn game() -> Result<()> {
         let port = args.get(1).and_then(|a| a.to_str()).unwrap_or_default();
         return bri_client::firewall::run_helper(port);
     }
+    if args.first().is_some_and(|a| a == "--version") {
+        println!("{}", bri_client::updates::version());
+        return Ok(());
+    }
     if args.first().is_some_and(|a| a == "--help") {
         println!(
-            "Blockland ReImagined\nUsage: bri-client [--run] [native-content-directory] [client-state-directory]\n       bri-client --check [native-content-directory] [client-state-directory]\nWith no arguments the game opens with the content beside it.\n--check validates startup content/settings silently without a window or audio device."
+            "Blockland ReImagined {}\nUsage: bri-client [--run] [native-content-directory] [client-state-directory]\n       bri-client --check [native-content-directory] [client-state-directory]\nWith no arguments the game opens with the content beside it.\n--check validates startup content/settings silently without a window or audio device.\n--version prints the build's version.",
+            bri_client::updates::version()
         );
         return Ok(());
     }
@@ -83,7 +88,8 @@ fn game() -> Result<()> {
     };
     // Every run keeps a session log; a crash leaves a report (and on Windows
     // a minidump) in logs/ next to the game for the player to send.
-    let capture = match bri_crash::install("bri-client", &bri_crash::default_directories(&state)) {
+    let program = format!("bri-client {}", bri_client::updates::version());
+    let capture = match bri_crash::install(&program, &bri_crash::default_directories(&state)) {
         Ok(capture) => {
             bri_console::echo(format!("Log: {}", capture.session_log.display()));
             Some(capture)
@@ -108,11 +114,7 @@ fn game() -> Result<()> {
         bri_crash::acknowledge(report);
         bri_crash::alert(
             &format!("{} closed unexpectedly", bri_crash::PRODUCT),
-            &format!(
-                "{} crashed last time it ran. A crash report was saved as {}; sending it helps get the problem fixed.",
-                bri_crash::PRODUCT,
-                report.file_name().unwrap_or_default().to_string_lossy()
-            ),
+            &bri_crash::previous_crash_message(report),
             logs,
         );
     }
@@ -132,8 +134,9 @@ fn game() -> Result<()> {
 fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
     // Executing the game opts into the normal game window and audio device.
     // Library/headless callers use App::load, which always selects silent output.
-    let app = App::load_with_audio(content, state, (1280, 720), bri_audio::OutputKind::Device)
+    let mut app = App::load_with_audio(content, state, (1280, 720), bri_audio::OutputKind::Device)
         .context("Loading the game")?;
+    app.player_session();
     for warning in app.audio_warnings() {
         bri_console::warn(warning);
     }

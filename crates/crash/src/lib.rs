@@ -22,7 +22,7 @@ use std::{
 mod dialog;
 #[cfg(windows)]
 mod windows;
-pub use dialog::{alert, summarize};
+pub use dialog::{alert, open, summarize};
 /// The dialog title players see.
 pub const PRODUCT: &str = "Blockland ReImagined";
 
@@ -156,6 +156,25 @@ pub fn acknowledge(report: &Path) {
     if let (Some(dir), Some(stem)) = (report.parent(), report.file_stem()) {
         let _ = File::create(dir.join(format!("seen-{}", stem.to_string_lossy())));
     }
+}
+
+/// What to tell a player about a crash report from their last run: the
+/// report and, after a native crash, its minidump, by name.
+pub fn previous_crash_message(report: &Path) -> String {
+    let mut files = vec![report.to_path_buf()];
+    let dump = report.with_extension("dmp");
+    if dump.is_file() {
+        files.push(dump);
+    }
+    let names: Vec<String> = files
+        .iter()
+        .map(|f| format!("    {}", f.file_name().unwrap_or_default().to_string_lossy()))
+        .collect();
+    format!(
+        "{PRODUCT} closed unexpectedly last time it ran. It saved what happened in:\n\n{}\n\nPlease send {} to whoever gave you the game; it helps them fix the problem. Nothing is sent automatically.",
+        names.join("\n"),
+        if files.len() == 1 { "that file" } else { "both files" },
+    )
 }
 
 /// The newest crash report written during the latest session that has not
@@ -352,6 +371,19 @@ mod tests {
         touch("session-20260102-000000.log");
         touch("crash-20260101-000600.txt"); // an older session's crash
         assert_eq!(unseen_crash(dir.path()), None);
+    }
+
+    #[test]
+    fn the_crash_message_names_the_report_and_its_dump() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("crash-20260101-000500.txt");
+        File::create(&report).unwrap();
+        let text = previous_crash_message(&report);
+        assert!(text.contains("crash-20260101-000500.txt") && text.contains("that file"));
+        assert!(!text.contains(".dmp"));
+        File::create(dir.path().join("crash-20260101-000500.dmp")).unwrap();
+        let text = previous_crash_message(&report);
+        assert!(text.contains("crash-20260101-000500.dmp") && text.contains("both files"));
     }
 
     #[test]

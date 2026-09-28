@@ -148,6 +148,8 @@ pub enum Callback {
     DefaultAddOns,
     /// Send this request (a platform question answered YES).
     Request(Box<crate::api::UiAction>),
+    /// Open a web page (a new release's download page).
+    OpenUrl(String),
 }
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
@@ -219,6 +221,10 @@ pub struct Core {
     pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
     /// See `UiUpdate::UnsavedChanges`.
     pub unsaved_changes: bool,
+    /// This build's version (`UiUpdate::Version`).
+    pub version: String,
+    /// A newer release's name and page, once one is found.
+    pub newer_version: Option<(String, String)>,
     // live state
     pub conn: ConnectionState,
     pub hud: HudModel,
@@ -953,6 +959,8 @@ impl Ui {
             add_ons: Default::default(),
             add_on_mismatch: None,
             unsaved_changes: false,
+            version: String::new(),
+            newer_version: None,
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
@@ -1473,6 +1481,23 @@ impl Ui {
             UiUpdate::AddOns(view) => c.add_ons = view,
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
             UiUpdate::UnsavedChanges(unsaved) => c.unsaved_changes = unsaved,
+            UiUpdate::Version(v) => c.version = v,
+            UiUpdate::NewerVersion { name, url } => {
+                c.message_yes_no(
+                    "New Version Available",
+                    &format!(
+                        "A newer version of Blockland ReImagined, {name}, is available.\n\nOpen the download page?"
+                    ),
+                    Callback::OpenUrl(url.clone()),
+                );
+                c.newer_version = Some((name, url));
+            }
+            UiUpdate::SetPrefs(prefs) => {
+                for (key, value) in prefs {
+                    c.prefs.set(&key, value);
+                }
+                c.save_settings();
+            }
             UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
             UiUpdate::DisplayChanged {
                 resolution,

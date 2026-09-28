@@ -23,6 +23,19 @@ pub struct NativeScreen {
     shown_mode: Option<Option<String>>,
 }
 
+/// The main menu's corner line: this build, and a newer release if found.
+fn main_menu_version(core: &Core) -> String {
+    let version = if core.version.is_empty() {
+        "ReImagined".to_string()
+    } else {
+        format!("ReImagined {}", core.version)
+    };
+    match &core.newer_version {
+        Some((name, _)) => format!("{version} - {name} is available"),
+        None => version,
+    }
+}
+
 impl NativeScreen {
     pub fn new(id: ScreenId, core: &Core) -> Self {
         let name = match id {
@@ -58,7 +71,6 @@ impl NativeScreen {
         match id {
             ScreenId::MainMenu => {
                 for name in ["MM_AuthBar", "DemoBanner", "buyNowButton_W", "buyNowButton_B", "mm_Fade"] { s.visible(name, false); }
-                s.set("MM_Version", "ReImagined — development");
                 if core.pack.has_image("screenshots/icepalace") { s.icon("MM_BG", &IconRef::Pack("screenshots/icepalace".into())); }
             }
             ScreenId::DefaultControls => {
@@ -269,6 +281,7 @@ impl NativeScreen {
                 if let Some(i) = core.menu_backgrounds.first() {
                     self.icon("MM_BG", i);
                 }
+                self.set("MM_Version", &main_menu_version(core));
             }
             ScreenId::StartMission => {
                 let selected = self
@@ -835,6 +848,9 @@ impl MessageScreen {
             }
             Callback::DefaultAddOns => {
                 core.request(UiAction::DefaultAddOns);
+            }
+            Callback::OpenUrl(url) => {
+                core.request(UiAction::OpenUrl(url.clone()));
             }
             Callback::MiniGame { game, operation } => {
                 let valid = match operation {

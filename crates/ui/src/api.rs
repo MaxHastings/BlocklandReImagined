@@ -597,6 +597,8 @@ pub enum UiAction {
         channel: String,
         value: f32,
     },
+    /// Open a web page in the player's browser (a new release's page).
+    OpenUrl(String),
     // ---- in game
     Chat {
         channel: ChatChannel,
@@ -1139,6 +1141,13 @@ pub enum UiUpdate {
     /// The hosted world changed since it was last saved under a name (or
     /// loaded); leaving and quitting ask first.
     UnsavedChanges(bool),
+    /// This build's version, shown on the main menu.
+    Version(String),
+    /// A newer release exists: say so once and offer its page.
+    NewerVersion { name: String, url: String },
+    /// The host chose preferences for the player (the first run's graphics
+    /// quality); they are saved like the player's own.
+    SetPrefs(Vec<(String, String)>),
 }
 
 // ----------------------------------------------------------------- settings

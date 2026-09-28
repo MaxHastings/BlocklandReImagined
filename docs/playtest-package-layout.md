@@ -65,3 +65,28 @@ the copy size without writing anything:
 Final assembly requires root's exact executable hash and an explicit package
 version. The generated directory and its content remain ignored; only the
 packager, launcher/trust helpers, and this layout documentation are source.
+
+## Release version and signing
+
+A release build carries its version. Set `BRI_VERSION` to the package version
+before building, so the main menu, logs, crash reports and the update check
+name it (without it a build calls itself `dev-<commit date>` and never checks
+for updates):
+
+```powershell
+$env:BRI_VERSION = '2026-09-28-a14'
+cargo build --release --locked -p bri-client --bin bri-client
+.\tools\package_playtest.ps1 -Version 2026-09-28-a14 -ExpectedExecutableSha256 <hash>
+```
+
+The packager runs `bri-client.exe --version` and refuses a build whose version
+differs from `-Version`. Publish the zipped folder as a GitHub Release whose tag
+is that version; players' games compare against the latest release.
+
+Signing is optional and off until there is a code-signing certificate. With
+one installed in the Windows certificate store, pass its SHA-1 thumbprint:
+`-SignCertificateThumbprint <40 hex digits>` signs and timestamps every `.exe`
+in the package with `signtool` (Windows SDK) before the manifest is written.
+Unsigned packages trigger SmartScreen's "Windows protected your PC";
+`PLAYTEST.md` tells players to click More info, then Run anyway.
+

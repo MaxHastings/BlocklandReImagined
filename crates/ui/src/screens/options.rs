@@ -102,11 +102,15 @@ pub const DEFAULT_FOV: &str = "$pref::Player::defaultFov";
 /// The patch's `SliderFOV` range; `validateFOV` rounds to whole degrees.
 pub const FOV_RANGE: (f32, f32) = (70.0, 140.0);
 const FOV_SLIDER: &str = "SliderFOV";
+/// Not a v20 setting: look for a newer release once per start (on unless
+/// turned off). The client's update check reads it.
+pub const CHECK_FOR_UPDATES: &str = "$pref::Net::CheckForUpdates";
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
     ANTI_ALIASING,
     PRECIPITATION,
+    CHECK_FOR_UPDATES,
 ];
 /// Checkbox preferences the native game honours.
 const CHECKBOX_PREFS: &[&str] = &[
@@ -117,6 +121,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::OpenGL::useGLNearest",
     ANTI_ALIASING,
     BRICK_SHADOWS,
+    CHECK_FOR_UPDATES,
     "$Pref::Audio::PlayMusic",
     "$Pref::Audio::MenuSounds",
     "$Pref::Audio::PlayBrickPlantSound",
@@ -657,6 +662,35 @@ impl Options {
             slider.fields.insert("ticks".into(), "40".into());
             slider.fields.insert("snap".into(), "0".into());
             v.add(section, slider);
+        }
+        // "Check for new versions" has no v20 control; it ends Gui Options.
+        if let Some(section) = find_section(v, "Gui Options") {
+            let checks: Vec<NodeId> = v
+                .node(section)
+                .children
+                .iter()
+                .copied()
+                .filter(|&k| v.node(k).state.visible && v.node(k).ctrl.class == "GuiCheckBoxCtrl")
+                .collect();
+            let last = checks.iter().copied().max_by_key(|&k| v.node(k).ctrl.position[1]);
+            let bottom = v
+                .node(section)
+                .children
+                .iter()
+                .map(|&k| v.node(k).ctrl.position[1] + v.node(k).ctrl.extent[1])
+                .max();
+            if let (Some(last), Some(bottom)) = (last, bottom) {
+                let mut c = v.node(last).ctrl.clone();
+                c.name = Some("OptCheckForUpdatesToggle".into());
+                c.variable = Some(CHECK_FOR_UPDATES.into());
+                c.text = Some("Check for new versions".into());
+                c.command = None;
+                c.position[1] = bottom + 2;
+                c.extent[0] = c.extent[0].max(170);
+                let grow = c.extent[1] + 2;
+                v.add(section, c);
+                v.nodes[section].ctrl.extent[1] += grow;
+            }
         }
         let sections: Vec<NodeId> = v.walk().filter(|&n| is_section(v, n)).collect();
         for &n in &sections {
@@ -1699,6 +1733,58 @@ mod tests {
             },
             &mut ui.core,
         );
+    }
+
+    #[test]
+    fn gui_options_ends_with_a_check_for_new_versions_toggle() {
+        let mut data = UiPack::default();
+        let mut layout = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
+        let mut section = ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(0, 0, 300, 60));
+        section
+            .children
+            .push(ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(2, 2, 296, 14)));
+        let mut title = ctrl("GuiTextCtrl", "GuiDefaultProfile", Rect::new(4, 0, 100, 14));
+        title.text = Some("Gui Options".into());
+        section.children.push(title);
+        let mut tips = ctrl("GuiCheckBoxCtrl", "GuiDefaultProfile", Rect::new(10, 20, 120, 18));
+        tips.variable = Some("$pref::HUD::showToolTips".into());
+        tips.text = Some("Show Tooltips".into());
+        section.children.push(tips);
+        layout.children.push(section);
+        let mut done = ctrl("GuiButtonCtrl", "GuiDefaultProfile", Rect::new(0, 400, 100, 20));
+        done.name = Some("done".into());
+        done.command = Some("Canvas.popDialog(optionsDlg);".into());
+        layout.children.push(done);
+        data.layouts.insert("optionsDlg".into(), layout);
+        let mut ui = Ui::new(
+            Rc::new(Pack::from_parts(data, Default::default())),
+            UiConfig {
+                size: (640, 480),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        let mut options = Options::new(&ui.core);
+        let toggle = options.view.id("OptCheckForUpdatesToggle").expect("added");
+        let tips = audio_node(&options, "$pref::HUD::showToolTips");
+        let (t, c) = (&options.view.node(tips).ctrl, &options.view.node(toggle).ctrl);
+        assert!(c.position[1] >= t.position[1] + t.extent[1], "below the last row");
+        assert_eq!(c.position[0], t.position[0]);
+        assert!(options.view.node(toggle).state.visible);
+        assert!(options.view.bool_value(toggle), "on unless turned off");
+        toggle_audio(&mut options, &mut ui, CHECK_FOR_UPDATES, false);
+        click(&mut options, "done", &mut ui);
+        let saved = ui.drain_actions().into_iter().find_map(|(_, a)| match a {
+            UiAction::SaveSettings(s) => Some(s),
+            _ => None,
+        });
+        let saved = saved.expect("Done saves");
+        let prefs = Prefs::new(&Default::default(), &saved.prefs);
+        assert!(!prefs.bool_or(CHECK_FOR_UPDATES, true));
     }
 
     #[test]

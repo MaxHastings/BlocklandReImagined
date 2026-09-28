@@ -2926,3 +2926,44 @@ game mode picker once the Stress Lab landed (da5668e).
   Evidence: cold `cargo build --workspace --all-targets --locked` of e880717
   in a fresh worktree: 42.1 GB (329 s) as before, 13.5 GB (253 s) with the
   profile change, 8.9 GB (200 s) with incremental off as well.
+
+## 2026-09-28 Friends-ready gaps: version, updates, crash files, signing, low-end PCs
+
+Closes the four gaps between "Max can play" and "friends can play", with no
+third-party service and nothing to host.
+
+- Version: `crates/client/build.rs` stamps the build. `BRI_VERSION` names a
+  release (the dist folder's version); otherwise the build is
+  `dev-<commit date>`. The short hash is always added. The main menu's
+  `MM_Version` line, `bri-client --version`, the console `version` command,
+  session logs and crash reports show it. `package_playtest.ps1` refuses an
+  executable whose `--version` differs from `-Version`.
+- Updates: a release build asks
+  `api.github.com/repos/MaxHastings/BlocklandReImagined/releases/latest` once
+  per start on a background thread (`crates/client/src/updates.rs`, ureq on
+  rustls/ring with the platform's certificate store). A release published
+  after this build's commit with a different tag shows a yes/no box
+  (Open the download page) outside a game, and the version line names it. No
+  download; silent offline, on 404 (nothing published yet) and in dev builds.
+  Options > Advanced > "Check for new versions" (`$pref::Net::CheckForUpdates`)
+  turns it off. Checked from the cloud: the real endpoint answers 404 until a
+  release exists.
+- Crash files: the next start already showed a dialog with an Open folder
+  button (Foundations). It now names the report and, after a native crash,
+  the `.dmp`, and says nothing is sent automatically.
+- SmartScreen: `-SignCertificateThumbprint` signs and timestamps every `.exe`
+  with signtool when Max has a certificate; `PLAYTEST.md` explains More info,
+  Run anyway, and Unblock.
+- Low-end PCs: on the first run (`App::player_session`, never tests or
+  `--check`) the client picks Low (software adapter), Medium (integrated GPU;
+  Low above 1080p) or High (graphics card) and saves it as the Options
+  quality prefs, with `$pref::Video::AutoQuality` recording the pick; any
+  quality pref the player set wins. Values match PR #10's presets so Options
+  shows the name. The session log gets a frame-time line each minute of play
+  (average fps, median, 1% slowest, worst, frames under 30 fps).
+  `PLAYTEST.md` has a slow-PC checklist.
+
+Evidence: `cargo test -p bri-client --lib updates quality`, `cargo test -p
+bri-ui --lib gui_options`, `cargo test -p bri-crash --lib`, clippy -D warnings
+on the three crates, all content-free. Not measured: how the picks feel on a
+real integrated GPU; needs a weaker PC.
