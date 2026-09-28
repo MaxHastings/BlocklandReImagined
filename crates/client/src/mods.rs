@@ -71,6 +71,42 @@ pub fn load_fetched(
     Ok((catalog, packages))
 }
 
+/// The package list a joined game runs with: this client's own list with
+/// every package the server sent in place of the local one of the same id.
+/// Downloads must lie under `root` (the cache is `root/.downloads`), so
+/// their bricks, weapons and vehicles load like any other Add-On's.
+pub fn joined_set(root: &std::path::Path, set: &PackageSet, fetched: &[Fetched]) -> Result<PackageSet> {
+    let root = root.canonicalize()?;
+    let mut packages: Vec<PackageEntry> = set
+        .packages
+        .iter()
+        .filter(|e| !fetched.iter().any(|f| f.package.id == e.id))
+        .cloned()
+        .collect();
+    for f in fetched {
+        let dir = f.dir.canonicalize()?;
+        let Ok(relative) = dir.strip_prefix(&root) else {
+            bail!("{} was downloaded outside the game folder", f.package);
+        };
+        let relative = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        packages.push(PackageEntry {
+            id: f.package.id.clone(),
+            version: f.package.version.clone(),
+            side: f.package.side,
+            dir: relative,
+            role: None,
+        });
+    }
+    Ok(PackageSet {
+        schema_version: set.schema_version,
+        packages,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -78,8 +78,12 @@ async fn main() -> Result<()> {
                     })
                 },
             }),
-            // Offered once this host loads through packages.json.
-            packages: None,
+            // Joiners download the Add-Ons this host runs.
+            packages: Some(std::sync::Arc::new(bri_net::packages::PackageShelf::new(
+                &content_root,
+                &bri_package::packages::PackageSet::load_root(&content_root)?,
+                &environment,
+            )?)),
         },
         64,
         state_dir.join("administration.json"),

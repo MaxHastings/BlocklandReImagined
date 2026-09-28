@@ -115,6 +115,9 @@ struct Attempt {
     identity_changed: Arc<std::sync::atomic::AtomicBool>,
     /// Joins: a large Add-On download waiting for the player.
     download: Arc<std::sync::Mutex<DownloadAsk>>,
+    /// Joins: the server's Add-Ons bring bricks, weapons or vehicles, so
+    /// the game loads this package list and joins again.
+    add_ons: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
 }
 /// A large Add-On download the join asks the player about.
 #[derive(Default)]
@@ -133,6 +136,109 @@ struct PendingAction {
 /// Everything a client needs to show and predict on `map` (joins and map changes).
 /// The packages a view draws with: those loaded for its server when joining
 /// it downloaded some, else this client's own.
+/// Everything the game derives from its content that depends on which
+/// Add-Ons are on: weapons, items, vehicles and the tool menus. Built at
+/// startup and again when a game starts with a different Add-On list.
+struct ContentParts {
+    weapon_effects: crate::weapon_effects::WeaponEffects,
+    actor_effects: crate::actor_effects::ActorEffects,
+    explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    tool_ui: crate::tool_ui::ToolUi,
+    item_assets: Arc<crate::items::ItemAssets>,
+    item_ui: crate::item_ui::ItemUi,
+    vehicle_assets: crate::vehicles::VehicleAssets,
+    world_items: crate::world_items::WorldItems,
+}
+impl ContentParts {
+    fn build(content: &ClientContent, effects_pack: Arc<bri_fx_runtime::EffectsPack>) -> Result<Self> {
+        let weapon_pack = Arc::new(content.weapons.pack.clone());
+        let explosion_shapes =
+            crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
+        let actor_effects = crate::actor_effects::ActorEffects::new(
+            effects_pack.clone(),
+            weapon_pack.clone(),
+            Default::default(),
+        )?;
+        let weapon_effects = crate::weapon_effects::WeaponEffects::new(
+            effects_pack,
+            weapon_pack,
+            Default::default(),
+        )?;
+        let material_path = content.paths.brick_materials.join("brick-materials.json");
+        ensure!(
+            std::fs::metadata(&material_path)?.len() <= 8 * 1024 * 1024,
+            "Oversized material manifest"
+        );
+        let material_bundle: bri_content::brick_materials::Bundle =
+            serde_json::from_slice(&std::fs::read(material_path)?)?;
+        material_bundle.validate()?;
+        let mut tool_ui = crate::tool_ui::ToolUi::new(
+            &content.catalog,
+            &content.effects,
+            &material_bundle,
+            &content.ui_pack,
+        )?;
+        tool_ui.install_items(content.weapons.item_choices.clone())?;
+        tool_ui.install_special(
+            content.music.clone(),
+            content
+                .vehicles
+                .definitions
+                .iter()
+                .filter(|d| {
+                    !matches!(
+                        d.family,
+                        bri_vehicles::Family::Skis
+                            | bri_vehicles::Family::Tumble
+                            | bri_vehicles::Family::Turret
+                    )
+                })
+                .map(|d| (d.id.clone(), d.name.trim().to_string()))
+                .chain(bri_sim::session::Session::bot_choices())
+                .collect(),
+        )?;
+        tool_ui.install_events(
+            content.events.clone(),
+            content.event_sounds.clone(),
+            content
+                .weapons
+                .pack
+                .projectiles
+                .iter()
+                .map(|(id, p)| (id.clone(), p.name.clone()))
+                .collect(),
+        );
+        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
+            &content.paths.item_presentation,
+            &content.paths.weapons,
+            &content.paths.weapon_extras,
+        )?);
+        let item_ui = crate::item_ui::ItemUi::new(
+            &item_assets,
+            &content.weapons.item_choices,
+            &content.ui_pack,
+        )?;
+        let vehicle_assets = crate::vehicles::VehicleAssets::load_with(
+            &content.paths.vehicles,
+            &content.paths.vehicle_extras,
+        )?;
+        let world_items = crate::world_items::WorldItems::new(
+            item_assets.clone(),
+            Arc::new(content.weapons.pack.clone()),
+            Default::default(),
+        )?;
+        Ok(Self {
+            weapon_effects,
+            actor_effects,
+            explosion_shapes,
+            tool_ui,
+            item_assets,
+            item_ui,
+            vehicle_assets,
+            world_items,
+        })
+    }
+}
 fn packages_for<'a>(
     own: &'a Option<Arc<bri_package_runtime::Catalog>>,
     view: &'a crate::network::View,
@@ -493,22 +599,42 @@ impl App {
         self.client_code = crate::client_code::ClientCode::load(root, set);
         Ok(())
     }
-    /// The Add-Ons screen changed which Add-Ons are on. HUD panels, rules,
-    /// game modes and worlds are read again now, so the next game uses them;
-    /// bricks, weapons and vehicles are read with the rest of the content at
-    /// startup, so a change to those asks for a restart.
+    /// The Add-Ons screen changed which Add-Ons are on: the next game uses
+    /// the new list, with no restart.
     fn add_ons_changed(&mut self, mut view: AddOnsView) {
         let root = self.content.paths.root.clone();
-        let set = match bri_package::packages::PackageSet::load_root(&root) {
-            Ok(set) => set,
-            Err(error) => {
-                bri_console::warn(format!("Add-On list unreadable after a change: {error:#}"));
-                self.ui.apply(UiUpdate::AddOns(view));
-                return;
-            }
-        };
-        let (client, problems) = crate::packages::load_set(&root, &set, false);
-        let (server, more) = crate::packages::load_set(&root, &set, true);
+        let applied = bri_package::packages::PackageSet::load_root(&root)
+            .and_then(|set| self.apply_packages(&set));
+        if let Err(error) = applied {
+            bri_console::warn(format!("Add-On change not applied: {error:#}"));
+            view.notice = format!("{} It could not be loaded: {error:#}", view.notice);
+        }
+        self.ui.apply(UiUpdate::AddOns(view));
+    }
+    /// Run with the Add-Ons `set` lists, loading again what depends on them:
+    /// HUD panels, rules, game modes and worlds, and (when the list differs
+    /// from the one loaded) bricks, weapons, items and vehicles. Only between
+    /// games; a game in progress keeps what it started with.
+    pub fn apply_packages(&mut self, set: &bri_package::packages::PackageSet) -> Result<()> {
+        ensure!(self.attempt.is_none(), "Leave the game before changing Add-Ons");
+        let root = self.content.paths.root.clone();
+        if *set != self.content.paths.packages {
+            let content = ClientContent::load_packages(&root, set)?;
+            let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
+            let parts = ContentParts::build(&content, effects_pack)?;
+            self.weapon_effects = parts.weapon_effects;
+            self.actor_effects = parts.actor_effects;
+            self.explosion_shapes = parts.explosion_shapes;
+            self.tool_ui = parts.tool_ui;
+            self.item_assets = parts.item_assets;
+            self.item_ui = parts.item_ui;
+            self.vehicle_assets = parts.vehicle_assets;
+            self.world_items = parts.world_items;
+            self.ui.core.pack = content.ui_pack.clone();
+            self.content = content;
+        }
+        let (client, problems) = crate::packages::load_set(&root, set, false);
+        let (server, more) = crate::packages::load_set(&root, set, true);
         for problem in problems.iter().chain(&more) {
             bri_console::warn(format!("Add-On problem: {problem}"));
         }
@@ -517,24 +643,14 @@ impl App {
             let worlds = crate::packages::world_maps(catalog, &self.content.maps);
             self.content.maps.extend(worlds);
         }
+        self.saves = crate::saves::Store::new(&self.state_dir, &self.content);
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
         self.ui.apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
+        self.ui.apply(UiUpdate::Datablocks(self.content.datablocks.clone()));
         self.package_catalog = client;
         self.server_packages = server;
-        self.client_code = crate::client_code::ClientCode::load(&root, &set);
-        let paths = &self.content.paths;
-        let restart = crate::content::ContentPaths::resolve(&root, &set).is_ok_and(|fresh| {
-            fresh.brick_extras != paths.brick_extras
-                || fresh.weapon_extras != paths.weapon_extras
-                || fresh.vehicle_extras != paths.vehicle_extras
-        });
-        if restart {
-            view.notice = view.notice.replace(
-                "Changes apply the next time you start a game.",
-                "Restart the game to use the change: bricks, weapons and vehicles load when it opens.",
-            );
-        }
-        self.ui.apply(UiUpdate::AddOns(view));
+        self.client_code = crate::client_code::ClientCode::load(&root, set);
+        Ok(())
     }
     /// Package HUD panels and keys from the latest replicated state.
     fn update_package_hud(&mut self) {
@@ -1078,89 +1194,23 @@ impl App {
         let foliage = crate::foliage::ClientFoliage::load(&content.paths.foliage)?;
         let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
         let effects = crate::effects::WorldEffects::new(effects_pack.clone(), Default::default())?;
-        let weapon_pack = Arc::new(content.weapons.pack.clone());
-        let explosion_shapes =
-            crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
         let weapon_shells = crate::weapon_debris::WeaponDebris::new(
             crate::weapon_debris::WeaponDebrisAssets::load(&content.paths.weapon_debris)?,
             Default::default(),
         )?;
-        let actor_effects = crate::actor_effects::ActorEffects::new(
-            effects_pack.clone(),
-            weapon_pack.clone(),
-            Default::default(),
-        )?;
-        let weapon_effects = crate::weapon_effects::WeaponEffects::new(
-            effects_pack,
-            weapon_pack,
-            Default::default(),
-        )?;
-        let material_path = content.paths.brick_materials.join("brick-materials.json");
-        ensure!(
-            std::fs::metadata(&material_path)?.len() <= 8 * 1024 * 1024,
-            "Oversized material manifest"
-        );
-        let material_bundle: bri_content::brick_materials::Bundle =
-            serde_json::from_slice(&std::fs::read(material_path)?)?;
-        material_bundle.validate()?;
-        let mut tool_ui = crate::tool_ui::ToolUi::new(
-            &content.catalog,
-            &content.effects,
-            &material_bundle,
-            &content.ui_pack,
-        )?;
-        tool_ui.install_items(content.weapons.item_choices.clone())?;
-        tool_ui.install_special(
-            content.music.clone(),
-            content
-                .vehicles
-                .definitions
-                .iter()
-                .filter(|d| {
-                    !matches!(
-                        d.family,
-                        bri_vehicles::Family::Skis
-                            | bri_vehicles::Family::Tumble
-                            | bri_vehicles::Family::Turret
-                    )
-                })
-                .map(|d| (d.id.clone(), d.name.trim().to_string()))
-                .chain(bri_sim::session::Session::bot_choices())
-                .collect(),
-        )?;
-        tool_ui.install_events(
-            content.events.clone(),
-            content.event_sounds.clone(),
-            content
-                .weapons
-                .pack
-                .projectiles
-                .iter()
-                .map(|(id, p)| (id.clone(), p.name.clone()))
-                .collect(),
-        );
-        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
-            &content.paths.item_presentation,
-            &content.paths.weapons,
-            &content.paths.weapon_extras,
-        )?);
-        let item_ui = crate::item_ui::ItemUi::new(
-            &item_assets,
-            &content.weapons.item_choices,
-            &content.ui_pack,
-        )?;
+        let ContentParts {
+            weapon_effects,
+            actor_effects,
+            explosion_shapes,
+            tool_ui,
+            item_assets,
+            item_ui,
+            vehicle_assets,
+            world_items,
+        } = ContentParts::build(&content, effects_pack)?;
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);
-        let vehicle_assets = crate::vehicles::VehicleAssets::load_with(
-            &content.paths.vehicles,
-            &content.paths.vehicle_extras,
-        )?;
-        let world_items = crate::world_items::WorldItems::new(
-            item_assets.clone(),
-            Arc::new(content.weapons.pack.clone()),
-            Default::default(),
-        )?;
         let settings::Recovered {
             settings: mut saved,
             notice: settings_notice,
@@ -1854,6 +1904,11 @@ impl App {
         let admin = bri_admin::Secret::new(admin)?;
         let super_admin = bri_admin::Secret::new(super_admin)?;
         ensure!((1..=64).contains(&max_players), "Invalid player limit");
+        // A host runs its own Add-On list as it is now; a game joined before
+        // may have loaded another server's.
+        self.disconnect();
+        let set = bri_package::packages::PackageSet::load_root(&self.content.paths.root)?;
+        self.apply_packages(&set)?;
         // What runs: the chosen game mode's Add-Ons, or (Custom) every
         // enabled Add-On that fits the map. A package world stands on its
         // environment map; the packages then generate the ground.
@@ -1907,6 +1962,11 @@ impl App {
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
         let saves = self.saves.clone();
+        // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
+        let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
+            .ok()
+            .filter(|p| *p != 0)
+            .unwrap_or(bri_net::invite::DEFAULT_PORT);
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -2022,13 +2082,15 @@ impl App {
             reporting.begin(bri_progress::Stage::StartingServer, bri_progress::Unit::Steps, None);
             // Tests set BRI_TEST_HOST_PORT so a hosted test game never takes
             // the port of a real game running on this machine.
-            let port = std::env::var("BRI_TEST_HOST_PORT").unwrap_or_else(|_| "28000".into());
-            let bind = if single {
-                "127.0.0.1:0".to_string()
+            let port = std::env::var("BRI_TEST_HOST_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(port);
+            let bind: SocketAddr = if single {
+                "127.0.0.1:0".parse()?
             } else {
-                format!("0.0.0.0:{port}")
-            }
-            .parse()?;
+                SocketAddr::from(([0, 0, 0, 0], port))
+            };
             let setup = HostSetup {
                 // v20 `$Server::LAN`: single-player and LAN hosts keep the looser
                 // brick-damage rule; internet hosts use miniGameCanDamage.
@@ -2084,7 +2146,12 @@ impl App {
                         every: crate::saves::AUTOSAVE_EVERY,
                         save: autosaver.clone(),
                     }),
-                    packages: None,
+                    // Joiners download the Add-Ons this host runs.
+                    packages: Some(Arc::new(bri_net::packages::PackageShelf::new(
+                        &paths_for_maps.root,
+                        &paths_for_maps.packages,
+                        &identity,
+                    )?)),
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),
@@ -2094,8 +2161,14 @@ impl App {
                 // LAN players find this host (and its certificate) by broadcast;
                 // Connect to IP asks the same responder directly, so internet
                 // hosts answer it too.
-                host.advertise(listing_name, listing_map, max_players, identity.digest())
-                    .await?;
+                // Another game on this computer may hold the LAN port; this
+                // one is then joined by address only.
+                if let Err(error) = host
+                    .advertise(listing_name, listing_map, max_players, identity.digest())
+                    .await
+                {
+                    bri_console::warn(format!("Not listed on the LAN: {error:#}"));
+                }
             }
             if !single {
                 // Windows Firewall can block friends whatever the router does.
@@ -2160,6 +2233,7 @@ impl App {
             settling: None,
             identity_changed: Default::default(),
             download: Default::default(),
+            add_ons: Default::default(),
         });
         Ok(())
     }
@@ -2227,7 +2301,11 @@ impl App {
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let load_limit = self.load_limit.clone();
         let identity_file = self.state_dir.join("client.identity");
-        let package_cache = self.state_dir.join("package-cache");
+        // Downloaded Add-Ons live in the game folder (a dot folder the
+        // Add-Ons list skips), so their content loads like a local Add-On's.
+        let package_cache = self.content.paths.root.join(".downloads");
+        let add_ons = Arc::new(std::sync::Mutex::new(None));
+        let needs_add_ons = add_ons.clone();
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -2320,6 +2398,21 @@ impl App {
             )
             .await;
             let client = match joined {
+                Ok((client, fetched)) if !fetched.is_empty() => {
+                    let set = crate::mods::joined_set(&package_root, &package_set, &fetched)?;
+                    let fresh = crate::content::ContentPaths::resolve(&package_root, &set)?;
+                    if fresh.brick_extras != paths.brick_extras
+                        || fresh.weapon_extras != paths.weapon_extras
+                        || fresh.vehicle_extras != paths.vehicle_extras
+                    {
+                        client.close();
+                        if let Ok(mut slot) = needs_add_ons.lock() {
+                            *slot = Some(set);
+                        }
+                        anyhow::bail!("Loading the server's Add-Ons");
+                    }
+                    client
+                }
                 Ok((client, _)) => client,
                 Err(error) => {
                     // A saved server that answers with a new identity may
@@ -2401,6 +2494,7 @@ impl App {
             settling: None,
             identity_changed,
             download,
+            add_ons,
         });
         Ok(())
     }
@@ -3146,6 +3240,19 @@ impl App {
                 }
             }
             self.reconnects = 0;
+            // The server's Add-Ons bring content: load it and join again
+            // (the downloads are cached, so this join fetches nothing).
+            let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
+            if let Some(set) = add_ons {
+                self.disconnect();
+                let rejoined = self
+                    .apply_packages(&set)
+                    .and_then(|()| self.join(id, a.name.clone(), String::new()));
+                match rejoined {
+                    Ok(()) => return Ok(()),
+                    Err(error) => bri_console::warn(format!("Joining with the server's Add-Ons: {error:#}")),
+                }
+            }
             if a.identity_changed.load(std::sync::atomic::Ordering::Relaxed) {
                 let question = self.identity_question(&a.name);
                 self.ui.apply_session(id, UiUpdate::FailureQuestion(question));

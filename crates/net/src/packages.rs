@@ -62,20 +62,31 @@ fn stamp(path: &Path) -> Option<(u64, std::time::SystemTime)> {
 }
 
 impl PackageShelf {
-    /// List every client-side package of `environment` (loaded from `set`
-    /// under `root`). Fails if a package cannot be sent, naming it.
+    /// List every client-side Add-On of `environment` (loaded from `set`
+    /// under `root`). Base game content (entries with a role) is never
+    /// offered: a joiner on another build cannot run it anyway, and one on
+    /// the same build already has it. Fails if a package cannot be sent,
+    /// naming it.
     pub fn new(root: &Path, set: &PackageSet, environment: &Environment) -> Result<Self> {
+        let entry_of = |id: &str| {
+            set.packages
+                .iter()
+                .find(|e| e.id == id)
+                .with_context(|| format!("Package `{id}` is not in the package list"))
+        };
+        let mut offered = Vec::new();
+        for package in environment.client_packages() {
+            if entry_of(&package.id)?.role.is_none() {
+                offered.push(package);
+            }
+        }
         let mut shelf = Self {
-            offered: environment.client_packages(),
+            offered,
             listings: BTreeMap::new(),
             objects: BTreeMap::new(),
         };
         for package in &shelf.offered {
-            let entry = set
-                .packages
-                .iter()
-                .find(|e| e.id == package.id)
-                .with_context(|| format!("Package `{}` is not in the package list", package.id))?;
+            let entry = entry_of(&package.id)?;
             let dir = package_dir(root, entry)?;
             let listing = Listing::of(&dir, package)?;
             for file in &listing.files {

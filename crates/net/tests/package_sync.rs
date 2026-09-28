@@ -683,3 +683,38 @@ async fn large_add_on_downloads_ask_the_player_first() -> Result<()> {
     server.stop().await?;
     Ok(())
 }
+
+/// Base game content (an entry with a role) is never offered: joiners on
+/// the same build have it, and others cannot run it. Only Add-Ons are.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_add_ons_are_offered_never_base_game_content() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (_, _) = content(root.path())?;
+    std::fs::create_dir_all(root.path().join("base-ui"))?;
+    std::fs::write(root.path().join("base-ui/ui-pack.json"), b"{}")?;
+    let set = PackageSet::parse(
+        br#"{"schema_version":1,"packages":[
+            {"id":"v20-ui","version":"3.0.0","side":"client","dir":"base-ui","role":"ui_pack"},
+            {"id":"hud","version":"1.0.0","side":"client","dir":"hud"}
+        ]}"#,
+    )?;
+    let environment = Environment::load(root.path(), &set)?;
+    let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment: environment.clone(),
+            packages: Some(Arc::new(shelf)),
+            ..fixture::options()
+        },
+    )?;
+    let DownloadReply::Environment(offered) =
+        raw_download(&server, &DownloadRequest::Environment).await?
+    else {
+        anyhow::bail!("expected the offered list");
+    };
+    let ids: Vec<_> = offered.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["hud"]);
+    server.stop().await?;
+    Ok(())
+}
