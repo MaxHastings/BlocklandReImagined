@@ -161,7 +161,12 @@ Ranked by impact on getting problems fixed, with status:
    double-click with the content beside it, release builds have no console,
    startup and fatal errors show a dialog with an Open logs folder choice, a
    main-thread panic says so before closing, and a crash nobody saw is
-   reported once on the next launch (`tests/launch.rs`).
+   reported once on the next launch (`tests/launch.rs`). Loading feedback: the
+   loading screen shows the real stage and bar from `bri-progress` (loading
+   the map, starting the server, connecting, receiving the world brick by
+   brick, loading graphics) for hosting, joining (from the moment the host
+   names its map) and map changes; `input_playback` asserts the stages seen.
+   Still open there: a splash while content loads before the window opens.
 5. **Net soak tests: done, and they found a real problem.**
    `bri_net::impair::ImpairedLink` is a UDP relay that adds latency, jitter
    (so reordering), loss and duplication both ways, with a seeded pattern so a
