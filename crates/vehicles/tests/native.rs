@@ -990,3 +990,33 @@ fn restored_vehicles_join_an_island_even_before_their_first_pre_step() {
             .any(|(_, body)| body.is_dynamic() && body.linvel().y < -1.)
     );
 }
+
+#[test]
+fn jeeps_sink_and_stop_spinning_in_water() {
+    // JeepVehicle: mass 300, density 5, drag 1.6. In water of viscosity 40,
+    // buoyancy is a fifth of its weight and `torque -= angMomentum * mDrag`
+    // decays spin at 64 per second; `mDrag` on velocity is not mass-scaled.
+    let spin_after = |water: Option<f32>| {
+        let (mut v, mut w) = setup();
+        spawn(&mut v, &mut w, "jeepvehicle", 60.);
+        for (_, body) in w.bodies.iter_mut() {
+            if body.is_dynamic() {
+                body.set_angvel(Vec3::Y * 10., true);
+            }
+        }
+        step(&mut v, &mut w, 12, water);
+        let spin = w
+            .bodies
+            .iter()
+            .filter(|(_, b)| b.is_dynamic())
+            .map(|(_, b)| b.angvel().length())
+            .fold(0., f32::max);
+        (spin, v.snapshot(&w).vehicles[0].transform.position[1])
+    };
+    let (dry, dry_y) = spin_after(None);
+    let (wet, wet_y) = spin_after(Some(1000.));
+    assert!(dry > 5., "{dry}");
+    assert!(wet < 0.05, "{wet}");
+    // Still sinking, only a little slower than falling through air.
+    assert!(wet_y < 60. && wet_y > dry_y, "{wet_y} {dry_y}");
+}

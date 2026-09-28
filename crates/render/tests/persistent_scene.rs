@@ -116,7 +116,7 @@ fn water_depth_mask_and_time_motion_use_one_upload() -> Result<()> {
         rgba: vec![255, 50, 20, 255, 20, 50, 255, 255],
         srgb: true,
     });
-    bri_render::water_scene::append(&mut data, &water, [1, 1, 0], |x, _| {
+    bri_render::water_scene::append(&mut data, &water, [1, 1, 0], ([1.0; 4], 6.0), true, |x, _| {
         Some(if x < 0. { 2. } else { -4. })
     })?;
     let mask = &data.images.last().unwrap().rgba;

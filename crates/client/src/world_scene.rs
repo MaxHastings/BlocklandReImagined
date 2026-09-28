@@ -261,6 +261,7 @@ pub fn v20_temp_brick(scene: &mut SceneData, look: &TempBrickLook) {
             ],
             [0.0; 4],
             [0.0; 4],
+            [0.0; 4],
         ]);
     }
 }

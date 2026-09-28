@@ -216,7 +216,7 @@ pub struct Material {
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
-    pub parameters: Option<[[f32; 4]; 3]>,
+    pub parameters: Option<[[f32; 4]; 4]>,
 }
 impl Material {
     pub fn brick_overlay(name: impl Into<String>, diffuse: usize) -> Self {
@@ -725,7 +725,8 @@ pub struct GpuScene {
     materials: Vec<wgpu::BindGroup>,
     batches: Vec<MeshBatch>,
     /// Opaque/alpha/additive, double sided, background, alpha-masked.
-    material_modes: Vec<(usize, bool, bool, bool)>,
+    /// (blend, double sided, sky/cloud background, alpha mask, water plane)
+    material_modes: Vec<(usize, bool, bool, bool, bool)>,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
     bounds: Option<(Vec3, Vec3)>,
     pub vertex_count: usize,
@@ -973,6 +974,39 @@ fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
     // 0..1 depth: the near plane is row 2 alone.
     [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2]
 }
+/// Back-to-front order for translucent draws, each a centre and, for a
+/// water surface, the height of its horizontal plane. Torque sorts water
+/// blocks as planes (`SceneRenderImage::Plane`), not points: a plane is drawn
+/// after everything beyond it and before everything on the camera's side,
+/// and stacked planes go farthest first. So an ocean covers the sand layer
+/// under it wherever their strips' centres happen to lie.
+pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize> {
+    let mut planes: Vec<f32> = draws.iter().filter_map(|d| d.1).collect();
+    planes.sort_by(|a, b| (a - eye.y).abs().total_cmp(&(b - eye.y).abs()));
+    planes.dedup();
+    // Planes between a point and the camera; a plane's rank counts itself.
+    let level = |(center, plane): &(Vec3, Option<f32>)| match plane {
+        Some(h) => planes.iter().position(|p| p == h).unwrap_or(0) * 2 + 1,
+        None => {
+            let behind = |p: &f32| (center.y - p) * (eye.y - p) < 0.0;
+            match planes.iter().rposition(behind) {
+                Some(i) => i * 2 + 2,
+                None => 0,
+            }
+        }
+    };
+    let mut order: Vec<usize> = (0..draws.len()).collect();
+    order.sort_by(|&a, &b| {
+        level(&draws[b]).cmp(&level(&draws[a])).then_with(|| {
+            draws[b]
+                .0
+                .distance_squared(eye)
+                .total_cmp(&draws[a].0.distance_squared(eye))
+        })
+    });
+    order
+}
+
 fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     planes.iter().all(|plane| {
         let normal = plane.truncate();
@@ -1565,7 +1599,7 @@ impl SceneRenderer {
         }
         let mut materials = vec![];
         for material in &data.materials {
-            let mut parameters: [f32; 16] = [0.0; 16];
+            let mut parameters: [f32; 20] = [0.0; 20];
             parameters[..4].copy_from_slice(&[
                 match material.kind {
                     MaterialKind::Surface => 0.0,
@@ -1638,6 +1672,7 @@ impl SceneRenderer {
                         m.double_sided,
                         matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
                         matches!(m.alpha, AlphaMode::Mask(_)),
+                        m.kind == MaterialKind::Water,
                     )
                 })
                 .collect(),
@@ -1898,7 +1933,8 @@ impl SceneRenderer {
                         }
                     };
                     for batch in &scene.batches {
-                        let (blend, _, background, masked) = scene.material_modes[batch.material];
+                        let (blend, _, background, masked, _) =
+                            scene.material_modes[batch.material];
                         if blend != 0 || background {
                             continue;
                         }
@@ -2038,16 +2074,31 @@ impl SceneRenderer {
             } // authored sky/cloud/band order
             let aa = a.blend != 0;
             let ba = b.blend != 0;
-            aa.cmp(&ba).then_with(|| {
-                if aa {
-                    b.center
-                        .distance_squared(self.eye)
-                        .total_cmp(&a.center.distance_squared(self.eye))
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            })
+            aa.cmp(&ba)
         });
+        // Translucent draws go back to front; water surfaces sort as planes.
+        let first = order
+            .iter()
+            .position(|d| d.blend != 0 && !d.scene.material_modes[d.batch.material].2)
+            .unwrap_or(order.len());
+        let translucent = order.split_off(first);
+        let keys: Vec<_> = translucent
+            .iter()
+            .map(|d| {
+                (
+                    d.center,
+                    d.scene.material_modes[d.batch.material]
+                        .4
+                        .then_some(d.center.y),
+                )
+            })
+            .collect();
+        let mut translucent: Vec<_> = translucent.into_iter().map(Some).collect();
+        order.extend(
+            translucent_order(self.eye, &keys)
+                .into_iter()
+                .filter_map(|i| translucent[i].take()),
+        );
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("persistent world scene"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2081,7 +2132,7 @@ impl SceneRenderer {
             if scene.vertex_count == 0 || scene.index_count == 0 {
                 continue;
             }
-            let (_, double_sided, background, _) = scene.material_modes[batch.material];
+            let (_, double_sided, background, _, _) = scene.material_modes[batch.material];
             pass.set_pipeline(
                 &self.pipelines
                     [usize::from(background) * 6 + draw.blend * 2 + usize::from(double_sided)],

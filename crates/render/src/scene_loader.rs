@@ -436,7 +436,9 @@ fn load_waters(
                 );
             }
         }
-        crate::water_scene::append(out, water, textures, |x, z| {
+        let specular = water_specular(&scene.nodes[water.node].properties);
+        let terrain = !fields.is_empty();
+        crate::water_scene::append(out, water, textures, specular, terrain, |x, z| {
             fields
                 .iter()
                 .filter_map(|field| field.height(x, z))
@@ -444,6 +446,27 @@ fn load_waters(
         })?;
     }
     Ok(true)
+}
+
+/// A WaterBlock's authored `specularColor` and `specularPower`, or the
+/// block defaults (white, and `mSpecPower` 6 from the v20 constructor).
+fn water_specular(node: &BTreeMap<String, String>) -> ([f32; 4], f32) {
+    let color = node
+        .get("specularcolor")
+        .and_then(|c| {
+            let v: Vec<f32> = c
+                .split_whitespace()
+                .map(|v| v.parse().ok())
+                .collect::<Option<_>>()?;
+            (v.len() == 4 && v.iter().all(|v| v.is_finite())).then(|| [v[0], v[1], v[2], v[3]])
+        })
+        .unwrap_or([1.0; 4]);
+    let power = node
+        .get("specularpower")
+        .and_then(|p| p.parse::<f32>().ok())
+        .filter(|p| p.is_finite() && *p >= 0.0)
+        .unwrap_or(6.0);
+    (color, power)
 }
 
 fn load_static_shape(
