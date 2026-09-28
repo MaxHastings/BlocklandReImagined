@@ -1725,6 +1725,19 @@ impl SceneRenderer {
             image_count: palette.image_count,
         })
     }
+    /// Upload one instanced model whose batches index `palette`'s materials:
+    /// geometry only, like a chunk, but never culled by its model-space
+    /// bounds, since its instances may be anywhere.
+    pub fn upload_palette_model(
+        &self,
+        device: &wgpu::Device,
+        data: &SceneData,
+        palette: &GpuScene,
+    ) -> Result<GpuScene> {
+        let mut scene = self.upload_chunk(device, data, palette)?;
+        scene.bounds = None;
+        Ok(scene)
+    }
     /// Upload changed animation geometry while sharing the original material
     /// bind groups and textures. A foreign/recolored binding table is rejected.
     pub fn upload_geometry_shared(

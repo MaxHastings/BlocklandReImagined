@@ -28,6 +28,61 @@ impl BrickMaterials {
         }
         Ok(Self { bundle, images })
     }
+    /// Plain 1x1 surfaces and one `Letters/A` print, held in memory, for
+    /// tests of textured brick scenes.
+    #[cfg(test)]
+    pub(crate) fn in_memory() -> Self {
+        use bri_content::brick_materials::{Package, Print, Source};
+        let image = |name: &str| Image {
+            path: format!("{name}.png"),
+            width: 1,
+            height: 1,
+            sha256: "0".repeat(64),
+            source: Source {
+                path: format!("{name}.png"),
+                archive: None,
+                sha256: "0".repeat(64),
+            },
+        };
+        let bundle = Bundle {
+            schema_version: 1,
+            surfaces: SURFACES.into_iter().map(|s| (s.into(), image(s))).collect(),
+            prints: vec![Print {
+                id: "print/print_letters_default/a".into(),
+                name: "A".into(),
+                aspect: "Letters".into(),
+                package: "Print_Letters_Default".into(),
+                aliases: vec!["Letters/A".into()],
+                diffuse: image("letter-a"),
+                icon: image("icon-a"),
+            }],
+            packages: vec![Package {
+                name: "Print_Letters_Default".into(),
+                archive: "Add-Ons/Print_Letters_Default.zip".into(),
+                archive_sha256: "a".repeat(64),
+                default_list_line: 1,
+            }],
+            evidence: vec![],
+            excluded_installed_packages: vec![],
+            warnings: vec![],
+        };
+        let images = bundle
+            .images()
+            .map(|entry| {
+                (
+                    entry.path.clone(),
+                    SceneImage {
+                        label: entry.path.clone(),
+                        width: 1,
+                        height: 1,
+                        rgba: vec![255; 4],
+                        srgb: false,
+                    },
+                )
+            })
+            .collect();
+        Self { bundle, images }
+    }
     pub fn surface_materials(&self, scene: &mut SceneData) -> [usize; 6] {
         let mut out = [0; 6];
         for (i, name) in SURFACES.iter().enumerate() {

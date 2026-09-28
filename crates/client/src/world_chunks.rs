@@ -357,23 +357,68 @@ fn build_chunk(
     palette: &BrickPalette,
     materials: Option<&BrickMaterials>,
 ) -> Result<SceneData> {
+    palette_scene(
+        format!("{}/replicated-bricks/{key:?}", world.map_id),
+        format!("{} bricks {key:?}", world.name),
+        ids.iter().map(|id| (*id, &world.bricks[id])),
+        &world.palette,
+        meshes,
+        palette,
+        materials,
+        true,
+    )
+}
+
+/// One brick in its own frame against the shared palette, for per-brick
+/// models (knocked-out brick debris) that upload geometry only.
+pub fn build_brick(
+    brick: &Brick,
+    colors: &[[f32; 4]],
+    meshes: &BTreeMap<String, BrickMesh>,
+    palette: &BrickPalette,
+    materials: Option<&BrickMaterials>,
+) -> Result<SceneData> {
+    brick.validate(colors.len())?;
+    palette_scene(
+        "replicated-bricks/single".into(),
+        "Single brick".into(),
+        [(0, brick)],
+        colors,
+        meshes,
+        palette,
+        materials,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // bricks plus the shared palette context
+fn palette_scene<'a>(
+    id: String,
+    name: String,
+    bricks: impl IntoIterator<Item = (u64, &'a Brick)>,
+    colors: &[[f32; 4]],
+    meshes: &BTreeMap<String, BrickMesh>,
+    palette: &BrickPalette,
+    materials: Option<&BrickMaterials>,
+    mesh_validated: bool,
+) -> Result<SceneData> {
     let mut scene = SceneData {
-        id: format!("{}/replicated-bricks/{key:?}", world.map_id),
-        name: format!("{} bricks {key:?}", world.name),
+        id,
+        name,
         images: vec![],
         materials: palette.scene.materials.clone(),
         ..Default::default()
     };
-    for id in ids {
+    for (id, brick) in bricks {
         crate::world_scene::append_world_brick(
             &mut scene,
-            *id,
-            &world.bricks[id],
-            &world.palette,
+            id,
+            brick,
+            colors,
             meshes,
             palette.surfaces,
             materials,
-            true,
+            mesh_validated,
         )?;
     }
     ensure!(
@@ -387,12 +432,12 @@ fn build_chunk(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::network::WorldChanges;
     use bri_content::brick::{Face, Quad, Surface, Vertex};
 
-    fn meshes() -> BTreeMap<String, BrickMesh> {
+    pub(crate) fn meshes() -> BTreeMap<String, BrickMesh> {
         let quad = Quad {
             face: Face::Omni,
             surface: Surface::Side,

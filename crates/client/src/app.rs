@@ -6592,15 +6592,19 @@ impl PlatformApp for App {
                 }
                 self.hidden_uploaded = Some(show);
             }
-            self.debris_models.upload(
-                &self.brick_debris,
-                renderer,
-                frame.device,
-                frame.queue,
-                meshes,
-                materials,
-                &view.world.palette,
-            )?;
+            if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
+                self.debris_models.upload(
+                    &self.brick_debris,
+                    renderer,
+                    frame.device,
+                    frame.queue,
+                    meshes,
+                    palette,
+                    gpu_palette,
+                    materials,
+                    &view.world.palette,
+                )?;
+            }
             if let Some(world) = &self.world_source {
                 self.fade_models.upload(
                     &self.brick_fades,
