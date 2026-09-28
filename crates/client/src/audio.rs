@@ -11,6 +11,10 @@ use std::{
     sync::Arc,
 };
 
+/// Bricks in one of v20's brick explosion messages (`sendBrickExplosion`),
+/// each heard as one break sound.
+const BRICKS_PER_BREAK_SOUND: u32 = 100;
+
 pub struct ClientAudio {
     runtime: AudioRuntime,
     pending: VecDeque<(String, Placement)>,
@@ -30,9 +34,9 @@ pub struct ClientAudio {
     master: f32,
     mute_in_background: bool,
     focused: bool,
-    /// The last brick explosion heard (tick and origin): its other bricks
-    /// make no further break sound.
-    last_break: Option<(u64, [f32; 3])>,
+    /// The last brick blast heard (tick, origin) and how many of its bricks
+    /// have arrived since its last break sound.
+    last_break: Option<(u64, [f32; 3], u32)>,
 }
 /// Attached-sound entity keys for projectiles, apart from other entities.
 fn projectile_entity(id: u64) -> EntityKey {
@@ -221,12 +225,17 @@ impl ClientAudio {
             // v20 sends one `BrickBreakSoundEvent` per brick explosion, not
             // per brick: a blast groups up to 100 bricks
             // (`startNewBrickExplosion`/`sendBrickExplosion`), heard at the
-            // blast. Its bricks arrive as cues of one tick and origin.
+            // blast, and starts a new group every 100. Its bricks arrive as
+            // cues of one tick and origin.
             CueKind::BrickKill { origin, .. } => {
-                if self.last_break == Some((cue.tick, *origin)) {
+                if let Some((tick, at, count)) = &mut self.last_break
+                    && (*tick, *at) == (cue.tick, *origin)
+                    && *count < BRICKS_PER_BREAK_SOUND
+                {
+                    *count += 1;
                     return;
                 }
-                self.last_break = Some((cue.tick, *origin));
+                self.last_break = Some((cue.tick, *origin, 1));
                 self.trigger("brick.break", Placement::World(*origin));
                 return;
             }
@@ -329,9 +338,7 @@ impl ClientAudio {
         }
         for (key, (sound, position)) in wanted {
             if let Some((_, handle)) = self.image_loops.get(key) {
-                let result = self
-                    .runtime
-                    .set_source_position(*handle, *position);
+                let result = self.runtime.set_source_position(*handle, *position);
                 self.record(result);
             } else if self.image_loops.len() < 64 {
                 match self.runtime.play(sound, Placement::World(*position)) {
@@ -345,9 +352,18 @@ impl ClientAudio {
     }
     /// `ProjectileData.sound`: a loop that flies with each projectile and
     /// stops when it explodes or expires.
-    pub fn sync_projectiles(&mut self, projectiles: &[bri_weapons::Projectile], pack: &bri_weapons::Pack) {
+    pub fn sync_projectiles(
+        &mut self,
+        projectiles: &[bri_weapons::Projectile],
+        pack: &bri_weapons::Pack,
+    ) {
         let live: BTreeSet<u64> = projectiles.iter().map(|p| p.id).collect();
-        for id in self.projectiles.difference(&live).copied().collect::<Vec<_>>() {
+        for id in self
+            .projectiles
+            .difference(&live)
+            .copied()
+            .collect::<Vec<_>>()
+        {
             self.projectiles.remove(&id);
             let result = self.runtime.despawn(projectile_entity(id));
             self.record(result);
@@ -355,7 +371,9 @@ impl ClientAudio {
         for p in projectiles {
             let position = p.position.to_array();
             if self.projectiles.contains(&p.id) {
-                let result = self.runtime.update_entity(projectile_entity(p.id), position);
+                let result = self
+                    .runtime
+                    .update_entity(projectile_entity(p.id), position);
                 self.record(result);
                 continue;
             }
@@ -490,6 +508,11 @@ mod tests {
         assert_eq!(breaks(&audio), Some(1));
         audio.cue(&kill(31, 51, 1));
         assert_eq!(breaks(&audio), Some(2), "the next blast is heard");
+        // A 250-brick blast is three of v20's 100-brick explosions.
+        for brick in 1..=250 {
+            audio.cue(&kill(100 + brick, 60, brick));
+        }
+        assert_eq!(breaks(&audio), Some(5));
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
         Ok(())
