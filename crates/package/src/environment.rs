@@ -276,6 +276,17 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Files the operating system drops into folders a person browses: thumbnail
+/// caches, folder settings and macOS metadata. They are never content, so a
+/// package's identity ignores them rather than refusing a join over them.
+pub fn is_os_litter(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "thumbs.db" | "ehthumbs.db" | "ehthumbs_vista.db" | "desktop.ini" | ".ds_store"
+    ) || name.starts_with("._")
+}
+
 /// Deterministic identity of a package directory: SHA-256 over each file's
 /// relative path (forward slashes), length and SHA-256, in sorted path order.
 /// Symlinks and junctions are refused rather than followed.
@@ -294,6 +305,8 @@ pub fn hash_dir(root: &Path) -> Result<(String, u64)> {
             );
             if kind.is_dir() {
                 pending.push(path);
+            } else if entry.file_name().to_str().is_some_and(is_os_litter) {
+                continue;
             } else {
                 let relative = path
                     .strip_prefix(root)?
@@ -393,6 +406,11 @@ mod tests {
         let (first, size) = hash_dir(&dir).unwrap();
         assert_eq!(size, 5);
         assert_eq!(hash_dir(&dir).unwrap().0, first);
+        // Browsing the folder must not change its identity.
+        fs::write(dir.join("Thumbs.db"), b"cache").unwrap();
+        fs::write(dir.join("sub/desktop.ini"), b"[.ShellClassInfo]").unwrap();
+        fs::write(dir.join("sub/.DS_Store"), b"mac").unwrap();
+        assert_eq!(hash_dir(&dir).unwrap(), (first.clone(), size));
         fs::write(dir.join("sub/b.bin"), b"124").unwrap();
         assert_ne!(hash_dir(&dir).unwrap().0, first);
         fs::remove_dir_all(&dir).unwrap();
