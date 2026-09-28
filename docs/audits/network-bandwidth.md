@@ -162,7 +162,9 @@ A budget may rise only with the reason recorded here.
 - **Brick explosions stopped at the first 64 bricks by id** (fixed in
   7208d183). In `session/events.rs` the `take(64)` ran before
   already-knocked-out bricks were skipped, so a second rocket into the same
-  spot knocked out nothing. The 64 now counts only bricks a blast knocks out;
+  spot knocked out nothing. The 64 now counts only bricks a blast knocks out,
+  and, as in v20, a direct hit knocks out only the brick it struck while the
+  explosion searches the radius, so a rocket takes at most 65.
   `brick_damage.rs` covers it without content.
 - **Admin snapshots** go to every player on each join and leave (N² at a
   busy join). Rare, so left alone.

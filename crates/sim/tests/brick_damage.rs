@@ -704,8 +704,9 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
     pack
 }
 
-/// v20 knocks out at most 64 bricks a blast. Bricks a first rocket already
-/// knocked out must not use up a second rocket's 64 at the same spot.
+/// A rocket knocks out the brick it hits plus at most 64 in its blast.
+/// Bricks a first rocket already knocked out must not use up a second
+/// rocket's 64 at the same spot.
 #[test]
 fn a_second_rocket_knocks_out_bricks_the_first_left_standing() {
     let mut s = session();
@@ -716,7 +717,7 @@ fn a_second_rocket_knocks_out_bricks_the_first_left_standing() {
         .unwrap();
     let mut seq = 0;
     let mut bricks = Vec::new();
-    for row in 0..16 {
+    for row in 0..10 {
         for column in 0..10 {
             seq += 1;
             let position = [column as f32 - 4.5, 0.3, -8.0 - row as f32];
@@ -753,11 +754,12 @@ fn a_second_rocket_knocks_out_bricks_the_first_left_standing() {
         }
         after.push(knocked_out(&s));
     }
-    // Each blast stops at 64, so the first rocket leaves some of the 160
-    // standing; the second knocks out the rest instead of finding its 64
-    // used up by bricks that are already down.
+    // The direct hit knocks out the brick it struck (v20 `onCollision`) and
+    // the explosion 64 more (`onExplode`, capped), so the first rocket
+    // leaves 35 of the 100 standing. The second knocks out the rest
+    // instead of finding its 64 used up by bricks that are already down.
     assert!(
-        (64..160).contains(&after[0]) && after[1] == 160,
+        after == [65, 100],
         "bricks knocked out after each rocket: {after:?}"
     );
 }
