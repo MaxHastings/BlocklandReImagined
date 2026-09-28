@@ -4000,3 +4000,65 @@ the passenger camera does not tilt or roll with the seat (v20's does; our
 view has no roll). Evidence: `cargo test -p bri-client --lib vehicle_camera`.
 Not seen in a window: needs Max's playtest in a Jeep, driving and as a
 passenger.
+
+## 2026-09-28 Flying vehicles and vehicle Add-On fields (branch `claude/project-thread-e0lly9`)
+
+A playtester ported the Stunt Plane (Kaje and Ephialtes, a community
+`WheeledVehicleData`) but had to edit the engine: no way to spin its
+propeller, flying fields missing. Checked against the Add-On's scripts, the
+recovered core scripts and blocklandv20.exe:
+
+- Blockland's flying forces run in every `WheeledVehicle::updateForces`
+  (0x5746a0), driven by the datablock's fields. We gave them only to a
+  `FlyingWheeled` family the stock importer assigned to the Flying Wheeled
+  Jeep by name, and read their fields from `authored`. Any imported wheeled
+  Add-On drove as a car. Now schema 6 types them (`wheeled_flight`,
+  `steering`) and the `FlyingWheeled` family is gone: a `Wheeled` or `Skis`
+  vehicle with `wheeled_flight` flies. The importer sets it when any flying
+  field is nonzero. `Pack::load` upgrades schema 5 packs (the stock
+  vehicles-pack-011 and earlier imports) from `authored`, so no content
+  regeneration is needed; the stock converter now writes schema 6.
+- `WheeledVehicleData::onAdd` chooses steering and driven wheels by wheel
+  count; we used the Jeep's rule for all. Now the table, and the Add-On's own
+  `onAdd` `setWheelSteering`/`setWheelPowered` calls (without
+  `Parent::onAdd`, Torque's defaults: no steering, powered).
+- Vehicles could not play model animations. Schema 6 `threads`: slot,
+  sequence, `rate` (negative is `setThreadDir(slot, false)`) and an optional
+  speed range. The importer reads `playThread`/`setThreadDir` from `onAdd` and
+  the functions it hands the object to, and turns `if (%speed < n)` with
+  `%speed = vectorLen(%obj.getVelocity())` into ranges; the Stunt Plane gets
+  `propslow` below 5 and `propfast` from 5. The client draws the parts those
+  sequences move apart and poses them from the server tick.
+- `FlyingVehicle::updateForces` (0x568770) and `getHeight` (0x568420) are
+  stock Torque. Ours multiplied the damping surfaces by speed; fixed. The
+  hover support (90% of the weight above the 10-unit band) was already right.
+  Every force and torque is along the craft's own axes, so it climbs where the
+  nose points; tests now pin that.
+- The DTS reader refused a sequence whose empty trigger list keeps a stale
+  start index, so the Stunt Plane's model did not convert.
+
+`cameraRoll` stays unmodelled: every known vehicle, the Stunt Plane
+included, sets it false. The Ball (a `WheeledVehicle` with flying fields in
+v20) keeps its own family and gets no flying forces, as before.
+
+lpsroo's own patch (pasted by Max) made the same calls: flying by nonzero
+thrust, lift or surface fields, v20's wheel table, speed-switched looping
+threads read from `onAdd` and its helpers, the DTS empty-range fix, and a
+spinning part drawn apart on the client. Taken from it as well: an image
+state over 300 s (the contrail images wait 10000 s) is reported and left
+out instead of failing the whole weapons pack, and a thread naming a
+sequence the model lacks is dropped. It kept a `FlyingWheeled` family and a
+separate `speed_threads` list; here the fields are typed on `Wheeled` and
+threads carry slot, rate and both speed bounds.
+
+Defaults picked: a speed-switched thread changes the moment the speed crosses
+(v20's script checks every 2 s); a non-looping thread holds its end; a
+thread's model parts must not be skinned; the propeller's phase comes from
+the server tick. Evidence: `cargo test -p bri-vehicles` (new
+`tests/flying_vehicle.rs`: schema 5 upgrade, the carpet climbing and diving
+along its nose, mouse pitch about its own wing when rolled),
+`cargo test -p bri-addon-import` (`vehicle_script` unit tests;
+`real_community_samples` imports the real Stunt Plane when the archive is on
+this machine and checks its fields, wheels, threads and that it holds height
+on lift at 45), `cargo test -p bri-client --lib threads_pick`. Not seen in a
+window: the propeller and how the plane and carpet feel need Max's playtest.

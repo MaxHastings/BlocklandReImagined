@@ -251,10 +251,41 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
 | `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
 | `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
-| `bricks`, `vehicles` | everyone | written by Import Add-On (section 7) | |
+| `bricks`, `vehicles` | everyone | written by Import Add-On (section 7); vehicle fields below | |
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.
+
+**Vehicles.** A vehicle Add-On is an `assets/vehicles.json` file. Import
+Add-On writes it from a v20 `WheeledVehicleData` or `FlyingVehicleData`
+(section 7), and you can edit any field afterwards: a new vehicle never
+needs engine changes. The fields that decide how it flies and looks:
+
+| Field | Meaning | v20 source |
+|---|---|---|
+| `family` | `Wheeled` (a car, or a plane when `wheeled_flight` is set) or `Flying` (hovers; `flight` holds its forces) | the datablock class |
+| `wheeled_flight` | Blockland's flying forces on a wheeled vehicle: `max_forward_vel`, `max_reverse_vel`, `horizontal_surface_force`, `vertical_surface_force`, `stall_speed`, `sled`. `null` for a car | `maxForwardVel`, `maxReverseVel`, `horizontalSurfaceForce`, `verticalSurfaceForce`, `stallSpeed`, `isSled` |
+| `thrust`, `reverse_thrust`, `lift` | push along the nose; lift along the roof, speed × `lift`, capped at 4000 | `forwardThrust`, `reverseThrust`, `lift`; `maneuveringForce` for `Flying` |
+| `pitch_force`, `yaw_force`, `roll_force` | how hard the mouse and strafe keys turn it in the air | `pitchForce`, `yawForce`, `rollForce` |
+| `flight` | a hovering vehicle's hover height, drag, auto-levelling, damping surfaces and steering | the `FlyingVehicleData` fields |
+| `strafe_steering` | the strafe keys steer; otherwise the mouse steers and pitches | `steeringUseStrafeSteering` |
+| `steering` | `strafe_rate`, and `auto_return`, `auto_return_rate`, `auto_return_max_speed`: whether steering drifts back to straight | `steeringStrafeSteeringRate`, `steeringUseAutoReturn`, `steeringAutoReturnRate`, `steeringAutoReturnMaxSpeed` |
+| `wheels[].steering`, `wheels[].powered` | how far each wheel turns (1 fully, negative the other way) and whether it drives | `setWheelSteering`/`setWheelPowered` in `onAdd`, else v20's table by wheel count |
+| `threads` | animations the model plays by itself, like a propeller | `playThread` and `setThreadDir` in `onAdd` and the functions it calls |
+
+Every force and turn acts along the vehicle's own axes, so a flying vehicle
+climbs where its nose points. A thread plays one of the model's sequences
+on a slot from 0 to 3. `rate` scales its speed (1 when left out, 2 twice as
+fast, negative backwards). Of the threads on one slot, the first whose
+`min_speed`/`max_speed` range holds the vehicle's speed plays, so a
+propeller can idle below speed 5 and race above it:
+
+```json
+"threads": [
+  { "slot": 0, "sequence": "propslow", "max_speed": 5 },
+  { "slot": 0, "sequence": "propfast", "min_speed": 5 }
+]
+```
 
 **Client code.** An Add-On may also carry code that runs on players'
 machines: a WebAssembly module and WGSL shaders, declared in a `client`

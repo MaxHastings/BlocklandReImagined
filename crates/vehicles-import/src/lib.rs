@@ -30,6 +30,58 @@ pub fn field(b: &Block, key: &str) -> String {
 pub fn truth(b: &Block, key: &str) -> bool {
     matches!(field(b, key).to_lowercase().as_str(), "true" | "1")
 }
+/// Torque's `dAtob`: `true`, or any nonzero number.
+fn torque_bool(b: &Block, key: &str, default: bool) -> bool {
+    let v = field(b, key).trim().to_lowercase();
+    if v.is_empty() {
+        default
+    } else {
+        v == "true" || v.parse::<f32>().is_ok_and(|n| n != 0.)
+    }
+}
+/// `WheeledVehicleData::onAdd` in the recovered v20 core scripts: which of
+/// `count` wheels steer and which are powered. Past six wheels it sets the
+/// first six like six wheels, and later wheels keep Torque's defaults.
+pub fn v20_wheel(count: usize, i: usize) -> (f32, bool) {
+    let (steer, powered): (usize, std::ops::Range<usize>) = match count {
+        1 => (1, 0..1),
+        2 => (2, 0..2),
+        3 => (1, 1..3),
+        4 => (2, 2..4),
+        5 => (1, 1..5),
+        _ => (2, 2..6),
+    };
+    if i >= 6 {
+        (0., true)
+    } else {
+        (if i < steer { 1. } else { 0. }, powered.contains(&i))
+    }
+}
+/// Blockland's flying fields on a `WheeledVehicleData`; a datablock that
+/// sets none of them nonzero drives as a car.
+pub fn wheeled_flight(b: &Block) -> Option<WheeledFlightSettings> {
+    let flies = [
+        "forwardThrust",
+        "reverseThrust",
+        "lift",
+        "maxForwardVel",
+        "maxReverseVel",
+        "horizontalSurfaceForce",
+        "verticalSurfaceForce",
+        "stallSpeed",
+    ]
+    .iter()
+    .any(|k| number(b, k, 0.) != 0.)
+        || torque_bool(b, "isSled", false);
+    flies.then(|| WheeledFlightSettings {
+        max_forward_vel: number(b, "maxForwardVel", 0.),
+        max_reverse_vel: number(b, "maxReverseVel", 0.),
+        horizontal_surface_force: number(b, "horizontalSurfaceForce", 0.),
+        vertical_surface_force: number(b, "verticalSurfaceForce", 0.),
+        stall_speed: number(b, "stallSpeed", 0.),
+        sled: torque_bool(b, "isSled", false),
+    })
+}
 pub fn virtual_path(package: &str, path: &str) -> String {
     if let Some(relative) = path.strip_prefix("./") {
         format!("Add-Ons/{package}/{relative}")
@@ -250,7 +302,8 @@ pub fn lower(
         });
     }
     let mut wheels = vec![];
-    for i in 0..number(b, "numWheels", if family == Family::Skis { 4. } else { 0. }) as usize {
+    let wheel_count = number(b, "numWheels", if family == Family::Skis { 4. } else { 0. }) as usize;
+    for i in 0..wheel_count {
         let tire = blocks
             .get(&if family == Family::Skis {
                 "nothingtire".into()
@@ -286,14 +339,15 @@ pub fn lower(
             spring: number(spring, "force", 6000.),
             damping: number(spring, "damping", 800.),
             friction: number(tire, "staticFriction", 5.),
-            steering: if i < 2 {
-                1.
-            } else if name == "TankVehicle" {
-                -0.8
+            // TankVehicle::onAdd steers all four wheels and powers them all;
+            // skis have no engine.
+            steering: if name == "TankVehicle" {
+                if i < 2 { 1. } else { -0.8 }
             } else {
-                0.
+                v20_wheel(wheel_count, i).0
             },
-            powered: name == "TankVehicle" || (family != Family::Skis && i >= 2),
+            powered: name == "TankVehicle"
+                || (family != Family::Skis && v20_wheel(wheel_count, i).1),
             model: wheel_model.clone(),
             // WheeledVehicle turns each tire a quarter turn about up so its
             // +Y face points outward: clockwise (Torque's positive) on the right.
@@ -491,8 +545,17 @@ pub fn lower(
         max_speed: number(b, "maxWheelSpeed", number(b, "maxForwardSpeed", 20.)),
         reverse_speed: number(b, "maxBackwardSpeed", 20.),
         max_steering: number(b, "maxSteeringAngle", 1.),
-        thrust: number(b, "forwardThrust", number(b, "maneuveringForce", 0.)),
-        reverse_thrust: number(b, "reverseThrust", number(b, "maneuveringForce", 0.)),
+        // FlyingVehicle's maneuvering jets push both ways and sideways.
+        thrust: if family == Family::Flying {
+            number(b, "maneuveringForce", 0.)
+        } else {
+            number(b, "forwardThrust", 0.)
+        },
+        reverse_thrust: if family == Family::Flying {
+            number(b, "maneuveringForce", 0.)
+        } else {
+            number(b, "reverseThrust", 0.)
+        },
         lift: number(b, "lift", 0.),
         yaw_force: number(b, "yawForce", number(b, "steeringForce", 0.)),
         pitch_force: number(b, "pitchForce", 0.),
@@ -508,6 +571,17 @@ pub fn lower(
         ),
         impact_damage: number(b, "collDamageMultiplier", 0.),
         strafe_steering,
+        steering: SteeringSettings {
+            strafe_rate: number(b, "steeringStrafeSteeringRate", 0.1),
+            auto_return: torque_bool(b, "steeringUseAutoReturn", true),
+            auto_return_rate: number(b, "steeringAutoReturnRate", 0.9),
+            auto_return_max_speed: number(b, "steeringAutoReturnMaxSpeed", 10.),
+        },
+        wheeled_flight: match family {
+            Family::Wheeled | Family::Skis => wheeled_flight(b),
+            _ => None,
+        },
+        threads: vec![],
         look_pitch: [
             -number(look, "maxLookAngle", std::f32::consts::FRAC_PI_2),
             -number(look, "minLookAngle", -std::f32::consts::FRAC_PI_2),

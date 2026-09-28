@@ -854,7 +854,7 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
     let wheeled: Vec<_> = pack()
         .definitions
         .into_iter()
-        .filter(|d| matches!(d.family, Family::Wheeled | Family::FlyingWheeled))
+        .filter(|d| d.family == Family::Wheeled)
         .collect();
     assert_eq!(wheeled.len(), 3);
     for d in wheeled {

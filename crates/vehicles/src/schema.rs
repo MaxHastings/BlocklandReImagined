@@ -3,8 +3,11 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
-/// 5 adds the chase camera and seated look limits.
-pub const SCHEMA_VERSION: u32 = 5;
+/// 5 adds the chase camera and seated look limits. 6 types the steering and
+/// wheeled-flight fields (5 kept them only in `authored`), folds the
+/// `FlyingWheeled` family into `Wheeled` and adds animation threads.
+/// `Pack::load` still reads 5 and upgrades it.
+pub const SCHEMA_VERSION: u32 = 6;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
@@ -36,8 +39,9 @@ pub struct Evidence {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Family {
+    /// Blockland's `WheeledVehicle`; it flies when `wheeled_flight` is set.
     Wheeled,
-    FlyingWheeled,
+    /// Torque's `FlyingVehicle`: hovers, and `flight` holds its fields.
     Flying,
     Horse,
     Ball,
@@ -124,6 +128,82 @@ pub struct FlightSettings {
     pub steering_roll_force: f32,
     pub vertical_thrust_multiple: f32,
 }
+/// Blockland's flying forces on `WheeledVehicle` (blocklandv20.exe
+/// `WheeledVehicle::updateForces` 0x5746a0, fields registered at 0x5703ea).
+/// The thrust, lift and turning forces are `Definition::thrust`,
+/// `reverse_thrust`, `lift`, `pitch_force`, `yaw_force` and `roll_force`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct WheeledFlightSettings {
+    /// `maxForwardVel`: thrust only below this speed along the nose; the
+    /// surfaces bite fully at `stallSpeed` + this.
+    pub max_forward_vel: f32,
+    /// `maxReverseVel`: reverse thrust only below this speed.
+    pub max_reverse_vel: f32,
+    /// `horizontalSurfaceForce`: resists sideways air.
+    pub horizontal_surface_force: f32,
+    /// `verticalSurfaceForce`: resists air through the roof; what makes a
+    /// raised nose climb.
+    pub vertical_surface_force: f32,
+    /// `stallSpeed`: below it the surfaces and turning forces do nothing.
+    pub stall_speed: f32,
+    /// `isSled` (datablock +0x378): the surfaces bite only while wheel 0
+    /// touches the ground (0x57565f).
+    pub sled: bool,
+}
+/// How a driver's keys and mouse steer a wheeled vehicle
+/// (`WheeledVehicle::updateMove` 0x570be0; defaults from its constructor).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SteeringSettings {
+    /// `steeringStrafeSteeringRate` (0x5716dc): steering a held strafe key
+    /// adds per 32 ms tick, radians.
+    pub strafe_rate: f32,
+    /// `steeringUseAutoReturn`: a move with no mouse turn returns the
+    /// steering toward straight.
+    pub auto_return: bool,
+    /// `steeringAutoReturnRate`: share returned per tick at full throttle.
+    pub auto_return_rate: f32,
+    /// `steeringAutoReturnMaxSpeed`: the throttle at which the return is full.
+    pub auto_return_max_speed: f32,
+}
+impl Default for SteeringSettings {
+    fn default() -> Self {
+        Self {
+            strafe_rate: 0.1,
+            auto_return: true,
+            auto_return_rate: 0.9,
+            auto_return_max_speed: 10.,
+        }
+    }
+}
+/// An animation the vehicle's model plays on its own, like a spinning
+/// propeller (`ShapeBase::playThread(slot, sequence)` from a script such as
+/// `onAdd`). Of a slot's threads, the first whose speed range holds the
+/// vehicle's speed plays; one with no range always matches.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnimationThread {
+    /// Torque thread slot, 0 through 3. Threads on one slot replace each other.
+    pub slot: u8,
+    /// The model's sequence name.
+    pub sequence: String,
+    /// Playback rate: 1 is as authored, 2 twice as fast, and a negative rate
+    /// plays backwards (`setThreadDir(slot, false)`).
+    #[serde(default = "one")]
+    pub rate: f32,
+    /// Plays only at this speed or faster, units per second.
+    #[serde(default)]
+    pub min_speed: Option<f32>,
+    /// Plays only below this speed.
+    #[serde(default)]
+    pub max_speed: Option<f32>,
+}
+fn one() -> f32 {
+    1.
+}
+impl AnimationThread {
+    pub fn matches(&self, speed: f32) -> bool {
+        self.min_speed.is_none_or(|m| speed >= m) && self.max_speed.is_none_or(|m| speed < m)
+    }
+}
 /// Third-person camera while riding (`Vehicle::getCameraTransform`; for
 /// PlayerData mounts the player camera fields).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -196,6 +276,15 @@ pub struct Definition {
     /// `steeringUseStrafeSteering`: the strafe keys steer. Otherwise the
     /// mouse steers and pitches the vehicle (Torque `mSteering`).
     pub strafe_steering: bool,
+    #[serde(default)]
+    pub steering: SteeringSettings,
+    /// Blockland's flying forces for a `Wheeled` or `Skis` vehicle; `None`
+    /// is a car.
+    #[serde(default)]
+    pub wheeled_flight: Option<WheeledFlightSettings>,
+    /// Animations the model plays by itself.
+    #[serde(default)]
+    pub threads: Vec<AnimationThread>,
     /// Actor look pitch range, native up-positive radians, from PlayerData
     /// `maxLookAngle`/`minLookAngle`. Bounds a gunner's barrel.
     pub look_pitch: [f32; 2],
@@ -270,7 +359,9 @@ impl Pack {
             std::fs::metadata(path)?.len() < 16 * 1024 * 1024,
             "vehicle pack too large"
         );
-        let mut pack: Self = serde_json::from_slice(&std::fs::read(path)?)?;
+        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        upgrade(&mut value)?;
+        let mut pack: Self = serde_json::from_value(value)?;
         pack.validate()?;
         pack.attach_muzzle_tracks(path.parent().unwrap_or(Path::new(".")))?;
         Ok(pack)
@@ -320,6 +411,47 @@ impl Pack {
                 d.flight.is_some() == (d.family == Family::Flying),
                 "flying controller configuration mismatch"
             );
+            if let Some(f) = &d.wheeled_flight {
+                ensure!(
+                    matches!(d.family, Family::Wheeled | Family::Skis)
+                        && [
+                            f.max_forward_vel,
+                            f.max_reverse_vel,
+                            f.horizontal_surface_force,
+                            f.vertical_surface_force,
+                            f.stall_speed,
+                        ]
+                        .iter()
+                        .all(|v| v.is_finite() && *v >= 0.),
+                    "invalid wheeled flight"
+                );
+            }
+            let st = &d.steering;
+            ensure!(
+                [
+                    st.strafe_rate,
+                    st.auto_return_rate,
+                    st.auto_return_max_speed
+                ]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.),
+                "invalid steering"
+            );
+            ensure!(d.threads.len() <= 16, "too many animation threads");
+            for t in &d.threads {
+                ensure!(
+                    t.slot < 4
+                        && !t.sequence.trim().is_empty()
+                        && t.sequence.len() <= 64
+                        && t.rate.is_finite()
+                        && t.rate.abs() <= 100.
+                        && [t.min_speed, t.max_speed]
+                            .iter()
+                            .flatten()
+                            .all(|v| v.is_finite() && *v >= 0.),
+                    "invalid animation thread"
+                );
+            }
             if let Some(f) = &d.flight {
                 ensure!(
                     [
@@ -502,4 +634,60 @@ impl Pack {
         }
         Ok(())
     }
+}
+/// Upgrades an older pack to this schema in place. Schema 5 kept the
+/// steering and wheeled-flight fields only in `authored` and marked flying
+/// wheeled vehicles with a family of their own; the runtime then gave the
+/// flying forces to that family and to skis.
+fn upgrade(pack: &mut serde_json::Value) -> Result<()> {
+    use serde_json::{Value, json};
+    if pack.get("schema_version").and_then(Value::as_u64) != Some(5) {
+        return Ok(());
+    }
+    for d in pack
+        .get_mut("definitions")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let authored = d.get("authored").cloned().unwrap_or(Value::Null);
+        let number = |key: &str, default: f32| {
+            authored
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .unwrap_or(default)
+        };
+        let flag = |key: &str, default: bool| {
+            authored
+                .get(key)
+                .and_then(Value::as_str)
+                .map_or(default, |v| !matches!(v.trim(), "0" | "false" | ""))
+        };
+        let family = d.get("family").and_then(Value::as_str).unwrap_or_default();
+        let flies = matches!(family, "FlyingWheeled" | "Skis");
+        if family == "FlyingWheeled" {
+            d["family"] = json!("Wheeled");
+        }
+        d["steering"] = serde_json::to_value(SteeringSettings {
+            strafe_rate: number("steeringstrafesteeringrate", 0.1),
+            auto_return: flag("steeringuseautoreturn", true),
+            auto_return_rate: number("steeringautoreturnrate", 0.9),
+            auto_return_max_speed: number("steeringautoreturnmaxspeed", 10.),
+        })?;
+        d["wheeled_flight"] = if flies {
+            serde_json::to_value(WheeledFlightSettings {
+                max_forward_vel: number("maxforwardvel", 0.),
+                max_reverse_vel: number("maxreversevel", 0.),
+                horizontal_surface_force: number("horizontalsurfaceforce", 0.),
+                vertical_surface_force: number("verticalsurfaceforce", 0.),
+                stall_speed: number("stallspeed", 0.),
+                sled: flag("issled", false),
+            })?
+        } else {
+            Value::Null
+        };
+    }
+    pack["schema_version"] = json!(SCHEMA_VERSION);
+    Ok(())
 }

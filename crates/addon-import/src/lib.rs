@@ -13,6 +13,7 @@ pub mod ports;
 pub mod reference;
 pub mod report;
 pub mod source;
+mod vehicle_script;
 
 use anyhow::{Context, Result, ensure};
 use bri_convert::tscript::{self, Datablock, Script};
@@ -317,7 +318,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     references(&mut cx);
     convert_files(&mut cx)?;
     weapons(&mut cx, &scripts)?;
-    vehicles(&mut cx)?;
+    vehicles(&mut cx, &scripts)?;
     bricks(&mut cx, &scripts)?;
     sounds_and_rest(&mut cx);
     behaviours(&mut cx, &scripts);
@@ -1045,6 +1046,25 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             defs.push(d);
         }
     }
+    // One image outside the native state limits (300 s, `bri_weapons` pack
+    // validation) must not drop every other weapon, projectile and explosion
+    // (lpsroo's fix: the Stunt Plane's contrail images wait 10000 s).
+    let too_long = |d: &bri_weapons::Definition| {
+        d.class.eq_ignore_ascii_case("ShapeBaseImageData")
+            && d.fields.iter().any(|(k, v)| {
+                (k.starts_with("statetimeoutvalue[") || k.starts_with("stateemittertime["))
+                    && literal(v).trim().parse::<f32>().is_ok_and(|s| s > 300.)
+            })
+    };
+    for d in defs.iter().filter(|d| too_long(d)) {
+        cx.report.unsupported.push(Finding {
+            what: format!("image {}", d.name),
+            source: Some(Location::new(&d.source.path, d.source.line)),
+            detail: "a state lasts over 300 s, beyond the native image state limit".into(),
+            resolution: None,
+        });
+    }
+    defs.retain(|d| !too_long(d));
     let mut pack = match bri_weapons_import::lower(defs) {
         Ok(p) => p,
         Err(e) => {
@@ -1541,7 +1561,7 @@ fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
     (shape, png)
 }
 
-fn vehicles(cx: &mut Ctx) -> Result<()> {
+fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     use bri_vehicles::schema::{Asset, Evidence, Pack, SCHEMA_VERSION};
     use bri_vehicles_import::Block;
     let wanted: Vec<(String, bri_vehicles::schema::Family)> = cx
@@ -1638,17 +1658,67 @@ fn vehicles(cx: &mut Ctx) -> Result<()> {
             .collect();
         match bri_vehicles_import::lower(name, *family, &blocks, &cx.shapes, &files, &id) {
             Ok(mut d) => {
-                d.adaptations.push(
-                    "Wheel steering and power follow the vanilla Jeep convention (front two steer, the rest drive); Torque sets both from script (setWheelSteering/setWheelPowered), which this Add-On does not call".into(),
-                );
+                // Its onAdd sets wheels and animations in place of v20's
+                // WheeledVehicleData::onAdd, or after it with Parent::onAdd.
+                let setup = vehicle_script::setup(scripts, name);
+                if setup.found && !setup.calls_parent {
+                    for w in &mut d.wheels {
+                        (w.steering, w.powered) = (0., true);
+                    }
+                }
+                for &(i, v) in &setup.steering {
+                    if let Some(w) = d.wheels.get_mut(i) {
+                        w.steering = v;
+                    }
+                }
+                for &(i, v) in &setup.powered {
+                    if let Some(w) = d.wheels.get_mut(i) {
+                        w.powered = v;
+                    }
+                }
+                // A thread naming a sequence the model lacks plays nothing in
+                // v20 either; leave it out.
+                let shape = cx
+                    .shapes
+                    .values()
+                    .find(|(p, _)| *p == d.model)
+                    .map(|(_, s)| s);
+                let (known, unknown): (Vec<_>, Vec<_>) = setup.threads.into_iter().partition(|t| {
+                    shape.is_some_and(|s| {
+                        s.animations
+                            .iter()
+                            .any(|a| a.name.eq_ignore_ascii_case(&t.sequence))
+                    })
+                });
+                for t in unknown {
+                    cx.report.diagnostics.push(format!(
+                        "vehicle {name} plays sequence {}, which its model does not have",
+                        t.sequence
+                    ));
+                }
+                d.threads = known;
+                if !d.threads.is_empty() {
+                    d.adaptations.push(format!(
+                        "Animation threads read from {name}::onAdd and the functions it calls: {}",
+                        d.threads
+                            .iter()
+                            .map(|t| format!(
+                                "slot {} {}{}{}",
+                                t.slot,
+                                t.sequence,
+                                t.min_speed
+                                    .map(|m| format!(" from speed {m}"))
+                                    .unwrap_or_default(),
+                                t.max_speed
+                                    .map(|m| format!(" below speed {m}"))
+                                    .unwrap_or_default()
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
                 let vid = cx.id("vehicle", name, name, "assets/vehicles.json");
                 d.id = vid.clone();
-                cx.ambiguous(
-                    format!("vehicle {name} wheel steering and power"),
-                    Some(at),
-                    "no script sets them; the vanilla front-steer rear-drive convention was applied".into(),
-                    Some("front two wheels steer, the rest are powered".into()),
-                );
                 for p in [&d.initial_explosion, &d.final_explosion]
                     .into_iter()
                     .flatten()
