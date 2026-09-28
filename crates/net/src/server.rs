@@ -20,7 +20,9 @@ use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 pub struct ServerOptions {
     pub bind: SocketAddr,
-    pub content_id: String,
+    /// Every package this server loaded; joining clients must agree on the
+    /// shared ones.
+    pub environment: bri_package::environment::Environment,
     pub spawn_points: Vec<Vec3>,
     /// A persistent host identity lets joiners keep trusting this host
     /// across restarts. None generates a throwaway certificate.
@@ -43,6 +45,22 @@ pub struct Autosave {
 }
 /// Writes one world snapshot durably; runs on a blocking thread.
 pub type SaveWorld = Arc<dyn Fn(&bri_world::World) -> Result<()> + Send + Sync>;
+/// Refuse a join whose shared packages differ from the server's, naming
+/// every differing package. Presentation-only differences are allowed and
+/// returned, for the joining player to be told about.
+fn check_packages(
+    environment: &bri_package::environment::Environment,
+    client: &[bri_package::environment::PackageRef],
+) -> Result<Vec<bri_package::environment::Mismatch>> {
+    let (blocking, cosmetic): (Vec<_>, Vec<_>) = environment
+        .compare(client)
+        .into_iter()
+        .partition(|m| m.blocks_join());
+    if !blocking.is_empty() {
+        return Err(crate::client::PackagesDiffer(blocking).into());
+    }
+    Ok(cosmetic)
+}
 /// Loads a map for Change Map; runs on a blocking thread.
 pub type MapLoader = Arc<dyn Fn(&str) -> Result<Session> + Send + Sync>;
 /// Self-signed QUIC host certificate and its PKCS#8 private key.
@@ -358,7 +376,7 @@ enum Event {
         connection: Connection,
         out: Outbox,
         bulk: Arc<AtomicBool>,
-        answer: oneshot::Sender<Result<OwnerId, String>>,
+        answer: oneshot::Sender<Result<OwnerId, Message>>,
     },
     Command {
         owner: OwnerId,
@@ -430,8 +448,7 @@ fn start_configured(
     ensure!(
         !options.spawn_points.is_empty()
             && options.spawn_points.len() <= 256
-            && !options.content_id.is_empty()
-            && options.content_id.len() <= 128,
+            && options.environment.packages.len() <= bri_package::environment::MAX_PACKAGES,
         "Invalid server options"
     );
     let identity = match &options.certificate {
@@ -549,8 +566,8 @@ async fn connection_task(
         .await?;
     let owner = match accepted.await? {
         Ok(owner) => owner,
-        Err(reason) => {
-            codec::write_frame(&mut send, &codec::encode(&Message::Rejected(reason))?).await?;
+        Err(refusal) => {
+            codec::write_frame(&mut send, &codec::encode(&refusal)?).await?;
             send.finish()?;
             let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
             return Ok(());
@@ -918,7 +935,7 @@ async fn run(
         Some(event)=incoming.recv()=>{match event {
             Event::Join{hello,principal,connection,out,bulk,answer}=>{
                 let join:Result<OwnerId>= (||{
-                    ensure!(hello.version==VERSION,"Incompatible protocol version");ensure!(hello.content_id==options.content_id,"Required content does not match");
+                    ensure!(hello.version==VERSION,"Incompatible protocol version");let cosmetic=check_packages(&options.environment,&hello.packages)?;
                     ensure!(peers.len()<max_players,"Server is full");
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
                     let (owner,token)=if let Some(token)=hello.resume {
@@ -937,6 +954,7 @@ async fn run(
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
+                    if !cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks});
@@ -944,7 +962,7 @@ async fn run(
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
                     peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,bulk});Ok(owner)
                 })();
-                if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|e.to_string()));
+                if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
             Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{

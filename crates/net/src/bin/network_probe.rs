@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
             session,
             ServerOptions {
                 bind: "127.0.0.1:0".parse()?,
-                content_id: "native-probe-only".into(),
+                environment: bri_package::environment::Environment::empty(),
                 spawn_points: vec![
                     Vec3::new(2000.0, 2000.0, 2000.0),
                     Vec3::new(2003.0, 2000.0, 2000.0),
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
             server.address,
             &server.certificate,
             "First".into(),
-            "native-probe-only".into(),
+            Vec::new(),
             None,
         )
         .await?;
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
             server.address,
             &server.certificate,
             "Late join".into(),
-            "native-probe-only".into(),
+            Vec::new(),
             None,
         )
         .await?;

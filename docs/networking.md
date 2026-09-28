@@ -100,8 +100,17 @@ World transfer above).
 ## Executable host
 
 ```powershell
-cargo run -p bri-net --release --bin bri-server -- content/stock-catalog-004 content/maps-pass-003 content/worlds-pass-004/1d1679fca49fa09325f55b8ac77c35ddc7c4131d6ff2e4ae96096c1af54dfca8.world.json content/map-bundle-014 content/brick-materials-001 content/effects-pass-004 content/avatar-pack-001 content/effects-runtime-pack-001 content/audio-pack-001 content/weather-pack-001 content/foliage-pack-001 content/weapons-pack-003 content/item-presentation-pack-003 artifacts/native-network/server-clock-smoke 127.0.0.1:0 2
+cargo run -p bri-net --release --bin bri-server -- content content/worlds-pass-005/<world>.world.json artifacts/native-network/server-clock-smoke 127.0.0.1:0 2
 ```
+
+The first argument is the content root. The server loads the packages its
+`packages.json` lists (the base game's list, `crates/package/base-packages.json`,
+when the root has none) and hashes each one into its environment
+(`docs/architecture/packages.md`). A joining client sends its shared and
+client packages; the join is refused when a shared package differs, and the
+refusal names every differing package. Differences in client-only
+(presentation) packages are allowed and told to the joining player in chat.
+`host.json` records the environment.
 
 The optional final duration bounds a headless smoke. Without it the host runs
 until Ctrl+C. Public host metadata and certificate go to the supplied state

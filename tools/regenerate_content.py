@@ -2,7 +2,7 @@
 """Regenerate every native content pack the client loads from a v20 install.
 
 One ordered pipeline from a read-only Blockland v20 folder to the packs named
-by `ContentConfig::default` (crates/client/src/content.rs). Works on Windows,
+by the base package list (crates/package/base-packages.json). Works on Windows,
 Linux and macOS. Most people want tools/bootstrap.py, which also checks the
 toolchain first. See docs/content-regeneration.md.
 
@@ -122,14 +122,11 @@ def run(*command, cwd=REPO, stdin=None):
 
 
 def pack_names():
-    """The pack directory names the client loads, read from the source."""
-    text = (REPO / 'crates/client/src/content.rs').read_text(encoding='utf-8')
-    block = re.search(r'impl Default for ContentConfig \{.*?Self \{(.*?)\n\s*\}', text, re.S)
-    if not block:
-        fail('Could not find ContentConfig::default in crates/client/src/content.rs')
-    names = dict(re.findall(r'(\w+): "([^"]+)"\.into\(\)', block.group(1)))
+    """Role -> pack directory for every base package the game loads."""
+    listing = json.loads((REPO / 'crates/package/base-packages.json').read_text(encoding='utf-8'))
+    names = {p['role']: p['dir'] for p in listing.get('packages', []) if p.get('role')}
     if not names:
-        fail('ContentConfig::default lists no packs')
+        fail('crates/package/base-packages.json lists no packages')
     return names
 
 
@@ -591,18 +588,18 @@ def valid_v20(path):
 def regenerate(v20, content, steps, rebuild_decompiled=False, keep_stale=False, force=()):
     """Plan and run the selected steps. Returns the pipeline."""
     content.mkdir(parents=True, exist_ok=True)
-    override = content / 'client-content.json'
+    override = content / 'packages.json'
     if override.exists():
         # It pins older pack names; the client would load those instead of the
         # packs built here. Keep it beside the content, out of the way.
-        aside = content / 'client-content.json.disabled'
+        aside = content / 'packages.json.disabled'
         override.replace(aside)
         print(f'  moved {override.name} (an older pack selection) to {aside.name}; '
               'the client now loads the current default packs')
     pipeline = Pipeline(v20, content, rebuild_decompiled, keep_stale, force)
     missing = set(PACK_STEPS) - set(pipeline.packs)
     if missing or set(pipeline.packs) - set(PACK_STEPS):
-        fail(f'Pipeline steps and ContentConfig packs disagree: {sorted(missing)} '
+        fail(f'Pipeline steps and base packages disagree: {sorted(missing)} '
              f'{sorted(set(pipeline.packs) - set(PACK_STEPS))}')
     pipeline.make_plan({s for s in steps if s in PACK_STEPS})
     pipeline.print_plan()

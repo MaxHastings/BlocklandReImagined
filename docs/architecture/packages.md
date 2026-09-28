@@ -1,7 +1,8 @@
 # Packages
 
-Status: format landed 2026-09-27 (platform API level 1). Code: `crates/package`
-(`bri-package`). This closes the shape of door-closer P0 items 2 (package
+Status: format landed 2026-09-27 (platform API level 1); the client, the
+dedicated server and the join check use it (protocol 31). Code:
+`crates/package` (`bri-package`). This closes the shape of door-closer P0 items 2 (package
 manifest) and 4 (one id grammar); see
 [`docs/audits/platform-door-closers.md`](../audits/platform-door-closers.md).
 
@@ -100,8 +101,23 @@ you have zombies 2.0.0 (77b2…), the server does not
 ```
 
 A mismatch in a `shared` package refuses the join and the rejection lists
-every difference; `client` differences are reported only. Server-only
-packages are never compared.
+every difference; `client` differences are told to the joining player in chat
+and do not refuse. Server-only packages are never compared.
+
+Where it is used:
+
+- `ClientContent::load` and `ContentPaths` read `packages.json` and resolve
+  each engine role to its package directory; `ContentPaths::environment()`
+  hashes the set when hosting or joining.
+- `bri-server <content-root> <world.json> <state-dir> <listen> [seconds]`
+  reads the same file and publishes its environment in `host.json`.
+- `Hello.packages` carries the joining client's shared and client packages;
+  `ServerOptions.environment` is the server's.
+- `tools/regenerate_content.py` builds the packs the base list names, and the
+  playtest packager copies the effective list into `content/packages.json`.
+- Mod packages with their own `package.json` (the Stress Lab packages) are
+  listed here like any other package; `bri-package-runtime` loads their
+  manifests from the same list.
 
 ## Per-package manifests (`package.json`)
 
@@ -163,13 +179,20 @@ Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
   in order (object ranges up to 1 MiB). No identity or game state is involved.
   `bri_net::packages::fetch_missing` does the whole fetch and reports bytes
   under `Stage::DownloadingPackages`.
+- **Join.** A join whose shared packages differ is refused with
+  `Message::PackagesDiffer` (the mismatches, typed), which a client sees as
+  the error `bri_net::client::PackagesDiffer`. `Client::connect_fetching`
+  joins, and on that refusal, unless the client runs a shared package the
+  server lacks, fetches the server's packages, hands them to the caller's
+  `load` step and joins again with the list it returns; the server checks
+  that list like any other.
 
 ## Not built yet
 
-- Hosts and clients do not call this yet: `bri-server` passes
-  `packages: None` until it loads through `packages.json`, and the client
-  does not call `fetch_missing` on a join mismatch. That wiring belongs with
-  loading through `packages.json`.
+- Hosts and the game client do not call this yet: `bri-server` passes
+  `packages: None`, and the client app joins with `connect_with_identity`,
+  because it cannot load a downloaded package into its content yet. When it
+  can, its join switches to `connect_fetching` with that loader as `load`.
 - A host that edits a package must restart to offer the new version; there
   is no reload.
 - Per-package `package.json` manifests, dependency resolution and archives.

@@ -43,6 +43,21 @@ pub enum ClientEvent {
     /// The replica now holds a new map.
     MapChanged,
 }
+/// A join refused because the client's shared packages differ from the
+/// server's. Downcast a join error to this to offer the download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagesDiffer(pub Vec<bri_package::environment::Mismatch>);
+impl std::fmt::Display for PackagesDiffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Your content does not match the server: {}",
+            bri_package::environment::describe(&self.0)
+        )
+    }
+}
+impl std::error::Error for PackagesDiffer {}
+
 pub struct Client {
     endpoint: quinn::Endpoint,
     connection: quinn::Connection,
@@ -67,16 +82,16 @@ impl Client {
         address: SocketAddr,
         certificate: &[u8],
         name: String,
-        content_id: String,
+        packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
     ) -> Result<Self> {
-        Self::connect_with_host(address, certificate, name, content_id, resume, None).await
+        Self::connect_with_host(address, certificate, name, packages, resume, None).await
     }
     pub async fn connect_with_host(
         address: SocketAddr,
         certificate: &[u8],
         name: String,
-        content_id: String,
+        packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
     ) -> Result<Self> {
@@ -84,7 +99,7 @@ impl Client {
             address,
             certificate,
             name,
-            content_id,
+            packages,
             resume,
             host,
             None,
@@ -96,7 +111,7 @@ impl Client {
         address: SocketAddr,
         certificate: &[u8],
         name: String,
-        content_id: String,
+        packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
         identity: &ClientIdentity,
@@ -105,13 +120,74 @@ impl Client {
             address,
             certificate,
             name,
-            content_id,
+            packages,
             resume,
             host,
             identity,
             Progress::default(),
         )
         .await
+    }
+    /// Joins like [`Client::connect_reporting`]; when the server refuses
+    /// because shared packages differ and downloading can fix it (nothing
+    /// the server lacks is required), fetches what the server offers into
+    /// `cache` and joins once more. `load` receives the fetched packages,
+    /// loads them, and returns the package list the client now runs; the
+    /// server checks that list again. Returns what was fetched.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_fetching(
+        address: SocketAddr,
+        certificate: &[u8],
+        name: String,
+        packages: Vec<bri_package::environment::PackageRef>,
+        host: Option<ResumeToken>,
+        identity: &ClientIdentity,
+        cache: &bri_package::sync::Cache,
+        progress: Progress,
+        load: impl FnOnce(&[crate::packages::Fetched]) -> Result<Vec<bri_package::environment::PackageRef>>,
+    ) -> Result<(Self, Vec<crate::packages::Fetched>)> {
+        let refused = match Self::connect_reporting(
+            address,
+            certificate,
+            name.clone(),
+            packages,
+            None,
+            host.clone(),
+            identity,
+            progress.clone(),
+        )
+        .await
+        {
+            Ok(client) => return Ok((client, Vec::new())),
+            Err(error) => error,
+        };
+        let Some(differ) = refused.downcast_ref::<PackagesDiffer>() else {
+            return Err(refused);
+        };
+        // A shared package only the client runs cannot be downloaded away.
+        if differ
+            .0
+            .iter()
+            .any(|m| matches!(m, bri_package::environment::Mismatch::Extra(_)))
+        {
+            return Err(refused);
+        }
+        let fetched = crate::packages::fetch_missing(address, certificate, cache, &progress)
+            .await
+            .context("Downloading the server's packages")?;
+        let packages = load(&fetched)?;
+        let client = Self::connect_reporting(
+            address,
+            certificate,
+            name,
+            packages,
+            None,
+            host,
+            identity,
+            progress,
+        )
+        .await?;
+        Ok((client, fetched))
     }
     /// Connects like [`Client::connect_with_identity`], reporting the
     /// handshake and the world download into `progress`.
@@ -120,7 +196,7 @@ impl Client {
         address: SocketAddr,
         certificate: &[u8],
         name: String,
-        content_id: String,
+        packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
         identity: &ClientIdentity,
@@ -130,7 +206,7 @@ impl Client {
             address,
             certificate,
             name,
-            content_id,
+            packages,
             resume,
             host,
             Some(identity),
@@ -143,7 +219,7 @@ impl Client {
         address: SocketAddr,
         certificate: &[u8],
         name: String,
-        content_id: String,
+        packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
         identity: Option<&ClientIdentity>,
@@ -167,7 +243,7 @@ impl Client {
         let mut hello = Hello {
             version: VERSION,
             name,
-            content_id,
+            packages,
             resume,
             host,
             identity: None,
@@ -197,6 +273,9 @@ impl Client {
                 checkpoint,
             } => (owner, administrator, resume, checkpoint),
             Message::Rejected(reason) => anyhow::bail!("Join rejected: {reason}"),
+            Message::PackagesDiffer(differences) => {
+                return Err(PackagesDiffer(differences).into());
+            }
             _ => anyhow::bail!("Expected welcome"),
         };
         // The Welcome is small; the world streams after it in chunks.

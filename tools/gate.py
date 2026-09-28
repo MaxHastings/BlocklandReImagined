@@ -640,7 +640,21 @@ def install_hook():
     say(f"installed {target} (shared by every worktree)")
 
 
+def forget_hook_repository():
+    """Git runs hooks with GIT_DIR and friends pointing at the pushing
+    worktree. Left in the environment, they redirect every git call, even
+    one with cwd set to the gate worktree, back to the pusher: a checkout
+    for the gate would move the pusher's HEAD while cargo built a stale
+    gate tree. Hooks start in the pusher's top level, so plain discovery
+    from the working directory finds the same repository."""
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
+                 "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 "GIT_QUARANTINE_PATH"):
+        os.environ.pop(name, None)
+
+
 def main():
+    forget_hook_repository()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--install-hook", action="store_true")

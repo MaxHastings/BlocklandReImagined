@@ -519,3 +519,97 @@ async fn a_package_edited_while_hosting_is_reported_not_served() -> Result<()> {
     server.stop().await?;
     Ok(())
 }
+
+/// E31 (multiplayer/distribution). A clean client joins a modded server:
+/// the join is refused naming the shared packages it lacks, the client
+/// downloads them over the download connection, loads them and joins with
+/// the server's package list. A client running a shared package the server
+/// does not is refused without downloading anything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (set, environment) = content(root.path())?;
+    let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment: environment.clone(),
+            packages: Some(Arc::new(shelf)),
+            ..fixture::options()
+        },
+    )?;
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let cache_dir = tempfile::tempdir()?;
+    let cache = Cache::open(cache_dir.path())?;
+
+    // Without downloading, the refusal names what differs.
+    let refused = bri_net::client::Client::connect_with_identity(
+        server.address,
+        &server.certificate,
+        "Plain".into(),
+        Vec::new(),
+        None,
+        None,
+        &identity,
+    )
+    .await
+    .err()
+    .unwrap();
+    let differ = refused
+        .downcast_ref::<bri_net::client::PackagesDiffer>()
+        .expect("a typed package refusal");
+    let missing: Vec<_> = differ.0.iter().map(|m| m.to_string()).collect();
+    assert_eq!(missing.len(), 2, "{missing:?}");
+    assert!(missing.iter().all(|m| m.starts_with("server has")));
+
+    let mut loaded = Vec::new();
+    let (client, fetched) = bri_net::client::Client::connect_fetching(
+        server.address,
+        &server.certificate,
+        "Fetcher".into(),
+        Vec::new(),
+        None,
+        &identity,
+        &cache,
+        Progress::default(),
+        |fetched| {
+            loaded = fetched.iter().map(|f| f.dir.clone()).collect();
+            Ok(fetched.iter().map(|f| f.package.clone()).collect())
+        },
+    )
+    .await?;
+    assert!(client.owner > 0);
+    assert_eq!(fetched.len(), 3, "shared and client packages");
+    assert!(loaded.iter().all(|dir| dir.is_dir()));
+    drop(client);
+
+    // A shared package only the client runs cannot be downloaded away.
+    let mut extra = environment.client_packages();
+    extra.push(bri_package::environment::PackageRef {
+        id: "mymod".into(),
+        version: "1.0.0".into(),
+        side: bri_package::packages::Side::Shared,
+        hash: "ab".repeat(32),
+        size: 1,
+    });
+    let empty_cache = tempfile::tempdir()?;
+    let error = bri_net::client::Client::connect_fetching(
+        server.address,
+        &server.certificate,
+        "Extra".into(),
+        extra,
+        None,
+        &identity,
+        &Cache::open(empty_cache.path())?,
+        Progress::default(),
+        |_| panic!("nothing downloads for an extra package"),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(format!("{error:#}").contains("mymod"), "{error:#}");
+    server.stop().await?;
+    Ok(())
+}

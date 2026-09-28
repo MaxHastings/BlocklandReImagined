@@ -101,7 +101,7 @@ const SPAWNS: [Vec3; 3] = [
 fn options() -> ServerOptions {
     ServerOptions {
         bind: "127.0.0.1:0".parse().unwrap(),
-        content_id: "fixture-v1".into(),
+        environment: bri_package::environment::Environment::empty(),
         spawn_points: SPAWNS.to_vec(),
         certificate: None,
         map_loader: None,
@@ -110,11 +110,21 @@ fn options() -> ServerOptions {
     }
 }
 
+fn shared_package(id: &str) -> bri_package::environment::PackageRef {
+    bri_package::environment::PackageRef {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side: bri_package::packages::Side::Shared,
+        hash: "cd".repeat(32),
+        size: 1,
+    }
+}
+
 fn hello(name: &str) -> Hello {
     Hello {
         version: VERSION,
         name: name.into(),
-        content_id: "fixture-v1".into(),
+        packages: Vec::new(),
         resume: None,
         host: None,
         identity: None,
@@ -126,7 +136,7 @@ async fn connect(server: &ServerHandle, name: &str) -> Result<Client> {
         server.address,
         &server.certificate,
         name.into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await
@@ -192,9 +202,14 @@ async fn raw_join(
     .await??;
     Ok((raw, codec::decode::<Message>(&answer)?))
 }
-fn rejected(message: &Message) -> Option<&str> {
+/// Why the join was refused: the reason, or the differing packages.
+fn rejected(message: &Message) -> Option<String> {
     match message {
-        Message::Rejected(reason) => Some(reason),
+        Message::Rejected(reason) => Some(reason.clone()),
+        Message::PackagesDiffer(differences) => Some(format!(
+            "content differs: {}",
+            bri_package::environment::describe(differences)
+        )),
         _ => None,
     }
 }
@@ -321,7 +336,7 @@ fn codec_rejects_garbage_truncated_trailing_oversized_and_forged_frames() {
     struct ForgedHello {
         version: u32,
         name: String,
-        content_id: String,
+        packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
         host: Option<ResumeToken>,
         identity: Option<IdentityProof>,
@@ -331,7 +346,7 @@ fn codec_rejects_garbage_truncated_trailing_oversized_and_forged_frames() {
         &ForgedHello {
             version: VERSION,
             name: "x".into(),
-            content_id: "fixture-v1".into(),
+            packages: Vec::new(),
             resume: None,
             host: None,
             identity: None,
@@ -378,7 +393,7 @@ fn movement_and_hello_shapes_are_validated() {
         assert!(hello(&name).validate_bounds().is_err(), "{name:?}");
     }
     let mut h = hello("ok");
-    h.content_id = "c".repeat(129);
+    h.packages = vec![shared_package("bad id!")];
     assert!(h.validate_bounds().is_err());
     let mut h = hello("ok");
     h.version = VERSION + 1;
@@ -435,7 +450,7 @@ async fn forged_or_malformed_hellos_are_rejected() -> Result<()> {
         (
             "content",
             Box::new(|_| Hello {
-                content_id: "other-content".into(),
+                packages: vec![shared_package("other-content")],
                 ..hello("Mismatch")
             }),
         ),
@@ -503,7 +518,7 @@ async fn resume_tickets_are_bound_to_identity_and_one_live_connection() -> Resul
         server.address,
         &server.certificate,
         "Ann".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &key_a,
@@ -525,7 +540,7 @@ async fn resume_tickets_are_bound_to_identity_and_one_live_connection() -> Resul
         server.address,
         &server.certificate,
         "Ann twin".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &key_a,
@@ -841,7 +856,7 @@ async fn fourth_failed_login_closes_the_connection_end_to_end() -> Result<()> {
         server.address,
         &server.certificate,
         "Guesser".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &identity,

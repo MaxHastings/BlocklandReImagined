@@ -27,7 +27,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
             session,
             ServerOptions {
                 bind: "127.0.0.1:0".parse()?,
-                content_id: "fixture".into(),
+                environment: bri_package::environment::Environment::empty(),
                 spawn_points: vec![Vec3::new(0.0, 100.0, 0.0)],
                 certificate: None,
                 map_loader: None,
@@ -41,7 +41,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
         let pin = certificate.clone();
         let mut worker = Worker::start(&tokio::runtime::Handle::current(), async move {
             let client =
-                Client::connect(address, &pin, "Builder".into(), "fixture".into(), None).await?;
+                Client::connect(address, &pin, "Builder".into(), Vec::new(), None).await?;
             Ok(Connected {
                 client,
                 host: Some(host),
@@ -57,7 +57,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 address,
                 &certificate,
                 "Extra".into(),
-                "fixture".into(),
+                Vec::new(),
                 None
             )
             .await

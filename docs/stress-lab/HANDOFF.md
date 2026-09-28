@@ -11,7 +11,7 @@ based PvP mode, a board game, a strategy game) needs no engine change. The
 campaign built modes nothing like the Stress Lab, attacked the platform
 with a red team, and fixed each class of weakness it found with the
 smallest general seam. The running record is
-[weakness-ledger.md](weakness-ledger.md): 15 classes (W1 to W15) from 30
+[weakness-ledger.md](weakness-ledger.md): 15 classes (W1 to W15) from 31
 experiments and two red-team rounds.
 
 Labels: **WORKING NOW** (built and tested headless), **PROTOTYPE** (built
@@ -37,7 +37,7 @@ game with different assumptions uses it.
 | One capability gate (`ops::authorize`) plus the caller's trust (W9) | Security | Package brick removal (H2-F12), explosions | Any package power, declared and shown to the host | WORKING NOW |
 | Per-origin shares (W1): script work per package and per player, world edits, chat lines, entity slots | Performance | 12 red-team findings (H2) | Keeps any mode from starving the others | WORKING NOW |
 | One storage budget per carrier (W7): bricks, package state, join chunks, reliable outbox | Persistence, distribution | Heavy worlds (E14, E15), package state (H2-F1), slow joins (E24) | Anything admitted can be saved and sent | WORKING NOW |
-| Verified package sync: content-addressed cache, seals, one path rule, conflict checks | Distribution, security | Auto-download (E6 to E13), hostile package files (H2-F2 to F5) | Any mod's assets reach clients safely | PROTOTYPE (not wired into the join yet) |
+| Verified package sync: content-addressed cache, seals, one path rule, conflict checks; a refused join names the differing packages and `connect_fetching` downloads them and joins again | Distribution, security | Auto-download (E6 to E13), download then join (E31), hostile package files (H2-F2 to F5) | Any mod's assets reach clients safely | PROTOTYPE (the game client cannot load a downloaded package yet) |
 | Crash-safe autosave for the dedicated server (W2) | Persistence | World (E5), package state (E28) | Any long-running server | WORKING NOW for the dedicated server |
 
 ### What is not built
@@ -55,9 +55,9 @@ game with different assumptions uses it.
   (the Stress Lab's protocol work). `Session::package_state_for(viewer)` is
   the per-client view to send when they do.
 - **MISSING.** The client does not draw package HUD panels or box models.
-- **MISSING.** Package download is not wired into the join: the join path
-  should call `bri_net::packages::fetch_missing` when it reports a missing
-  or mismatched package.
+- **MISSING.** The game client cannot load a downloaded package into its
+  content, so it still joins without `Client::connect_fetching`. When it
+  can, the download-then-join path (E31) is ready.
 - **MISSING.** The windowed host does not autosave its world (W2).
 - **MISSING.** Fog of war for entities: W13's audience rule for package
   entities.
@@ -79,7 +79,7 @@ classes. Per family (full table in the ledger):
 | UI model | E21, E26, H2-F4 | W11, W13 | E26: W8 again |
 | Game rules | E16 to E18, E25, E28 | W8, W15 | E28: none |
 | Persistence | E5, E11, E15, E28, H2 | W2, W6, W7 | E28: none |
-| Multiplayer/distribution | E4, E6, E9 to E12, E14, E24 | W6, W7 | E24: W7 again |
+| Multiplayer/distribution | E4, E6, E9 to E12, E14, E24, E31 | W6, W7 | E31: W8 again |
 | Security/authority | H, M, E7, H2 | W3, W4, W5, W9, W10 | H2: W9, W10 |
 | Performance/failure | E1 to E3, E8, E13, E23, H2 | W1, W12 | H2: W1 again |
 

@@ -1947,7 +1947,8 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   entity slots and state bytes, and a start-of-tick view shared by calls.
 - Platform: one package path rule, load-time conflict checks, verified
   package cache, byte-bounded join chunks, storage budgets and reliable
-  outbox. Protocol 30 on the branch (main + 1).
+  outbox. Protocol 34 on the branch (coordinator's numbering after Stress
+  Lab 32 and door-closers' avatar names 33).
 - Evidence: `cargo test -p bri-sim --test unlike_modes --test
   hardening_packages --test packages`, `cargo test -p bri-package-runtime`,
   `cargo test -p bri-net`, clippy clean on Linux; Windows CI on PR #1.
@@ -1967,6 +1968,16 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   "Player archetypes". Evidence: `cargo test -p bri-motor`, `cargo test -p
   bri-sim` (all content-free targets), `cargo test -p bri-net`, `cargo
   test -p bri-client --lib`, clippy `-D warnings` clean.
+- Merged main's join package check (81604e1). E31: a refused join now
+  names the differing packages as a typed `PackagesDiffer`, and
+  `Client::connect_fetching` downloads the server's packages and joins
+  again (`package_sync::a_refused_join_downloads_the_missing_packages_and_joins`).
+  The game client still joins without it until it can load a downloaded
+  package. Observed once under a loaded machine, not reproduced in 14 runs
+  (12 in parallel): two `package_sync` tests lost the server's refusal
+  frame ("closed by peer") or found the per-address download slots still
+  held, both consistent with the server's 1 s wait for the client to read
+  its last frame.
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
@@ -2460,3 +2471,23 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   Open: a hosted game cannot load an imported package yet, because each system
   reads one pack per role. That seam and 19 others are in
   `docs/audits/spike-addon-import.md`.
+
+- 2026-09-27 Content loads through `packages.json`; joins name differing
+  packages (door-closer P0, protocol 31). `ContentConfig` (18 fixed pack
+  fields and `client-content.json`) is gone: the client and `bri-server` read
+  `packages.json` from the content root, falling back to
+  `crates/package/base-packages.json`, and resolve each engine role to its
+  package directory. `bri-server` now takes `<content-root> <world.json>
+  <state-dir> <listen> [seconds]`. Hosting and joining hash every listed
+  package into an environment; `Hello` carries the client's shared and client
+  packages instead of one opaque content id, and the server refuses a join
+  whose shared packages differ with a message naming each one (server has X,
+  you have Y / you do not / the server does not). Client-only differences
+  join and are told in chat. The fingerprint chain in `content_identity.rs`
+  (and its tests) is removed; the weapon and item-physics startup snapshots
+  stay. The regeneration script, both packagers and the launchers use the
+  package list. Measured: the base environment is 333 MiB over 18 packages;
+  `bri-server` on the real content ran a 2 s smoke and published it.
+  Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
+  new loopback `join_refusal_names_each_differing_shared_package`,
+  `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.

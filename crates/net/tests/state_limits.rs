@@ -83,7 +83,7 @@ async fn a_world_of_legal_heavy_bricks_still_joins_and_saves() -> Result<()> {
             server.address,
             &server.certificate,
             "Joiner".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None,
         ),
     )

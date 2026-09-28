@@ -59,7 +59,7 @@ default.
 | UI model | E21, E26, H2-F4 | W11 (H2-F4), W13 (E21) | E26 (W8 again) |
 | Game rules | E16, E17, E18, E25, E28 | W8 (E16), W15 (E25) | E28 (none), E17 (W8 again), E18 (none) |
 | Persistence | E5, E11, E15, E28, H2-F1, H2-F9, H2-F10 | W2, W6, W7 | E28 (none), H2-F1 (W7 again), H2-F9, H2-F10 (ordinary) |
-| Multiplayer/distribution | E4, E6, E9, E10, E12, E14, E24 | W6, W7 | E24 (W7 again), E9, E6 (none/ordinary) |
+| Multiplayer/distribution | E4, E6, E9, E10, E12, E14, E24, E31 | W6, W7 | E31 (W8 again), E24 (W7 again), E9, E6 (none/ordinary) |
 | Security/authority | H, M, E7, H2 | W3, W4, W5, W9, W10 | M (W4 held), E7 (none) |
 | Performance/failure | E1, E2, E3, E8, E13, H2-F6/F8/F15, E23 | W1, W12 | E3, E8 (none), H2 (W1 again) |
 
@@ -78,6 +78,8 @@ archetypes, the first class the campaign closed by making an engine kind
 data. It found no new class: the steering model is W14's own rule
 (mechanisms a client runs stay engine code that data selects) and the
 mini-game ids are W8 again. W14 stays open for control targets (E27).
+E31 (download then join) found W8 again: the join refusal was a sentence
+meant for people, so no program could act on it.
 
 ## Experiments
 
@@ -116,3 +118,4 @@ mini-game ids are W8 again. W14 stays open for control targets (E27).
 | E28 | Game rules, persistence | 9, 7 | `unlike_modes::a_king_of_the_hill_mode_keeps_its_leaderboard_across_restarts`: timed scoring, a win condition, and an all-time leaderboard saved through `PackageSave` while the round in progress is not. | Nothing: ran on the existing seams. | none |
 | E29 | Entities and behaviour | 9, 1 | `unlike_modes::a_zombie_wave_chases_and_bites_players`: agents chase the nearest living player and hurt on contact. | `damage(player, amount, ())` was refused: `()` means "nobody" everywhere else (`on_death`'s killer) but not here. | ordinary. Fixed. |
 | E30 | Player and control, UI model | 9 | `unlike_modes::players_can_be_bodies_beyond_the_blockhead` and `a_broken_archetype_is_refused_with_its_reason` (Max, 2026-09-28: "custom player controller models beyond just everyone being a Blockhead"): four players on one server are a Blockhead, v20's horse, a package's rolling ball (sphere body, 60 health) and a package's kart; the ball dies and comes back a ball; a client predicting the ball from the checkpoint's table matches the server within 1 cm; a mini-game picks the ball as its player type. | Built on W14's fix. Two findings: a kart that cannot strafe could not be written, because v20's motor always moves along the raw input vector (a zero sideways speed only caps it), so how input steers is a controller model, not a constant; and the mini-game catalog accepted only `v20.` ids. | W14's fix held. Fixed: a `steering` model (`strafe`, v20; `turn`, a vehicle) chosen by data; mini-game ids accept `namespace:kind/name`. The second is W8 again (the catalog followed its first client). |
+| E31 | Multiplayer/distribution | 3 | `package_sync::a_refused_join_downloads_the_missing_packages_and_joins`: a clean client joins a modded server by downloading what the refusal names, then joining again; a client running a shared package the server lacks is refused without a download. | The join refused a package mismatch with a sentence (`Rejected(String)`), so a client could not tell a refusal it can fix by downloading from one it cannot without parsing text. | W8 again (the refusal followed its first reader, a person). Fixed: `Message::PackagesDiffer` carries the typed mismatches; `Client::connect_fetching` downloads and retries. |

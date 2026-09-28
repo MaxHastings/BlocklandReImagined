@@ -80,7 +80,7 @@ pub fn session_with(world: World) -> Session {
 pub fn options() -> ServerOptions {
     ServerOptions {
         bind: "127.0.0.1:0".parse().unwrap(),
-        content_id: "fixture-v1".into(),
+        environment: bri_package::environment::Environment::empty(),
         spawn_points: (0..32)
             .map(|i| Vec3::new(-48.0 + 3.0 * i as f32, 0.05, 0.0))
             .collect(),
