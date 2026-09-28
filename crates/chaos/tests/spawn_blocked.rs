@@ -50,8 +50,8 @@ fn players_still_join_when_every_spawn_point_is_built_over() {
             "spawn {spawn} is still clear"
         );
     }
-    for n in 0..3 {
-        session.join(format!("Late{n}"), spawns[n], false).unwrap();
+    for (n, spawn) in spawns.iter().take(3).enumerate() {
+        session.join(format!("Late{n}"), *spawn, false).unwrap();
     }
     for _ in 0..120 {
         session.step().unwrap();
