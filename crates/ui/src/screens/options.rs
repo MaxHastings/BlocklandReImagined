@@ -39,6 +39,15 @@ pub const MAX_FPS: &str = "$pref::Video::MaxFps";
 /// The Max FPS menu's choices; 0 is Unlimited.
 pub const MAX_FPS_CHOICES: &[u32] = &[30, 60, 75, 120, 144, 165, 240, 0];
 const MAX_FPS_MENU: &str = "OptGraphicsMaxFpsMenu";
+/// Not a v20 setting: colour-vision assistance for the 3D view (0 off,
+/// 1 protanopia, 2 deuteranopia, 3 tritanopia).
+pub const COLOR_VISION: &str = "$pref::Gui::ColorVision";
+const COLOR_VISION_MENU: &str = "OptGraphicsColorVisionMenu";
+const COLOR_VISION_CHOICES: [&str; 4] = ["Off", "Red-weak", "Green-weak", "Blue-weak"];
+/// The colour-vision assistance `$pref::Gui::ColorVision` asks for.
+pub fn color_vision(p: &Prefs) -> u32 {
+    p.i64_or(COLOR_VISION, 0).clamp(0, 3) as u32
+}
 /// The UI Size menu (`$pref::Gui::Scale`, percent; 0 is Auto).
 const UI_SCALE_MENU: &str = "OptGraphicsUiScaleMenu";
 pub const UI_SCALE_CHOICES: &[i64] = &[0, 100, 125, 150, 200, 250, 300];
@@ -719,6 +728,12 @@ impl Options {
             })
             .collect();
         s.menu(MAX_FPS_MENU, fps_items, i64::from(fps));
+        let vision = COLOR_VISION_CHOICES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        s.menu(COLOR_VISION_MENU, vision, i64::from(color_vision(&core.prefs)));
         let scale = core.prefs.i64_or(crate::ui::UI_SCALE, 0).max(0);
         let scale_items = UI_SCALE_CHOICES
             .iter()
@@ -855,6 +870,7 @@ impl Options {
                     (QUALITY_MENU, "Quality:"),
                     (MAX_FPS_MENU, "Max FPS:"),
                     (UI_SCALE_MENU, "UI Size:"),
+                    (COLOR_VISION_MENU, "Colors:"),
                 ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
@@ -1136,6 +1152,13 @@ impl Options {
             .and_then(|n| self.view.selected(n))
         {
             self.draft.set(MAX_FPS, fps.clamp(0, 1000).to_string());
+        }
+        if let Some(mode) = self
+            .view
+            .id(COLOR_VISION_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(COLOR_VISION, mode.clamp(0, 3).to_string());
         }
         if let Some(scale) = self
             .view
@@ -2075,6 +2098,19 @@ mod tests {
         ui.core.prefs.set(crate::ui::UI_SCALE, "0");
         ui.update(0);
         assert_eq!(ui.scale(), 2.0);
+    }
+
+    #[test]
+    fn color_vision_menu_saves_the_mode() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(COLOR_VISION_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Off"));
+        s.view.select(menu, Some(2));
+        click(&mut s, "done", &mut ui);
+        assert_eq!(color_vision(&saved_prefs(&mut ui)), 2);
+        ui.core.prefs.set(COLOR_VISION, "9");
+        assert_eq!(color_vision(&ui.core.prefs), 3);
     }
 
     #[test]

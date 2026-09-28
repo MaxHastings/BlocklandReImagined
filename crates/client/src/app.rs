@@ -5685,6 +5685,9 @@ impl PlatformApp for App {
         }
         self.avatar_preview = Some(crate::avatar::Preview::new(device));
         self.preview_dirty = self.preview_request.is_some();
+        bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
+            &self.ui.core.prefs,
+        ));
         let samples = self.graphics.samples;
         self.renderer = Some(SceneRenderer::with_settings(
             device,
@@ -5773,7 +5776,10 @@ impl PlatformApp for App {
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
         // Anti-aliasing and shadow quality rebuild world pipelines and maps;
         // a map change needs renderers built for the new map.
+        // Colour-vision assistance is a pipeline constant, too.
+        let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
         if std::mem::take(&mut self.gpu_restart)
+            || bri_render::color::color_vision() != vision
             || self.renderer.as_ref().is_some_and(|r| {
                 r.samples() != self.graphics.samples
                     || r.shadow_settings() != self.graphics.shadows
