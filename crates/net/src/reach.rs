@@ -1,13 +1,13 @@
 //! Opening a host to the internet and telling the host, in plain words,
 //! whether friends can reach it.
 //!
-//! No service of ours is involved: the router is asked to forward the game
-//! port (UPnP IGD, then NAT-PMP), a public STUN server reports the public
-//! address, and the host then probes its own public address over the game
-//! port. A router that forwards the port and loops the probe back proves the
-//! path works; one that does not loop back leaves a "should work" verdict.
-//! Hosts behind a shared address (carrier-grade or double NAT) are told so,
-//! because no router setting on their side helps.
+//! Only the host's own router is asked anything; no outside service is
+//! contacted. The router forwards the game port (UPnP IGD, then NAT-PMP) and
+//! reports its outside address, and the host then probes that address over
+//! the game port. A router that loops the probe back proves the path works;
+//! one that does not leaves a "should work" verdict. A router whose outside
+//! address is itself private or carrier-grade sits behind someone else's
+//! NAT, and the host is told so, because no setting on their side helps.
 use crate::{
     client::{HostPin, probe},
     invite::{host_key, invite},
@@ -49,7 +49,7 @@ pub enum Verdict {
     SharedAddress,
     /// The router did not open the port; the player must forward it.
     NeedsForward,
-    /// The public address could not be found (offline, or STUN blocked).
+    /// This computer is not on a network that leads anywhere.
     Unknown,
 }
 
@@ -60,7 +60,7 @@ pub struct Report {
     pub port: u16,
     /// This computer's address on the home network.
     pub local_ip: Option<IpAddr>,
-    /// The address friends connect to, when known.
+    /// The address friends connect to, when the router reported it.
     pub public: Option<SocketAddr>,
     /// The router's own outside address, when it reported one.
     pub router_ip: Option<IpAddr>,
@@ -85,13 +85,18 @@ impl Report {
                 "Friends can join you over the internet: your game answered at your public address.".into(),
                 format!("Share your invite: {invite}"),
             ],
-            Verdict::Likely => vec![
-                format!(
+            Verdict::Likely => {
+                let mut lines = vec![format!(
                     "Your router opened port {port} ({}). Friends should be able to join; your router does not let the game test this from inside your home.",
                     self.method.unwrap_or("automatically")
-                ),
-                format!("Share your invite: {invite}"),
-            ],
+                )];
+                lines.push(if invite.is_empty() {
+                    format!("Give friends your public IP address (your router's status page shows it) and port {port}.")
+                } else {
+                    format!("Share your invite: {invite}")
+                });
+                lines
+            }
             Verdict::SharedAddress => vec![
                 "Friends outside your home probably cannot join: your internet provider (or a second router) shares one public address between several homes.".into(),
                 "Ask your provider for a public IP address, or play together through a virtual LAN tool such as Tailscale or ZeroTier. Players on your own network can still join.".into(),
@@ -103,13 +108,15 @@ impl Report {
                 lines.push(format!(
                     "Turn on UPnP in your router's settings and host again, or forward UDP port {port} to {here}."
                 ));
-                if !invite.is_empty() {
-                    lines.push(format!("Once that is done, share your invite: {invite}"));
-                }
+                lines.push(if invite.is_empty() {
+                    format!("Then give friends your public IP address (your router's status page shows it) and port {port}.")
+                } else {
+                    format!("Once that is done, share your invite: {invite}")
+                });
                 lines
             }
             Verdict::Unknown => vec![
-                "Could not reach the internet to find your public address. Players on your own network can still join.".into(),
+                "This PC does not seem to be connected to a network, so friends cannot join yet.".into(),
             ],
         }
     }
@@ -137,19 +144,16 @@ pub async fn open_and_check(port: u16, certificate: Vec<u8>) -> (Report, Option<
         Some(Forward::NatPmp(m)) if m.external_port != 0 => m.external_port,
         _ => port,
     };
-    let seen = crate::stun::public_address(crate::stun::SERVERS, Duration::from_secs(3))
-        .await
-        .ok()
-        .map(|a| a.ip());
-    let public_ip = seen.or(router_ip.filter(|ip| is_public(*ip)));
-    let public = public_ip.map(|ip| SocketAddr::new(ip, external_port));
+    let public = router_ip
+        .filter(|ip| is_public(*ip))
+        .map(|ip| SocketAddr::new(ip, external_port));
     let reached = match public {
         Some(address) => probe(address, &HostPin::Key(host_key(&certificate)), SELF_PROBE)
             .await
             .is_ok(),
         None => false,
     };
-    let verdict = verdict(reached, public_ip, router_ip, forward.is_some());
+    let verdict = verdict(local_ip.is_some(), reached, router_ip, forward.is_some());
     let report = Report {
         verdict,
         port,
@@ -163,27 +167,14 @@ pub async fn open_and_check(port: u16, certificate: Vec<u8>) -> (Report, Option<
     (report, forward)
 }
 
-fn verdict(
-    reached: bool,
-    public_ip: Option<IpAddr>,
-    router_ip: Option<IpAddr>,
-    forwarded: bool,
-) -> Verdict {
+fn verdict(networked: bool, reached: bool, router_ip: Option<IpAddr>, forwarded: bool) -> Verdict {
     if reached {
-        return Verdict::Reachable;
-    }
-    let Some(public_ip) = public_ip else {
-        // The router's outside address is private and nothing else answered.
-        return if router_ip.is_some_and(|ip| !is_public(ip)) {
-            Verdict::SharedAddress
-        } else {
-            Verdict::Unknown
-        };
-    };
-    // The router's outside address is not the one the internet sees: another
-    // router or the provider's NAT sits in front of it.
-    let shared = router_ip.is_some_and(|ip| !is_public(ip) || ip != public_ip);
-    if shared {
+        Verdict::Reachable
+    } else if !networked {
+        Verdict::Unknown
+    } else if router_ip.is_some_and(|ip| !is_public(ip)) {
+        // The router's own outside address is private or carrier-grade:
+        // another router or the provider's NAT sits in front of it.
         Verdict::SharedAddress
     } else if forwarded {
         Verdict::Likely
@@ -231,15 +222,15 @@ mod tests {
     #[test]
     fn verdicts_follow_the_evidence() {
         let public = Some(ip("203.0.113.10"));
-        assert_eq!(verdict(true, public, None, false), Verdict::Reachable);
-        assert_eq!(verdict(false, public, public, true), Verdict::Likely);
-        assert_eq!(verdict(false, public, None, false), Verdict::NeedsForward);
-        // The router's outside address is private, or differs from the one
-        // the internet sees: someone else's NAT is in front.
-        assert_eq!(verdict(false, public, Some(ip("100.72.1.2")), true), Verdict::SharedAddress);
-        assert_eq!(verdict(false, public, Some(ip("198.51.100.1")), true), Verdict::SharedAddress);
-        assert_eq!(verdict(false, None, Some(ip("10.0.0.2")), true), Verdict::SharedAddress);
-        assert_eq!(verdict(false, None, None, false), Verdict::Unknown);
+        assert_eq!(verdict(true, true, public, true), Verdict::Reachable);
+        assert_eq!(verdict(true, false, public, true), Verdict::Likely);
+        // Forwarded by a router that did not say its outside address.
+        assert_eq!(verdict(true, false, None, true), Verdict::Likely);
+        assert_eq!(verdict(true, false, None, false), Verdict::NeedsForward);
+        // The router's outside address is private: someone else's NAT is in front.
+        assert_eq!(verdict(true, false, Some(ip("100.72.1.2")), true), Verdict::SharedAddress);
+        assert_eq!(verdict(true, false, Some(ip("10.0.0.2")), false), Verdict::SharedAddress);
+        assert_eq!(verdict(false, false, None, false), Verdict::Unknown);
     }
     #[test]
     fn every_verdict_reads_as_plain_advice() {

@@ -11,6 +11,5 @@ pub mod protocol;
 pub mod reach;
 pub mod replica;
 pub mod server;
-pub mod stun;
 pub mod upnp;
 mod tick_clock;

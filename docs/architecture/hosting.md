@@ -1,13 +1,14 @@
 # Hosting and joining
 
 Players expect to click Host, send a friend something, and have the friend
-join, with no router settings. This document covers what the game does today
-without any service of ours, the one design decision still open (join codes
-through a small hosted service), and the seams that keep that decision cheap
-either way.
+join, with no router settings. This document covers how the game gets as
+close to that as it can with direct connections alone.
 
-Scope: direct connections only. A public server list or master server is out
-of scope (Max, 2026-09-28).
+Scope: direct connections only, with no service of ours and no third-party
+service (Max, 2026-09-28: "stick to direct ip", "I do not want to have to host
+any relay service or rely on 3rd party crap"). The game talks only to the
+host's own router and to the other player. A public server list or master
+server is out of scope.
 
 ## What happens today
 
@@ -66,9 +67,9 @@ servers not bound to loopback) runs `bri_net::reach::open_and_check`:
 1. Ask the router to forward the game port: UPnP IGD first (`upnp.rs`), then
    NAT-PMP (`natpmp.rs`, RFC 6886) to the default gateway. Forwards are leased
    for an hour, renewed every 20 minutes, and removed when hosting stops.
-2. Ask a public STUN server (`stun.rs`, RFC 8489 Binding request) for the
-   public address. Servers used: `stun.cloudflare.com:3478`, then
-   `stun.l.google.com:19302`. They see the host's IP and nothing else.
+2. Take the public address from the router: the outside address it reports
+   through UPnP (`GetExternalIPAddress`) or NAT-PMP. Nothing outside the home
+   network is asked.
 3. Probe `public address:port` with the host's own key. A router that
    forwards the port and loops traffic back proves the path end to end.
 
@@ -77,10 +78,14 @@ The host player then reads one verdict in chat:
 | Verdict | Evidence | What the player is told |
 | --- | --- | --- |
 | Reachable | the self-probe answered | friends can join; invite on the clipboard |
-| Likely | the router opened the port, addresses agree, no loopback | friends should be able to join; invite on the clipboard |
-| Shared address | the router's outside address is private or differs from the STUN address | a provider or second router shares the address; ask for a public IP or use a virtual LAN tool |
-| Needs forward | no UPnP or NAT-PMP | turn on UPnP, or forward UDP *port* to *this PC's LAN address*; the invite for afterwards |
-| Unknown | no public address found | nothing could be checked; LAN still works |
+| Likely | the router opened the port, no loopback | friends should be able to join; invite on the clipboard (or, if the router kept its address to itself, where to find it) |
+| Shared address | the router's outside address is private or carrier-grade (100.64/10) | a provider or second router shares the address; ask for a public IP or use a virtual LAN tool |
+| Needs forward | no UPnP or NAT-PMP | turn on UPnP, or forward UDP *port* to *this PC's LAN address*; then share the address |
+| Unknown | this PC has no network route | nothing could be checked |
+
+Without an outside observer the check cannot see a second NAT whose router
+reports a public-looking address, nor a provider firewall; those hosts get
+"should be able to join" and learn otherwise when a friend tries.
 
 `/invite` copies the host's invite again. LAN hosts get an invite with their
 LAN address. The dedicated server prints the same lines.
@@ -109,74 +114,15 @@ query, is now Favorite/Unfavorite for the selected server. Favourites are
 listed first and marked `*`. A saved server that does not answer shows why in
 the Map column: no answer, host changed, other version, unknown name.
 
-## The seam for join codes
+## Not planned: join codes and a relay
 
-Everything that joins goes through `JoinTarget::parse` then
-`JoinTarget::resolve() -> Route { address, key }`, and connects with the
-route's key as a `HostPin::Key`. A join code is another `JoinTarget` variant
-whose `resolve` asks a rendezvous service; nothing after `resolve` changes. A
-relayed route would add a transport choice to `Route`; the QUIC session, pins
-and protocol stay as they are, because a relay only forwards encrypted packets.
+Short join codes, hole punching and a relay fallback would need a service
+that someone runs (ours, Steam or Epic). Max decided against any such service
+on 2026-09-28, so none is planned. A built and tested version was shelved
+outside the repository; everything that joins still goes through
+`JoinTarget::parse` and `resolve`, which is where one would plug in.
 
-## Open decision: join codes and a relay
-
-Direct addresses work for hosts whose router opens the port, which is most home
-connections but not all. Players today expect a short code instead
-(Among Us, Valheim, Minecraft Bedrock, Steam games): no address to read out,
-no router settings, and it works behind carrier-grade NAT. That needs a small
-always-on service. Nothing here is built; this is the option for Max to decide.
-
-### How it would work
-
-- **Rendezvous service.** The host registers with the service over an
-  outgoing connection it keeps open, and gets a code like `BRK-7Q4M`
-  (Crockford base32, no ambiguous letters). It publishes its candidate
-  addresses (LAN address, STUN public address, router-forwarded address) and
-  its host key. The service keeps this in memory only while the host is
-  connected.
-- **Join.** The joiner resolves the code to the candidates and key. Both sides
-  learn each other's public address from the service, and the service tells
-  the host to "punch": the host's QUIC endpoint starts an outgoing connection
-  attempt to the joiner's public address from its game port (quinn endpoints
-  can connect and accept on one socket), which opens the host's NAT for the
-  joiner's packets. The joiner's normal connect then gets through. This works
-  for most home NATs (about nine in ten pairs, by industry figures for UDP hole
-  punching).
-- **Relay fallback.** When punching fails (symmetric NAT on both sides, strict
-  corporate networks), both sides send QUIC packets to a relay that forwards
-  them unchanged. The session stays end-to-end encrypted and pinned by the
-  host key, so the relay cannot read or alter the game. Bandwidth is what the
-  game sends: snapshots at 20 Hz and movement datagrams (roughly tens of
-  kilobits per second per player) plus world transfers on join.
-- **Invites keep working.** Direct addresses and `bri://` invites stay for
-  players who forward ports, LAN play, and dedicated servers.
-
-### What it costs
-
-- A service to run: one small VPS runs both rendezvous and relay for many
-  concurrent games; relay traffic is the only cost that grows with play.
-- Operations: uptime, abuse limits (codes per IP, relay bandwidth caps per
-  session), a privacy note (the service sees who connects to whom, never
-  content), and a way to point the game at another service
-  (a `$pref::Net::Rendezvous` address) so it is open source and self-hostable.
-- Code: the rendezvous and relay (one small Rust binary, shared protocol
-  types in `bri-net`), a UDP socket wrapper for quinn that lets the host send
-  punch packets and relay-wrapped packets, and the code field in Connect to IP.
-
-### Alternatives
-
-- **Steam networking (Steam Datagram Relay)** gives codes, invites and relays
-  for free, but needs a Steam release and the Steamworks SDK.
-- **Epic Online Services P2P** is free and store-independent but adds a large
-  SDK and an Epic account dependency.
-- **IPv6 direct.** Many players have IPv6, where no NAT stands in the way,
-  but home routers still firewall inbound connections and UPnP pinholes are
-  rarely offered. Worth adding (bind dual-stack, publish both families) as a
-  cheap improvement, not a replacement.
-- **Stay direct-only.** The check above tells each host exactly what is
-  wrong; players behind carrier-grade NAT use a virtual LAN tool.
-
-## Later, independent of the decision
+## Later
 
 - Register `bri://` as a Windows URL handler, so clicking an invite starts the
   game and joins.

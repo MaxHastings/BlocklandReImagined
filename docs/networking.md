@@ -87,10 +87,10 @@ client (saved pin, LAN listing, an invite's key, or trust on first use), and
 protocol 35's `Challenge` carries the server listing so the join list and the
 host's reachability check can probe a server over the game port without
 joining. Internet hosts and non-loopback dedicated servers ask the router to
-forward the port (UPnP, then NAT-PMP), learn their public address from a
-public STUN server, probe it, and tell the host in plain words whether friends
-can reach them. See [architecture/hosting.md](architecture/hosting.md),
-including the open decision on join codes and a relay.
+forward the port (UPnP, then NAT-PMP), take their public address from the
+router, probe it, and tell the host in plain words whether friends can reach
+them. No outside service is contacted. See
+[architecture/hosting.md](architecture/hosting.md).
 
 ## Executable host
 
