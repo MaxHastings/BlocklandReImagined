@@ -14,6 +14,15 @@ use std::collections::HashMap;
 const FULLSCREEN: &str = "$pref::Video::fullScreen";
 const NO_VSYNC: &str = "$pref::Video::disableVerticalSync";
 const RESOLUTION: &str = "$pref::Video::resolution";
+/// v20's stock display defaults (800x600, VSync off) described the machines
+/// of 2009, not this one. They are not defaults here, so a first Options
+/// visit shows the real window and Done does not store them for next launch.
+pub const MACHINE_PREFS: &[&str] = &[
+    FULLSCREEN,
+    NO_VSYNC,
+    RESOLUTION,
+    "$pref::Video::windowedRes",
+];
 pub const CHAT_SIZE: &str = "$Pref::Gui::ChatSize";
 pub const KEYBOARD_TURN_SPEED: &str = "$pref::Input::KeyboardTurnSpeed";
 const ANISOTROPY: &str = "$pref::OpenGL::anisotropy";
@@ -1891,6 +1900,35 @@ mod tests {
                 _ => None,
             })
             .expect("Done saves settings")
+    }
+
+    #[test]
+    fn stock_v20_display_defaults_are_not_shown_or_saved() {
+        // The v20 pack seeds 800x600 and VSync off; a first visit and Done
+        // must keep the real window size and VSync on for the next launch.
+        let mut data = fixture().core.pack.data.clone();
+        data.data.prefs.insert(NO_VSYNC.into(), "1".into());
+        data.data.prefs.insert(RESOLUTION.into(), "800 600 32".into());
+        let mut ui = Ui::new(
+            Rc::new(Pack::from_parts(data, Default::default())),
+            UiConfig {
+                size: (1280, 720),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        let mut s = Options::new(&ui.core);
+        for n in s.checkboxes(NO_VSYNC) {
+            assert!(!s.view.bool_value(n), "Disable Vsync shown ticked");
+        }
+        click(&mut s, "done", &mut ui);
+        let saved = saved_prefs(&mut ui);
+        assert!(!saved.bool_or(NO_VSYNC, false));
+        assert_eq!(saved.get(RESOLUTION), Some("1280 720 32"));
     }
 
     #[test]

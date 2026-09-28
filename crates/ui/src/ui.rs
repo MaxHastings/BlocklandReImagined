@@ -910,7 +910,13 @@ impl Ui {
     /// Create the UI. `settings` are the host-persisted values (use
     /// `Settings::default()` on first run: Default Controls will show).
     pub fn new(pack: Rc<Pack>, cfg: UiConfig, settings: Settings) -> Ui {
-        let prefs = Prefs::new(&pack.data.data.prefs, &settings.prefs);
+        let mut defaults = pack.data.data.prefs.clone();
+        defaults.retain(|k, _| {
+            !crate::screens::options::MACHINE_PREFS
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(k))
+        });
+        let prefs = Prefs::new(&defaults, &settings.prefs);
         let platform = cfg.platform;
         let binds = match &settings.binds {
             Some(b) => BindMap { entries: b.clone() },
