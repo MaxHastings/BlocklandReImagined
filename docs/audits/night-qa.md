@@ -240,6 +240,25 @@ loading, hosting and joining are night QA's and are not covered here.
 | 19 | Toggle crouch: closed. Options > Controls has "Toggle crouch (press once)"; off by default, so Crouch is held as in v20 (`toggle_crouch_flips_on_each_press_and_ignores_release`). Mouse 4 and 5: closed, they bind like any button (`side_mouse_buttons_bind_by_torque_name`). Gamepad: closed. A connected pad drives the same commands as the keyboard while playing: left stick moves, right stick looks, A jumps, B crouches, X walks, right trigger fires, left trigger jets, Start opens the Escape menu (`crates/client/src/gamepad.rs`, `sticks_and_buttons_map_to_the_keyboard_commands`; new dependency `gilrs`). Building and menus still need keyboard and mouse; not tried on a real pad. |
 | 20 | Closed (pass). |
 
+**Still open after the follow-up (item 18, duplicator).** Too large to
+finish well in one night, so not started; what it needs, modelled on the
+v20 Duplicator Add-On most servers ran:
+
+1. A Duplicator tool in the tool list (server `ToolAction`, client
+   `Equipment`), with its own hand image.
+2. Select: clicking a brick with it takes that brick and every brick
+   connected to it (the same connectivity `grid::connected` uses), up to a
+   cap (v20 servers used a few thousand), only bricks the player may build
+   on.
+3. A multi-brick ghost: the selection drawn translucent where the player
+   aims, moved with the brick shift keys and turned with the rotate keys
+   (whole-build rotation about the selection's centre on the plate grid).
+4. Plant: one server command that validates every brick with the normal
+   plant rules (overlap, support, trust, brick limit and plant rate, with a
+   per-duplicate allowance) and places all or none, with one undo entry.
+5. Tests: selection and connectivity, rotation on the grid, all-or-none
+   planting, trust refusal, undo.
+
 Also fixed on this branch: `docs/PLAYTEST.md` said Tab shows scores; it is
 the player list (F2).
 
