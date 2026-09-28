@@ -33,6 +33,7 @@ fn checkpoint() -> Checkpoint {
         vehicle_poses: vec![],
         time_scale: 1.0,
         world_bricks: 0,
+        broken_shapes: Default::default(),
     }
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
@@ -67,6 +68,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
         weapons: None,
         tools: Some(tools),
         base: 0,
@@ -125,6 +127,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
         weapons: Some(weapons),
         tools: None,
         base: 0,
@@ -173,6 +176,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
         minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
         weapons: None,
         tools: None,
         base: 0,
@@ -215,6 +219,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
         weapons: None,
         tools: None,
         cues: vec![],
@@ -248,6 +253,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
             minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
             weapons: None,
             tools: None,
             cues: vec![],
@@ -279,6 +285,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
         weapons: None,
         tools: None,
         cues: vec![],
@@ -322,6 +329,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
         weapons: None,
         tools: None,
         cues: vec![],
@@ -415,6 +423,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        broken_shapes: None,
         weapons: None,
         tools: None,
         cues: vec![cue],
@@ -514,4 +523,34 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     let mut empty = checkpoint();
     empty.world_bricks = 0;
     assert!(WorldAssembly::new(empty).unwrap().complete());
+}
+
+#[test]
+fn smashed_map_shapes_replicate_and_stay_bounded() {
+    let mut replica = Replica::new(checkpoint()).unwrap();
+    assert!(replica.broken_shapes.is_empty());
+    let delta = Delta {
+        vitals: None,
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: Some((0..5000).collect()),
+        weapons: None,
+        tools: None,
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: BTreeMap::new(),
+        names: None,
+        avatars: None,
+        palette: None,
+        chat: vec![],
+        cues: vec![],
+        dropped_cues: 0,
+    };
+    assert!(replica.update(delta.clone()).is_err());
+    let mut delta = delta;
+    delta.broken_shapes = Some([19, 27].into());
+    replica.update(delta).unwrap();
+    assert_eq!(replica.broken_shapes, [19, 27].into());
 }

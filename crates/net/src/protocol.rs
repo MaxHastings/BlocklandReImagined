@@ -4,8 +4,8 @@ use bri_sim::{
 };
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-pub const VERSION: u32 = 26;
+use std::collections::{BTreeMap, BTreeSet};
+pub const VERSION: u32 = 30;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -243,6 +243,8 @@ pub struct Checkpoint {
     /// Bricks that stream after this checkpoint as `WorldChunk` frames;
     /// `world.bricks` itself travels empty.
     pub world_bricks: u64,
+    /// Scene nodes of map shapes players have smashed.
+    pub broken_shapes: BTreeSet<u32>,
 }
 impl Checkpoint {
     /// Everything but the bricks, plus an O(1) snapshot of the authoritative
@@ -272,6 +274,7 @@ impl Checkpoint {
             vehicles: session.vehicle_infos(),
             vehicle_poses: session.vehicle_poses(),
             time_scale: session.time_scale(),
+            broken_shapes: session.broken_shapes(),
             world_bricks: world.bricks.len() as u64,
         };
         (checkpoint, world.bricks.clone())
@@ -380,6 +383,7 @@ pub struct Delta {
     pub minigames: Option<Vec<bri_sim::session::MiniGameView>>,
     pub vehicles: Option<Vec<bri_sim::session::VehicleInfo>>,
     pub time_scale: Option<f32>,
+    pub broken_shapes: Option<BTreeSet<u32>>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {

@@ -12,13 +12,61 @@ use bri_content::water::Water;
 use bri_world::{Brick, BrickId, ContentRef};
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Two seconds of unacknowledged input at 120 Hz. Older inputs are discarded;
 /// the next authoritative pose simply replays whatever history remains.
 pub const INPUT_HISTORY: usize = 240;
 /// Position difference (native units) treated as float noise, not error.
 const NOISE: f32 = 1e-3;
+
+/// Client copies of map collision drop the colliders of smashed shapes
+/// (`Session::broken_shapes`) so they stop blocking movement and building.
+#[derive(Default)]
+pub struct BrokenShapes {
+    handles: Vec<ColliderHandle>,
+    /// Scene node and its range of map colliders.
+    shapes: Vec<(u32, std::ops::Range<usize>)>,
+    applied: BTreeSet<u32>,
+}
+impl BrokenShapes {
+    /// `handles` are the map colliders in `NativeMap::colliders` order.
+    pub fn new(handles: Vec<ColliderHandle>, shapes: &[crate::map::Breakable]) -> Self {
+        Self {
+            handles,
+            shapes: shapes
+                .iter()
+                .map(|s| (s.node, s.colliders.clone()))
+                .collect(),
+            applied: BTreeSet::new(),
+        }
+    }
+    /// Replace the breakable shapes. Call before any `apply`.
+    pub fn set_shapes(&mut self, shapes: &[crate::map::Breakable]) {
+        self.shapes = shapes
+            .iter()
+            .map(|s| (s.node, s.colliders.clone()))
+            .collect();
+        self.applied.clear();
+    }
+    /// Match `physics` to the replicated broken set. Returns whether any
+    /// collider changed.
+    pub fn apply(&mut self, physics: &mut PhysicsWorld, broken: &BTreeSet<u32>) -> Result<bool> {
+        if &self.applied == broken {
+            return Ok(false);
+        }
+        let mut changed = false;
+        for (node, colliders) in &self.shapes {
+            let solid = !broken.contains(node);
+            if solid == self.applied.contains(node) && !colliders.is_empty() {
+                crate::simulation::set_enabled(physics, &self.handles, colliders.clone(), solid)?;
+                changed = true;
+            }
+        }
+        self.applied = broken.clone();
+        Ok(changed)
+    }
+}
 
 #[derive(PartialEq)]
 struct Geometry {
@@ -48,13 +96,15 @@ pub struct CollisionMirror {
     brick_waters: BTreeMap<BrickId, Water>,
     bricks: BTreeMap<BrickId, (ColliderHandle, Geometry)>,
     terrain: Option<crate::map::TerrainStream>,
+    broken: BrokenShapes,
 }
 impl CollisionMirror {
     pub fn new(definitions: Definitions, map: Vec<ColliderBuilder>, waters: Vec<Water>) -> Self {
         let mut physics = bri_physics::new_world();
-        for collider in map {
-            physics.insert_collider(collider.user_data(MAP_TAG), None);
-        }
+        let handles = map
+            .into_iter()
+            .map(|collider| physics.insert_collider(collider.user_data(MAP_TAG), None))
+            .collect();
         physics.detect_collisions(&(), &());
         Self {
             physics,
@@ -64,7 +114,16 @@ impl CollisionMirror {
             brick_waters: BTreeMap::new(),
             bricks: BTreeMap::new(),
             terrain: None,
+            broken: BrokenShapes::new(handles, &[]),
         }
+    }
+    /// The map's breakable shapes (`NativeMap::breakables`).
+    pub fn set_breakables(&mut self, shapes: &[crate::map::Breakable]) {
+        self.broken.set_shapes(shapes);
+    }
+    /// Drop the collision of smashed shapes (`Session::broken_shapes`).
+    pub fn set_broken_shapes(&mut self, broken: &BTreeSet<u32>) -> Result<bool> {
+        self.broken.apply(&mut self.physics, broken)
     }
     /// Incrementally mirror replicated brick collision. Returns whether any
     /// collider changed. Unknown definitions reject the update atomically.
@@ -199,6 +258,9 @@ impl Predictor {
     }
     pub fn sync_world(&mut self, bricks: &bri_world::Bricks) -> Result<bool> {
         self.world.sync(bricks)
+    }
+    pub fn set_broken_shapes(&mut self, broken: &BTreeSet<u32>) -> Result<bool> {
+        self.world.set_broken_shapes(broken)
     }
     /// `sync_world` restricted to the bricks a replica change log names.
     pub fn sync_world_changes(

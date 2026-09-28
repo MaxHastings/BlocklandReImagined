@@ -109,6 +109,7 @@ async fn main() -> Result<()> {
     let spawn_points =
         bri_sim::spawn::candidates(&simulation.physics, &map.scene, &Default::default())?;
     let mut session = Session::new(simulation);
+    session.set_breakables(map.breakables)?;
     session.set_vehicle_pack(vehicle_pack)?;
     session.set_spawn_points(spawn_points.clone())?;
     tools.install_special(

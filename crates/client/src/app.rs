@@ -50,6 +50,7 @@ struct Prepared {
     palette: Arc<crate::world_chunks::BrickPalette>,
     building: crate::building::Building,
     mirror: bri_sim::prediction::CollisionMirror,
+    shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
 }
 /// A background chunk update: the replica revision it reached, and the
 /// chunk state handed back with the rebuilt chunks.
@@ -132,8 +133,10 @@ fn prepare_map(
         native_map.waters.clone(),
     );
     mirror.attach_terrain(native_map.terrain.clone())?;
+    mirror.set_breakables(&native_map.breakables);
     let mut building =
         crate::building::Building::new(definitions, native_map.colliders)?;
+    building.set_breakables(&native_map.breakables);
     building.attach_terrain(native_map.terrain);
     building.set_catalog(selected)?;
     if let Some(print) = &catalog.default_print {
@@ -162,6 +165,7 @@ fn prepare_map(
         palette,
         building,
         mirror,
+        shape_indices: visual.shape_indices,
     })
 }
 /// Everything a host installs in a map's session; kept to build the next
@@ -188,6 +192,7 @@ impl HostSetup {
         session.set_vehicle_pack(self.vehicle_pack.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
+        session.set_breakables(loaded.breakables)?;
         session.set_map_list(self.maps.clone())?;
         if let Some(tutorial) = loaded.tutorial {
             session.set_tutorial(tutorial)?;
@@ -243,6 +248,10 @@ pub struct App {
     weapon_animation_cursor: u64,
     effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     gpu_scene: Option<GpuScene>,
+    /// Map static shapes' index ranges, and the smashed ones `gpu_scene`
+    /// no longer draws.
+    shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    gpu_broken: BTreeSet<u32>,
     gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
     /// World-pass depth and, with MSAA, the multisampled color attachment
     /// that the last world pass resolves into the frame target.
@@ -870,6 +879,8 @@ impl App {
             weapon_animation_cursor: 0,
             effects_renderer: None,
             gpu_scene: None,
+            shape_indices: BTreeMap::new(),
+            gpu_broken: BTreeSet::new(),
             gpu_terrain: Vec::new(),
             depth: None,
             meshes: None,
@@ -1477,10 +1488,12 @@ impl App {
                         loaded.simulation.waters.clone(),
                     );
                     mirror.attach_terrain(loaded.terrain.clone())?;
+                    mirror.set_breakables(&loaded.breakables);
                     let mut building = crate::building::Building::new(
                         loaded.simulation.definitions.clone(),
                         loaded.query_colliders.clone(),
                     )?;
+                    building.set_breakables(&loaded.breakables);
                     building.attach_terrain(loaded.terrain.clone());
                     building.set_catalog(selected)?;
                     if let Some(print) = &catalog.default_print {
@@ -1512,6 +1525,7 @@ impl App {
                             palette,
                             building,
                             mirror,
+                            shape_indices: visual.shape_indices,
                         },
                         identity,
                         catalog,
@@ -2406,6 +2420,7 @@ impl App {
             self.foliage.set_map(prepared.foliage);
             self.weather.set_map(&prepared.map_id, prepared.waters)?;
             self.cpu_scene = Some(prepared.scene);
+            self.shape_indices = prepared.shape_indices;
             self.cpu_terrain = prepared.terrain;
             self.meshes = Some(prepared.meshes);
             self.materials = Some(prepared.materials);
@@ -2468,6 +2483,9 @@ impl App {
             {
                 self.brick_hand = Some(hand);
             }
+        }
+        if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
+            building.set_broken_shapes(&view.broken_shapes)?;
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view)
             && self
@@ -4387,6 +4405,7 @@ impl PlatformApp for App {
             .context("Scene GPU not initialized")?;
         renderer.set_filtering(frame.device, self.graphics.filtering);
         if self.gpu_scene.is_none() {
+            self.gpu_broken.clear();
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
             self.gpu_terrain = self
                 .cpu_terrain
@@ -4719,6 +4738,19 @@ impl PlatformApp for App {
             .map(|color| color.create_view(&Default::default()));
         let world_target = multisampled.as_ref().unwrap_or(frame.target);
         let [r, g, b, a] = scene.clear_color.map(f64::from);
+        if let (Some(gpu), Some(view)) = (self.gpu_scene.as_mut(), self.attempt.as_ref().and_then(|a| a.view.as_ref()))
+            && self.gpu_broken != view.broken_shapes
+        {
+            // Smashed shapes stop drawing (`renderWhenDestroyed = 0`); only a
+            // new mission restores them, with a fresh upload.
+            let ranges: Vec<_> = view
+                .broken_shapes
+                .difference(&self.gpu_broken)
+                .filter_map(|node| self.shape_indices.get(node).cloned())
+                .collect();
+            gpu.hide_indices(&ranges);
+            self.gpu_broken.extend(view.broken_shapes.iter().copied());
+        }
         let mut scenes = vec![self.gpu_scene.as_ref().unwrap()];
         scenes.extend(self.gpu_chunks.values());
         if let Some(ghost) = &self.ghost_gpu {

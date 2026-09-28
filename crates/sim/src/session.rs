@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod admin;
 mod bots;
+mod breakables;
 mod build_load;
 mod combat;
 mod control;
@@ -499,6 +500,7 @@ pub struct Session {
     map_change: Option<(OwnerId, String)>,
     /// Enabled mod packages and the gameplay they define.
     packages: Option<Box<packages::PackageHost>>,
+    breakables: breakables::Breakables,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -517,6 +519,7 @@ impl Session {
         weapons.tick = simulation.state().tick;
         Self {
             events: Default::default(),
+            breakables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
             tutorial: None,
@@ -1424,6 +1427,7 @@ impl Session {
         self.step_bots()?;
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
+        let mut glass_hits = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
         let liquids = self.simulation.liquids();
@@ -1504,6 +1508,10 @@ impl Session {
                         [state.feet[0], surface, state.feet[2]],
                     );
                 }
+                // Corpses also call `Armor::onImpact`, so they break glass too.
+                if !motion.hits.is_empty() {
+                    glass_hits.push((owner, motion.hits));
+                }
                 if peer.combat.alive {
                     touches.extend(motion.touched.into_iter().map(|brick| (owner, brick)));
                     impacts.push((owner, motion.impact));
@@ -1517,6 +1525,8 @@ impl Session {
                 }
             }
         }
+        let smashers = self.smash_breakables(glass_hits)?;
+        impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, trigger, down) in triggers {
             // The sports balls' `onBallTrigger` alternate actions.
@@ -1537,6 +1547,7 @@ impl Session {
         self.step_temp_colors();
         self.step_items()?;
         self.step_combat(impacts)?;
+        self.step_breakables()?;
         self.step_specials()?;
         self.step_highlights()?;
         self.step_tutorial()?;

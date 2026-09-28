@@ -826,6 +826,15 @@ impl GpuInstances {
 }
 
 impl GpuScene {
+    /// Stop drawing every batch that lies inside one of `ranges` (index
+    /// ranges of a smashed map shape). Upload the scene again to restore them.
+    pub fn hide_indices(&mut self, ranges: &[Range<u32>]) {
+        self.batches.retain(|b| {
+            !ranges
+                .iter()
+                .any(|r| r.start <= b.indices.start && b.indices.end <= r.end)
+        });
+    }
     /// Update a posed model with unchanged topology/materials. The caller must
     /// re-upload if visibility, mesh frame topology or appearance bindings change.
     /// One update per scene per submission: GPU writes are not per-draw snapshots.

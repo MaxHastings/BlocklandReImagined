@@ -40,6 +40,8 @@ pub struct View {
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     /// Admin `/timeScale`: game time per real second.
     pub time_scale: f32,
+    /// Scene nodes of map shapes players have smashed.
+    pub broken_shapes: std::collections::BTreeSet<u32>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     pub rtt_ms: u32,
@@ -233,6 +235,7 @@ fn publish(
         vitals: client.replica.vitals.clone(),
         minigames: client.replica.minigames.clone(),
         time_scale: client.replica.time_scale,
+        broken_shapes: client.replica.broken_shapes.clone(),
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         rtt_ms: client.rtt().as_millis().min(u128::from(u32::MAX)) as u32,

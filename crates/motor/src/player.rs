@@ -353,6 +353,9 @@ pub struct MotionEvents {
     pub touched: Vec<BrickId>,
     /// Velocity removed by collision this tick (Torque `onImpact` vector).
     pub impact: Vec3,
+    /// Each collision's collider and the speed into its surface before the
+    /// collision stopped it (Torque `Player::updatePos` `bd`).
+    pub hits: Vec<(ColliderHandle, f32)>,
 }
 impl Player {
     /// Feet are chosen by the server's map spawn service.
@@ -949,7 +952,7 @@ impl Player {
                 {
                     contacts.insert(id);
                 }
-                normals.push(Vec3::from(c.hit.normal1.to_array()));
+                normals.push((c.handle, Vec3::from(c.hit.normal1.to_array())));
             },
         );
         let mut moved = Vec3::from(motion.translation.to_array());
@@ -989,12 +992,14 @@ impl Player {
         let intended = velocity * dt;
         let climbed = moved.y > intended.y.max(0.0) + 0.01;
         // Remove blocked velocity, avoiding accumulation against ceilings/walls.
-        for normal in normals {
+        let mut hits = Vec::new();
+        for (handle, normal) in normals {
             let into = velocity.dot(normal);
             if into >= 0.0 {
                 continue;
             }
             if normal.y >= walkable {
+                hits.push((handle, -into));
                 if was_grounded && !jumped {
                     // Walking onto a ramp turns the run along it at the same speed.
                     let speed = velocity.length();
@@ -1010,12 +1015,33 @@ impl Player {
             if climbed && expected > 0.0 && moved.dot(across) >= expected * 0.5 {
                 continue;
             }
+            hits.push((handle, -into));
             velocity -= normal * into;
         }
         // Like v20's run surface, support persists while jetting until thrust lifts
         // the player: jetting along the floor keeps ground friction.
         self.state.grounded = grounded && !rising && !jumped;
         if self.state.grounded {
+            // The controller can settle a landing without reporting the
+            // floor; Torque reports it as a collision, so find what was hit.
+            if velocity.y < 0.0
+                && let Some((handle, hit)) = query.cast_shape(
+                    &t.pose(feet + moved, self.state.crouched),
+                    Vector::new(0.0, -1.0, 0.0),
+                    shape.as_ref(),
+                    ShapeCastOptions {
+                        max_time_of_impact: t.ground_snap,
+                        compute_impact_geometry_on_penetration: true,
+                        ..Default::default()
+                    },
+                )
+            {
+                let normal = Vec3::from(hit.normal1.to_array());
+                let into = velocity.dot(normal);
+                if into < 0.0 {
+                    hits.push((handle, -into));
+                }
+            }
             velocity.y = 0.0;
         }
         self.state.feet = (feet + moved).to_array();
@@ -1052,6 +1078,7 @@ impl Player {
             landed: !was_grounded && self.state.grounded,
             touched,
             impact: before_collision - velocity,
+            hits,
         })
     }
     /// A swept sphere keeps the third-person camera in front of architecture.
