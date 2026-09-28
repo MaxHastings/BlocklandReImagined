@@ -1090,6 +1090,8 @@ pub enum UiUpdate {
     },
     ClearPrints,
     PlantError(PlantError),
+    /// A sound caption ("[Explosion]"), shown while captions are on.
+    Caption(String),
     /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
     DamageFlash(f32),
     /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it

@@ -56,6 +56,8 @@ const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
 pub const MUTE_IN_BACKGROUND: &str = "$pref::Audio::MuteInBackground";
+/// Not a v20 setting: short captions for game sounds ("[Explosion]").
+pub const CAPTIONS: &str = "$pref::Audio::Captions";
 /// v20's Advanced "Max Draw Distance" (`SliderGraphicsDistanceMax`): caps a
 /// map's visible distance, 110 to 1000 units, 1000 by default.
 pub const VISIBLE_DISTANCE_MAX: &str = "$pref::visibleDistanceMax";
@@ -181,6 +183,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::Input::MouseInvert",
     MUTE_IN_BACKGROUND,
     TOGGLE_CROUCH,
+    CAPTIONS,
 ];
 /// Other authored controls with native behaviour.
 const SUPPORTED_CONTROLS: &[&str] = &[
@@ -598,7 +601,13 @@ fn audio_rows(v: &mut View) {
     mute.name = Some("OptAudioMuteInBackground".into());
     mute.variable = Some(MUTE_IN_BACKGROUND.into());
     mute.text = Some("Mute when in background".into());
+    let mut captions = mute.clone();
+    captions.position[1] += step;
+    captions.name = Some("OptAudioCaptions".into());
+    captions.variable = Some(CAPTIONS.into());
+    captions.text = Some("Show captions for sounds".into());
     v.add(parent, mute);
+    v.add(parent, captions);
 }
 
 /// Controls addition: a Toggle Crouch checkbox under v20's own input
@@ -2205,6 +2214,18 @@ mod tests {
         change(&mut s, &mut ui, n);
         click(&mut s, "done", &mut ui);
         assert!(saved_prefs(&mut ui).bool_or(TOGGLE_CROUCH, false));
+    }
+
+    #[test]
+    fn captions_are_an_audio_checkbox_saved_on_done() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id("OptAudioCaptions").unwrap();
+        assert!(!s.view.bool_value(n));
+        s.view.set_bool(n, true);
+        change(&mut s, &mut ui, n);
+        click(&mut s, "done", &mut ui);
+        assert!(saved_prefs(&mut ui).bool_or(CAPTIONS, false));
     }
 
     #[test]

@@ -1007,3 +1007,19 @@ fn first_run_offers_the_tutorial_then_asks_for_a_name_once() {
     assert_eq!(actions(&mut u).last(), Some(&UiAction::StartTutorial));
     assert_eq!(u.core.prefs.str_or(bri_ui::ui::NAME_PROMPT, ""), "after_tutorial");
 }
+#[test]
+fn sound_captions_show_only_when_turned_on_refresh_and_expire() {
+    let mut u = ui();
+    u.apply(UiUpdate::Caption("[Explosion]".into()));
+    assert!(u.core.captions.is_empty(), "off by default");
+    u.core
+        .prefs
+        .set_bool(bri_ui::screens::options::CAPTIONS, true);
+    for text in ["[Explosion]", "[Weapon fire]", "[Explosion]"] {
+        u.apply(UiUpdate::Caption(text.into()));
+    }
+    let lines: Vec<_> = u.core.captions.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(lines, ["[Weapon fire]", "[Explosion]"]);
+    u.update(3001);
+    assert!(u.core.captions.is_empty());
+}

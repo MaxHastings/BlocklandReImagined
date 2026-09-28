@@ -146,6 +146,32 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
 
 /// The `hud.overlay` slot: panels enabled packages declared, drawn from
 /// data (title, rows of label and value, key hints) in their own colours.
+/// Sound captions, newest last, centred above the bottom print.
+fn captions(pack: &Pack, dl: &mut DrawList, core: &Core) {
+    if core.captions.is_empty() {
+        return;
+    }
+    let Some(font) = pack
+        .data
+        .styles
+        .get("BlockChatTextProfile")
+        .and_then(|s| s.font.as_deref())
+        .and_then(|f| crate::text::Font::get(pack, f))
+    else {
+        return;
+    };
+    let (w, h) = core.logical;
+    let line = font.line_height().max(1) + 4;
+    let mut y = h - 140 - core.captions.len() as i32 * line;
+    for (text, _) in &core.captions {
+        let tw = font.width(text) + 12;
+        let x = (w - tw) / 2;
+        dl.fill(Rect::new(x, y, tw, line), [0, 0, 0, 170]);
+        font.draw(dl, (x + 6) as f32, (y + 2) as f32, text, [255, 255, 255, 255], &[]);
+        y += line;
+    }
+}
+
 fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
     use crate::api::PanelAnchor;
     let Some(font) = pack
@@ -531,5 +557,6 @@ impl Screen for Play {
         }
         hud(core).draw(pack, dl);
         package_panels(pack, dl, core);
+        captions(pack, dl, core);
     }
 }

@@ -711,6 +711,9 @@ impl App {
             self.combat.hugging.insert(*actor, None);
         }
         self.audio.cue(&cue);
+        if let Some(text) = caption(&cue, self.presented_local().map(|p| Vec3::from(p.feet))) {
+            self.ui.apply(UiUpdate::Caption(text.into()));
+        }
         // The engine explosion operation looks like v20's rocket blast.
         let cue = match &cue.kind {
             bri_sim::presentation::CueKind::Explosion { radius, .. } => bri_sim::presentation::Cue {
@@ -4104,6 +4107,27 @@ fn building_action(action: &UiAction) -> bool {
     )
 }
 
+/// The caption for a sound a player would hear from `listener`, if it is
+/// one worth reading: blasts, gunfire, cries, splashes and breaking bricks
+/// within earshot. Footsteps, plants and menu sounds get none.
+fn caption(cue: &bri_sim::presentation::Cue, listener: Option<Vec3>) -> Option<&'static str> {
+    use bri_sim::presentation::CueKind as K;
+    const EARSHOT: f32 = 80.0;
+    if listener.is_some_and(|l| l.distance(Vec3::from(cue.position)) > EARSHOT) {
+        return None;
+    }
+    Some(match &cue.kind {
+        K::Explosion { .. } => "[Explosion]",
+        K::WeaponSound { .. } => "[Weapon fire]",
+        K::Death { .. } => "[Death cry]",
+        K::Pain { cry: true, .. } => "[Cry of pain]",
+        K::Water { entered: true, speed, .. } if *speed > 4.0 => "[Splash]",
+        K::BrickKill { .. } => "[Bricks breaking]",
+        K::Teleport { .. } => "[Teleport]",
+        K::Emote { name, .. } if name == "alarm" => "[Alarm]",
+        _ => return None,
+    })
+}
 /// A ghost the server would refuse, before `v20_temp_brick` brightens it.
 const BLOCKED_GHOST: [f32; 4] = [0.6, 0.05, 0.05, 1.0];
 /// The ghost is redrawn when it moves or the bricks around it change.

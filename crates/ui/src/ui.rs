@@ -180,6 +180,9 @@ pub enum Callback {
 /// player to come back from the Tutorial, "done" once asked.
 pub const NAME_PROMPT: &str = "$pref::Player::NamePrompt";
 
+/// How long a sound caption stays, and how many show at once.
+const CAPTION_MS: u64 = 3000;
+const MAX_CAPTIONS: usize = 4;
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
 /// follows mouse Y, so positive looks down.
 const KEYBOARD_TURN: [(&str, f32, f32); 4] = [
@@ -284,6 +287,8 @@ pub struct Core {
     pub center_print: Option<(String, Option<u64>)>,
     pub bottom_print: Option<(String, Option<u64>, bool)>,
     pub plant_error: Option<(PlantError, u64)>,
+    /// Sound captions on screen and when each one goes.
+    pub captions: Vec<(String, u64)>,
     /// Current damage flash opacity (0..=0.75), fading over time.
     pub damage_flash: f32,
     pub energy: Option<f32>,
@@ -1135,6 +1140,7 @@ impl Ui {
             center_print: None,
             bottom_print: None,
             plant_error: None,
+            captions: Vec::new(),
             damage_flash: 0.0,
             energy: None,
             whiteout: 0.0,
@@ -1572,6 +1578,15 @@ impl Ui {
             UiUpdate::PerfStats(stats) => {
                 if c.perf.visible() {
                     c.perf.stats = stats;
+                }
+            }
+            UiUpdate::Caption(text) => {
+                if c.prefs.bool_or(crate::screens::options::CAPTIONS, false) {
+                    // A repeated sound refreshes its line instead of stacking.
+                    c.captions.retain(|(t, _)| *t != text);
+                    c.captions.push((text, c.time_ms + CAPTION_MS));
+                    let extra = c.captions.len().saturating_sub(MAX_CAPTIONS);
+                    c.captions.drain(..extra);
                 }
             }
             UiUpdate::FirstPerson(on) => c.first_person = on,
@@ -2123,6 +2138,7 @@ impl Ui {
         {
             c.plant_error = None;
         }
+        c.captions.retain(|(_, until)| *until > now);
         c.hud.tick(dt_ms);
         self.content.view_mut().tick(dt_ms);
         self.content.tick(dt_ms, &mut self.core);
