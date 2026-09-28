@@ -670,6 +670,18 @@ impl Session {
     ) -> Result<OwnerId> {
         self.join_inner(name, spawn, trusted_host, false, principal)
     }
+    /// Replace the host's Server Settings (v20's `$Pref::Server::*`); the
+    /// same as the host's Admin > Server Settings. Tests and tools that plant
+    /// faster than a player could raise the limits here.
+    pub fn set_server_settings(&mut self, settings: bri_admin::ServerSettings) -> Result<()> {
+        settings.validate()?;
+        self.admin.settings = settings;
+        Ok(())
+    }
+    /// The host's current Server Settings.
+    pub fn server_settings(&self) -> &bri_admin::ServerSettings {
+        &self.admin.settings
+    }
     /// `name`, or `name 2`, `name 3`... when a connected player has it.
     fn unique_name(&self, name: String) -> String {
         let taken = |candidate: &str| {

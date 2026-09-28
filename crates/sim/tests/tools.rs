@@ -975,6 +975,12 @@ fn undo_is_owner_scoped_lifo_spends_removed_bricks_and_survives_authenticated_re
 #[test]
 fn undo_retains_only_the_511_entries_of_a_512_slot_queue() {
     let mut s = session(vec![], false);
+    // Fifty plants a second: above v20's default plant rate.
+    s.set_server_settings(bri_admin::ServerSettings {
+        bricks_per_second: 1000,
+        ..Default::default()
+    })
+    .unwrap();
     let owner = s
         .join("Builder".into(), Vec3::new(-3.0, 0.05, 0.0), false)
         .unwrap();

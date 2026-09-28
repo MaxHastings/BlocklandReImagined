@@ -73,6 +73,13 @@ fn session() -> Session {
     session
         .set_event_catalog(bri_events::testing::catalog(), Vec::new())
         .unwrap();
+    // The campaign's clients plant faster than v20's default plant rate.
+    session
+        .set_server_settings(bri_admin::ServerSettings {
+            bricks_per_second: 100_000,
+            ..Default::default()
+        })
+        .unwrap();
     session
 }
 
