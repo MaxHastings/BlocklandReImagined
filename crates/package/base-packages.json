@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "packages": [
-    { "id": "v20-map-bundle", "version": "16.0.0", "side": "shared", "dir": "map-bundle-016", "role": "map_bundle" },
+    { "id": "v20-map-bundle", "version": "17.0.0", "side": "shared", "dir": "map-bundle-017", "role": "map_bundle" },
     { "id": "v20-bricks", "version": "4.0.0", "side": "shared", "dir": "stock-catalog-004", "role": "brick_catalog" },
     { "id": "v20-brick-geometry", "version": "7.0.0", "side": "shared", "dir": "maps-pass-007", "role": "geometry" },
     { "id": "v20-effects", "version": "4.0.0", "side": "shared", "dir": "effects-pass-004", "role": "effects" },

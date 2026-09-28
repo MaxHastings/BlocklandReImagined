@@ -913,7 +913,7 @@ fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires locally converted map-bundle-016; produces offscreen evidence only"]
+#[ignore = "requires locally converted map-bundle-017; produces offscreen evidence only"]
 fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = root.join("artifacts/persistent-scene");
@@ -921,7 +921,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let gpu = Gpu::new()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut reports = vec![];
-    let bundle_path = root.join("content/map-bundle-016");
+    let bundle_path = root.join("content/map-bundle-017");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle_path.join("bundle.json"))?)?;
     let maps = bundle["maps"].as_array().unwrap();

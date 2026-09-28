@@ -22,7 +22,7 @@ fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
     let artifact = workspace.join("artifacts/native-client-foliage");
     std::fs::create_dir_all(&artifact)?;
     let map = "v20/add-ons/map_bedroom/bedroom.mis";
-    let native = bri_sim::map::NativeMap::load(&root.join("map-bundle-016"), map)?;
+    let native = bri_sim::map::NativeMap::load(&root.join("map-bundle-017"), map)?;
     let mut building = Building::new(
         bri_sim::definitions::Definitions {
             entries: BTreeMap::new(),
@@ -42,7 +42,7 @@ fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
     let load_ms = prepared.elapsed_ms;
     let mut foliage = ClientFoliage::load(&root.join("foliage-pack-001"))?;
     foliage.set_map(prepared);
-    let map_scene = load_map_bundle(&root.join("map-bundle-016"), map)?;
+    let map_scene = load_map_bundle(&root.join("map-bundle-017"), map)?;
     let scene = map_scene.scene;
     let gpu = Headless::new()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;

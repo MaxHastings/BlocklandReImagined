@@ -2,14 +2,14 @@
 use anyhow::Result;
 
 #[test]
-#[ignore = "needs generated content (map-bundle-016); set BRI_CONTENT"]
+#[ignore = "needs generated content (map-bundle-017); set BRI_CONTENT"]
 fn bedroom_carpet_is_drawn_on_the_plate_lattice() -> Result<()> {
     let content = std::env::var_os("BRI_CONTENT").map_or_else(
         || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content"),
         std::path::PathBuf::from,
     );
     let map = bri_render::scene_loader::load_map_bundle(
-        &content.join("map-bundle-016"),
+        &content.join("map-bundle-017"),
         "v20/add-ons/map_bedroom/bedroom.mis",
     )?;
     let data = map.scene;

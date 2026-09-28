@@ -11,7 +11,7 @@ fn content() -> PathBuf {
 
 /// (datablock, sound, indestructable) per breakable, in scene order.
 fn shapes(map: &str) -> Vec<(String, Option<String>, bool, usize)> {
-    let native = NativeMap::load(&content().join("map-bundle-016"), map).unwrap();
+    let native = NativeMap::load(&content().join("map-bundle-017"), map).unwrap();
     native
         .breakables
         .iter()
@@ -30,7 +30,7 @@ fn shapes(map: &str) -> Vec<(String, Option<String>, bool, usize)> {
 }
 
 #[test]
-#[ignore = "needs generated content (map-bundle-016); set BRI_CONTENT"]
+#[ignore = "needs generated content (map-bundle-017); set BRI_CONTENT"]
 fn bedroom_windows_and_bulb_break_but_kitchen_windows_do_not() {
     for map in [
         "v20/add-ons/map_bedroom/bedroom.mis",
@@ -74,7 +74,7 @@ fn bedroom_windows_and_bulb_break_but_kitchen_windows_do_not() {
 }
 
 #[test]
-#[ignore = "needs generated content (map-bundle-016); set BRI_CONTENT"]
+#[ignore = "needs generated content (map-bundle-017); set BRI_CONTENT"]
 fn a_player_thrown_at_each_bedroom_shape_hits_its_glass_hard_enough() {
     use bri_sim::{
         player::{MoveInput, Player, PlayerTuning},
@@ -82,7 +82,7 @@ fn a_player_thrown_at_each_bedroom_shape_hits_its_glass_hard_enough() {
     };
     use glam::Vec3;
     let native = NativeMap::load(
-        &content().join("map-bundle-016"),
+        &content().join("map-bundle-017"),
         "v20/add-ons/map_bedroom/bedroom.mis",
     )
     .unwrap();
