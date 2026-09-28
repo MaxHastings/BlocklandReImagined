@@ -55,6 +55,8 @@ pub struct Poly {
     pub kind: Kind,
     /// The owning collider's `user_data`.
     pub tag: u128,
+    /// The owning collider.
+    pub collider: ColliderHandle,
     min: Vec3,
     max: Vec3,
 }
@@ -110,6 +112,8 @@ fn rv(v: Vec3) -> Vector {
 #[derive(Default)]
 pub struct Soup {
     pub origin: Vec3,
+    /// The collider whose shape is being added.
+    current: ColliderHandle,
     points: Vec<Vec3>,
     pub polys: Vec<Poly>,
 }
@@ -129,7 +133,8 @@ impl Soup {
         // Rapier's traversal order depends on insertion history; collide in
         // tag (brick id) order so client and server resolve ties identically.
         found.sort_by_key(|(h, c)| (c.user_data, h.into_raw_parts()));
-        for (_, collider) in found {
+        for (handle, collider) in found {
+            soup.current = handle;
             let kind = if collider.shape().as_heightfield().is_some() {
                 Kind::Terrain
             } else if collider
@@ -160,22 +165,33 @@ impl Soup {
             let corner = |x: f32, y: f32, z: f32| to(rv(h * Vec3::new(x, y, z)));
             let faces = [
                 [(1., -1., -1.), (1., 1., -1.), (1., 1., 1.), (1., -1., 1.)],
-                [(-1., -1., 1.), (-1., 1., 1.), (-1., 1., -1.), (-1., -1., -1.)],
+                [
+                    (-1., -1., 1.),
+                    (-1., 1., 1.),
+                    (-1., 1., -1.),
+                    (-1., -1., -1.),
+                ],
                 [(-1., 1., -1.), (-1., 1., 1.), (1., 1., 1.), (1., 1., -1.)],
-                [(-1., -1., 1.), (-1., -1., -1.), (1., -1., -1.), (1., -1., 1.)],
+                [
+                    (-1., -1., 1.),
+                    (-1., -1., -1.),
+                    (1., -1., -1.),
+                    (1., -1., 1.),
+                ],
                 [(-1., -1., 1.), (1., -1., 1.), (1., 1., 1.), (-1., 1., 1.)],
-                [(1., -1., -1.), (-1., -1., -1.), (-1., 1., -1.), (1., 1., -1.)],
+                [
+                    (1., -1., -1.),
+                    (-1., -1., -1.),
+                    (-1., 1., -1.),
+                    (1., 1., -1.),
+                ],
             ];
             for face in faces {
                 let verts = face.map(|(x, y, z)| corner(x, y, z));
                 self.push(&verts, None, kind, tag);
             }
         } else if let Some(c) = shape.as_convex_polyhedron() {
-            let points: Vec<Vec3> = c
-                .points()
-                .iter()
-                .map(|p| to(*p))
-                .collect();
+            let points: Vec<Vec3> = c.points().iter().map(|p| to(*p)).collect();
             let adjacent = c.vertices_adj_to_face();
             for face in c.faces() {
                 let normal = v3(pose.rotation * face.normal);
@@ -211,7 +227,13 @@ impl Soup {
             let half = (aabb.maxs - aabb.mins) * 0.5;
             let center = (aabb.maxs + aabb.mins) * 0.5;
             let boxed = Cuboid::new(half);
-            self.add_shape(&boxed, &(*pose * Pose::from_translation(center)), kind, tag, region);
+            self.add_shape(
+                &boxed,
+                &(*pose * Pose::from_translation(center)),
+                kind,
+                tag,
+                region,
+            );
         }
     }
     fn push(&mut self, verts: &[Vec3], normal: Option<Vec3>, kind: Kind, tag: u128) {
@@ -236,6 +258,7 @@ impl Soup {
             normal,
             kind,
             tag,
+            collider: self.current,
             min,
             max,
         });
@@ -327,6 +350,7 @@ pub struct Collision {
     pub point: Vec3,
     pub kind: Kind,
     pub tag: u128,
+    pub collider: ColliderHandle,
 }
 
 #[derive(Debug)]
@@ -390,10 +414,7 @@ fn collide(
         max: bounds.max + vector,
     });
     for poly in &soup.polys {
-        if !accept(poly)
-            || !swept.overlaps(poly.min, poly.max)
-            || poly.normal.dot(heading) > 0.0
-        {
+        if !accept(poly) || !swept.overlaps(poly.min, poly.max) || poly.normal.dot(heading) > 0.0 {
             continue;
         }
         let verts = soup.verts(poly);
@@ -428,6 +449,7 @@ fn collide(
                     point,
                     kind: poly.kind,
                     tag: poly.tag,
+                    collider: poly.collider,
                 },
             ));
         }
@@ -535,7 +557,13 @@ pub struct Contact {
     pub normal: Option<Vec3>,
     pub tag: Option<u128>,
 }
-pub fn find_contact(soup: &Soup, feet: Vec3, half_width: f32, run_cos: f32, jump_cos: f32) -> Contact {
+pub fn find_contact(
+    soup: &Soup,
+    feet: Vec3,
+    half_width: f32,
+    run_cos: f32,
+    jump_cos: f32,
+) -> Contact {
     contact_local(soup, feet - soup.origin, half_width, run_cos, jump_cos)
 }
 fn contact_local(soup: &Soup, feet: Vec3, half_width: f32, run_cos: f32, jump_cos: f32) -> Contact {
@@ -565,10 +593,10 @@ fn step(
     feet: &mut Vec3,
     max_step: &mut f32,
     offset: Vec3,
-    half_width: f32,
-    height: f32,
-    step_reach: f32,
+    contact_y: f32,
+    m: &Mover,
 ) -> bool {
+    let (half_width, height, step_reach) = (m.half_width, m.height, m.step_reach);
     let at = *feet + offset;
     let bounds = Box3 {
         min: Vec3::new(at.x - half_width, at.y, at.z - half_width),
@@ -595,7 +623,13 @@ fn step(
         }
     }
     let rise = best - feet.y;
-    if best >= feet.y && rise < *max_step {
+    // v20 accepts a zero step (`>=`), TGE only a rise (`>`). With the 0.01
+    // back-off equal to sMinFaceDistance, the floor a fall just reached sits at
+    // the feet and qualifies only by float noise; stepping onto it loops the
+    // move to its retry limit and cancels the landing's impact. Measured from
+    // the contact point (before the back-off, which is scaled here), only
+    // vertices above the feet count, as in TGE.
+    if best >= feet.y && best > contact_y + MIN_FACE_DISTANCE && rise < *max_step {
         feet.y = best;
         *max_step -= rise;
         true
@@ -633,6 +667,9 @@ pub struct Moved {
     pub feet: Vec3,
     /// Tags of every polygon the box hit.
     pub touched: Vec<u128>,
+    /// Each blocking hit's collider and the speed into its surface before
+    /// the hit stopped it (`bd`, what v20 passes to `onImpact`), in order.
+    pub hit: Vec<(ColliderHandle, f32)>,
     /// The last blocking polygon faced straight down (v20 0x8A2, which
     /// `canJump` refuses on).
     pub ceiling: bool,
@@ -660,6 +697,7 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
     let mut max_step = m.max_step;
     let mut first_normal = Vec3::ZERO;
     let mut touched = Vec::new();
+    let mut colliders = Vec::new();
     let mut ceiling = false;
     let mut count = 0;
     while count < MOVE_RETRIES {
@@ -687,7 +725,9 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         start += *velocity * dt;
         time -= dt;
         // Back off 0.01 (per Torque tick) along the move.
-        start -= *velocity * (m.back_off / speed).min(dt);
+        let backed = *velocity * (m.back_off / speed).min(dt);
+        start -= backed;
+        let contact_y = start.y + backed.y;
         // v20 steps only from a run surface, over hits low enough, off walls
         // or walkable slopes, and never off terrain.
         if contact_local(soup, start, half, m.run_cos, m.jump_cos).run
@@ -700,10 +740,13 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
                 soup,
                 &mut start,
                 &mut max_step,
-                *velocity * time,
-                half,
-                m.height,
-                m.step_reach,
+                // The step probe looks from the contact, not the backed-off
+                // box: at 120 Hz a player pushing off a riser from rest moves
+                // less per tick than the back-off, so probing from behind it
+                // never reaches the tread and v20's stair climb stalls.
+                *velocity * time + backed,
+                contact_y,
+                m,
             )
         {
             count += 1;
@@ -711,20 +754,17 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         }
         ceiling = list.hits.iter().any(|c| c.normal.y <= -0.99);
         // The hit most parallel to the face that struck it.
-        let hit = list
-            .hits
-            .iter()
-            .fold(list.hits[0], |best, c| if c.face_dot > best.face_dot { *c } else { best });
+        let hit = list.hits.iter().fold(list.hits[0], |best, c| {
+            if c.face_dot > best.face_dot { *c } else { best }
+        });
         touched.extend(list.hits.iter().map(|c| c.tag));
         let into = -velocity.dot(hit.normal);
+        colliders.push((hit.collider, into));
         let dv = hit.normal * (into + m.elasticity);
         *velocity += dv;
         if count == 0 {
             first_normal = hit.normal;
-        } else if count == 1
-            && dv.dot(first_normal) < 0.0
-            && hit.normal.dot(first_normal) < 0.0
-        {
+        } else if count == 1 && dv.dot(first_normal) < 0.0 && hit.normal.dot(first_normal) < 0.0 {
             // Re-aim along the crease between the two planes.
             let crease = hit.normal.cross(first_normal);
             let mut length = crease.length();
@@ -744,6 +784,7 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
     Moved {
         feet: start,
         touched,
+        hit: colliders,
         ceiling,
     }
 }

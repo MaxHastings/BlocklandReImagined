@@ -69,6 +69,9 @@ sub-millimetre sweeps keep full float precision far from the origin, and
 sorted by collider tag (brick id) so client and server agree on ties. Rapier
 still owns the bodies; the motor only reads collider shapes and poses. The
 kinematic player body is still targeted each tick so other bodies see it.
+Every polygon remembers its collider, and `MotionEvents::hits` lists each
+blocking hit's collider and its speed into the surface (v20's `onImpact`
+`bd`), which breakable glass uses.
 
 **updateMove (0x5AE2A0).** Gravity always applies. `findContact` (0x5AA570)
 takes the flattest polygon in a slab 0.013 (`sTractionDistance`) under the
@@ -99,7 +102,16 @@ slope, and never off terrain: the highest static vertex at the destination
 under the remaining `maxStepHeight` with none of the others within the
 player's own height above it. Only the player's height must be clear, so
 players step onto plates and bricks under ceilings they fit beneath, and
-walk onto low ramps by stepping onto their vertices as in v20.
+walk onto low ramps by stepping onto their vertices as in v20. The step
+probe looks ahead from the point of contact rather than the backed-off box:
+at 120 Hz a player pushing off a riser from rest moves less per tick than
+the back-off, so probing from behind it never reached the tread and 1x brick
+stairs stalled. A step must also rise above the contact point, as in TGE (v20 also
+accepts a zero step): otherwise the floor a fall reaches counts as a step,
+the move loops to its retry limit and the landing's impact is lost.
+`grounded` means a run surface under the feet and not still closing on it
+faster than 1 u/s, so a fall that stops within the contact slab lands, and
+impacts, on the next sweep.
 
 **120 Hz against Torque's 32 ms tick.** Per-tick epsilons are rescaled so
 behaviour per second matches: the 0.002/0.0021 rest values and the 0.01

@@ -14,14 +14,18 @@ use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use std::path::Path;
 
-const SLIDES: &str = "worlds-pass-005/0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c.world.json";
+const SLIDES: &str =
+    "worlds-pass-005/0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c.world.json";
 const RAMPS: [&str; 2] = [
     "v20/brick/brick1x2x3rampdata",
     "v20/brick/brick2x2x3rampdata",
 ];
 
+/// A ramp brick's position and quarter turns.
+type Ramp = ([f32; 3], u8);
+
 /// The save's simulation, and its 72 degree ramps (position, quarter turns).
-fn slides() -> anyhow::Result<(Simulation, Vec<([f32; 3], u8)>)> {
+fn slides() -> anyhow::Result<(Simulation, Vec<Ramp>)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
     let world = bri_world::persistence::load(&root.join(SLIDES))?;
     let ramps = world
@@ -32,10 +36,8 @@ fn slides() -> anyhow::Result<(Simulation, Vec<([f32; 3], u8)>)> {
         })
         .map(|b| (b.position, b.quarter_turns))
         .collect();
-    let definitions = Definitions::load(
-        &root.join("stock-catalog-004"),
-        &root.join("maps-pass-007"),
-    )?;
+    let definitions =
+        Definitions::load(&root.join("stock-catalog-004"), &root.join("maps-pass-007"))?;
     let sim = Simulation::new(
         world,
         definitions,
@@ -58,14 +60,14 @@ struct Lane {
 }
 
 /// Two 72 degree ramps at the same height facing each other two studs apart.
-fn lanes(ramps: &[([f32; 3], u8)]) -> Vec<Lane> {
+fn lanes(ramps: &[Ramp]) -> Vec<Lane> {
     let mut out: Vec<Lane> = vec![];
     for (a, ta) in ramps {
         let facing = facing(*ta);
         let partner = Vec3::from(*a) + facing * 2.0;
-        let paired = ramps.iter().any(|(b, tb)| {
-            (Vec3::from(*b) - partner).length() < 0.01 && (*tb + 4 - *ta) % 4 == 2
-        });
+        let paired = ramps
+            .iter()
+            .any(|(b, tb)| (Vec3::from(*b) - partner).length() < 0.01 && (*tb + 4 - *ta) % 4 == 2);
         let feet = Vec3::from(*a) + facing - Vec3::Y * 0.43;
         if paired && !out.iter().any(|l| (l.feet - feet).length() < 0.01) {
             out.push(Lane {
@@ -206,4 +208,3 @@ fn slide_lanes_carry_a_player_down_hands_free() -> anyhow::Result<()> {
     assert!(descents[descents.len() - 1] > 20.0);
     Ok(())
 }
-

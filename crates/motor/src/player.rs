@@ -3,13 +3,15 @@ use anyhow::{Result, ensure};
 /// A brick or other contact id (`user_data`), and a player owner id.
 type BrickId = u64;
 type OwnerId = u64;
+use crate::torque;
 use glam::Vec3;
 use rapier3d::parry::query::ShapeCastOptions;
-use crate::torque;
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Speed into a run surface below which a player in contact has landed.
+const LANDING_SPEED: f32 = 1.0;
 /// Original engine tick; v20 per-tick constants are converted with it.
 pub const TORQUE_TICK: f32 = 0.032;
 /// `PlayerStandardArmor.minJumpSpeed`/`maxJumpSpeed`: upward speeds over
@@ -357,7 +359,13 @@ impl Player {
         feet: Vec3,
         tuning: PlayerTuning,
     ) -> Result<Self> {
-        Self::spawn_tagged(physics, owner, (1_u128 << 64) | u128::from(owner), feet, tuning)
+        Self::spawn_tagged(
+            physics,
+            owner,
+            (1_u128 << 64) | u128::from(owner),
+            feet,
+            tuning,
+        )
     }
     /// A character body for something other than a player (package
     /// entities): the same motor and shape, with the caller's collider tag so
@@ -937,8 +945,14 @@ impl Player {
             .collect();
         self.state.feet = moved.feet.to_array();
         self.state.velocity = velocity.to_array();
-        // Standing on a run surface after the move (v20's run-surface contact).
-        self.state.grounded = torque::find_contact(&soup, moved.feet, half, run_cos, jump_cos).run;
+        // Standing on a run surface after the move (v20's run-surface contact),
+        // and not still closing on it: a fall that stops within the contact
+        // slab of a floor lands (and impacts) on the next tick's sweep.
+        let end_contact = torque::find_contact(&soup, moved.feet, half, run_cos, jump_cos);
+        self.state.grounded = end_contact.run
+            && end_contact
+                .normal
+                .is_some_and(|n| velocity.dot(n) > -LANDING_SPEED);
         // Grounded idle motion need not produce a sweep callback. Include nearby
         // solid contacts so on-touch is an entry event, not a movement event.
         let end_pose = t.pose(Vec3::from(self.state.feet), self.state.crouched);
@@ -971,7 +985,7 @@ impl Player {
             landed: !was_grounded && self.state.grounded,
             touched,
             impact: before_collision - velocity,
-            hits: Vec::new(),
+            hits: moved.hit,
         })
     }
     /// A swept sphere keeps the third-person camera in front of architecture.
