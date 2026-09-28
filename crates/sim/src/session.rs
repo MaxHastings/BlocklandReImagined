@@ -1471,6 +1471,21 @@ impl Session {
                 brick.quarter_turns = quarter_turns;
                 brick.color = color;
                 brick.print = default_print.map(ContentRef::Resolved);
+                // `$Pref::Server::RandomBrickColor`: the brick tool colours
+                // each brick from six of the palette's first eight, not the
+                // builder's paint (`getRandom(5)` in `BrickImage::onFire`).
+                let palette = self.simulation.state().palette.len();
+                let choices: Vec<u8> = [0, 1, 3, 4, 5, 7]
+                    .into_iter()
+                    .filter(|&c| usize::from(c) < palette)
+                    .collect();
+                if self.admin.settings.random_brick_color && !choices.is_empty() {
+                    self.spawn_seed = self
+                        .spawn_seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    brick.color = choices[(self.spawn_seed >> 33) as usize % choices.len()];
+                }
                 // `ServerCmdPlantBrick`: the server's brick limit, then the
                 // plant rate for non-administrators, then TooFarDistance.
                 let settings = &self.admin.settings;
