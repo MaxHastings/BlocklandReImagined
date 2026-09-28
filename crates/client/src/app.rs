@@ -4985,17 +4985,31 @@ impl PlatformApp for App {
                         .filter(|t| t.key().is_some())
                         .map(|t| t.to_string())
                         .or_else(|| {
-                            self.lan_hosts.get(address).map(|certificate| {
+                            // The same order as joining: a saved pin before
+                            // an (unsigned) LAN listing, so starring a
+                            // spoofed LAN row cannot pin its sender.
+                            let pins: BTreeMap<String, Vec<u8>> =
+                                read_small_json(&self.state_dir.join("trusted-hosts.json"))
+                                    .unwrap_or_default();
+                            let (pin, _) = crate::servers::join_pin(
+                                None,
+                                pins.get(&key).cloned(),
+                                self.lan_hosts.get(address),
+                            );
+                            let HostPin::Certificate(certificate) = pin else {
+                                return None;
+                            };
+                            Some(
                                 bri_net::invite::JoinTarget::Direct {
                                     host: target_host(address),
                                     port: address
                                         .rsplit_once(':')
                                         .and_then(|(_, p)| p.parse().ok())
                                         .unwrap_or(bri_net::invite::DEFAULT_PORT),
-                                    key: Some(bri_net::invite::host_key(certificate)),
+                                    key: Some(bri_net::invite::host_key(&certificate)),
                                 }
-                                .to_string()
-                            })
+                                .to_string(),
+                            )
                         });
                     let name = self
                         .ui
