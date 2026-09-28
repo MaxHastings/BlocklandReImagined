@@ -718,6 +718,25 @@ impl Building {
         Ok(nearest)
     }
 
+    /// `GuiShapeNameHud::onRender`'s line of sight (blocklandv20.exe
+    /// 0x527c99): mask 0x200001d, the map plus `FxBrickObjectType`, which
+    /// only bricks with raycasting on carry. Players and vehicles never hide
+    /// a name.
+    pub fn name_visible(&self, eye: Vec3, target: Vec3) -> Result<bool> {
+        ensure!(
+            eye.is_finite() && target.is_finite(),
+            "Invalid name sight ray"
+        );
+        let delta = target - eye;
+        let distance = delta.length();
+        if distance <= 0.002 {
+            return Ok(true);
+        }
+        Ok(self
+            .trace(eye, delta / distance, distance - 0.001, &self.index)?
+            .is_none())
+    }
+
     /// Cosmetic line of sight uses visible bricks independently of tool-ray flags.
     /// Authored collision shapes approximate opaque surfaces; translucent/material
     /// coverage and dynamic actors remain fidelity work.
@@ -1352,6 +1371,28 @@ mod tests {
         building.sync_world(&world).unwrap();
         assert!(building.effect_visible(9, eye, target).unwrap());
         assert!(!building.effect_visible(9, Vec3::Y, -Vec3::Y).unwrap());
+    }
+    #[test]
+    fn names_hide_behind_raycasting_bricks_and_the_map() {
+        let mut building = controller();
+        let mut world = world();
+        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 1.1, 0.25], 1);
+        brick.colliding = false;
+        brick.visible = false;
+        world.bricks.insert(1, brick);
+        building.sync_world(&world).unwrap();
+        let eye = Vec3::new(0.5, 1.1, 2.);
+        let head = Vec3::new(0.5, 1.1, -2.);
+        assert!(!building.name_visible(eye, head).unwrap());
+        assert!(!building.name_visible(head, eye).unwrap());
+        assert!(building.name_visible(eye + Vec3::Y * 3., head + Vec3::Y * 3.).unwrap());
+        // v20's mask is FxBrickObjectType: a brick with raycasting off does
+        // not hide a name, visible or not.
+        world.bricks.get_mut(&1).unwrap().raycast = false;
+        world.bricks.get_mut(&1).unwrap().visible = true;
+        building.sync_world(&world).unwrap();
+        assert!(building.name_visible(eye, head).unwrap());
+        assert!(!building.name_visible(Vec3::Y, -Vec3::Y).unwrap(), "the ground");
     }
     #[test]
     fn extended_loaded_colors_remain_usable_for_paint_without_rebuilding_queries() {

@@ -122,7 +122,10 @@ fn markup(v: &mut View, r: Rect, label: &str, style: &str) -> NodeId {
 /// Rebuilt in a bounded temporary view: no detached controls accumulate as
 /// inventory, paint or chat changes. The authored PlayGui remains persistent.
 /// `PlayGui_ShapeNameHud`: names centered above each anchor in the HUD's
-/// `BlockChatTextProfile` font and `textColor` (1 1 0.909), faded by distance.
+/// `BlockChatTextProfile` font. `GuiShapeNameHud::drawName`
+/// (blocklandv20.exe 0x527630) ignores the control's `textColor`: it draws
+/// the name eight times one pixel around in [`name_outline`], then once in
+/// the shape's name colour, all at the distance fade.
 fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
     let Some(font) = pack
         .data
@@ -138,9 +141,18 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
         if alpha == 0 {
             continue;
         }
-        let x = tag.x - font.width(&tag.text) as f32 / 2.0;
-        let y = tag.y - font.line_height() as f32;
-        font.draw(dl, x.round(), y.round(), &tag.text, [255, 255, 232, alpha], &[]);
+        let x = (tag.x - font.width(&tag.text) as f32 / 2.0).round();
+        let y = (tag.y - font.line_height() as f32).round();
+        let [r, g, b] = crate::api::name_outline(tag.color);
+        for dx in [-1.0, 0.0, 1.0] {
+            for dy in [-1.0, 0.0, 1.0] {
+                if dx != 0.0 || dy != 0.0 {
+                    font.draw(dl, x + dx, y + dy, &tag.text, [r, g, b, alpha], &[]);
+                }
+            }
+        }
+        let [r, g, b] = tag.color;
+        font.draw(dl, x, y, &tag.text, [r, g, b, alpha], &[]);
     }
 }
 

@@ -975,6 +975,22 @@ pub struct NameTag {
     pub text: String,
     /// Distance fade, 0..=1.
     pub opacity: f32,
+    /// `ShapeBase::setShapeNameColor`: white, or the player's mini-game colour.
+    #[serde(default = "white_name")]
+    pub color: [u8; 3],
+}
+fn white_name() -> [u8; 3] {
+    [255; 3]
+}
+/// The outline `GuiShapeNameHud::drawName` (blocklandv20.exe 0x527630) draws
+/// under a name: white under a dark name (red and green both below 0.3),
+/// otherwise black.
+pub fn name_outline(color: [u8; 3]) -> [u8; 3] {
+    if f32::from(color[0]) / 255.0 < 0.3 && f32::from(color[1]) / 255.0 < 0.3 {
+        [255; 3]
+    } else {
+        [0; 3]
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrustInvitation {

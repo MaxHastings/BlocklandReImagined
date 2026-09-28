@@ -21,6 +21,11 @@ const COLORS: [(&str, [u8; 3]); 10] = [
     ("Black", [0, 0, 0]),
 ];
 
+/// `$MiniGameColorI[index]`, the colour a member's name takes.
+pub fn color_rgb(index: u8) -> Option<[u8; 3]> {
+    COLORS.get(usize::from(index)).map(|(_, rgb)| *rgb)
+}
+
 pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
     ensure!(
         (1..=30).contains(&rules.respawn_seconds)

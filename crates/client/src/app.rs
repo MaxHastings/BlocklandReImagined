@@ -3822,9 +3822,30 @@ impl Drop for App {
 }
 /// Eye of the camera in control: the free camera itself, an orbit around the
 /// spied player, the chase camera, or the player's own eye.
+/// A name's distance fade in `GuiShapeNameHud::onRender` (blocklandv20.exe
+/// 0x5278f0). Blockland replaces the control's `distanceFade` with the
+/// shape's name distance (8192 unless `setShapeNameDistance`): names show
+/// out to `min(nameDistance, visibleDistance)` and fade from
+/// `min(fogDistance, max(0.8 × nameDistance, nameDistance - 5))`. None past
+/// the far end.
+pub fn name_opacity(distance: f32, fog_distance: f32, visible_distance: f32) -> Option<f32> {
+    const NAME_DISTANCE: f32 = 8192.0;
+    let far = NAME_DISTANCE.min(visible_distance);
+    let fade = fog_distance.min((NAME_DISTANCE * 0.8).max(NAME_DISTANCE - 5.0));
+    if distance <= 0.0 || distance > far {
+        return None;
+    }
+    Some(if distance < fade {
+        1.0
+    } else {
+        1.0 - (distance - fade) / (far - fade)
+    })
+}
 /// `GuiShapeNameHud::onRender`: every other living player's name above their
-/// eye point (`verticalOffset` 0.85), hidden behind terrain and interiors and
-/// faded over the last 90% of the visible distance (`distanceFade` 0.1).
+/// eye point (`verticalOffset` 0.85), hidden behind the map and raycasting
+/// bricks ([`crate::building::Building::name_visible`]), faded by
+/// [`name_opacity`] and drawn in the mini-game colour a member's player is
+/// given at spawn (`GameConnection::createPlayer`), white otherwise.
 #[allow(clippy::too_many_arguments)]
 fn name_tags(
     view: &network::View,
@@ -3832,14 +3853,12 @@ fn name_tags(
     building: Option<&crate::building::Building>,
     view_projection: glam::Mat4,
     camera: Vec3,
-    visible_distance: f32,
+    (fog_distance, visible_distance): (f32, f32),
     size: (f32, f32),
     scale: f32,
     controlling_body: bool,
 ) -> Vec<bri_ui::api::NameTag> {
     const VERTICAL_OFFSET: f32 = 0.85;
-    const DISTANCE_FADE: f32 = 0.1;
-    let fade_distance = visible_distance * DISTANCE_FADE;
     let mut tags = Vec::new();
     for (owner, name) in &view.names {
         if (*owner == view.owner && controlling_body)
@@ -3851,11 +3870,11 @@ fn name_tags(
             continue;
         };
         let target = view.archetypes.eye(state);
-        let distance = target.distance(camera);
-        if distance <= 0.0 || distance > visible_distance {
+        let Some(opacity) = name_opacity(target.distance(camera), fog_distance, visible_distance)
+        else {
             continue;
-        }
-        if building.is_some_and(|b| b.map_blocks(camera, target)) {
+        };
+        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
             continue;
         }
         let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
@@ -3866,16 +3885,18 @@ fn name_tags(
         if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
             continue;
         }
-        let opacity = if distance < fade_distance {
-            1.0
-        } else {
-            1.0 - (distance - fade_distance) / (visible_distance - fade_distance)
-        };
+        let color = view
+            .minigames
+            .iter()
+            .find(|m| m.members.contains(owner))
+            .and_then(|m| crate::minigame_ui::color_rgb(m.color))
+            .unwrap_or([255; 3]);
         tags.push(bri_ui::api::NameTag {
             x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
             y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
             text: plain_chat(name),
             opacity,
+            color,
         });
     }
     tags
@@ -6220,7 +6241,7 @@ impl PlatformApp for App {
             self.building.as_ref(),
             glam::Mat4::from_cols_array(&camera.view_projection),
             eye,
-            fog_end.max(1.),
+            (fog_start.max(0.), fog_end.max(1.)),
             (frame.size.0 as f32, frame.size.1 as f32),
             self.ui.scale(),
             self.controls.observer().is_none(),
