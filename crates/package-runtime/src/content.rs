@@ -102,6 +102,11 @@ pub struct CommandDef {
     /// Only administrators may send it.
     #[serde(default)]
     pub admin: bool,
+    /// Dead players may send it too (a spectator vote, a class pick). By
+    /// default only living players can (stress campaign W4: preconditions
+    /// are declared, never left to each handler).
+    #[serde(default)]
+    pub while_dead: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

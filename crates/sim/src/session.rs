@@ -238,7 +238,10 @@ impl Command {
             | Command::Emote(_)
             | Command::Wand
             | Command::BuildGesture(_) => (true, None),
-            Command::Admin(_)
+            // The package's command declaration decides (`while_dead`);
+            // checked with the rest of the declaration in `package_command`.
+            Command::Package(_)
+            | Command::Admin(_)
             | Command::Tool(_)
             | Command::DropTool { .. }
             | Command::WeaponTrigger { .. }

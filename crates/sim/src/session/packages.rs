@@ -1037,6 +1037,12 @@ impl Session {
                 format!("`{}` is for administrators", request.command),
             ));
         }
+        if !def.while_dead && !peer.combat.alive {
+            return Err(reject(
+                "command.dead",
+                format!("Dead players cannot use `{}`", request.command),
+            ));
+        }
         if request.args.len() != def.args.len()
             || !request
                 .args
