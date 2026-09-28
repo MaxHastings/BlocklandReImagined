@@ -76,15 +76,16 @@ impl Session {
         }
         Ok(())
     }
-    /// `/realBrickCount`.
-    pub(super) fn admin_brick_count(&mut self, admin: OwnerId) {
+    /// `/brickCount` (anyone) and `/realBrickCount` (admins): the server's
+    /// bricks, told to whoever asked.
+    pub(super) fn brick_count(&mut self, asker: OwnerId) {
         let count = self.simulation.state().bricks.len();
         let text = if count == 1 {
             "1 brick".to_string()
         } else {
             format!("{count} bricks")
         };
-        self.notify(admin, Notice::Chat(text));
+        self.notify(asker, Notice::Chat(text));
     }
     /// `/cancelAllEvents`: drop every scheduled event row.
     pub(super) fn admin_cancel_all_events(&mut self, admin: OwnerId) {

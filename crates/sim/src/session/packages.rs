@@ -1689,7 +1689,18 @@ impl Session {
         request: PackageCommand,
         direction: Vec3,
     ) -> Result<Reply> {
-        let request = self.resolve_typed_command(request)?;
+        // `serverCmdBrickCount`: anyone may ask how many bricks the server
+        // has, unless an Add-On declares its own /brickCount.
+        let typed_brick_count =
+            request.package.is_empty() && request.command.eq_ignore_ascii_case("brickcount");
+        let request = match self.resolve_typed_command(request) {
+            Ok(request) => request,
+            Err(_) if typed_brick_count => {
+                self.brick_count(owner);
+                return Ok(Reply::Accepted);
+            }
+            Err(error) => return Err(error),
+        };
         let host = self
             .packages
             .as_ref()

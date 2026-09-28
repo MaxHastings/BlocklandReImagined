@@ -5325,6 +5325,8 @@ impl PlatformApp for App {
                         "clearcheckpoint" => Some(Command::ClearCheckpoint),
                         "treasurestatus" => Some(Command::TreasureStatus),
                         "wand" => Some(Command::Wand),
+                        // `serverCmdRet`: back from `/spy` to one's own body.
+                        "ret" => Some(Command::ControlPlayer),
                         // `serverCmdWtf` and `serverCmdZombie` repeat
                         // `/confusion` and `/hug`.
                         "wtf" => Some(Command::Emote("confusion".into())),

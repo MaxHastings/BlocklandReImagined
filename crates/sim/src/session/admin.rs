@@ -555,7 +555,7 @@ impl AdminRuntime {
                         GameplayCommand::HighlightBrickGroup(group) => {
                             session.highlight_brick_group(group)?;
                         }
-                        GameplayCommand::RealBrickCount => session.admin_brick_count(actor_owner),
+                        GameplayCommand::RealBrickCount => session.brick_count(actor_owner),
                         GameplayCommand::CancelAllEvents => {
                             session.admin_cancel_all_events(actor_owner)
                         }
