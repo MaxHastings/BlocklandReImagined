@@ -20,6 +20,8 @@ mod control;
 pub use control::{CameraView, ControlObject};
 mod debris;
 mod events;
+mod quotas;
+use quotas::Quota;
 mod admin_world;
 mod admin_players;
 mod trust;
