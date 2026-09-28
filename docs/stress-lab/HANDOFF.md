@@ -384,6 +384,11 @@ game with different assumptions uses it.
 4. Animate package box models (a walk bob, a turn), and let archetypes pick
    v20 shapes other than the Blockhead and horse.
 5. The windowed host's autosave (W2) lands with the first impressions work.
+6. Crowds of package entities can jam. In E29 on Windows CI, eight zombies
+   walking shoulder to shoulder toward one player pressed into each other
+   and stopped 7 m short, every run; on Linux they got through. The test
+   now sends four, spread out. Entities need separation steering (or the
+   character body a sideways give) so a horde reaches its target.
 
 ### Saturation evidence
 

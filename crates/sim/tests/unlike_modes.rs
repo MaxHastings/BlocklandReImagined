@@ -1475,9 +1475,11 @@ const ZOMBIE_ENTITY: &str = r#"{ "schema_version": 1, "name": "Zombie", "model":
   "think": "think", "think_interval": 4, "speed": 0.6, "scale": 1.0, "health": 30.0, "max_alive": 32 }"#;
 
 /// Zombies shamble toward the nearest living player and bite on contact.
+/// The wave is spread out: eight zombies shoulder to shoulder jammed each
+/// other short of the survivor on Windows (see HANDOFF's next steps).
 const ZOMBIE_SCRIPT: &str = r#"
 fn cmd_wave(player) {
-    for i in 0..8 { spawn_entity("zombies:entity/zombie", i * 3.0 - 12.0, 0.1, -20.0); }
+    for i in 0..4 { spawn_entity("zombies:entity/zombie", i * 6.0 - 9.0, 0.1, -20.0); }
 }
 fn think(z) {
     let me = me();
