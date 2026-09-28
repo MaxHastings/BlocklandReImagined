@@ -491,6 +491,15 @@ impl World {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        self.validate_header()?;
+        for b in self.bricks.values().chain(&self.unloaded) {
+            b.validate(self.palette.len())?;
+        }
+        Ok(())
+    }
+    /// Everything [`Self::validate`] checks except each brick, for callers
+    /// that validate every brick themselves as they go through them.
+    pub fn validate_header(&self) -> Result<()> {
         ensure!(
             self.schema_version == WORLD_SCHEMA,
             "Unsupported world schema"
@@ -524,9 +533,6 @@ impl World {
             self.next_brick_id > self.bricks.keys().next_back().copied().unwrap_or(0),
             "Brick ID would be reused"
         );
-        for b in self.bricks.values().chain(&self.unloaded) {
-            b.validate(self.palette.len())?;
-        }
         ensure!(
             self.owners.len() <= MAX_OWNERS && !self.owners.contains_key(&0),
             "Invalid owner table"

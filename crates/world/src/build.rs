@@ -181,8 +181,13 @@ impl LoadPlan {
         preserve_ownership: bool,
         next_owner: OwnerId,
     ) -> Result<Self> {
-        build.validate()?;
-        target.validate()?;
+        // Each brick is validated below as it is prepared; the target world
+        // is the authority's own, valid by construction.
+        ensure!(
+            build.schema_version == BUILD_SCHEMA,
+            "Unsupported native build schema"
+        );
+        build.world.validate_header()?;
         ensure!(
             load_owner > 0 && next_owner > load_owner,
             "Invalid native owner allocation"
@@ -228,6 +233,9 @@ impl LoadPlan {
         // server may have their definitions.
         let saved = build.world.bricks.into_iter().map(|(_, b)| b);
         for (offset, mut brick) in saved.chain(build.world.unloaded).enumerate() {
+            // Valid against its own colorset, so the recolor below stays
+            // inside the merged one.
+            brick.validate(build.world.palette.len())?;
             brick.recolor(|c| colors[usize::from(c)]);
             brick.owner = if !preserve_ownership {
                 load_owner
@@ -254,7 +262,6 @@ impl LoadPlan {
                 owners.insert(brick.owner, owner);
                 owner
             };
-            brick.validate(palette.len())?;
             bricks.insert(target.next_brick_id + offset as u64, brick);
         }
         Ok(Self {

@@ -76,11 +76,12 @@ impl Session {
     /// that follows a tick clears the dirty set. Reconciliation is idempotent
     /// and never resets an unchanged item's respawn clock.
     pub(super) fn reconcile_items(&mut self) -> Result<()> {
+        let changed = self.dirty.read(super::dirty::Reader::Items);
         if self.item_spawners.bounds.is_empty() {
             return Ok(());
         }
         let tick = self.simulation.state().tick;
-        for &id in &self.dirty {
+        for id in changed {
             self.item_spawners.reconcile(
                 id,
                 self.simulation.state().bricks.get(&id),

@@ -5,20 +5,28 @@
 //! batch is then published against the world as it is at that moment.
 use super::*;
 
-/// Ticks between published batches (100 ms at 120 ticks/s). Every batch
-/// is one brick delta and one client mesh update.
-const BATCH_TICKS: u64 = 12;
-/// Smallest batch, so small saves visibly build up like v20's per-brick load.
-const MIN_BATCH: usize = 25;
-/// Large saves finish in about this many batches (8 s) instead of v20's
-/// minutes.
-const TARGET_BATCHES: usize = 80;
+/// How much of each tick a load may take. A load publishes bricks until
+/// the budget is spent, so it goes as fast as the host can place bricks while
+/// every tick stays well inside its 8.3 ms. v20 planted a few bricks a tick
+/// and took minutes over a big save.
+const TICK_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
+/// Bricks placed between budget checks, and the least a tick places, so a
+/// load always moves forward however slow the host is.
+const SLICE: usize = 256;
+
+/// How fast a load goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadPace {
+    /// As many bricks as fit in [`TICK_BUDGET`] each tick.
+    Budget,
+    /// Exactly this many bricks each tick, whatever the machine: tests use
+    /// it to see a load unfold the same way every run.
+    Bricks(usize),
+}
 
 pub(super) struct Loading {
     loader: OwnerId,
     started: u64,
-    next_batch: u64,
-    batch: usize,
     palette: Vec<[f32; 4]>,
     bricks: VecDeque<Brick>,
     total: usize,
@@ -82,8 +90,6 @@ impl Session {
         self.loading = Some(Box::new(Loading {
             loader: owner,
             started: tick,
-            next_batch: tick,
-            batch: MIN_BATCH.max(total.div_ceil(TARGET_BATCHES)),
             palette,
             bricks: bricks.into(),
             total,
@@ -99,17 +105,48 @@ impl Session {
         Ok(total)
     }
 
-    /// Publish the next batch when it is due.
+    /// Choose how fast loads go ([`LoadPace::Budget`] unless set).
+    pub fn set_load_pace(&mut self, pace: LoadPace) {
+        self.load_pace = pace;
+    }
+
+    /// Publish this tick's bricks, a slice at a time until the tick's
+    /// budget is spent.
     pub(super) fn step_build_load(&mut self) -> Result<()> {
-        let tick = self.simulation.state().tick;
-        let Some(loading) = self.loading.as_deref_mut() else {
-            return Ok(());
-        };
-        if tick < loading.next_batch {
+        if self.loading.is_none() {
             return Ok(());
         }
-        loading.next_batch = tick + BATCH_TICKS;
-        let count = loading.batch.min(loading.bricks.len());
+        let started = std::time::Instant::now();
+        let mut published = 0;
+        while self.loading.as_deref().is_some_and(|l| !l.bricks.is_empty()) {
+            let slice = match self.load_pace {
+                LoadPace::Budget => SLICE,
+                LoadPace::Bricks(count) => (count - published).min(SLICE),
+            };
+            self.publish_load_slice(slice);
+            published += slice;
+            let done = match self.load_pace {
+                LoadPace::Budget => started.elapsed() >= TICK_BUDGET,
+                LoadPace::Bricks(count) => published >= count,
+            };
+            if done {
+                break;
+            }
+        }
+        // One collision refresh for the whole tick's bricks.
+        self.simulation.refresh_collisions();
+        if self.loading.as_deref().is_some_and(|l| l.bricks.is_empty()) {
+            self.end_build_load();
+        }
+        Ok(())
+    }
+
+    /// Place the next `count` bricks of the load.
+    fn publish_load_slice(&mut self, count: usize) {
+        let Some(loading) = self.loading.as_deref_mut() else {
+            return;
+        };
+        let count = count.min(loading.bricks.len());
         let bricks: Vec<Brick> = loading.bricks.drain(..count).collect();
         let loader = loading.loader;
         let palette = std::mem::take(&mut loading.palette);
@@ -136,9 +173,10 @@ impl Session {
                     bricks,
                     self.next_owner,
                 )?;
-                self.item_spawners
-                    .validate_append(self.simulation.state(), plan.bricks())?;
-                self.simulation.load_build(&actor, plan)
+                // The item capacity was checked for the whole save when the
+                // load started; a player's own item bricks meet it as they
+                // are reconciled, as they always do.
+                self.simulation.load_build_unrefreshed(&actor, plan)
             });
         let loading = self.loading.as_deref_mut().expect("load in progress");
         loading.palette = palette;
@@ -154,10 +192,6 @@ impl Session {
                 self.system_chat(format!("{error:#}"));
             }
         }
-        if self.loading.as_deref().is_some_and(|l| l.bricks.is_empty()) {
-            self.end_build_load();
-        }
-        Ok(())
     }
 
     /// `ServerLoadSaveFile_End`.

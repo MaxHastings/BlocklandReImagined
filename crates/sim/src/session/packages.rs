@@ -1967,13 +1967,13 @@ impl Session {
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
         self.deliver_loadouts();
+        let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };
         let tick = self.simulation.state().tick;
         // Bricks removed by other means (hammer, wand) are world edits too.
-        let gone: Vec<BrickId> = self
-            .dirty
+        let gone: Vec<BrickId> = changed
             .iter()
             .filter(|id| {
                 host.world
