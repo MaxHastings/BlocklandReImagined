@@ -305,6 +305,36 @@ impl Session {
         let Some(def) = world.definition(definition) else {
             return Ok(());
         };
+        // `fxDTSBrick::spawnVehicle`: the server's totals, player-type
+        // mounts (horses, boats, cannons, turrets) apart from physics
+        // vehicles (`$Pref::Server::MaxPlayerVehicles_Total` and
+        // `MaxPhysVehicles_Total`).
+        let actor = def.is_actor();
+        let settings = &self.admin.settings;
+        let (limit, noun) = if actor {
+            (settings.player_vehicles, "player-vehicle")
+        } else {
+            (settings.physics_vehicles, "physics-vehicle")
+        };
+        let count = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .iter()
+            .filter(|v| {
+                world
+                    .definition(&v.definition)
+                    .is_some_and(|d| d.is_actor() == actor)
+            })
+            .count();
+        if count >= limit as usize {
+            let text = if limit == 1 {
+                format!("\u{E000}Server is limited to 1 {noun}")
+            } else {
+                format!("\u{E000}Server is limited to {limit} {noun}s")
+            };
+            self.notify(brick.owner, Notice::Center { text, seconds: 2.0 });
+            return Ok(());
+        }
         let transform = self.spawn_transform(&brick, def);
         let game = self.owner_game(brick.owner);
         let respawn_ms = game

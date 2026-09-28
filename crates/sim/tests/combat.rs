@@ -111,7 +111,13 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     let chat = s.take_private_notices();
     assert!(chat.iter().any(|(_, n)| matches!(n, Notice::Chat(t) if t == "Alpha")));
 
-    // Leaving the minigame (after respawning) makes the same fall harmless.
+    // Outside a mini-game the host's Falling Damage decides; with it off,
+    // leaving the minigame (after respawning) makes the same fall harmless.
+    s.set_server_settings(bri_admin::ServerSettings {
+        falling_damage: false,
+        ..Default::default()
+    })
+    .unwrap();
     steps(&mut s, 130);
     s.command(a, 2, Command::Respawn).unwrap();
     s.take_private_notices();
@@ -127,6 +133,27 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     }
     assert!(s.is_alive(a));
     assert_eq!(s.vitals()[&a].health, 100.0);
+}
+
+#[test]
+fn falls_outside_minigames_follow_the_hosts_falling_damage() {
+    // v20's server/defaults.cs turns $Pref::Server::FallingDamage on.
+    for (on, survives) in [(true, false), (false, true)] {
+        let mut s = session();
+        s.set_server_settings(bri_admin::ServerSettings {
+            falling_damage: on,
+            ..Default::default()
+        })
+        .unwrap();
+        let a = s
+            .join("Alpha".into(), Vec3::new(0.0, 80.0, 0.0), false)
+            .unwrap();
+        for sequence in 1..=600 {
+            s.movement(a, sequence, MoveInput::default()).unwrap();
+            s.step().unwrap();
+        }
+        assert_eq!(s.is_alive(a), survives, "Falling Damage {on}");
+    }
 }
 
 #[test]

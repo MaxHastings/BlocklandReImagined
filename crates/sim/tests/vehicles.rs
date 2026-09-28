@@ -659,3 +659,26 @@ fn admin_drop_at_camera_carries_the_ridden_vehicle() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn the_hosts_physics_vehicle_limit_holds_back_a_spawn() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session(&root)?;
+    s.set_server_settings(bri_admin::ServerSettings {
+        physics_vehicles: 0,
+        ..Default::default()
+    })?;
+    for sequence in 1..=120 {
+        s.movement(owner, sequence, MoveInput::default())?;
+        s.step()?;
+    }
+    assert!(s.vehicle_infos().is_empty(), "no jeep past a limit of 0");
+    // The brick's owner (here the map's public group) is told why.
+    assert!(s.take_private_notices().iter().any(|(_, n)| matches!(
+        n,
+        bri_sim::session::Notice::Center { text, .. }
+            if text.ends_with("Server is limited to 0 physics-vehicles")
+    )));
+    Ok(())
+}
