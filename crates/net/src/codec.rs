@@ -4,7 +4,9 @@
 //! representation the shared types use, including adjacently tagged
 //! commands, round-trips exactly. `protocol::VERSION` pins the schema.
 //! Reliable frames are length-prefixed; server frames are also zstd
-//! compressed. Unreliable datagrams are single uncompressed messages.
+//! compressed. Unreliable datagrams are uncompressed and compact: fields by
+//! position rather than by name, several state items packed into one
+//! datagram (see `docs/audits/network-bandwidth.md`).
 //! Every length is bounded before allocating, decoding rejects trailing
 //! bytes, and server request admission accounts for body bytes through
 //! command dispatch.
@@ -53,9 +55,55 @@ pub fn decode<T: DeserializeOwned>(frame: &[u8]) -> Result<T> {
     );
     from_bytes(&decoded)
 }
-/// One unreliable datagram, bounded so it always fits a QUIC datagram frame.
+/// One unreliable datagram in the compact form, bounded so it always fits a
+/// QUIC datagram frame.
 pub fn encode_datagram<T: Serialize>(message: &T) -> Result<Vec<u8>> {
-    encode_request(message, MAX_DATAGRAM).context("Datagram exceeds budget")
+    encode_with(message, MAX_DATAGRAM, false).context("Datagram exceeds budget")
+}
+/// Largest array header [`pack_datagrams`] writes before its items.
+const ARRAY_HEADER: usize = 3;
+/// Largest item [`pack_datagrams`] carries: an item and its batch's header
+/// always fit one datagram.
+pub const MAX_DATAGRAM_ITEM: usize = MAX_DATAGRAM - ARRAY_HEADER;
+/// One item of a datagram batch in the compact form.
+pub fn encode_datagram_item<T: Serialize>(item: &T) -> Result<Vec<u8>> {
+    encode_with(item, MAX_DATAGRAM_ITEM, false).context("Datagram item exceeds budget")
+}
+/// Pack encoded items, in order, into as few datagrams as fit: each one a
+/// MessagePack array of items, decoded with `decode_datagram::<Vec<T>>`.
+/// One packet's header costs more than a pose, so this is most of the win.
+pub fn pack_datagrams<'a>(items: impl IntoIterator<Item = &'a [u8]>) -> Vec<Vec<u8>> {
+    fn finish(out: &mut Vec<Vec<u8>>, items: &mut Vec<&[u8]>) {
+        if items.is_empty() {
+            return;
+        }
+        let mut bytes = Vec::with_capacity(MAX_DATAGRAM);
+        match items.len() {
+            n @ 0..=15 => bytes.push(0x90 | n as u8),
+            n => {
+                bytes.push(0xdc);
+                bytes.extend_from_slice(&(n as u16).to_be_bytes());
+            }
+        }
+        for item in items.drain(..) {
+            bytes.extend_from_slice(item);
+        }
+        out.push(bytes);
+    }
+    let mut out = Vec::new();
+    let mut batch = Vec::new();
+    let mut size = ARRAY_HEADER;
+    for item in items {
+        debug_assert!(item.len() <= MAX_DATAGRAM_ITEM);
+        if size + item.len() > MAX_DATAGRAM {
+            finish(&mut out, &mut batch);
+            size = ARRAY_HEADER;
+        }
+        size += item.len();
+        batch.push(item);
+    }
+    finish(&mut out, &mut batch);
+    out
 }
 pub fn decode_datagram<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     ensure!(bytes.len() <= MAX_DATAGRAM, "Oversized datagram");
@@ -142,6 +190,11 @@ pub async fn write_small_request<T: Serialize>(
 /// Bound the serialization buffer as it grows, before any stream bytes are
 /// written. A rejected local request leaves the framed stream synchronized.
 pub fn encode_request<T: Serialize>(request: &T, limit: usize) -> Result<Vec<u8>> {
+    encode_with(request, limit, true)
+}
+/// Named (self-describing maps) or compact (positional arrays) MessagePack,
+/// bounded as it grows.
+fn encode_with<T: Serialize>(request: &T, limit: usize, named: bool) -> Result<Vec<u8>> {
     ensure!(limit <= MAX_DECODED, "Invalid serialization limit");
     struct Bounded {
         bytes: Vec<u8>,
@@ -166,7 +219,11 @@ pub fn encode_request<T: Serialize>(request: &T, limit: usize) -> Result<Vec<u8>
         limit,
         overflowed: false,
     };
-    let result = rmp_serde::encode::write_named(&mut writer, request);
+    let result = if named {
+        rmp_serde::encode::write_named(&mut writer, request)
+    } else {
+        rmp_serde::encode::write(&mut writer, request)
+    };
     ensure!(!writer.overflowed, "Oversized request");
     result.context("Could not encode message")?;
     Ok(writer.bytes)
@@ -311,10 +368,26 @@ mod tests {
             owner: u64::MAX,
             eye: [f32::MAX; 3],
         });
-        for datagram in [pose, vehicle, orb] {
-            let bytes = encode_datagram(&datagram).unwrap();
-            assert_eq!(decode_datagram::<Datagram>(&bytes).unwrap(), datagram);
-        }
+        let items = [pose, vehicle, orb];
+        let encoded: Vec<_> = items
+            .iter()
+            .map(|d| encode_datagram_item(d).unwrap())
+            .collect();
+        let packed = pack_datagrams(encoded.iter().map(Vec::as_slice));
+        assert_eq!(packed.len(), 1);
+        assert_eq!(decode_datagram::<Vec<Datagram>>(&packed[0]).unwrap(), items);
+        // Many items split into full datagrams, in order.
+        let many: Vec<_> = (0..40)
+            .flat_map(|_| encoded.iter().map(Vec::as_slice))
+            .collect();
+        let packed = pack_datagrams(many.iter().copied());
+        assert!(packed.len() > 1 && packed.iter().all(|d| d.len() <= MAX_DATAGRAM));
+        let decoded: Vec<Datagram> = packed
+            .iter()
+            .flat_map(|d| decode_datagram::<Vec<Datagram>>(d).unwrap())
+            .collect();
+        assert_eq!(decoded.len(), 120);
+        assert_eq!(decoded[..3], items);
         let decoded: Movement = decode_datagram(&bytes).unwrap();
         decoded.validate().unwrap();
         assert_eq!(decoded.sequenced().last().unwrap().0, u64::MAX);

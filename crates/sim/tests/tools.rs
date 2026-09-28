@@ -1714,3 +1714,16 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound() {
         ]
     );
 }
+
+#[test]
+fn a_joining_player_learns_the_music_the_host_offers() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(to, n)| *to == owner && matches!(n, bri_sim::session::Notice::MusicTracks(_)))
+    );
+}

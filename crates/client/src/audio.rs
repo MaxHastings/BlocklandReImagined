@@ -336,9 +336,7 @@ impl ClientAudio {
         }
         for (key, (sound, position)) in wanted {
             if let Some((_, handle)) = self.image_loops.get(key) {
-                let result = self
-                    .runtime
-                    .set_source_position(*handle, *position);
+                let result = self.runtime.set_source_position(*handle, *position);
                 self.record(result);
             } else if self.image_loops.len() < 64 {
                 match self.runtime.play(sound, Placement::World(*position)) {
@@ -352,9 +350,18 @@ impl ClientAudio {
     }
     /// `ProjectileData.sound`: a loop that flies with each projectile and
     /// stops when it explodes or expires.
-    pub fn sync_projectiles(&mut self, projectiles: &[bri_weapons::Projectile], pack: &bri_weapons::Pack) {
+    pub fn sync_projectiles(
+        &mut self,
+        projectiles: &[bri_weapons::Projectile],
+        pack: &bri_weapons::Pack,
+    ) {
         let live: BTreeSet<u64> = projectiles.iter().map(|p| p.id).collect();
-        for id in self.projectiles.difference(&live).copied().collect::<Vec<_>>() {
+        for id in self
+            .projectiles
+            .difference(&live)
+            .copied()
+            .collect::<Vec<_>>()
+        {
             self.projectiles.remove(&id);
             let result = self.runtime.despawn(projectile_entity(id));
             self.record(result);
@@ -362,7 +369,9 @@ impl ClientAudio {
         for p in projectiles {
             let position = p.position.to_array();
             if self.projectiles.contains(&p.id) {
-                let result = self.runtime.update_entity(projectile_entity(p.id), position);
+                let result = self
+                    .runtime
+                    .update_entity(projectile_entity(p.id), position);
                 self.record(result);
                 continue;
             }
@@ -506,6 +515,12 @@ mod tests {
         assert_eq!(breaks(&audio), Some(1), "within 80 ms of the last");
         audio.cue(&kill(32, 60, 1));
         assert_eq!(breaks(&audio), Some(2), "80 ms later");
+        // A 250-brick blast arrives as three of v20's 100-brick explosion
+        // messages in one tick; the client gate makes it one sound.
+        for brick in 1..=250 {
+            audio.cue(&kill(100 + brick, 120, brick));
+        }
+        assert_eq!(breaks(&audio), Some(3));
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
         Ok(())

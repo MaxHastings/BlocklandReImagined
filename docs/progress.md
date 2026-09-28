@@ -3347,6 +3347,29 @@ the first copy). No wire change.
   machine, Custom runs it), `cargo test -p bri-sim --lib blueprint`,
   `cargo test -p bri-client --lib a_copied_build`. Not seen in a window:
   Max's playtest.
+
+## 2026-09-28 Network bandwidth audit
+
+Max's rule: never spend bandwidth on things that are cosmetic and heavy.
+`docs/audits/network-bandwidth.md` has the inventory, the before and after
+table and the follow-ups. Measured over real QUIC on loopback with the host's
+new per-kind counters (`ServerHandle::traffic`): eight idle players cost the
+host 653 KB/s of upload and each player 86 KB/s, because every pose went to
+every player 40 times a second with its field names and a packet of its own.
+Now: state datagrams are compact and packed; other players' poses are a
+smaller `RemotePose` with quantized velocity and look; still players, parked
+vehicles and camera orbs settle then go out once a second; empty updates run
+at 10 Hz with absent fields left out; vitals, inventories, avatars and held
+images go only for the players that changed; projectiles are sent when they
+appear or leave their flight and every client coasts them with
+`bri_weapons::coast`; moving Add-On entities send only where they are; a
+client drawing above 60 fps no longer sends twice the input. Eight idle
+players: 653 to 14 KB/s from the host. Eight running: 657 to 137. A rocket
+fight: 849 to 46. Each player's upload: 33 to 13 KB/s. Protocol 46. Evidence:
+`cargo test -p bri-net --test bandwidth` (idle, explosion and rocket-fight
+byte budgets), `-- --ignored --nocapture` for the table, `cargo test -p
+bri-net --lib stream` (settle and keepalive, coasted projectiles match the
+host's flight, entity moves, held input merging).
 - 2026-09-28 Smooth replicated motion (branch `claude/smoothing`). Max saw
   the football and soccer ball move at the server's update rate. Audit of
   what the client drew between host updates: the local player is predicted
@@ -3553,3 +3576,50 @@ Evidence: `cargo test -p bri-sim --test tools`, `cargo test -p bri-ui
 --test admin_screens` (the new test fails without the fix), `cargo test
 -p bri-client --lib audio -- --include-ignored`, clippy clean on the three
 crates. Not run: the gate; Max's interactive check.
+
+## 2026-09-28 Admin orb flies at v20 speeds
+
+- Max: holding left click in the v20 free camera flies faster; ours did not.
+  v20's scripts set `$Camera::movementSpeed = 40`; its fly-mode tick
+  (blocklandv20.exe 0x588514) doubles that while trigger 0 (left click) is
+  held, else halves it for trigger 1 (`altTrigger`, unbound in v20), else
+  quarters it for trigger 3 (crouch, left shift). Walk (`c`) scales each
+  axis by 0.4, the axes are not normalized (diagonals are faster), and v20
+  binds no `moveup`/`movedown`, so space does nothing and shift slows
+  instead of descending. Right click is jet, which the camera ignores.
+- Ours flew at 30 (8 walking), used space/shift to climb and sink, and
+  swallowed left click on the camera. `Controls::fly_speed` now follows the
+  exe; left click is recorded while a camera has control and forgotten
+  when control returns to the body.
+Evidence: `cargo test -p bri-client --lib controls`
+(`free_camera_flies_at_v20_speeds`, `leaving_the_camera_forgets_a_held_fire`).
+Needs Max's playtest: F8, fly with and without left click and shift.
+## 2026-09-28 v20 parity: last missing rows built
+
+- Branch `claude/v20-parity`. Every Part 1 row of `docs/audits/v20-parity.md`
+  that was missing is now built (100 present, 5 partial, 0 missing, 7 other
+  lanes, 8 dropped of 120). This round: v20's schedule, light and emitter,
+  item and projectile quotas per builder (`fbc263ef`; "Too many events at
+  once!" as `ProcessInputEvent`); Load Bricks' colour warning with Nearest
+  Match and Add More Colors (`c3ad84a0`); Random Brick Color's next colour
+  on the ghost and `/clearinventory` (`c72cc900`); a joiner's wrench lists
+  only the host's Music Files (`2ce1ecd2`).
+- Dropped, each with a v20 reason in its audit row: Replace Current Color
+  Set (v20 needed it for a 64-colour set; ours holds 256 and the replicated
+  palette only grows), Render My Player, and the Misc quota (explosions are
+  instantaneous here).
+- Protocol additions for Gate to number: `Notice::TempBrickColor(u8)` and
+  `Notice::MusicTracks(BTreeSet<String>)`.
+- Evidence: `cargo test -p bri-sim -p bri-events -p bri-client -p bri-net
+  -p bri-ui`; `cargo test --release -p bri-sim --test pong --test
+  events_native --test special_bricks --test stock_saves_native --
+  --ignored`; `cargo test --release -p bri-client --test app_flow --test
+  multiplayer -- --include-ignored`; clippy clean on the touched crates.
+  None seen in a visible window yet. Maxwell's checks: load a save made
+  with other colours (the Color Warning should ask); host with Random Brick
+  Color on and watch the ghost change colour after each plant.
+Merge with main 1286fc3f6: the exe's 80 ms client gate replaces the
+bandwidth lane's one-sound-per-100-bricks grouping (300b1530) as the only
+break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
+-p bri-client --lib audio -- --include-ignored`, `cargo test -p bri-sim
+--test tools --test brick_damage -- --include-ignored` green.

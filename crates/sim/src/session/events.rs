@@ -421,13 +421,14 @@ impl Session {
         if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
             return Ok(());
         }
+        // v20 splits a rocket's brick damage in two: `onCollision` knocks
+        // out only the brick it hit, and `onExplode` searches the radius.
         let mut hit: Vec<BrickId> = Vec::new();
-        if impact.direct
-            && let Some(brick) = target
-        {
-            hit.push(brick);
-        }
-        if impact.radius > 0.0 {
+        if let Some(brick) = target {
+            if impact.direct {
+                hit.push(brick);
+            }
+        } else if impact.radius > 0.0 {
             let reach = Vec3::splat(impact.radius);
             hit.extend(
                 self.simulation
@@ -447,7 +448,9 @@ impl Session {
             .minigames
             .respawn_delay(game, mg::RespawnObject::Brick)
             .unwrap_or(3600);
-        for brick in hit.into_iter().take(64) {
+        // v20's `onExplode` knocks out every eligible brick in the radius; it
+        // has no cap, and only batches its notices (clients' audio does too).
+        for brick in hit {
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
             };
@@ -493,7 +496,7 @@ impl Session {
             let blast = super::debris::BrickBlast {
                 origin: position,
                 force: impact.force,
-                radius: if impact.radius > 0.0 {
+                radius: if target.is_none() && impact.radius > 0.0 {
                     impact.radius
                 } else {
                     0.02

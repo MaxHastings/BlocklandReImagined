@@ -378,6 +378,26 @@ pub struct Projectile {
     #[serde(default)]
     pub heading: Option<Vec3>,
 }
+/// Vertical speed a projectile loses each tick of flight (`gravityMod`);
+/// none unless it is ballistic.
+pub fn fall_per_tick(d: &crate::ProjectileDef) -> f32 {
+    if d.ballistic {
+        9.81 * d.gravity / 120.0
+    } else {
+        0.0
+    }
+}
+/// One tick of free flight, exactly as the host moves a projectile that hits
+/// nothing. Clients coast replicated projectiles with it between the host's
+/// corrections, so a projectile's flight costs no bandwidth.
+pub fn coast(p: &mut Projectile, fall: f32) {
+    p.age = p.age.saturating_add(1);
+    if p.stuck {
+        return;
+    }
+    p.velocity.y -= fall;
+    p.position += p.velocity * (1.0 / 120.0);
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Drop {
     #[serde(default)]
@@ -464,6 +484,15 @@ impl WeaponsWorld {
     }
     pub fn projectiles(&self) -> impl Iterator<Item = &Projectile> {
         self.projectiles.values()
+    }
+    /// [`fall_per_tick`] of every projectile that falls, by definition.
+    pub fn projectile_falls(&self) -> BTreeMap<String, f32> {
+        self.pack
+            .projectiles
+            .iter()
+            .map(|(id, d)| (id.clone(), fall_per_tick(d)))
+            .filter(|(_, fall)| *fall != 0.0)
+            .collect()
     }
     pub fn drops(&self) -> impl Iterator<Item = &Drop> {
         self.drops.values()
@@ -1335,6 +1364,8 @@ impl WeaponsWorld {
         }
         true
     }
+    /// One tick of a projectile's flight. [`coast`] is the same motion when
+    /// it hits nothing.
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
         let d = self.pack.projectiles[&p.definition].clone();
         p.age += 1;
@@ -1347,9 +1378,7 @@ impl WeaponsWorld {
         if p.stuck {
             return true;
         }
-        if d.ballistic {
-            p.velocity.y -= 9.81 * d.gravity / 120.0;
-        }
+        p.velocity.y -= fall_per_tick(&d);
         let mut remaining = 1.0 / 120.0;
         for _ in 0..4 {
             let end = p.position + p.velocity * remaining;

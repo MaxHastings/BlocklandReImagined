@@ -36,6 +36,8 @@ pub struct ToolUi {
     inspection: Option<Inspection>,
     /// The host's wrench event catalog; empty until installed.
     events: Option<bri_events::Catalog>,
+    /// Every installed music loop; the wrench lists those the host offers.
+    music: Vec<Choice>,
 }
 
 impl ToolUi {
@@ -136,6 +138,7 @@ impl ToolUi {
             variants,
             inspection: None,
             events: None,
+            music: Vec::new(),
         })
     }
     pub fn server_catalog(&self) -> ToolCatalog {
@@ -198,10 +201,22 @@ impl ToolUi {
             choices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
             choices
         };
-        self.datablocks.insert("Music".into(), menu(sounds));
+        self.music = menu(sounds);
+        self.datablocks.insert("Music".into(), self.music.clone());
         self.datablocks.insert("Vehicle".into(), menu(vehicles));
         self.invalidate();
         Ok(())
+    }
+    /// The wrench's Music list shows only the loops the host offers (its
+    /// Music Files), as v20 clients knew only the host's music datablocks.
+    pub fn offer_music(&mut self, offered: &std::collections::BTreeSet<String>) {
+        let music = self
+            .music
+            .iter()
+            .filter(|c| offered.contains(&c.id))
+            .cloned()
+            .collect();
+        self.datablocks.insert("Music".into(), music);
     }
     /// Install the wrench event catalog and the datablock menus only events
     /// use: sounds, projectiles and player types.
@@ -846,7 +861,27 @@ mod tests {
             variants: [("plate".into(), WrenchVariant::Normal)].into(),
             inspection: None,
             events: Some(events()),
+            music: Vec::new(),
         }
+    }
+    #[test]
+    fn the_wrench_lists_only_the_music_the_host_offers() {
+        let mut ui = fixture();
+        let loops = vec![
+            ("music/bass".to_string(), "Bass 1".to_string()),
+            ("music/rock".to_string(), "Rock".to_string()),
+        ];
+        ui.install_special(loops, vec![]).unwrap();
+        assert_eq!(ui.datablocks["Music"].len(), 2);
+        ui.offer_music(&["music/rock".to_string()].into());
+        let listed: Vec<_> = ui.datablocks["Music"]
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(listed, ["Rock"]);
+        // The next host's list starts again from every installed loop.
+        ui.offer_music(&["music/bass".to_string(), "music/rock".to_string()].into());
+        assert_eq!(ui.datablocks["Music"].len(), 2);
     }
     fn events() -> bri_events::Catalog {
         use bri_events::{InputDef, OutputDef, Param};
