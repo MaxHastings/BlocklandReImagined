@@ -557,3 +557,41 @@ fn press_up_to_repeat_chat_recalls_sent_lines() {
     assert_eq!(press(&mut u, Key::Down), "there");
     assert_eq!(press(&mut u, Key::Down), "");
 }
+
+#[test]
+fn ml_text_switches_fonts_colours_and_margins_like_the_help_pages() {
+    use bri_ui::text::{MlRun, font_named, layout_ml, ml_rich_runs};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let (Some(small), Some(bold)) = (
+        font_named(&pack, "arial_14"),
+        font_named(&pack, "arial bold_20"),
+    ) else {
+        return;
+    };
+    let lines = layout_ml(
+        &pack,
+        &small,
+        "<font:Arial Bold:20>Title\n<lmargin%:10><font:Arial:14>Press <color:0000FF>B<color:000000> now",
+        300,
+        bri_ui::schema::Justify::Left,
+    );
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].height, bold.line_height());
+    assert_eq!((lines[0].indent, lines[1].indent), (0, 30));
+    // The second line carries the bold font it starts in, then switches.
+    let runs = ml_rich_runs(&lines[1].text);
+    assert_eq!(runs[0], MlRun::Font("arial bold_20"));
+    assert!(runs.contains(&MlRun::Rgb([0, 0, 255, 255])));
+    // A font the pack lacks keeps the current one.
+    let odd = layout_ml(
+        &pack,
+        &small,
+        "<font:Nope:99>x",
+        300,
+        bri_ui::schema::Justify::Left,
+    );
+    assert_eq!(ml_rich_runs(&odd[0].text), vec![MlRun::Text("x")]);
+}

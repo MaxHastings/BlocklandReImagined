@@ -525,15 +525,17 @@ impl View {
         let Some(font) = Self::profile_font(pack, profile) else {
             return 0;
         };
-        text::layout_ml(&font, text, width, Justify::Left)
+        text::layout_ml(pack, &font, text, width, Justify::Left)
             .iter()
             .map(|line| {
-                text::ml_runs(&line.text)
+                text::ml_rich_runs(&line.text)
                     .iter()
-                    .filter(|(bitmap, _)| *bitmap)
-                    .filter_map(|(_, id)| pack.image_size(id))
+                    .filter_map(|run| match run {
+                        text::MlRun::Bitmap(id) => pack.image_size(id),
+                        _ => None,
+                    })
                     .map(|(_, h)| h as i32)
-                    .fold(font.line_height(), i32::max)
+                    .fold(line.height, i32::max)
             })
             .sum()
     }
@@ -726,45 +728,62 @@ impl View {
             .or(style.font_color)
             .unwrap_or(geom::BLACK);
         let mut y = r.y;
-        for line in text::layout_ml(&font, text, r.w, Justify::Left) {
-            let runs = text::ml_runs(&line.text);
+        // Each line starts in the profile's font and colour; the line's own
+        // markers (carried from the line before) switch them.
+        for line in text::layout_ml(pack, &font, text, r.w, Justify::Left) {
+            let runs = text::ml_rich_runs(&line.text);
             let bitmap_width: i32 = runs
                 .iter()
-                .filter(|(bitmap, _)| *bitmap)
-                .filter_map(|(_, id)| pack.image_size(id))
+                .filter_map(|run| match run {
+                    text::MlRun::Bitmap(id) => pack.image_size(id),
+                    _ => None,
+                })
                 .map(|(w, _)| w as i32)
                 .sum();
             let width = line.width + bitmap_width;
+            let left = r.x + line.indent;
             let mut x = match line.justify {
-                Justify::Left => r.x,
-                Justify::Center => r.x + (r.w - width) / 2,
+                Justify::Left => left,
+                Justify::Center => left + (r.w - line.indent - width) / 2,
                 Justify::Right => r.right() - width,
             };
-            let mut height = font.line_height();
-            for (bitmap, run) in runs {
-                if bitmap {
-                    if let Some((w, h)) = pack.image_size(run) {
-                        dl.image(
-                            TexKey::Image(run.to_string()),
-                            [0.0, 0.0, w as f32, h as f32],
-                            [x as f32, y as f32, w as f32, h as f32],
-                            geom::WHITE,
-                            crate::draw::Filter::Linear,
-                        );
-                        x += w as i32;
-                        height = height.max(h as i32);
+            let mut height = line.height;
+            let (mut run_font, mut run_color) = (font, color);
+            for run in runs {
+                match run {
+                    text::MlRun::Bitmap(image) => {
+                        if let Some((w, h)) = pack.image_size(image) {
+                            dl.image(
+                                TexKey::Image(image.to_string()),
+                                [0.0, 0.0, w as f32, h as f32],
+                                [x as f32, y as f32, w as f32, h as f32],
+                                geom::WHITE,
+                                crate::draw::Filter::Linear,
+                            );
+                            x += w as i32;
+                            height = height.max(h as i32);
+                        }
                     }
-                } else {
-                    font.draw_outlined(
-                        dl,
-                        x as f32,
-                        y as f32,
-                        run,
-                        color,
-                        style.font_outline,
-                        &style.font_colors,
-                    );
-                    x += font.width(run);
+                    text::MlRun::Font(id) => {
+                        if let Some(f) = text::font_named(pack, id) {
+                            run_font = f;
+                        }
+                    }
+                    text::MlRun::Rgb(rgb) => run_color = rgb,
+                    text::MlRun::Text(run) => {
+                        // Glyphs sit on the line's baseline.
+                        let top = y + line.height - run_font.line_height();
+                        run_font.draw_outlined(
+                            dl,
+                            x as f32,
+                            top as f32,
+                            run,
+                            run_color,
+                            style.font_outline,
+                            &style.font_colors,
+                        );
+                        x += run_font.width(run);
+                    }
                 }
             }
             y += height;
