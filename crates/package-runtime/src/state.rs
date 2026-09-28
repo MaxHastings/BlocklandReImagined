@@ -12,6 +12,23 @@ use std::collections::BTreeMap;
 pub const STORE_SCHEMA: u32 = 1;
 const MAX_VALUE_BYTES: usize = 4096;
 const MAX_STORE_BYTES: usize = 64 * 1024 * 1024;
+/// State one player may hold in one package.
+pub const MAX_PLAYER_STATE_BYTES: usize = 64 * 1024;
+/// A package's server-wide state.
+pub const MAX_GLOBAL_STATE_BYTES: usize = 256 * 1024;
+/// All package state together, as counted by [`stored_size`]: the store
+/// file's limit less room for its framing, so anything admitted can be
+/// saved (stress campaign W7).
+pub const MAX_STATE_BYTES: usize = MAX_STORE_BYTES - 1024 * 1024;
+
+/// What one map of values adds to the store file, including its key and
+/// punctuation: the unit package state is budgeted in.
+pub fn stored_size(values: &BTreeMap<String, Value>) -> usize {
+    if values.is_empty() {
+        return 0;
+    }
+    serde_json::to_vec(values).map_or(usize::MAX, |b| b.len()) + 96
+}
 
 /// The durable key a player's package state is stored under.
 ///
@@ -77,6 +94,18 @@ struct SavedStore {
 }
 
 impl Store {
+    /// Every namespace's state as [`stored_size`] counts it.
+    pub fn stored_size(&self) -> usize {
+        self.namespaces
+            .iter()
+            .map(|(id, ns)| {
+                id.len()
+                    + 64
+                    + stored_size(&ns.global)
+                    + ns.players.values().map(stored_size).sum::<usize>()
+            })
+            .sum()
+    }
     pub fn namespace(&self, package: &str) -> Option<&Namespace> {
         self.namespaces.get(package)
     }
@@ -122,7 +151,7 @@ impl Store {
         out
     }
     pub fn encode(&self) -> Result<Vec<u8>> {
-        let bytes = serde_json::to_vec_pretty(&SavedStore {
+        let bytes = serde_json::to_vec(&SavedStore {
             schema_version: STORE_SCHEMA,
             store: self.clone(),
         })?;

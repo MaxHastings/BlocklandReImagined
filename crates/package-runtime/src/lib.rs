@@ -19,6 +19,16 @@
 //!   them,
 //! - declarative client **HUD panels** and **box models** bound to replicated
 //!   state. Clients never receive or run package code.
+//!
+//! Every call has its own operation budget ([`script::Budget`]), and the
+//! server bounds what calls add up to by origin, so no one package or player
+//! can take capacity everyone needs: script work the engine runs (thinks,
+//! hooks, generation) is a per-package share of each tick, a player's
+//! commands a per-player share, and destruction, chat lines, entity slots
+//! and state bytes each have a per-package (or per-player) allowance. A
+//! call past a share waits or is refused with a named reason (`command.busy`,
+//! `state.budget`); state is budgeted against the save file's limit
+//! ([`state::MAX_STATE_BYTES`]) so admitted state can always be saved.
 pub mod content;
 pub mod manifest;
 pub mod noise;

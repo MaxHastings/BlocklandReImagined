@@ -33,7 +33,8 @@ impl Budget {
             Self::Command => 200_000,
             Self::Think => 100_000,
             Self::Tick => 400_000,
-            Self::Generate => 4_000_000,
+            // One chunk is generated per tick, so its budget fits a tick.
+            Self::Generate => 400_000,
         }
     }
 }
@@ -502,8 +503,17 @@ fn sandbox() -> Engine {
         })
     });
     engine.on_debug(|_, _, _| {});
+    engine.on_progress(|operations| {
+        OPERATIONS.with(|o| o.set(operations));
+        None
+    });
     register_api(&mut engine);
     engine
+}
+
+thread_local! {
+    /// Operations the running call has used so far.
+    static OPERATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Compiled scripts for every package with behaviour.
@@ -599,6 +609,11 @@ impl Runtime {
     pub fn has_script(&self, package: &str) -> bool {
         self.scripts.contains_key(package)
     }
+    /// Script operations the last [`call`](Self::call) used, whether it
+    /// succeeded or not: what the engine charges to the caller's share.
+    pub fn last_operations(&self) -> u64 {
+        OPERATIONS.with(std::cell::Cell::get)
+    }
     /// Run one function. On error nothing of the call is kept.
     pub fn call(&mut self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
         let ast =
@@ -606,6 +621,7 @@ impl Runtime {
                 Diagnostic::error("script.none", "package has no script").at(package)
             })?;
         self.engine.set_max_operations(call.budget.operations());
+        OPERATIONS.with(|o| o.set(0));
         let previous = CURRENT.with(|c| {
             c.borrow_mut().replace(Invocation {
                 snapshot: call.snapshot,

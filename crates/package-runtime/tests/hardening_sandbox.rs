@@ -9,7 +9,7 @@ use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
     ops::{CAPABILITIES, Op, authorize},
     script::{Budget, Call, PlayerView, Runtime, Snapshot},
-    state::{Namespace, check_value},
+    state::{self, Namespace, check_value},
 };
 use serde_json::json;
 use std::{
@@ -426,28 +426,35 @@ fn player_state_is_only_for_connected_players() {
     }
 }
 
-/// A namespace grown to the per-value and key-count limits for many players
-/// still saves and loads. 256 declared keys of 4 KiB for 70 durable players
-/// is ~70 MiB, over the 64 MiB store cap: expected is a per-package or
-/// per-player byte budget enforced at commit, so a save never fails.
+/// State admitted up to the engine's state budget still saves: the budget
+/// (`MAX_STATE_BYTES`, counted by `stored_size` at every commit) is derived
+/// from the store file's limit (finding H2-F1: 70 players at the per-value
+/// and key-count limits made ~70 MiB of state, which could not be saved).
 #[test]
-#[ignore = "finding H2-F1: no per-package/per-player state budget; reachable state exceeds the 64 MiB store cap and fails to save"]
 fn grown_state_still_saves() {
     let value = json!("x".repeat(4000));
     check_value(&value).unwrap();
     let mut store = Store::default();
-    let ns = store.namespace_mut("probe");
-    for p in 0..70u8 {
-        let mut values = BTreeMap::new();
-        for k in 0..256 {
-            values.insert(format!("k{k}"), value.clone());
-        }
-        ns.players.insert(PlayerKey::principal(&[p; 32]), values);
+    let mut values = BTreeMap::new();
+    for k in 0..15 {
+        values.insert(format!("k{k}"), value.clone());
     }
+    let per_player = state::stored_size(&values);
+    assert!(per_player <= state::MAX_PLAYER_STATE_BYTES);
+    let players = (state::MAX_STATE_BYTES - 1024) / (per_player + 80);
+    for p in 0..players as u32 {
+        let mut key = [0u8; 32];
+        key[..4].copy_from_slice(&p.to_le_bytes());
+        store
+            .namespace_mut("probe")
+            .players
+            .insert(PlayerKey::principal(&key), values.clone());
+    }
+    assert!(store.stored_size() <= state::MAX_STATE_BYTES);
     let encoded = store.encode();
     assert!(
         encoded.is_ok(),
-        "state reachable through valid commits cannot be saved: {:#}",
+        "state within the admission budget cannot be saved: {:#}",
         encoded.unwrap_err()
     );
 }

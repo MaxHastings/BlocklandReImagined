@@ -338,7 +338,6 @@ fn timed(f: impl FnOnce()) -> Duration {
 /// throttled, not every player slowed. Today every due think runs in the
 /// same tick, each with its own 100 000-operation budget, with no aggregate.
 #[test]
-#[ignore = "finding H2-F6: no per-tick CPU budget across think calls; 256 legal thinks run in one tick"]
 fn many_heavy_thinks_keep_the_tick_budget() {
     let mut s = session(vec![
         Spec::server(
@@ -368,13 +367,12 @@ fn many_heavy_thinks_keep_the_tick_budget() {
     assert!(took < STALL, "one tick of package thinking took {took:?}");
 }
 
-/// A world generator that spends most of its (legal) 4 000 000-operation
-/// Generate budget per chunk, while a player stands where no chunk exists
-/// yet. Streaming is one chunk per tick, but that one call has no time
-/// budget: expected is that a tick stays under [`STALL`] (generation spread
-/// or cut), not that one chunk may stall every player.
+/// A world generator that spends most of its (legal) Generate budget per
+/// chunk, while a player stands where no chunk exists yet. Streaming is one
+/// chunk per tick, so the Generate budget is sized to fit a tick (it was
+/// 4 000 000 operations, ~156 ms, when this was finding H2-F6): the tick
+/// stays under [`STALL`].
 #[test]
-#[ignore = "finding H2-F6: chunk generation has an operation budget far above a tick; one legal chunk stalls the tick"]
 fn chunk_generation_keeps_the_tick_budget() {
     let mut s = session(vec![
         Spec::server(
@@ -386,7 +384,7 @@ fn chunk_generation_keeps_the_tick_budget() {
                 // Near the origin: cheap, so install stays fast.
                 if cx.abs() > 1 || cz.abs() > 1 {
                     let n = 0;
-                    for i in 0..1200000 { n += i; }
+                    for i in 0..80000 { n += i; }
                 }
                 [[cx * 4, 0, cz * 4, 0]]
             }
@@ -418,7 +416,6 @@ fn chunk_generation_keeps_the_tick_budget() {
 /// at most 10 over 60 ticks) instead of burning 400 000 operations per tick
 /// forever.
 #[test]
-#[ignore = "finding H2-F7: a package failing every on_tick is re-run forever; no quarantine or back-off"]
 fn failing_on_tick_is_quarantined() {
     let mut s = session(vec![Spec::server(
         "spinner",
@@ -476,7 +473,6 @@ fn failing_think_backs_off() {
 /// per-player script budget per tick or window (the player is throttled with
 /// a named rejection), keeping the tick under [`STALL`].
 #[test]
-#[ignore = "finding H2-F8: package commands have no per-player script budget; 60 heavy commands run in one tick"]
 fn rapid_fire_commands_are_throttled() {
     let mut s = session(vec![Spec::server(
         "grinder",
@@ -513,7 +509,6 @@ fn rapid_fire_commands_are_throttled() {
 /// so state and saves stay bounded; today ~800 KB per player is committed,
 /// and ~260 such durable players exceed the 256 MiB save decode limit.
 #[test]
-#[ignore = "finding H2-F1: no per-player/per-package state byte budget; one command commits ~800 KB"]
 fn player_state_has_a_byte_budget() {
     let keys: serde_json::Map<String, Value> = (0..200)
         .map(|i| (format!("k{i}"), json!({ "default": 0 })))
@@ -1017,7 +1012,6 @@ fn packages_cannot_remove_other_players_builds() {
 /// Expected: a per-call or per-tick destruction budget (assumed: at most
 /// 4 096 bricks per call) and the call finishing within 2 s even in debug.
 #[test]
-#[ignore = "finding H2-F13: 1024 explosions per call x 256 bricks each: one call can level the whole generated world"]
 fn one_call_cannot_level_the_world() {
     let mut s = session(vec![Spec::server(
         "quarry",
@@ -1062,7 +1056,6 @@ fn one_call_cannot_level_the_world() {
 /// cannot spawn anything. Expected: a per-package entity budget that leaves
 /// room for other packages.
 #[test]
-#[ignore = "finding H2-F14: no per-package entity budget; one package can take all 1024 entity slots"]
 fn one_package_cannot_take_every_entity_slot() {
     let mut horde = Spec::server(
         "horde",
@@ -1100,9 +1093,10 @@ fn one_package_cannot_take_every_entity_slot() {
             .send(&mut s, pkg("horde", "fill", vec![PackageArg::Int(k)]))
             .unwrap();
     }
+    // The horde gets its share: every slot but the pet package's reserve.
     assert_eq!(
         s.package_stats().entities,
-        1024,
+        1024 - 64,
         "{:?}",
         s.package_diagnostics().last()
     );
@@ -1154,7 +1148,6 @@ fn extreme_but_legal_entity_values_are_contained() {
 /// one call may not broadcast 1024 lines and push every player's chat out of
 /// the 100-line history in one tick.
 #[test]
-#[ignore = "finding H2-F15: package chat/tell have no rate budget; one command floods chat and evicts shared notices"]
 fn package_broadcasts_cannot_flood_chat() {
     let mut s = session(vec![Spec::server(
         "herald",
@@ -1183,7 +1176,6 @@ fn package_broadcasts_cannot_flood_chat() {
 /// players (a shared 256-entry queue) must not be evicted by one player's
 /// package command.
 #[test]
-#[ignore = "finding H2-F15: package chat/tell have no rate budget; one command floods chat and evicts shared notices"]
 fn package_tells_cannot_evict_other_players_notices() {
     let mut s = session(vec![Spec::server(
         "herald",

@@ -19,7 +19,7 @@ use bri_package_runtime::{
     content::{ArgType, ChunkWorld},
     ops::{Op, authorize},
     script::{self, Budget, Call, EntityView, PlayerView, Runtime, Snapshot},
-    state::Namespace,
+    state::{self, Namespace},
 };
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
@@ -253,6 +253,103 @@ pub(super) struct PackageHost {
     output: VecDeque<String>,
     /// Deaths since the last tick, for `on_death` hooks: victim, killer.
     deaths: VecDeque<(OwnerId, Option<OwnerId>)>,
+    /// Per-origin shares of the server's package capacity (stress campaign
+    /// W1): no one package, or one player's commands, can take a pool
+    /// every player needs.
+    shares: Shares,
+    /// Package state as [`state::stored_size`] counts it, kept within
+    /// [`state::MAX_STATE_BYTES`] so any admitted state can be saved (W7).
+    state_bytes: usize,
+    /// `on_tick` hooks that are due but wait for their package's share.
+    hooks_due: BTreeSet<String>,
+    /// Hooks paused after failing, until the given tick.
+    hooks_paused: BTreeMap<String, u64>,
+}
+
+/// Script operations per tick the server gives package work it runs itself
+/// (thinks, `on_tick`, generation), split evenly between packages with
+/// scripts. About 16 ms of script time.
+const SERVER_WORK_PER_TICK: i64 = 400_000;
+/// Most script operations one player's commands may use in a burst (one
+/// full command), and what refills every second.
+const PLAYER_COMMAND_BURST: i64 = 200_000;
+const PLAYER_COMMAND_WORK: i64 = 400_000;
+/// Bricks one package may destroy in a burst; refills every second.
+const PACKAGE_DESTRUCTION: i64 = 2048;
+/// Chat lines (broadcasts and tells) per package and calling player in a
+/// burst; refills every second, like player chat.
+const PACKAGE_CHAT_LINES: i64 = 8;
+/// Package entities on the server.
+const MAX_ENTITIES: usize = 1024;
+/// Entity slots kept free for every other package that declares entities.
+const ENTITY_RESERVE: usize = 64;
+/// A failing `on_tick` hook pauses this long, as a failing think does.
+const FAILURE_PAUSE: u64 = 120;
+const SECOND: u64 = 120;
+
+/// A refilling allowance per origin. Levels are held scaled by `window` so
+/// slow refills (8 lines per 120 ticks) are exact. A level may go into debt
+/// by what one call actually used; the origin then waits until it is repaid.
+struct Allowance<K: Ord> {
+    capacity: i64,
+    refill: i64,
+    window: u64,
+    levels: BTreeMap<K, (i64, u64)>,
+}
+impl<K: Ord + Clone> Allowance<K> {
+    fn new(capacity: i64, refill: i64, window: u64) -> Self {
+        Self {
+            capacity,
+            refill,
+            window,
+            levels: BTreeMap::new(),
+        }
+    }
+    fn available(&mut self, key: &K, tick: u64) -> i64 {
+        let window = self.window as i64;
+        let full = self.capacity * window;
+        let Some((level, at)) = self.levels.get_mut(key) else {
+            return self.capacity;
+        };
+        let elapsed = tick.saturating_sub(*at).min(self.window * 1024) as i64;
+        *level = level
+            .saturating_add(self.refill.saturating_mul(elapsed))
+            .min(full);
+        *at = tick;
+        level.div_euclid(window)
+    }
+    fn spend(&mut self, key: &K, tick: u64, amount: i64) {
+        self.available(key, tick);
+        let window = self.window as i64;
+        let full = self.capacity * window;
+        let entry = self.levels.entry(key.clone()).or_insert((full, tick));
+        entry.0 = entry.0.saturating_sub(amount.saturating_mul(window));
+        if self.levels.len() > 4096 {
+            // Origins back at full carry no information.
+            let (refill, window) = (self.refill, self.window as i64);
+            self.levels.retain(|_, (level, at)| {
+                *level + refill * (tick.saturating_sub(*at) as i64).min(window * 1024) < full
+            });
+        }
+    }
+}
+
+struct Shares {
+    work: Allowance<String>,
+    commands: Allowance<PlayerKey>,
+    destruction: Allowance<String>,
+    chat: Allowance<(String, Option<PlayerKey>)>,
+}
+impl Shares {
+    fn new(script_packages: usize) -> Self {
+        let share = SERVER_WORK_PER_TICK / script_packages.max(1) as i64;
+        Self {
+            work: Allowance::new(Budget::Tick.operations() as i64, share, 1),
+            commands: Allowance::new(PLAYER_COMMAND_BURST, PLAYER_COMMAND_WORK, SECOND),
+            destruction: Allowance::new(PACKAGE_DESTRUCTION, PACKAGE_DESTRUCTION, SECOND),
+            chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
+        }
+    }
 }
 
 /// Deaths held for `on_death` between ticks; more in one tick are dropped
@@ -313,6 +410,11 @@ impl Session {
             }
             None => None,
         };
+        let scripts = catalog
+            .behaviours()
+            .filter(|(id, _)| runtime.has_script(id))
+            .count();
+        let state_bytes = store.stored_size();
         self.packages = Some(Box::new(PackageHost {
             catalog,
             runtime,
@@ -324,6 +426,10 @@ impl Session {
             diagnostics: VecDeque::new(),
             output: VecDeque::new(),
             deaths: VecDeque::new(),
+            shares: Shares::new(scripts),
+            state_bytes,
+            hooks_due: BTreeSet::new(),
+            hooks_paused: BTreeMap::new(),
         }));
         let Some(view) = self
             .packages
@@ -614,6 +720,7 @@ impl Session {
                 None,
                 None,
             );
+            self.charge_work(&package);
         }
     }
     /// Run one package function, then commit its state and apply its
@@ -702,6 +809,57 @@ impl Session {
             note(host, d.clone());
             return Err(d);
         }
+        // State is budgeted per player, per package and in total, and only
+        // growth is refused, so a call can always shrink state (W7).
+        let mut growth = 0_isize;
+        let mut over = None;
+        if outcome.state.global != input.global {
+            let (before, after) = (
+                state::stored_size(&input.global),
+                state::stored_size(&outcome.state.global),
+            );
+            growth += after as isize - before as isize;
+            if after > before && after > state::MAX_GLOBAL_STATE_BYTES {
+                over = Some(format!(
+                    "{function} would grow server-wide state to {after} bytes; the limit is {}",
+                    state::MAX_GLOBAL_STATE_BYTES
+                ));
+            }
+        }
+        let empty = BTreeMap::new();
+        for (player, values) in &outcome.state.players {
+            let old = input.players.get(player).unwrap_or(&empty);
+            if old == values {
+                continue;
+            }
+            let (before, after) = (state::stored_size(old), state::stored_size(values));
+            growth += after as isize - before as isize;
+            if after > before && after > state::MAX_PLAYER_STATE_BYTES {
+                over = Some(format!(
+                    "{function} would grow a player's state to {after} bytes; the limit is {}",
+                    state::MAX_PLAYER_STATE_BYTES
+                ));
+            }
+        }
+        for (player, values) in &input.players {
+            if !outcome.state.players.contains_key(player) {
+                growth -= state::stored_size(values) as isize;
+            }
+        }
+        let total = host.state_bytes.saturating_add_signed(growth);
+        if over.is_none() && growth > 0 && total > state::MAX_STATE_BYTES {
+            over = Some(format!(
+                "{function} would grow package state past the server's {} bytes",
+                state::MAX_STATE_BYTES
+            ));
+        }
+        if let Some(message) = over {
+            let d = Diagnostic::error("state.budget", message)
+                .at(package.to_string())
+                .hint("keep per-player state small; store counts, not logs");
+            note(host, d.clone());
+            return Err(d);
+        }
         let capabilities = host
             .catalog
             .packages
@@ -737,6 +895,7 @@ impl Session {
                 return Err(d);
             }
         }
+        host.state_bytes = total;
         *host.store.namespace_mut(package) = outcome.state;
         for (id, vars) in outcome.entity_vars {
             if let Some(e) = host.entities.get_mut(&id) {
@@ -762,7 +921,7 @@ impl Session {
     fn apply_package_op(&mut self, package: &str, op: Op, caller: Option<OwnerId>) -> Result<()> {
         let tick = self.simulation.state().tick;
         match op {
-            Op::RemoveBrick { brick } => self.package_remove_brick(brick, None, caller),
+            Op::RemoveBrick { brick } => self.package_remove_brick(package, brick, None, caller),
             Op::Explode {
                 position,
                 radius,
@@ -847,19 +1006,34 @@ impl Session {
             }
             Op::Tell { player, text } => {
                 ensure!(self.peers.contains_key(&player), "No player {player}");
+                self.take_chat_line(package, caller)?;
                 self.notify(player, Notice::Chat(text));
                 Ok(())
             }
             Op::Broadcast { text } => {
                 let _ = tick;
+                self.take_chat_line(package, caller)?;
                 self.system_chat(text);
                 Ok(())
             }
         }
     }
+    /// One chat line from `package` on behalf of `caller`, within their share.
+    fn take_chat_line(&mut self, package: &str, caller: Option<OwnerId>) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let origin = (package.to_string(), caller.map(|c| self.player_key(c)));
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        ensure!(
+            host.shares.chat.available(&origin, tick) >= 1,
+            "Chat line dropped: more than {PACKAGE_CHAT_LINES} lines a second"
+        );
+        host.shares.chat.spend(&origin, tick, 1);
+        Ok(())
+    }
     /// Remove a brick for good, recording generated voxels as world edits.
     fn package_remove_brick(
         &mut self,
+        package: &str,
         brick: BrickId,
         blast: Option<super::debris::BrickBlast>,
         caller: Option<OwnerId>,
@@ -893,6 +1067,16 @@ impl Session {
                 world.def.materials[voxel.material].name
             );
         }
+        // Destruction draws on the package's share, so one call cannot
+        // level a world (W1).
+        let tick = self.simulation.state().tick;
+        let origin = package.to_string();
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        ensure!(
+            host.shares.destruction.available(&origin, tick) >= 1,
+            "`{package}` destroyed its share of bricks for now"
+        );
+        host.shares.destruction.spend(&origin, tick, 1);
         let admin = Actor {
             owner: 0,
             administrator: true,
@@ -975,7 +1159,12 @@ impl Session {
                 }
             }
         }
-        if brick_radius > 0.0 {
+        let (origin, tick) = (source.to_string(), self.simulation.state().tick);
+        let can_destroy = self
+            .packages
+            .as_mut()
+            .is_some_and(|h| h.shares.destruction.available(&origin, tick) >= 1);
+        if brick_radius > 0.0 && can_destroy {
             let reach = Vec3::splat(brick_radius);
             let mut hit: Vec<(f32, BrickId)> = self
                 .simulation
@@ -994,8 +1183,15 @@ impl Session {
                 radius: brick_radius,
             };
             for (_, brick) in hit.into_iter().take(MAX_BLAST_BRICKS) {
+                let spent = self
+                    .packages
+                    .as_mut()
+                    .is_none_or(|h| h.shares.destruction.available(&origin, tick) < 1);
+                if spent {
+                    break;
+                }
                 // Indestructible bricks and materials simply survive.
-                let _ = self.package_remove_brick(brick, Some(blast), caller);
+                let _ = self.package_remove_brick(source, brick, Some(blast), caller);
             }
         }
         let tick = self.simulation.state().tick;
@@ -1024,7 +1220,28 @@ impl Session {
             def.name,
             def.max_alive
         );
-        ensure!(host.entities.len() < 1024, "Too many package entities");
+        ensure!(
+            host.entities.len() < MAX_ENTITIES,
+            "Too many package entities"
+        );
+        // One package may not take every slot: each other package that
+        // declares entities keeps a reserve (W1).
+        let others = host
+            .catalog
+            .packages
+            .values()
+            .filter(|p| p.id() != package.id() && !p.entities.is_empty())
+            .count();
+        let mine = host
+            .entities
+            .values()
+            .filter(|e| e.package == package.id())
+            .count();
+        ensure!(
+            mine < MAX_ENTITIES - ENTITY_RESERVE * others,
+            "`{}` has {mine} entities, its share of the server's {MAX_ENTITIES}",
+            package.id()
+        );
         let id = host.next_entity;
         let (package, def) = (package.id().to_string(), def.clone());
         let tuning = PlayerTuning::default().scaled(def.scale);
@@ -1173,10 +1390,23 @@ impl Session {
             }
             None => None,
         };
+        let player = key.0.clone();
         let cooldown = u64::from(def.cooldown_ticks);
         let mut args = vec![Dynamic::from_int(owner as i64)];
         args.extend(request.args.iter().map(PackageArg::dynamic));
         let function = format!("cmd_{}", request.command);
+        // Each player's commands draw on their own share of script work.
+        if let Some(host) = self.packages.as_mut()
+            && host.shares.commands.available(&player, tick) <= 0
+        {
+            return Err(reject(
+                "command.busy",
+                format!(
+                    "Your commands used their share of server time; `{}` is refused for now",
+                    request.command
+                ),
+            ));
+        }
         if cooldown > 0
             && let Some(host) = self.packages.as_mut()
         {
@@ -1185,7 +1415,7 @@ impl Session {
             }
             host.cooldowns.insert(key, tick + cooldown);
         }
-        self.run_package(
+        let result = self.run_package(
             &request.package,
             &function,
             args,
@@ -1193,8 +1423,12 @@ impl Session {
             Some(owner),
             aim,
             None,
-        )
-        .map_err(|d| diagnostics_error(vec![d]))?;
+        );
+        if let Some(host) = self.packages.as_mut() {
+            let used = host.runtime.last_operations() as i64;
+            host.shares.commands.spend(&player, tick, used);
+        }
+        result.map_err(|d| diagnostics_error(vec![d]))?;
         Ok(Reply::Accepted)
     }
 
@@ -1221,7 +1455,17 @@ impl Session {
         for id in gone {
             self.forget_voxel(id);
         }
-        let host = self.packages.as_ref().expect("checked");
+        let host = self.packages.as_mut().expect("checked");
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| {
+                b.tick_interval
+                    .is_some_and(|i| tick > 0 && tick.is_multiple_of(u64::from(i)))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        host.hooks_due.extend(hooks);
         let due: Vec<(u64, String, String)> = host
             .entities
             .iter()
@@ -1229,6 +1473,13 @@ impl Session {
             .map(|(id, e)| (*id, e.package.clone(), e.think.clone()))
             .collect();
         for (id, package, think) in due {
+            // Past its share this tick, a package's thinks wait (and yield to
+            // its due hook); they are not dropped.
+            let host = self.packages.as_mut().expect("checked");
+            if host.hooks_due.contains(&package) || host.shares.work.available(&package, tick) <= 0
+            {
+                continue;
+            }
             let Some(view) = self
                 .package_snapshot()
                 .entities
@@ -1240,18 +1491,17 @@ impl Session {
             if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
                 e.next_think = tick + e.interval;
             }
-            if self
-                .run_package(
-                    &package,
-                    &think,
-                    vec![script::entity_map(&view)],
-                    Budget::Think,
-                    None,
-                    None,
-                    Some(id),
-                )
-                .is_err()
-            {
+            let result = self.run_package(
+                &package,
+                &think,
+                vec![script::entity_map(&view)],
+                Budget::Think,
+                None,
+                None,
+                Some(id),
+            );
+            self.charge_work(&package);
+            if result.is_err() {
                 // A broken think stops the entity rather than spamming errors.
                 if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
                     e.steer = (Vec3::ZERO, false);
@@ -1322,32 +1572,55 @@ impl Session {
             // A failing generator is reported; the chunk stays empty.
             let _ = self.generate_chunk(chunk);
         }
-        let hooks: Vec<String> = self
+        // Due hooks wait for their package's share of script work; a hook
+        // that failed stays paused, as a failing think does.
+        let pending: Vec<String> = self
             .packages
             .as_ref()
             .expect("checked")
-            .catalog
-            .behaviours()
-            .filter(|(_, b)| {
-                b.tick_interval
-                    .is_some_and(|i| tick > 0 && tick.is_multiple_of(u64::from(i)))
-            })
-            .map(|(id, _)| id.clone())
+            .hooks_due
+            .iter()
+            .cloned()
             .collect();
-        for package in hooks {
-            let _ = self.run_package(
-                &package,
-                "on_tick",
-                Vec::new(),
-                Budget::Tick,
-                None,
-                None,
-                None,
-            );
+        for package in pending {
+            let host = self.packages.as_mut().expect("checked");
+            if host
+                .hooks_paused
+                .get(&package)
+                .is_some_and(|until| tick < *until)
+            {
+                host.hooks_due.remove(&package);
+            } else if host.shares.work.available(&package, tick) > 0 {
+                host.hooks_due.remove(&package);
+                let result = self.run_package(
+                    &package,
+                    "on_tick",
+                    Vec::new(),
+                    Budget::Tick,
+                    None,
+                    None,
+                    None,
+                );
+                self.charge_work(&package);
+                let host = self.packages.as_mut().expect("checked");
+                if result.is_err() {
+                    host.hooks_paused.insert(package, tick + FAILURE_PAUSE);
+                } else {
+                    host.hooks_paused.remove(&package);
+                }
+            }
         }
         Ok(())
     }
 
+    /// Charge the last script call to its package's share of server work.
+    fn charge_work(&mut self, package: &str) {
+        let tick = self.simulation.state().tick;
+        if let Some(host) = self.packages.as_mut() {
+            let used = host.runtime.last_operations() as i64;
+            host.shares.work.spend(&package.to_string(), tick, used);
+        }
+    }
     /// Note a death for packages' `on_death` hooks.
     pub(super) fn package_death(&mut self, victim: OwnerId, killer: Option<OwnerId>) {
         let Some(host) = self.packages.as_mut() else {
@@ -1390,6 +1663,7 @@ impl Session {
                     None,
                     None,
                 );
+                self.charge_work(package);
             }
         }
     }
