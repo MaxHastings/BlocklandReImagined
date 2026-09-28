@@ -546,15 +546,35 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
             .is_some_and(|images| images.iter().any(|i| i.state == "Ready"))
     })
     .await?;
+    let mut cues = first.replica.take_cues();
     send_inputs(&mut first, &[MoveInput::default()])?;
     first.command(Command::WeaponTrigger { down: true }).await?;
     first
         .command(Command::WeaponTrigger { down: false })
         .await?;
-    wait(&mut first, |client| {
-        !client.replica.weapons.projectiles.is_empty()
+    // What each update brought, for the failure message below.
+    let mut timeline = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let fresh = first.replica.take_cues();
+            timeline.push(format!(
+                "tick {} images {:?} projectiles {:?} cues {:?}",
+                first.replica.tick,
+                first.replica.weapons.images.get(&shooter).map(|images| {
+                    images.iter().map(|i| i.state.clone()).collect::<Vec<_>>()
+                }),
+                first.replica.weapons.projectiles.iter().map(|p| (p.id, p.age)).collect::<Vec<_>>(),
+                fresh.iter().map(|c| (c.tick, &c.kind)).collect::<Vec<_>>()
+            ));
+            cues.extend(fresh);
+            if !first.replica.weapons.projectiles.is_empty() {
+                break;
+            }
+            first.receive().await?;
+        }
+        Result::<()>::Ok(())
     })
-    .await?;
+    .await??;
     let projectile = first.replica.weapons.projectiles[0].clone();
     assert_eq!(projectile.source.0, shooter);
     assert_eq!(first.replica.tools[&shooter].selected, Some(3));
@@ -562,11 +582,12 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
         first.replica.weapons.images[&shooter][0].image,
         "v20.image.gunimage"
     );
-    let cues = first.replica.take_cues();
+    cues.extend(first.replica.take_cues());
     assert!(
         cues.iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "gunShot1Sound")),
-        "no gunShot1Sound cue by the projectile's first update; cues: {:?}",
-        cues.iter().map(|c| (c.tick, &c.kind)).collect::<Vec<_>>()
+        "no gunShot1Sound cue by the projectile's first update; cues: {:?}\n{}",
+        cues.iter().map(|c| (c.tick, &c.kind)).collect::<Vec<_>>(),
+        timeline.join("\n")
     );
     let mut second = Client::connect(
         server.address,
