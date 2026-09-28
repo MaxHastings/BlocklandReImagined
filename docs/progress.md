@@ -2420,3 +2420,21 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Open: a hosted game cannot load an imported package yet, because each system
   reads one pack per role. That seam and 19 others are in
   `docs/audits/spike-addon-import.md`.
+
+## 2026-09-28 — first-impressions audit and three robustness fixes
+
+- `docs/audits/first-impressions.md` ranks 20 things a new player would find
+  missing, rough or fragile on main `1599ef2`, with evidence for each.
+- Settings: a damaged or older `settings.json` no longer stops startup. Missing
+  fields take defaults; a damaged file is copied to
+  `settings.damaged-<time>.json`, readable sections are kept, and the player is
+  told in plain words (`settings::recover`).
+- Saves: one unreadable save no longer empties the Save and Load lists. It is
+  listed as damaged (`SaveFileInfo::damaged`) and can be saved over.
+- Messages: the Connection Failed dialog explains transport and join failures
+  in plain words (`bri_ui::models::disconnect::explain`); kicks and bans close
+  with the reason and ban length, and a banned rejoin is told how long is left.
+  No protocol change: the close reason is free text.
+- Evidence: `cargo test -p bri-ui --lib`, `-p bri-sim --lib --test session`,
+  `-p bri-client --lib`, `-p bri-net --lib`; clippy `-D warnings` on those
+  four crates with `--all-targets`.

@@ -55,6 +55,7 @@ impl Session {
         self.admin = std::mem::take(&mut old.admin);
         self.admin.maps_available = !self.map_list.is_empty();
         self.admin_disconnects = std::mem::take(&mut old.admin_disconnects);
+        self.admin_disconnect_messages = std::mem::take(&mut old.admin_disconnect_messages);
         self.trust = std::mem::take(&mut old.trust);
         self.trust.forget_published();
         self.chat = std::mem::take(&mut old.chat);

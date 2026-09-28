@@ -749,8 +749,10 @@ async fn run(
                         Err(error)=>peer.send_message(&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
                     }
                     for target in session.take_admin_disconnects(){
+                        let message=session.take_admin_disconnect_message(target);
                         if let Some(target_peer)=peers.remove(&target){
-                            target_peer.connection.close(0_u32.into(),b"Administration disconnect");
+                            // The close frame must fit one packet; messages stay short.
+                            target_peer.connection.close(0_u32.into(),&message.as_bytes()[..message.floor_char_boundary(400)]);
                             let _=session.disconnect(target);
                         }
                     }

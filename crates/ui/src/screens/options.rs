@@ -1704,6 +1704,7 @@ mod tests {
             modified: "2026-09-26".into(),
             description: "Native save test".into(),
             brick_count: Some(42),
+            damaged: false,
         }];
         let output = root.join("artifacts/ui-native-dialogs");
         std::fs::create_dir_all(&output).unwrap();

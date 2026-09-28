@@ -1263,7 +1263,11 @@ impl Ui {
                     c.pop(ScreenId::Connecting);
                 }
                 if let Some(r) = failed {
-                    c.message_ok("Connection Failed", &r);
+                    bri_console::warn(format!("Connection failed: {r}"));
+                    c.message_ok(
+                        "Connection Failed",
+                        &crate::models::disconnect::explain(&r),
+                    );
                 }
             }
             UiUpdate::Maps(m) => c.maps = m,

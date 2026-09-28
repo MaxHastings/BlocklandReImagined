@@ -266,6 +266,7 @@ pub enum ParamValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AvatarPrefs {
     /// `$pref::Avatar::*` values by short name in the v20 formats: part
     /// indices (`Hat`, `Accent`, `Pack`, `SecondPack`, `Chest`, `Hip`,
@@ -344,6 +345,8 @@ pub struct SaveFileInfo {
     pub modified: String,
     pub description: String,
     pub brick_count: Option<u32>,
+    /// The file could not be read; it is listed so it can be saved over.
+    pub damaged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -926,7 +929,10 @@ pub enum UiUpdate {
 // ----------------------------------------------------------------- settings
 
 /// Everything the UI persists through the host (`UiAction::SaveSettings`).
+/// Missing fields take their defaults, so adding a field never makes an
+/// older settings file unreadable.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// `$pref::`-style values by their original names (stock defaults from
     /// the UI pack are used for missing keys).
@@ -941,7 +947,6 @@ pub struct Settings {
     pub brick_favorites: BTreeMap<u8, Vec<String>>,
     pub avatar: AvatarPrefs,
     pub avatar_favorites: BTreeMap<u8, AvatarPrefs>,
-    #[serde(default)]
     pub avatar_colors: Vec<[f32; 4]>,
 }
 

@@ -24,6 +24,9 @@ pub struct Store {
     templates: Vec<Entry>,
     map_names: BTreeMap<String, String>,
 }
+/// What the save dialogs say about a save file that cannot be read.
+const DAMAGED: &str =
+    "This save is damaged and can't be loaded. Saving over it keeps a copy of the old file.";
 pub fn valid_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".world.json") else {
         return false;
@@ -90,6 +93,7 @@ impl Store {
                     modified: "Converted original".into(),
                     description: "Original converted build".into(),
                     brick_count: Some(world.brick_count as u32),
+                    damaged: false,
                 },
                 map_id: world.map_id.clone(),
                 path: content.paths.worlds.join(&world.file),
@@ -150,6 +154,7 @@ impl Store {
             {
                 continue;
             }
+            let folder = directory.file_name().to_string_lossy().into_owned();
             let directory = directory.path().canonicalize()?;
             ensure!(
                 directory.starts_with(&root),
@@ -179,17 +184,36 @@ impl Store {
                         ),
                         description: String::new(),
                         brick_count: None,
+                        damaged: false,
                     },
                     map_id: String::new(),
                     path: entry.path(),
                     root: root.clone(),
                 };
-                let saved = Self::read(&record)
-                    .with_context(|| format!("Could not read save {}", record.info.name))?;
-                record.map_id = saved.world.map_id;
-                record.info.map = self.map_name(&record.map_id);
-                record.info.description = saved.world.description.join("\n");
-                record.info.brick_count = Some(saved.world.bricks.len() as u32);
+                match Self::read(&record) {
+                    Ok(saved) => {
+                        record.map_id = saved.world.map_id;
+                        record.info.map = self.map_name(&record.map_id);
+                        record.info.description = saved.world.description.join("\n");
+                        record.info.brick_count = Some(saved.world.bricks.len() as u32);
+                    }
+                    // One bad file must not hide every other save: list it as
+                    // damaged under the map its folder names.
+                    Err(error) => {
+                        bri_console::warn(format!(
+                            "Save {} is damaged: {error:#}",
+                            record.path.display()
+                        ));
+                        record.map_id = self.map_for_folder(&folder).unwrap_or_default();
+                        record.info.map = if record.map_id.is_empty() {
+                            "Unknown map".into()
+                        } else {
+                            self.map_name(&record.map_id)
+                        };
+                        record.info.description = DAMAGED.into();
+                        record.info.damaged = true;
+                    }
+                }
                 files.insert(
                     (
                         record.info.map.to_ascii_lowercase(),
@@ -208,7 +232,15 @@ impl Store {
             .into_iter()
             .find(|e| e.info.map == map && e.info.name == name)
             .context("Selected save no longer exists")?;
+        ensure!(!entry.info.damaged, "{DAMAGED}");
         Self::read(&entry)
+    }
+    /// The map id whose save folder (`map-<sha256 of the id>`) is `folder`.
+    fn map_for_folder(&self, folder: &str) -> Option<String> {
+        self.map_names
+            .keys()
+            .find(|id| folder == format!("map-{:x}", Sha256::digest(id.as_bytes())))
+            .cloned()
     }
     pub fn save(
         &self,
@@ -420,6 +452,7 @@ mod tests {
                     modified: "Original".into(),
                     description: String::new(),
                     brick_count: Some(1),
+                    damaged: false,
                 },
                 map_id: "map".into(),
                 path: path.clone(),
@@ -487,6 +520,52 @@ mod tests {
         );
         // Deliberately leave no recursive deletion against a computed directory.
         // These small fixtures stay in the OS temporary directory.
+        Ok(())
+    }
+    #[test]
+    fn a_damaged_save_is_listed_as_damaged_and_hides_nothing_else() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-save-damaged-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let store = Store {
+            directory: directory.clone(),
+            map_names: [("map".into(), "Map".into())].into(),
+            templates: Vec::new(),
+        };
+        let world = bri_world::World::new("Good".into(), "map".into(), vec![[1.0; 4]]);
+        let build = SavedBuild::capture(&world, true, true)?;
+        store.save("Good.world.json", "Fine", build.clone(), false)?;
+        let good = store.list()?[0].path.clone();
+        let broken = good.with_file_name("Broken.world.json");
+        std::fs::write(&broken, b"{\"truncated")?;
+        let entries = store.list()?;
+        assert_eq!(entries.len(), 2);
+        let damaged = entries
+            .iter()
+            .find(|e| e.info.name == "Broken.world.json")
+            .unwrap();
+        assert!(damaged.info.damaged);
+        // The folder names the map even though the file does not.
+        assert_eq!(damaged.info.map, "Map");
+        assert_eq!(damaged.info.brick_count, None);
+        assert!(store.load("Map", "Good.world.json").is_ok());
+        let error = format!("{:#}", store.load("Map", "Broken.world.json").unwrap_err());
+        assert!(error.contains("damaged and can't be loaded"), "{error}");
+        // Saving over it asks first, then keeps the old file in history.
+        assert!(
+            store
+                .save("Broken.world.json", "", build.clone(), false)
+                .is_err()
+        );
+        store.save("Broken.world.json", "Fixed", build, true)?;
+        assert!(store.list()?.iter().all(|e| !e.info.damaged));
+        let history: Vec<_> = std::fs::read_dir(good.parent().unwrap().join(".history"))?
+            .collect::<std::io::Result<_>>()?;
+        assert_eq!(std::fs::read(history[0].path())?, b"{\"truncated");
         Ok(())
     }
 }

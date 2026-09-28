@@ -34,12 +34,12 @@ Every claim cites the file:line or test that backs it. Line numbers are from
 | 1 | Double-clicking the game opens nothing, and startup errors are invisible | FRAGILE | high |
 | 2 | A crash or fatal error never tells the player what happened or where the logs are | MISSING | high |
 | 3 | Unsaved builds are lost: no autosave, no prompt on leave or close, host world discarded | MISSING | high |
-| 4 | A damaged or older `settings.json` stops the game from starting, with a misleading hint | FRAGILE | high |
+| 4 | A damaged or older `settings.json` stops the game from starting, with a misleading hint (fixed in this PR) | FRAGILE | high |
 | 5 | Joining by IP depends on a second port and fails with vague or raw messages | FRAGILE | high |
 | 6 | Rejoining the same session loses edit rights on your own bricks; no reconnect | FRAGILE | high |
-| 7 | One unreadable save file empties both the Save and Load lists | FRAGILE | high |
+| 7 | One unreadable save file empties both the Save and Load lists (fixed in this PR) | FRAGILE | high |
 | 8 | Building gives no warning before a bad plant, and the undo render path is a known failing test | ROUGH / FRAGILE | high |
-| 9 | Disconnect, kick, ban and mismatch reasons reach the player as raw internal text | ROUGH | med |
+| 9 | Disconnect, kick, ban and mismatch reasons reach the player as raw internal text (fixed in this PR) | ROUGH | med |
 | 10 | Loading feedback: no splash at startup, host loading bar stuck at 0, no loading screen on join | ROUGH | med |
 | 11 | The Tutorial works but is untested end to end, and the docs steer players away from it | FRAGILE | med |
 | 12 | No frame cap, graphics presets or render distance | MISSING | med |
@@ -52,7 +52,9 @@ Every claim cites the file:line or test that backs it. Line numbers are from
 | 19 | Input options: no crouch toggle, no gamepad, no side mouse buttons, one key per action | MISSING | med |
 | 20 | Audio: no music slider, and no live preview for volume, FOV or sensitivity | ROUGH | low |
 
-Details for each follow, then a list of what already works well, then doc drift.
+Items 4, 7 and 9 are fixed in the same pull request as this audit; each
+section says what changed. Details for each follow, then a list of what already
+works well, then doc drift.
 
 ## 1. Double-clicking the game opens nothing; startup errors are invisible
 
@@ -132,6 +134,20 @@ v20 also lost unsaved builds, but the Autosaver add-on was near-universal.
 Minecraft saves on quit and periodically; Roblox Studio autosaves and asks
 "Save changes?" on close.
 
+**Overlap with PR #1.** PR #1 (branch `claude/stress-campaign-73g1eu`) adds a
+server-side `Autosave` option (`crates/net/src/server.rs` `ServerOptions::autosave`)
+that checkpoints the world every 60 s and keeps the newest three
+(`crates/net/src/bin/bri-server.rs` `AUTOSAVE_EVERY`, `AUTOSAVE_KEEP`). Only
+`bri-server` turns it on; the client-hosted game passes `autosave: None`
+(`crates/client/src/app.rs` on that branch). After PR #1 lands, the gap for
+players is:
+
+- Autosave for single player, LAN and Internet games hosted from the client.
+- A "Save changes?" prompt on Disconnect, Quit and closing the window.
+- Keeping the host's final world when a client-hosted game stops, and a way to
+  load it back (an autosave slot in the Load dialog).
+- Resuming `bri-server` from its newest autosave without typing its path.
+
 ## 4. Settings file damage stops the game
 
 FRAGILE, high.
@@ -151,6 +167,16 @@ FRAGILE, high.
 
 Expected: rename the bad file to `settings.json.bad`, start with defaults, and
 say so once.
+
+**Fixed in this PR.** `Settings` and `AvatarPrefs` take defaults for missing
+fields, and the stored wrapper accepts unknown fields
+(`crates/ui/src/api.rs`, `crates/client/src/settings.rs`). At startup
+`settings::recover` copies a damaged file to `settings.damaged-<time>.json`,
+keeps every top-level section that still reads, resets the rest, writes the
+result back and shows a "Settings Problem" message in plain words. Tests:
+`damaged_settings_start_with_defaults_keep_a_copy_and_tell_the_player`,
+`a_bad_section_keeps_the_rest_and_missing_fields_take_defaults`,
+`older_files_missing_newer_fields_load_without_a_notice`.
 
 ## 5. Joining by IP
 
@@ -225,6 +251,15 @@ FRAGILE, high.
 Expected: skip the bad file, list it as damaged, and keep everything else
 usable, as Minecraft does with a broken world.
 
+**Fixed in this PR.** An unreadable save is listed with "(damaged)" after its
+name, under the map its folder belongs to, with no brick count
+(`crates/client/src/saves.rs`, `SaveFileInfo::damaged`,
+`crates/ui/src/screens/saveload.rs`). Loading it says "This save is damaged
+and can't be loaded"; saving over it asks first and keeps the old file in
+`.history`. Every other save stays listed. The reason is logged. Test:
+`a_damaged_save_is_listed_as_damaged_and_hides_nothing_else`. The scan budget
+and full parse on every listing remain.
+
 ## 8. Building feedback and undo
 
 ROUGH / FRAGILE, high. Building is the core loop, so this ranks above its label.
@@ -275,6 +310,24 @@ ROUGH, med.
   (`crates/net/src/server.rs:49`).
 - Save load errors surface raw serde text such as "EOF while parsing"
   (`crates/client/src/saves.rs:122-126`).
+
+**Fixed in this PR.** The Connection Failed dialog now shows
+`bri_ui::models::disconnect::explain` of the reason; the raw text stays in the
+connection state and is logged. It covers host shutdown, time-outs, a full
+server, version and content mismatch, no answer at an address (naming both UDP
+ports), unsupported passwords and map failures, and passes unknown text
+through unchanged. Add-On refusals (`Your content does not match the server:`,
+PR #4's Can't Join dialog) are left intact. The server now closes an admin
+disconnect with a message written for the player: "You were kicked from the
+server by an admin.", "You were banned from this server for 10 minutes.
+Reason: spam", or the wrong-password and trust-spam equivalents
+(`bri_sim::session::disconnect_message`,
+`Session::take_admin_disconnect_message`). A banned player who rejoins is told
+how long is left and why. Tests: `disconnect::tests::*` in `bri-ui`,
+`kicked_and_banned_players_are_told_why_and_for_how_long` and
+`ban_and_unban_publish_only_after_durable_commit` in `bri-sim`. Still open:
+the developer wording in menu "under construction" dialogs and the admin
+certificate message.
 
 ## 10. Loading feedback
 
@@ -555,12 +608,12 @@ Small, contained fixes that remove the worst first impressions:
 1. Error and crash dialog with the log path, `windows_subsystem`, open the game
    when the exe is double-clicked, and a player-facing startup message instead
    of `REGENERATE_HINT` (items 1, 2).
-2. Settings fall back to defaults and keep the bad file; `#[serde(default)]` on
-   every field (item 4).
-3. Save list skips and marks damaged files (item 7).
+2. Settings fall back to defaults and keep the bad file (item 4). Done in
+   this PR.
+3. Save list skips and marks damaged files (item 7). Done in this PR.
 4. Expire or reuse departed owner entries on rejoin (item 6).
 5. Plain-language messages for disconnect, kick, ban, mismatch and join
-   failure, and remove developer wording from player text (items 5, 9).
+   failure (item 9). Done in this PR; join-by-IP diagnosis (item 5) remains.
 6. Version string in the main menu and window title (item 17).
 7. Offer the Tutorial on first launch and fix the doc drift (item 11).
 

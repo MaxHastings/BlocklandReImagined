@@ -805,7 +805,10 @@ impl App {
             Arc::new(content.weapons.pack.clone()),
             Default::default(),
         )?;
-        let mut saved = settings::load(&state_dir.join("settings.json"))?;
+        let settings::Recovered {
+            settings: mut saved,
+            notice: settings_notice,
+        } = settings::recover(&state_dir.join("settings.json"));
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
         let graphics = crate::graphics::Graphics::from_settings(&saved);
         let audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
@@ -824,6 +827,12 @@ impl App {
             saved,
         );
         ui.set_console_commands(crate::console::commands());
+        if let Some(text) = settings_notice {
+            ui.apply(UiUpdate::MessageBox {
+                title: "Settings Problem".into(),
+                text,
+            });
+        }
         ui.apply(UiUpdate::Maps(content.maps.clone()));
         let backgrounds = content
             .ui_pack
