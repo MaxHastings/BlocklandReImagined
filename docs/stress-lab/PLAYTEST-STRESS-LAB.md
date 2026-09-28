@@ -1,8 +1,7 @@
 # Stress Lab playtest
 
-The Stress Lab is five ordinary mod packages (`content/stresslab/`, enabled by
-`content/packages.json`). Everything below is package content; the engine
-only provides general seams.
+The Stress Lab is five ordinary Add-Ons in `content/stresslab/`. Everything
+below comes from those Add-Ons; the engine only provides general seams.
 
 ## Start
 
@@ -33,8 +32,8 @@ only provides general seams.
 
 ## Known limits
 
-- The world stands on Slate's sky and ground; packages cannot provide their
+- The world stands on Slate's sky and ground; Add-Ons cannot provide their
   own sky yet.
 - Base-game weapons do not hurt creepers yet.
-- Mining uses a key, not the mouse, because a package cannot claim the
+- Mining uses a key, not the mouse, because an Add-On cannot claim the
   mouse without replacing the base game's tools.

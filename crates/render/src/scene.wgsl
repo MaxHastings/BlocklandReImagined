@@ -48,6 +48,23 @@ struct Shadows {
 @group(0) @binding(7) var shadow_sampler:sampler_comparison;
 @group(0) @binding(8) var<uniform> shadows:Shadows;
 @group(0) @binding(9) var shadow_point:sampler;
+// Baked interior light for vertex-lit surfaces (light_volume.rs): RGB
+// premultiplied by the cell's share outside walls. placement: origin, cell
+// size; dimensions, 1 when a volume is bound.
+struct LightVolume { origin_cell:vec4<f32>, dims:vec4<f32> };
+@group(0) @binding(10) var light_volume:texture_3d<f32>;
+@group(0) @binding(11) var<uniform> volume:LightVolume;
+// Mirrors LightVolume::light.
+fn baked_surroundings(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    if volume.dims.w==0.0 {return vec3<f32>(0.0);}
+    let t=(position-volume.origin_cell.xyz)/(volume.origin_cell.w*volume.dims.xyz);
+    if any(t<vec3<f32>(0.0)) || any(t>vec3<f32>(1.0)) {return vec3<f32>(0.0);}
+    let s=textureSampleLevel(light_volume,clamped_exact,t,0.0);
+    if s.a<0.01 {return vec3<f32>(0.0);}
+    let n=normal/max(length(normal),0.0001);
+    let form=0.7+0.3*max(dot(n,vec3<f32>(-0.57735,0.57735,0.57735)),0.0);
+    return s.rgb*(min(s.a*2.0,1.0)/s.a)*form;
+}
 struct ShadowCoord { uv:vec2<f32>, depth:f32, cascade:i32, strength:f32 };
 fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     var out:ShadowCoord;
@@ -123,7 +140,7 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
     let shade=clamp(ambient/max(lit,0.0001),0.4,0.7);
     return lightmap*mix(shade,1.0,shadow_lit(c));
 }
-@group(1) @binding(15) var<uniform> material:array<vec4<f32>,4>;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,5>;
 // v20 brick FX (blocklandv20.exe quad emitter 0x52ed70, docs/audits/bricks.md).
 // fx.w packs 1 + color + 8*shape + 32*corner + 128*depthStuds; fx.xyz is the
 // brick centre. Only brick materials read it.
@@ -269,11 +286,21 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     if material[0].x==6.0 {
         let time=camera.atmosphere.z;
-        let phase=vec2<f32>(v.world_position.x+1024.0,1024.0-v.world_position.z)*material[2].x+vec2<f32>(time/material[2].z);
-        let distortion=vec2<f32>(cos(phase.x),sin(phase.y))*material[2].y;
+        // Fluid space: Torque x/y plus the terrain's 1024 offset.
+        let fluid=vec2<f32>(v.world_position.x+1024.0,1024.0-v.world_position.z);
+        let phase=fluid*material[2].x+vec2<f32>(time/material[2].z);
+        let depth_mapped=material[2].w>0.5;
+        // Only the depth-mapped path distorts and flows its coordinates; the
+        // plain two-pass path texgens fluid space at TessSurface/48 per unit
+        // and drifts on the fixed 8 s cycle.
+        var distortion=vec2<f32>(0.0);
         var drift=vec2<f32>(time*0.02,cos(time*0.785398163)*0.03);
-        if material[2].w>0.5 {drift=material[1].xy*time;}
-        let base=v.uv*material[3].x+distortion;
+        var base=fluid*material[3].x/48.0;
+        if depth_mapped {
+            distortion=vec2<f32>(cos(phase.x),sin(phase.y))*material[2].y;
+            drift=material[1].xy*time;
+            base=v.uv*material[3].x+distortion;
+        }
         let second=mat2x2<f32>(vec2<f32>(0.8660254,0.5),vec2<f32>(-0.5,0.8660254))*(base+drift*material[3].w);
         let first_rgb=display_color(textureSample(layer0,tiled,base+drift).rgb);
         let second_rgb=display_color(textureSample(layer0,tiled,second).rgb);
@@ -292,6 +319,16 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         let reflection=display_color(textureSample(layer2,clamped,reflection_uv).rgb);
         rgb=mix(rgb,reflection,clamp(material[3].z*(0.5+0.15*(cos(phase.x)+sin(phase.y))),0.0,1.0));
         if alpha<=0.00001 {discard;}
+        if depth_mapped {
+            // fluid::CalcVertSpecular, added (SRC_ALPHA, ONE) under the depth
+            // mask: colour.rgb*colour.a*pow(half.up,power)^2, sun as light 0.
+            let light=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+            let half_vector=normalize(normalize(camera.eye.xyz-v.world_position)-light);
+            let facing=max(half_vector.y,0.0);
+            var shine=1.0;
+            if material[4].w>0.0 {shine=select(0.0,pow(facing,material[4].w),facing>0.0);}
+            rgb+=material[4].rgb*shine*shine*a/alpha;
+        }
         return vec4<f32>(fogged(rgb,v.world_position),alpha);
     }
     if (material[0].x==4.0 || material[0].x==5.0) {
@@ -366,7 +403,9 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         let facing=max(dot(normal,-direction),0.0)*strength;
         var sun=0.0;
         if facing>0.0 {sun=facing*sun_visibility(v.world_position,normal);}
-        illumination=camera.ambient.rgb+camera.sun_color.rgb*sun
+        // Interior lights exist only in lightmaps; the brighter of the sun
+        // and that baked light, so dark maps' lamps light players and bricks.
+        illumination=max(camera.ambient.rgb+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
             +point_illumination(v.world_position,v.normal)*strength;
         if fx.x==3u {
             // Glow aims the normal at the sun, 1/min(1, sun rgb) long.

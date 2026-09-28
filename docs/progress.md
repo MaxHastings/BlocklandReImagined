@@ -3554,6 +3554,32 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
   packaging test needs Windows (not run in the cloud).
 
+
+## 2026-09-28 Water audit against v20
+
+- Max's Slate Sea screenshot: sand showing over the sea in a raised, notched
+  band, and bright turquoise water in visible square tiles. Slate Sea's sea
+  sits 9 units over the slate on an opaque sand WaterBlock; our water strips
+  sorted by centre, so sand strips drew over the sea. Water now sorts as
+  planes, as Torque's WaterBlocks do.
+- From `blocklandv20.exe` (details in `docs/audits/water.md`): with no
+  terrain the depth masks keep GBitmap's 0xFF fill, so the Slate maps draw an
+  opaque shore pass; the depth-mapped path adds the authored specular
+  highlight that makes Sea pale; the plain path (Storm, Tutorial) texgens at
+  TessSurface/48 per unit without distortion. Texture coordinates continue
+  across repeated copies.
+- The glitchy rise to the surface: full coverage rounded to 0.99999994 on
+  alternate ticks, flipping the forced underwater crouch every tick.
+  `Water::coverage` now returns exactly 1 for a body wholly under.
+- Dropped items float (every stock ItemData: density 0.2, no drag); vehicle
+  water drag is `drag x viscosity x coverage` unscaled by mass, and wheeled
+  vehicles' spin decays at that rate, as `WheeledVehicle::updateForces`.
+- Split out: the live Sun direction uses the stale `direction` field instead
+  of azimuth/elevation (all maps' shading, and the water highlight).
+- Evidence: `cargo test -p bri-render -p bri-content -p bri-sim -p
+  bri-weapons -p bri-vehicles -p bri-client`; offscreen `scene_snapshot`
+  renders of Sea, Storm, Desert and Slopes compared with the map previews.
+  No wire protocol change. Needs a visible check by Max (see the thread).
 ## 2026-09-28 Destructo Wand sound and admin menu (a17 report)
 
 - Max heard the Destructo Wand play a loud brick-break sound where the
@@ -3852,3 +3878,148 @@ break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
   the gun grabs (masking jet only for the motor needs the client's
   prediction to send one input and predict another); entities have no
   beam effect (client code does not see entities).
+- `hardening_packages` `many_heavy_thinks_keep_the_tick_budget` failed once
+  in the gate and passed alone. Not an overrun: the per-tick script work cap
+  counts operations, so the work is the same every run. The test timed the
+  tick by wall clock, which counts time the OS gives other processes. Here
+  the tick measured 12-24 ms alone and up to 37 ms beside CPU-busy
+  processes; with the whole file under 8 busy processes the old
+  wall-clock checks (thinks, chunk generation, player commands) failed 59
+  of 60 runs. `timed()` now reads the test thread's CPU time
+  (`GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` elsewhere), where
+  package scripts run; the 50 ms bound is unchanged. After: 0 failures in
+  60 loaded runs, worst 25 ms. With the per-tick cap switched off the test
+  still fails (1.4 s of CPU in one tick).
+## 2026-09-28 Map lamps light players and bricks (client-only, no network)
+
+- Report: on the lamp's bars in BedroomDark a player is a black silhouette.
+  Evidence: neither Bedroom mission has a light object. The lamp is only in
+  `bedroom.dif`'s baked lightmaps, and `lightBulbA` is a breakable `Glass`
+  shape. BedroomDark and KitchenDark author a black sun and ambient, so
+  vertex-lit meshes (players, items, vehicles, bricks, map shapes) got no
+  light anywhere except from player lights. Of the 14 stock missions, none
+  has a point light object; only the four interiors' lightmaps carry lamp
+  light (Bedroom, BedroomDark, Kitchen, KitchenDark, plus Tutorial's).
+- The engine family lit a shape with the lightmap colour of the interior
+  surface under it (`SceneObject::getLightingAmbientColor`, OpenMBG pinned
+  commit). No trace of it was found in `blocklandv20.exe`: its terrain scale
+  constant (255/31) and the commented 0.57735 ambient direction are absent.
+  So v20 itself most likely left players black here. Default chosen for
+  player satisfaction: light them.
+- `bri_render::light_volume` bakes a grid from a map's lightmapped surfaces
+  on a background thread after the map loads (cells of at least 2 units and
+  at most a million: 4.7 units for Bedroom, 2.5 s; Kitchen 3.2 units, 5-6 s).
+  Each cell holds the brighter of the lightmap under it and the mean
+  lightmap over 48 directions, so the Bedroom lamp's lit shade lights a
+  player on its unlit bars. Cells inside walls hold no light, so filtering
+  never pulls light toward black. Vertex-lit surfaces take the brighter of
+  their sun lighting and the volume, with a 0.7 + 0.3 form term. Maps with a
+  bright sun keep their look; nothing gets darker; outdoor maps have no
+  lightmapped surfaces and bake nothing.
+- Breaking the bulb keeps v20's rule (burst, no sound, no respawn until the
+  mission reloads). The room's light stays because it is baked; the volume
+  follows the room, so objects stay consistent with what the walls show.
+  Turning the lamp off would need a lamp-free relight of `bedroom.dif`.
+- Evidence: `cargo test -p bri-render --release --test light_volume`
+  (a lit floor and a lit shade light a stand-in; dark rooms stay black;
+  walls hold no light; the cell budget holds; the shader matches the CPU
+  mirror; a dimmer volume never dims daylight), and with `--ignored`:
+  every stock map bakes in under 30 s with the Bedroom bulb and Kitchen
+  lights lit around them; an offscreen BedroomDark render of a player-sized
+  box on the lamp bars goes from black (0,0,0) to (197,197,197).
+  `cargo test -p bri-render --release`, `cargo test -p bri-client --lib
+  --release`, clippy `-D warnings` on both crates.
+- Follow-up (gate sent 9b37a574 back): the stock-map test's 30 s
+  wall-clock bound failed in the gate's debug build (Bedroom 42 s, every
+  cell casting 49 rays). The bake now casts 24 directions and does it only
+  where needed: it bakes every 8th cell, interpolates blocks that touch no
+  geometry and whose open corners agree within 12/255, halves failing
+  blocks down to 2, and bakes what is left. The one ray down still runs for
+  every cell, because it changes sharply over a small lit block. Casting
+  from every cell remains available (`Baker::bake_every_cell`) as the
+  reference: on a test room with a small lit block, the fast bake casts
+  under half the rays, its mean texel error is under 1/255 and its worst is
+  at most 24/255. Release timings on this PC, one test thread: Bedroom
+  0.39 s (8.0 M rays of 20.6 M), BedroomDark 0.38 s, Kitchen 1.66 s
+  (11.8 M of 19.7 M), Tutorial 0.18 s; before this change they were 2.5 s
+  and 5-6 s. The client starts the bake as soon as the map's scene is read,
+  so it runs alongside the rest of loading. It stores the result under
+  `<state>/light-volumes/<sha256>.lightvolume`, keyed by the bake format,
+  its settings, every lightmapped triangle and lightmap. Later loads read
+  it instead of baking, and bad or foreign files are refused and rebaked.
+  Tests bound work by rays cast, not time: under two thirds of casting from
+  every cell on each stock map. Debug build: `cargo test -p bri-render`
+  passes (69 s including the build); the ignored light-volume map tests
+  pass in 52 s.
+
+## 2026-09-28 Live sun from azimuth and elevation
+
+- The live renderer lit every map from the mission's `direction` field, a
+  stale dynamic field Torque never reads: twelve stock maps carry the same
+  0.577 0.577 -0.577, Bedroom Dark's points straight up and Slopes and
+  Tutorial have none. v20's Sun uses `azimuth`/`elevation`, as our bake
+  already did (it reproduces the reference caches only that way). Both now
+  share `bri_content::scene::sun_direction`; the bake keeps libm sines.
+- Shading, cascaded sun shadows and the water highlight move on every map.
+- Evidence: `cargo test -p bri-render -p bri-content -p bri-convert`, the
+  content-gated `map_sun` test over all 14 stock maps, clippy clean.
+
+## 2026-09-28 Knocked-out brick debris no longer hitches
+
+Max saw frame hitches in a16/a17 when a dozen or so bricks broke into
+debris. Cause: every new debris look (definition, paint, FX, print) built
+its own scene through `build_world_scene_materials`, which carries all five
+brick surface textures (plus the print). Each upload copied them, built
+their mip chains on the CPU and created textures and bind groups, all on the
+frame the bricks died. Looks now build against the shared `BrickPalette`
+the world chunks use (`world_chunks::build_brick`) and upload geometry only
+(`SceneRenderer::upload_palette_model`, a chunk upload that keeps no
+model-space bounds so the shadow pass never culls moved instances). Debris
+behaviour is unchanged: solid 3 s, 2 s fade, cap 128, client-only.
+
+New headless `debris_probe` (release, Golden Gate, 44,465 bricks, offscreen
+GPU) replays the client's per-frame debris work: query-mirror sync, the
+hidden-brick ghost rebuild with a wand out, cues, physics, model upload and
+an instanced draw. Worst frame, before -> after (machine at 100% CPU from
+other builds, so absolute times are noisy; best of repeated runs):
+
+- Rocket, 12 bricks: 48-58 ms -> 2.9-3.3 ms (model upload 46-55 -> 0.2-0.4 ms).
+- Destructo Wand chain, 40 bricks: 16 ms (13 ms per new look) -> 3.5-4.7 ms.
+- 128 bricks at once, then 64 more evicting: 330 ms (models 310 ms) ->
+  3.7-9.6 ms (kill frame: physics 2.5-6 ms; the rest is fading draws).
+
+Measured and not the cause: Rapier body setup (cues <= 0.9 ms for 128),
+surroundings/physics (<= 2.6 ms at 128 bodies on a quiet run), query-mirror
+sync (<= 0.4 ms), break sound (already one per gap), per-body draws (one
+instanced draw per look). Chunk remeshing runs off-thread. Secondary: with
+a building tool out, each kill rebuilds the hidden-brick ghost scene by
+scanning the whole world, 0.7-2 ms on Golden Gate.
+
+Guard (no wall clock): `brick_debris::tests::debris_looks_upload_geometry_only_against_the_brick_palette`
+checks plain, translucent, printed and FX looks carry no images, index the
+palette's materials and match the old standalone geometry exactly.
+`DebrisModels::diagnostics` counts looks built and images uploaded (probe:
+4/12/25 looks, 0 images). Evidence: `cargo test -p bri-client --lib`
+(170 passed), clippy on bri-render and bri-client clean, `cargo run
+--release -p bri-client --bin debris_probe -- <content> <report.json>`.
+Not seen in a window: Max's playtest.
+
+## 2026-09-28 GitHub Actions release builds
+
+Max asked for prebuilt downloads. `.github/workflows/release.yml` runs on a
+`YYYY-MM-DD-*` version tag (or a manual run with a version) on windows-latest:
+fetch content, release build of bri-client, bri-import-addon and bri-launcher
+with `BRI_VERSION`, `--check`, `package_playtest.ps1 -StressLab` and
+`-VerifyPackage`, the standalone-exe release smoke, then a GitHub Release with
+`BlocklandReImagined.exe` and the zip. Symbols are a 90-day workflow artifact.
+Details and Max's setup: `docs/release-builds.md`.
+
+Content source: a draft, prerelease GitHub release `ci-content` in this repo
+holding `ci-content.zip` (only the packs the game loads), made by
+`python tools/ci_content.py upload`. Chosen over a secret (48 KB limit) and a
+second private repo plus token (two setup steps): drafts are private to people
+with push access, the workflow's own token reads them, and assets allow 2 GiB.
+Prerelease keeps a mistakenly published draft out of `releases/latest`.
+`ci_content.py pack` was checked here on a stand-in content folder (zip
+layout, missing-pack error). Not yet run on GitHub: needs Max's upload first.
+The loopback-join smoke stays on the PC (original v20 Add-On archive, GPU).

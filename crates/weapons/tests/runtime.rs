@@ -1032,3 +1032,78 @@ fn a_stuck_arrow_remembers_the_direction_it_flew() {
         assert!(heading.dot(Vec3::NEG_Z) > 0.9, "{heading}");
     }
 }
+
+/// Open water whose surface is y = 0, with no floor.
+#[derive(Default)]
+struct Pool;
+impl Query for Pool {
+    fn sweep(&mut self, _: Vec3, _: Vec3, _: Filter) -> Option<Hit> {
+        None
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        vec![]
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        true
+    }
+    fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
+        let coverage = (-bottom.y / height).clamp(0.0, 1.0);
+        (coverage > 0.0).then_some(Liquid {
+            coverage,
+            density: 1.0,
+            viscosity: 40.0,
+        })
+    }
+}
+
+#[test]
+fn dropped_items_float_a_fifth_under_like_v20_items() {
+    // Every stock ItemData has density 0.2 and no drag, so an item thrown
+    // into water rises and bobs about 20% submerged without settling.
+    let mut w = WeaponsWorld::new(empty()).unwrap();
+    let actor = ActorId(7);
+    w.add_actor(actor, 5).unwrap();
+    w.give(actor, CORE_TOOLS[0]).unwrap();
+    let half = 0.5;
+    w.set_item_bounds(BTreeMap::from([(
+        CORE_TOOLS[0].to_string(),
+        ItemBounds {
+            min: [-half, 0.0, -half],
+            max: [half, 1.0, half],
+        },
+    )]));
+    w.drop_item(actor, 0).unwrap();
+    let id = w.drops().next().unwrap().id;
+    let mut pool = Pool;
+    let (mut low, mut high) = (f32::MAX, f32::MIN);
+    for tick in 0..1200 {
+        w.step(&mut pool);
+        let Some(drop) = w.drops().find(|d| d.id == id) else {
+            break;
+        };
+        if tick > 600 {
+            low = low.min(drop.position.y);
+            high = high.max(drop.position.y);
+        }
+    }
+    assert!(
+        low < -0.2 && high > -0.2,
+        "bobs about 0.2 under: {low}..{high}"
+    );
+    assert!(
+        low > -3.0 && high < 3.0,
+        "stays near the surface: {low}..{high}"
+    );
+    // Without water it simply falls.
+    let mut w = WeaponsWorld::new(empty()).unwrap();
+    w.add_actor(actor, 5).unwrap();
+    w.give(actor, CORE_TOOLS[0]).unwrap();
+    w.drop_item(actor, 0).unwrap();
+    for _ in 0..600 {
+        w.step(&mut Scene::default());
+    }
+    assert!(w.drops().next().unwrap().position.y < -50.0);
+}

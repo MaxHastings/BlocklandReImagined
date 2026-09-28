@@ -216,7 +216,7 @@ pub struct Material {
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
-    pub parameters: Option<[[f32; 4]; 3]>,
+    pub parameters: Option<[[f32; 4]; 4]>,
 }
 impl Material {
     pub fn brick_overlay(name: impl Into<String>, diffuse: usize) -> Self {
@@ -725,7 +725,8 @@ pub struct GpuScene {
     materials: Vec<wgpu::BindGroup>,
     batches: Vec<MeshBatch>,
     /// Opaque/alpha/additive, double sided, background, alpha-masked.
-    material_modes: Vec<(usize, bool, bool, bool)>,
+    /// (blend, double sided, sky/cloud background, alpha mask, water plane)
+    material_modes: Vec<(usize, bool, bool, bool, bool)>,
     /// World-space bounds of static chunk geometry; unbounded scenes always draw.
     bounds: Option<(Vec3, Vec3)>,
     pub vertex_count: usize,
@@ -973,6 +974,39 @@ fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
     // 0..1 depth: the near plane is row 2 alone.
     [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r2, r3 - r2]
 }
+/// Back-to-front order for translucent draws, each a centre and, for a
+/// water surface, the height of its horizontal plane. Torque sorts water
+/// blocks as planes (`SceneRenderImage::Plane`), not points: a plane is drawn
+/// after everything beyond it and before everything on the camera's side,
+/// and stacked planes go farthest first. So an ocean covers the sand layer
+/// under it wherever their strips' centres happen to lie.
+pub fn translucent_order(eye: Vec3, draws: &[(Vec3, Option<f32>)]) -> Vec<usize> {
+    let mut planes: Vec<f32> = draws.iter().filter_map(|d| d.1).collect();
+    planes.sort_by(|a, b| (a - eye.y).abs().total_cmp(&(b - eye.y).abs()));
+    planes.dedup();
+    // Planes between a point and the camera; a plane's rank counts itself.
+    let level = |(center, plane): &(Vec3, Option<f32>)| match plane {
+        Some(h) => planes.iter().position(|p| p == h).unwrap_or(0) * 2 + 1,
+        None => {
+            let behind = |p: &f32| (center.y - p) * (eye.y - p) < 0.0;
+            match planes.iter().rposition(behind) {
+                Some(i) => i * 2 + 2,
+                None => 0,
+            }
+        }
+    };
+    let mut order: Vec<usize> = (0..draws.len()).collect();
+    order.sort_by(|&a, &b| {
+        level(&draws[b]).cmp(&level(&draws[a])).then_with(|| {
+            draws[b]
+                .0
+                .distance_squared(eye)
+                .total_cmp(&draws[a].0.distance_squared(eye))
+        })
+    });
+    order
+}
+
 fn aabb_visible(planes: &[glam::Vec4; 6], (min, max): (Vec3, Vec3)) -> bool {
     planes.iter().all(|plane| {
         let normal = plane.truncate();
@@ -1055,6 +1089,7 @@ fn camera_group(
     lights: &wgpu::Buffer,
     filtering: TextureFiltering,
     shadows: &crate::shadow::ShadowMaps,
+    volume: &VolumeBinding,
 ) -> wgpu::BindGroup {
     let filtered = |address_mode| {
         let filter = if filtering.sharp {
@@ -1126,6 +1161,14 @@ fn camera_group(
             binding: 9,
             resource: wgpu::BindingResource::Sampler(&shadows.point),
         },
+        wgpu::BindGroupEntry {
+            binding: 10,
+            resource: wgpu::BindingResource::TextureView(&volume.view),
+        },
+        wgpu::BindGroupEntry {
+            binding: 11,
+            resource: volume.parameters.as_entire_binding(),
+        },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
@@ -1142,6 +1185,67 @@ pub struct ShadowCasters<'a> {
 }
 
 pub const MAX_POINT_LIGHTS: usize = 256;
+
+/// The light volume texture and its placement: origin and cell size, then
+/// dimensions and 1 when enabled (an empty 1x1x1 volume is bound otherwise).
+struct VolumeBinding {
+    view: wgpu::TextureView,
+    parameters: wgpu::Buffer,
+}
+impl VolumeBinding {
+    fn new(
+        device: &wgpu::Device,
+        volume: Option<(&wgpu::Queue, &crate::light_volume::LightVolume)>,
+    ) -> Self {
+        let dims = volume.map_or([1; 3], |(_, v)| v.dims);
+        let size = wgpu::Extent3d {
+            width: dims[0],
+            height: dims[1],
+            depth_or_array_layers: dims[2],
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("light volume"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut parameters = [0f32; 8];
+        if let Some((queue, volume)) = volume {
+            queue.write_texture(
+                texture.as_image_copy(),
+                bytemuck::cast_slice(&volume.texels),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(dims[0] * 4),
+                    rows_per_image: Some(dims[1]),
+                },
+                size,
+            );
+            parameters = [
+                volume.origin[0],
+                volume.origin[1],
+                volume.origin[2],
+                volume.cell,
+                dims[0] as f32,
+                dims[1] as f32,
+                dims[2] as f32,
+                1.0,
+            ];
+        }
+        Self {
+            view: texture.create_view(&Default::default()),
+            parameters: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("light volume placement"),
+                contents: bytemuck::cast_slice(&parameters),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }),
+        }
+    }
+}
 /// Native unshadowed point illumination. Radius and RGB come from the effect clock.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1154,6 +1258,7 @@ pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
+    volume: VolumeBinding,
     camera_layout: wgpu::BindGroupLayout,
     camera_group: wgpu::BindGroup,
     material_layout: wgpu::BindGroupLayout,
@@ -1243,6 +1348,26 @@ impl SceneRenderer {
                     binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -1367,6 +1492,7 @@ impl SceneRenderer {
         let filtering = TextureFiltering::default();
         let shadows =
             crate::shadow::ShadowMaps::new(device, shadows, &material_layout, &vertex_layouts());
+        let volume = VolumeBinding::new(device, None);
         let camera_group = camera_group(
             device,
             &camera_layout,
@@ -1374,6 +1500,7 @@ impl SceneRenderer {
             &light_buffer,
             filtering,
             &shadows,
+            &volume,
         );
         Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1383,6 +1510,7 @@ impl SceneRenderer {
             }),
             camera_buffer,
             light_buffer,
+            volume,
             camera_layout,
             camera_group,
             material_layout,
@@ -1471,7 +1599,7 @@ impl SceneRenderer {
         }
         let mut materials = vec![];
         for material in &data.materials {
-            let mut parameters: [f32; 16] = [0.0; 16];
+            let mut parameters: [f32; 20] = [0.0; 20];
             parameters[..4].copy_from_slice(&[
                 match material.kind {
                     MaterialKind::Surface => 0.0,
@@ -1544,6 +1672,7 @@ impl SceneRenderer {
                         m.double_sided,
                         matches!(m.kind, MaterialKind::Sky | MaterialKind::Cloud),
                         matches!(m.alpha, AlphaMode::Mask(_)),
+                        m.kind == MaterialKind::Water,
                     )
                 })
                 .collect(),
@@ -1595,6 +1724,19 @@ impl SceneRenderer {
             index_count: data.indices.len(),
             image_count: palette.image_count,
         })
+    }
+    /// Upload one instanced model whose batches index `palette`'s materials:
+    /// geometry only, like a chunk, but never culled by its model-space
+    /// bounds, since its instances may be anywhere.
+    pub fn upload_palette_model(
+        &self,
+        device: &wgpu::Device,
+        data: &SceneData,
+        palette: &GpuScene,
+    ) -> Result<GpuScene> {
+        let mut scene = self.upload_chunk(device, data, palette)?;
+        scene.bounds = None;
+        Ok(scene)
     }
     /// Upload changed animation geometry while sharing the original material
     /// bind groups and textures. A foreign/recolored binding table is rejected.
@@ -1655,8 +1797,40 @@ impl SceneRenderer {
                 &self.light_buffer,
                 filtering,
                 &self.shadows,
+                &self.volume,
             );
         }
+    }
+    /// Baked interior light for vertex-lit surfaces (see `crate::light_volume`);
+    /// None removes it. Rebuilds only the camera bind group.
+    pub fn set_light_volume(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        volume: Option<&crate::light_volume::LightVolume>,
+    ) -> Result<()> {
+        if let Some(volume) = volume {
+            ensure!(
+                volume.dims.iter().all(|d| (1..=2048).contains(d))
+                    && volume.texels.len()
+                        == volume.dims.iter().map(|d| *d as usize).product::<usize>()
+                    && volume.cell.is_finite()
+                    && volume.cell > 0.0
+                    && volume.origin.iter().all(|v| v.is_finite()),
+                "Invalid light volume"
+            );
+        }
+        self.volume = VolumeBinding::new(device, volume.map(|v| (queue, v)));
+        self.camera_group = camera_group(
+            device,
+            &self.camera_layout,
+            &self.camera_buffer,
+            &self.light_buffer,
+            self.filtering,
+            &self.shadows,
+            &self.volume,
+        );
+        Ok(())
     }
     /// Call once before encoding/submitting a frame. Multiple writes before a
     /// single submission would intentionally use the latest camera everywhere.
@@ -1772,7 +1946,8 @@ impl SceneRenderer {
                         }
                     };
                     for batch in &scene.batches {
-                        let (blend, _, background, masked) = scene.material_modes[batch.material];
+                        let (blend, _, background, masked, _) =
+                            scene.material_modes[batch.material];
                         if blend != 0 || background {
                             continue;
                         }
@@ -1912,16 +2087,31 @@ impl SceneRenderer {
             } // authored sky/cloud/band order
             let aa = a.blend != 0;
             let ba = b.blend != 0;
-            aa.cmp(&ba).then_with(|| {
-                if aa {
-                    b.center
-                        .distance_squared(self.eye)
-                        .total_cmp(&a.center.distance_squared(self.eye))
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            })
+            aa.cmp(&ba)
         });
+        // Translucent draws go back to front; water surfaces sort as planes.
+        let first = order
+            .iter()
+            .position(|d| d.blend != 0 && !d.scene.material_modes[d.batch.material].2)
+            .unwrap_or(order.len());
+        let translucent = order.split_off(first);
+        let keys: Vec<_> = translucent
+            .iter()
+            .map(|d| {
+                (
+                    d.center,
+                    d.scene.material_modes[d.batch.material]
+                        .4
+                        .then_some(d.center.y),
+                )
+            })
+            .collect();
+        let mut translucent: Vec<_> = translucent.into_iter().map(Some).collect();
+        order.extend(
+            translucent_order(self.eye, &keys)
+                .into_iter()
+                .filter_map(|i| translucent[i].take()),
+        );
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("persistent world scene"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1955,7 +2145,7 @@ impl SceneRenderer {
             if scene.vertex_count == 0 || scene.index_count == 0 {
                 continue;
             }
-            let (_, double_sided, background, _) = scene.material_modes[batch.material];
+            let (_, double_sided, background, _, _) = scene.material_modes[batch.material];
             pass.set_pipeline(
                 &self.pipelines
                     [usize::from(background) * 6 + draw.blend * 2 + usize::from(double_sided)],

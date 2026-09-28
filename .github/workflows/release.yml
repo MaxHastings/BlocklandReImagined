@@ -1,0 +1,153 @@
+# Builds the Windows release and publishes it as a GitHub Release: the zip
+# and the standalone BlocklandReImagined.exe players download, which is also
+# what the game's update check reads. Same recipe as a release built by hand
+# (docs/playtest-package-layout.md); setup and use in docs/release-builds.md.
+#
+# Push a version tag (git tag 2026-10-02-a19 && git push origin 2026-10-02-a19)
+# or run it from the Actions tab with a version.
+name: release
+
+on:
+  push:
+    tags: ['[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, such as 2026-10-02-a19 (becomes the tag)'
+        required: true
+      publish:
+        description: 'Publish a GitHub Release (off: build and keep the files as a workflow artifact only)'
+        type: boolean
+        default: true
+      stress_lab:
+        description: 'Ship the Stress Lab Add-Ons'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  # Publishing the release, and reading the ci-content draft release.
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  BRI_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+  STRESS_LAB: ${{ github.event_name == 'push' || github.event.inputs.stress_lab == 'true' }}
+  PUBLISH: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the version
+        shell: pwsh
+        run: |
+          if ($env:BRI_VERSION -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
+            Write-Output "::error::'$env:BRI_VERSION' is not a release version: use letters, digits, dot, underscore or dash, such as 2026-10-02-a19."
+            exit 1
+          }
+          if ($env:PUBLISH -eq 'true') {
+            gh release view $env:BRI_VERSION *> $null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Output "::error::A release named $env:BRI_VERSION already exists. Pick a new version."
+              exit 1
+            }
+          }
+          exit 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Fails here, before any build, when Max has not uploaded the content.
+      - name: Fetch the generated v20 content
+        run: python tools/ci_content.py fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+
+      - name: Build the game, Add-On importer and standalone launcher
+        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-launcher
+
+      - name: Startup check against the content
+        shell: pwsh
+        run: |
+          $state = Join-Path $env:RUNNER_TEMP 'bri-check-state'
+          .\target\release\bri-client.exe --check content $state
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\target\release\bri-client.exe --version
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash target\release\bri-client.exe -Algorithm SHA256).Hash
+          $pack = @{ Version = $env:BRI_VERSION; ExpectedExecutableSha256 = $hash }
+          if ($env:STRESS_LAB -eq 'true') { $pack.StressLab = $true }
+          .\tools\package_playtest.ps1 @pack
+          $release = Get-ChildItem dist -Directory | Where-Object { $_.Name -like "BlocklandReImagined-alpha-$env:BRI_VERSION*" -and $_.Name -notlike '*-standalone' } | Select-Object -First 1
+          .\tools\package_playtest.ps1 -VerifyPackage $release.FullName
+          "RELEASE_DIR=$($release.FullName)" >> $env:GITHUB_ENV
+          "RELEASE_NAME=$($release.Name)" >> $env:GITHUB_ENV
+
+      # The same smoke a hand-made release gets: the exe unpacks per user,
+      # keeps a dropped Add-On across starts, and the game passes --check.
+      # (The loopback-join smoke needs an original v20 Add-On archive and a
+      # GPU, so it stays on the PC gate.)
+      - name: Standalone exe smoke
+        shell: pwsh
+        run: |
+          $env:BRI_STANDALONE_EXE = "$env:RELEASE_DIR-standalone\BlocklandReImagined.exe"
+          cargo test --release --locked -p bri-client --test release_smoke -- --ignored --exact standalone_exe_unpacks_per_user_and_starts_the_game --nocapture
+          exit $LASTEXITCODE
+
+      - name: Gather release files
+        shell: pwsh
+        run: |
+          $out = New-Item -ItemType Directory -Force upload
+          Copy-Item "$env:RELEASE_DIR.zip" $out
+          Copy-Item "$env:RELEASE_DIR-standalone\BlocklandReImagined.exe" $out
+          # Debug symbols for crash reports: kept with the run, not shipped.
+          $symbols = New-Item -ItemType Directory -Force "symbols\$env:RELEASE_NAME-symbols"
+          Copy-Item target\release\*.pdb $symbols
+          Get-ChildItem $out, $symbols | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_NAME }}-symbols
+          path: symbols
+          retention-days: 90
+
+      - uses: actions/upload-artifact@v4
+        if: env.PUBLISH != 'true'
+        with:
+          name: ${{ env.RELEASE_NAME }}
+          path: upload
+          retention-days: 30
+
+      - name: Publish the GitHub Release
+        if: env.PUBLISH == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          **Download ``BlocklandReImagined.exe``** and double-click it. It needs no install: the first start unpacks the game into ``%LOCALAPPDATA%\BlocklandReImagined\Game``, and later starts reuse it. Windows may say "Windows protected your PC": click More info, then Run anyway.
+
+          Prefer a folder? Download ``$env:RELEASE_NAME.zip``, unzip it anywhere and run ``Launch.cmd``.
+
+          To play together, one player hosts and the others join by IP address. Hosting over the internet needs UDP port 28000 forwarded to the host when the router doesn't open it automatically.
+          "@
+          Set-Content -Path notes.md -Value $notes -Encoding utf8
+          gh release create $env:BRI_VERSION upload\* --target $env:GITHUB_SHA --title "Blockland ReImagined $env:BRI_VERSION" --notes-file notes.md --generate-notes
+          exit $LASTEXITCODE

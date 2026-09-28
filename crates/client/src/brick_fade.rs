@@ -269,8 +269,10 @@ fn brick_scene(
     let Some(brick) = world.bricks.get(&id) else {
         return Ok(None);
     };
+    // Every colour the brick names, its events' included, indexes the
+    // one-colour palette it is drawn with.
     let mut brick = brick.clone();
-    brick.color = 0;
+    brick.recolor(|_| 0);
     let one = PublicWorld {
         name: "Easing brick".into(),
         map_id: world.map_id.clone(),
@@ -343,6 +345,22 @@ mod tests {
             palette: vec![BLACK, WHITE, [1.0, 0.0, 0.0, 1.0]],
             bricks: bri_world::Bricks::unit(7, brick),
         }
+    }
+
+    /// Reported crash ("Invalid replicated brick 1590: Event color outside
+    /// palette"): a repainted brick with a `setColor` event eased in a
+    /// one-colour palette that its event colour indexed past.
+    #[test]
+    fn a_brick_with_event_colours_eases() {
+        let meshes = BTreeMap::from([("a".to_string(), crate::world_scene::tests::mesh())]);
+        let materials = crate::materials::BrickMaterials::in_memory();
+        let mut world = world(1, true);
+        let brick = world.bricks.get_mut(&7).unwrap();
+        brick.events = vec![crate::world_scene::tests::set_color(2)];
+        let data = brick_scene(&world, 7, WHITE, &meshes, &materials)
+            .unwrap()
+            .unwrap();
+        assert!(data.vertices.iter().all(|v| v.color == WHITE));
     }
 
     #[test]

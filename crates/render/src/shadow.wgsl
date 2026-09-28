@@ -6,7 +6,7 @@ struct Caster { light:mat4x4<f32>, gap:vec4<f32> };
 // Occluder passes only: this cascade's finished caster depth.
 @group(0) @binding(2) var caster_depth:texture_depth_2d;
 @group(1) @binding(0) var layer0:texture_2d<f32>;
-@group(1) @binding(15) var<uniform> material:array<vec4<f32>,4>;
+@group(1) @binding(15) var<uniform> material:array<vec4<f32>,5>;
 struct VertexOut {
     @builtin(position) position:vec4<f32>,
     @location(0) uv:vec2<f32>,

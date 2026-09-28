@@ -455,8 +455,8 @@ impl Jobs {
 }
 
 /// `LoadBricks_GetColorDifference`: `None` when every colour the save's
-/// bricks use is already in the world's set, otherwise whether the save's
-/// new colours fit added on (the world holds 256).
+/// bricks use, paint and event colours alike, is already in the world's set,
+/// otherwise whether the save's new colours fit added on (the world holds 256).
 pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> {
     let saved = &build.world.palette;
     let used: std::collections::BTreeSet<u8> = build
@@ -464,7 +464,7 @@ pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> 
         .bricks
         .values()
         .chain(&build.world.unloaded)
-        .map(|b| b.color)
+        .flat_map(|b| b.colors())
         .collect();
     let missing = |c: &&[f32; 4]| !world.contains(c);
     if !used

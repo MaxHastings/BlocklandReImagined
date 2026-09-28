@@ -173,7 +173,14 @@ impl Water {
         {
             return 0.0;
         }
-        ((self.max[1].min(feet[1] + height) - self.min[1].max(feet[1])) / height).clamp(0.0, 1.0)
+        let top = feet[1] + height;
+        // A body wholly inside is exactly covered. Rounding in the subtraction
+        // below can otherwise leave 0.99999994, and v20's full-submersion
+        // rules (forced crouch, the exit sound's `inLiquid`) test `>= 1`.
+        if self.max[1] >= top && self.min[1] <= feet[1] {
+            return 1.0;
+        }
+        ((self.max[1].min(top) - self.min[1].max(feet[1])) / height).clamp(0.0, 1.0)
     }
     /// Surface/shore opacity from authored depth controls, with defined behavior
     /// for legacy zero-gradient and out-of-range alpha values.
@@ -263,5 +270,23 @@ mod tests {
         assert_eq!(water.max[1], 0.);
         assert_eq!(coverage, 0.5);
         assert!(submersion(&waters, [50., 20., 50.], 2.).is_none());
+    }
+
+    #[test]
+    fn a_body_wholly_under_is_exactly_covered() {
+        // Slate Sea's ocean; these feet heights round (feet + h) - feet below h.
+        let sea = Water::volume([-100., -91., -100.], [100., 9., 100.]);
+        let mut rounded = 0;
+        for i in 0..3000 {
+            let feet = 0.05 + i as f32 * 0.00173;
+            for height in [1.0, 2.65, 2.65 * 1.3] {
+                let top = feet + height;
+                if (top - feet) / height < 1.0 {
+                    rounded += 1;
+                }
+                assert_eq!(sea.coverage([0., feet, 0.], height), 1.0, "{feet} {height}");
+            }
+        }
+        assert!(rounded > 0, "fixture no longer exercises the rounding");
     }
 }

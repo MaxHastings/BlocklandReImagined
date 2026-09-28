@@ -53,6 +53,7 @@ struct Prepared {
     building: crate::building::Building,
     mirror: bri_sim::prediction::CollisionMirror,
     shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    light_volume: LightVolumeState,
 }
 /// A background chunk update: the replica revision it reached, and the
 /// chunk state handed back with the rebuilt chunks.
@@ -253,9 +254,11 @@ fn prepare_map(
     map: &str,
     selected: Vec<(String, u8)>,
     catalog: &bri_sim::session::ToolCatalog,
+    light_cache: &std::path::Path,
 ) -> Result<Prepared> {
     let map = map.to_owned();
     let visual = load_map_bundle(&paths.map_bundle, &map)?;
+    let light_volume = LightVolumeState::start(&visual.scene, light_cache);
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions =
         Definitions::load_with(&paths.brick_catalog, &paths.geometry, &paths.brick_extras)?;
@@ -305,6 +308,7 @@ fn prepare_map(
         building,
         mirror,
         shape_indices: visual.shape_indices,
+        light_volume,
     })
 }
 /// Everything a host installs in a map's session; kept to build the next
@@ -415,6 +419,7 @@ pub struct App {
     weapon_animation_cursor: u64,
     effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     gpu_scene: Option<GpuScene>,
+    light_volume: LightVolumeState,
     /// Map static shapes' index ranges, and the smashed ones `gpu_scene`
     /// no longer draws.
     shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
@@ -1403,6 +1408,7 @@ impl App {
             weapon_animation_cursor: 0,
             effects_renderer: None,
             gpu_scene: None,
+            light_volume: LightVolumeState::default(),
             shape_indices: BTreeMap::new(),
             gpu_broken: BTreeSet::new(),
             gpu_terrain: Vec::new(),
@@ -1562,6 +1568,7 @@ impl App {
         self.avatar_action_images.clear();
         self.controls = Controls::default();
         self.cpu_scene = None;
+        self.light_volume = LightVolumeState::default();
         self.cpu_terrain.clear();
         self.gpu_scene = None;
         self.gpu_terrain.clear();
@@ -2087,6 +2094,7 @@ impl App {
             "This map has no usable native bundle yet"
         );
         let paths = self.content.paths.clone();
+        let light_cache = self.state_dir.join("light-volumes");
         let paths_for_maps = paths.clone();
         let base_map = hosted.base_map;
         let package_world = hosted.catalog;
@@ -2200,6 +2208,7 @@ impl App {
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&base_map, None)?;
                     let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
+                    let light_volume = LightVolumeState::start(&visual.scene, &light_cache);
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack = paths.vehicle_pack()?;
@@ -2260,6 +2269,7 @@ impl App {
                             building,
                             mirror,
                             shape_indices: visual.shape_indices,
+                            light_volume,
                         },
                         identity,
                         catalog,
@@ -2496,6 +2506,7 @@ impl App {
         let servers_file = self.state_dir.join("servers.json");
         let lan_hosts = self.lan_hosts.clone();
         let paths = self.content.paths.clone();
+        let light_cache = self.state_dir.join("light-volumes");
         let player = self.player_name();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
@@ -2659,7 +2670,7 @@ impl App {
             let permit = load_limit.acquire_owned().await?;
             let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
                 let _permit = permit;
-                prepare_map(&paths, &map, selected, &catalog)
+                prepare_map(&paths, &map, selected, &catalog, &light_cache)
             })
             .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
@@ -3277,6 +3288,7 @@ impl App {
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
                     let paths = self.content.paths.clone();
+                    let light_cache = self.state_dir.join("light-volumes");
                     let selected = self.content.selectable.clone();
                     let catalog = self.tool_ui.server_catalog();
                     let load_limit = self.load_limit.clone();
@@ -3312,7 +3324,7 @@ impl App {
                             let permit = load_limit.acquire_owned().await?;
                             tokio::task::spawn_blocking(move || {
                                 let _permit = permit;
-                                prepare_map(&paths, &map, selected, &catalog)
+                                prepare_map(&paths, &map, selected, &catalog, &light_cache)
                             })
                             .await?
                         }
@@ -3567,6 +3579,7 @@ impl App {
             self.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
             self.weather.set_map(&prepared.map_id, prepared.waters)?;
+            self.light_volume = prepared.light_volume;
             self.cpu_scene = Some(prepared.scene);
             self.shape_indices = prepared.shape_indices;
             self.cpu_terrain = prepared.terrain;
@@ -4508,6 +4521,88 @@ fn ghost_key(building: &crate::building::Building) -> u64 {
 
 fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrickLook) {
     crate::world_scene::v20_temp_brick(scene, look);
+}
+
+/// The map's baked interior light (`bri_render::light_volume`), started on
+/// its own thread as soon as the map's scene is read, so it bakes while the
+/// rest of the map loads, and uploaded once per renderer. A bake is stored
+/// under the client state directory by its content key, so each map bakes
+/// once. Until it arrives, vertex-lit meshes see only the sun and lights.
+type LightVolumeReceiver = std::sync::mpsc::Receiver<bri_render::light_volume::LightVolume>;
+#[derive(Default)]
+struct LightVolumeState {
+    /// Behind a mutex so a prepared map (which carries it) stays `Sync`.
+    baking: Option<std::sync::Mutex<LightVolumeReceiver>>,
+    volume: Option<bri_render::light_volume::LightVolume>,
+    uploaded: bool,
+}
+impl LightVolumeState {
+    /// Cells of at least 2 units, at most a million (4 MB): about 4.7 units
+    /// across the whole Bedroom.
+    const MIN_CELL: f32 = 2.0;
+    const MAX_CELLS: usize = 1_000_000;
+    fn start(scene: &SceneData, cache: &std::path::Path) -> Self {
+        let Some(baker) = bri_render::light_volume::Baker::new(scene) else {
+            return Self::default();
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cache = cache.to_owned();
+        let spawned = std::thread::Builder::new()
+            .name("light volume".into())
+            .spawn(move || {
+                let key = baker.key(Self::MIN_CELL, Self::MAX_CELLS);
+                let name: String = key.iter().map(|b| format!("{b:02x}")).collect();
+                let file = cache.join(format!("{name}.lightvolume"));
+                let stored = std::fs::read(&file)
+                    .ok()
+                    .and_then(|bytes| bri_render::light_volume::LightVolume::from_bytes(&bytes));
+                if let Some(volume) = stored {
+                    let _ = tx.send(volume);
+                    return;
+                }
+                let volume = baker.bake(Self::MIN_CELL, Self::MAX_CELLS);
+                let bytes = volume.to_bytes();
+                let _ = tx.send(volume);
+                // A lost write only means baking again next time.
+                let partial = file.with_extension("partial");
+                let _ = std::fs::create_dir_all(&cache)
+                    .and_then(|_| std::fs::write(&partial, bytes))
+                    .and_then(|_| std::fs::rename(&partial, &file));
+            });
+        Self {
+            baking: spawned.ok().map(|_| std::sync::Mutex::new(rx)),
+            ..Self::default()
+        }
+    }
+    fn upload(
+        &mut self,
+        renderer: &mut SceneRenderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
+        if let Some(rx) = self.baking.as_mut() {
+            let received = match rx.get_mut() {
+                Ok(rx) => rx.try_recv(),
+                Err(_) => Err(std::sync::mpsc::TryRecvError::Disconnected),
+            };
+            match received {
+                Ok(volume) => {
+                    self.volume = Some(volume);
+                    self.baking = None;
+                    self.uploaded = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.baking = None,
+            }
+        }
+        if !self.uploaded
+            && let Some(volume) = &self.volume
+        {
+            renderer.set_light_volume(device, queue, Some(volume))?;
+            self.uploaded = true;
+        }
+        Ok(())
+    }
 }
 
 fn combine_effect_frames(
@@ -6450,6 +6545,7 @@ impl PlatformApp for App {
         if self.gpu_scene.is_none() {
             self.gpu_broken.clear();
             self.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
+            self.light_volume.uploaded = false;
             self.gpu_terrain = self
                 .cpu_terrain
                 .iter()
@@ -6464,6 +6560,7 @@ impl PlatformApp for App {
                 })
                 .collect::<Result<_>>()?;
         }
+        self.light_volume.upload(renderer, frame.device, frame.queue)?;
         if self.gpu_palette.is_none()
             && let Some(palette) = &self.palette
         {
@@ -6626,15 +6723,19 @@ impl PlatformApp for App {
                 }
                 self.hidden_uploaded = Some(show);
             }
-            self.debris_models.upload(
-                &self.brick_debris,
-                renderer,
-                frame.device,
-                frame.queue,
-                meshes,
-                materials,
-                &view.world.palette,
-            )?;
+            if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
+                self.debris_models.upload(
+                    &self.brick_debris,
+                    renderer,
+                    frame.device,
+                    frame.queue,
+                    meshes,
+                    palette,
+                    gpu_palette,
+                    materials,
+                    &view.world.palette,
+                )?;
+            }
             if let Some(world) = &self.world_source {
                 self.fade_models.upload(
                     &self.brick_fades,

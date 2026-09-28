@@ -1,8 +1,7 @@
 # bri-ui — native interface integration
 
 Both `bri-ui` and offline `bri-ui-import` are members of the root workspace.
-The active implementation is under `src/`; `wip/` preserves the transferred
-unfinished drafts for reference and is not compiled.
+The implementation is under `src/`.
 
 ## Implemented interface layer
 
@@ -15,10 +14,9 @@ typed requests with acknowledgments and rejection handling. No scripts execute.
 The `bri-client` host now connects map loading, authoritative movement/chat,
 networking, scene/UI compositing, display requests and settings persistence.
 See [native client integration](../../docs/native-client.md) for verified limits.
-Avatar rendering, audio and most gameplay requests still need host adapters.
-Minigame/trust/admin/config/add-on/music workflows and several options still need
-implementation. Disabled/development notices do not satisfy the full vanilla
-contract. See `docs/alpha-contract.md` and `docs/ui-handoff-status.md`.
+Screens for minigames, trust, admin, server config, Add-Ons and music live in
+`src/screens/`. Disabled/development notices do not satisfy the full vanilla
+contract. See `docs/alpha-contract.md` and `docs/STATUS.md`.
 
 ## Host contract
 

@@ -1,8 +1,7 @@
-# Vanilla audio pipeline — handoff
+# Vanilla audio pipeline
 
-Delivered for [the Opus audio brief](../../coordination/opus-vanilla-audio.md).
-Astra owns integration, and Maxwell judges sound and timing in a playtest. No
-in-game acceptance is claimed.
+Research notes behind the audio converter and runtime (`crates/audio-import`,
+`crates/audio`), both now part of the game.
 
 ## Status
 

@@ -1236,12 +1236,21 @@ impl VehiclesWorld {
                 (c.steer, c.pitch, c.roll)
             };
             let aabb = world.colliders[v.collider].compute_aabb();
-            let submerged = bri_content::water::submersion(
+            let liquid = bri_content::water::submersion(
                 waters,
                 [p.x, aabb.mins.y, p.z],
                 (aabb.maxs.y - aabb.mins.y).max(0.01),
-            )
-            .map_or(0., |(_, coverage)| coverage);
+            );
+            let submerged = liquid.map_or(0., |(_, coverage)| coverage);
+            // `ShapeBase::updateContainer`: from 10% coverage, buoyancy is the
+            // density ratio and drag is `drag` x viscosity, both x coverage.
+            let (buoyancy, drag) = match liquid {
+                Some((water, coverage)) if coverage >= 0.1 => (
+                    water.density / d.density.max(0.05) * coverage,
+                    d.drag.max(0.) * water.viscosity * coverage,
+                ),
+                _ => (0., 0.),
+            };
             v.water_coverage = submerged;
             let in_water = submerged > 0.05;
             if v.water != in_water {
@@ -1297,12 +1306,23 @@ impl VehiclesWorld {
             b.reset_forces(false);
             b.reset_torques(false);
             b.add_force(hull_friction, true);
-            if submerged > 0. {
+            if buoyancy > 0. || drag > 0. {
+                // `WheeledVehicle::updateForces` and FlyingVehicle's: lift of
+                // buoyancy x gravity x mass, and drag straight on the velocity,
+                // not scaled by mass.
                 b.add_force(
-                    Vec3::Y * (d.mass * gravity * submerged / d.density.max(0.05))
-                        - velocity * (d.mass * submerged * 1.5),
+                    Vec3::Y * (buoyancy * gravity * d.mass) - velocity * drag,
                     true,
                 );
+                // Wheeled vehicles also take `torque -= angMomentum * mDrag`,
+                // which decays spin at `drag` per second whatever the inertia.
+                if matches!(
+                    d.family,
+                    Family::Wheeled | Family::FlyingWheeled | Family::Skis | Family::Ball
+                ) {
+                    let spin = b.angvel() * (1. - drag * FIXED_DT).max(0.);
+                    b.set_angvel(spin, true);
+                }
             }
             if alive {
                 match d.family {

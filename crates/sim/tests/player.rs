@@ -745,3 +745,41 @@ fn a_wedged_rider_gains_lane_speed_on_v20_ticks() {
     let fast = lane_speed(Some(1.0 / 120.0));
     assert!((fast[29] - 3.248).abs() < 0.05, "120 Hz ticks settle at {}", fast[29]);
 }
+
+#[test]
+fn a_swimmer_rising_from_the_bottom_stays_crouched_until_it_surfaces() {
+    // Slate Sea: the slate lies 9 under the surface. A player spawned on it
+    // floats up fully submerged; v20 holds the crouch pose all the way, and
+    // standing only once the crouched box breaks the surface.
+    // Each 32 ms tick adds buoyancy (1 / 0.7 - 1) x gravity 20 and then
+    // removes drag 0.1 x viscosity 40 of the speed, so the rise settles at
+    // 8.571 x (1 - 4 x 0.032) / 4 = 1.869 units a second.
+    let mut world = scene();
+    let waters = [bri_content::water::Water::volume(
+        [-100., -91., -100.],
+        [100., 9., 100.],
+    )];
+    let mut player = spawn(&mut world);
+    // The crouch state each time it changes; the motor may not tick on the
+    // very first step.
+    let mut poses = vec![];
+    let mut fastest: f32 = 0.0;
+    for _ in 0..900 {
+        player
+            .step_in_water(&mut world, MoveInput::default(), &waters)
+            .unwrap();
+        world.step();
+        fastest = fastest.max(player.state().velocity[1]);
+        let crouched = player.state().crouched;
+        if poses.last() != Some(&crouched) {
+            poses.push(crouched);
+        }
+    }
+    assert!((fastest - 1.869).abs() < 0.005, "rose at {fastest}");
+    assert!(
+        poses.ends_with(&[true, false]) && poses.iter().filter(|&&c| c).count() == 1,
+        "crouch should end once, at the surface: {poses:?}"
+    );
+    assert!(!player.state().crouched);
+    assert!(player.state().feet[1] > 6.0, "{:?}", player.state());
+}

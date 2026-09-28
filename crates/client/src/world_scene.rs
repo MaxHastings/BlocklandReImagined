@@ -37,10 +37,12 @@ pub fn build_world_scene_materials(
         "Invalid replicated world paint palette"
     );
     let mut count = 0usize;
+    let mut skipped = std::collections::BTreeSet::new();
     for (id, brick) in &world.bricks {
-        brick
-            .validate(world.palette.len())
-            .with_context(|| format!("Invalid replicated brick {id}"))?;
+        if !drawable(*id, brick, world.palette.len()) {
+            skipped.insert(*id);
+            continue;
+        }
         if !brick.visible {
             continue;
         }
@@ -87,7 +89,11 @@ pub fn build_world_scene_materials(
     scene.omissions.push("Attached brick lights/emitters are bound by the host effects adapter, outside this geometry pass".into());
     scene.vertices.reserve(count.saturating_mul(2));
     scene.indices.reserve(count.saturating_mul(3));
-    for (id, brick) in world.bricks.iter().filter(|(_, b)| b.visible) {
+    for (id, brick) in world
+        .bricks
+        .iter()
+        .filter(|(id, b)| b.visible && !skipped.contains(*id))
+    {
         append_world_brick(
             &mut scene,
             *id,
@@ -103,6 +109,45 @@ pub fn build_world_scene_materials(
     scene.omissions.sort();
     scene.omissions.dedup();
     Ok(scene)
+}
+
+/// Whether a replicated brick can be drawn. One bad brick must not end the
+/// game: an invalid one is left out and named in the log, and the session
+/// goes on. Each brick is named once per reason, however often its chunk
+/// rebuilds, until it becomes valid again.
+pub(crate) fn drawable(id: u64, brick: &bri_world::Brick, palette_len: usize) -> bool {
+    static LOGGED: std::sync::Mutex<BTreeMap<u64, String>> = std::sync::Mutex::new(BTreeMap::new());
+    let mut logged = LOGGED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (drawable, warning) = check_drawable(id, brick, palette_len, &mut logged);
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+    drawable
+}
+
+/// [`drawable`] against the reasons already logged: the warning to log, if
+/// this brick's reason is new.
+fn check_drawable(
+    id: u64,
+    brick: &bri_world::Brick,
+    palette_len: usize,
+    logged: &mut BTreeMap<u64, String>,
+) -> (bool, Option<String>) {
+    match brick.validate(palette_len) {
+        Ok(()) => {
+            logged.remove(&id);
+            (true, None)
+        }
+        Err(error) => {
+            let reason = format!("{error:#}");
+            let new = logged.get(&id) != Some(&reason);
+            let warning = new.then(|| format!("Skipping invalid replicated brick {id}: {reason}"));
+            logged.insert(id, reason);
+            (false, warning)
+        }
+    }
 }
 
 /// Append one validated visible brick with its paint, print and FX.
@@ -261,17 +306,18 @@ pub fn v20_temp_brick(scene: &mut SceneData, look: &TempBrickLook) {
             ],
             [0.0; 4],
             [0.0; 4],
+            [0.0; 4],
         ]);
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bri_content::brick::{Face, Quad, Surface, Vertex};
     use bri_render::scene::AlphaMode;
 
-    fn mesh() -> BrickMesh {
+    pub(crate) fn mesh() -> BrickMesh {
         BrickMesh {
             schema_version: 1,
             id: "mesh/shared".into(),
@@ -309,6 +355,57 @@ mod tests {
     }
     fn brick(position: [f32; 3]) -> bri_world::Brick {
         bri_world::Brick::new(ContentRef::Resolved("definition/a".into()), position, 1)
+    }
+
+    pub(crate) fn set_color(color: u8) -> bri_world::EventRow {
+        bri_world::EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 0,
+            target: bri_world::EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "setColor".into(),
+            params: vec![bri_world::EventValue::Color(color)],
+        }
+    }
+
+    /// An invalid brick is named once per reason, not on every rebuild,
+    /// and again after it was valid.
+    #[test]
+    fn an_invalid_brick_is_logged_once_per_reason() {
+        let mut logged = BTreeMap::new();
+        let mut bad = brick([0.0; 3]);
+        bad.events = vec![set_color(2)];
+        let first = check_drawable(1590, &bad, 2, &mut logged);
+        assert_eq!(
+            first,
+            (
+                false,
+                Some(
+                    "Skipping invalid replicated brick 1590: Color 2 outside the 2-color palette"
+                        .into()
+                )
+            )
+        );
+        assert_eq!(check_drawable(1590, &bad, 2, &mut logged), (false, None));
+        bad.events = vec![set_color(3)];
+        assert!(check_drawable(1590, &bad, 2, &mut logged).1.is_some());
+        assert_eq!(check_drawable(1590, &bad, 4, &mut logged), (true, None));
+        assert!(check_drawable(1590, &bad, 2, &mut logged).1.is_some());
+    }
+
+    /// Reported crash: one brick naming an event colour past the palette
+    /// closed the client. It is left out and the rest still draws.
+    #[test]
+    fn an_invalid_brick_is_left_out_not_fatal() {
+        let meshes = BTreeMap::from([("definition/a".into(), mesh())]);
+        let mut world = world();
+        let mut bad = brick([10.0, 0.0, 0.0]);
+        bad.events = vec![set_color(2)];
+        world.bricks.insert(1, brick([3.0, 4.0, 5.0]));
+        world.bricks.insert(1590, bad);
+        let scene = build_world_scene(&world, &meshes, 4).unwrap();
+        assert_eq!((scene.vertices.len(), scene.indices.len()), (4, 6));
     }
 
     #[test]

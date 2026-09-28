@@ -69,14 +69,10 @@ pub fn suns(scene: &Scene) -> Result<Vec<Sun>> {
     for node in scene.nodes.iter().filter(|n| matches!(n.kind, Kind::Sun)) {
         let [azimuth] = floats(node, "azimuth", [0.0])?;
         let [elevation] = floats(node, "elevation", [35.0])?;
-        let yaw = azimuth.clamp(0.0, 359.0).to_radians();
-        let pitch = elevation.clamp(-360.0, 360.0).to_radians();
         // Portable `libm` trigonometry: imported content must be byte-identical
         // on every machine, and C runtime sines can differ in the last bit.
-        let (sin, cos) = (libm::sinf, libm::cosf);
-        let toward = Vec3::new(sin(yaw) * cos(pitch), cos(yaw) * cos(pitch), sin(pitch));
-        ensure!(toward.is_finite(), "Invalid sun angles");
-        let d = -toward.normalize();
+        let d = bri_content::scene::sun_direction(azimuth, elevation, libm::sinf, libm::cosf);
+        ensure!(d.is_finite(), "Invalid sun angles");
         let color = floats(node, "color", [0.7, 0.7, 0.7, 1.0])?;
         let ambient = floats(node, "ambient", [0.3, 0.3, 0.3, 1.0])?;
         let clamp = |c: [f32; 4]| Vec3::new(c[0], c[1], c[2]).clamp(Vec3::ZERO, Vec3::ONE);

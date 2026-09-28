@@ -7,7 +7,7 @@ together, what to send). `FEATURES.md` says what is done and what isn't, and
 
 ## Start
 
-1. Keep the package folder intact in a writable folder and run `Launch.cmd`.
+1. Keep the game folder intact in a writable folder and run `Launch.cmd`.
    No Rust, compiler or original v20 installation is needed.
 2. Choose your mouse/keyboard scheme on first run (standard if you have a
    numpad, laptop otherwise).

@@ -123,9 +123,8 @@ they're your identity and your server's.
 - **Vehicle handling** is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
 - **Bots** steer simply and can get stuck on complex builds.
-- **Some v20 settings aren't there yet**: Censor Chat, Press Up to Repeat
-  Chat, the ghost brick colour options, and Render My Player, Items and
-  Jets. `FEATURES.md` lists everything still missing.
+- **A few v20 settings aren't there yet**, such as Render My Player.
+  `FEATURES.md` lists everything still missing.
 - **Old Add-On scripts don't run.** Imported v20 Add-Ons bring their
   bricks, weapons and vehicles, but not their custom behaviour (see
   `FEATURES.md`).

@@ -585,7 +585,8 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
         }
         Result::<()>::Ok(())
     })
-    .await??;
+    .await
+    .context("waiting for the shot's projectile")??;
     let projectile = first.replica.weapons.projectiles[0].clone();
     assert_eq!(projectile.source.0, shooter);
     assert_eq!(first.replica.tools[&shooter].selected, Some(3));
@@ -849,7 +850,8 @@ async fn join_refusal_names_each_differing_shared_package() -> Result<()> {
             }
         }
     })
-    .await??;
+    .await
+    .context("waiting for the differing-package notice")??;
     assert!(told.contains("server has v20-ui 1.0.0"), "{told}");
     client.close();
     server.stop().await?;
@@ -914,7 +916,8 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         }
         anyhow::Ok(())
     })
-    .await??;
+    .await
+    .context("waiting for both activation replies")??;
     assert_eq!(
         replies,
         vec![(sequences[0], ids[0]), (sequences[1], ids[1])]
@@ -1145,7 +1148,8 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
             }
         }
     })
-    .await?;
+    .await
+    .context("waiting for the kicked player's close")?;
     assert!(
         closed.contains("closed by peer: You were kicked"),
         "{closed}"
@@ -1241,14 +1245,23 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
     server.stop().await?;
     Ok(())
 }
-async fn wait(client: &mut Client, predicate: impl Fn(&Client) -> bool) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !predicate(client) {
-            client.receive().await?;
-        }
-        Result::<()>::Ok(())
-    })
-    .await?
+/// Receive until `predicate` holds; a timeout names the waiting line.
+#[track_caller]
+fn wait<'a>(
+    client: &'a mut Client,
+    predicate: impl Fn(&Client) -> bool + 'a,
+) -> impl std::future::Future<Output = Result<()>> + 'a {
+    let at = std::panic::Location::caller();
+    async move {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !predicate(client) {
+                client.receive().await?;
+            }
+            Result::<()>::Ok(())
+        })
+        .await
+        .with_context(|| format!("waiting at {at}"))?
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1657,18 +1670,68 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
     assert_eq!(events, b.replica.take_cues());
     assert_eq!(events, late.replica.take_cues());
     assert_eq!(events.len(), 2);
-    wait(&mut a, |c| c.replica.poses[&c.owner].player.grounded).await?;
-    send_inputs(
-        &mut a,
-        &[MoveInput {
-            jump: true,
-            ..Default::default()
-        }],
-    )?;
-    wait(&mut b, |c| c.replica.cue_cursor == 5).await?;
-    let jumps = b.replica.take_cues();
-    assert_eq!(jumps.len(), 1);
-    assert_eq!(jumps[0].kind, CueKind::Jump);
+    // v20 refuses a jump tapped in the tick the feet land (canJump reads
+    // contact from before the move), so wait until the jumper can jump.
+    wait(&mut a, |c| {
+        let p = &c.replica.poses[&c.owner].player;
+        p.grounded && p.jump.delay == 0 && p.jump.since_contact == 0
+    })
+    .await?;
+    // Movement is unreliable, so a real client repeats every input in each
+    // frame's datagram until the host acknowledges it. Resend the jump
+    // (always the same input, so the host takes it once) each frame.
+    let jump = [MoveInput {
+        jump: true,
+        ..Default::default()
+    }];
+    let sequence = a.replica.poses[&a.owner].acknowledged_input + 1;
+    // The jumper's state as it changes, and every cue either side hears,
+    // for the failure message.
+    let mut timeline = Vec::new();
+    let mut last = None;
+    let heard = tokio::time::timeout(Duration::from_secs(5), async {
+        while b.replica.cue_cursor < 5 {
+            if a.replica.poses[&a.owner].acknowledged_input < sequence {
+                a.movement(sequence, &jump, None)?;
+            }
+            tokio::select! {
+                received = b.receive() => { received?; }
+                received = a.receive() => { received?; }
+                () = tokio::time::sleep(Duration::from_millis(16)) => {}
+            }
+            let pose = &a.replica.poses[&a.owner];
+            let p = &pose.player;
+            let now = format!(
+                "ack {} feet {:?} velocity {:?} grounded {} jump {:?} motor {:?}",
+                pose.acknowledged_input, p.feet, p.velocity, p.grounded, p.jump, p.tick
+            );
+            if last.as_ref() != Some(&now) {
+                timeline.push(format!("tick {} {now}", a.replica.tick));
+                last = Some(now);
+            }
+            for (side, client) in [("jumper", &mut a), ("listener", &mut b)] {
+                for cue in client.replica.take_cues() {
+                    timeline.push(format!("{side} heard {:?} at tick {}", cue.kind, cue.tick));
+                }
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await;
+    heard
+        .with_context(|| {
+            format!(
+                "waiting for the listener to hear the jump (input {sequence}):\n{}",
+                timeline.join("\n")
+            )
+        })??;
+    assert_eq!(b.replica.cue_cursor, 5);
+    let jumps: Vec<_> = timeline
+        .iter()
+        .filter(|line| line.starts_with("listener heard"))
+        .collect();
+    assert_eq!(jumps.len(), 1, "{timeline:#?}");
+    assert!(jumps[0].starts_with("listener heard Jump"), "{timeline:#?}");
     drop((a, b, late));
     server.stop().await?;
     Ok(())
