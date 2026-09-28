@@ -662,6 +662,34 @@ impl Camera {
             atmosphere: [0.0; 4],
         }
     }
+    /// A camera looking along `forward` with its own `up`, so a view at or
+    /// past straight up or down keeps its roll (the player camera turns by
+    /// yaw then pitch, as Torque's eye transform does).
+    pub fn oriented(
+        eye: [f32; 3],
+        forward: [f32; 3],
+        up: [f32; 3],
+        aspect: f32,
+        fov_y: f32,
+        near: f32,
+        far: f32,
+    ) -> Self {
+        let forward = Vec3::from(forward).normalize_or_zero();
+        let up = Vec3::from(up).normalize_or_zero();
+        if forward.length_squared() < 0.5
+            || up.length_squared() < 0.5
+            || forward.cross(up).length_squared() < 1e-6
+        {
+            let target = Vec3::from(eye) + forward;
+            return Self::perspective(eye, target.to_array(), aspect, fov_y, near, far);
+        }
+        let view = glam::camera::rh::view::look_to_mat4(Vec3::from(eye), forward, up);
+        let projection = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
+        Self {
+            view_projection: (projection * view).to_cols_array(),
+            ..Self::perspective(eye, [eye[0], eye[1], eye[2] - 1.0], aspect, fov_y, near, far)
+        }
+    }
     pub fn apply_environment(&mut self, scene: &SceneData) {
         self.sun_direction[..3].copy_from_slice(&scene.sun_direction);
         self.sun_color[..3].copy_from_slice(&scene.sun_color);

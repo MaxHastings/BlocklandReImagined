@@ -1590,7 +1590,8 @@ impl App {
             Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
         };
         let (yaw, pitch) = controls.camera_angles();
-        let pitch = pitch.clamp(-1.56, 1.56);
+        // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
+        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         let pos = controls.camera_pos();
         let mounted = view.vitals.get(&view.owner).is_some_and(|v| v.mounted.is_some());
         if controls.observer().is_some() || pos == 0.0 {
@@ -1608,7 +1609,9 @@ impl App {
         if !mounted {
             let (distance, pivot, tilt) =
                 Self::player_camera(assets, &view.archetypes, lag, local, pos);
-            let pitch = (pitch - tilt).clamp(-1.56, 1.56);
+            // `getCameraTransform` composes the tilt onto the eye's pitch, so
+            // the chase camera keeps swinging over the head past vertical.
+            let pitch = pitch - tilt;
             let eye = camera_eye(
                 controls,
                 presented,
@@ -3896,6 +3899,16 @@ fn camera_eye(
         },
     }
 }
+/// The view's forward, right and up for a look turned by `yaw` then pitched
+/// by `pitch`, as Torque builds the eye transform (`zmat(yaw) * xmat(pitch)`).
+/// Right stays level, so looking straight up or down (v20's look limits are
+/// exactly +-90 degrees) or past it (the chase camera adds `cameraTilt`)
+/// keeps turning with the yaw instead of snapping to a fixed roll.
+fn view_basis(yaw: f32, pitch: f32) -> (Vec3, Vec3, Vec3) {
+    let forward = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos());
+    let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
+    (forward, right, right.cross(forward))
+}
 /// Torque's FOV is horizontal (`GuiTSCtrl::processCameraQuery` takes the
 /// frustum width from it and the height from the aspect ratio).
 fn vertical_fov(horizontal: f32, aspect: f32) -> f32 {
@@ -4799,16 +4812,12 @@ impl PlatformApp for App {
                     .local_eye()
                     .unwrap_or_else(|| view.archetypes.eye(local)),
             )?;
-            let forward = Vec3::new(
-                yaw.sin() * pitch.cos(),
-                pitch.sin(),
-                -yaw.cos() * pitch.cos(),
-            );
+            let (forward, view_right, view_up) = view_basis(yaw, pitch);
             self.observer_eye = self.controls.observer().map(|_| eye);
             listener = bri_audio::Listener {
                 position: eye.to_array(),
                 forward: forward.to_array(),
-                up: Vec3::Y.to_array(),
+                up: view_up.to_array(),
             };
             // v20 tints the screen with the liquid the camera is in, and
             // colours player splashes and froth with the liquid they touch.
@@ -4951,14 +4960,13 @@ impl PlatformApp for App {
                 Vec3::ZERO,
                 |id, from, to| building.effect_visible(id, from, to),
             )?;
-            let right = forward.cross(Vec3::Y).normalize();
             self.weather.advance(
                 game_elapsed.as_secs_f32(),
                 bri_weather::CameraState {
                     position: eye,
                     forward,
-                    right,
-                    up: right.cross(forward).normalize(),
+                    right: view_right,
+                    up: view_up,
                     velocity: Vec3::from_array(local.velocity),
                 },
                 building,
@@ -6133,24 +6141,17 @@ impl PlatformApp for App {
                 .local_eye()
                 .unwrap_or_else(|| view.archetypes.eye(local)),
         )?;
-        let forward = Vec3::new(
-            yaw.sin() * pitch.cos(),
-            pitch.sin(),
-            -yaw.cos() * pitch.cos(),
-        );
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.actor_effects.camera_shake(eye) * 10f32.to_radians();
-        let forward = if shake == Vec3::ZERO {
-            forward
-        } else {
-            let yaw = yaw + shake.z.clamp(-0.3, 0.3);
-            let pitch = (pitch + shake.x.clamp(-0.3, 0.3)).clamp(-1.56, 1.56);
-            Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
-        };
+        let (forward, right, up) = view_basis(
+            yaw + shake.z.clamp(-0.3, 0.3),
+            pitch + shake.x.clamp(-0.3, 0.3),
+        );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
-        let mut camera = Camera::perspective(
+        let mut camera = Camera::oriented(
             eye.to_array(),
-            (eye + forward).to_array(),
+            forward.to_array(),
+            up.to_array(),
             aspect,
             vertical_fov(self.controls.fov().to_radians(), aspect),
             0.05,
@@ -6159,12 +6160,11 @@ impl PlatformApp for App {
         camera.apply_environment(scene);
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
         renderer.update_camera(frame.queue, &camera);
-        let right = forward.cross(Vec3::Y).normalize();
         let effects_camera = bri_fx_runtime::Camera {
             view_projection: glam::Mat4::from_cols_array(&camera.view_projection),
             position: eye,
             right,
-            up: right.cross(forward).normalize(),
+            up,
         };
         if self.client_code.is_started() {
             self.client_code.run_frame(self.animation_time, eye, forward);
@@ -6480,6 +6480,42 @@ mod tests {
         let walking = super::rider_input(no_jet, pressed, false);
         assert!(!walking.jet && !walking.jump, "the lesson's limits still hold on foot");
         assert_eq!(walking.forward, 1.0);
+    }
+    #[test]
+    fn looking_straight_down_or_past_it_keeps_turning_with_the_yaw() {
+        use glam::Vec3;
+        use std::f32::consts::FRAC_PI_2;
+        // v20's look limits are exactly +-90 degrees; the chase camera adds
+        // cameraTilt (0.261) past that.
+        for pitch in [-FRAC_PI_2 - 0.261, -FRAC_PI_2, -1.2, 0.0, FRAC_PI_2] {
+            for yaw in [0.0f32, 1.0, -2.5] {
+                let (forward, right, up) = super::view_basis(yaw, pitch);
+                for v in [forward, right, up] {
+                    assert!(v.is_finite() && (v.length() - 1.0).abs() < 1e-5);
+                }
+                assert!(forward.dot(right).abs() < 1e-5 && forward.dot(up).abs() < 1e-5);
+                assert!(right.y.abs() < 1e-6, "the horizon stays level");
+                let camera = bri_render::scene::Camera::oriented(
+                    [0.0; 3],
+                    forward.to_array(),
+                    up.to_array(),
+                    1.5,
+                    1.0,
+                    0.05,
+                    100.0,
+                );
+                assert!(camera.view_projection.iter().all(|v| v.is_finite()));
+            }
+        }
+        // Straight down, turning spins the view (no snap to a fixed roll).
+        let (_, a, _) = super::view_basis(0.0, -FRAC_PI_2);
+        let (_, b, _) = super::view_basis(1.0, -FRAC_PI_2);
+        assert!(a.angle_between(b) > 0.99);
+        // The chase camera passes over the head smoothly.
+        let (before, _, _) = super::view_basis(0.3, -FRAC_PI_2 + 0.01);
+        let (after, _, _) = super::view_basis(0.3, -FRAC_PI_2 - 0.01);
+        assert!(before.angle_between(after) < 0.021);
+        assert!(after.dot(Vec3::new(0.3f32.sin(), 0.0, -0.3f32.cos())) < 0.0);
     }
     #[test]
     fn fov_is_horizontal_like_torque() {
