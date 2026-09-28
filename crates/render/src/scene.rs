@@ -1613,17 +1613,13 @@ impl SceneRenderer {
                 && data.indices.len() as u64 * 4 <= device.limits().max_buffer_size,
             "Shared scene buffer exceeds device limits"
         );
+        // A pose may hide every object (the spear's `fire` sequence while it
+        // is thrown): the placeholder keeps the buffers non-empty, as upload
+        // does, because wgpu panics on slicing an empty buffer.
+        let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("shared-material posed vertices"),
-                contents: bytemuck::cast_slice(&data.vertices),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("shared-material posed indices"),
-                contents: bytemuck::cast_slice(&data.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertices,
+            indices,
             materials: base.materials.clone(),
             material_modes: base.material_modes.clone(),
             material_descriptors: base.material_descriptors.clone(),
@@ -1749,6 +1745,12 @@ impl SceneRenderer {
                     &[crate::shadow::ShadowMaps::caster_offset(index)],
                 );
                 let mut draw = |scene: &GpuScene, buffer: &wgpu::Buffer, range: Range<u32>| {
+                    // A pose can hide every object (the spear's `fire`
+                    // sequence while it is thrown); wgpu panics on slicing
+                    // the empty buffers.
+                    if scene.vertex_count == 0 || scene.index_count == 0 {
+                        return;
+                    }
                     if let Some(bounds) = scene.bounds
                         && !aabb_visible(&planes, bounds)
                     {
@@ -1947,6 +1949,9 @@ impl SceneRenderer {
         pass.set_bind_group(0, &self.camera_group, &[]);
         for draw in order {
             let (scene, batch) = (draw.scene, draw.batch);
+            if scene.vertex_count == 0 || scene.index_count == 0 {
+                continue;
+            }
             let (_, double_sided, background, _) = scene.material_modes[batch.material];
             pass.set_pipeline(
                 &self.pipelines

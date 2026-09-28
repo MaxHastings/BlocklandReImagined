@@ -445,3 +445,88 @@ fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
     assert!(same(head(&adapter), start), "a new entry swings again");
     Ok(())
 }
+
+#[test]
+#[ignore = "requires converted packs and an offscreen GPU adapter"]
+fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> {
+    // a16: "buffer slice can not be empty". spear.dts's `fire` sequence keys
+    // both spear objects invisible while it is thrown, so the posed held
+    // image has no geometry; its shadow draw bound the empty buffers.
+    let (assets, weapons) = packs()?;
+    let gpu = Headless::new()?;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut renderer = SceneRenderer::with_settings(
+        &gpu.device,
+        format,
+        1,
+        Some(bri_render::shadow::ShadowSettings::LOW),
+    );
+    let mut camera =
+        bri_render::scene::Camera::perspective([4., 3., 4.], [0.; 3], 1.0, 1.0, 0.05, 100.0);
+    camera.sun_direction = [0.3, -1.0, 0.0, 0.0];
+    renderer.update_camera(&gpu.queue, &camera);
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.spearimage".into(),
+                state: "Fire".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::IDENTITY,
+            mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            velocity: Vec3::ZERO,
+        })
+    };
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("thrown spear target"),
+        size: wgpu::Extent3d {
+            width: 64,
+            height: 64,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let color = target.create_view(&Default::default());
+    let depth = bri_render::scene::create_depth(&gpu.device, 64, 64).create_view(&Default::default());
+    // Mid-throw (hidden) and after it (shown again).
+    for seconds in [1.0, 1.05, 1.5] {
+        adapter.sync(
+            &view,
+            WorldItemFrame {
+                seconds,
+                ..frame()
+            },
+            pose,
+        )?;
+        adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+        let draws = adapter.draws();
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.render_shadows(
+            &mut encoder,
+            bri_render::scene::ShadowCasters {
+                scenes: &[],
+                instances: &draws,
+            },
+            bri_render::scene::ShadowCasters {
+                scenes: &[],
+                instances: &draws,
+            },
+        );
+        renderer.render_with_instances(&mut encoder, &color, &depth, &[], &draws, None);
+        gpu.queue.submit([encoder.finish()]);
+    }
+    Ok(())
+}
