@@ -34,8 +34,15 @@ pub(crate) fn attach_parent_console() {
 struct Tee {
     write: usize,
     original: usize,
-    reader: std::thread::JoinHandle<File>,
+    /// The reader thread hands the log back here once it has read to the
+    /// end of the pipe.
+    done: std::sync::mpsc::Receiver<File>,
 }
+
+/// How long `finish` and the panic hook wait for the reader. If the pipe
+/// never reaches its end (some other handle to it is still open), the
+/// process must still exit rather than hang.
+const DRAIN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 static TEE: std::sync::Mutex<Option<Tee>> = std::sync::Mutex::new(None);
 
@@ -52,7 +59,7 @@ fn drain() -> Option<File> {
         SetStdHandle(STD_ERROR_HANDLE, tee.original as HANDLE);
         CloseHandle(tee.write as HANDLE);
     }
-    tee.reader.join().ok()
+    tee.done.recv_timeout(DRAIN_WAIT).ok()
 }
 
 /// Deliver everything written so far and stop teeing (the program's end).
@@ -93,7 +100,8 @@ fn tee_stderr(mut log: File) -> io::Result<()> {
     let echo = (!original.is_null() && original != INVALID_HANDLE_VALUE)
         // SAFETY: a valid standard handle; ManuallyDrop keeps it open.
         .then(|| ManuallyDrop::new(unsafe { File::from_raw_handle(original as RawHandle) }));
-    let reader = std::thread::Builder::new()
+    let (send, done) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
         .name("bri-log".into())
         .spawn(move || {
             let mut echo = echo;
@@ -107,7 +115,7 @@ fn tee_stderr(mut log: File) -> io::Result<()> {
                     let _ = echo.write_all(&buffer[..n]);
                 }
             }
-            log
+            let _ = send.send(log);
         })?;
     // SAFETY: `write` is the pipe's write end, kept open until `finish`.
     if unsafe { SetStdHandle(STD_ERROR_HANDLE, write) } == 0 {
@@ -116,7 +124,7 @@ fn tee_stderr(mut log: File) -> io::Result<()> {
     *TEE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Tee {
         write: write as usize,
         original: original as usize,
-        reader,
+        done,
     });
     Ok(())
 }
