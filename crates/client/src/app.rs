@@ -1958,6 +1958,12 @@ impl App {
         let single = mode == ServerMode::SinglePlayer;
         let internet = mode == ServerMode::Internet;
         let max_players = if single { 1 } else { max_players };
+        // Start Game's Advanced Config: v20's saved `$Pref::Server::*`.
+        let server_settings = crate::admin_ui::host_settings(
+            &bri_ui::models::admin::options_from_prefs(&self.ui.core.prefs),
+            &local_name,
+            u16::try_from(max_players).unwrap_or(1),
+        );
         let listing_name = local_name.clone();
         let listing_map = self
             .content
@@ -2114,6 +2120,7 @@ impl App {
             };
             let mut spawn_points = loaded.spawn_points.clone();
             let mut session = setup.session(loaded)?;
+            session.set_server_settings(server_settings.clone())?;
             if let Some(catalog) = package_world {
                 let save = match package_save.as_ref().map(std::fs::read) {
                     Some(Ok(bytes)) => Some(bri_sim::session::PackageSave::decode(&bytes)?),
@@ -2135,7 +2142,12 @@ impl App {
             let autosaver = saves.autosaver(session.simulation().state());
             let map_loader: server::MapLoader = {
                 let paths = paths_for_maps.clone();
-                Arc::new(move |map: &str| setup.session(paths.load_map(map, None)?))
+                Arc::new(move |map: &str| {
+                    // Change Map keeps the host's Server Settings.
+                    let mut session = setup.session(paths.load_map(map, None)?)?;
+                    session.set_server_settings(server_settings.clone())?;
+                    Ok(session)
+                })
             };
             let mut host = server::start_with_admin_store_and_limit(
                 session,
