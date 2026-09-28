@@ -16,9 +16,10 @@
 //! Like v20's `$Physics::maxBricks`, only a bounded number of bodies are
 //! alive at once; the oldest make way for new ones.
 use crate::building::Building;
+use crate::world_chunks::BrickPalette;
 use anyhow::{Context, Result, ensure};
 use bri_net::protocol::PublicWorld;
-use bri_render::scene::{GpuInstances, GpuScene, SceneRenderer, SceneTransform};
+use bri_render::scene::{GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform};
 use bri_sim::presentation::{Cue, CueKind};
 use bri_world::{BrickId, ContentRef};
 use glam::{Mat4, Quat, Vec3};
@@ -643,11 +644,21 @@ impl BrickDebris {
     }
 }
 
-/// GPU models for debris, one shared mesh per look.
+/// GPU models for debris, one shared mesh per look. Looks index the shared
+/// brick material palette, so a new look uploads only its geometry: brick
+/// textures and bind groups are never uploaded again for debris.
 #[derive(Default)]
 pub struct DebrisModels {
     models: BTreeMap<Look, Model>,
     frame: u64,
+    pub diagnostics: DebrisModelDiagnostics,
+}
+#[derive(Clone, Debug, Default)]
+pub struct DebrisModelDiagnostics {
+    /// Look meshes built and uploaded.
+    pub looks_built: u64,
+    /// Texture images those uploads carried; the palette holds them all.
+    pub images_uploaded: u64,
 }
 struct Model {
     gpu: Option<GpuScene>,
@@ -659,7 +670,8 @@ impl DebrisModels {
     pub fn clear(&mut self) {
         self.models.clear();
     }
-    /// Build missing looks and upload this frame's transforms.
+    /// Build missing looks against `gpu_palette` (the uploaded `palette`)
+    /// and upload this frame's transforms.
     #[allow(clippy::too_many_arguments)] // GPU context plus the brick catalogs
     pub fn upload(
         &mut self,
@@ -668,8 +680,10 @@ impl DebrisModels {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         meshes: &BTreeMap<String, bri_content::brick::Brick>,
+        palette: &BrickPalette,
+        gpu_palette: &GpuScene,
         materials: &crate::materials::BrickMaterials,
-        palette: &[[f32; 4]],
+        colors: &[[f32; 4]],
     ) -> Result<()> {
         self.frame += 1;
         for model in self.models.values_mut() {
@@ -680,14 +694,21 @@ impl DebrisModels {
                 continue;
             }
             if !self.models.contains_key(look) {
-                if usize::from(look.color) >= palette.len() {
+                if usize::from(look.color) >= colors.len() {
                     continue;
                 }
                 if self.models.len() >= MAX_LOOKS {
                     self.evict();
                 }
-                let gpu = build_look(look, renderer, device, queue, meshes, materials, palette)
+                let data = look_scene(look, meshes, palette, materials, colors)
                     .with_context(|| format!("Debris model for {}", look.definition))?;
+                let gpu = data
+                    .map(|data| {
+                        self.diagnostics.looks_built += 1;
+                        self.diagnostics.images_uploaded += data.images.len() as u64;
+                        renderer.upload_palette_model(device, &data, gpu_palette)
+                    })
+                    .transpose()?;
                 self.models.insert(
                     look.clone(),
                     Model {
@@ -736,34 +757,23 @@ impl DebrisModels {
     }
 }
 
-/// One brick at the origin in its own frame, drawn like a planted brick.
-fn build_look(
+/// One brick at the origin in its own frame, drawn like a planted brick
+/// with the planted bricks' materials.
+fn look_scene(
     look: &Look,
-    renderer: &SceneRenderer,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
     meshes: &BTreeMap<String, bri_content::brick::Brick>,
+    palette: &BrickPalette,
     materials: &crate::materials::BrickMaterials,
-    palette: &[[f32; 4]],
-) -> Result<Option<GpuScene>> {
+    colors: &[[f32; 4]],
+) -> Result<Option<SceneData>> {
     let mut brick =
         bri_world::Brick::new(ContentRef::Resolved(look.definition.clone()), [0.0; 3], 0);
     brick.color = look.color;
     brick.color_effect = look.color_effect;
     brick.shape_effect = look.shape_effect;
     brick.print = look.print.clone();
-    let world = PublicWorld {
-        name: "Brick debris".into(),
-        map_id: "debris".into(),
-        palette: palette.to_vec(),
-        bricks: bri_world::Bricks::unit(0, brick),
-    };
-    let data =
-        crate::world_scene::build_world_scene_materials(&world, meshes, 200_000, Some(materials))?;
-    if data.indices.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(renderer.upload(device, queue, &data)?))
+    let data = crate::world_chunks::build_brick(&brick, colors, meshes, palette, Some(materials))?;
+    Ok((!data.indices.is_empty()).then_some(data))
 }
 
 /// SplitMix64: the same throw from the same cue on every client.
@@ -1161,5 +1171,72 @@ mod tests {
         debris.advance(5.0, &building).unwrap();
         assert!(debris.diagnostics.dropped_steps > 0);
         assert!(debris.positions().iter().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn debris_looks_upload_geometry_only_against_the_brick_palette() {
+        // Each new look once built its own scene with every brick texture,
+        // mipmapped on the CPU and uploaded on the frame the bricks died: a
+        // dozen bricks hitched ~50 ms, a full 128 ~300 ms. Looks now index
+        // the shared palette the chunks use, so none carries an image.
+        let meshes = crate::world_chunks::tests::meshes();
+        let materials = crate::materials::BrickMaterials::in_memory();
+        let palette = BrickPalette::new(&materials).unwrap();
+        let colors = [[0.9, 0.2, 0.1, 1.0], [0.2, 0.4, 0.8, 0.5]];
+        let plain = Look {
+            definition: "definition/a".into(),
+            color: 0,
+            color_effect: 0,
+            shape_effect: 0,
+            print: None,
+        };
+        let looks = [
+            plain.clone(),
+            Look {
+                color: 1,
+                ..plain.clone()
+            },
+            Look {
+                print: Some(ContentRef::Resolved("print/print_letters_default/a".into())),
+                ..plain.clone()
+            },
+            Look {
+                color_effect: 1,
+                shape_effect: 1,
+                ..plain.clone()
+            },
+        ];
+        for look in &looks {
+            let data = look_scene(look, &meshes, &palette, &materials, &colors)
+                .unwrap()
+                .unwrap();
+            assert!(data.images.is_empty(), "{look:?} uploads textures");
+            assert_eq!(data.materials, palette.scene.materials);
+            // The same geometry the standalone scene drew.
+            let mut brick =
+                bri_world::Brick::new(ContentRef::Resolved(look.definition.clone()), [0.0; 3], 0);
+            brick.color = look.color;
+            brick.color_effect = look.color_effect;
+            brick.shape_effect = look.shape_effect;
+            brick.print = look.print.clone();
+            let standalone = crate::world_scene::build_world_scene_materials(
+                &PublicWorld {
+                    name: "Look".into(),
+                    map_id: "look".into(),
+                    palette: colors.to_vec(),
+                    bricks: bri_world::Bricks::unit(0, brick),
+                },
+                &meshes,
+                1000,
+                Some(&materials),
+            )
+            .unwrap();
+            assert!(!standalone.images.is_empty());
+            assert_eq!(
+                format!("{:?}", data.vertices),
+                format!("{:?}", standalone.vertices)
+            );
+            assert_eq!(data.indices, standalone.indices);
+        }
     }
 }

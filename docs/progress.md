@@ -3807,3 +3807,43 @@ break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
   package scripts run; the 50 ms bound is unchanged. After: 0 failures in
   60 loaded runs, worst 25 ms. With the per-tick cap switched off the test
   still fails (1.4 s of CPU in one tick).
+
+## 2026-09-28 Knocked-out brick debris no longer hitches
+
+Max saw frame hitches in a16/a17 when a dozen or so bricks broke into
+debris. Cause: every new debris look (definition, paint, FX, print) built
+its own scene through `build_world_scene_materials`, which carries all five
+brick surface textures (plus the print). Each upload copied them, built
+their mip chains on the CPU and created textures and bind groups, all on the
+frame the bricks died. Looks now build against the shared `BrickPalette`
+the world chunks use (`world_chunks::build_brick`) and upload geometry only
+(`SceneRenderer::upload_palette_model`, a chunk upload that keeps no
+model-space bounds so the shadow pass never culls moved instances). Debris
+behaviour is unchanged: solid 3 s, 2 s fade, cap 128, client-only.
+
+New headless `debris_probe` (release, Golden Gate, 44,465 bricks, offscreen
+GPU) replays the client's per-frame debris work: query-mirror sync, the
+hidden-brick ghost rebuild with a wand out, cues, physics, model upload and
+an instanced draw. Worst frame, before -> after (machine at 100% CPU from
+other builds, so absolute times are noisy; best of repeated runs):
+
+- Rocket, 12 bricks: 48-58 ms -> 2.9-3.3 ms (model upload 46-55 -> 0.2-0.4 ms).
+- Destructo Wand chain, 40 bricks: 16 ms (13 ms per new look) -> 3.5-4.7 ms.
+- 128 bricks at once, then 64 more evicting: 330 ms (models 310 ms) ->
+  3.7-9.6 ms (kill frame: physics 2.5-6 ms; the rest is fading draws).
+
+Measured and not the cause: Rapier body setup (cues <= 0.9 ms for 128),
+surroundings/physics (<= 2.6 ms at 128 bodies on a quiet run), query-mirror
+sync (<= 0.4 ms), break sound (already one per gap), per-body draws (one
+instanced draw per look). Chunk remeshing runs off-thread. Secondary: with
+a building tool out, each kill rebuilds the hidden-brick ghost scene by
+scanning the whole world, 0.7-2 ms on Golden Gate.
+
+Guard (no wall clock): `brick_debris::tests::debris_looks_upload_geometry_only_against_the_brick_palette`
+checks plain, translucent, printed and FX looks carry no images, index the
+palette's materials and match the old standalone geometry exactly.
+`DebrisModels::diagnostics` counts looks built and images uploaded (probe:
+4/12/25 looks, 0 images). Evidence: `cargo test -p bri-client --lib`
+(170 passed), clippy on bri-render and bri-client clean, `cargo run
+--release -p bri-client --bin debris_probe -- <content> <report.json>`.
+Not seen in a window: Max's playtest.
