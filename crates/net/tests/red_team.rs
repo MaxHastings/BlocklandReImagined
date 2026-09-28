@@ -51,7 +51,7 @@ async fn refused_in_time(address: SocketAddr) -> String {
     )
     .await
     .expect("the join hung");
-    let error = outcome.err().expect("a hostile host was accepted");
+    let error = outcome.expect_err("a hostile host was accepted");
     assert!(
         started.elapsed() < WAIT * 3,
         "took {:?} to refuse",
