@@ -3365,7 +3365,7 @@ appear or leave their flight and every client coasts them with
 `bri_weapons::coast`; moving Add-On entities send only where they are; a
 client drawing above 60 fps no longer sends twice the input. Eight idle
 players: 653 to 14 KB/s from the host. Eight running: 657 to 137. A rocket
-fight: 849 to 46. Each player's upload: 33 to 13 KB/s. Protocol 45. Evidence:
+fight: 849 to 46. Each player's upload: 33 to 13 KB/s. Protocol 46. Evidence:
 `cargo test -p bri-net --test bandwidth` (idle, explosion and rocket-fight
 byte budgets), `-- --ignored --nocapture` for the table, `cargo test -p
 bri-net --lib stream` (settle and keepalive, coasted projectiles match the

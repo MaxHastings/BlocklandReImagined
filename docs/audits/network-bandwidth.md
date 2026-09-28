@@ -1,6 +1,6 @@
 # Network bandwidth audit
 
-Branch `claude/bandwidth-audit-9j7dwx`, 2026-09-28. Protocol 45 (Gate
+Branch `claude/bandwidth-audit-9j7dwx`, 2026-09-28. Protocol 46 (Gate
 renumbers on landing).
 
 Max's rule (2026-09-28, 14:37Z and 14:38Z): never spend bandwidth on things

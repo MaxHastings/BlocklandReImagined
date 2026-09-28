@@ -20,11 +20,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 43: `Notice::Bottom::hide_bar` and `Projectile::heading` (a stuck
 /// arrow's direction).
 /// 44: `Command::SteeringPrefs`, v20's strafe and auto-return steering.
-/// 45: compact, batched state datagrams; other players' poses as
+/// 45: taken by the v20 parity lane.
+/// 46: compact, batched state datagrams; other players' poses as
 /// `RemotePose`; still items sent only to settle and keep alive; empty world
 /// updates at 10 Hz with absent fields left out; per-player vitals, tools and
 /// avatars; `WeaponDelta` with coasted projectiles; `EntityDelta`.
-pub const VERSION: u32 = 45;
+pub const VERSION: u32 = 46;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
