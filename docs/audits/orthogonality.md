@@ -801,6 +801,51 @@ bug, so they wait for Max:
 - Harmful event outputs: whether SetVelocity, AddVelocity and Dismount from
   someone else's brick need a minigame, as damage does.
 - Particle and rain fog (35): v20 behaviour not yet checked.
+- The trust rules (6). Each tool's check may copy its own v20 script:
+  explosions use `ProjectileData::onExplode` (LAN uses the mini-game
+  setting; internet play outside mini-games is owner only), pumpkins allow
+  owner, public or admin, and weapon hits on bricks allow owner or public.
+  A single `may_affect(actor, owner, action)` table would let a fully
+  trusted friend carve your pumpkin, open your key door and wand you. Two
+  mismatches are ours whatever the table says: the wand-on-player refusal
+  blames trust when the mini-game rule refused, and the wrench opens its
+  dialog at build trust while Apply needs full trust for events and
+  collision, failing as "Brick edit denied".
+- Packages on Change Map (5): the new map's session starts without the
+  host's Add-On code, so a game mode's HUD, keys and saved progress vanish.
+  Re-running the packages is simple, but whether a mode should survive a
+  map change is a product decision.
+- Vehicle respawn (29): the game uses the brick owner's mini-game with a 1 s
+  floor. v20's `WheeledVehicleData` uses the damage source's mini-game and
+  waits out the burn first, and the tested rule in the minigames crate does
+  that. Switching changes respawn timing players will notice.
+
+## Fixed on this branch
+
+Each is one commit with a test that fails without it, except where noted.
+
+| Finding | Commit | What changed |
+|---|---|---|
+| 1 | `37ba325` | Weapon and minigame ids accept Add-On spellings (`bri_package::id::is_content_ref`). |
+| 3 | `58020a7` | Effects, foliage and weather encode output like the world pass. |
+| 4 | `6c391e8` | One `saved_world` snapshot for every save, including before Change Map. |
+| 5 | `03f3900`, `7a87c78` | One HUD setup recipe on entry and after Change Map; brick bar and paint carry over; Tutorial limits reset (no test for the reset). |
+| 7 | `e2361ae` | Planting, painting and the wand share one build gate, alive first. |
+| 9 | `db5cadc` | Projectiles obey Ray Casting, not Colliding. |
+| 15 | `c4a7162` | Tools check a brick may be destroyed before breaking it. |
+| 16 | `d462a60` | Every in-world client visual runs on the game clock (no test: needs the full client). |
+| 17 | `084b31e` | One `submersion` query for players, splashes and vehicles. |
+| 18 | `0e07fbe` | Planting uses chain-kill's ground rule. |
+| 19 | `270850d` | Vehicle exits test the rider's own box at their feet. |
+| 20 | `98a91d7` | A captured pointer always drives the camera, chat open or not. |
+| 21 | `ea476fc`, `0e2075b` | A dialog's opening key closes it; lists read double-click as Submit; trust invites queue and Escape closes them. |
+| 23 | `003c3aa` | Mouse sensitivity, chat lines and zoom FOV each have one range, default and apply step. |
+| 24 | `dde532c` | One setter for the admin role; the UI reads the live admin snapshot. |
+| 30 | `5e0fcf6` | Core tools and the Tutorial map are named, not indexed. |
+| — | `5bc58e5` | Add-On commands can be typed in chat (`/sell coal`). |
+
+Left for other threads: 2 and 8 (the sandbox thread), 28, 36 and 37 (they
+touch the shadow thread's caster and shader changes).
 
 ## Suggested order
 
