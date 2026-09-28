@@ -9,7 +9,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
-    session::{ActionAim, Command, PackageArg, PackageCommand, PackageSave, Session},
+    session::{ActionAim, Command, Notice, PackageArg, PackageCommand, PackageSave, Session},
     simulation::Simulation,
 };
 use bri_world::World;
@@ -328,4 +328,40 @@ fn world_edits_and_durable_state_survive_save_and_reload() {
         )
         .unwrap();
     assert_eq!(value(&restarted, other, "mined"), 0);
+}
+
+/// A slash command typed in chat names no package: the host finds the
+/// package declaring it and reads the words as its arguments, as v20 sends
+/// any `/name` to the server.
+#[test]
+fn typed_chat_commands_reach_the_declaring_package() {
+    let (mut s, spawns) = session(None);
+    let a = s.join("Typist".into(), spawns[0], false).unwrap();
+    s.take_private_notices();
+    let typed = |command: &str, words: &[&str]| {
+        pkg(
+            "",
+            command,
+            words
+                .iter()
+                .map(|w| PackageArg::String((*w).into()))
+                .collect(),
+        )
+    };
+    // `/sell rocks` runs cmd_sell(player, "rocks") in stresslab-economy.
+    s.command(a, 1, typed("Sell", &["rocks"])).unwrap();
+    let told = s.take_private_notices();
+    assert!(
+        told.iter().any(
+            |(o, n)| *o == a && matches!(n, Notice::Chat(t) if t.contains("Nobody buys rocks"))
+        ),
+        "{told:?}"
+    );
+    // Wrong word counts and unknown names are refused, not forwarded.
+    assert_eq!(
+        code(&s.command(a, 2, typed("sell_all", &["now"])).unwrap_err()),
+        "command.args"
+    );
+    let unknown = s.command(a, 3, typed("nope", &[])).unwrap_err();
+    assert!(format!("{unknown:#}").contains("Unknown command: /nope"));
 }

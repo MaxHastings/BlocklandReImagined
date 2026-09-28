@@ -39,6 +39,8 @@ const KILL_Y: f32 = -64.0;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageCommand {
+    /// The package whose command this is. Empty for a command typed in chat,
+    /// which the host resolves to the one package declaring it.
     pub package: String,
     pub command: String,
     #[serde(default)]
@@ -1607,12 +1609,81 @@ impl Session {
     }
 
     /// A client asked to run a package command.
+    /// A command typed in chat (`/sell stone`) names no package, like any
+    /// other slash command: the host finds the one package that declares it
+    /// and reads each word as that command's argument type, a final string
+    /// taking the rest of the line. HUD keys name their package already.
+    fn resolve_typed_command(&self, request: PackageCommand) -> Result<PackageCommand> {
+        if !request.package.is_empty() {
+            return Ok(request);
+        }
+        let unknown = || anyhow::anyhow!("Unknown command: /{}", request.command);
+        let host = self.packages.as_ref().ok_or_else(unknown)?;
+        let mut declaring = host.catalog.packages.iter().filter_map(|(id, p)| {
+            let def = p
+                .behaviour
+                .as_ref()?
+                .commands
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&request.command))?;
+            Some((id, def))
+        });
+        let (package, def) = declaring.next().ok_or_else(unknown)?;
+        ensure!(
+            declaring.next().is_none(),
+            "More than one Add-On declares /{}",
+            request.command
+        );
+        let words: Vec<&str> = request
+            .args
+            .iter()
+            .map(|a| match a {
+                PackageArg::String(word) => Ok(word.as_str()),
+                _ => Err(anyhow::anyhow!("Typed commands carry words")),
+            })
+            .collect::<Result<_>>()?;
+        let mut args = Vec::with_capacity(def.args.len());
+        for (i, kind) in def.args.iter().enumerate() {
+            let Some(word) = words.get(i) else { break };
+            let last = i + 1 == def.args.len();
+            args.push(match kind {
+                ArgType::String if last => PackageArg::String(words[i..].join(" ")),
+                ArgType::Int => word
+                    .parse()
+                    .map_or_else(|_| PackageArg::String((*word).into()), PackageArg::Int),
+                ArgType::Float => word
+                    .parse()
+                    .map_or_else(|_| PackageArg::String((*word).into()), PackageArg::Float),
+                ArgType::Bool => match word.to_ascii_lowercase().as_str() {
+                    "true" | "yes" | "on" | "1" => PackageArg::Bool(true),
+                    "false" | "no" | "off" | "0" => PackageArg::Bool(false),
+                    _ => PackageArg::String((*word).into()),
+                },
+                ArgType::String => PackageArg::String((*word).into()),
+            });
+        }
+        // Extra words make the count differ, which the command check refuses.
+        if words.len() > def.args.len() && def.args.last() != Some(&ArgType::String) {
+            args.extend(
+                words[def.args.len()..]
+                    .iter()
+                    .map(|w| PackageArg::String((*w).into())),
+            );
+        }
+        Ok(PackageCommand {
+            package: package.clone(),
+            command: def.name.clone(),
+            args,
+        })
+    }
+
     pub(super) fn package_command(
         &mut self,
         owner: OwnerId,
         request: PackageCommand,
         direction: Vec3,
     ) -> Result<Reply> {
+        let request = self.resolve_typed_command(request)?;
         let host = self
             .packages
             .as_ref()

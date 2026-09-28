@@ -4806,7 +4806,18 @@ impl PlatformApp for App {
                         "sit" | "love" | "hate" | "alarm" | "confusion" => {
                             Some(Command::Emote(name.to_ascii_lowercase()))
                         }
-                        _ => None,
+                        // Every other slash command goes to the host, which
+                        // runs the Add-On command of that name, or answers
+                        // that there is none (v20's `/x` calls `serverCmdX`).
+                        _ => Some(Command::Package(bri_sim::session::PackageCommand {
+                            package: String::new(),
+                            command: name.clone(),
+                            args: args
+                                .iter()
+                                .cloned()
+                                .map(bri_sim::session::PackageArg::String)
+                                .collect(),
+                        })),
                         },
                     };
                     match command {

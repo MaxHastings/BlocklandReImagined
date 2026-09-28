@@ -114,9 +114,11 @@ parameters, so a typo shows up in `bri-addon-check`, not mid-game.
 `"bool"`, for example `"args": ["int"]` for `cmd_gift(player, amount)`),
 `cooldown_ticks` per player, `admin: true` to refuse non-administrators,
 and `aim_reach` to have the engine resolve what the player is aiming at
-(read it with `aim()`). Players send commands with a HUD panel's keys
-(section 4). Typing them in chat is not wired up yet, so a command with
-arguments can only be tried with `bri-addon-run` for now.
+(read it with `aim()`). Players send a command by typing it in chat,
+`/sell coal`, or with a HUD panel's keys (section 4). Typed words become the
+declared arguments in order; a final `string` argument takes the rest of the
+line. Two Add-Ons declaring the same command name make the typed form
+ambiguous, and the host says so.
 
 **State** is declared up front with defaults. `player` keys exist for every
 player; `global` keys once per server. `visible` says who receives the
