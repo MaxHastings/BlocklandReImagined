@@ -158,6 +158,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             min_shot_ticks: 0,
             states,
             command: None,
+            commands: Default::default(),
             shot: None,
         },
     )

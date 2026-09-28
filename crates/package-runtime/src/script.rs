@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::Op;
+use crate::ops::{ObjectRef, Op};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -41,7 +41,7 @@ impl Budget {
 const MAX_OPS_PER_CALL: usize = 1024;
 const MAX_OUTPUT_LINES: usize = 32;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerView {
     pub id: u64,
     pub key: PlayerKey,
@@ -49,6 +49,41 @@ pub struct PlayerView {
     pub position: [f32; 3],
     pub alive: bool,
     pub admin: bool,
+    /// Where the player sees from, and the unit direction they look.
+    #[serde(default)]
+    pub eye: [f32; 3],
+    #[serde(default)]
+    pub look: [f32; 3],
+    #[serde(default)]
+    pub velocity: [f32; 3],
+    /// The item in their hand (`namespace:weapon/name`), or empty.
+    #[serde(default)]
+    pub item: String,
+}
+/// A loose physics body or other movable thing, as scripts see it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectView {
+    pub object: ObjectRef,
+    /// A vehicle's definition, an entity's kind; empty for players.
+    pub definition: String,
+    pub position: [f32; 3],
+    pub velocity: [f32; 3],
+    pub mass: f32,
+    /// Radius of a sphere around it, units.
+    pub radius: f32,
+    /// The player it belongs to (a vehicle's spawner, the player
+    /// themselves), when there is one.
+    pub owner: Option<u64>,
+    /// The package that spawned it (`spawn_vehicle`), or empty.
+    #[serde(default)]
+    pub package: String,
+}
+/// What a player holds (`hold`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HoldView {
+    pub player: u64,
+    pub object: ObjectRef,
+    pub distance: f32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityView {
@@ -72,6 +107,12 @@ pub struct Aim {
     pub look: Option<(String, String)>,
     pub position: [f32; 3],
     pub distance: f32,
+    /// The movable object the aim met before any brick, and whether the
+    /// caller may move it under the minigame and trust rules.
+    #[serde(default)]
+    pub object: Option<ObjectRef>,
+    #[serde(default)]
+    pub movable: bool,
 }
 /// Read-only game facts for one tick.
 #[derive(Debug, Clone, Default)]
@@ -80,6 +121,38 @@ pub struct Snapshot {
     pub seed: i64,
     pub players: Vec<PlayerView>,
     pub entities: Vec<EntityView>,
+    /// Vehicles and other loose physics bodies (players and entities are
+    /// in their own lists, and in [`object`](Self::object)'s answers).
+    pub objects: Vec<ObjectView>,
+    pub holds: Vec<HoldView>,
+}
+impl Snapshot {
+    /// Any movable object by reference, players and entities included.
+    pub fn object(&self, object: ObjectRef) -> Option<ObjectView> {
+        match object {
+            ObjectRef::Vehicle(_) => self.objects.iter().find(|o| o.object == object).cloned(),
+            ObjectRef::Player(id) => self.players.iter().find(|p| p.id == id).map(|p| ObjectView {
+                object,
+                definition: String::new(),
+                position: p.position,
+                velocity: p.velocity,
+                mass: crate::ops::PLAYER_MASS,
+                radius: 1.3,
+                owner: Some(id),
+                package: String::new(),
+            }),
+            ObjectRef::Entity(id) => self.entities.iter().find(|e| e.id == id).map(|e| ObjectView {
+                object,
+                definition: e.kind.clone(),
+                position: e.position,
+                velocity: [0.0; 3],
+                mass: crate::ops::PLAYER_MASS,
+                radius: 1.3,
+                owner: None,
+                package: String::new(),
+            }),
+        }
+    }
 }
 
 /// One call's inputs.
@@ -191,6 +264,9 @@ fn position(p: [f32; 3]) -> [(&'static str, Dynamic); 3] {
         ("z", Dynamic::from_float(p[2] as f64)),
     ]
 }
+fn float_entry(key: &'static str, v: f32) -> (&'static str, Dynamic) {
+    (key, Dynamic::from_float(v as f64))
+}
 fn player_map(p: &PlayerView) -> Dynamic {
     let [x, y, z] = position(p.position);
     map([
@@ -201,7 +277,59 @@ fn player_map(p: &PlayerView) -> Dynamic {
         z,
         ("alive", p.alive.into()),
         ("admin", p.admin.into()),
+        float_entry("ex", p.eye[0]),
+        float_entry("ey", p.eye[1]),
+        float_entry("ez", p.eye[2]),
+        float_entry("lx", p.look[0]),
+        float_entry("ly", p.look[1]),
+        float_entry("lz", p.look[2]),
+        float_entry("vx", p.velocity[0]),
+        float_entry("vy", p.velocity[1]),
+        float_entry("vz", p.velocity[2]),
+        ("item", p.item.clone().into()),
     ])
+}
+fn object_map(o: &ObjectView) -> Dynamic {
+    let [x, y, z] = position(o.position);
+    let speed = (o.velocity[0].powi(2) + o.velocity[1].powi(2) + o.velocity[2].powi(2)).sqrt();
+    map([
+        ("ref", o.object.to_string().into()),
+        ("kind", o.object.kind().into()),
+        ("id", Dynamic::from_int(o.object.id() as i64)),
+        ("definition", o.definition.clone().into()),
+        x,
+        y,
+        z,
+        float_entry("vx", o.velocity[0]),
+        float_entry("vy", o.velocity[1]),
+        float_entry("vz", o.velocity[2]),
+        float_entry("speed", speed),
+        float_entry("mass", o.mass),
+        float_entry("radius", o.radius),
+        (
+            "owner",
+            o.owner
+                .map_or(Dynamic::UNIT, |owner| Dynamic::from_int(owner as i64)),
+        ),
+        ("spawner", o.package.clone().into()),
+    ])
+}
+fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
+    let text = value.clone().into_string().map_err(|_| {
+        format!(
+            "expected an object like \"vehicle:3\", got {}",
+            value.type_name()
+        )
+    })?;
+    ObjectRef::parse(&text)
+        .ok_or_else(|| format!("`{text}` is not an object like \"vehicle:3\"").into())
+}
+fn credit(value: &Dynamic) -> Fallible<Option<u64>> {
+    if value.is_unit() {
+        Ok(None)
+    } else {
+        Ok(Some(id(value)?))
+    }
 }
 pub fn entity_map(e: &EntityView) -> Dynamic {
     let [x, y, z] = position(e.position);
@@ -297,6 +425,12 @@ fn register_api(engine: &mut Engine) {
                     y,
                     z,
                     ("distance", Dynamic::from_float(a.distance as f64)),
+                    (
+                        "object",
+                        a.object
+                            .map_or(Dynamic::UNIT, |o| Dynamic::from(o.to_string())),
+                    ),
+                    ("movable", a.movable.into()),
                 ])
             }))
         })
@@ -552,6 +686,136 @@ fn register_api(engine: &mut Engine) {
             item: item.into(),
             equip,
         })
+    });
+    register_physics(engine);
+}
+
+fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
+    push(Op::Push {
+        target: object_ref(&target)?,
+        velocity: [float(&x)?, float(&y)?, float(&z)?],
+        by: credit(&by)?,
+    })
+}
+fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
+    let player = match object_ref(&player) {
+        Ok(ObjectRef::Player(p)) => p,
+        Ok(other) => return fail(format!("only players tumble, not {other}")),
+        Err(_) => id(&player)?,
+    };
+    push(Op::Tumble {
+        player,
+        velocity: [float(&x)?, float(&y)?, float(&z)?],
+        by: credit(&by)?,
+    })
+}
+
+/// Movable objects: reading them, and the `physics` operations.
+fn register_physics(engine: &mut Engine) {
+    engine.register_fn("object", |object: Dynamic| {
+        with(|i| {
+            let object = object_ref(&object)?;
+            Ok(i.snapshot
+                .object(object)
+                .map_or(Dynamic::UNIT, |o| object_map(&o)))
+        })
+    });
+    engine.register_fn("objects", || {
+        with(|i| Ok(i.snapshot.objects.iter().map(object_map).collect::<Array>()))
+    });
+    engine.register_fn(
+        "objects_near",
+        |x: Dynamic, y: Dynamic, z: Dynamic, radius: Dynamic| {
+            with(|i| {
+                let centre = [float(&x)?, float(&y)?, float(&z)?];
+                let radius = float(&radius)?;
+                let near = |p: [f32; 3]| {
+                    (p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2) + (p[2] - centre[2]).powi(2)
+                        <= radius * radius
+                };
+                let players = i
+                    .snapshot
+                    .players
+                    .iter()
+                    .filter(|p| p.alive)
+                    .map(|p| ObjectRef::Player(p.id));
+                let entities = i.snapshot.entities.iter().map(|e| ObjectRef::Entity(e.id));
+                let vehicles = i.snapshot.objects.iter().map(|o| o.object);
+                Ok(players
+                    .chain(entities)
+                    .chain(vehicles)
+                    .filter_map(|o| i.snapshot.object(o))
+                    .filter(|o| near(o.position))
+                    .map(|o| object_map(&o))
+                    .collect::<Array>())
+            })
+        },
+    );
+    engine.register_fn("held", |player: Dynamic| {
+        with(|i| {
+            let player = id(&player)?;
+            Ok(i.snapshot
+                .holds
+                .iter()
+                .find(|h| h.player == player)
+                .map_or(Dynamic::UNIT, |h| Dynamic::from(h.object.to_string())))
+        })
+    });
+    engine.register_fn(
+        "push",
+        |target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push_op(target, x, y, z, Dynamic::UNIT)
+        },
+    );
+    engine.register_fn("push", push_op);
+    engine.register_fn(
+        "tumble",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
+            tumble_op(player, x, y, z, Dynamic::UNIT)
+        },
+    );
+    engine.register_fn("tumble", tumble_op);
+    engine.register_fn(
+        "hold",
+        |player: Dynamic, target: Dynamic, distance: Dynamic| {
+            push(Op::Hold {
+                player: id(&player)?,
+                target: object_ref(&target)?,
+                distance: float(&distance)?,
+            })
+        },
+    );
+    engine.register_fn("let_go", |player: Dynamic| {
+        push(Op::LetGo {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn(
+        "spawn_vehicle",
+        |definition: &str, x: Dynamic, y: Dynamic, z: Dynamic, yaw: Dynamic, velocity: Array, owner: Dynamic| {
+            let v = velocity
+                .iter()
+                .map(float)
+                .collect::<Fallible<Vec<f32>>>()?;
+            let [vx, vy, vz] = v[..] else {
+                return fail("velocity is [x, y, z]");
+            };
+            push(Op::SpawnVehicle {
+                definition: definition.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                yaw: float(&yaw)?,
+                velocity: [vx, vy, vz],
+                owner: credit(&owner)?,
+            })
+        },
+    );
+    engine.register_fn("remove_vehicle", |vehicle: Dynamic| {
+        let vehicle = match object_ref(&vehicle) {
+            Ok(ObjectRef::Vehicle(v)) => v,
+            Ok(other) => return fail(format!("{other} is not a vehicle")),
+            Err(_) => id(&vehicle)?,
+        };
+        push(Op::RemoveVehicle { vehicle })
     });
 }
 

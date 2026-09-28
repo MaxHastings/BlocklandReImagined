@@ -627,6 +627,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         casing: String::new(),
         min_shot_ticks: 0,
         command: Default::default(),
+        commands: Default::default(),
         shot: None,
         states,
     };

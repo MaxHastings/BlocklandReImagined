@@ -39,6 +39,7 @@ pub use weapons::{MountedImage, WeaponView};
 mod tools;
 mod undo;
 mod blueprints;
+mod movables;
 mod spray;
 mod packages;
 pub use packages::{
@@ -575,6 +576,8 @@ pub struct Session {
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
     breakables: breakables::Breakables,
+    /// Holds, pushes and Add-On vehicles (`physics` operations).
+    movables: movables::Movables,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -595,6 +598,7 @@ impl Session {
             events: Default::default(),
             archetypes: Default::default(),
             breakables: Default::default(),
+            movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
             tutorial: None,
@@ -968,6 +972,7 @@ impl Session {
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
         self.forget_blueprint(owner);
+        self.forget_mover(owner);
         self.departed.insert(
             owner,
             (
@@ -1910,6 +1915,16 @@ impl Session {
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, trigger, down) in triggers {
+            // An Add-On tool's jet command (v20 `onTrigger` slot 4).
+            if trigger == 4
+                && down
+                && let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .and_then(|(image, _)| image.commands.jet.clone())
+            {
+                self.addon_tool_fire(owner, &command);
+            }
             // The sports balls' `onBallTrigger` alternate actions.
             if self.weapons.holds_ball(bri_weapons::ActorId(owner)) {
                 let _ = self
@@ -1922,6 +1937,7 @@ impl Session {
         }
         self.drive_package_entities(entity_moves);
         contain("packages", self.step_packages());
+        self.step_holds();
         contain("vehicles", self.vehicle_pre_step());
         contain("physics", self.simulation.step());
         contain("vehicles", self.vehicle_post_step());

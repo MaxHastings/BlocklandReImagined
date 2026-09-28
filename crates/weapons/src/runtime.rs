@@ -1126,6 +1126,20 @@ impl WeaponsWorld {
         q: &mut impl Query,
     ) -> bool {
         let name = image.name.to_ascii_lowercase();
+        // An Add-On tool's own moments run its commands, then carry on.
+        if let Some(command) = image.commands.for_script(script)
+            && !(script.eq_ignore_ascii_case("onfire") && image.command.is_some())
+        {
+            self.events.push(Event::ToolFire {
+                actor: id,
+                image: image.id.clone(),
+                hand: e.hand,
+                command: Some(command.clone()),
+            });
+            if script.eq_ignore_ascii_case("onfire") {
+                return true;
+            }
+        }
         match script.to_ascii_lowercase().as_str() {
             "oncharge" => {
                 if name.contains("spear") || name.contains("football") {

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "gravity-gun-tool",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Gravity Gun Tool",
+  "description": "The Gravity Gun you hold: an orange launcher whose buttons run the Gravity Gun Add-On. The Gravity Gun Add-On hands it out and does the grabbing and throwing.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "weapons", "id": "gravity-gun-tool:weapons/main", "file": "assets/weapons.json" }
+  ]
+}

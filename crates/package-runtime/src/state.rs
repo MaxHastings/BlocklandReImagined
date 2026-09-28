@@ -36,7 +36,7 @@ pub fn stored_size(values: &BTreeMap<String, Value>) -> usize {
 /// transport proved one, otherwise a per-session fallback that does not
 /// survive a reconnect. It is one small type so the platform's player
 /// identity can replace it without touching package state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlayerKey(pub String);
 impl PlayerKey {
     pub fn principal(bytes: &[u8; 32]) -> Self {

@@ -22,7 +22,7 @@ pub(super) const VEHICLE_TAG: u128 = 2 << 64;
 
 #[derive(Default)]
 pub(super) struct Vehicles {
-    world: Option<veh::VehiclesWorld>,
+    pub(super) world: Option<veh::VehiclesWorld>,
     by_brick: BTreeMap<BrickId, VehicleId>,
     brick_of: BTreeMap<VehicleId, BrickId>,
     colors: BTreeMap<VehicleId, Option<u8>>,
@@ -394,7 +394,7 @@ impl Session {
             }
         }
     }
-    fn remove_vehicle(&mut self, id: VehicleId) -> Result<()> {
+    pub(super) fn remove_vehicle(&mut self, id: VehicleId) -> Result<()> {
         if let Some(world) = &mut self.vehicles.world {
             if let Some(spawn) = self.vehicles.brick_of.get(&id) {
                 world.cancel_spawn(&mut self.simulation.physics, SpawnId(*spawn))?;
@@ -1089,7 +1089,7 @@ impl Session {
         self.start_tumble(owner, transform, velocity, 1.0)
     }
     /// Spawn a helper vehicle no brick owns (skis, tumble) moving at `velocity`.
-    fn spawn_transient(
+    pub(super) fn spawn_transient(
         &mut self,
         owner: OwnerId,
         definition: &str,
@@ -1312,18 +1312,37 @@ impl Session {
                         self.spawn_vehicle_for(brick)?;
                     }
                 }
+                Intent::Struck {
+                    vehicle,
+                    owner,
+                    other,
+                    point,
+                    ..
+                } => self.vehicle_struck(vehicle.0, owner.0, other, Vec3::from(point))?,
                 Intent::RunOver {
+                    vehicle,
                     owner,
                     target,
                     damage,
                     velocity,
-                    ..
                 } => {
                     let victim = target.0;
-                    if !self.can_damage_player(owner.0, victim, false) {
+                    // Whoever threw or holds the vehicle runs the victim
+                    // over, not its driver or owner.
+                    let owner = self
+                        .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
+                        .unwrap_or(owner.0);
+                    let hurts = self.can_damage_player(owner, victim, false);
+                    let shoves = self
+                        .vehicles
+                        .world
+                        .as_ref()
+                        .and_then(|w| w.definition_of(vehicle))
+                        .is_some_and(|d| d.shove);
+                    if !hurts && !shoves {
                         continue;
                     }
-                    if damage > 0.0 {
+                    if hurts && damage > 0.0 {
                         self.damage_player(
                             victim,
                             damage,
@@ -1331,8 +1350,17 @@ impl Session {
                                 name: "Vehicle".into(),
                                 direct: false,
                             },
-                            Some(owner.0),
+                            Some(owner),
                         )?;
+                    }
+                    if shoves {
+                        // Bowled over: the victim tumbles away from it, so
+                        // the vehicle rolls on through instead of stopping
+                        // against a standing player.
+                        if self.is_alive(victim) {
+                            self.tumble_player(victim, Vec3::from(velocity) + Vec3::Y * 4.0)?;
+                        }
+                        continue;
                     }
                     // setVelocity: the push replaces the player's velocity.
                     if let Some(peer) = self.peers.get_mut(&victim) {

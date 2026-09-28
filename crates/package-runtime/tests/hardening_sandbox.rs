@@ -157,6 +157,7 @@ fn player(id: u64) -> PlayerView {
         position: [0.0; 3],
         alive: true,
         admin: false,
+        ..Default::default()
     }
 }
 fn call(function: &str, budget: Budget) -> Call<'_> {

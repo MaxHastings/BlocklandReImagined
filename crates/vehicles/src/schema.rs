@@ -211,9 +211,37 @@ pub struct Definition {
     pub protect_direct: bool,
     pub protect_radius: bool,
     pub protect_burn: bool,
+    /// Breaks bricks it strikes hard enough (an Add-On's wrecking ball).
+    /// Which bricks break is the host's rule (v20's rocket brick damage).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smash: Option<Smash>,
+    /// Bowls players over, even where it may not hurt them: a player it
+    /// runs over tumbles away, so it rolls on through (a heavy ball
+    /// ploughing through a crowd).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shove: bool,
     /// Authored fields retained as metadata only. Runtime reads typed native fields above.
     pub authored: BTreeMap<String, String>,
     pub adaptations: Vec<String>,
+}
+/// A vehicle that breaks what it hits: striking something at `speed` or
+/// faster (units per second, into the surface) knocks out the brick it hit
+/// and every brick within `radius` of the contact no larger than
+/// `max_volume` (studs x studs x plates), thrown with `force`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Smash {
+    pub speed: f32,
+    #[serde(default)]
+    pub radius: f32,
+    pub max_volume: f32,
+    #[serde(default = "Smash::default_force")]
+    pub force: f32,
+}
+impl Smash {
+    fn default_force() -> f32 {
+        10.
+    }
 }
 /// How a seat's occupant controls things. Host input mapping, rider facing
 /// and the client camera all follow it.
@@ -342,6 +370,17 @@ impl Pack {
                 ensure!(
                     f.auto_input_damping <= 1. && f.min_drag > 0.,
                     "invalid flight damping"
+                );
+            }
+            if let Some(s) = &d.smash {
+                ensure!(
+                    [s.speed, s.radius, s.max_volume, s.force]
+                        .iter()
+                        .all(|v| v.is_finite() && *v >= 0.)
+                        && s.speed >= 1.
+                        && s.radius <= 8.
+                        && s.force <= 200.,
+                    "invalid smash"
                 );
             }
             let scalars = [

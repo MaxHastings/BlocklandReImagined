@@ -159,11 +159,54 @@ pub struct Image {
     /// of firing a projectile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// More of an Add-On tool's moments that run Add-On commands.
+    #[serde(default, skip_serializing_if = "ImageCommands::is_empty")]
+    pub commands: ImageCommands,
     /// Several projectiles per shot, spread and recoil. None fires one
     /// projectile straight along the aim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shot: Option<Shot>,
 }
+/// Add-On commands (`package:command`) an image runs for its holder, aimed
+/// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons
+/// scripted these in their image's state callbacks and `onTrigger`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageCommands {
+    /// By state script, lowercase (`oncharge`, `onfire`, `onabortcharge`):
+    /// entering a state with that script runs the command. A charge
+    /// (trigger held) and its release are two states of the image.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub states: BTreeMap<String, String>,
+    /// Pressing jet while the image is in hand (v20 `onTrigger` slot 4, the
+    /// right mouse button). Jetting players still jet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jet: Option<String>,
+}
+impl ImageCommands {
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty() && self.jet.is_none()
+    }
+    /// The command for entering a state with `script`, if any.
+    pub fn for_script(&self, script: &str) -> Option<&String> {
+        if script.is_empty() {
+            return None;
+        }
+        self.states.get(&script.to_ascii_lowercase())
+    }
+}
+/// A well-formed `package:command` an image may name.
+pub fn is_image_command(c: &str) -> bool {
+    c.len() <= 128
+        && c.split_once(':').is_some_and(|(package, command)| {
+            !package.is_empty()
+                && !command.is_empty()
+                && !command.contains(':')
+                && c.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-:".contains(&b))
+        })
+}
+
 /// What v20 Add-Ons scripted in `onFire` with the common spread code
 /// (`%shellcount`, `%spread`, `%obj.setVelocity(... getEyeVector() * -n)`):
 /// the recoil first, then each projectile's velocity turned by its own
@@ -443,16 +486,15 @@ impl Pack {
                 "Invalid image mount/timing"
             );
             ensure!(
-                image.command.as_deref().is_none_or(|c| {
-                    c.len() <= 128
-                        && c.split_once(':').is_some_and(|(package, command)| {
-                            !package.is_empty()
-                                && !command.is_empty()
-                                && !command.contains(':')
-                                && c.bytes()
-                                    .all(|b| b.is_ascii_alphanumeric() || b"_-:".contains(&b))
-                        })
-                }),
+                image.command.as_deref().is_none_or(is_image_command)
+                    && image.commands.states.len() <= 16
+                    && image.commands.states.iter().all(|(script, c)| {
+                        !script.is_empty()
+                            && script.len() <= 64
+                            && script.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                            && is_image_command(c)
+                    })
+                    && image.commands.jet.as_deref().is_none_or(is_image_command),
                 "Invalid image command {id}"
             );
             ensure!(

@@ -157,6 +157,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 min_shot_ticks: 0,
                 states,
                 command: None,
+                commands: Default::default(),
                 shot: None,
             },
         );

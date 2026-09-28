@@ -294,6 +294,15 @@ pub enum Intent {
         owner: OwnerId,
         transform: Transform,
     },
+    /// A vehicle whose definition smashes struck something (`other` is
+    /// that collider's user data) moving `speed` into it at `point`.
+    Struck {
+        vehicle: VehicleId,
+        owner: OwnerId,
+        other: u128,
+        point: [f32; 3],
+        speed: f32,
+    },
     RunOver {
         vehicle: VehicleId,
         owner: OwnerId,
@@ -522,6 +531,12 @@ impl VehiclesWorld {
     /// Where an occupant sits, if mounted.
     pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
         self.occupied.get(&occupant).copied()
+    }
+    /// The rigid body a vehicle simulates with, for hosts that move vehicles
+    /// themselves (a held object). Player-type mounts have none.
+    pub fn body_of(&self, id: VehicleId) -> Option<RigidBodyHandle> {
+        let v = self.instances.get(&id)?;
+        v.actor.is_none().then_some(v.body)
     }
     pub fn is_alive(&self, id: VehicleId) -> bool {
         self.instances.get(&id).is_some_and(|v| v.dead_at.is_none())
@@ -1488,6 +1503,43 @@ impl VehiclesWorld {
                 }
             } else {
                 let b = &world.bodies[v.body];
+                if let Some(smash) = &d.smash {
+                    for c in b.colliders() {
+                        for p in world.contact_pairs_with(*c) {
+                            let (other, outward) = if p.collider1 == *c {
+                                (p.collider2, 1.)
+                            } else {
+                                (p.collider1, -1.)
+                            };
+                            let hit = p.solver_manifolds().iter().find_map(|m| {
+                                let speed = v.previous_velocity.dot(m.data.normal) * outward;
+                                (m.data.num_active_contacts() > 0 && speed >= smash.speed)
+                                    .then(|| {
+                                        // The surface under the body's centre,
+                                        // along the contact normal.
+                                        let reach = (Vec3::from_array(d.bounds_max)
+                                            - Vec3::from_array(d.bounds_min))
+                                        .min_element()
+                                            * 0.5
+                                            * v.spawn.scale;
+                                        let point = b.translation() + m.data.normal * outward * reach;
+                                        (point, speed)
+                                    })
+                            });
+                            if let Some((point, speed)) = hit
+                                && let Some(collider) = world.colliders.get(other)
+                            {
+                                self.intents.push(Intent::Struck {
+                                    vehicle: *id,
+                                    owner: v.spawn.owner,
+                                    other: collider.user_data,
+                                    point: point.to_array(),
+                                    speed,
+                                });
+                            }
+                        }
+                    }
+                }
                 let delta = (v.previous_velocity - v.velocity(d, b)).length();
                 // Vehicle::updatePos (0x56ecb1): a body collision raises
                 // `onImpact` and the impact sounds. v20 applies no damage

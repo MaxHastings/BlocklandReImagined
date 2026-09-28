@@ -449,6 +449,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 min_shot_ticks: ticks(num(d, "minShotTime", 0.0) / 1000.0),
                 states: native,
                 command: None,
+                commands: Default::default(),
                 shot: None,
             },
         );

@@ -209,11 +209,11 @@ impl PackageSave {
     }
 }
 
-struct Entity {
+pub(super) struct Entity {
     kind: String,
     package: String,
     model: String,
-    body: Player,
+    pub(super) body: Player,
     health: f32,
     label: String,
     steer: (Vec3, bool),
@@ -261,11 +261,11 @@ impl GeneratedWorld {
 }
 
 pub(super) struct PackageHost {
-    catalog: Arc<Catalog>,
+    pub(super) catalog: Arc<Catalog>,
     runtime: Runtime,
     store: Store,
     world: Option<GeneratedWorld>,
-    entities: BTreeMap<u64, Entity>,
+    pub(super) entities: BTreeMap<u64, Entity>,
     next_entity: u64,
     /// Keyed by the durable player, so reconnecting does not reset a
     /// cooldown (stress campaign W3).
@@ -780,13 +780,24 @@ impl Session {
                 .peers
                 .iter()
                 .filter(|(o, _)| !self.bots.is_bot(**o))
-                .map(|(owner, p)| PlayerView {
-                    id: *owner,
-                    key: self.player_key(*owner),
-                    name: p.name.clone(),
-                    position: p.player.state().feet,
-                    alive: p.combat.alive,
-                    admin: p.actor.administrator,
+                .map(|(owner, p)| {
+                    let item = self
+                        .weapons
+                        .actor(bri_weapons::ActorId(*owner))
+                        .and_then(|a| a.inventory.get(a.selected?)?.clone())
+                        .unwrap_or_default();
+                    PlayerView {
+                        id: *owner,
+                        key: self.player_key(*owner),
+                        name: p.name.clone(),
+                        position: p.player.state().feet,
+                        alive: p.combat.alive,
+                        admin: p.actor.administrator,
+                        eye: p.player.eye().to_array(),
+                        look: p.player.state().forward().to_array(),
+                        velocity: p.player.state().velocity,
+                        item,
+                    }
                 })
                 .collect(),
             entities: host
@@ -808,6 +819,8 @@ impl Session {
                         .collect()
                 })
                 .unwrap_or_default(),
+            objects: self.movable_views(),
+            holds: self.hold_views(),
         }
     }
     /// Give a joining player every package's player defaults and run
@@ -1290,6 +1303,12 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.give_tool(player, &item, equip)
             }
+            op @ (Op::Push { .. }
+            | Op::Tumble { .. }
+            | Op::Hold { .. }
+            | Op::LetGo { .. }
+            | Op::SpawnVehicle { .. }
+            | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
         }
     }
     /// One chat line from `package` on behalf of `caller`, within their share.
@@ -1828,22 +1847,40 @@ impl Session {
             Some(reach) => {
                 let eye = peer.player.eye();
                 let hit = self.simulation.target(eye, direction, reach)?;
-                hit.map(|hit| script::Aim {
-                    look: hit
-                        .brick
-                        .and_then(|b| self.simulation.state().bricks.get(&b)?.look.clone())
-                        .map(|l| (l.block, l.state)),
-                    tag: hit.brick.and_then(|b| {
-                        let world = host.world.as_ref()?;
-                        world
-                            .voxels
-                            .get(&b)
-                            .map(|v| world.def.materials[v.material].id.clone())
+                // A movable object in front of the brick is what is aimed at.
+                let object = self
+                    .aim_object(owner, eye, direction, hit.as_ref().map_or(reach, |h| h.distance))
+                    .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance));
+                match (hit, object) {
+                    (_, Some((object, position, distance))) => Some(script::Aim {
+                        brick: None,
+                        tag: None,
+                        look: None,
+                        position: position.to_array(),
+                        distance,
+                        object: Some(object),
+                        movable: self.may_move(owner, object),
                     }),
-                    brick: hit.brick,
-                    position: hit.position.to_array(),
-                    distance: hit.distance,
-                })
+                    (Some(hit), None) => Some(script::Aim {
+                        look: hit
+                            .brick
+                            .and_then(|b| self.simulation.state().bricks.get(&b)?.look.clone())
+                            .map(|l| (l.block, l.state)),
+                        tag: hit.brick.and_then(|b| {
+                            let world = host.world.as_ref()?;
+                            world
+                                .voxels
+                                .get(&b)
+                                .map(|v| world.def.materials[v.material].id.clone())
+                        }),
+                        brick: hit.brick,
+                        position: hit.position.to_array(),
+                        distance: hit.distance,
+                        object: None,
+                        movable: false,
+                    }),
+                    (None, None) => None,
+                }
             }
             None => None,
         };
