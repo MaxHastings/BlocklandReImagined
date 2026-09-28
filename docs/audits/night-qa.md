@@ -236,7 +236,7 @@ loading, hosting and joining are night QA's and are not covered here.
 | 15 | Duplicate names: closed (this branch): a second "Blockhead" joins as "Blockhead 2" (`players_sharing_a_name_are_numbered`). A name prompt on first run: closed. Declining the Tutorial, or coming back from it, asks once to choose a name and look in Avatar, only while the name is still "Blockhead". |
 | 16 | Closed (this branch): `bri-server ... resume ...` continues from the newest autosave or shutdown save in its state folder (`newest_world`). |
 | 17 | Closed on main: the main menu and `--version` show the build's version. |
-| 18 | Brick search and a duplicator: open. |
+| 18 | Brick search: closed. The brick selector has a Search box above the grid; results from every tab replace the grid while it has text, and clicking a tab ends the search (`search_shows_results_that_add_to_the_cart_and_a_tab_ends_it`). Duplicator: open. |
 | 19 | Toggle crouch: closed. Options > Controls has "Toggle crouch (press once)"; off by default, so Crouch is held as in v20 (`toggle_crouch_flips_on_each_press_and_ignores_release`). Mouse 4 and 5: closed, they bind like any button (`side_mouse_buttons_bind_by_torque_name`). Gamepad: open. |
 | 20 | Closed (pass). |
 
