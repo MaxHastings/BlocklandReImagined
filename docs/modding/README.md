@@ -329,8 +329,8 @@ draws a cube with its own shader, then [`steel-ball-fx`](../../packages/showcase
 (one shader drawn over every vehicle of a kind) and
 [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) (beams, a force
 field and GPU particle systems driven by a rule's public state). With
-`world.read`, code sees what the player's own screen shows: where players
-and vehicles are drawn and the server's public Add-On state; `draw_with`
+`world.read`, code sees what the player's own screen shows: where players,
+vehicles and creatures are drawn and the server's public Add-On state; `draw_with`
 gives a draw its own shader parameters and `material_blend` makes glowing
 (additive) or see-through layers; with `audio`, `sound_at` plays one of
 its own `.wav` or `.ogg` files where something happens. Its capabilities (`render.layer`,

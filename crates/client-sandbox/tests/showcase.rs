@@ -4,7 +4,7 @@
 //! (`--ignored`), each renders offscreen to PNGs for a look.
 use bri_client_sandbox::{
     AddOn, AddOnCode, Budgets, Capability, FrameInput, Sandbox, TrustLevel, World,
-    world::{Player, Vehicle},
+    world::{Entity, Player, Vehicle},
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -353,4 +353,24 @@ fn the_gravity_gun_renders_offscreen() {
     assert!(lit(1) > 2000, "the beam and bubble show");
     assert!(lit(3) > lit(1), "charging adds the orb");
     assert!(lit(5) > 500, "the throw's shockwave shows");
+}
+
+#[test]
+fn a_held_creature_gets_the_beam_and_bubble_too() {
+    let (_, mut addon) = start("gravity-gun-fx");
+    let mut world = gun_world([3, 5, 0, 0, 0, 0], [0.0, 2.0, -5.0]);
+    world.entities = vec![Entity {
+        id: 5,
+        kind: "zoo:entity/cow".into(),
+        feet: [1.0, 0.0, -6.0],
+        yaw: 0.0,
+    }];
+    let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
+    assert_eq!(drawn.draws.len(), 4, "beam, core, bubble and sparks");
+    let beam_params = drawn.draws[0].params.unwrap();
+    assert_eq!(
+        &beam_params[1][..3],
+        &[1.0, 1.3, -6.0],
+        "to the creature's middle"
+    );
 }

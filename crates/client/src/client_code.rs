@@ -419,12 +419,13 @@ impl ClientCode {
 /// player receives, and the scene's lighting.
 pub fn world_view(
     view: &crate::network::View,
+    entities: &std::collections::BTreeMap<u64, bri_sim::session::EntityInfo>,
     players: &std::collections::BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
     vehicles: &crate::vehicles::ClientVehicles,
     assets: &crate::vehicles::VehicleAssets,
     camera: &bri_render::scene::Camera,
 ) -> bri_client_sandbox::World {
-    use bri_client_sandbox::world::{AddOnState, Environment, Player, Vehicle, World};
+    use bri_client_sandbox::world::{AddOnState, Entity, Environment, Player, Vehicle, World};
     let players = players
         .iter()
         .map(|(owner, state)| Player {
@@ -469,11 +470,21 @@ pub fn world_view(
             )
         })
         .collect();
+    let entities = entities
+        .values()
+        .map(|e| Entity {
+            id: e.id,
+            kind: e.kind.clone(),
+            feet: e.position,
+            yaw: e.yaw,
+        })
+        .collect();
     let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
     World {
         local: view.owner,
         players,
         vehicles,
+        entities,
         state,
         environment: Environment {
             sun_direction: rgb(camera.sun_direction),

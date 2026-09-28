@@ -138,7 +138,7 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
         "sound_play" | "sound_at" => Some(Capability::Audio),
         "key_down" => Some(Capability::InputFocused),
         "send" | "recv" => Some(Capability::NetMessage),
-        "players" | "vehicles" | "vehicle_kind" | "state_num" | "local_player" => {
+        "players" | "vehicles" | "entities" | "vehicle_kind" | "state_num" | "local_player" => {
             Some(Capability::WorldRead)
         }
         _ => return Err(UnknownFunction),

@@ -12,7 +12,8 @@
 ;; Everything comes from what the game already knows (`world.read`):
 ;; where players and vehicles are drawn, and each player's `beam` from the
 ;; Gravity Gun Add-On's public state: [held kind, held id, charging, shots
-;; fired, last shot's kind, last shot's id]; kinds 1 vehicle, 2 player.
+;; fired, last shot's kind, last shot's id]; kinds 1 vehicle, 2 player,
+;; 3 Add-On creature.
 ;; The server sends that only when it changes; the motion itself comes
 ;; from the game's own pose updates.
 ;;
@@ -25,6 +26,7 @@
 ;;   1088   draw parameters (16 f32)
 ;;   2048   player records, 16 f32 (64 bytes) each, up to 64
 ;;   8192   vehicle records, 16 f32 each, up to 256
+;;   30720  creature records, 8 f32 (32 bytes) each, up to 64
 ;;   24576  per-player effect state, 96 bytes each, 64 slots:
 ;;            +0 id  +4 in use  +8 shots  +12 shots known  +16 charging
 ;;            +20 charge start  +24 last shot time  +28 shot centre xyz
@@ -42,6 +44,7 @@
   (import "bri" "draw_with" (func $draw_with (param i32 i32 i32 i32)))
   (import "bri" "players" (func $players (param i32 i32) (result i32)))
   (import "bri" "vehicles" (func $vehicles (param i32 i32) (result i32)))
+  (import "bri" "entities" (func $entities (param i32 i32) (result i32)))
   (import "bri" "state_num" (func $state_num (param i32 i32 i32 i32 i32 i32) (result f32)))
   (import "bri" "sound_at" (func $sound_at (param i32 i32 f32 f32 f32 f32) (result i32)))
   (memory (export "memory") 2)
@@ -56,6 +59,7 @@
   (global $m_ring (mut i32) (i32.const 0))
   (global $players_n (mut i32) (i32.const 0))
   (global $vehicles_n (mut i32) (i32.const 0))
+  (global $entities_n (mut i32) (i32.const 0))
   ;; What $locate found: centre and radius.
   (global $ox (mut f32) (f32.const 0))
   (global $oy (mut f32) (f32.const 0))
@@ -233,7 +237,8 @@
 
   ;; ---- Finding things ----
 
-  ;; Where the object of `kind` (1 vehicle, 2 player) and `id` is drawn:
+  ;; Where the object of `kind` (1 vehicle, 2 player, 3 creature) and `id`
+  ;; is drawn:
   ;; sets $ox $oy $oz (its middle) and $or (its size). 0 when not found.
   (func $locate (param $kind f32) (param $id f32) (result i32)
     (local $i i32) (local $at i32)
@@ -267,6 +272,22 @@
                 (global.set $ox (f32.load offset=8 (local.get $at)))
                 (global.set $oy (f32.add (f32.load offset=12 (local.get $at)) (f32.const 1.3)))
                 (global.set $oz (f32.load offset=16 (local.get $at)))
+                (global.set $or (f32.const 1.5))
+                (return (i32.const 1))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $each)))))
+    (if (f32.eq (local.get $kind) (f32.const 3))
+      (then
+        (local.set $i (i32.const 0))
+        (block $done
+          (loop $each
+            (br_if $done (i32.ge_s (local.get $i) (global.get $entities_n)))
+            (local.set $at (i32.add (i32.const 30720) (i32.mul (local.get $i) (i32.const 32))))
+            (if (f32.eq (f32.load (local.get $at)) (local.get $id))
+              (then
+                (global.set $ox (f32.load offset=4 (local.get $at)))
+                (global.set $oy (f32.add (f32.load offset=8 (local.get $at)) (f32.const 1.3)))
+                (global.set $oz (f32.load offset=12 (local.get $at)))
                 (global.set $or (f32.const 1.5))
                 (return (i32.const 1))))
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -325,6 +346,7 @@
     (local $charge f32) (local $age f32) (local $shot i32)
     (global.set $players_n (call $players (i32.const 2048) (i32.const 64)))
     (global.set $vehicles_n (call $vehicles (i32.const 8192) (i32.const 256)))
+    (global.set $entities_n (call $entities (i32.const 30720) (i32.const 64)))
     ;; Slots not seen this frame belong to players who left.
     (local.set $i (i32.const 0))
     (block $done

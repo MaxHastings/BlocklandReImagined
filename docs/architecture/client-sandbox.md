@@ -173,6 +173,7 @@ the Add-On. Floats must be finite.
 | `recv(ptr, capacity) -> i32` | `net.message` | The next message from its server script: its length, -1 when none, or -2 - length when the buffer is too small. |
 | `local_player() -> i32` | `world.read` | The viewing player's id. |
 | `players(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` players as the game draws them, 16 f32 each: id, flags (1 the viewer, 2 alive), feet xyz, eye xyz, look xyz, velocity xyz, 2 unused. Returns how many. |
+| `entities(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` Add-On creatures as drawn, 8 f32 each: id, feet xyz, yaw, 3 unused. Returns how many. |
 | `vehicle_kind(ptr, len) -> i32` | `world.read` | Names a vehicle definition (`namespace:vehicle/name`) the Add-On wants to find; returns its kind number (64 at most). |
 | `vehicles(ptr, capacity) -> i32` | `world.read` | Writes up to `capacity` vehicles as drawn, 16 f32 each: id, kind (from `vehicle_kind`, -1 otherwise), position xyz, rotation xyzw, velocity xyz, radius of a sphere round its box, 3 unused. Returns how many. |
 | `state_num(pkg_ptr, pkg_len, key_ptr, key_len, player, index) -> f32` | `world.read` | A number of an Add-On's public state the player receives: a server-wide key (`player` -1) or that player's; an array gives its `index`th element, true and false are 1 and 0; NaN when there is none. |

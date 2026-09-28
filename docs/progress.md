@@ -3874,10 +3874,13 @@ break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
   `cargo test -p bri-client --test showcase_sounds`, the loopback test
   in `crates/net/tests/showcase.rs`, and the sim, net, package-runtime,
   client-sandbox and client suites. Not seen in a window: Max's playtest.
-- Open: right click still gives jetting player types a small hop while
-  the gun grabs (masking jet only for the motor needs the client's
-  prediction to send one input and predict another); entities have no
-  beam effect (client code does not see entities).
+- Follow-up (same day): right click with a tool whose image has a `jet`
+  command no longer jets on any player type: host and prediction both run
+  the motor through `prediction::motor_input`, while the press still
+  reaches the host as the trigger (`right_click_with_the_gun_grabs_without_
+  jetting`, `a_tool_that_takes_jet_is_predicted_without_jetting`). Client
+  code reads creatures too (`entities`, `world.read`), so a held creature
+  gets the beam and bubble (`a_held_creature_gets_the_beam_and_bubble_too`).
 - `hardening_packages` `many_heavy_thinks_keep_the_tick_budget` failed once
   in the gate and passed alone. Not an overrun: the per-tick script work cap
   counts operations, so the work is the same every run. The test timed the

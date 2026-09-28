@@ -387,7 +387,7 @@ impl Session {
             .iter()
             .filter(|v| v.owner == veh::OwnerId(owner))
             .count();
-        if !self.lan_host && owner != 0 && owned >= quota as usize {
+        if !self.lan_host && owned >= quota as usize {
             return Err(if quota == 1 {
                 format!("\u{E000}You already have a {noun}")
             } else {

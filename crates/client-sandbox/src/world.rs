@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 pub const PLAYER_RECORD: usize = 16;
 /// Floats per record `vehicles` writes.
 pub const VEHICLE_RECORD: usize = 16;
+/// Floats per record `entities` writes.
+pub const ENTITY_RECORD: usize = 8;
 /// Floats `environment` writes.
 pub const ENVIRONMENT_RECORD: usize = 12;
 /// Most records one `players` or `vehicles` call copies.
@@ -24,6 +26,8 @@ pub struct World {
     pub local: u64,
     pub players: Vec<Player>,
     pub vehicles: Vec<Vehicle>,
+    /// Add-On creatures (package entities) as drawn.
+    pub entities: Vec<Entity>,
     /// Public Add-On state the player receives, by package.
     pub state: BTreeMap<String, AddOnState>,
     pub environment: Environment,
@@ -51,6 +55,16 @@ pub struct Vehicle {
     pub velocity: [f32; 3],
     /// Radius of a sphere around it.
     pub radius: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Entity {
+    pub id: u64,
+    /// Its kind (`namespace:entity/name`).
+    pub kind: String,
+    /// Where it stands.
+    pub feet: [f32; 3],
+    pub yaw: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -121,6 +135,20 @@ impl World {
                     .chain(v.rotation)
                     .chain(v.velocity)
                     .chain([v.radius])
+                    .chain([0.0; 3]),
+            ));
+        }
+        out
+    }
+    /// The `entities` records: id, feet xyz, yaw, then padding.
+    pub fn entity_records(&self, capacity: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        for e in self.entities.iter().take(capacity.min(MAX_RECORDS)) {
+            out.extend(finite(
+                [e.id as f32]
+                    .into_iter()
+                    .chain(e.feet)
+                    .chain([e.yaw])
                     .chain([0.0; 3]),
             ));
         }
@@ -201,6 +229,19 @@ mod tests {
         assert_eq!(v[12], 1.25);
         assert_eq!(world.vehicle_records(&[], 8)[1], -1.0);
         assert!(world.player_records(0).is_empty());
+        let with = World {
+            entities: vec![Entity {
+                id: 5,
+                kind: "zoo:entity/cow".into(),
+                feet: [1.0, 0.0, 2.0],
+                yaw: 0.5,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            with.entity_records(4),
+            [5.0, 1.0, 0.0, 2.0, 0.5, 0.0, 0.0, 0.0]
+        );
         assert_eq!(world.environment_record().len(), ENVIRONMENT_RECORD);
     }
 

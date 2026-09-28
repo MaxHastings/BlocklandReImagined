@@ -1019,6 +1019,16 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
         )?;
         linker.func_wrap(
             m,
+            "entities",
+            |mut caller: Host<'_>, ptr: i32, capacity: i32| -> wasmtime::Result<i32> {
+                let records = caller.data().world.entity_records(capacity.max(0) as usize);
+                let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
+                write(&mut caller, ptr, &bytes)?;
+                Ok((records.len() / crate::world::ENTITY_RECORD) as i32)
+            },
+        )?;
+        linker.func_wrap(
+            m,
             "vehicle_kind",
             |mut caller: Host<'_>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
                 let name = text(&mut caller, ptr, len, 160)?;

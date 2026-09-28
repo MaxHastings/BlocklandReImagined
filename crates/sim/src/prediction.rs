@@ -241,12 +241,28 @@ impl CollisionMirror {
     }
 }
 
+/// What the walking motor gets from an input. A tool in hand that takes
+/// the jet button for its own action (an image with a `jet` command) keeps
+/// the press from jetting: the server still sees the press as the tool's
+/// trigger. Host and prediction both use this, so neither jets.
+pub fn motor_input(input: MoveInput, tool_takes_jet: bool) -> MoveInput {
+    MoveInput {
+        jet: input.jet && !tool_takes_jet,
+        ..input
+    }
+}
+
 pub struct Predictor {
     world: CollisionMirror,
     player: Player,
     /// The host's archetype table, from its checkpoint.
     archetypes: Archetypes,
     pending: VecDeque<(u64, MoveInput)>,
+    /// What the motor ran for each pending input ([`motor_input`]), so a
+    /// replay runs exactly what was predicted.
+    motor: VecDeque<MoveInput>,
+    /// The tool in hand takes the jet button.
+    tool_jet: bool,
     sequence: u64,
     acknowledged: u64,
     server_tick: Option<u64>,
@@ -269,6 +285,8 @@ impl Predictor {
             player,
             archetypes,
             pending: VecDeque::new(),
+            motor: VecDeque::new(),
+            tool_jet: false,
             sequence: 0,
             acknowledged: 0,
             server_tick: None,
@@ -281,6 +299,10 @@ impl Predictor {
     /// The predicted body's motor constants (its archetype at its scale).
     pub fn tuning(&self) -> &crate::player::PlayerTuning {
         self.player.tuning()
+    }
+    /// Whether the tool in hand takes the jet button ([`motor_input`]).
+    pub fn set_tool_jet(&mut self, takes: bool) {
+        self.tool_jet = takes;
     }
     pub fn pending_len(&self) -> usize {
         self.pending.len()
@@ -359,13 +381,16 @@ impl Predictor {
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("Input sequence exhausted"))?;
         self.world.stream_terrain();
+        let motor = motor_input(input, self.tool_jet);
         let events =
             self.player
-                .step_in_water(&mut self.world.physics, input, &self.world.waters)?;
+                .step_in_water(&mut self.world.physics, motor, &self.world.waters)?;
         if self.pending.len() == INPUT_HISTORY {
             self.pending.pop_front();
+            self.motor.pop_front();
         }
         self.pending.push_back((sequence, input));
+        self.motor.push_back(motor);
         self.sequence = sequence;
         Ok((sequence, events))
     }
@@ -379,8 +404,10 @@ impl Predictor {
             .ok_or_else(|| anyhow::anyhow!("Input sequence exhausted"))?;
         if self.pending.len() == INPUT_HISTORY {
             self.pending.pop_front();
+            self.motor.pop_front();
         }
         self.pending.push_back((sequence, input));
+        self.motor.push_back(input);
         self.sequence = sequence;
         Ok(sequence)
     }
@@ -415,8 +442,9 @@ impl Predictor {
             .is_some_and(|(sequence, _)| *sequence <= ack)
         {
             self.pending.pop_front();
+            self.motor.pop_front();
         }
-        for (_, input) in &self.pending {
+        for input in &self.motor {
             self.player
                 .step_in_water(&mut self.world.physics, *input, &self.world.waters)?;
         }
@@ -451,6 +479,7 @@ impl Predictor {
             .restore(&mut self.world.physics, state, tuning)?;
         self.world.stream_terrain();
         self.pending.clear();
+        self.motor.clear();
         self.server_tick = Some(tick);
         self.acknowledged = ack.min(self.sequence);
         Ok(())

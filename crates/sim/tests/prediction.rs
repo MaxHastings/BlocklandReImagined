@@ -305,3 +305,44 @@ fn mirror_sync_timing() {
         median(&mut t_logged)
     );
 }
+
+/// A tool that takes the jet button: the prediction sends the press (the
+/// host runs the tool's command from it) but its motor, like the host's,
+/// never jets, and a correction replays exactly that.
+#[test]
+fn a_tool_that_takes_jet_is_predicted_without_jetting() {
+    let session = {
+        let mut s = server();
+        s.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        s
+    };
+    let (initial, _) = session.motion_states().remove(0);
+    let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+    let mut prediction = Predictor::new(mirror, initial.clone(), Default::default()).unwrap();
+    for _ in 0..30 {
+        prediction.step(MoveInput::default()).unwrap();
+    }
+    let ground = prediction.state().feet[1];
+    prediction.set_tool_jet(true);
+    let jet = MoveInput {
+        jet: true,
+        ..Default::default()
+    };
+    for _ in 0..60 {
+        prediction.step(jet).unwrap();
+    }
+    assert!((prediction.state().feet[1] - ground).abs() < 0.01);
+    assert!(
+        prediction.recent(6).all(|(_, input)| input.jet),
+        "the press still reaches the host"
+    );
+    // A correction from the start replays the unjetted steps.
+    prediction.reconcile(1, 0, initial).unwrap();
+    assert!((prediction.state().feet[1] - ground).abs() < 0.05);
+    prediction.set_tool_jet(false);
+    for _ in 0..60 {
+        prediction.step(jet).unwrap();
+    }
+    assert!(prediction.state().feet[1] > ground + 0.1, "without it, jet jets");
+}

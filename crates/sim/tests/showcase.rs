@@ -710,3 +710,55 @@ fn everyone_gets_both_items_outside_minigames_and_the_loadout_decides_inside() {
     g.steps(2);
     assert!(!holds(&g, b, GUN), "no gun from a command in a minigame");
 }
+
+#[test]
+fn right_click_with_the_gun_grabs_without_jetting() {
+    let rise = |gun: bool| {
+        let mut g = Game::new();
+        let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+        g.steps(2);
+        if gun {
+            g.s.give_tool(host, GUN, true).unwrap();
+        } else {
+            g.s.give_tool(host, GUN, false).unwrap();
+            g.cmd(host, Command::EquipTool { slot: None }).unwrap();
+        }
+        g.steps(30);
+        let before = g.feet(host).y;
+        g.looks.get_mut(&host).unwrap().jet = true;
+        g.steps(40);
+        g.looks.get_mut(&host).unwrap().jet = false;
+        g.feet(host).y - before
+    };
+    let bare = rise(false);
+    assert!(bare > 0.15, "an empty-handed player jets: {bare}");
+    let armed = rise(true);
+    assert!(
+        armed.abs() < 0.05,
+        "the gun takes right click: rose {armed}"
+    );
+}
+
+#[test]
+fn steel_balls_count_toward_the_per_builder_vehicle_quota() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    let mut settings = bri_admin::ServerSettings::default();
+    settings.per_player.vehicles = 1;
+    g.s.set_server_settings(settings).unwrap();
+    g.steps(30);
+    g.package(host, "steel-ball", "roll").unwrap();
+    g.steps(40);
+    assert_eq!(g.vehicles_of(BALL).len(), 1);
+    g.s.take_private_notices();
+    g.package(host, "steel-ball", "hurl").unwrap();
+    g.steps(2);
+    assert_eq!(
+        g.vehicles_of(BALL).len(),
+        1,
+        "the quota holds the second back"
+    );
+    assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == host
+        && matches!(n, bri_sim::session::Notice::Center { text, .. }
+            if text.ends_with("You already have a physics-vehicle"))));
+}

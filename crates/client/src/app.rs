@@ -4755,6 +4755,23 @@ impl PlatformApp for App {
                     ..Default::default()
                 }
             };
+            // A tool in hand with a jet command (v20's `onTrigger` slot 4)
+            // takes right click: predict no jet, as the host runs none.
+            let tool_jet = a.view.as_ref().is_some_and(|v| {
+                v.weapons.images.get(&v.owner).is_some_and(|images| {
+                    images.iter().any(|m| {
+                        m.hand == 0
+                            && self
+                                .content
+                                .weapons
+                                .pack
+                                .images
+                                .get(&m.image)
+                                .is_some_and(|i| i.commands.jet.is_some())
+                    })
+                })
+            });
+            self.motion.set_tool_jet(tool_jet);
             if let Some((newest, inputs)) = self.motion.advance(
                 game_elapsed.as_secs_f32(),
                 input,
@@ -6902,6 +6919,7 @@ impl PlatformApp for App {
             let world = if self.client_code.reads_world() {
                 std::sync::Arc::new(crate::client_code::world_view(
                     view,
+                    self.ghosts.entities_at(view.tick, &view.entities),
                     self.motion.presented(),
                     &self.vehicles,
                     &self.vehicle_assets,

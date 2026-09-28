@@ -52,7 +52,8 @@ copy `user-state/` across to keep settings, saves and identity.
   (overlap, floating, someone else's bricks, brick limit) plants nothing.
 - **Gravity Gun** (an Add-On, on by default): everyone gets one; `/gravitygun`
   puts it in your hand. Right click grabs what you aim at (players,
-  vehicles, Steel Balls) and right click again drops it; left click punts;
+  vehicles, Steel Balls, Add-On creatures) and right click again drops it,
+  without jetting; left click punts;
   hold left click to charge a throw and release to throw. Heavy things lag
   and sag in the beam. In a minigame, a thrown vehicle that lands on
   someone kills them and the kill is yours; outside minigames you can only

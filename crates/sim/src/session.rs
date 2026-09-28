@@ -1851,7 +1851,15 @@ impl Session {
                             triggers.push((owner, trigger, now));
                         }
                     }
-                    peer.tutorial.abilities().apply(peer.input)
+                    // A tool that takes the jet button keeps it from jetting.
+                    let tool_jet = self
+                        .weapons
+                        .image_state(bri_weapons::ActorId(owner), 0)
+                        .is_some_and(|(image, _)| image.commands.jet.is_some());
+                    crate::prediction::motor_input(
+                        peer.tutorial.abilities().apply(peer.input),
+                        tool_jet,
+                    )
                 } else {
                     MoveInput {
                         yaw: peer.input.yaw,
