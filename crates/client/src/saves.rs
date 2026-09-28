@@ -454,9 +454,87 @@ impl Jobs {
     }
 }
 
+/// `LoadBricks_GetColorDifference`: `None` when every colour the save's
+/// bricks use is already in the world's set, otherwise whether the save's
+/// new colours fit added on (the world holds 256).
+pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> {
+    let saved = &build.world.palette;
+    let used: std::collections::BTreeSet<u8> = build
+        .world
+        .bricks
+        .values()
+        .chain(&build.world.unloaded)
+        .map(|b| b.color)
+        .collect();
+    let missing = |c: &&[f32; 4]| !world.contains(c);
+    if !used
+        .iter()
+        .filter_map(|&i| saved.get(usize::from(i)))
+        .any(|c| missing(&c))
+    {
+        return None;
+    }
+    let mut new: Vec<&[f32; 4]> = saved.iter().filter(missing).collect();
+    new.dedup_by(|a, b| a == b);
+    Some(world.len() + new.len() <= 256)
+}
+
+/// `ColorWarning_ClickMatch` (colour method 3): each of the save's colours
+/// becomes the world's nearest, by v20's summed RGB difference, alpha
+/// counting half and a solid/translucent mismatch never matching first.
+pub fn match_colors(world: &[[f32; 4]], build: &mut SavedBuild) {
+    for color in &mut build.world.palette {
+        let diff = |c: &[f32; 4]| {
+            let rgb: f32 = (0..3).map(|i| (c[i].abs() - color[i].abs()).abs()).sum();
+            let alpha = if (c[3] > 0.99) != (color[3] > 0.99) {
+                1000.0
+            } else {
+                (c[3].abs() - color[3].abs()).abs() * 0.5
+            };
+            rgb + alpha
+        };
+        if let Some(nearest) = world.iter().min_by(|a, b| diff(a).total_cmp(&diff(b))) {
+            *color = *nearest;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_saves_colours_load_as_v20s_color_warning_offers() {
+        let world = vec![
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0, 0.5],
+        ];
+        let mut saved = bri_world::World::new(
+            "Save".into(),
+            "map".into(),
+            vec![
+                [0.9, 0.1, 0.0, 1.0],
+                [0.0, 0.9, 0.1, 1.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ],
+        );
+        let mut brick =
+            bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [0.0; 3], 1);
+        brick.color = 2;
+        saved.bricks.insert(1, brick.clone());
+        let mut build = SavedBuild::new(saved);
+        // Only the world's own red is used: nothing to ask.
+        assert_eq!(color_difference(&world, &build), None);
+        brick.color = 0;
+        build.world.bricks.insert(1, brick);
+        assert_eq!(color_difference(&world, &build), Some(true));
+        assert_eq!(color_difference(&[[0.5; 4]; 255], &build), Some(false));
+        match_colors(&world, &mut build);
+        // Near-red becomes red; solid green takes solid blue, not translucent green.
+        assert_eq!(build.world.palette[0], [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(build.world.palette[1], [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(color_difference(&world, &build), None);
+    }
     #[test]
     fn utc_save_dates_are_sortable_across_leap_year_boundaries() {
         assert_eq!(modified_date(0), "1970-01-01 00:00Z");

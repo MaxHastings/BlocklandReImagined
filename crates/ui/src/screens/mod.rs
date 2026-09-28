@@ -5,6 +5,7 @@
 pub mod addons;
 pub mod admin;
 pub mod avatar;
+pub mod colorwarn;
 pub mod console;
 pub mod help;
 pub mod menus;
@@ -83,6 +84,8 @@ pub enum ScreenId {
     Help,
     /// Start Game's Music Files: the loops a hosted game offers.
     MusicFiles,
+    /// v20 `LoadBricksColorGui`: how to load a save's differing colours.
+    LoadBricksColor,
 }
 
 pub trait Screen {
@@ -181,6 +184,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::ServerConfig => return Box::new(admin::ServerConfig::new(core)),
         ScreenId::Help => return Box::new(help::Help::new(core)),
         ScreenId::MusicFiles => return Box::new(music::MusicFiles::new(core)),
+        ScreenId::LoadBricksColor => return Box::new(colorwarn::ColorWarning::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),

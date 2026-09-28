@@ -733,3 +733,51 @@ fn maximize_and_minimize_boxes_toggle_the_window() {
     click(&mut u, boxed(small, 2));
     assert_eq!(window(&u, ScreenId::Help), start);
 }
+
+#[test]
+fn differing_save_colours_ask_to_match_or_add_them() {
+    use bri_ui::api::{ColorLoad, UiAction, UiUpdate};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let pack = Rc::new(pack);
+    for append in [true, false] {
+        let mut u = ui(&pack);
+        u.apply(UiUpdate::ColorWarning { append });
+        u.update(0);
+        assert_eq!(u.top_id(), ScreenId::LoadBricksColor);
+        let view = u.screen(ScreenId::LoadBricksColor).unwrap().view();
+        let shown = |command: &str| visible(view, view.by_command(command).unwrap());
+        assert!(shown("ColorWarning_ClickMatch();"));
+        assert!(!shown("ColorWarning_ClickReplace();"));
+        assert_eq!(shown("ColorWarning_ClickAppend();"), append);
+        // Add More Colors takes Replace's place, right under Nearest Match.
+        let y = |command: &str| view.node(view.by_command(command).unwrap()).rect.y;
+        assert_eq!(
+            y("ColorWarning_ClickAppend();"),
+            y("ColorWarning_ClickMatch();") + 40
+        );
+        let node = view.by_command("ColorWarning_ClickMatch();").unwrap();
+        let i = u
+            .dialogs
+            .iter()
+            .rposition(|s| s.id() == ScreenId::LoadBricksColor)
+            .unwrap();
+        let (dialogs, core) = (&mut u.dialogs, &mut u.core);
+        dialogs[i].on_event(
+            &ViewEvent {
+                node,
+                kind: EventKind::Click,
+            },
+            core,
+        );
+        u.update(0);
+        assert!(u.screen(ScreenId::LoadBricksColor).is_none());
+        assert!(
+            u.drain_actions()
+                .iter()
+                .any(|(_, a)| *a == UiAction::LoadBricksColors(ColorLoad::Match))
+        );
+    }
+}

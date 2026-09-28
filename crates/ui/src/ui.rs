@@ -255,6 +255,8 @@ pub struct Core {
     pub menu_backgrounds: Vec<IconRef>,
     /// Music loop names for Start Game's Music Files.
     pub music_tracks: Vec<String>,
+    /// Whether the save waiting in `LoadBricksColorGui` can add its colours.
+    pub color_append_fits: bool,
     pub display_modes: Option<crate::api::DisplayModes>,
     pub avatar_preview: IconRef,
     pub save_maps: Vec<String>,
@@ -1145,6 +1147,7 @@ impl Ui {
             datablocks: DatablockMenus::new(),
             menu_backgrounds: Vec::new(),
             music_tracks: Vec::new(),
+            color_append_fits: true,
             display_modes: None,
             avatar_preview: IconRef::None,
             save_maps: Vec::new(),
@@ -1725,6 +1728,10 @@ impl Ui {
                 }
                 c.print_aspect = Some(aspect);
                 c.push(ScreenId::PrintSelector);
+            }
+            UiUpdate::ColorWarning { append } => {
+                c.color_append_fits = append;
+                c.push(ScreenId::LoadBricksColor);
             }
             UiUpdate::SaveFiles { maps, files } => {
                 c.save_maps = maps;
