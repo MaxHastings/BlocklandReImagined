@@ -40,7 +40,14 @@ pub const MAX_SCAN_DEPTH: usize = 3;
 pub const MAX_SCAN_DIRS: usize = 4096;
 /// Content kinds that only the server reads. A discovered package that
 /// provides nothing else defaults to `server`.
-pub const SERVER_KINDS: &[&str] = &["behaviour", "script", "world", "entity", "mode"];
+pub const SERVER_KINDS: &[&str] = &[
+    "behaviour",
+    "script",
+    "world",
+    "entity",
+    "archetype",
+    "mode",
+];
 /// Content kinds only clients draw. A discovered package that provides
 /// nothing else defaults to `client`; any other package to `shared`.
 pub const CLIENT_KINDS: &[&str] = &["model", "hud"];
@@ -166,6 +173,26 @@ pub struct Library {
     pub problems: Diagnostics,
 }
 
+/// The side an Add-On providing these content kinds loads on: `server` when
+/// it provides only [`SERVER_KINDS`], `client` when only [`CLIENT_KINDS`],
+/// otherwise `shared` (weapons, bricks and other gameplay data both need).
+/// None when it mixes server and client kinds, which no side can load. The
+/// Add-Ons screen and `bri-addon-check` both use this one rule.
+pub fn side_for_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<Side> {
+    let kinds: Vec<&str> = kinds.into_iter().collect();
+    let has = |set: &[&str]| kinds.iter().any(|k| set.contains(k));
+    let only = |set: &[&str]| !kinds.is_empty() && kinds.iter().all(|k| set.contains(k));
+    if has(SERVER_KINDS) && has(CLIENT_KINDS) {
+        None
+    } else if only(SERVER_KINDS) {
+        Some(Side::Server)
+    } else if only(CLIENT_KINDS) {
+        Some(Side::Client)
+    } else {
+        Some(Side::Shared)
+    }
+}
+
 /// Where players drop old Blockland add-on zips and folders, as in v20.
 pub const DROP_DIR: &str = "Add-Ons";
 /// Where importing one writes its package.
@@ -273,34 +300,16 @@ impl Library {
                 );
                 continue;
             }
-            let only = |kinds: &[&str]| {
-                !info.provides.is_empty()
-                    && info
-                        .provides
-                        .iter()
-                        .all(|p| kinds.contains(&p.kind.as_str()))
-            };
-            let (server_only, client_only) = (only(SERVER_KINDS), only(CLIENT_KINDS));
-            let has = |kinds: &[&str]| {
-                info.provides
-                    .iter()
-                    .any(|p| kinds.contains(&p.kind.as_str()))
-            };
+            let side = side_for_kinds(info.provides.iter().map(|p| p.kind.as_str()));
             let package = PackageEntry {
                 id: info.id.clone(),
                 version: info.version.clone(),
-                side: if server_only {
-                    Side::Server
-                } else if client_only {
-                    Side::Client
-                } else {
-                    Side::Shared
-                },
+                side: side.unwrap_or(Side::Shared),
                 dir: dir.clone(),
                 role: None,
             };
             let mut found = entry(root, package, false, true);
-            if has(SERVER_KINDS) && has(CLIENT_KINDS) {
+            if side.is_none() {
                 found.problems.push(
                     Diagnostic::error(
                         "library.mixed_sides",

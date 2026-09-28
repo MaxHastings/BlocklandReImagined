@@ -8,5 +8,7 @@
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },
-  "provides": []
+  "provides": [
+    { "kind": "weapons", "id": "sample-bubble-blaster:weapons/main", "file": "assets/weapons.json" }
+  ]
 }

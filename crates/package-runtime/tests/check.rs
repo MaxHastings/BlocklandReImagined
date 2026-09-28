@@ -151,3 +151,43 @@ fn sides_follow_what_an_add_on_provides() {
     assert_eq!(side_for([]), Some(Side::Shared));
     assert_eq!(side_for(["entity", "model"]), None);
 }
+
+#[test]
+fn weapons_and_bricks_are_shared_and_the_screen_agrees() {
+    assert_eq!(side_for(["weapons"]), Some(Side::Shared));
+    assert_eq!(side_for(["bricks"]), Some(Side::Shared));
+    assert_eq!(side_for(["archetype"]), Some(Side::Server));
+    // One rule: a kind the host alone loads is a server kind on the Add-Ons
+    // screen too, and the screen's client kinds are ones clients load.
+    use bri_package::library::{CLIENT_KINDS, SERVER_KINDS};
+    use bri_package_runtime::content::Kind;
+    for name in Kind::NAMES {
+        let side = Kind::parse(name).unwrap().side();
+        assert_eq!(side == Side::Server, SERVER_KINDS.contains(&name), "{name}");
+        if CLIENT_KINDS.contains(&name) {
+            assert_eq!(side, Side::Client, "{name}");
+        }
+    }
+}
+
+#[test]
+fn the_sample_weapon_checks_and_a_broken_one_is_named() {
+    let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/samples/sample-bubble-blaster");
+    let report = check(&sample);
+    assert!(report.ok, "{report}");
+    assert_eq!(report.add_ons[0].side, Side::Shared);
+
+    let dir = tempfile::tempdir().unwrap();
+    let broken = dir.path().join("broken");
+    write(&broken, "package.json", manifest("broken", json!({})));
+    let mut weapons: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sample.join("assets/weapons.json")).unwrap())
+            .unwrap();
+    // An item whose image does not exist.
+    weapons["items"]["sample-bubble-blaster:weapon/bubble_blaster"]["image"] = json!("nope");
+    write(&broken.join("assets"), "weapons.json", weapons);
+    let report = check(&broken);
+    assert!(!report.ok);
+    assert_eq!(codes(&report), ["check.weapons"], "{report}");
+}

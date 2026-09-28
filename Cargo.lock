@@ -662,6 +662,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-package",
+ "bri-weapons",
  "rhai",
  "serde",
  "serde_json",

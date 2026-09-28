@@ -4,7 +4,6 @@
 //! folder of Add-Ons checks as a set. Nothing is run.
 use crate::{
     Catalog,
-    content::Kind,
     manifest::{MANIFEST_FILE, Manifest},
     script::Runtime,
 };
@@ -56,24 +55,11 @@ pub struct CapabilityView {
     pub meaning: String,
 }
 
-/// The side a package providing these kinds loads on, or None when it
-/// mixes server behaviour with client visuals (which no side can load).
+/// The side an Add-On providing these kinds loads on, or None when it
+/// mixes server behaviour with client visuals (which no side can load). The
+/// same rule the Add-Ons screen uses.
 pub fn side_for<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<Side> {
-    let sides: Vec<Side> = kinds
-        .into_iter()
-        .filter_map(Kind::parse)
-        .map(Kind::side)
-        .collect();
-    let all = |side: Side| !sides.is_empty() && sides.iter().all(|s| *s == side);
-    if all(Side::Server) {
-        Some(Side::Server)
-    } else if all(Side::Client) {
-        Some(Side::Client)
-    } else if sides.is_empty() {
-        Some(Side::Shared)
-    } else {
-        None
-    }
+    bri_package::library::side_for_kinds(kinds)
 }
 
 fn manifest_id(dir: &Path) -> Option<String> {
@@ -236,6 +222,20 @@ pub fn check(folder: &Path) -> Report {
     }
     if let Err(mut problems) = Catalog::load(&parent, &set, false) {
         diagnostics.append(&mut problems);
+    }
+    // Weapons are merged by the engine's content loading rather than the
+    // catalog, from `assets/weapons.json` whether or not `provides` lists it.
+    for (manifest, dir) in &found {
+        let file = parent.join(dir).join("assets/weapons.json");
+        if let Ok(bytes) = std::fs::read(&file)
+            && let Err(e) = bri_weapons::Pack::from_json(&bytes)
+        {
+            diagnostics.push(
+                Diagnostic::error("check.weapons", format!("{e:#}"))
+                    .at(format!("{}/assets/weapons.json", manifest.id))
+                    .hint("compare it with packages/samples/sample-bubble-blaster/assets/weapons.json"),
+            );
+        }
     }
     // Missing dependencies are reported above, with where to put them.
     diagnostics.retain(|d| d.code != "set.dependency.missing");
