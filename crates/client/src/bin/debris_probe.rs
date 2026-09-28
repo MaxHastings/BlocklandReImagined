@@ -2,12 +2,14 @@
 //! then replays the client's per-frame debris work (query mirror sync,
 //! hidden-brick ghosts, `BrickDebris` cues and physics, debris GPU models and
 //! an offscreen draw) around a rocket blast, a Destructo Wand chain and a
-//! mass kill past the body cap. Reports each frame's cost by stage and the
-//! worst frames. It never opens a window or reads input.
+//! mass kill. Reports each frame's cost by stage and the worst frames. Then
+//! big blasts at every Physics Quality limit, costed in this thread's CPU
+//! cycles and physics work counts (not wall clock), with and without the
+//! client's debris budget. It never opens a window or reads input.
 //!
 //! Usage: debris_probe <content-root> <report.json> [world-name-substring]
 use anyhow::{Context, Result, ensure};
-use bri_client::brick_debris::{BrickDebris, DebrisModels};
+use bri_client::brick_debris::{BUDGET, BrickDebris, DebrisModels, DebrisWork};
 use bri_client::building::Building;
 use bri_client::content::ClientContent;
 use bri_client::network::WorldChanges;
@@ -30,6 +32,160 @@ const FRAMES: usize = 60 * 8;
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
+}
+
+/// CPU cycles this thread has run: exact per frame, unlike wall clock
+/// (which counts other processes) or thread times (15.6 ms ticks).
+#[cfg(windows)]
+fn cycles() -> u64 {
+    use windows_sys::Win32::System::{Threading::GetCurrentThread, WindowsProgramming};
+    let mut c = 0u64;
+    // SAFETY: the current thread's pseudo-handle and an owned counter.
+    unsafe { WindowsProgramming::QueryThreadCycleTime(GetCurrentThread(), &mut c) };
+    c
+}
+/// This thread's CPU time in the OS's coarse ticks: over a whole run it
+/// turns cycles into milliseconds.
+#[cfg(windows)]
+fn cpu_time() -> Duration {
+    use windows_sys::Win32::{Foundation::FILETIME, System::Threading};
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: the current thread's pseudo-handle and four owned FILETIMEs.
+    unsafe {
+        Threading::GetThreadTimes(
+            Threading::GetCurrentThread(),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
+}
+/// The preset runs are costed on Windows only (Max's PC); elsewhere they
+/// are skipped.
+#[cfg(not(windows))]
+fn cycles() -> u64 {
+    0
+}
+#[cfg(not(windows))]
+fn cpu_time() -> Duration {
+    Duration::ZERO
+}
+
+/// Brick kill cues for `kills` due on `frame`, taking the bricks out of
+/// `current`; returns the cues and the bricks that changed.
+fn kill_cues(
+    kills: &[Kill],
+    frame: usize,
+    current: &mut PublicWorld,
+    cue_id: &mut u64,
+) -> (Vec<Cue>, BTreeSet<BrickId>) {
+    let mut cues = Vec::new();
+    let mut changed = BTreeSet::new();
+    for kill in kills.iter().filter(|k| k.frame == frame) {
+        for id in &kill.bricks {
+            // The cue captures the brick's look before it goes.
+            let Some(b) = current.bricks.remove(id) else {
+                continue;
+            };
+            *cue_id += 1;
+            cues.push(Cue {
+                id: *cue_id,
+                tick: frame as u64,
+                position: b.position,
+                kind: CueKind::BrickKill {
+                    brick: *id,
+                    definition: b.definition.clone(),
+                    quarter_turns: b.quarter_turns,
+                    color: b.color,
+                    color_effect: b.color_effect,
+                    shape_effect: b.shape_effect,
+                    print: b.print.clone(),
+                    origin: kill.origin.to_array(),
+                    force: kill.force,
+                    radius: kill.radius,
+                },
+            });
+            changed.insert(*id);
+        }
+    }
+    (cues, changed)
+}
+
+/// One run of `kills` with the debris limit at `limit`: each frame's CPU
+/// cycles for the client's debris work (cues, physics, instance upload) and
+/// what the physics had to do. With `budget` (this PC's cycles per ms),
+/// each frame's cost is fed to the client's budget as the game does.
+#[allow(clippy::too_many_arguments)] // probe inputs
+fn preset(
+    kills: &[Kill],
+    limit: usize,
+    budget: Option<f64>,
+    world: &Arc<PublicWorld>,
+    building: &mut Building,
+    meshes: &BTreeMap<String, bri_content::brick::Brick>,
+    materials: &bri_client::materials::BrickMaterials,
+    palette: &bri_client::world_chunks::BrickPalette,
+    gpu: &Gpu,
+) -> Result<(Vec<u64>, Vec<DebrisWork>, BrickDebris)> {
+    let gpu_palette = gpu
+        .renderer
+        .upload(&gpu.device, &gpu.queue, &palette.scene)?;
+    let mut debris = BrickDebris::new();
+    debris.set_limit(limit);
+    let mut models = DebrisModels::default();
+    let mut cue_id = 1_000_000u64;
+    let (mut spent, mut work) = (Vec::new(), Vec::new());
+    // With the budget, a first blast teaches it this PC's cost and the
+    // reported one is the next: the steady state a player plays in.
+    for run in 0..if budget.is_some() { 2 } else { 1 } {
+        building.sync_world(world)?;
+        debris.clear();
+        let mut current = (**world).clone();
+        spent.clear();
+        work.clear();
+        for frame in 0..FRAMES {
+            let (cues, changed) = kill_cues(kills, frame, &mut current, &mut cue_id);
+            if !changed.is_empty() {
+                building.sync_world_changes(
+                    &current,
+                    Some(&WorldChanges {
+                        bricks: changed,
+                        palette: false,
+                    }),
+                )?;
+                debris.sync_world(&current);
+            }
+            let start = cycles();
+            debris.cues(&cues, building)?;
+            debris.advance(DT, building)?;
+            models.upload(
+                &debris,
+                &gpu.renderer,
+                &gpu.device,
+                &gpu.queue,
+                meshes,
+                palette,
+                &gpu_palette,
+                materials,
+                &current.palette,
+            )?;
+            let c = cycles() - start;
+            if let Some(per_ms) = budget {
+                debris.spent(Duration::from_secs_f64(c as f64 / per_ms / 1000.0));
+            }
+            spent.push(c);
+            work.push(debris.work());
+        }
+        ensure!(debris.is_empty(), "limit {limit} run {run}: debris outlived its fade");
+    }
+    Ok((spent, work, debris))
 }
 
 /// One scheduled kill: on `frame`, these bricks die from this blast.
@@ -149,36 +305,7 @@ fn scenario(
     let mut hidden_dirty = true;
     for frame in 0..FRAMES {
         let mut t = [0.0f64; 6];
-        let mut cues = Vec::new();
-        let mut changed = BTreeSet::new();
-        for kill in kills.iter().filter(|k| k.frame == frame) {
-            for id in &kill.bricks {
-                // The cue captures the brick's look before it goes.
-                let Some(b) = current.bricks.get(id).cloned() else {
-                    continue;
-                };
-                cue_id += 1;
-                cues.push(Cue {
-                    id: cue_id,
-                    tick: frame as u64,
-                    position: b.position,
-                    kind: CueKind::BrickKill {
-                        brick: *id,
-                        definition: b.definition.clone(),
-                        quarter_turns: b.quarter_turns,
-                        color: b.color,
-                        color_effect: b.color_effect,
-                        shape_effect: b.shape_effect,
-                        print: b.print.clone(),
-                        origin: kill.origin.to_array(),
-                        force: kill.force,
-                        radius: kill.radius,
-                    },
-                });
-                current.bricks.remove(id);
-                changed.insert(*id);
-            }
-        }
+        let (cues, changed) = kill_cues(kills, frame, &mut current, &mut cue_id);
         // The replica's world update arrives with the cues (killBrick).
         if !changed.is_empty() {
             let s = Instant::now();
@@ -398,8 +525,8 @@ fn main() -> Result<()> {
             radius: 0.0,
         })
         .collect();
-    // Near the cap: 128 bricks in one blast, then two more blasts that
-    // evict the oldest bodies.
+    // 128 bricks in one blast, then two more blasts (the old 128 limit's
+    // eviction case).
     let mass_order = nearest(&world, centre, 128 + 64, &none);
     let mass = [
         Kill {
@@ -435,7 +562,7 @@ fn main() -> Result<()> {
         ("rocket_cold", &rocket[..], false),
         ("rocket", &rocket[..], false),
         ("wand_chain", &wand[..], true),
-        ("cap_128", &mass[..], false),
+        ("mass_192", &mass[..], false),
     ] {
         let result = scenario(
             name,
@@ -450,6 +577,85 @@ fn main() -> Result<()> {
         )?;
         report.insert(name.into(), result);
     }
+    // The biggest stock brick blast (radius 5, force 50) at the build's
+    // middle, then far bigger ones: the 1024 and 4096 nearest bricks in one
+    // blast, as a dense build, a pile of rockets or a bomb Add-On might give.
+    let blast = |bricks: Vec<BrickId>, radius: Option<f32>| {
+        let radius = radius.unwrap_or_else(|| {
+            bricks
+                .iter()
+                .map(|id| Vec3::from(world.bricks[id].position).distance(centre))
+                .fold(1.0, f32::max)
+        });
+        [Kill {
+            frame: 10,
+            bricks,
+            origin: centre,
+            force: 50.0,
+            radius,
+        }]
+    };
+    let mut rocket = nearest(&world, centre, world.bricks.len(), &none);
+    rocket.retain(|id| Vec3::from(world.bricks[id].position).distance(centre) <= 5.0);
+    let blasts = [
+        ("rocket_r5", blast(rocket, Some(5.0))),
+        ("mass_1024", blast(nearest(&world, centre, 1024, &none), None)),
+        ("mass_4096", blast(nearest(&world, centre, 4096, &none), None)),
+    ];
+    let limits = [
+        ("low", 128),
+        ("medium", 256),
+        ("high", 512),
+        ("best", 2048),
+        ("console_max", 4096),
+    ];
+    // This PC's cycles per CPU millisecond, from one whole run.
+    let (c0, t0) = (cycles(), cpu_time());
+    preset(
+        &blasts[2].1, 4096, None, &world, &mut building, &meshes, &materials, &palette, &gpu,
+    )?;
+    let per_ms = (cycles() - c0) as f64 / ms(cpu_time() - t0);
+    let to_ms = |c: u64| (c as f64 / per_ms * 1000.0).round() / 1000.0;
+    let mut presets = serde_json::Map::new();
+    presets.insert("mcycles_per_cpu_ms".into(), json!(per_ms / 1e6));
+    presets.insert("budget_ms".into(), json!(ms(BUDGET)));
+    for (blast, kills) in blasts.iter().filter(|_| cfg!(windows)) {
+        let mut rows = serde_json::Map::new();
+        rows.insert("kills".into(), json!(kills[0].bricks.len()));
+        for (name, limit) in limits {
+            let mut row = serde_json::Map::new();
+            for (mode, budget) in [("raw", None), ("budgeted", Some(per_ms))] {
+                let (spent, work, debris) = preset(
+                    kills, limit, budget, &world, &mut building, &meshes, &materials, &palette,
+                    &gpu,
+                )?;
+                let peak = (0..spent.len()).max_by_key(|&i| spent[i]).unwrap_or(0);
+                // The heaviest second: the blast frame and the tumbling after.
+                let second: u64 = spent[10..70].iter().sum();
+                let most = |f: fn(&DebrisWork) -> usize| work.iter().map(f).max().unwrap_or(0);
+                row.insert(
+                    mode.into(),
+                    json!({
+                        "peak_frame": peak,
+                        "peak_frame_mcycles": spent[peak] as f64 / 1e6,
+                        "peak_frame_cpu_ms": to_ms(spent[peak]),
+                        "first_second_avg_cpu_ms": to_ms(second / 60),
+                        "frames_over_budget": spent.iter().filter(|&&c| to_ms(c) > ms(BUDGET)).count(),
+                        "peak_bodies": most(|w| w.bodies),
+                        "peak_awake": most(|w| w.awake),
+                        "peak_touching": most(|w| w.touching),
+                        "peak_statics": most(|w| w.statics),
+                        "work_at_peak": format!("{:?}", work[peak]),
+                        "diagnostics": format!("{:?}", debris.diagnostics),
+                    }),
+                );
+            }
+            println!("{blast} {name} ({limit}): {}", serde_json::to_string(&row)?);
+            rows.insert(format!("{name}_{limit}"), row.into());
+        }
+        presets.insert((*blast).into(), rows.into());
+    }
+    report.insert("presets".into(), presets.into());
     if let Some(parent) = report_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
