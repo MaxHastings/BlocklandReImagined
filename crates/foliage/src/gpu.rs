@@ -295,7 +295,9 @@ impl FoliageRenderer {
         }
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("native foliage sway light fade mask"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("foliage.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                bri_render::color::shader_source(include_str!("foliage.wgsl")).into(),
+            ),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
@@ -333,7 +335,10 @@ impl FoliageRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &bri_render::color::output_constants(target),
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     format: target,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),

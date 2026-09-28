@@ -563,6 +563,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-content",
+ "bri-render",
  "bytemuck",
  "glam 0.33.10",
  "image",
@@ -831,6 +832,7 @@ name = "bri-weather"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-render",
  "bytemuck",
  "glam 0.33.10",
  "image",

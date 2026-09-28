@@ -16,4 +16,4 @@ fn phase(initial:f32,rate:f32)->f32{return floor((initial+rate*camera.time_fog.x
  let luminance=select(1.,(p.light.z+p.light.w)*0.5+(p.light.w-p.light.z)*0.5*cos(phase(p.light.x,p.light.y)),p.alpha.w>0.5);
  let color=mix(p.bottom,p.top,c.y);var out:Output;out.position=camera.vp*vec4(world,1.);out.uv=vec2(select(c.x+0.5,0.5-c.x,p.shape.z>0.5),1.-c.y);out.color=vec4(color.rgb*luminance,color.a*mix(min(p.alpha.x,opacity),opacity,c.y));out.cutoff=p.alpha.y;return out;
 }
-@fragment fn fs_main(input:Output)->@location(0) vec4<f32>{let color=textureSample(image,samp,input.uv)*input.color;if color.a<=input.cutoff{discard;}return color;}
+@fragment fn fs_main(input:Output)->@location(0) vec4<f32>{let texel=textureSample(image,samp,input.uv);let alpha=texel.a*input.color.a;if alpha<=input.cutoff{discard;}return vec4(output_color(display_color(texel.rgb)*input.color.rgb),alpha);}

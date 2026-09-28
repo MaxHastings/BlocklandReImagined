@@ -1,3 +1,4 @@
+pub mod color;
 pub mod environment_scene;
 pub mod mipmap;
 pub mod scene;

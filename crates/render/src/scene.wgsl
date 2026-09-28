@@ -1,8 +1,3 @@
-override OUTPUT_ENCODED: u32 = 0u;
-fn output_color(display:vec3<f32>)->vec3<f32> {
-    if OUTPUT_ENCODED == 1u { return display; }
-    return linear_color(display);
-}
 struct Camera {
     view_projection:mat4x4<f32>, eye:vec4<f32>, sun_direction:vec4<f32>,
     sun_color:vec4<f32>, ambient:vec4<f32>, fog_color:vec4<f32>, atmosphere:vec4<f32>,

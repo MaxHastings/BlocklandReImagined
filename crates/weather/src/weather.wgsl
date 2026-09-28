@@ -6,4 +6,4 @@ struct Out {@builtin(position) position:vec4<f32>,@location(0) uv:vec2<f32>,@loc
     let corners=array<vec2<f32>,6>(vec2(-1.,1.),vec2(1.,1.),vec2(1.,-1.),vec2(-1.,1.),vec2(1.,-1.),vec2(-1.,-1.));let c=corners[v];
     var out:Out;out.position=view_projection*vec4(position.xyz+right.xyz*c.x+up.xyz*c.y,1.);out.uv=mix(uv.xy,uv.zw,vec2(c.x*0.5+0.5,0.5-c.y*0.5));out.uv*=vec2(right.w,up.w);out.layer=i32(position.w);out.color=color;return out;
 }
-@fragment fn fs_main(input:Out)->@location(0) vec4<f32> {let color=textureSample(atlas,atlas_sampler,input.uv,input.layer)*input.color;if color.a<1./255. {discard;}return color;}
+@fragment fn fs_main(input:Out)->@location(0) vec4<f32> {let texel=textureSample(atlas,atlas_sampler,input.uv,input.layer);let alpha=texel.a*input.color.a;if alpha<1./255. {discard;}return vec4(output_color(display_color(texel.rgb)*input.color.rgb),alpha);}

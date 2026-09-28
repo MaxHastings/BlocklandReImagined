@@ -1251,12 +1251,7 @@ impl SceneRenderer {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("world-space scene"),
             source: wgpu::ShaderSource::Wgsl(
-                format!(
-                    "{}\n{}",
-                    include_str!("color.wgsl"),
-                    include_str!("scene.wgsl")
-                )
-                .into(),
+                crate::color::shader_source(include_str!("scene.wgsl")).into(),
             ),
         });
         let mut pipelines = vec![];
@@ -1312,10 +1307,7 @@ impl SceneRenderer {
                                 module: &shader,
                                 entry_point: Some("fs_main"),
                                 compilation_options: wgpu::PipelineCompilationOptions {
-                                    constants: &[(
-                                        "OUTPUT_ENCODED",
-                                        if color_format.is_srgb() { 0.0 } else { 1.0 },
-                                    )],
+                                    constants: &crate::color::output_constants(color_format),
                                     ..Default::default()
                                 },
                                 targets: &[Some(wgpu::ColorTargetState {
