@@ -5,10 +5,7 @@ use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
 };
-use bri_render::{
-    scene::{AlphaMode, GpuScene, Material, SceneData, SceneImage, SceneRenderer},
-    shape_scene::ShapeInstance,
-};
+use bri_render::scene::{AlphaMode, GpuScene, Material, SceneData, SceneImage, SceneRenderer};
 use bri_sim::player::PlayerState;
 use bri_ui::api::AvatarPrefs;
 use glam::{Mat4, Quat, Vec3};
@@ -22,6 +19,15 @@ pub struct AvatarAssets {
     detail: usize,
     /// `HorseArmor`'s horse.dts and sequences, for players of that datablock.
     horse: Option<Box<AvatarAssets>>,
+    /// Each shape object's name in lower case, as outfits name them.
+    object_names: Vec<String>,
+}
+fn lower_names(rig: &Rig) -> Vec<String> {
+    rig.shape
+        .objects
+        .iter()
+        .map(|o| o.name.to_ascii_lowercase())
+        .collect()
 }
 impl AvatarAssets {
     pub fn load(root: &Path) -> Result<Self> {
@@ -80,7 +86,9 @@ impl AvatarAssets {
             .iter()
             .position(|d| !d.collision)
             .context("Avatar has no visible detail")?;
+        let object_names = lower_names(&rig);
         Ok(Self {
+            object_names,
             package,
             rig,
             images,
@@ -148,7 +156,8 @@ impl AvatarAssets {
                         .ends_with(&format!("/{name}.png"))
                 })
                 .with_context(|| format!("Missing horse texture {name}"))?;
-            let bytes = crate::items::checked_read(&root, &texture.path, &texture.sha256, 16 << 20)?;
+            let bytes =
+                crate::items::checked_read(&root, &texture.path, &texture.sha256, 16 << 20)?;
             let pixels = image::load_from_memory(&bytes)?.to_rgba8();
             images.insert(
                 name.clone(),
@@ -178,6 +187,7 @@ impl AvatarAssets {
             ensure!(rig.sequence(needed).is_some(), "Horse lacks {needed}");
         }
         self.horse = Some(Box::new(Self {
+            object_names: lower_names(&rig),
             package: self.package.clone(),
             rig,
             images,
@@ -190,13 +200,13 @@ impl AvatarAssets {
     /// chest colour and the head black; the ski nodes stay hidden.
     pub fn horse_mesh(&self, appearance: Appearance) -> Result<AvatarMesh> {
         let horse = self.horse.as_deref().context("Horse model is not loaded")?;
-        let chest = appearance
-            .colors
-            .get("chest")
-            .copied()
-            .unwrap_or([1.0; 4]);
+        let chest = appearance.colors.get("chest").copied().unwrap_or([1.0; 4]);
         let outfit = Outfit {
-            nodes: [("body".into(), chest), ("head".into(), [0.0, 0.0, 0.0, 1.0])].into(),
+            nodes: [
+                ("body".into(), chest),
+                ("head".into(), [0.0, 0.0, 0.0, 1.0]),
+            ]
+            .into(),
             face: String::new(),
             decal: String::new(),
             head_up: false,
@@ -246,7 +256,10 @@ impl AvatarAssets {
             } else {
                 package.parts.get(slot).into_iter().collect()
             };
-            name == "none" || lists.iter().any(|l| l.iter().any(|n| n.eq_ignore_ascii_case(name)))
+            name == "none"
+                || lists
+                    .iter()
+                    .any(|l| l.iter().any(|n| n.eq_ignore_ascii_case(name)))
         };
         for slot in appearance.parts.keys().cloned().collect::<Vec<_>>() {
             if let Some(value) = prefs.get(&slot) {
@@ -344,7 +357,10 @@ impl AvatarAssets {
             appearance,
             data,
             gpu: None,
-            uploaded_topology: Default::default(),
+            layout: None,
+            restructured: true,
+            pending: None,
+            defer_mesh: false,
             outfit,
             materials,
             translucent_materials,
@@ -385,9 +401,15 @@ pub struct AvatarMesh {
     pub appearance: Appearance,
     pub data: SceneData,
     pub gpu: Option<GpuScene>,
-    /// Indices and batch layout last uploaded to `gpu`; a frame whose posed
-    /// topology differs (visibility or detail changes) needs a full upload.
-    uploaded_topology: (Vec<u32>, Vec<(std::ops::Range<u32>, usize)>),
+    /// The drawn mesh's structure, for rewriting only positions each frame.
+    layout: Option<crate::avatar_mesh::Layout>,
+    /// The structure changed since the last upload: upload it all again.
+    restructured: bool,
+    /// With `defer_mesh`, the pose waiting for `upload` to build the mesh
+    /// (a body the camera does not see is never built).
+    pending: Option<bri_content::animation::Pose>,
+    /// Build the mesh at `upload` instead of at every pose.
+    pub defer_mesh: bool,
     outfit: Outfit,
     materials: Vec<usize>,
     translucent_materials: Vec<usize>,
@@ -850,23 +872,43 @@ impl AvatarMesh {
                 .unwrap_or_else(|| Quat::from_rotation_y(-player.yaw)),
             Vec3::from(player.feet),
         );
-        self.data.vertices.clear();
-        self.data.indices.clear();
-        self.data.batches.clear();
-        self.data.append_shape(
-            ShapeInstance {
-                shape: &assets.rig.shape,
-                pose: &pose,
-                detail: assets.detail,
-                transform: model_transform,
-                materials: &self.materials,
-                translucent_materials: Some(&self.translucent_materials),
-                unassigned_material: self.materials[0],
-            },
-            |name| self.outfit.nodes.get(&name.to_ascii_lowercase()).copied(),
-        )?;
         self.model_transform = model_transform;
         self.posed_nodes.clone_from(&pose.nodes);
+        if self.defer_mesh {
+            self.pending = Some(pose);
+            Ok(())
+        } else {
+            self.build_mesh(assets, &pose)
+        }
+    }
+    /// Write the posed vertices into `data`, reusing the last frame's
+    /// structure when the drawn parts, frames and paint are unchanged.
+    fn build_mesh(
+        &mut self,
+        assets: &AvatarAssets,
+        pose: &bri_content::animation::Pose,
+    ) -> Result<()> {
+        let colors: Vec<_> = assets
+            .object_names
+            .iter()
+            .map(|name| self.outfit.nodes.get(name).copied())
+            .collect();
+        let binding = crate::avatar_mesh::Binding {
+            shape: &assets.rig.shape,
+            detail: assets.detail,
+            materials: &self.materials,
+            translucent_materials: &self.translucent_materials,
+            unassigned_material: self.materials[0],
+            colors: &colors,
+        };
+        let rebuilt = crate::avatar_mesh::Layout::pose(
+            &mut self.layout,
+            &mut self.data,
+            &binding,
+            pose,
+            self.model_transform,
+        )?;
+        self.restructured |= rebuilt;
         Ok(())
     }
     /// Takes over another mesh's action thread (sequence, direction, time
@@ -879,47 +921,27 @@ impl AvatarMesh {
         self.channels.clone_from(&old.channels);
         self.transition.clone_from(&old.transition);
     }
+    /// Build any pose waiting from `defer_mesh`, then send the vertices to
+    /// the GPU: only positions and normals while the structure holds.
     pub fn upload(
         &mut self,
+        assets: &AvatarAssets,
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
-        let same_topology = self.gpu.as_ref().is_some_and(|gpu| {
-            gpu.vertex_count == self.data.vertices.len()
-                && self.uploaded_topology.0 == self.data.indices
-                && self.uploaded_topology.1.len() == self.data.batches.len()
-                && self
-                    .uploaded_topology
-                    .1
-                    .iter()
-                    .zip(&self.data.batches)
-                    .all(|((range, material), b)| *range == b.indices && *material == b.material)
-        });
-        if !same_topology {
+        if let Some(pose) = self.pending.take() {
+            let assets = assets.for_mesh(self);
+            self.build_mesh(assets, &pose)?;
+        }
+        if std::mem::take(&mut self.restructured) {
             self.gpu = None;
         }
         if let Some(gpu) = &mut self.gpu {
-            gpu.update_vertices(
-                queue,
-                &self.data.vertices,
-                &self
-                    .data
-                    .batches
-                    .iter()
-                    .map(|b| b.center)
-                    .collect::<Vec<_>>(),
-            )?;
+            let centers: Vec<_> = self.data.batches.iter().map(|b| b.center).collect();
+            gpu.update_vertices(queue, &self.data.vertices, &centers)?;
         } else {
             self.gpu = Some(renderer.upload(device, queue, &self.data)?);
-            self.uploaded_topology = (
-                self.data.indices.clone(),
-                self.data
-                    .batches
-                    .iter()
-                    .map(|b| (b.indices.clone(), b.material))
-                    .collect(),
-            );
         }
         Ok(())
     }
@@ -1002,7 +1024,7 @@ impl Preview {
             },
             0.0,
         )?;
-        mesh.upload(&self.renderer, frame.device, frame.queue)?;
+        mesh.upload(assets, &self.renderer, frame.device, frame.queue)?;
         let target = Vec3::new(0.0, 1.3, 0.0);
         let eye = target
             + Vec3::new(
@@ -1161,6 +1183,69 @@ mod tests {
             HeldToolPose::from_mounted_images([(7, true)]),
             HeldToolPose::None
         );
+    }
+
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn reposed_vertices_match_a_full_shape_rebuild() -> Result<()> {
+        use bri_render::shape_scene::ShapeInstance;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
+        let assets = AvatarAssets::load(&root)?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        mesh.defer_mesh = true;
+        let mut p = player();
+        let mut layouts = 0;
+        for frame in 0..40 {
+            p.feet = [frame as f32 * 0.3, 1.0, -2.0];
+            p.velocity = [if frame < 20 { 5.0 } else { 0.0 }, 0.0, 0.0];
+            p.yaw = frame as f32 * 0.1;
+            p.pitch = (frame as f32 * 0.05).sin();
+            p.crouched = (10..15).contains(&frame);
+            p.grounded = frame % 13 != 0;
+            // Skis on and off, and a translucent paint, restructure the mesh.
+            mesh.set_skis((25..30).contains(&frame).then_some([0.2, 0.4, 0.6, 1.0]));
+            if frame == 32 {
+                mesh.outfit.nodes.insert("chest".into(), [1.0, 0.0, 0.0, 0.5]);
+            }
+            mesh.pose(&assets, &p, f64::from(frame) / 30.0)?;
+            let pose = mesh.pending.take().context("A deferred pose")?;
+            let mut reference = mesh.data.clone();
+            reference.vertices.clear();
+            reference.indices.clear();
+            reference.batches.clear();
+            reference.append_shape(
+                ShapeInstance {
+                    shape: &assets.rig.shape,
+                    pose: &pose,
+                    detail: assets.detail,
+                    transform: mesh.model_transform,
+                    materials: &mesh.materials,
+                    translucent_materials: Some(&mesh.translucent_materials),
+                    unassigned_material: mesh.materials[0],
+                },
+                |name| mesh.outfit.nodes.get(&name.to_ascii_lowercase()).copied(),
+            )?;
+            mesh.restructured = false;
+            mesh.build_mesh(&assets, &pose)?;
+            layouts += usize::from(mesh.restructured);
+            assert_eq!(mesh.data.indices, reference.indices, "frame {frame}");
+            assert_eq!(mesh.data.batches.len(), reference.batches.len());
+            for (a, b) in mesh.data.batches.iter().zip(&reference.batches) {
+                assert_eq!((&a.indices, a.material), (&b.indices, b.material));
+                assert_eq!(a.center, b.center, "frame {frame}");
+            }
+            assert_eq!(mesh.data.vertices.len(), reference.vertices.len());
+            for (a, b) in mesh.data.vertices.iter().zip(&reference.vertices) {
+                let fields = |v: &bri_render::scene::SceneVertex| {
+                    (v.position, v.normal, v.uv, v.lightmap_uv, v.color, v.fx)
+                };
+                assert_eq!(fields(a), fields(b), "frame {frame}");
+            }
+        }
+        // At least the first frame, skis on and off, and the new paint lay
+        // the mesh out again; every other frame reuses the layout.
+        assert!((4..10).contains(&layouts), "{layouts} layouts");
+        Ok(())
     }
 
     #[test]
@@ -1394,7 +1479,9 @@ mod tests {
         assert_eq!(super::look_position(0.0, limits), 0.5);
         assert_eq!(super::look_position(1.2, limits), 0.45);
         assert_eq!(super::look_position(-1.2, limits), 0.65);
-        assert!((super::look_position(-1.2, None) - (0.5 + 1.2 / std::f32::consts::PI)).abs() < 1e-6);
+        assert!(
+            (super::look_position(-1.2, None) - (0.5 + 1.2 / std::f32::consts::PI)).abs() < 1e-6
+        );
     }
     #[test]
     #[ignore = "requires original native avatar package"]
@@ -1468,15 +1555,18 @@ mod tests {
         skirt.parts.insert("lleg".into(), "nosuchleg".into());
         assert!(package.resolve(&skirt).is_err());
         let mut hat = package.defaults.clone();
-        hat.parts.insert("hat".into(), package.parts["hat"][1].clone());
+        hat.parts
+            .insert("hat".into(), package.parts["hat"][1].clone());
         hat.parts.insert("accent".into(), "visor".into());
         let outfit = package.resolve(&hat)?;
         assert!(outfit.nodes.contains_key("visor"));
         assert_eq!(outfit.nodes["visor"][3], 0.7);
-        hat.parts.insert("hat".into(), package.parts["hat"][2].clone());
+        hat.parts
+            .insert("hat".into(), package.parts["hat"][2].clone());
         assert!(package.resolve(&hat).is_err());
         let mut pack = package.defaults.clone();
-        pack.parts.insert("pack".into(), package.parts["pack"][1].clone());
+        pack.parts
+            .insert("pack".into(), package.parts["pack"][1].clone());
         assert!(package.resolve(&pack)?.head_up);
         let mut selected = package.defaults.clone();
         for (kind, choices) in [("face", &package.faces), ("decal", &package.decals)] {

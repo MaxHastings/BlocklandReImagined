@@ -5471,6 +5471,9 @@ impl PlatformApp for App {
                     } else {
                         self.avatar_assets.mesh(appearance.clone())?
                     };
+                    // The drawn mesh is built at render time, and only for
+                    // bodies in view (`render_scene`).
+                    mesh.defer_mesh = true;
                     // Outfit changes (spray paint included) keep the running
                     // action thread instead of restarting the clip.
                     if let Some(old) = self.avatars.get(owner).filter(|old| old.horse == horse) {
@@ -7141,13 +7144,8 @@ impl PlatformApp for App {
         // With shadows the first-person body is posed too: it casts a
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
-        for (owner, avatar) in &mut self.avatars {
-            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
-                avatar.upload(renderer, frame.device, frame.queue)?;
-            }
-        }
         for mesh in self.mount_meshes.values_mut() {
-            mesh.upload(renderer, frame.device, frame.queue)?;
+            mesh.upload(&self.avatar_assets, renderer, frame.device, frame.queue)?;
         }
         self.world_items
             .upload(renderer, frame.device, frame.queue)?;
@@ -7221,6 +7219,24 @@ impl PlatformApp for App {
         camera.apply_environment(scene);
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
         renderer.update_camera(frame.queue, &camera);
+        // Bodies build their mesh here, once the view is known. Without
+        // shadows one out of view draws nothing, so it is not built; with
+        // shadows every body may cast into view.
+        let in_view =
+            crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
+        let mut bodies_drawn = BTreeSet::new();
+        for (owner, avatar) in &mut self.avatars {
+            if (*owner != view.owner || third_person || casts) && !hidden.contains(owner) {
+                let body = avatar.body_transform();
+                let scale = body.x_axis.truncate().length();
+                let center = body.w_axis.truncate() + Vec3::Y * (1.4 * scale);
+                if !casts && !in_view.sees_sphere(center, 3.0 * scale) {
+                    continue;
+                }
+                avatar.upload(&self.avatar_assets, renderer, frame.device, frame.queue)?;
+                bodies_drawn.insert(*owner);
+            }
+        }
         let effects_camera = bri_fx_runtime::Camera {
             view_projection: glam::Mat4::from_cols_array(&camera.view_projection),
             position: eye,
@@ -7369,7 +7385,7 @@ impl PlatformApp for App {
         }
         for (owner, avatar) in &self.avatars {
             if (*owner != view.owner || third_person)
-                && !hidden.contains(owner)
+                && bodies_drawn.contains(owner)
                 && let Some(gpu) = &avatar.gpu
             {
                 scenes.push(gpu);
@@ -7409,7 +7425,7 @@ impl PlatformApp for App {
             bodies.extend(
                 self.avatars
                     .iter()
-                    .filter(|(owner, _)| !hidden.contains(owner))
+                    .filter(|(owner, _)| bodies_drawn.contains(owner))
                     .filter_map(|(_, avatar)| avatar.gpu.as_ref()),
             );
             // Rigged mounts (the horse) draw through their own meshes, not
