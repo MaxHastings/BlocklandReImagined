@@ -577,3 +577,189 @@ fn planting_obeys_the_minigame_building_rule() {
         .unwrap();
     plant(&mut s, builder, 5, [2.0, 0.3, -4.0]);
 }
+
+const SYNTHETIC_ROCKET: &str = "test:weapon/rocketitem";
+const SYNTHETIC_IMAGE: &str = "test:image/rocketimage";
+const SYNTHETIC_PROJECTILE: &str = "test:projectile/rocket";
+
+/// A content-free rocket launcher whose blast reaches 30 units.
+fn synthetic_rocket_pack() -> bri_weapons::Pack {
+    let state = |name: &str, ticks, script: &str| bri_weapons::State {
+        name: name.into(),
+        ticks,
+        wait: true,
+        allow_change: true,
+        script: script.into(),
+        ..Default::default()
+    };
+    let states = vec![
+        bri_weapons::State {
+            timeout: Some(1),
+            ..state("Activate", 0, "")
+        },
+        bri_weapons::State {
+            down: Some(2),
+            ..state("Ready", 0, "")
+        },
+        bri_weapons::State {
+            timeout: Some(3),
+            ..state("Fire", 60, "onFire")
+        },
+        bri_weapons::State {
+            timeout: Some(1),
+            ..state("Reload", 0, "")
+        },
+    ];
+    let image = bri_weapons::Image {
+        id: SYNTHETIC_IMAGE.into(),
+        name: "rocketLauncherImage".into(),
+        model: String::new(),
+        projectile: Some(SYNTHETIC_PROJECTILE.into()),
+        mount_point: 0,
+        offset: [0.; 3],
+        eye_offset: [0.; 3],
+        source_rotation_degrees: [0.; 3],
+        correct_muzzle: false,
+        melee: false,
+        color: [1.; 4],
+        color_shift: false,
+        arm_ready: true,
+        casing: String::new(),
+        min_shot_ticks: 0,
+        command: Default::default(),
+        states,
+    };
+    let item = bri_weapons::Item {
+        id: SYNTHETIC_ROCKET.into(),
+        name: "rocketLauncherItem".into(),
+        ui_name: "Rocket L.".into(),
+        image: SYNTHETIC_IMAGE.into(),
+        model: String::new(),
+        icon: String::new(),
+        can_drop: true,
+        sport: false,
+    };
+    let projectile = bri_weapons::ProjectileDef {
+        id: SYNTHETIC_PROJECTILE.into(),
+        name: "rocketLauncherProjectile".into(),
+        model: String::new(),
+        speed: 40.,
+        inherit: 0.,
+        gravity: 0.,
+        lifetime_ticks: 480,
+        fade_ticks: 0,
+        arm_ticks: 0,
+        ballistic: false,
+        elasticity: 0.,
+        friction: 0.,
+        damage: 0.,
+        damage_type: String::new(),
+        radius_damage_type: String::new(),
+        impulse: 0.,
+        vertical: 0.,
+        explode_player: true,
+        explode_death: true,
+        collide_players: true,
+        explosion: bri_weapons::Explosion {
+            effect: String::new(),
+            damage: 0.,
+            radius: 10.,
+            impulse: 0.,
+            impulse_radius: 0.,
+            impulse_vertical: 0.,
+            burn_seconds: 0.,
+        },
+        brick: bri_weapons::BrickImpact {
+            radius: 30.,
+            direct: true,
+            force: 20.,
+            max_volume: 1000.,
+            max_floating_volume: 1000.,
+        },
+        bounce_effect: String::new(),
+        stick_effect: String::new(),
+        blood_effect: String::new(),
+        bounce_angle: 0.,
+        min_stick_speed: 0.,
+        trail: String::new(),
+        sound: String::new(),
+        light_radius: 0.,
+        light_color: [0.; 3],
+        sport_image: None,
+        rest_speed: 0.,
+    };
+    let pack = bri_weapons::Pack {
+        schema_version: bri_weapons::SCHEMA,
+        id: "test.rockets".into(),
+        items: [(SYNTHETIC_ROCKET.to_string(), item)].into(),
+        images: [(SYNTHETIC_IMAGE.to_string(), image)].into(),
+        projectiles: [(SYNTHETIC_PROJECTILE.to_string(), projectile)].into(),
+        damage_types: Default::default(),
+        explosions: Default::default(),
+        definitions: vec![],
+        resources: vec![],
+        diagnostics: vec![],
+    };
+    pack.validate().unwrap();
+    pack
+}
+
+/// A rocket knocks out the brick it hits plus at most 64 in its blast.
+/// Bricks a first rocket already knocked out must not use up a second
+/// rocket's 64 at the same spot.
+#[test]
+fn a_second_rocket_knocks_out_bricks_the_first_left_standing() {
+    let mut s = session();
+    s.set_lan_host(true);
+    s.set_weapon_pack(synthetic_rocket_pack()).unwrap();
+    let shooter = s
+        .join("Shooter".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let mut seq = 0;
+    let mut bricks = Vec::new();
+    for row in 0..10 {
+        for column in 0..10 {
+            seq += 1;
+            let position = [column as f32 - 4.5, 0.3, -8.0 - row as f32];
+            bricks.push(plant(&mut s, shooter, seq, position));
+            // Stay under the host's action rate.
+            for _ in 0..12 {
+                s.step().unwrap();
+            }
+        }
+    }
+    let slot = s.give_item(shooter, SYNTHETIC_ROCKET).unwrap();
+    seq += 1;
+    s.command(shooter, seq, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    let knocked_out = |s: &Session| {
+        bricks
+            .iter()
+            .filter(|id| !s.simulation().state().bricks[*id].colliding)
+            .count()
+    };
+    let mut after = Vec::new();
+    for _ in 0..2 {
+        for _ in 0..120 {
+            s.step().unwrap();
+        }
+        let aim = aim_at(&mut s, shooter, Vec3::new(0.5, 0.3, -8.0));
+        for down in [true, false] {
+            seq += 1;
+            s.command_with_aim(shooter, seq, Command::WeaponTrigger { down }, Some(aim))
+                .unwrap();
+        }
+        for _ in 0..120 {
+            s.step().unwrap();
+        }
+        after.push(knocked_out(&s));
+    }
+    // The direct hit knocks out the brick it struck (v20 `onCollision`) and
+    // the explosion 64 more (`onExplode`, capped), so the first rocket
+    // leaves 35 of the 100 standing. The second knocks out the rest
+    // instead of finding its 64 used up by bricks that are already down.
+    assert!(
+        after == [65, 100],
+        "bricks knocked out after each rocket: {after:?}"
+    );
+}

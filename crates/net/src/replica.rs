@@ -29,6 +29,22 @@ pub struct Replica {
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
     pub package_state: bri_sim::session::PackageStateView,
+    /// Per-tick drop of falling projectiles, by definition.
+    projectile_falls: BTreeMap<String, f32>,
+}
+/// `current` without players who left, with `changed` entries replaced.
+fn merged<V: Clone>(
+    current: &BTreeMap<OwnerId, V>,
+    changed: &BTreeMap<OwnerId, V>,
+    names: &BTreeMap<OwnerId, String>,
+) -> BTreeMap<OwnerId, V> {
+    let mut out: BTreeMap<_, _> = current
+        .iter()
+        .filter(|(id, _)| names.contains_key(id))
+        .map(|(id, v)| (*id, v.clone()))
+        .collect();
+    out.extend(changed.iter().map(|(id, v)| (*id, v.clone())));
+    out
 }
 fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
     ensure!(entities.len() <= 1024, "Too many package entities");
@@ -135,6 +151,11 @@ impl Replica {
             validate_vehicle_pose(pose)?;
         }
         checkpoint.weapons.validate(&checkpoint.names)?;
+        ensure!(
+            checkpoint.projectile_falls.len() <= 4096
+                && checkpoint.projectile_falls.values().all(|f| f.is_finite()),
+            "Invalid projectile falls"
+        );
         let mut out = Self {
             weapons: checkpoint.weapons,
             tools: checkpoint.tools,
@@ -163,6 +184,7 @@ impl Replica {
             archetypes: checkpoint.archetypes.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
+            projectile_falls: checkpoint.projectile_falls,
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -214,25 +236,26 @@ impl Replica {
                 b.validate(delta.palette.as_ref().unwrap_or(&self.world.palette).len())?;
             }
         }
-        if let Some(avatars) = &delta.avatars {
-            validate_avatars(avatars, delta.names.as_ref().unwrap_or(&self.names))?;
-        }
-        validate_tools(
-            delta.tools.as_ref().unwrap_or(&self.tools),
-            delta.names.as_ref().unwrap_or(&self.names),
-        )?;
-        delta
-            .weapons
-            .as_ref()
-            .unwrap_or(&self.weapons)
-            .validate(delta.names.as_ref().unwrap_or(&self.names))?;
-        if let Some(vitals) = &delta.vitals {
-            validate_vitals(
-                vitals,
-                delta.names.as_ref().unwrap_or(&self.names),
-                &self.archetypes,
-            )?;
-        }
+        let names = delta.names.as_ref().unwrap_or(&self.names);
+        let avatars = merged(&self.avatars, &delta.avatars, names);
+        validate_avatars(&avatars, names)?;
+        let tools = merged(&self.tools, &delta.tools, names);
+        validate_tools(&tools, names)?;
+        let vitals = merged(&self.vitals, &delta.vitals, names);
+        validate_vitals(&vitals, names, &self.archetypes)?;
+        // Projectiles fly to this update's tick, then take its corrections.
+        let weapons = if delta.weapons.is_some() || !self.weapons.projectiles.is_empty() {
+            let mut weapons = self.weapons.clone();
+            weapons.images.retain(|id, _| names.contains_key(id));
+            coast_projectiles(&mut weapons, &self.projectile_falls, delta.tick - self.tick);
+            if let Some(changes) = &delta.weapons {
+                changes.apply(&mut weapons)?;
+            }
+            weapons.validate(names)?;
+            Some(weapons)
+        } else {
+            None
+        };
         if let Some(games) = &delta.minigames {
             validate_minigames(games)?;
         }
@@ -245,9 +268,14 @@ impl Replica {
         if let Some(shapes) = &delta.broken_shapes {
             validate_broken_shapes(shapes)?;
         }
-        if let Some(entities) = &delta.entities {
-            validate_entities(entities)?;
-        }
+        let entities = match &delta.entities {
+            Some(changes) => {
+                let mut entities = self.entities.clone();
+                changes.apply(&mut entities)?;
+                Some(entities)
+            }
+            None => None,
+        };
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -288,18 +316,12 @@ impl Replica {
             self.poses.retain(|id, _| self.names.contains_key(id));
             self.history.retain(|id, _| self.names.contains_key(id));
         }
-        if let Some(avatars) = delta.avatars {
-            self.avatars = avatars;
-        }
-        if let Some(tools) = delta.tools {
-            self.tools = tools;
-        }
-        if let Some(weapons) = delta.weapons {
+        self.avatars = avatars;
+        self.tools = tools;
+        if let Some(weapons) = weapons {
             self.weapons = weapons;
         }
-        if let Some(vitals) = delta.vitals {
-            self.vitals = vitals;
-        }
+        self.vitals = vitals;
         if let Some(games) = delta.minigames {
             self.minigames = games;
         }
@@ -309,8 +331,8 @@ impl Replica {
         if let Some(shapes) = delta.broken_shapes {
             self.broken_shapes = shapes;
         }
-        if let Some(entities) = delta.entities {
-            self.entities = entities.into_iter().map(|e| (e.id, e)).collect();
+        if let Some(entities) = entities {
+            self.entities = entities;
         }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();

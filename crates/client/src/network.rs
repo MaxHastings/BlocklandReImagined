@@ -341,14 +341,44 @@ async fn run(
     let mut cue_drops = client.replica.dropped_cues;
     let mut clock = tokio::time::interval(Duration::from_millis(250));
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Inputs held until MOVEMENT_GAP has passed since the last datagram.
+    type Batch = (u64, Vec<MoveInput>);
+    let mut held: Option<(Batch, Option<CameraView>)> = None;
+    let mut last_movement = tokio::time::Instant::now();
+    let mut sent_newest = 0_u64;
+    // Everything not sent yet, plus the usual redundancy: a held frame costs
+    // no extra datagram.
+    let mut send = |client: &mut Client, (newest, mut inputs): (u64, Vec<MoveInput>), camera| {
+        let unsent = newest.saturating_sub(sent_newest) as usize;
+        let excess = inputs.len().saturating_sub(unsent.max(bri_net::protocol::MOVEMENT_REDUNDANCY));
+        inputs.drain(..excess);
+        sent_newest = sent_newest.max(newest);
+        client.movement(newest, &inputs, camera)
+    };
     loop {
+        let release = last_movement + bri_net::protocol::MOVEMENT_GAP;
         tokio::select! {
             _=clock.tick()=>{
                 ensure!(pending.values().all(|(_,at)|at.elapsed()<Duration::from_secs(10)),"Server request timed out");
             }
             batch=movement.recv()=>{
                 let Some((newest,inputs,camera))=batch else { return Ok(()) };
-                client.movement(newest,&inputs,camera)?;
+                let batch=match held.take() {
+                    Some((older,_))=>bri_net::protocol::merge_movement(older,(newest,inputs)),
+                    None=>(newest,inputs),
+                };
+                if tokio::time::Instant::now()>=release {
+                    send(client,batch,camera)?;
+                    last_movement=tokio::time::Instant::now();
+                } else {
+                    held=Some((batch,camera));
+                }
+            }
+            _=tokio::time::sleep_until(release),if held.is_some()=>{
+                if let Some((batch,camera))=held.take() {
+                    send(client,batch,camera)?;
+                    last_movement=tokio::time::Instant::now();
+                }
             }
             request=requests.recv()=>{
                 let Some(request)=request else { return Ok(()) };

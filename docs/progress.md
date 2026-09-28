@@ -3347,6 +3347,29 @@ the first copy). No wire change.
   machine, Custom runs it), `cargo test -p bri-sim --lib blueprint`,
   `cargo test -p bri-client --lib a_copied_build`. Not seen in a window:
   Max's playtest.
+
+## 2026-09-28 Network bandwidth audit
+
+Max's rule: never spend bandwidth on things that are cosmetic and heavy.
+`docs/audits/network-bandwidth.md` has the inventory, the before and after
+table and the follow-ups. Measured over real QUIC on loopback with the host's
+new per-kind counters (`ServerHandle::traffic`): eight idle players cost the
+host 653 KB/s of upload and each player 86 KB/s, because every pose went to
+every player 40 times a second with its field names and a packet of its own.
+Now: state datagrams are compact and packed; other players' poses are a
+smaller `RemotePose` with quantized velocity and look; still players, parked
+vehicles and camera orbs settle then go out once a second; empty updates run
+at 10 Hz with absent fields left out; vitals, inventories, avatars and held
+images go only for the players that changed; projectiles are sent when they
+appear or leave their flight and every client coasts them with
+`bri_weapons::coast`; moving Add-On entities send only where they are; a
+client drawing above 60 fps no longer sends twice the input. Eight idle
+players: 653 to 14 KB/s from the host. Eight running: 657 to 137. A rocket
+fight: 849 to 46. Each player's upload: 33 to 13 KB/s. Protocol 46. Evidence:
+`cargo test -p bri-net --test bandwidth` (idle, explosion and rocket-fight
+byte budgets), `-- --ignored --nocapture` for the table, `cargo test -p
+bri-net --lib stream` (settle and keepalive, coasted projectiles match the
+host's flight, entity moves, held input merging).
 - 2026-09-28 Smooth replicated motion (branch `claude/smoothing`). Max saw
   the football and soccer ball move at the server's update rate. Audit of
   what the client drew between host updates: the local player is predicted

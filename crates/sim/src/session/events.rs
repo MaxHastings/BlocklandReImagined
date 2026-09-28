@@ -16,6 +16,8 @@ use bri_weapons::ActorId;
 const DIGIT_PRINTS: &str = "print/print_letters_default/";
 /// The only player datablock; `changeDatablock` accepts it as a no-op.
 const TICKS_PER_SECOND: u64 = 120;
+/// Most bricks one explosion or heavy hit knocks out.
+const MAX_BRICKS_PER_BLAST: usize = 64;
 
 pub(super) fn id(index: u64) -> Id {
     Id {
@@ -421,13 +423,14 @@ impl Session {
         if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
             return Ok(());
         }
+        // v20 splits a rocket's brick damage in two: `onCollision` knocks
+        // out only the brick it hit, and `onExplode` searches the radius.
         let mut hit: Vec<BrickId> = Vec::new();
-        if impact.direct
-            && let Some(brick) = target
-        {
-            hit.push(brick);
-        }
-        if impact.radius > 0.0 {
+        if let Some(brick) = target {
+            if impact.direct {
+                hit.push(brick);
+            }
+        } else if impact.radius > 0.0 {
             let reach = Vec3::splat(impact.radius);
             hit.extend(
                 self.simulation
@@ -447,7 +450,13 @@ impl Session {
             .minigames
             .respawn_delay(game, mg::RespawnObject::Brick)
             .unwrap_or(3600);
-        for brick in hit.into_iter().take(64) {
+        // At most 64 bricks per explosion, counted among those it knocks out,
+        // so bricks an earlier blast knocked out never use up a later one's.
+        let mut knocked = 0;
+        for brick in hit {
+            if knocked == MAX_BRICKS_PER_BLAST {
+                break;
+            }
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
             };
@@ -493,7 +502,7 @@ impl Session {
             let blast = super::debris::BrickBlast {
                 origin: position,
                 force: impact.force,
-                radius: if impact.radius > 0.0 {
+                radius: if target.is_none() && impact.radius > 0.0 {
                     impact.radius
                 } else {
                     0.02
@@ -501,6 +510,7 @@ impl Session {
             };
             self.fake_kill_brick(brick, blast, delay)?;
             self.fire_input(brick, "onBlownUp", Some(source));
+            knocked += 1;
         }
         Ok(())
     }

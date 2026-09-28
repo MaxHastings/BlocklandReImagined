@@ -125,6 +125,11 @@ impl Session {
             drops: self.weapons.drops().cloned().collect(),
         }
     }
+    /// How fast each falling projectile definition drops, so clients can
+    /// coast projectiles between the host's corrections.
+    pub fn projectile_falls(&self) -> BTreeMap<String, f32> {
+        self.weapons.projectile_falls()
+    }
     /// Counts unfinished gameplay/presentation adapters instead of pretending
     /// that emitted intentions have already changed authoritative game state.
     pub fn weapon_adapter_gaps(&self) -> &BTreeMap<String, u64> {
