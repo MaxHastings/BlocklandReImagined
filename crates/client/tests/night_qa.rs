@@ -1720,14 +1720,19 @@ fn plant_probe_single_player() -> Result<()> {
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("probe");
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out)?;
-    let map = std::env::var("BRI_QA_PROBE_MAP").unwrap_or("v20/add-ons/map_slopes/slopes.mis".into());
+    let mut map = std::env::var("BRI_QA_PROBE_MAP").unwrap_or("v20/add-ons/map_slopes/slopes.mis".into());
     let mut app = load(&content, &out, "Prober")?;
+    // BRI_QA_PROBE_MODE=1 plays the first game mode on its own world.
+    let game_mode = std::env::var("BRI_QA_PROBE_MODE").ok().and_then(|_| app.ui.core.game_modes.first().cloned());
+    if let Some(m) = &game_mode {
+        map = m.map.clone().unwrap_or(map);
+    }
     request(
         &mut app,
         UiAction::HostGame {
             map: map.clone(),
             mode: ServerMode::SinglePlayer,
-            game_mode: None,
+            game_mode: game_mode.map(|m| m.id),
             max_players: 1,
             server_name: "Probe".into(),
             password: String::new(),
@@ -1751,6 +1756,10 @@ fn plant_probe_single_player() -> Result<()> {
         request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
         let ghost = app.building().and_then(|b| b.ghost()).map(|g| g.position);
         let before = bricks(&app);
+        let target = app.building().zip(app.presented_local()).map(|(b, p)| {
+            b.target(b.archetypes().eye(p), p.forward(), 15.0).ok().flatten().map(|h| (h.position, h.normal, h.brick))
+        });
+        println!("  target {target:?}");
         bri_console::log::clear();
         app.ui.core.request(UiAction::Game(GameAction::PlantBrick));
         let commands = app.pump()?;
