@@ -4090,6 +4090,21 @@ brick against the palette after each tick (reset, rallies, scoring, win,
 hammered paddle buttons, timed reverts). Evidence:
 `cargo test -p bri-sim --test pong -- --ignored` (6 passed). No host change
 was needed.
+## 2026-09-28 Joined players no longer fall through far terrain
+
+Max reported clients far from the host (on Slopes) falling through the floor.
+Cause: terrain collision streams in 512-unit tiles around every moving
+body's position. A joined client predicts its own movement in a collision
+mirror that is queried but never stepped, so its kinematic body never
+reaches the pose the motor sets and stays at the join point. Past the tiles
+loaded around that point (about 700 units on Slopes-size tiles) the
+prediction had no ground and fell, fighting every server correction. The
+host was unaffected because its world steps. Fix: `body_foci` also covers a
+kinematic body's target pose (`crates/physics/src/terrain.rs`). No protocol
+change. Evidence: `cargo test -p bri-sim --lib
+predicted_players_stand_on_terrain_far_from_where_they_joined` fell to
+y = -3782 at 800 units before the fix and stands on the ground after it;
+`cargo test -p bri-physics -p bri-sim`.
 ## 2026-09-28 Flying vehicles and vehicle Add-On fields (branch `claude/project-thread-e0lly9`)
 
 A playtester ported the Stunt Plane (Kaje and Ephialtes, a community
