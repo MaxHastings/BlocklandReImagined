@@ -1928,6 +1928,32 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Jeep, and no return for the FlyingVehicle carpet (drop
   STEERING_RETURN_PER_TICK). Each needs a test in crates/vehicles.
 
+## 2026-09-28 — mod platform stress campaign (cloud, PR #1)
+
+Goal: make the game easy to modify at its core by building modes nothing
+like the Stress Lab, red-teaming the package sandbox, and fixing each class
+of weakness with the smallest general seam. Record:
+`docs/stress-lab/weakness-ledger.md`; handoff section "Beyond the Stress
+Lab" in `docs/stress-lab/HANDOFF.md`.
+
+- 29 experiments and two red-team rounds, tagged by Max's nine seam
+  families; 15 classes (W1 to W15). All fixed except W14 (closed engine
+  kinds: movement datablocks and control objects), whose two tests are
+  ignored and registered in `tools/gate-known-failures.toml`.
+- New package seams: `on_death`, `player` operations, `place_brick`,
+  entity variables at spawn, policy points (`allow_respawn`,
+  `allow_build`), state `visible` audiences with per-client views,
+  scoreboard bindings, per-origin shares of script work, world edits, chat,
+  entity slots and state bytes, and a start-of-tick view shared by calls.
+- Platform: one package path rule, load-time conflict checks, verified
+  package cache, byte-bounded join chunks, storage budgets and reliable
+  outbox. Protocol 30 on the branch (main + 1).
+- Evidence: `cargo test -p bri-sim --test unlike_modes --test
+  hardening_packages --test packages`, `cargo test -p bri-package-runtime`,
+  `cargo test -p bri-net`, clippy clean on Linux; Windows CI on PR #1.
+- Not saturated yet: the last round (E26 to E29) found no new class, but
+  W14 is open and package state does not replicate to clients yet.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
