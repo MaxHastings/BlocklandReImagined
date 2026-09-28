@@ -353,6 +353,10 @@ impl Controls {
             None => (wrap(self.yaw + self.free_yaw), self.pitch),
         }
     }
+    /// The head's free-look turn while Free Look is held (`$mvFreeLook`).
+    pub fn free_look(&self) -> Option<f32> {
+        self.held(HeldControl::FreeLook).then_some(self.free_yaw)
+    }
     /// Where the rendered camera looks: the observer's own angles while a
     /// camera has control.
     pub fn camera_angles(&self) -> (f32, f32) {

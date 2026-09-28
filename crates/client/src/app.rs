@@ -483,8 +483,6 @@ pub struct App {
     vehicles: crate::vehicles::ClientVehicles,
     /// Heading of the vehicle the local player rides, last frame.
     mount_heading: Option<f32>,
-    /// `mCameraOffset`: how far the chase camera trails the vehicle.
-    chase_lag: Vec3,
     /// This frame's seat rotation for every mounted player.
     rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
     /// Where the admin, spy or death camera was last drawn from, reported
@@ -1412,7 +1410,6 @@ impl App {
             vehicle_assets,
             vehicles: Default::default(),
             mount_heading: None,
-            chase_lag: Vec3::ZERO,
             rider_rotations: BTreeMap::new(),
             observer_eye: None,
             tumble: None,
@@ -1575,12 +1572,11 @@ impl App {
             .and_then(|v| v.vitals.get(&v.owner))
             .is_none_or(|v| v.alive)
     }
-    /// The chase camera while riding (`Vehicle::getCameraTransform`):
+    /// The chase camera for a gunner or a player-type mount's rider:
     /// distance, pivot above the vehicle and downward view tilt.
     fn chase_camera(
         assets: &crate::vehicles::VehicleAssets,
         vehicles: &crate::vehicles::ClientVehicles,
-        lag: Vec3,
         view: &network::View,
     ) -> Option<(f32, Vec3, f32)> {
         let (vehicle, _) = view.vitals.get(&view.owner)?.mounted?;
@@ -1589,21 +1585,22 @@ impl App {
         let frame = vehicles.frame(vehicle)?;
         Some((
             camera.max_dist.clamp(1.0, 40.0),
-            frame.position + Vec3::Y * camera.offset + lag,
+            frame.position + Vec3::Y * camera.offset,
             camera.tilt,
         ))
     }
-    /// `Player::getCameraTransform` (blocklandv20.exe 0x5ab7d0) on foot or as
-    /// a horse: the pivot is the middle of the standing box plus
-    /// `cameraVerticalOffset` (0.75 while sliding in), the view is pitched
-    /// down by `cameraTilt`, and the camera sits `cameraMaxDist` back along
-    /// that tilted view. Box, offset and distance scale with the player. A
-    /// package archetype keeps its own `camera_distance`.
+    /// `Player::getCameraTransform` (blocklandv20.exe 0x5ab7d0) on foot, as
+    /// a horse or riding as a passenger: the pivot is the middle of the
+    /// standing box over `feet` plus `cameraVerticalOffset` (0.75 while
+    /// sliding in), the view is pitched down by `cameraTilt`, and the camera
+    /// sits `cameraMaxDist` back along that tilted view. Box, offset and
+    /// distance scale with the player. A package archetype keeps its own
+    /// `camera_distance`.
     fn player_camera(
         assets: &crate::vehicles::VehicleAssets,
         archetypes: &bri_sim::archetype::Archetypes,
-        lag: Vec3,
         local: &bri_sim::player::PlayerState,
+        feet: Vec3,
         pos: f32,
     ) -> (f32, Vec3, f32) {
         let horse = local.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
@@ -1620,7 +1617,7 @@ impl App {
         let lift = stand_height * 0.5 + (offset * pos + 0.75 * (1.0 - pos)) * scale;
         (
             (max_dist * scale * pos).clamp(0.0, 40.0),
-            Vec3::from(local.feet) + Vec3::Y * lift + lag,
+            feet + Vec3::Y * lift,
             tilt,
         )
     }
@@ -1633,7 +1630,6 @@ impl App {
         building: &crate::building::Building,
         assets: &crate::vehicles::VehicleAssets,
         vehicles: &crate::vehicles::ClientVehicles,
-        lag: Vec3,
         view: &network::View,
         local: &bri_sim::player::PlayerState,
         first_person_eye: Vec3,
@@ -1645,7 +1641,7 @@ impl App {
         // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
         let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         let pos = controls.camera_pos();
-        let mounted = view.vitals.get(&view.owner).is_some_and(|v| v.mounted.is_some());
+        let seated = view.vitals.get(&view.owner).and_then(|v| v.mounted);
         if controls.observer().is_some() || pos == 0.0 {
             let eye = camera_eye(
                 controls,
@@ -1658,9 +1654,44 @@ impl App {
             )?;
             return Ok((eye, yaw, pitch));
         }
-        if !mounted {
+        let riding = seated.and_then(|(vehicle, seat)| {
+            let info = view.vehicles.get(&vehicle)?;
+            let d = assets.definition(&info.definition)?;
+            Some((info, d, usize::from(seat), vehicles.frame(vehicle)?))
+        });
+        // The driver's control object is the vehicle, which places the
+        // camera itself; everyone else rides their own player camera.
+        let feet = match riding {
+            Some((_, d, seat, frame))
+                if matches!(
+                    d.seat_role(seat),
+                    SeatRole::StrafeDriver | SeatRole::MouseDriver
+                ) =>
+            {
+                let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
+                return crate::vehicle_camera::driver_view(
+                    frame.position,
+                    frame.rotation,
+                    center,
+                    &d.camera,
+                    controls.free_look(),
+                    pos,
+                    |from, to| {
+                        Ok(building
+                            .solid_segment(from, to)?
+                            .map(|hit| (hit.distance, hit.normal)))
+                    },
+                );
+            }
+            Some((info, d, seat, _)) if d.seat_role(seat) == SeatRole::Passenger => vehicles
+                .seat(assets, info, seat)
+                .map(|(position, _)| position),
+            _ if seated.is_none() => Some(Vec3::from(local.feet)),
+            _ => None,
+        };
+        if let Some(feet) = feet {
             let (distance, pivot, tilt) =
-                Self::player_camera(assets, &view.archetypes, lag, local, pos);
+                Self::player_camera(assets, &view.archetypes, local, feet, pos);
             // `getCameraTransform` composes the tilt onto the eye's pitch, so
             // the chase camera keeps swinging over the head past vertical.
             let pitch = pitch - tilt;
@@ -1676,7 +1707,7 @@ impl App {
             return Ok((eye, yaw, pitch));
         }
         // `cameraTilt` turns the vehicle chase view down without moving the camera.
-        let chase = Self::chase_camera(assets, vehicles, lag, view);
+        let chase = Self::chase_camera(assets, vehicles, view);
         let eye = camera_eye(
             controls,
             presented,
@@ -4682,9 +4713,6 @@ impl PlatformApp for App {
                         .vehicles
                         .seat(&self.vehicle_assets, info, usize::from(seat))
                         .map(|(_, yaw)| yaw);
-                    let dt = elapsed.as_secs_f32().min(0.1);
-                    self.chase_lag -=
-                        (self.chase_lag * d.camera.decay + frame.velocity * d.camera.lag) * dt;
                     // skiVehicle::onWreck whites the screen out by the crash
                     // speed: clamp(1 + (speed - 10) / 50 * 7, 1, 7) / 7.
                     if d.family == bri_vehicles::Family::Tumble && self.tumble != Some(vehicle) {
@@ -4722,7 +4750,6 @@ impl PlatformApp for App {
                     None => {
                         self.controls.set_vehicle_view(None);
                         self.mount_heading = None;
-                        self.chase_lag = Vec3::ZERO;
                     }
                     // Passengers and the Jeep's driver sit fixed in the seat:
                     // the mouse only tilts their view (`Player::processTick`
@@ -5180,7 +5207,6 @@ impl PlatformApp for App {
                 building,
                 &self.vehicle_assets,
                 &self.vehicles,
-                self.chase_lag,
                 view,
                 local,
                 self.motion
@@ -6713,7 +6739,6 @@ impl PlatformApp for App {
                 .context("Camera collision mirror missing")?,
             &self.vehicle_assets,
             &self.vehicles,
-            self.chase_lag,
             view,
             local,
             self.motion

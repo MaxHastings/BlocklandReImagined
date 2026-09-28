@@ -134,7 +134,8 @@ pub struct VehicleCamera {
     pub offset: f32,
     /// `cameraTilt`: the view looks down this many radians.
     pub tilt: f32,
-    /// `cameraLag`/`cameraDecay`: the camera trails acceleration and eases back.
+    /// `cameraLag`/`cameraDecay`: stock Torque's trailing camera. Blockland's
+    /// `Vehicle::getCameraTransform` (0x56cc10) never reads them.
     pub lag: f32,
     pub decay: f32,
 }
