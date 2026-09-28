@@ -131,6 +131,8 @@ pub struct ServerHandle {
     pub host_token: ResumeToken,
     /// Live connected-player count (LAN listing).
     pub players: Arc<std::sync::atomic::AtomicU32>,
+    /// What probes and the join list see; `players` is filled in live.
+    listing: Arc<std::sync::Mutex<Listing>>,
     discovery: Option<tokio::task::JoinHandle<()>>,
     router: Option<RouterPorts>,
     stop: Option<oneshot::Sender<()>>,
@@ -176,6 +178,11 @@ impl ServerHandle {
         max_players: u32,
         content_id: String,
     ) -> Result<u16> {
+        if let Ok(mut listing) = self.listing.lock() {
+            listing.name = name.clone();
+            listing.map = map.clone();
+            listing.max_players = max_players;
+        }
         let beacon = crate::discovery::Beacon {
             version: VERSION,
             name,
@@ -191,45 +198,30 @@ impl ServerHandle {
         self.discovery = Some(task);
         Ok(port)
     }
-    /// Internet hosts: ask the router (UPnP) to forward the game and
-    /// certificate ports for as long as this host runs. Each outcome is sent
-    /// to `notify` as a line for the host player.
-    pub fn open_router_ports(&mut self, notify: std::sync::mpsc::Sender<String>) {
+    /// Internet hosts: ask the router to forward the game port for as long
+    /// as this host runs, then check whether friends can reach it. The
+    /// report is handed to `notify` once. LAN discovery (UDP 28050) is never
+    /// forwarded: joining over the internet needs only the game port.
+    pub fn open_to_internet(&mut self, notify: impl FnOnce(crate::reach::Report) + Send + 'static) {
         let port = self.address.port();
-        let ports = vec![port, crate::discovery::DISCOVERY_PORT];
-        let slot = Arc::new(std::sync::Mutex::new(None::<crate::upnp::PortMapping>));
+        let certificate = self.certificate.clone();
+        let slot = Arc::new(std::sync::Mutex::new(None::<crate::reach::Forward>));
         let held = slot.clone();
         let task = tokio::spawn(async move {
-            let opened = tokio::task::spawn_blocking(move || crate::upnp::PortMapping::open(&ports)).await;
-            let mapping = match opened {
-                Ok(Ok(mapping)) => mapping,
-                Ok(Err(error)) => {
-                    let _ = notify.send(format!(
-                        "Could not open router ports automatically ({error}). Friends outside your network need UDP {port} and {} forwarded to this PC.",
-                        crate::discovery::DISCOVERY_PORT
-                    ));
-                    return;
-                }
-                Err(_) => return,
-            };
-            let _ = notify.send(match mapping.external_ip {
-                Some(ip) if mapping.behind_another_router() => format!(
-                    "Router ports opened, but your router's address {ip} is not public (another router or your provider sits in front). Friends outside probably cannot connect."
-                ),
-                Some(ip) => format!("Router ports opened. Friends can Connect to IP: {ip}:{port}"),
-                None => format!("Router ports opened. Friends can Connect to IP with your public IP and port {port}."),
-            });
+            let (report, forward) = crate::reach::open_and_check(port, certificate).await;
+            notify(report);
+            let Some(forward) = forward else { return };
             if let Ok(mut guard) = held.lock() {
-                *guard = Some(mapping);
+                *guard = Some(forward);
             }
             loop {
                 tokio::time::sleep(crate::upnp::RENEW_EVERY).await;
                 let held = held.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Ok(mut guard) = held.lock()
-                        && let Some(mapping) = guard.as_mut()
+                        && let Some(forward) = guard.as_mut()
                     {
-                        let _ = mapping.renew();
+                        let _ = forward.renew();
                     }
                 })
                 .await;
@@ -248,11 +240,20 @@ impl ServerHandle {
         self.task.await?
     }
 }
+/// The listing with the live player count.
+fn current_listing(
+    listing: &std::sync::Mutex<Listing>,
+    players: &std::sync::atomic::AtomicU32,
+) -> Listing {
+    let mut listing = listing.lock().map(|l| l.clone()).unwrap_or_default();
+    listing.players = players.load(std::sync::atomic::Ordering::Relaxed);
+    listing
+}
 /// Router forwards held for a running internet host. Dropping this removes
 /// them on a background thread so the caller never waits on the router.
 struct RouterPorts {
     task: tokio::task::JoinHandle<()>,
-    slot: Arc<std::sync::Mutex<Option<crate::upnp::PortMapping>>>,
+    slot: Arc<std::sync::Mutex<Option<crate::reach::Forward>>>,
 }
 impl Drop for RouterPorts {
     fn drop(&mut self) {
@@ -431,8 +432,15 @@ fn start_configured(
     let host_token = ResumeToken(bytes);
     let host_key = token_key(&host_token);
     let players = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listing = Arc::new(std::sync::Mutex::new(Listing {
+        name: session.simulation().state().name.clone(),
+        map: session.simulation().state().map_id.clone(),
+        players: 0,
+        max_players: max_players as u32,
+    }));
     let task = tokio::spawn(run(
         players.clone(),
+        listing.clone(),
         endpoint,
         session,
         options,
@@ -448,6 +456,7 @@ fn start_configured(
         certificate,
         host_token,
         players,
+        listing,
         discovery: None,
         router: None,
         stop: Some(stop_tx),
@@ -460,6 +469,7 @@ async fn connection_task(
     request_budget: Arc<Semaphore>,
     server_fingerprint: [u8; 32],
     require_identity: bool,
+    listing: Listing,
 ) -> Result<()> {
     let (mut send, mut receive) =
         tokio::time::timeout(Duration::from_secs(10), connection.accept_bi()).await??;
@@ -469,15 +479,23 @@ async fn connection_task(
     )
     .await??;
     if begin.version != VERSION {
-        codec::write_frame(&mut send, &codec::encode(&Message::Rejected("Incompatible protocol version".into()))?).await?;
+        let reason = format!(
+            "This server runs a {} version of Blockland ReImagined (protocol {VERSION}, yours is {}). {}",
+            if begin.version < VERSION { "newer" } else { "older" },
+            begin.version,
+            if begin.version < VERSION { "Update your game to join." } else { "The host needs to update to the version you have." },
+        );
+        codec::write_frame(&mut send, &codec::encode(&Message::Rejected(reason))?).await?;
         send.finish()?;
+        // Dropping the connection at once could discard the refusal unsent.
+        let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
         return Ok(());
     }
     let mut nonce = [0; 32];
     getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("OS randomness failed: {error}"))?;
     codec::write_frame(
         &mut send,
-        &codec::encode(&Message::Challenge { nonce })?,
+        &codec::encode(&Message::Challenge { nonce, listing })?,
     )
     .await?;
     let hello: Hello = tokio::time::timeout(
@@ -689,6 +707,7 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
 #[allow(clippy::too_many_arguments)]
 async fn run(
     players: Arc<std::sync::atomic::AtomicU32>,
+    listing: Arc<std::sync::Mutex<Listing>>,
     endpoint: Endpoint,
     mut session: Session,
     options: ServerOptions,
@@ -744,7 +763,7 @@ async fn run(
     let outcome:Result<()>=async {loop {tokio::select!{
         _=&mut stop=>break,
         accepted=endpoint.accept()=>{
-            if let Some(accepted)=accepted {if let Ok(permit)=permits.clone().try_acquire_owned(){let events=events.clone();let request_budget=request_budget.clone();tasks.spawn(async move{let _permit=permit;if let Ok(Ok(connection))=tokio::time::timeout(Duration::from_secs(10),accepted).await {let _=connection_task(connection,events,request_budget,server_fingerprint,require_identity).await;}});}else{accepted.refuse();}}
+            if let Some(accepted)=accepted {if let Ok(permit)=permits.clone().try_acquire_owned(){let events=events.clone();let request_budget=request_budget.clone();let listing=current_listing(&listing,&players);tasks.spawn(async move{let _permit=permit;if let Ok(Ok(connection))=tokio::time::timeout(Duration::from_secs(10),accepted).await {let _=connection_task(connection,events,request_budget,server_fingerprint,require_identity,listing).await;}});}else{accepted.refuse();}}
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
         _=autosave_timer.tick(),if autosave.is_some()=>{
@@ -762,6 +781,7 @@ async fn run(
                 Ok(new)=>{
                     let old=std::mem::replace(&mut session,new);
                     session.adopt(old,admin)?;
+                    if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();package_state=session.package_state();

@@ -2696,3 +2696,37 @@ game mode picker once the Stress Lab landed (da5668e).
   --lib`, clippy `-D warnings` on both. Not yet seen on the authored layout:
   the new rows are placed relative to Resolution and the Sim volume row;
   needs the offscreen options render on a PC with content.
+
+- 2026-09-28 Modern hosting (first-impressions item 5, Max's "make hosting
+  first class"). Joining needs only the game port: door-closers' first-use
+  pinning, host names, typed join errors and remembered address (from
+  859c012, item 5 parts only) plus `bri://host:port/<key>` invites whose key
+  (first 128 bits of the certificate's SHA-256) verifies a first join. One TLS
+  verifier handles every `HostPin`. Protocol 34: `Challenge` carries the
+  server `Listing`, so `client::probe` reads name, map and players over the
+  game port without joining; a client on another version is told which side
+  must update (that refusal was dropped unsent before). Internet hosts and
+  non-loopback dedicated servers run `reach::open_and_check`: UPnP IGD, then
+  NAT-PMP (RFC 6886), the public address as the router reports it (no
+  outside service is contacted), a self-probe of that address, and one plain verdict (reachable, likely, shared address,
+  needs forward, unknown) with the invite put on the clipboard and `/invite`
+  to copy it again. UDP 28050 is no longer forwarded. Windows hosts read the
+  firewall rules for the game (PowerShell NetSecurity, per active profile) and
+  offer a one-prompt fix (`bri-client --allow-firewall <port>`, elevated,
+  removes the program's inbound rules and keeps one allow rule for the game
+  and discovery UDP ports, so new build folders need no second prompt). Hosts
+  whose router gives no public address still get a home network invite. Join Server searches the LAN
+  and probes saved servers on open; Query Internet became Favorite
+  (`servers.json`: 64 favourites, 10 recent). Join codes with hole punching
+  and a relay were built and tested against simulated routers, then shelved
+  because they need a hosted service (Max: direct IP only, no relay, no
+  third-party services); the patch is kept outside the repository. Evidence: `cargo test -p bri-net --lib`
+  (invite, natpmp against a fake router, reach verdicts), `--test
+  loopback` (`invites_pin_the_host_key_and_probes_read_the_listing`,
+  `a_different_version_is_told_which_side_to_update`,
+  `first_join_needs_only_the_game_port_and_errors_are_plain`), `cargo test -p
+  bri-client --lib` (servers, firewall decisions), `cargo test -p bri-ui`
+  (Favorite button, Confirm dialog, list query on open), clippy `-D warnings`
+  on Linux and `--target x86_64-pc-windows-gnu`. Not yet exercised: a real
+  router, the Windows Firewall helper on
+  Windows, and a remote friend joining.

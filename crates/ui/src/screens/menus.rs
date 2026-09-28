@@ -91,7 +91,11 @@ impl NativeScreen {
             ScreenId::JoinServer => {
                 s.visible("JSG_demoBanner", false); s.visible("JSG_demoBanner2", false);
                 s.visible("JS_QueryInternetBlocker", false);
-                if let Some(n) = s.view.by_command("JoinServerGui.queryWebMaster();") { s.view.set_active(n, false); }
+                // There is no master server: Query Internet becomes the star
+                // for servers the player wants to keep in the list.
+                if let Some(n) = s.view.by_command("JoinServerGui.queryWebMaster();") {
+                    s.view.set_text(n, "Favorite");
+                }
             }
             ScreenId::About => s.set("aboutText", "Blockland ReImagined\nOriginal Blockland by Eric Hartman and contributors.\nNative engine rewrite — development build."),
             ScreenId::MessageInput(ch) => {
@@ -348,9 +352,10 @@ impl NativeScreen {
                         .map(|(i, s)| {
                             (
                                 format!(
-                                    "{}\t{}\t{}\t{}\t{}\t/\t{}\t{}\t{}",
+                                    "{}\t{}\t{}{}\t{}\t{}\t/\t{}\t{}\t{}",
                                     if s.password { "Yes" } else { "" },
                                     if s.dedicated { "Yes" } else { "" },
+                                    if s.favorite { "* " } else { "" },
                                     s.name,
                                     s.ping_ms.map(|p| p.to_string()).unwrap_or_default(),
                                     s.players,
@@ -369,11 +374,20 @@ impl NativeScreen {
                             .map(|i| i as i64),
                     );
                 }
+                let selected = self
+                    .selected("JS_serverList")
+                    .and_then(|i| core.servers.get(i));
+                if let Some(n) = self.view.by_command("JoinServerGui.queryWebMaster();") {
+                    self.view.set_text(
+                        n,
+                        if selected.is_some_and(|s| s.favorite) { "Unfavorite" } else { "Favorite" },
+                    );
+                }
                 self.visible("JS_queryStatus", core.lan_querying);
                 self.set(
                     "JS_statusText",
                     if core.lan_querying {
-                        "Querying LAN..."
+                        "Looking for games..."
                     } else {
                         ""
                     },
@@ -554,6 +568,11 @@ impl NativeScreen {
             core.message_ok("Connect to IP", "Enter a server address.");
             return;
         }
+        if self.id == ScreenId::ManualJoin {
+            // v20 remembers the last typed address for next time.
+            core.prefs.set("$pref::Join::Address", &address);
+            core.save_settings();
+        }
         self.request =
             Some(core.request_pending(UiAction::JoinServer { address, password }, Pending::Other));
     }
@@ -582,6 +601,10 @@ impl Screen for NativeScreen {
         self.id != ScreenId::Play
     }
     fn on_wake(&mut self, core: &mut Core) {
+        // LAN games and saved servers are listed as soon as the list opens.
+        if self.id == ScreenId::JoinServer && !core.lan_querying {
+            core.request(UiAction::QueryLan);
+        }
         if self.id == ScreenId::ManualJoin {
             self.set("MJ_txtIP", core.prefs.str_or("$pref::Join::Address", ""));
         }
@@ -651,6 +674,7 @@ impl Screen for NativeScreen {
         if ev.kind == EventKind::Changed {
             match self.view.node(ev.node).ctrl.name.as_deref() {
                 Some("SM_missionList") => self.map_preview(core),
+                Some("JS_serverList") => self.refresh(core),
                 // NMH_Type::type: the first typed character, unless it starts
                 // a slash command, shows this player as talking.
                 Some("NMH_Type") => {
@@ -668,6 +692,10 @@ impl Screen for NativeScreen {
             EventKind::Click | EventKind::Submit | EventKind::DoubleClick
         ) {
             return;
+        }
+        // Picking a server relabels the Favorite button.
+        if self.view.node(ev.node).ctrl.name.as_deref() == Some("JS_serverList") {
+            self.refresh(core);
         }
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
         // Exact allowlist only: never evaluate script or infer arbitrary actions.
@@ -719,6 +747,17 @@ impl Screen for NativeScreen {
             "joinservergui.querylan();" => {
                 core.request(UiAction::QueryLan);
             }
+            // A double click must not star and unstar at once.
+            "joinservergui.querywebmaster();" if ev.kind != EventKind::DoubleClick => {
+                if let Some(address) = self
+                    .selected("JS_serverList")
+                    .and_then(|i| self.server_addresses.get(i))
+                    .cloned()
+                {
+                    core.request(UiAction::ToggleFavorite { address });
+                }
+            }
+            "joinservergui.querywebmaster();" => {}
             "mj_connect();" | "joinservergui.join();" => self.join(core),
             "connectinggui::cancel();" => self.cancel(core),
             "disconnect();" if self.id == ScreenId::Loading => self.cancel(core),
@@ -827,6 +866,9 @@ impl MessageScreen {
                 );
             }
             Callback::CloseEvents => core.pop(ScreenId::WrenchEvents),
+            Callback::Request(action) => {
+                core.request((**action).clone());
+            }
             Callback::IgnoreTrust { from } => {
                 super::trust::answer(core, *from, crate::api::TrustAnswer::Ignore)
             }

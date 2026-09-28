@@ -146,6 +146,8 @@ pub enum Callback {
     AddOn { id: String, enabled: bool },
     /// Turn off every add-on outside the base game.
     DefaultAddOns,
+    /// Send this request (a platform question answered YES).
+    Request(Box<crate::api::UiAction>),
 }
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
@@ -1400,6 +1402,11 @@ impl Ui {
                 c.minigames = state;
             }
             UiUpdate::MessageBox { title, text } => c.message_ok(&title, &text),
+            UiUpdate::Confirm {
+                title,
+                text,
+                action,
+            } => c.message_yes_no(&title, &text, Callback::Request(action)),
             UiUpdate::TrustInvite(invitation) => {
                 c.trust_invite = Some(invitation);
                 c.pop(ScreenId::TrustInvitation);

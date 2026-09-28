@@ -57,12 +57,16 @@ fn fixture() -> Rc<Pack> {
         ),
         (
             "JoinServerGui",
-            vec![node(
-                "GuiButtonCtrl",
-                "manual",
-                10,
-                "Canvas.pushDialog(\"manualJoin\");",
-            )],
+            vec![
+                node(
+                    "GuiButtonCtrl",
+                    "manual",
+                    10,
+                    "Canvas.pushDialog(\"manualJoin\");",
+                ),
+                node("GuiTextListCtrl", "JS_serverList", 45, ""),
+                node("GuiButtonCtrl", "internet", 80, "JoinServerGui.queryWebMaster();"),
+            ],
         ),
         (
             "ManualJoin",
@@ -323,19 +327,74 @@ fn host_uses_current_catalog_once_and_rejection_reenables_form() {
 fn direct_join_accepts_text_and_blocks_duplicate_request() {
     let mut u = ui();
     click(&mut u, ScreenId::MainMenu, "join");
+    // Opening the list looks for LAN games and checks saved servers.
+    assert_eq!(actions(&mut u), vec![UiAction::QueryLan]);
     click(&mut u, ScreenId::JoinServer, "manual");
     for ch in "127.0.0.1:28000".chars() {
         u.handle_input(InputEvent::Char(ch));
     }
     down(&mut u, Key::Return);
     down(&mut u, Key::Return);
+    let actions = actions(&mut u);
+    // The typed address is remembered for the next visit, like v20.
+    assert!(matches!(&actions[0], UiAction::SaveSettings(s)
+        if s.prefs.get("$pref::Join::Address").map(String::as_str) == Some("127.0.0.1:28000")));
     assert_eq!(
-        actions(&mut u),
-        vec![UiAction::JoinServer {
+        actions[1..],
+        [UiAction::JoinServer {
             address: "127.0.0.1:28000".into(),
             password: String::new()
         }]
     );
+}
+#[test]
+fn favorite_button_stars_the_selected_server() {
+    let mut u = ui();
+    click(&mut u, ScreenId::MainMenu, "join");
+    actions(&mut u);
+    let server = |address: &str, favorite| ServerInfo {
+        address: address.into(),
+        name: "Server".into(),
+        password: false,
+        dedicated: false,
+        ping_ms: Some(20),
+        players: 1,
+        max_players: 8,
+        bricks: 0,
+        map: "Slate".into(),
+        favorite,
+    };
+    u.apply(UiUpdate::LanServers {
+        servers: vec![server("bri://203.0.113.10:28000/key", true), server("192.168.1.20:28000", false)],
+        querying: false,
+    });
+    // Nothing selected: the button does nothing.
+    click(&mut u, ScreenId::JoinServer, "JoinServerGui.queryWebMaster();");
+    assert!(actions(&mut u).is_empty());
+    let list = u.screen(ScreenId::JoinServer).unwrap().view().id("JS_serverList").unwrap();
+    u.screen_mut(ScreenId::JoinServer).unwrap().view_mut().select(list, Some(1));
+    click(&mut u, ScreenId::JoinServer, "JoinServerGui.queryWebMaster();");
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::ToggleFavorite {
+            address: "192.168.1.20:28000".into()
+        }]
+    );
+}
+#[test]
+fn platform_questions_send_their_action_only_on_yes() {
+    let mut u = ui();
+    let ask = || UiUpdate::Confirm {
+        title: "Windows Firewall".into(),
+        text: "Let the game through?".into(),
+        action: Box::new(UiAction::AllowFirewall { port: 28000 }),
+    };
+    u.apply(ask());
+    down(&mut u, Key::Escape);
+    assert!(actions(&mut u).is_empty());
+    u.apply(ask());
+    down(&mut u, Key::Return);
+    assert_eq!(actions(&mut u), vec![UiAction::AllowFirewall { port: 28000 }]);
 }
 #[test]
 fn confirmation_is_modal_and_escape_declines_without_underlying_action() {
