@@ -442,7 +442,7 @@ impl Session {
                     TargetId::Vehicle(vehicle) => {
                         self.hammer_vehicle(owner, vehicle, hit.position, dir)
                     }
-                    TargetId::Map(_) => {}
+                    TargetId::Map(_) | TargetId::Shape(_) => {}
                 }
             }
             "wandimage" => {

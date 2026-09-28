@@ -272,6 +272,7 @@ impl Session {
                 && games.get(&source.0).copied().flatten()
                     == games.get(&target.0).copied().flatten()
         };
+        let shapes = self.tutorial_shape_targets();
         let mut query = crate::weapon_query::WeaponQuery {
             simulation: &self.simulation,
             affect: &affect,
@@ -279,6 +280,7 @@ impl Session {
             catch: &catch,
             responses: &self.events.projectile_responses,
             truncated_targets: 0,
+            shapes: &shapes,
         };
         let events = self.weapons.step(&mut query);
         let truncated = query.truncated_targets;
@@ -332,6 +334,7 @@ impl Session {
                         .definition
                         .eq_ignore_ascii_case("v20.projectile.brickdeployprojectile") => {}
                 WeaponEvent::Contact { impact } => {
+                    self.tutorial_contact(&impact);
                     self.spray_player(&impact);
                     if let TargetId::Brick(brick) = impact.target {
                         self.paint_contact(&impact)?;

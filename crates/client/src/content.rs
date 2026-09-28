@@ -410,11 +410,14 @@ impl ContentPaths {
                 .context("Loading the tutorial pack")?;
             unresolved_items += weapons.resolve_world_items(&mut part1)?;
             unresolved_items += weapons.resolve_world_items(&mut part2)?;
+            let collision = bri_sim::tutorial::load_target_collision(&self.tutorial, &index)
+                .context("Loading the tutorial targets")?;
             Some(bri_sim::tutorial::TutorialMap::new(
                 &native.scene,
                 index,
                 part1,
                 part2,
+                collision,
             )?)
         } else {
             None

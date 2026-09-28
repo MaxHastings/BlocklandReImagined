@@ -137,7 +137,7 @@ impl Cue {
                         bri_weapons::TargetId::Actor(id) => id.0 > 0,
                         bri_weapons::TargetId::Brick(id) | bri_weapons::TargetId::Vehicle(id) =>
                             *id > 0,
-                        bri_weapons::TargetId::Map(_) => true,
+                        bri_weapons::TargetId::Map(_) | bri_weapons::TargetId::Shape(_) => true,
                     }
                     && image.as_ref().is_none_or(|s| !s.is_empty() && text(s))
                     && image.is_some() == hand.is_some()
