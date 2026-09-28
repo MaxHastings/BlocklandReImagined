@@ -20,7 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 43: `Notice::Bottom::hide_bar` and `Projectile::heading` (a stuck
 /// arrow's direction).
 /// 44: `Command::SteeringPrefs`, v20's strafe and auto-return steering.
-pub const VERSION: u32 = 44;
+/// 45: `Notice::TempBrickColor`, Random Brick Color's next colour.
+pub const VERSION: u32 = 45;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
