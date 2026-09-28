@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// avatars; `WeaponDelta` with coasted projectiles; `EntityDelta`.
 /// 47: `Notice::MusicTracks`, the host's Music Files for a joiner's wrench.
 /// 48: `PlayerState::tick`: players move on v20's 32 ms ticks.
-pub const VERSION: u32 = 48;
+pub const VERSION: u32 = 49;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -85,6 +85,11 @@ pub struct Hello {
     pub resume: Option<ResumeToken>,
     pub host: Option<ResumeToken>,
     pub identity: Option<IdentityProof>,
+    /// Set on the join after downloading what the server offers: whatever
+    /// shared content still differs could not be had, and the server lets
+    /// the player in without it rather than refusing again.
+    #[serde(default)]
+    pub accept_differences: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

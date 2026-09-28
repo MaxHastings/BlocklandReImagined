@@ -753,3 +753,178 @@ async fn only_add_ons_are_offered_never_base_game_content() -> Result<()> {
     server.stop().await?;
     Ok(())
 }
+
+/// lpsroo's a20 join to Wilfred's host: "can't join unless I have Add-Ons".
+/// A host whose shared content this joiner cannot get from it: base game
+/// content that differs from the joiner's (never offered), an Add-On the
+/// joiner's release does not ship (offered, so downloaded), and an Add-On
+/// the host cannot send (a file servers never send). Before, the join
+/// downloaded what it could and was refused again over the rest; now it
+/// goes ahead and the player is told, by name, what they joined without.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_join_goes_ahead_without_content_the_host_cannot_send() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let files: &[(&str, &[u8])] = &[
+        ("base-bricks/bricks.json", b"{\"host\":true}"),
+        ("gravity-gun/package.json", br#"{"id":"gravity-gun"}"#),
+        ("gravity-gun/models/gun.glb", &[5; 4096]),
+        ("native-addon/package.json", br#"{"id":"native-addon"}"#),
+        ("native-addon/helper.dll", b"MZ"),
+    ];
+    for (path, bytes) in files {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(path, bytes)?;
+    }
+    let set = PackageSet::parse(
+        br#"{"schema_version":1,"packages":[
+            {"id":"v20-bricks","version":"1.0.0","side":"shared","dir":"base-bricks","role":"brick_catalog"},
+            {"id":"gravity-gun","version":"1.0.0","side":"shared","dir":"gravity-gun"},
+            {"id":"native-addon","version":"1.0.0","side":"shared","dir":"native-addon"}
+        ]}"#,
+    )?;
+    let environment = Environment::load(root.path(), &set)?;
+    // The host still hosts, offering what it can send.
+    let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment: environment.clone(),
+            packages: Some(Arc::new(shelf)),
+            ..fixture::options()
+        },
+    )?;
+    let by_id = |id: &str| environment.packages.iter().find(|p| p.id == id).unwrap().clone();
+    // The joiner's own base game, imported from their own v20 copy.
+    let theirs = bri_package::environment::PackageRef {
+        hash: "cd".repeat(32),
+        ..by_id("v20-bricks")
+    };
+    let have = vec![theirs.clone()];
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let cache_dir = tempfile::tempdir()?;
+    let cache = Cache::open(cache_dir.path())?;
+
+    // The a20 behaviour: after downloading what the host offers, joining
+    // with it is refused again over what it could not send.
+    let fetched = bri_net::packages::fetch_missing_pinned(
+        server.address,
+        &bri_net::client::HostPin::from(&server.certificate[..]),
+        &cache,
+        &Progress::default(),
+        &have,
+    )
+    .await?;
+    let ids: Vec<_> = fetched.iter().map(|f| f.package.id.as_str()).collect();
+    assert_eq!(ids, ["gravity-gun"], "only the sendable Add-On is offered");
+    let refused = bri_net::client::Client::connect_with_identity(
+        server.address,
+        &server.certificate,
+        "A20".into(),
+        joined(&have, &fetched, &[]),
+        None,
+        None,
+        &identity,
+    )
+    .await
+    .err()
+    .expect("a20 refused this join");
+    let differ = refused
+        .downcast_ref::<bri_net::client::PackagesDiffer>()
+        .expect("a typed package refusal");
+    let named: Vec<_> = differ
+        .0
+        .iter()
+        .map(|m| match m {
+            bri_package::environment::Mismatch::Missing(p)
+            | bri_package::environment::Mismatch::Different { server: p, .. }
+            | bri_package::environment::Mismatch::Extra(p) => p.id.as_str(),
+        })
+        .collect();
+    assert_eq!(named, ["native-addon", "v20-bricks"]);
+
+    // Now: the join goes ahead, running the downloaded Add-On.
+    let mut ran = Vec::new();
+    let (mut client, fetched, dropped) = bri_net::client::Client::connect_fetching(
+        server.address,
+        bri_net::client::HostPin::from(&server.certificate[..]),
+        "Lpsroo".into(),
+        have.clone(),
+        None,
+        &identity,
+        &cache,
+        Progress::default(),
+        |fetched, dropped| {
+            ran = joined(&have, fetched, dropped);
+            Ok(ran.clone())
+        },
+    )
+    .await?;
+    assert!(client.owner > 0, "in the game");
+    assert!(dropped.is_empty());
+    assert_eq!(fetched.len(), 1);
+    assert!(ran.contains(&by_id("gravity-gun")));
+    assert_eq!(client.unavailable, [by_id("native-addon"), by_id("v20-bricks")]);
+    // ...and is told, by name, what it joined without.
+    let notice = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let bri_net::client::ClientEvent::Notice(bri_sim::session::Notice::Chat(text)) =
+                client.receive().await?
+                && text.contains("joined without")
+            {
+                return anyhow::Ok(text);
+            }
+        }
+    })
+    .await??;
+    assert!(
+        notice.contains("native-addon 1.0.0") && notice.contains("v20-bricks 1.0.0"),
+        "{notice}"
+    );
+    assert!(!notice.contains("gravity-gun"), "{notice}");
+    drop(client);
+    server.stop().await?;
+    Ok(())
+}
+
+/// A download that fails outright (the host stopped offering files
+/// mid-join, say) still joins, without the Add-Ons.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_download_joins_without_the_add_ons() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (_, environment) = content(root.path())?;
+    // A host with Add-Ons but no shelf: it refuses every download.
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment: environment.clone(),
+            packages: None,
+            ..fixture::options()
+        },
+    )?;
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let cache_dir = tempfile::tempdir()?;
+    let (client, fetched, _) = bri_net::client::Client::connect_fetching(
+        server.address,
+        bri_net::client::HostPin::from(&server.certificate[..]),
+        "Offline".into(),
+        Vec::new(),
+        None,
+        &identity,
+        &Cache::open(cache_dir.path())?,
+        Progress::default(),
+        |fetched, dropped| Ok(joined(&[], fetched, dropped)),
+    )
+    .await?;
+    assert!(client.owner > 0);
+    assert!(fetched.is_empty());
+    let ids: Vec<_> = client.unavailable.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["creeper", "zombies"]);
+    drop(client);
+    server.stop().await?;
+    Ok(())
+}
