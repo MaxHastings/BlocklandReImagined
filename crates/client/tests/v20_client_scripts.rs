@@ -1,5 +1,6 @@
-//! Name tags against v20's `GuiShapeNameHud` (blocklandv20.exe 0x5278f0 and
-//! 0x527630) and the stock scripts that colour names.
+//! Client behaviour pinned to v20's client scripts and engine: name tags
+//! (`GuiShapeNameHud`, blocklandv20.exe 0x5278f0 and 0x527630, and the stock
+//! scripts that colour names) and `handleYourSpawn`.
 use bri_client::app::name_opacity;
 use bri_client::minigame_ui::color_rgb;
 use bri_ui::api::{NameTag, name_outline};
@@ -34,4 +35,16 @@ fn names_are_white_with_a_black_outline_and_members_take_the_minigame_colour() {
     assert_eq!(name_outline([0, 77, 255]), [0, 0, 0]);
     assert_eq!(name_outline([0, 128, 255]), [0, 0, 0]);
     assert_eq!(name_outline([255, 0, 0]), [0, 0, 0]);
+}
+
+/// `handleYourSpawn`: with `$pref::Input::AutoLight` (on by default) a spawn
+/// under a sun whose red, green and blue are all below 0.4 sends /light.
+#[test]
+fn spawning_under_a_dark_sun_turns_the_light_on() {
+    use bri_client::app::dark_sun;
+    assert!(dark_sun([0.1, 0.1, 0.2]));
+    assert!(dark_sun([0.39, 0.39, 0.39]));
+    assert!(!dark_sun([0.4, 0.1, 0.1]));
+    assert!(!dark_sun([0.1, 0.1, 0.4]));
+    assert!(!dark_sun([0.6, 0.6, 0.6]));
 }

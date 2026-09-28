@@ -1070,6 +1070,9 @@ impl Session {
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
             peer.combat.corpse_cleared = false;
+            // `serverCmdLight` mounts its fxLight on the player object, which
+            // stays with the corpse: a new body starts dark.
+            peer.combat.light = false;
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
             peer.inputs.clear();

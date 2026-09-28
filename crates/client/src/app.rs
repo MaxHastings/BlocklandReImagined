@@ -1850,8 +1850,11 @@ impl App {
         let Some(view) = a.view.as_ref() else {
             return;
         };
+        let sun = self.cpu_scene.as_ref().map(|s| s.sun_color);
+        let auto_light = self.ui.core.prefs.bool_or("$pref::Input::AutoLight", true);
         let c = &mut self.combat;
         let mut updates = Vec::new();
+        let mut light_on_spawn = false;
         // `showEnergyBar` datablocks show the predicted jet energy.
         let energy = self
             .motion
@@ -1892,6 +1895,9 @@ impl App {
             if local.alive {
                 if c.alive == Some(false) {
                     updates.push(UiUpdate::ClearPrints);
+                }
+                if c.alive != Some(true) {
+                    light_on_spawn = auto_light && sun.is_some_and(dark_sun);
                 }
                 if local.health < c.health && c.alive == Some(true) {
                     // Armor::onDamage: flash += delta / maxDamage * 2.
@@ -1954,6 +1960,9 @@ impl App {
         }
         for update in updates {
             self.ui.apply_session(session, update);
+        }
+        if light_on_spawn {
+            self.ui.core.game(GameAction::UseLight);
         }
     }
     fn player_name(&self) -> String {
@@ -4170,6 +4179,12 @@ fn server_markup(text: &str) -> String {
     }
     out.push_str(&escape(rest));
     out
+}
+
+/// `handleYourSpawn`'s `$pref::Input::AutoLight` test: every spawn under a
+/// sun whose red, green and blue are all below 0.4 turns the light on.
+pub fn dark_sun(color: [f32; 3]) -> bool {
+    color.iter().all(|c| *c < 0.4)
 }
 
 /// Client-side death, respawn and status presentation derived from vitals.
