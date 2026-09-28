@@ -16,12 +16,21 @@ async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(
         args.len() == 4 || args.len() == 5,
-        "Usage: bri-server <content-root> <world.json> <state-dir> <listen-address> [run-seconds]
+        "Usage: bri-server <content-root> <world.json | resume> <state-dir> <listen-address> [run-seconds]
+         `resume` continues from the newest world this server saved in <state-dir> (autosave or shutdown).
          The content root's packages.json lists the packages to load (the base game's list when absent)."
     );
     let content_root = PathBuf::from(&args[0]);
-    let world_path = PathBuf::from(&args[1]);
     let state_dir = PathBuf::from(&args[2]);
+    let world_path = if args[1] == "resume" {
+        let newest = bri_world::persistence::newest_world(&state_dir)
+            .with_context(|| format!("Reading {}", state_dir.display()))?
+            .with_context(|| format!("No saved world to resume in {}", state_dir.display()))?;
+        println!("Resuming {}", newest.display());
+        newest
+    } else {
+        PathBuf::from(&args[1])
+    };
     // Session log and crash reports beside the server binary (or in its state).
     if let Err(error) = bri_crash::install("bri-server", &bri_crash::default_directories(&state_dir)) {
         eprintln!("Crash capture unavailable: {error}");
@@ -89,7 +98,7 @@ async fn main() -> Result<()> {
         state_dir.join("host.json").display()
     );
     println!(
-        "Autosaving the world every {} s to {} (autosave-*.world.json; pass the newest as <world.json> to resume after a crash)",
+        "Autosaving the world every {} s to {} (autosave-*.world.json; start with `resume` in place of <world.json> to continue after a crash)",
         AUTOSAVE_EVERY.as_secs(),
         state_dir.display()
     );

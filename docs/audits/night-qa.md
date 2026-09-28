@@ -211,6 +211,39 @@ window and were not run.
 | 19 | Input options | Fail: no hold or toggle choice for crouch, walk or jet (only the Super Shift toggle); no gamepad. |
 | 20 | Music slider, live preview | Pass: Music Volume slider with readouts. |
 
+### Status after the follow-up (2026-09-28, `claude/first-impressions`)
+
+Checked against main `91ae557`. "Closed" names the change; "Max" marks
+what needs Max's own hands or a decision (new behaviour beyond v20, which
+the playtest contract's feature freeze leaves to him). Add-On loading,
+hosting and joining are night QA's and are not covered here.
+
+| # | Status |
+|---|---|
+| 1 | Closed on main: the exe opens the game with no arguments, runs without a console in release builds, and startup failures show a dialog (`crates/client/src/main.rs`). Max: double-click once to confirm. |
+| 2 | Closed on main: a fatal error or an earlier crash shows a dialog naming the report (`bri_crash::alert`). Max: confirm with a real window. |
+| 3 | Closed on main (audit fix): client-hosted autosave every 60 s and the "Unsaved Changes" prompt. |
+| 4 | Closed on main (audit fix). |
+| 5 | Closed (pass). |
+| 6 | Closed on main (`3ee8ab3`): a rejoining player keeps their owner number, and the client reconnects after a drop. |
+| 7 | Closed on main (audit fix). |
+| 8 | Undo: closed (the undo render test passes; it left the gate's known failures). Warning before a bad plant: Max. v20 shows the icon only after the server answers; a red ghost would be new. The Slopes' Buried refusal is fixed on `claude/map-fixes`. |
+| 9 | Closed: the Tutorial no longer refuses joiners, it runs single player (`claude/map-fixes`). |
+| 10 | Host progress is closed on main. The loading screen now names the map instead of showing its content id (this branch). Guest map preview: joins take the host's map from the first world chunk (`show_progress`); not re-captured here. |
+| 11 | Two-player failure closed (`claude/map-fixes`); the KNOWN-ISSUES drift is fixed (this branch). Offering the Tutorial on first launch: Max. |
+| 12 | Max: render distance is new (v20 used each map's visible distance). |
+| 13 | Max: text size, colourblind and subtitle options are new. |
+| 14 | Join passwords: hidden (release default in `orthogonality.md`). Brick limits: Max. |
+| 15 | Duplicate names: closed (this branch): a second "Blockhead" joins as "Blockhead 2" (`players_sharing_a_name_are_numbered`). A name prompt on first run: Max. |
+| 16 | Closed (this branch): `bri-server ... resume ...` continues from the newest autosave or shutdown save in its state folder (`newest_world`). |
+| 17 | Closed on main: the main menu and `--version` show the build's version. |
+| 18 | Max: brick search and a duplicator are new (the duplicator was a v20 Add-On). |
+| 19 | Max: toggle crouch or walk, gamepad and extra mouse buttons are new. |
+| 20 | Closed (pass). |
+
+Also fixed on this branch: `docs/PLAYTEST.md` said Tab shows scores; it is
+the player list (F2).
+
 ## v20 Add-On imports (item 2)
 
 - **Import button:** `Weapon_Shotgun.zip` (community archive) dropped in

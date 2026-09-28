@@ -17,8 +17,8 @@ flows are blockers: please report them. The items below are known gaps.
   complex builds. They only fight inside the brick owner's minigame.
 - **Emotes:** play their sound (alarm) and the sit pose; the floating emote
   images are not drawn yet.
-- **Special map behavior:** Tutorial triggers and some map-specific objects are
-  not implemented.
+- **Special map behavior:** some map-specific objects are not implemented.
+  The Tutorial's triggers and lessons work; it runs single player only.
 - **Admin:** host/admin roles, bans and basic moderation work; the complete
   original Admin/SuperAdmin tool set does not.
 - **Visuals:** lighting, shadows, some materials, water and sky effects are not

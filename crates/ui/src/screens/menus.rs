@@ -408,14 +408,13 @@ impl NativeScreen {
                     progress,
                 } = &core.conn
                 {
-                    self.set("LOAD_MapName", map);
+                    // Players see the map's name, not its content id.
+                    let info = core.maps.iter().find(|m| m.id == *map || m.name == *map);
+                    self.set("LOAD_MapName", info.map_or(map.as_str(), |m| m.name.as_str()));
                     self.icon("LOAD_MapPicture", preview);
                     self.set(
                         "LOAD_MapDescription",
-                        core.maps
-                            .iter()
-                            .find(|m| m.id == *map || m.name == *map)
-                            .map_or("", |m| m.description.as_str()),
+                        info.map_or("", |m| m.description.as_str()),
                     );
                     self.set("LoadingProgressTxt", status);
                     if let Some(n) = self.view.id("LoadingProgress") {

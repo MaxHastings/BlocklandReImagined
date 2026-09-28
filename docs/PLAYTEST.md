@@ -43,7 +43,7 @@ copy `user-state/` across to keep settings, saves and identity.
   collision/rendering). Blocked placements show the original plant-error icon.
 - **Deathmatch:** Escape → Mini-Games → Create. The default rules give everyone
   a gun and rocket launcher. Shoot, fall, die, watch the respawn countdown and
-  click to respawn. Kill messages appear in chat. Tab shows scores.
+  click to respawn. Kill messages appear in chat. The player list (F2) shows scores.
 - **Vehicles:** plant a Vehicle Spawn brick (Special tab), wrench it and pick a
   vehicle (Jeep, Tank, Horse, Magic Carpet, Rowboat, Ball…). Walk into it to get
   in; W/S throttle, A/D steer, Space gets out (Shift on the horse), period and

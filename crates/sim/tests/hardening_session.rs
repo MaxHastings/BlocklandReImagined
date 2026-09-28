@@ -2157,3 +2157,22 @@ fn player_saves_cannot_starve_the_administrator_build_budget() {
         assert!(!format!("{saved:?}").contains("rate exceeded"), "{saved:?}");
     }
 }
+
+/// First impressions 15: everyone starts as "Blockhead", so a second
+/// player with a connected player's name gets a number to tell them apart.
+#[test]
+fn players_sharing_a_name_are_numbered() {
+    let mut s = plain();
+    let a = s.join("Blockhead".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
+    let b = s.join("blockhead".into(), Vec3::new(3.0, 0.05, 0.0), false).unwrap();
+    let c = s.join("Blockhead".into(), Vec3::new(6.0, 0.05, 0.0), false).unwrap();
+    let long = "x".repeat(48);
+    let d = s.join(long.clone(), Vec3::new(9.0, 0.05, 0.0), false).unwrap();
+    let e = s.join(long.clone(), Vec3::new(12.0, 0.05, 0.0), false).unwrap();
+    let names = s.names();
+    assert_eq!(names[&a], "Blockhead");
+    assert_eq!(names[&b], "blockhead 2");
+    assert_eq!(names[&c], "Blockhead 3");
+    assert_eq!(names[&d], long);
+    assert_eq!(names[&e], format!("{} 2", &long[..46]));
+}

@@ -93,6 +93,21 @@ pub fn autosaves(dir: &Path) -> Result<Vec<PathBuf>> {
     saves.sort();
     Ok(saves)
 }
+/// The world a dedicated host last wrote to `dir`: its newest autosave or
+/// shutdown save (`world-<unix millis>.json`), by the time in the name.
+pub fn newest_world(dir: &Path) -> Result<Option<PathBuf>> {
+    let stamp = |name: &str| -> Option<u128> {
+        name.strip_prefix(AUTOSAVE_PREFIX)
+            .and_then(|n| n.strip_suffix(AUTOSAVE_SUFFIX))
+            .or_else(|| name.strip_prefix("world-").and_then(|n| n.strip_suffix(".json")))
+            .and_then(|n| n.parse().ok())
+    };
+    Ok(std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter_map(|path| Some((stamp(path.file_name()?.to_str()?)?, path)))
+        .max()
+        .map(|(_, path)| path))
+}
 
 #[cfg(test)]
 mod tests {
@@ -159,6 +174,28 @@ mod tests {
         }
         assert_eq!(autosaves(&directory).unwrap(), written[2..]);
         assert_eq!(load(&written[3]).unwrap().name, "revision 3");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+    #[test]
+    fn the_newest_autosave_or_shutdown_save_resumes() {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-newest-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        assert_eq!(newest_world(&directory).unwrap(), None);
+        let world = World::new("w".into(), "map/test".into(), vec![[1.0; 4]]);
+        let autosaved = autosave(&directory, &world, 3).unwrap();
+        std::fs::write(directory.join("host.json"), b"{}").unwrap();
+        std::fs::write(directory.join("world-1.json"), b"{}").unwrap();
+        assert_eq!(newest_world(&directory).unwrap(), Some(autosaved));
+        let later = directory.join("world-99999999999999.json");
+        std::fs::write(&later, b"{}").unwrap();
+        assert_eq!(newest_world(&directory).unwrap(), Some(later));
         std::fs::remove_dir_all(&directory).unwrap();
     }
     #[test]

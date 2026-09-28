@@ -658,6 +658,28 @@ impl Session {
     ) -> Result<OwnerId> {
         self.join_inner(name, spawn, trusted_host, false, principal)
     }
+    /// `name`, or `name 2`, `name 3`... when a connected player has it.
+    fn unique_name(&self, name: String) -> String {
+        let taken = |candidate: &str| {
+            self.peers
+                .values()
+                .any(|p| p.name.trim().eq_ignore_ascii_case(candidate.trim()))
+        };
+        if !taken(&name) {
+            return name;
+        }
+        (2..)
+            .map(|n| {
+                let suffix = format!(" {n}");
+                let mut base = name.trim_end().to_string();
+                while base.len() + suffix.len() > 48 {
+                    base.pop();
+                }
+                format!("{base}{suffix}")
+            })
+            .find(|candidate: &String| !taken(candidate))
+            .expect("at most 64 players")
+    }
     fn join_inner(
         &mut self,
         name: String,
@@ -671,6 +693,9 @@ impl Session {
             !name.trim().is_empty() && name.len() <= 48 && !name.chars().any(char::is_control),
             "Invalid player name"
         );
+        // Two players with one name cannot be told apart in chat or the
+        // player list (everyone starts as "Blockhead"): the later gets a number.
+        let name = self.unique_name(name);
         // A returning player builds under the owner number they had in this
         // world, so their bricks are theirs again after leaving or a
         // restart. A number held by a live connection is not handed out
