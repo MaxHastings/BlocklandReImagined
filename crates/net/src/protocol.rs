@@ -31,7 +31,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// rideable players.
 /// 50: `Hello::accept_differences`: a join after downloading the server's
 /// Add-Ons is let in without what it could not get.
-pub const VERSION: u32 = 50;
+/// 51: `Command::SetName`: a rename applies live.
+pub const VERSION: u32 = 51;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
