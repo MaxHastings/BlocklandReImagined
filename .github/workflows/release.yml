@@ -78,7 +78,7 @@ jobs:
           shared-key: release
 
       - name: Build the game, Add-On importer and standalone launcher
-        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-launcher
+        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-launcher --bin BlocklandReImagined
 
       - name: Startup check against the content
         shell: pwsh

@@ -342,8 +342,10 @@ foreach ($source in $modSources) {
         # kinds only, client kinds (model, hud) only, else shared. An
         # Add-On that is only client code (no provides) is presentation:
         # client.
-        $kinds = @($manifest.provides | Where-Object { $_ } | ForEach-Object { [string]$_.kind })
-        $side = if ($kinds.Count -eq 0 -and $null -ne $manifest.client) { 'client' }
+        # Strict mode: a client-code-only Add-On has no provides at all.
+        $provides = $manifest.PSObject.Properties['provides']
+        $kinds = @($(if ($provides) { $provides.Value }) | Where-Object { $_ } | ForEach-Object { [string]$_.kind })
+        $side = if ($kinds.Count -eq 0 -and $null -ne $manifest.PSObject.Properties['client']) { 'client' }
             elseif ($kinds.Count -eq 0) { 'shared' }
             elseif (@($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
             elseif (@($kinds | Where-Object { $_ -notin @('model','hud') }).Count -eq 0) { 'client' }
