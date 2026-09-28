@@ -9,7 +9,6 @@ use crate::view::EventKind;
 
 const SERVER_TYPE: &str = "$Pref::Net::ServerType";
 const MAX_PLAYERS: &str = "$Pref::Server::MaxPlayers";
-const ADD_ONS: &str = "NativeAddOns";
 /// Start Game's native Game Mode button (v20 had no game modes).
 const GAME_MODE_BUTTON: &str = "SM_GameMode";
 const GAME_MODE_COMMAND: &str = "nativegamemodes";
@@ -61,7 +60,6 @@ impl NativeScreen {
                 for name in ["MM_AuthBar", "DemoBanner", "buyNowButton_W", "buyNowButton_B", "mm_Fade"] { s.visible(name, false); }
                 s.set("MM_Version", "ReImagined — development");
                 if core.pack.has_image("screenshots/icepalace") { s.icon("MM_BG", &IconRef::Pack("screenshots/icepalace".into())); }
-                s.add_ons_button(core.pack.has_image(&format!("{}_n", crate::composed::ADD_ONS_BUTTON)));
             }
             ScreenId::DefaultControls => {
                 let mouse = if core.settings.binds.is_none() { DEFAULT_MOUSE } else { core.settings.mouse_type };
@@ -155,58 +153,6 @@ impl NativeScreen {
         if before != (placed(&self.view.node(bx).ctrl), placed(&self.view.node(field).ctrl)) {
             self.view.layout(core.logical.0, core.logical.1);
         }
-    }
-    /// Native "Add-Ons" entry (no v20 layout has one): a dialog-sized button
-    /// directly under Options. Quit shares the column but sits at the bottom
-    /// of the screen, so the entry follows Options, not the lowest button.
-    fn add_ons_button(&mut self, art: bool) {
-        let Some(options) = self.view.id("MM_OptionsButton") else {
-            return;
-        };
-        let parent = self.view.node(options).parent.unwrap_or(self.view.root);
-        let [x, y] = self.view.node(options).ctrl.position;
-        let [w, h] = self.view.node(options).ctrl.extent;
-        // Below the lowest main button of the column (Options in v20, or a
-        // Demo button a layout may add), never below Quit at the bottom.
-        let bottom = self
-            .view
-            .node(parent)
-            .children
-            .iter()
-            .map(|&n| &self.view.node(n).ctrl)
-            .filter(|c| {
-                c.position[0] == x
-                    && c.position[1] >= y
-                    && c.name.as_deref().is_some_and(|n| {
-                        n.starts_with("MM_") && n.ends_with("Button") && n != "MM_QuitButton"
-                    })
-            })
-            .map(|c| c.position[1] + c.extent[1])
-            .max()
-            .unwrap_or(y + h);
-        let mut b = if art {
-            // Spelled in the menu's own lettering (crate::composed), in the
-            // next slot of the column like v20's buttons.
-            let mut b = self.view.node(options).ctrl.clone();
-            b.position = [x, bottom];
-            b.bitmap = Some(crate::composed::ADD_ONS_BUTTON.into());
-            b.text = None;
-            b.command = Some(ADD_ONS.into());
-            b.variable = None;
-            b
-        } else {
-            button(
-                "BlockButtonProfile",
-                Rect::new(x, bottom + 6, 160.min(w), 30.min(h)),
-                "base/client/ui/button1",
-                "Add-Ons",
-                ADD_ONS,
-            )
-        };
-        b.name = Some("MM_AddOnsButton".into());
-        b.h_sizing = self.view.node(options).ctrl.h_sizing;
-        b.v_sizing = self.view.node(options).ctrl.v_sizing;
-        self.view.add(parent, b);
     }
     fn set(&mut self, name: &str, text: &str) {
         if let Some(n) = self.view.id(name) {
@@ -724,7 +670,7 @@ impl Screen for NativeScreen {
             "canvas.pushdialog(joinservergui);" => core.push(ScreenId::JoinServer),
             "canvas.pushdialog(optionsdlg);" => core.push(ScreenId::Options),
             // v20 Start Game's Add-Ons tab opens the same Add-Ons screen.
-            "nativeaddons" | "canvas.pushdialog(addonsgui);" | "canvas.pushdialog(addonsgui)" => {
+            "canvas.pushdialog(addonsgui);" | "canvas.pushdialog(addonsgui)" => {
                 core.push(ScreenId::AddOns)
             }
             "canvas.pushdialog(avatargui);" => core.push(ScreenId::Avatar),

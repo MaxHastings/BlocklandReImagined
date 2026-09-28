@@ -1010,7 +1010,7 @@ mod tests {
     }
 
     #[test]
-    fn the_main_menu_opens_add_ons_and_the_screen_asks_for_rows() {
+    fn add_ons_live_under_start_game_not_the_main_menu() {
         let mut data = UiPack::default();
         let mut menu = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
         // v20's column: Options is the lowest main button, Quit sits at the
@@ -1030,7 +1030,7 @@ mod tests {
             ));
         }
         data.layouts.insert("MainMenuGui".into(), menu);
-        let mut ui = Ui::new(
+        let ui = Ui::new(
             Rc::new(Pack::from_parts(data, Default::default())),
             UiConfig {
                 size: (640, 480),
@@ -1043,24 +1043,8 @@ mod tests {
             },
         );
         assert_eq!(ui.top_id(), ScreenId::MainMenu);
-        let (x, y) = ui
-            .control_center(ScreenId::MainMenu, "MM_AddOnsButton")
-            .unwrap();
-        assert_eq!((x, y), (80.0, 341.0), "directly under Options");
-        ui.handle_input(InputEvent::MouseMove { x, y });
-        ui.handle_input(InputEvent::MouseDown {
-            button: crate::input::MouseButton::Left,
-            x,
-            y,
-        });
-        ui.handle_input(InputEvent::MouseUp {
-            button: crate::input::MouseButton::Left,
-            x,
-            y,
-        });
-        assert_eq!(ui.top_id(), ScreenId::AddOns);
-        let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
-        assert!(actions.contains(&UiAction::RequestAddOns), "{actions:?}");
+        // Like v20, Add-Ons is reached from Start Game, not the main menu.
+        assert!(ui.control_center(ScreenId::MainMenu, "MM_AddOnsButton").is_none());
     }
 
     #[test]

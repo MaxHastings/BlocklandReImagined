@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 /// Decoded RGBA8 pixels (non-premultiplied, display space).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Pixels {
     pub width: u32,
     pub height: u32,
@@ -46,26 +46,7 @@ impl Pack {
     }
 
     /// Build from in-memory data (tests use synthetic packs).
-    pub fn from_parts(mut data: UiPack, dir: PathBuf) -> Self {
-        // Native art composed from original images (crate::composed): listed
-        // like any image, built on first use.
-        use crate::composed::{ADD_ONS_BUTTON, SOURCES, STATES};
-        for state in STATES {
-            let sources: Vec<_> = SOURCES
-                .iter()
-                .filter_map(|s| data.images.get(&format!("{s}{state}")))
-                .collect();
-            if sources.len() == SOURCES.len() {
-                let entry = crate::schema::ImageEntry {
-                    file: String::new(),
-                    width: sources[0].width,
-                    height: sources[0].height,
-                    sha256: String::new(),
-                    source: format!("composed from {}", SOURCES.join(", ")),
-                };
-                data.images.insert(format!("{ADD_ONS_BUTTON}{state}"), entry);
-            }
-        }
+    pub fn from_parts(data: UiPack, dir: PathBuf) -> Self {
         Pack {
             data,
             dir,
@@ -100,16 +81,6 @@ impl Pack {
     fn decode(&self, key: &TexKey) -> Result<Pixels> {
         match key {
             TexKey::Image(id) => {
-                if let Some(state) = id.strip_prefix(crate::composed::ADD_ONS_BUTTON) {
-                    let [about, credits, options] = crate::composed::SOURCES.map(|s| {
-                        self.pixels(&TexKey::Image(format!("{s}{state}")))
-                    });
-                    return crate::composed::add_ons_button(
-                        &*about.context("About button art")?,
-                        &*credits.context("Credits button art")?,
-                        &*options.context("Options button art")?,
-                    );
-                }
                 let e = self.data.images.get(id).context("unknown image")?;
                 let img = image::open(self.dir.join(&e.file))?.to_rgba8();
                 Ok(Pixels {
