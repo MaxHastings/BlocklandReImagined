@@ -30,6 +30,8 @@ mod special;
 mod trust;
 mod tutorial;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
+mod riding;
+pub use riding::Ride;
 mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{VehicleInfo, VehiclePose};
@@ -516,6 +518,7 @@ pub struct Session {
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
     vehicles: vehicles::Vehicles,
+    riding: riding::Riding,
     minigames: bri_minigames::MinigamesWorld,
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
@@ -607,6 +610,7 @@ impl Session {
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
+            riding: Default::default(),
             minigames: combat::new_world(
                 bri_minigames::Catalog::minimal_vanilla(),
                 &Default::default(),
@@ -971,6 +975,7 @@ impl Session {
             self.announce(owner, "has left the game.", "ClientDropSound");
         }
         self.eject(owner);
+        self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
         self.admin_disconnect(owner);
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
@@ -1795,11 +1800,14 @@ impl Session {
         // Moves of players driving a package entity, for `step_packages`.
         let mut entity_moves = Vec::new();
         let liquids = self.simulation.liquids();
+        let mut riding = Vec::new();
         for (&owner, peer) in self.peers.iter_mut() {
-            if !peer.combat.alive || self.vehicles.is_mounted(owner) {
+            let on_vehicle = self.vehicles.is_mounted(owner);
+            let on_player = self.riding.is_riding(owner);
+            if !peer.combat.alive || on_vehicle || on_player {
                 peer.sitting = false;
             }
-            if self.vehicles.is_mounted(owner) {
+            if on_vehicle || on_player {
                 peer.input_budget = (peer.input_budget + 1.0).min(combat_input_burst());
                 // Seated players drive; consume inputs without the walking motor.
                 while let Some((sequence, input)) = peer.inputs.pop_front() {
@@ -1807,7 +1815,11 @@ impl Session {
                     peer.last_input_tick = tick;
                     peer.input = peer.body_input(input);
                 }
-                driving.push((owner, peer.input));
+                if on_vehicle {
+                    driving.push((owner, peer.input));
+                } else {
+                    riding.push((owner, peer.input));
+                }
                 peer.player.look(&peer.input);
                 peer.player.hold(&mut self.simulation.physics);
                 continue;
@@ -1950,12 +1962,18 @@ impl Session {
         for (owner, input) in driving {
             contain("vehicle input", self.vehicle_input(owner, input));
         }
+        for (owner, input) in riding {
+            contain("rider input", self.ride_input(owner, input));
+        }
+        // Riders move with where their mounts walked this tick.
+        self.follow_player_mounts();
         self.drive_package_entities(entity_moves);
         contain("packages", self.step_packages());
         self.step_holds();
         contain("vehicles", self.vehicle_pre_step());
         contain("physics", self.simulation.step());
         contain("vehicles", self.vehicle_post_step());
+        self.player_mount_contacts();
         contain("weapons", self.step_weapons());
         self.step_temp_colors();
         contain("items", self.step_items());

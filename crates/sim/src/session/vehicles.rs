@@ -124,6 +124,16 @@ impl Vehicles {
     pub(super) fn is_mounted(&self, owner: OwnerId) -> bool {
         self.mounted.contains_key(&owner)
     }
+    /// `$Game::MinMountTime` has passed since this player last left a mount.
+    pub(super) fn may_remount(&self, owner: OwnerId, tick: u64) -> bool {
+        self.last_dismount
+            .get(&owner)
+            .is_none_or(|t| tick.saturating_sub(*t) >= MIN_MOUNT_TICKS)
+    }
+    /// `Armor::onUnMount` sets `lastMountTime`.
+    pub(super) fn note_dismount(&mut self, owner: OwnerId, tick: u64) {
+        self.last_dismount.insert(owner, tick);
+    }
     /// The family of the vehicle a player rides.
     pub(super) fn mounted_family(&self, owner: OwnerId) -> Option<veh::Family> {
         let mount = self.mounted.get(&owner)?;
@@ -239,6 +249,23 @@ impl Session {
         position: Vec3,
         rotation: glam::Quat,
     ) -> Result<Option<(Vec3, f32)>> {
+        if let Some(ride) = self.ride(owner) {
+            // A player mount is the root: it moves and its riders follow.
+            if let Some((at, scale)) = self.teleport_mount(ride.mount, position, rotation)? {
+                return Ok(Some((at, scale)));
+            }
+            let forward = rotation * Vec3::NEG_Z;
+            let peer = self.peers.get_mut(&ride.mount).context("Unknown mount")?;
+            let scale = peer.player.state().scale;
+            peer.player.teleport(
+                &mut self.simulation.physics,
+                position,
+                forward.x.atan2(-forward.z),
+            )?;
+            peer.inputs.clear();
+            self.follow_player_mounts();
+            return Ok(Some((position, scale)));
+        }
         let Some(mount) = self.vehicles.mounted.get(&owner) else {
             return Ok(None);
         };
@@ -511,7 +538,7 @@ impl Session {
     }
     /// `miniGameCanUse` for riding: owners, trusted sandbox players and
     /// same-minigame players may ride; different minigames may not.
-    fn can_ride(&self, owner: OwnerId, vehicle_owner: OwnerId) -> bool {
+    pub(super) fn can_ride(&self, owner: OwnerId, vehicle_owner: OwnerId) -> bool {
         let Some(peer) = self.peers.get(&owner) else {
             return false;
         };
@@ -756,7 +783,7 @@ impl Session {
         let mut boarding = Vec::new();
         let mut touching = BTreeSet::new();
         for (owner, peer) in &self.peers {
-            if !peer.combat.alive || self.vehicles.mounted.contains_key(owner) {
+            if !peer.combat.alive || self.seated(*owner) {
                 continue;
             }
             let bounds = crate::player::item_bounds(&peer.player);
@@ -765,12 +792,7 @@ impl Session {
             let pose =
                 Pose::from_translation((Vec3::from(bounds.min) + Vec3::from(bounds.max)) * 0.5);
             let feet = Vec3::from(peer.player.state().feet);
-            let may_board = !self.bots.is_bot(*owner)
-                && self
-                    .vehicles
-                    .last_dismount
-                    .get(owner)
-                    .is_none_or(|t| tick.saturating_sub(*t) >= MIN_MOUNT_TICKS);
+            let may_board = !self.bots.is_bot(*owner) && self.vehicles.may_remount(*owner, tick);
             for v in &snapshot.vehicles {
                 if v.destroyed {
                     continue;
@@ -1444,8 +1466,10 @@ impl Session {
         }
         Ok(())
     }
-    /// Death or disconnect forces the occupant out.
+    /// Death or disconnect forces the occupant out of a vehicle or off a
+    /// ridden player.
     pub(super) fn eject(&mut self, owner: OwnerId) {
+        self.dismount_player(owner, true);
         if let Some(world) = &mut self.vehicles.world
             && self.vehicles.mounted.contains_key(&owner)
         {

@@ -832,3 +832,177 @@ fn an_internet_hosts_per_builder_vehicle_quota_holds_back_a_spawn_but_lan_does_n
     }
     Ok(())
 }
+
+/// HorseArmor's player seat is horse.dts's `mount2` at rest, the same node
+/// and place the converted pack seats a horse bot's rider.
+#[test]
+#[ignore = "requires the converted native vehicle pack"]
+fn horse_player_seat_is_the_horse_shapes_mount_node() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pack = bri_vehicles::Pack::load(root.join("content/vehicles-pack-011/vehicles.json"))?;
+    let horse = pack
+        .definitions
+        .iter()
+        .find(|d| d.id == "v20.vehicle.horsearmor")
+        .expect("HorseArmor");
+    let points = bri_sim::player_types::PlayerType::Horse.mount_points();
+    assert_eq!(points.len(), horse.seats.len(), "numMountPoints");
+    for (point, seat) in points.iter().zip(&horse.seats) {
+        assert_eq!(point.node, seat.node);
+        assert!(Vec3::from(point.position).distance(Vec3::from(seat.transform.position)) < 1e-4);
+        assert_eq!(point.pose, seat.pose);
+    }
+    Ok(())
+}
+
+/// A bot hit by the Horse Ray becomes a rideable horse. It has no client of
+/// its own, so v20 gives the rider in its first seat control of it
+/// (`setControlObject`): its brain stops and it runs where the rider looks.
+#[test]
+#[ignore = "requires the converted native vehicle, weapon and brick packs"]
+fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // A bot brick the shooter owns, so the bot follows their minigame.
+    let definitions = Definitions::load(
+        &root.join("content/stock-catalog-004"),
+        &root.join("content/maps-pass-008"),
+    )?;
+    let mut world = World::new("Bot horse".into(), "test".into(), vec![[1.0; 4]]);
+    let principal = [7; 32];
+    world
+        .owners
+        .insert(1, bri_world::OwnerRecord::new(principal, "Shooter".into()));
+    let mut brick = Brick::new(ContentRef::Resolved(SPAWN.into()), [0.0, 0.1, -12.0], 1);
+    brick.vehicle = Some(VehicleSpawn {
+        vehicle: ContentRef::Resolved("bot.blockhead".into()),
+        recolor: false,
+    });
+    world.bricks.insert(1, brick);
+    world.next_brick_id = 2;
+    let mut s = Session::new(Simulation::new(
+        world,
+        definitions,
+        vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
+    )?);
+    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
+        root.join("content/weapons-pack-009/weapons.json"),
+    )?)?)?;
+    s.set_vehicle_pack(bri_vehicles::Pack::load(
+        root.join("content/vehicles-pack-011/vehicles.json"),
+    )?)?;
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
+    let shooter = s.join_verified(
+        "Shooter".into(),
+        Vec3::new(0.0, 0.05, 0.0),
+        true,
+        Some(bri_admin::Principal(principal)),
+    )?;
+    assert_eq!(shooter, 1);
+    let mut sequence = 0;
+    let mut idle = |s: &mut Session, owner: u64, ticks: usize, input: MoveInput| {
+        for _ in 0..ticks {
+            sequence += 1;
+            s.movement(owner, sequence, input).unwrap();
+            s.step().unwrap();
+        }
+    };
+    idle(&mut s, shooter, 60, MoveInput::default());
+    let bot = *s
+        .names()
+        .keys()
+        .find(|o| s.is_bot(**o))
+        .expect("bot spawned from its brick");
+    let feet = |s: &Session, owner: u64| {
+        Vec3::from(
+            s.snapshot()
+                .players
+                .into_iter()
+                .find(|p| p.owner == owner)
+                .unwrap()
+                .feet,
+        )
+    };
+    // The Horse Ray only works where it may hurt: inside a minigame, which
+    // the bot joins as its brick owner's.
+    s.command(
+        shooter,
+        1,
+        Command::MiniGame(bri_sim::session::MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                // Unarmed, so the bot has nothing to fight back with.
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )?;
+    idle(&mut s, shooter, 60, MoveInput::default());
+    let game = s.vitals()[&shooter].minigame.expect("minigame");
+    assert_eq!(s.vitals()[&bot].minigame, Some(game));
+    let slot = s.give_item(shooter, "v20.weapon.horserayitem")?;
+    s.equip_tool(shooter, Some(slot))?;
+    let mut horse = false;
+    for shot in 0..10 {
+        let to = feet(&s, bot) + Vec3::Y * 1.5 - (feet(&s, shooter) + Vec3::Y * 2.3);
+        let aim = MoveInput {
+            yaw: to.x.atan2(-to.z),
+            pitch: (to.y / to.length()).asin(),
+            ..Default::default()
+        };
+        idle(&mut s, shooter, 5, aim);
+        s.command(
+            shooter,
+            100 + shot * 2,
+            Command::WeaponTrigger { down: true },
+        )?;
+        idle(&mut s, shooter, 5, aim);
+        s.command(
+            shooter,
+            101 + shot * 2,
+            Command::WeaponTrigger { down: false },
+        )?;
+        idle(&mut s, shooter, 60, aim);
+        let state = s
+            .snapshot()
+            .players
+            .into_iter()
+            .find(|p| p.owner == bot)
+            .unwrap();
+        if state.archetype == bri_sim::player_types::PlayerType::Horse.archetype() {
+            horse = true;
+            break;
+        }
+    }
+    assert!(horse, "the Horse Ray turned the bot into a horse");
+    // A player of the same minigame dropped on its back takes the reins.
+    let rider = s.join("Rider".into(), Vec3::new(30.0, 0.05, 30.0), false)?;
+    s.set_spawn_points(vec![feet(&s, bot) + Vec3::Y * 6.0])?;
+    s.command(
+        rider,
+        1,
+        Command::MiniGame(bri_sim::session::MiniGameRequest::Join { game }),
+    )?;
+    let mut rs = 0;
+    let mut ride = |s: &mut Session, ticks: usize, input: MoveInput| {
+        for _ in 0..ticks {
+            rs += 1;
+            s.movement(rider, rs, input).unwrap();
+            s.step().unwrap();
+        }
+    };
+    ride(&mut s, 240, MoveInput::default());
+    let seat = s.vitals()[&rider].ride.expect("rides the horse bot");
+    assert_eq!((seat.mount, seat.seat, seat.steers), (bot, 0, true));
+    // Looking east and pressing forward runs the horse east.
+    let start = feet(&s, bot);
+    let east = MoveInput {
+        forward: 1.0,
+        yaw: std::f32::consts::FRAC_PI_2,
+        ..Default::default()
+    };
+    ride(&mut s, 240, east);
+    let moved = feet(&s, bot) - start;
+    assert!(moved.x > 5.0 && moved.x > moved.z.abs() * 3.0, "{moved}");
+    assert_eq!(s.vitals()[&rider].ride.map(|r| r.mount), Some(bot));
+    Ok(())
+}

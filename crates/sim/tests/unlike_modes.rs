@@ -1913,3 +1913,307 @@ fn a_broken_archetype_is_refused_with_its_reason() {
         assert!(error.contains(reason), "{reason}: {error}");
     }
 }
+
+/// A package body two riders can mount (`numMountPoints = 2`).
+const CAMEL_ARCHETYPE: &str = r#"{
+  "schema_version": 1,
+  "name": "Camel",
+  "base": "v20.player.horsearmor",
+  "rideable": true,
+  "can_ride": false,
+  "mount_points": [
+    { "node": "hump0", "position": [0.0, 2.0, 0.5] },
+    { "node": "hump1", "position": [0.0, 2.0, -0.5], "pose": "sit" }
+  ]
+}"#;
+
+fn ride(s: &Session, owner: u64) -> Option<bri_sim::session::Ride> {
+    s.vitals()[&owner].ride
+}
+
+/// Step until `owner` rides, at most `ticks`, returning the ticks it took.
+fn until_riding(s: &mut Session, owner: u64, ticks: u32) -> Option<u32> {
+    for tick in 0..ticks {
+        if ride(s, owner).is_some() {
+            return Some(tick);
+        }
+        s.step().unwrap();
+    }
+    ride(s, owner).is_some().then_some(ticks)
+}
+
+fn become_body(s: &mut Session, owner: u64, sequence: u64, body: &str) {
+    s.command(
+        owner,
+        sequence,
+        command("bodies", "become", vec![PackageArg::String(body.into())]),
+    )
+    .unwrap_or_else(|e| panic!("{e:#}"));
+}
+
+/// Where a rider in `seat` of `mount` sits, from the mount's archetype.
+fn seat_of(s: &Session, mount: u64, seat: usize) -> Vec3 {
+    let state = s
+        .snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == mount)
+        .unwrap();
+    s.archetypes().resolve(state.archetype).mount_points[seat].seat(
+        Vec3::from(state.feet),
+        state.yaw,
+        state.scale,
+    )
+}
+
+/// Max's a19 playtest: the Horse Ray turned him into a horse and the other
+/// player could not get on. v20's `Armor::onCollision` seats a `canRide`
+/// player who lands on top of a `rideable` player with mount points; the
+/// horse keeps its own controls, the rider moves with it, and jet gets off
+/// (`doDismount`, 2.2 up) with `$Game::MinMountTime` before remounting.
+#[test]
+fn a_player_rides_a_horse_player_and_jets_off() {
+    let mut s = bodies_mode("ride-horse", BALL_ARCHETYPE).unwrap();
+    let horse = s
+        .join("Horse".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 10);
+    // A Blockhead is not rideable: landing on one stays on foot.
+    let rider = s
+        .join("Rider".into(), Vec3::new(0.0, 5.0, 0.0), false)
+        .unwrap();
+    assert_eq!(until_riding(&mut s, rider, 240), None);
+    assert!(position(&s, rider).y > 2.0, "stands on the Blockhead");
+    become_body(&mut s, horse, 1, "v20.player.horsearmor");
+    // Standing on top as it becomes a horse, the rider takes the one seat.
+    s.take_cues();
+    assert!(until_riding(&mut s, rider, 240).is_some());
+    assert_eq!(
+        ride(&s, rider),
+        Some(bri_sim::session::Ride {
+            mount: horse,
+            seat: 0,
+            steers: false,
+        })
+    );
+    assert!(s.take_cues().iter().any(|c| matches!(
+        &c.kind,
+        bri_sim::presentation::CueKind::VehicleSound { sound, .. } if sound == "player.mount"
+    )));
+    // The horse runs where it looks; the rider's own keys move nothing.
+    // The horse's client predicts its run exactly, colliding with players
+    // on foot but not with its rider, who is a sensor on the host.
+    let (state, _) = s
+        .motion_states()
+        .into_iter()
+        .find(|(p, _)| p.owner == horse)
+        .unwrap();
+    let mirror = bri_sim::prediction::CollisionMirror::new(
+        definitions(),
+        vec![ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0))],
+        vec![],
+    );
+    let mut predictor =
+        bri_sim::prediction::Predictor::new(mirror, state, s.archetypes().clone()).unwrap();
+    let (mut hs, mut rs) = (0, 0);
+    let start = position(&s, horse);
+    for _ in 0..120 {
+        let vitals = s.vitals();
+        let others: Vec<_> = s
+            .snapshot()
+            .players
+            .into_iter()
+            .filter(|p| {
+                let v = &vitals[&p.owner];
+                v.alive && v.mounted.is_none() && v.ride.is_none()
+            })
+            .collect();
+        predictor.set_others(&others).unwrap();
+        predictor
+            .step(MoveInput {
+                forward: 1.0,
+                yaw: 1.0,
+                ..Default::default()
+            })
+            .unwrap();
+        hs += 1;
+        rs += 1;
+        s.movement(
+            horse,
+            hs,
+            MoveInput {
+                forward: 1.0,
+                yaw: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.movement(
+            rider,
+            rs,
+            MoveInput {
+                right: 1.0,
+                yaw: -2.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+        assert!(
+            position(&s, rider).distance(seat_of(&s, horse, 0)) < 1e-3,
+            "the rider sits on the mount node"
+        );
+    }
+    assert!(position(&s, horse).distance(start) > 5.0, "the horse ran");
+    let client = Vec3::from(predictor.state().feet);
+    assert!(
+        position(&s, horse).distance(client) < 0.01,
+        "the horse's prediction matches the host: {} vs {client}",
+        position(&s, horse)
+    );
+    assert!((heading(&s, rider) - heading(&s, horse)).abs() < 1e-4);
+    // The horse stops; jet gets off, 2.2 above the seat, and landing back
+    // on the horse does not remount at once.
+    steps(&mut s, 60);
+    let seat = seat_of(&s, horse, 0);
+    for jet in [false, true] {
+        rs += 1;
+        s.movement(
+            rider,
+            rs,
+            MoveInput {
+                jet,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    assert_eq!(ride(&s, rider), None);
+    assert!(
+        position(&s, rider).y > seat.y + 1.5,
+        "{}",
+        position(&s, rider)
+    );
+    for _ in 0..100 {
+        s.step().unwrap();
+        assert_eq!(ride(&s, rider), None);
+    }
+}
+
+/// Riders get off whenever the mount stops being one: a new body that is
+/// not rideable, death, a disconnect. A rider who dies is off too, and the
+/// mount carries on.
+#[test]
+fn riders_are_put_down_when_the_mount_changes_dies_or_leaves() {
+    let mut s = bodies_mode("ride-cleanup", CAMEL_ARCHETYPE).unwrap();
+    let horse = s
+        .join("Horse".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    become_body(&mut s, horse, 1, "v20.player.horsearmor");
+    steps(&mut s, 10);
+    let rider = s
+        .join("Rider".into(), Vec3::new(0.0, 6.0, 0.0), false)
+        .unwrap();
+    assert!(until_riding(&mut s, rider, 240).is_some());
+    // A body with seats keeps the rider in theirs (`onNewDataBlock`).
+    become_body(&mut s, horse, 2, "bodies:archetype/ball");
+    steps(&mut s, 1);
+    assert_eq!(ride(&s, rider).map(|r| r.seat), Some(0));
+    assert!(position(&s, rider).distance(seat_of(&s, horse, 0)) < 1e-3);
+    // One that is not rideable puts them down.
+    become_body(&mut s, horse, 3, "v20.player.playerstandardarmor");
+    steps(&mut s, 1);
+    assert_eq!(ride(&s, rider), None);
+    // The mount dies: `Armor::onDisabled` forces its riders off.
+    become_body(&mut s, horse, 4, "v20.player.horsearmor");
+    assert!(until_riding(&mut s, rider, 400).is_some());
+    s.command(horse, 5, Command::Suicide).unwrap();
+    steps(&mut s, 1);
+    assert!(!s.is_alive(horse));
+    assert_eq!(ride(&s, rider), None);
+    assert!(s.is_alive(rider));
+    // A rider who dies is off; the mount is unharmed.
+    let mount = s
+        .join("Mount".into(), Vec3::new(10.0, 0.05, 0.0), false)
+        .unwrap();
+    become_body(&mut s, mount, 1, "v20.player.horsearmor");
+    let second = s
+        .join("Second".into(), Vec3::new(10.0, 6.0, 0.0), false)
+        .unwrap();
+    assert!(until_riding(&mut s, second, 240).is_some());
+    s.command(second, 1, Command::Suicide).unwrap();
+    steps(&mut s, 1);
+    assert_eq!(ride(&s, second), None);
+    assert!(s.is_alive(mount));
+    // The mount leaves: its rider stays behind.
+    let mount = s
+        .join("Leaver".into(), Vec3::new(20.0, 0.05, 0.0), false)
+        .unwrap();
+    become_body(&mut s, mount, 1, "v20.player.horsearmor");
+    let third = s
+        .join("Third".into(), Vec3::new(20.0, 6.0, 0.0), false)
+        .unwrap();
+    assert!(until_riding(&mut s, third, 240).is_some());
+    s.disconnect(mount).unwrap();
+    steps(&mut s, 1);
+    assert_eq!(ride(&s, third), None);
+    steps(&mut s, 120);
+    assert!(s.is_alive(third));
+}
+
+/// `numMountPoints` from a package body: two humps, two riders, and a third
+/// who finds no free seat stays on foot.
+#[test]
+fn a_package_mount_seats_as_many_riders_as_it_has_mount_points() {
+    let mut s = bodies_mode("ride-camel", CAMEL_ARCHETYPE).unwrap();
+    let camel = s
+        .join("Camel".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    become_body(&mut s, camel, 1, "bodies:archetype/ball");
+    steps(&mut s, 10);
+    let riders: Vec<u64> = ["A", "B", "C"]
+        .iter()
+        .map(|name| {
+            let rider = s
+                .join((*name).into(), Vec3::new(0.0, 7.0, 0.0), false)
+                .unwrap();
+            until_riding(&mut s, rider, 240);
+            rider
+        })
+        .collect();
+    assert_eq!(ride(&s, riders[0]).map(|r| r.seat), Some(0));
+    assert_eq!(ride(&s, riders[1]).map(|r| r.seat), Some(1));
+    assert_eq!(ride(&s, riders[2]), None);
+    for (seat, rider) in riders[..2].iter().enumerate() {
+        assert!(position(&s, *rider).distance(seat_of(&s, camel, seat)) < 1e-3);
+    }
+}
+
+/// `miniGameCanUse`: a horse in a minigame does not carry a player outside
+/// it.
+#[test]
+fn a_horse_in_a_minigame_only_carries_its_own_players() {
+    let mut s = bodies_mode("ride-minigame", BALL_ARCHETYPE).unwrap();
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
+    let horse = s
+        .join("Horse".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    become_body(&mut s, horse, 1, "v20.player.horsearmor");
+    s.command(
+        horse,
+        2,
+        Command::MiniGame(bri_sim::session::MiniGameRequest::Create {
+            color: 1,
+            settings: Default::default(),
+        }),
+    )
+    .unwrap();
+    steps(&mut s, 10);
+    assert_eq!(archetype_of(&s, horse).id, "v20.player.horsearmor");
+    let rider = s
+        .join("Rider".into(), Vec3::new(0.0, 6.0, 0.0), false)
+        .unwrap();
+    assert_eq!(until_riding(&mut s, rider, 240), None);
+    assert!(position(&s, rider).y > 2.0, "stands on the horse");
+}

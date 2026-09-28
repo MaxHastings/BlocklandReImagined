@@ -66,6 +66,8 @@ pub struct Vitals {
     pub light: bool,
     /// Vehicle id and seat while riding.
     pub mounted: Option<(u64, u8)>,
+    /// The player this one rides, and the seat.
+    pub ride: Option<super::Ride>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
     /// Typing in the chat box (`MsgStartTalking`).
@@ -348,6 +350,7 @@ impl Session {
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
+                        ride: self.ride(*owner),
                         control: peer.control,
                         talking: peer.talking,
                         sitting: peer.sitting,
@@ -573,6 +576,8 @@ impl Session {
         // decides credit.
         self.package_death(victim, instigator);
         self.eject(victim);
+        // `Armor::onDisabled` forces every rider off.
+        self.release_riders(victim);
         {
             let peer = self.peers.get_mut(&victim).unwrap();
             peer.combat.alive = false;
@@ -1048,6 +1053,9 @@ impl Session {
     /// `GameConnection::spawnPlayer`: pick a spawn, heal, equip and relocate.
     fn respawn(&mut self, owner: OwnerId, equipment: Option<mg::Equipment>) -> Result<()> {
         let tick = self.simulation.state().tick;
+        // A new body is on no mount and carries nobody.
+        self.dismount_player(owner, true);
+        self.release_riders(owner);
         let (feet, yaw) = self.pick_spawn(owner);
         {
             let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
@@ -1338,6 +1346,7 @@ impl Session {
         if !can_ride {
             self.eject(owner);
         }
+        self.reseat_riders(owner);
         // `Armor::onNewDataBlock` swaps a held brick for the new datablock's.
         if self.holds_brick(owner) {
             self.hold_brick(owner)?;

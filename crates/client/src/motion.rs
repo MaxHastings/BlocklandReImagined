@@ -208,13 +208,18 @@ impl Motion {
             }
         }
         self.remotes.retain(|owner, _| view.poses.contains_key(owner));
-        // The host's motor collides with every other living body; corpses
-        // are sensors there.
+        // The host's motor collides with every other living body on foot;
+        // corpses and seated riders are sensors there, so a horse is not
+        // pushed by the player riding it.
         if let Some(predictor) = &mut self.predictor {
             predictor.set_others(
                 self.remotes
                     .iter()
-                    .filter(|(owner, _)| view.vitals.get(owner).is_none_or(|v| v.alive))
+                    .filter(|(owner, _)| {
+                        view.vitals
+                            .get(owner)
+                            .is_none_or(|v| v.alive && v.mounted.is_none() && v.ride.is_none())
+                    })
                     .filter_map(|(_, history)| history.back())
                     .map(|pose| &pose.player),
             )?;

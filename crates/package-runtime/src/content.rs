@@ -529,12 +529,29 @@ pub struct ArchetypeDef {
     pub rideable: Option<bool>,
     #[serde(default)]
     pub can_ride: Option<bool>,
+    /// Rider seats (`numMountPoints`, `mountNode`, `mountThread`), replacing
+    /// the base's. A rideable archetype needs at least one to be mounted.
+    #[serde(default)]
+    pub mount_points: Option<Vec<MountPointDef>>,
     /// Model id the clients draw: a package model (`namespace:model/name`)
     /// or one of v20's shapes (`v20.shape.m` is the Blockhead).
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub camera_distance: Option<f32>,
+}
+/// One rider seat: the model node riders follow, its rest position from
+/// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MountPointDef {
+    pub node: String,
+    pub position: [f32; 3],
+    #[serde(default = "root_pose")]
+    pub pose: String,
+}
+fn root_pose() -> String {
+    "root".into()
 }
 impl ArchetypeDef {
     pub fn validate(&self) -> Result<()> {
