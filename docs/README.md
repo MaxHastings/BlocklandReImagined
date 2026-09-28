@@ -45,6 +45,8 @@ Read [AGENTS.md](../AGENTS.md) first, then:
   `tools/bootstrap.py` does, step by step.
 - [playtest-package-layout.md](playtest-package-layout.md): building and
   checking a release folder.
+- [release-builds.md](release-builds.md): the GitHub Actions release build,
+  its one-time content setup, and tagging a release.
 - [vanilla-reference.md](vanilla-reference.md) and
   [vanilla-coverage.md](vanilla-coverage.md): the v20 install used as the
   reference, and coverage of its content.

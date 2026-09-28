@@ -113,7 +113,9 @@ cargo build --release --locked -p bri-client --bin bri-client
 
 The packager runs `bri-client.exe --version` and refuses a build whose version
 differs from `-Version`. Publish the zipped folder as a GitHub Release whose tag
-is that version; players' games compare against the latest release.
+is that version; players' games compare against the latest release. Pushing a
+version tag does all of this on GitHub Actions
+([release-builds.md](release-builds.md)).
 
 Signing is optional and off until there is a code-signing certificate. With
 one installed in the Windows certificate store, pass its SHA-1 thumbprint:
