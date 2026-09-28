@@ -159,10 +159,11 @@ A budget may rise only with the reason recorded here.
   twice (out and back 30 s later) alongside its `BrickKill` cue. A presence
   patch would halve an explosion's cost, which is already small (282 bricks
   cost each watcher about 2 KB/s over 4 s).
-- **Brick explosions stop at the first 64 bricks by id.** In
-  `session/events.rs` the `take(64)` runs before already-knocked-out bricks
-  are skipped, so a second rocket into the same spot knocks out nothing.
-  That is gameplay, not bandwidth; flagged for the bricks owner.
+- **Brick explosions stopped at the first 64 bricks by id** (fixed in
+  7208d183). In `session/events.rs` the `take(64)` ran before
+  already-knocked-out bricks were skipped, so a second rocket into the same
+  spot knocked out nothing. The 64 now counts only bricks a blast knocks out;
+  `brick_damage.rs` covers it without content.
 - **Admin snapshots** go to every player on each join and leave (N² at a
   busy join). Rare, so left alone.
 - **Fire-and-forget reports** (ghost brick, brick hand) get a reply each,
