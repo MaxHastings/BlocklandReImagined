@@ -3,6 +3,7 @@ use crate::*;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Limits {
     pub rows_per_brick: usize,
@@ -102,9 +103,15 @@ struct Job {
     context: Trigger,
     target: Entity,
     row: u16,
-    output: String,
-    action: Action,
-    row_snapshot: Row,
+    /// The compiled row's output, action and authored row, shared with its
+    /// program: a relay loop queues thousands of jobs a tick, and each one
+    /// only reads them.
+    #[serde(with = "shared")]
+    output: Arc<str>,
+    #[serde(with = "shared")]
+    action: Arc<Action>,
+    #[serde(with = "shared")]
+    row_snapshot: Arc<Row>,
     /// Logical time the row was scheduled: its activation's time, or the
     /// due time of the job whose relay or chain fired it.
     #[serde(default)]
@@ -123,18 +130,43 @@ struct Job {
 }
 impl Job {
     fn measure(&mut self) {
-        self.encoded_bytes = serde_json::to_vec(&self.row_snapshot)
+        self.encoded_bytes = serde_json::to_vec(&*self.row_snapshot)
             .expect("validated row")
             .len()
-            + serde_json::to_vec(&self.action)
+            + serde_json::to_vec(&*self.action)
                 .expect("validated action")
                 .len()
             + self.output.len()
             + 512
-            + serde_json::to_vec(&self.context)
-                .expect("validated context")
-                .len();
+            + context_bytes(&self.context);
     }
+}
+/// Serde for the `Arc`s a job shares with its compiled row, in the same
+/// encoding as the values themselves.
+mod shared {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+    pub fn serialize<T: Serialize + ?Sized, S: Serializer>(
+        value: &Arc<T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        (**value).serialize(serializer)
+    }
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Arc<T>, D::Error>
+    where
+        T: ?Sized,
+        Box<T>: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Box::<T>::deserialize(deserializer).map(Arc::from)
+    }
+}
+/// What a queued job's activation context counts against `state_bytes`: an
+/// upper bound on its encoded size. Every chained row carries one, so it is
+/// counted, not serialised.
+fn context_bytes(t: &Trigger) -> usize {
+    const ENTITY: usize = 80;
+    128 + t.input.len() + ENTITY * (t.targets.len() + usize::from(t.client.is_some()))
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -163,8 +195,10 @@ type Instant = (u64, u32);
 struct CompiledRow {
     input: String,
     class: Class,
-    output: String,
-    action: Action,
+    output: Arc<str>,
+    action: Arc<Action>,
+    /// The authored row as queued jobs record it.
+    row: Arc<Row>,
     cost: usize,
 }
 pub struct EventWorld {
@@ -286,8 +320,9 @@ impl EventWorld {
                 Ok(Some(CompiledRow {
                     input: self.catalog.input(&row.input).unwrap().id.clone(),
                     class,
-                    output: output.name.clone(),
-                    action,
+                    output: output.name.as_str().into(),
+                    action: Arc::new(action),
+                    row: Arc::new(row.clone()),
                     cost,
                 }))
             })
@@ -380,35 +415,39 @@ impl EventWorld {
     pub fn cancel_origin(&mut self, origin: u64) -> usize {
         self.retain_jobs(|j| j.context.origin != origin)
     }
+    /// Drop every queued or held job `keep` refuses, keeping the pending,
+    /// byte and cancellation indexes in step job by job rather than
+    /// rebuilding them: a relay's implicit cancel runs this on every hop.
     fn retain_jobs(&mut self, keep: impl Fn(&Job) -> bool) -> usize {
-        let before = self.pending;
+        let mut dropped = Vec::new();
         for q in self.queues.values_mut() {
-            q.retain(|_, j| keep(j));
+            q.retain(|_, j| {
+                keep(j) || {
+                    dropped.push((j.encoded_bytes, j.cancelable.then_some(j.context.source)));
+                    false
+                }
+            });
         }
         self.queues.retain(|_, q| !q.is_empty());
-        self.held.retain(|_, j| keep(j));
-        self.pending = self.queues.values().map(BTreeMap::len).sum::<usize>() + self.held.len();
-        self.job_bytes = self
-            .queues
-            .values()
-            .flat_map(|q| q.values())
-            .chain(self.held.values())
-            .map(|j| j.encoded_bytes)
-            .sum();
-        self.delayed.clear();
-        for j in self
-            .queues
-            .values()
-            .flat_map(|q| q.values())
-            .chain(self.held.values())
-        {
-            if j.cancelable {
-                let entry = self.delayed.entry(j.context.source).or_default();
-                entry.0 += 1;
-                entry.1 += j.encoded_bytes;
+        self.held.retain(|_, j| {
+            keep(j) || {
+                dropped.push((j.encoded_bytes, j.cancelable.then_some(j.context.source)));
+                false
+            }
+        });
+        for (bytes, source) in &dropped {
+            self.pending -= 1;
+            self.job_bytes -= bytes;
+            if let Some(source) = source {
+                let v = self.delayed.get_mut(source).unwrap();
+                v.0 -= 1;
+                v.1 -= bytes;
+                if v.0 == 0 {
+                    self.delayed.remove(source);
+                }
             }
         }
-        before - self.pending
+        dropped.len()
     }
     fn targets(&self, source: &BrickProgram, t: &Trigger, target: &Target) -> Result<Vec<Entity>> {
         match target {
@@ -484,7 +523,7 @@ impl EventWorld {
         if input.name.eq_ignore_ascii_case("onRelay") && brick.implicit_cancel_relays {
             plan.cancel.insert(brick.id);
         }
-        let context_cost = serde_json::to_vec(t)?.len();
+        let context_cost = context_bytes(t);
         for (idx, (row, compiled)) in brick.rows.iter().zip(&self.compiled[&brick.id]).enumerate() {
             let Some(compiled) = compiled else {
                 continue;
@@ -492,7 +531,7 @@ impl EventWorld {
             if !row.enabled || compiled.input != input.id {
                 continue;
             }
-            let action = &compiled.action;
+            let action = &*compiled.action;
             let targets = self.targets(brick, t, &row.target)?;
             for target in targets {
                 ensure!(
@@ -512,8 +551,8 @@ impl EventWorld {
                     target,
                     row: idx as u16,
                     output: compiled.output.clone(),
-                    action: action.clone(),
-                    row_snapshot: row.clone(),
+                    action: compiled.action.clone(),
+                    row_snapshot: compiled.row.clone(),
                     scheduled: fired_at,
                     due: fired_at
                         .checked_add(u64::from(row.delay_ms) * 1000)
@@ -553,26 +592,36 @@ impl EventWorld {
                 (0, 0)
             };
         let added_bytes: usize = p.jobs.iter().map(|j| j.encoded_bytes).sum();
-        let mut origins: BTreeSet<u64> = if cancelled == 0 {
-            self.queues
-                .keys()
-                .chain(self.held.values().map(|j| &j.context.origin))
-                .copied()
-                .collect()
+        let origins = if cancelled == 0 {
+            // Every queued origin stays: count the queues plus the origins
+            // only the held jobs and this plan bring, without collecting
+            // every origin on each chained row.
+            let mut extra: Vec<u64> = self
+                .held
+                .values()
+                .map(|j| j.context.origin)
+                .chain(p.jobs.iter().map(|j| j.context.origin))
+                .filter(|origin| !self.queues.contains_key(origin))
+                .collect();
+            extra.sort_unstable();
+            extra.dedup();
+            self.queues.len() + extra.len()
         } else {
-            self.queues
+            let mut origins: BTreeSet<u64> = self
+                .queues
                 .values()
                 .flat_map(|q| q.values())
                 .chain(self.held.values())
                 .filter(|j| !Self::cancelled_by(j, &p.cancel, p.at))
                 .map(|j| j.context.origin)
-                .collect()
+                .collect();
+            origins.extend(p.jobs.iter().map(|j| j.context.origin));
+            origins.len()
         };
-        origins.extend(p.jobs.iter().map(|j| j.context.origin));
         self.pending - cancelled + p.jobs.len() <= self.limits.pending
             && self.program_bytes + self.job_bytes - cancelled_bytes + added_bytes
                 <= self.limits.state_bytes
-            && origins.len() <= self.limits.origins
+            && origins <= self.limits.origins
             && self
                 .next_sequence
                 .checked_add(p.jobs.len() as u64)
@@ -638,7 +687,7 @@ impl EventWorld {
                 if row.enabled
                     && let Some(c) = c
                     && c.input == input.id
-                    && !(row.delay_ms == 0 && matches!(c.action, Action::Cancel))
+                    && !(row.delay_ms == 0 && matches!(*c.action, Action::Cancel))
                 {
                     count += match &row.target {
                         Target::Named(name) => {
@@ -779,13 +828,13 @@ impl EventWorld {
             }
             if !self.bricks.contains_key(&job.context.source)
                 || !host.alive(job.target)
-                || (!matches!(job.action, Action::Reappear(_))
+                || (!matches!(*job.action, Action::Reappear(_))
                     && job.context.client.is_some_and(|c| !host.alive(c)))
             {
                 r.stale += 1;
                 continue;
             }
-            if !matches!(job.action, Action::Reappear(_))
+            if !matches!(*job.action, Action::Reappear(_))
                 && !host.permitted(&job.context, job.target, &job.output)
             {
                 r.rejected += 1;
@@ -850,7 +899,7 @@ impl EventWorld {
         let mut digit = None;
         let mut timer = None;
         let mut expanded = 0;
-        let intent = match &j.action {
+        let intent = match &*j.action {
             Action::Cancel => {
                 r.cancelled +=
                     self.cancel_authored(&BTreeSet::from([j.target.id]), (j.due, j.order));
@@ -952,7 +1001,7 @@ impl EventWorld {
                 timer = Some(token);
                 if *seconds > 0 {
                     let mut job = j.clone();
-                    job.action = Action::Reappear(token);
+                    job.action = Arc::new(Action::Reappear(token));
                     job.context.source = j.target.id;
                     job.output = "reappear".into();
                     job.cancelable = false;
@@ -989,7 +1038,7 @@ impl EventWorld {
             client,
             input: self.catalog.input(&j.context.input).unwrap().name.clone(),
             row: j.row,
-            output: j.output.clone(),
+            output: j.output.to_string(),
             scheduled_us: j.due,
             now_us: self.now,
             intent,
@@ -1018,21 +1067,24 @@ impl EventWorld {
         }
     }
     fn change_enabled(&mut self, id: Id, selection: &RowSelection, value: Option<bool>) {
-        if let Some(b) = self.bricks.get_mut(&id) {
-            match selection {
-                RowSelection::All => {
-                    for row in &mut b.rows {
-                        row.enabled = value.unwrap_or(!row.enabled)
-                    }
-                }
-                RowSelection::Indices(ids) => {
-                    for index in ids {
-                        if let Some(row) = b.rows.get_mut(*index as usize) {
-                            row.enabled = value.unwrap_or(!row.enabled);
-                        }
-                    }
-                }
+        let Some(b) = self.bricks.get_mut(&id) else {
+            return;
+        };
+        let rows = b.rows.len();
+        let compiled = self.compiled.get_mut(&id).unwrap();
+        let mut change = |index: usize| {
+            let Some(row) = b.rows.get_mut(index) else {
+                return;
+            };
+            row.enabled = value.unwrap_or(!row.enabled);
+            // Rows queued from now on record the row as it now stands.
+            if let Some(Some(c)) = compiled.get_mut(index) {
+                Arc::make_mut(&mut c.row).enabled = row.enabled;
             }
+        };
+        match selection {
+            RowSelection::All => (0..rows).for_each(&mut change),
+            RowSelection::Indices(ids) => ids.iter().for_each(|i| change(*i as usize)),
         }
     }
     pub fn save(&self) -> Result<Vec<u8>> {
@@ -1127,10 +1179,10 @@ impl EventWorld {
                     .eq_ignore_ascii_case("onToolBreak")
                     || matches!(j.row_snapshot.target, Target::Named(_)));
             ensure!(
-                matches!(j.action, Action::Reappear(_)) || j.cancelable == expected_cancel,
+                matches!(*j.action, Action::Reappear(_)) || j.cancelable == expected_cancel,
                 "Checkpoint cancellation flag mismatch"
             );
-            let horizon = if matches!(j.action, Action::Reappear(_)) {
+            let horizon = if matches!(*j.action, Action::Reappear(_)) {
                 300_000_000
             } else {
                 u64::from(j.row_snapshot.delay_ms) * 1000
@@ -1139,17 +1191,17 @@ impl EventWorld {
                 j.due <= s.now.saturating_add(horizon),
                 "Checkpoint deadline outside authored horizon"
             );
-            match j.action {
+            match *j.action {
                 Action::Reappear(token) => ensure!(
                     matches!(expected,Action::Intent(Intent::Brick(BrickOp::Disappear{seconds})) if seconds>0)
-                        && j.output == "reappear"
+                        && &*j.output == "reappear"
                         && !j.cancelable
                         && token > 0
                         && token < s.next_sequence,
                     "Invalid reappear schedule"
                 ),
                 _ => ensure!(
-                    expected == j.action
+                    expected == *j.action
                         && w.catalog
                             .output(class, &j.output)
                             .is_some_and(|o| o.name.eq_ignore_ascii_case(&j.row_snapshot.output)
