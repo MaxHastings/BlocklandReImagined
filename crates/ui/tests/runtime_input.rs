@@ -346,6 +346,9 @@ fn direct_join_accepts_text_and_blocks_duplicate_request() {
     // Opening the list looks for LAN games and checks saved servers.
     assert_eq!(actions(&mut u), vec![UiAction::QueryLan]);
     click(&mut u, ScreenId::JoinServer, "manual");
+    // No server checks join passwords yet, so the field is not offered.
+    let view = u.screen(ScreenId::ManualJoin).unwrap().view();
+    assert!(!view.is_shown(view.id("MJ_txtJoinPass").unwrap()));
     for ch in "127.0.0.1:28000".chars() {
         u.handle_input(InputEvent::Char(ch));
     }

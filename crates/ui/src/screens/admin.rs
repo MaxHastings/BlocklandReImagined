@@ -621,9 +621,10 @@ impl AdminScreen {
             }
             if let Some(n) = self.view.id("AdminPasswordSlot") {
                 let selected = self.view.selected(n);
+                // No server checks a join password yet, so there is no
+                // Join slot to set.
                 self.view.state(n).items = if host {
                     vec![
-                        ("Join".into(), 0),
                         ("Admin".into(), 1),
                         ("Super Admin".into(), 2),
                     ]

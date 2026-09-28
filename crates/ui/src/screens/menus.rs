@@ -81,6 +81,7 @@ impl NativeScreen {
             }
             ScreenId::StartMission => {
                 for name in ["SM_demoBanner1", "SM_demoBanner2"] { s.visible(name, false); }
+                s.hide_password_field("TxtServerPassword");
                 // Internet hosts are joined by direct IP; there is no master
                 // server listing.
                 if let Some(n) = s.view.id("SM_PlayerCountMenu") {
@@ -120,7 +121,10 @@ impl NativeScreen {
                 s.view.focus = s.view.id("NMH_Type");
                 s.place_chat_box(core);
             }
-            ScreenId::ManualJoin => s.view.focus = s.view.id("MJ_txtIP"),
+            ScreenId::ManualJoin => {
+                s.hide_password_field("MJ_txtJoinPass");
+                s.view.focus = s.view.id("MJ_txtIP");
+            }
             // escapeMenu::onWake: plain buttons unless $Pref::Gui::ColorEscapeMenu.
             ScreenId::EscapeMenu if !core.prefs.bool_or("$Pref::Gui::ColorEscapeMenu", true) => {
                 for n in s.view.walk().collect::<Vec<_>>() {
@@ -169,6 +173,33 @@ impl NativeScreen {
     fn set(&mut self, name: &str, text: &str) {
         if let Some(n) = self.view.id(name) {
             self.view.set_text(n, text);
+        }
+    }
+    /// Join passwords are not checked by any server yet, so their fields
+    /// and the "Password" label on the same row stay hidden.
+    fn hide_password_field(&mut self, name: &str) {
+        let Some(field) = self.view.id(name) else {
+            return;
+        };
+        let (parent, y) = (self.view.node(field).parent, self.view.node(field).ctrl.position[1]);
+        let labels: Vec<_> = self
+            .view
+            .walk()
+            .filter(|&n| {
+                let node = self.view.node(n);
+                n != field
+                    && node.parent == parent
+                    && !node.ctrl.class.contains("Edit")
+                    && (node.ctrl.position[1] - y).abs() <= 8
+                    && node
+                        .ctrl
+                        .text
+                        .as_deref()
+                        .is_some_and(|t| t.to_ascii_lowercase().contains("password"))
+            })
+            .collect();
+        for n in labels.into_iter().chain([field]) {
+            self.view.set_visible(n, false);
         }
     }
     fn visible(&mut self, name: &str, value: bool) {
@@ -499,7 +530,7 @@ impl NativeScreen {
             game_mode: game_mode.map(|m| m.id),
             max_players,
             server_name: self.edit("TxtServerName"),
-            password: self.edit("TxtServerPassword"),
+            password: String::new(),
             admin_password: pref("$Pref::Server::AdminPassword"),
             super_admin_password: pref("$Pref::Server::SuperAdminPassword"),
         };
@@ -511,10 +542,7 @@ impl NativeScreen {
             return;
         }
         let (address, password) = if self.id == ScreenId::ManualJoin {
-            (
-                self.edit("MJ_txtIP").trim().to_string(),
-                self.edit("MJ_txtJoinPass"),
-            )
+            (self.edit("MJ_txtIP").trim().to_string(), String::new())
         } else {
             let Some(address) = self
                 .selected("JS_serverList")
