@@ -123,6 +123,33 @@ fn options(s: &bri_admin::ServerSettings) -> ui::AdminOptions {
         lan: quotas(&s.lan),
     }
 }
+/// A new host's Server Settings: the saved Advanced Config (`$Pref::Server::*`)
+/// with this game's name and player limit. Saved values the host would
+/// refuse fall back to v20's defaults.
+pub fn host_settings(
+    o: &ui::AdminOptions,
+    name: &str,
+    max_players: u16,
+) -> bri_admin::ServerSettings {
+    let base = bri_admin::ServerSettings {
+        name: name.into(),
+        max_players,
+        ..Default::default()
+    };
+    let saved = settings(
+        &ui::AdminOptions {
+            name: name.into(),
+            max_players,
+            ..o.clone()
+        },
+        &base,
+    );
+    if saved.validate().is_ok() {
+        saved
+    } else {
+        base
+    }
+}
 /// The Server Settings dialog's values over the host's current settings
 /// (keeping those the dialog does not show).
 fn settings(o: &ui::AdminOptions, current: &bri_admin::ServerSettings) -> bri_admin::ServerSettings {
@@ -438,6 +465,22 @@ mod tests {
         assert!(!mapped.supported.contains(&ui::AdminFeature::Ban));
         assert!(!mapped.supported.contains(&ui::AdminFeature::HostOptions));
         Ok(())
+    }
+    #[test]
+    fn advanced_config_defaults_are_the_hosts() {
+        let d = bri_admin::ServerSettings::default();
+        assert_eq!(options(&d), ui::AdminOptions::default());
+        assert_eq!(host_settings(&ui::AdminOptions::default(), &d.name, d.max_players), d);
+        let mut saved = ui::AdminOptions {
+            max_chat_length: 40,
+            random_brick_color: true,
+            ..Default::default()
+        };
+        let s = host_settings(&saved, "Build", 12);
+        assert_eq!((s.max_chat_length, s.random_brick_color), (40, true));
+        assert_eq!((s.name.as_str(), s.max_players), ("Build", 12));
+        saved.max_chat_length = 5000;
+        assert_eq!(host_settings(&saved, "Build", 12).max_chat_length, d.max_chat_length);
     }
     #[test]
     fn rejected_password_and_wrong_reply_never_report_success() {

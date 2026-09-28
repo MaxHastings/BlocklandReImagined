@@ -75,6 +75,181 @@ pub struct AdminOptions {
     pub per_player: AdminQuotas,
     pub lan: AdminQuotas,
 }
+/// v20's `$Pref::Server::*` defaults, as `bri_admin::ServerSettings::default`.
+impl Default for AdminOptions {
+    fn default() -> Self {
+        Self {
+            name: "Blockland Server".into(),
+            port: 28000,
+            max_players: 8,
+            brick_limit: 256000,
+            bricks_per_second: 10,
+            max_chat_length: 120,
+            physics_vehicles: 10,
+            player_vehicles: 150,
+            random_brick_color: false,
+            chat_filter: true,
+            falling_damage: true,
+            public_domain_timeout_minutes: -1,
+            too_far_distance: 50.,
+            per_player: AdminQuotas {
+                schedules: 50,
+                misc: 100,
+                projectiles: 25,
+                items: 25,
+                environment: 100,
+                players: 10,
+                vehicles: 5,
+            },
+            lan: AdminQuotas {
+                schedules: 300,
+                misc: 300,
+                projectiles: 50,
+                items: 50,
+                environment: 500,
+                players: 64,
+                vehicles: 20,
+            },
+        }
+    }
+}
+/// The settings as v20's `$Pref::Server::` names (without the prefix) and
+/// values, in serverConfigGui's order. Checkboxes are `1` or `0`.
+pub fn option_pairs(o: &AdminOptions) -> Vec<(&'static str, String)> {
+    let mut p = vec![
+        ("Port", o.port.to_string()),
+        ("BrickLimit", o.brick_limit.to_string()),
+        ("MaxBricksPerSecond", o.bricks_per_second.to_string()),
+        ("MaxChatLen", o.max_chat_length.to_string()),
+        ("MaxPhysVehicles_Total", o.physics_vehicles.to_string()),
+        ("MaxPlayerVehicles_Total", o.player_vehicles.to_string()),
+        (
+            "RandomBrickColor",
+            u8::from(o.random_brick_color).to_string(),
+        ),
+        ("ETardFilter", u8::from(o.chat_filter).to_string()),
+        ("FallingDamage", u8::from(o.falling_damage).to_string()),
+        (
+            "BrickPublicDomainTimeout",
+            o.public_domain_timeout_minutes.to_string(),
+        ),
+        ("TooFarDistance", o.too_far_distance.to_string()),
+    ];
+    for (q, keys) in [
+        (
+            &o.per_player,
+            [
+                "Quota::Schedules",
+                "Quota::Misc",
+                "Quota::Projectile",
+                "Quota::Item",
+                "Quota::Environment",
+                "Quota::Player",
+                "Quota::Vehicle",
+            ],
+        ),
+        (
+            &o.lan,
+            [
+                "QuotaLAN::Schedules",
+                "QuotaLAN::Misc",
+                "QuotaLAN::Projectile",
+                "QuotaLAN::Item",
+                "QuotaLAN::Environment",
+                "QuotaLAN::Player",
+                "QuotaLAN::Vehicle",
+            ],
+        ),
+    ] {
+        for (k, n) in keys.into_iter().zip([
+            q.schedules,
+            q.misc,
+            q.projectiles,
+            q.items,
+            q.environment,
+            q.players,
+            q.vehicles,
+        ]) {
+            p.push((k, n.to_string()));
+        }
+    }
+    p
+}
+/// Set the setting named as in [`option_pairs`] from its text.
+pub fn set_option(o: &mut AdminOptions, key: &str, value: &str) -> Result<(), String> {
+    let value = value.trim();
+    let number = || value.parse::<u32>().map_err(|_| format!("Invalid {key}"));
+    let flag = || value.parse::<f64>().map_or(!value.is_empty(), |v| v != 0.0);
+    match key {
+        "Port" => {
+            o.port = u16::try_from(number()?)
+                .ok()
+                .filter(|p| *p >= 1024)
+                .ok_or("Port must be 1024–65535.")?
+        }
+        "BrickLimit" => o.brick_limit = number()?,
+        "MaxBricksPerSecond" => o.bricks_per_second = number()?,
+        "MaxChatLen" => o.max_chat_length = number()?,
+        "MaxPhysVehicles_Total" => o.physics_vehicles = number()?,
+        "MaxPlayerVehicles_Total" => o.player_vehicles = number()?,
+        "RandomBrickColor" => o.random_brick_color = flag(),
+        "ETardFilter" => o.chat_filter = flag(),
+        "FallingDamage" => o.falling_damage = flag(),
+        "BrickPublicDomainTimeout" => {
+            o.public_domain_timeout_minutes = value
+                .parse()
+                .ok()
+                .filter(|m| *m >= -1)
+                .ok_or("Invalid public-domain timeout")?
+        }
+        "TooFarDistance" => {
+            o.too_far_distance = value
+                .parse()
+                .ok()
+                .filter(|d: &f32| d.is_finite() && *d >= 0.)
+                .ok_or("Invalid distance")?
+        }
+        _ => {
+            let (q, field) = match key.split_once("::") {
+                Some(("Quota", field)) => (&mut o.per_player, field),
+                Some(("QuotaLAN", field)) => (&mut o.lan, field),
+                _ => return Err(format!("Unknown setting {key}")),
+            };
+            let n = number()?;
+            match field {
+                "Schedules" => q.schedules = n,
+                "Misc" => q.misc = n,
+                "Projectile" => q.projectiles = n,
+                "Item" => q.items = n,
+                "Environment" => q.environment = n,
+                "Player" => q.players = n,
+                "Vehicle" => q.vehicles = n,
+                _ => return Err(format!("Unknown setting {key}")),
+            }
+        }
+    }
+    Ok(())
+}
+/// The settings saved in `$Pref::Server::*`, over v20's defaults. A value
+/// that does not parse keeps its default.
+pub fn options_from_prefs(prefs: &crate::prefs::Prefs) -> AdminOptions {
+    let mut o = AdminOptions::default();
+    for (key, _) in option_pairs(&AdminOptions::default()) {
+        if let Some(value) = prefs.get(&format!("$Pref::Server::{key}")) {
+            let mut next = o.clone();
+            if set_option(&mut next, key, value).is_ok() {
+                o = next;
+            }
+        }
+    }
+    o
+}
+/// Save the settings as `$Pref::Server::*`, as v20's serverConfigGui did.
+pub fn options_to_prefs(o: &AdminOptions, prefs: &mut crate::prefs::Prefs) {
+    for (key, value) in option_pairs(o) {
+        prefs.set(&format!("$Pref::Server::{key}"), value);
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminQuotas {
     pub schedules: u32,
@@ -445,4 +620,29 @@ pub fn plain(s: &str) -> String {
         .filter(|c| !c.is_control() && !('\u{e000}'..='\u{e0ff}').contains(c))
         .take(512)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prefs::Prefs;
+
+    #[test]
+    fn server_prefs_round_trip_and_keep_defaults_for_bad_values() {
+        let mut prefs = Prefs::default();
+        assert_eq!(options_from_prefs(&prefs), AdminOptions::default());
+        let mut o = AdminOptions {
+            max_chat_length: 60,
+            random_brick_color: true,
+            ..Default::default()
+        };
+        o.lan.projectiles = 7;
+        options_to_prefs(&o, &mut prefs);
+        assert_eq!(prefs.get("$Pref::Server::QuotaLAN::Projectile"), Some("7"));
+        assert_eq!(options_from_prefs(&prefs), o);
+        prefs.set("$Pref::Server::Port", "80");
+        prefs.set("$Pref::Server::MaxChatLen", "lots");
+        let back = options_from_prefs(&prefs);
+        assert_eq!((back.port, back.max_chat_length), (28000, 120));
+    }
 }

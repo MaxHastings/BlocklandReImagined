@@ -74,6 +74,9 @@ pub enum ScreenId {
     AddOnMismatch,
     /// Start Game's game mode picker (native; v20 had none).
     GameModes,
+    /// Start Game's Advanced Config (`serverConfigGui` over the saved
+    /// `$Pref::Server::*`), before a game is hosted.
+    ServerConfig,
 }
 
 pub trait Screen {
@@ -169,6 +172,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::PackageDownload => return Box::new(addons::PackageDownload::new(core)),
         ScreenId::AddOnMismatch => return Box::new(addons::Mismatch::new(core)),
         ScreenId::GameModes => return Box::new(modes::GameModes::new(core)),
+        ScreenId::ServerConfig => return Box::new(admin::ServerConfig::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),
