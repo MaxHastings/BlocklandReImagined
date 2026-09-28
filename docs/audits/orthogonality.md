@@ -836,6 +836,7 @@ Each is one commit with a test that fails without it, except where noted.
 | 7 | `e2361ae` | Planting, painting and the wand share one build gate, alive first. |
 | 9 | `db5cadc` | Projectiles obey Ray Casting, not Colliding. |
 | 11 | `b02bbf2` | Prediction mirrors other living players' bodies, so you bump into them as on the host (parked vehicles not yet mirrored). |
+| 12 | `bb45d2a` | Hosting, joining and Change Map load the same brick definitions, and one list of plantable bricks includes Add-On bricks (a joiner still needs the Add-On installed). |
 | 15 | `c4a7162`, `8b582f4` | Tools check a brick may be destroyed before breaking it; each tick system contains its own failure and the tick always completes (no test for the containment). |
 | 16 | `d462a60` | Every in-world client visual runs on the game clock (no test: needs the full client). |
 | 17 | `084b31e` | One `submersion` query for players, splashes and vehicles. |
@@ -843,6 +844,7 @@ Each is one commit with a test that fails without it, except where noted.
 | 19 | `270850d` | Vehicle exits test the rider's own box at their feet. |
 | 20 | `98a91d7` | A captured pointer always drives the camera, chat open or not. |
 | 21 | `ea476fc`, `0e2075b` | A dialog's opening key closes it; lists read double-click as Submit; trust invites queue and Escape closes them. |
+| 22 | `ef5f3dd` | Player List refusals reach the shared notice; developer words left player text (the per-screen popup titles remain; no test). |
 | 23 | `003c3aa` | Mouse sensitivity, chat lines and zoom FOV each have one range, default and apply step. |
 | 24 | `dde532c` | One setter for the admin role; the UI reads the live admin snapshot. |
 | 28 | `b219093` | Brick FX (glow, pulse) are centred in world space for moved and instanced bricks. |
@@ -855,9 +857,9 @@ Each is one commit with a test that fails without it, except where noted.
 | 40 | `e3376fc` | Every targeting ray sees terrain, loaded tile or not (vehicle flips and own-vehicle exclusion unchanged). |
 | — | `5bc58e5` | Add-On commands can be typed in chat (`/sell coal`). |
 
-Left for other threads: 2 and 8 (the sandbox thread). Not started: 10, 12,
-13, 22, 25 (large or cross-cutting), 37 (small gain for a shader-uniform
-change).
+Left for other threads: 2 and 8 (the sandbox thread). Not started: 10, 13
+and 25 (large refactors, beyond the overnight rule), 37 (small gain for a
+shader-uniform change).
 
 ## Suggested order
 
