@@ -30,11 +30,6 @@ reason = "Needs a real UPnP router on the LAN."
 test = "world_checkpoint_wire_cost"
 reason = "Benchmark; needs BRI_BENCH_WORLD."
 
-[[failure]]
-test = "unlike_modes.rs::a_player_drives_a_package_kart"
-owner = "Mod platform stress campaign"
-reason = "Open rest of finding W14 (docs/stress-lab/weakness-ledger.md): what a player controls is the closed ControlObject enum, so a package entity cannot take a player's input. A player can be a kart (archetypes, E30); driving a second body cannot be expressed yet."
-
 # Test targets GitHub Actions skips because they load generated v20 content,
 # which the runner cannot have. The local gate still runs them. Prefer
 # #[ignore = "requires generated ... content"] on individual tests; list a

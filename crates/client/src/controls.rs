@@ -59,6 +59,9 @@ pub enum ObserverMode {
     /// `Corpse` orbit mode around a spied player, or around one's own body
     /// after death.
     Orbit(OwnerId),
+    /// Orbit a package entity the player drives (`ControlObject::Entity`):
+    /// the moves go to the entity, steered by this camera's yaw.
+    Drive(u64),
 }
 /// Zoom eases toward its target at this exponential rate (95% in 0.3 s),
 /// in place of the engine's timed `setFov` transition.
@@ -188,6 +191,7 @@ impl Controls {
             },
             ControlObject::Spy(target) => ObserverMode::Orbit(target),
             ControlObject::Corpse => ObserverMode::Orbit(owner),
+            ControlObject::Entity(entity) => ObserverMode::Drive(entity),
         };
         if let Some(observer) = &mut self.observer {
             observer.mode = mode;
@@ -218,17 +222,22 @@ impl Controls {
     pub fn free_camera(&self) -> Option<glam::Vec3> {
         match self.observer?.mode {
             ObserverMode::Free(position) => Some(position),
-            ObserverMode::Orbit(_) => None,
+            ObserverMode::Orbit(_) | ObserverMode::Drive(_) => None,
         }
     }
-    /// The orbited player's presented eye, which the orbit camera circles.
+    /// The orbited player's presented eye, or the driven entity's head,
+    /// which the orbit camera circles.
     pub fn orbit_focus(
         &self,
         presented: &BTreeMap<OwnerId, PlayerState>,
         archetypes: &bri_sim::archetype::Archetypes,
+        entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
     ) -> Option<glam::Vec3> {
         match self.observer?.mode {
             ObserverMode::Orbit(target) => presented.get(&target).map(|p| archetypes.eye(p)),
+            ObserverMode::Drive(entity) => entities
+                .get(&entity)
+                .map(|e| glam::Vec3::from(e.position) + glam::Vec3::Y * 1.5),
             ObserverMode::Free(_) => None,
         }
     }
@@ -269,13 +278,22 @@ impl Controls {
     /// The body's move: the held controls, unless a camera has control, when
     /// the body stands still with the aim it was left with.
     pub fn movement(&self) -> MoveInput {
-        if self.observer.is_some() {
-            return MoveInput {
-                yaw: self.yaw,
-                pitch: self.pitch,
-                ..Default::default()
-            };
-        }
+        let (yaw, pitch) = match self.observer {
+            // A driven entity takes the held controls, steered by the camera.
+            Some(Observer {
+                mode: ObserverMode::Drive(_),
+                yaw,
+                pitch,
+            }) => (yaw, pitch),
+            Some(_) => {
+                return MoveInput {
+                    yaw: self.yaw,
+                    pitch: self.pitch,
+                    ..Default::default()
+                };
+            }
+            None => (self.yaw, self.pitch),
+        };
         let walk = if self.held(HeldControl::Walk) {
             0.4
         } else {
@@ -284,8 +302,8 @@ impl Controls {
         MoveInput {
             forward: self.axis(HeldControl::Forward, HeldControl::Backward) * walk,
             right: self.axis(HeldControl::Right, HeldControl::Left) * walk,
-            yaw: self.yaw,
-            pitch: self.pitch,
+            yaw,
+            pitch,
             head_yaw: self.free_yaw,
             jump: self.held(HeldControl::Jump),
             crouch: self.held(HeldControl::Crouch),
@@ -514,13 +532,55 @@ mod tests {
             energy: 100.0,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
-        assert_eq!(c.orbit_focus(&presented, &Default::default()), None);
+        assert_eq!(
+            c.orbit_focus(&presented, &Default::default(), &Default::default()),
+            None
+        );
         c.follow(ControlObject::Spy(7), 1, None);
-        let first = c.orbit_focus(&presented, &Default::default()).unwrap();
+        let first = c
+            .orbit_focus(&presented, &Default::default(), &Default::default())
+            .unwrap();
         assert_eq!(first.x, 5.0);
         presented.insert(7, body(7, 12.0));
-        assert_eq!(c.orbit_focus(&presented, &Default::default()).unwrap().x, 12.0);
+        assert_eq!(
+            c.orbit_focus(&presented, &Default::default(), &Default::default())
+                .unwrap()
+                .x,
+            12.0
+        );
         assert!(first.y > 1.0, "orbits the eye, not the feet");
+    }
+    #[test]
+    fn driving_an_entity_sends_the_held_controls_steered_by_the_camera() {
+        let mut c = Controls::default();
+        c.follow(ControlObject::Entity(9), 1, None);
+        assert_eq!(c.observer().unwrap().mode, ObserverMode::Drive(9));
+        held(&mut c, HeldControl::Forward, true);
+        c.action(&GameAction::Look {
+            yaw: 0.6,
+            pitch: 0.0,
+        });
+        let input = c.movement();
+        assert_eq!(input.forward, 1.0);
+        assert_eq!(input.yaw, c.observer().unwrap().yaw);
+        let kart = bri_sim::session::EntityInfo {
+            id: 9,
+            kind: "kart:entity/kart".into(),
+            model: "kart:model/kart".into(),
+            position: [3.0, 0.0, 4.0],
+            yaw: 0.0,
+            label: String::new(),
+        };
+        let focus = c
+            .orbit_focus(
+                &BTreeMap::new(),
+                &Default::default(),
+                &BTreeMap::from([(9, kart)]),
+            )
+            .unwrap();
+        assert_eq!((focus.x, focus.z), (3.0, 4.0));
+        c.follow(ControlObject::Player, 1, None);
+        assert_eq!(c.observer(), None);
     }
     #[test]
     fn death_orbits_the_corpse_without_turning_it() {
@@ -575,5 +635,4 @@ mod tests {
         assert_eq!(steer(false, false), -steer(false, true));
         assert_eq!(steer(true, false), steer(false, false));
     }
-
 }

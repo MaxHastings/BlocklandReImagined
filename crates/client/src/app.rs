@@ -3014,6 +3014,7 @@ fn name_tags(
 fn camera_eye(
     controls: &Controls,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
     building: &crate::building::Building,
     own_eye: Vec3,
     forward: Vec3,
@@ -3023,9 +3024,9 @@ fn camera_eye(
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position)) => Ok(position),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        Some(ObserverMode::Orbit(_)) => building.camera_position(
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building.camera_position(
             controls
-                .orbit_focus(presented, building.archetypes())
+                .orbit_focus(presented, building.archetypes(), entities)
                 .unwrap_or(own_eye),
             forward,
             8.0,
@@ -3302,8 +3303,13 @@ impl PlatformApp for App {
                 a.worker.movement(newest, inputs)?;
             }
             if let Some(view) = &a.view {
-                let mounted = view.vitals.get(&view.owner).and_then(|v| v.mounted);
-                self.motion.set_mounted(mounted.is_some());
+                let vitals = view.vitals.get(&view.owner);
+                let mounted = vitals.and_then(|v| v.mounted);
+                // Driving a package entity parks the avatar like a seat does.
+                let driving = vitals.is_some_and(|v| {
+                    matches!(v.control, bri_sim::session::ControlObject::Entity(_))
+                });
+                self.motion.set_mounted(mounted.is_some() || driving);
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
@@ -3698,10 +3704,14 @@ impl PlatformApp for App {
             let eye = camera_eye(
                 &self.controls,
                 presented,
+                &view.entities,
                 building,
                 chase.map_or(eye, |(_, pivot, _)| pivot),
                 forward,
-                third_person.then(|| chase.map_or(8.0, |(distance, ..)| distance)),
+                third_person.then(|| {
+                    let distance = view.archetypes.resolve(local.archetype).look.camera_distance;
+                    chase.map_or(distance, |(distance, ..)| distance)
+                }),
             )?;
             listener = bri_audio::Listener {
                 position: eye.to_array(),
@@ -4530,7 +4540,22 @@ impl PlatformApp for App {
         let third_person = self.controls.third_person
             || self.controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
-        let hidden = self.combat.hidden_bodies(&view.vitals);
+        let mut hidden = self.combat.hidden_bodies(&view.vitals);
+        // Players whose archetype looks like a package model draw as it, in
+        // place of the Blockhead (not the local player in first person).
+        let package_catalog = packages_for(&self.package_catalog, view);
+        let mut package_placements: Vec<_> =
+            crate::packages::entity_placements(&view.entities).collect();
+        if let Some(catalog) = package_catalog {
+            for (owner, placement) in
+                crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
+            {
+                hidden.insert(owner);
+                if owner != view.owner || third_person {
+                    package_placements.push(placement);
+                }
+            }
+        }
         let renderer = self
             .renderer
             .as_mut()
@@ -4654,8 +4679,8 @@ impl PlatformApp for App {
                 &view.world.palette,
             )?;
             self.package_models.upload(
-                packages_for(&self.package_catalog, view),
-                &view.entities,
+                package_catalog,
+                package_placements,
                 renderer,
                 frame.device,
                 frame.queue,
@@ -4766,12 +4791,16 @@ impl PlatformApp for App {
         let eye = camera_eye(
             &self.controls,
             self.motion.presented(),
+            &view.entities,
             self.building
                 .as_ref()
                 .context("Camera collision mirror missing")?,
             chase.map_or(eye, |(_, pivot, _)| pivot),
             forward,
-            third_person.then(|| chase.map_or(8.0, |(distance, ..)| distance)),
+            third_person.then(|| {
+                let distance = view.archetypes.resolve(local.archetype).look.camera_distance;
+                chase.map_or(distance, |(distance, ..)| distance)
+            }),
         )?;
         // `cameraTilt` turns the chase view down without moving the camera.
         let (pitch, forward) = match chase {

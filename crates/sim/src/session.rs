@@ -1446,6 +1446,8 @@ impl Session {
         let mut glass_hits = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
+        // Moves of players driving a package entity, for `step_packages`.
+        let mut entity_moves = Vec::new();
         let liquids = self.simulation.liquids();
         for (&owner, peer) in self.peers.iter_mut() {
             if self.vehicles.is_mounted(owner) {
@@ -1483,6 +1485,9 @@ impl Session {
                 let input = if let Some((sequence, input)) = peer.inputs.pop_front() {
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
+                    if let ControlObject::Entity(entity) = peer.control {
+                        entity_moves.push((entity, input));
+                    }
                     // Corpses fall and camera operators stand, ignoring controls.
                     let previous = peer.input;
                     peer.input = peer.body_input(input);
@@ -1556,6 +1561,7 @@ impl Session {
         for (owner, input) in driving {
             self.vehicle_input(owner, input)?;
         }
+        self.drive_package_entities(entity_moves);
         self.step_packages()?;
         self.vehicle_pre_step()?;
         self.simulation.step()?;

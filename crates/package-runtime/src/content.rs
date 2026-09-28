@@ -362,6 +362,11 @@ pub struct EntityKind {
     pub health: f32,
     /// Most live entities of this kind.
     pub max_alive: u32,
+    /// The body's archetype (a package `archetype` id or v20's
+    /// `v20.player.<datablock>`): how it moves and steers, whether a think
+    /// or a player (`control`) drives it. Absent: a Blockhead's movement.
+    #[serde(default)]
+    pub archetype: Option<String>,
 }
 fn one() -> f32 {
     1.0
@@ -394,6 +399,10 @@ impl EntityKind {
         ensure!(
             (1..=256).contains(&self.max_alive),
             "max_alive must be 1 to 256"
+        );
+        ensure!(
+            self.archetype.as_ref().is_none_or(|a| text(a, 160)),
+            "archetype must name an archetype"
         );
         Ok(())
     }

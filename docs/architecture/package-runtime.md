@@ -54,8 +54,11 @@ Hooks: `on_join(player)` and `on_tick()` every `tick_interval` ticks.
 Scripts never touch the game. A call receives a read-only snapshot (tick,
 seed, players, entities, the caller's aim) and a working copy of its own
 state; it returns a list of typed operations (`bri_package_runtime::Op`):
-`remove_brick`, `explode`, `damage`, `spawn_entity`, `remove_entity`,
-`steer`, `label`, `tell`, `broadcast`.
+`remove_brick`, `place_brick`, `explode`, `damage`, `teleport`, `respawn`,
+`set_archetype`, `control`, `spawn_entity`, `remove_entity`, `steer`,
+`label`, `tell`, `broadcast`. `control(player, entity)` hands a player's
+movement to one of the package's own entities, `release(player)` hands it
+back (capability `player`; see `docs/player-simulation.md`).
 
 Every operation passes **`ops::authorize`**, the single capability gate:
 bounds first (`op.bounds`), then the capability the manifest declares

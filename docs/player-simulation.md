@@ -89,9 +89,19 @@ checked by the motor). `PlayerState.archetype` is an index into that table.
   by name, because clients predict them and receive no code: `strafe` (v20:
   face the look direction, strafe sideways) and `turn` (a vehicle: left and
   right turn the body at `turn_rate`, no sideways movement).
+- **Driving another body.** A package hands a player one of its entities
+  with `control(player, entity)` (capability `player`) and takes it back
+  with `release(player)`. The player's `ControlObject` becomes
+  `Entity(id)`: their moves drive the entity's body, which moves by its
+  kind's `archetype`, while the avatar stands where it was. Only the
+  package that owns the entity may hand it over, one player drives it at a
+  time, and death, leaving or the entity's removal hand the player back.
+  The client orbits the entity with its camera and records its inputs
+  without predicting the avatar, as when seated; the entity itself moves at
+  the server's entity rate, not predicted. Predicting a package-authored
+  controller would need client code: the sandboxed tier-2 case.
 - **Not yet.** The client draws v20's Blockhead and horse; package box
-  models on player bodies, and a player driving a second body while the
-  avatar stays behind (`ControlObject`), are not built.
+  models on player bodies are not built.
 
 ## Session authority
 

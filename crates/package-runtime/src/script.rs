@@ -447,6 +447,18 @@ fn register_api(engine: &mut Engine) {
             archetype: archetype.into(),
         })
     });
+    engine.register_fn("control", |player: Dynamic, entity: Dynamic| {
+        push(Op::Control {
+            player: id(&player)?,
+            entity: Some(id(&entity)?),
+        })
+    });
+    engine.register_fn("release", |player: Dynamic| {
+        push(Op::Control {
+            player: id(&player)?,
+            entity: None,
+        })
+    });
     engine.register_fn(
         "spawn_entity",
         |kind: &str, x: Dynamic, y: Dynamic, z: Dynamic| {

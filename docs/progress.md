@@ -1993,6 +1993,14 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   purse, so she had not caught up). `stresslab test`: strata.rhai generates
   25 chunks (10,934 voxels) with 0 diagnostics inside the 400k Generate
   budget.
+- E27 passes, closing the rest of W14: a package hands a player one of its
+  entities (`control(player, entity)`, `release(player)`, capability
+  `player`, `ControlObject::Entity`), which moves by its kind's
+  `archetype` (a kart turns) while the avatar stays behind. The client
+  orbits the entity and parks its avatar prediction as when seated; it
+  does not predict the entity. Removed its `tools/gate-known-failures.toml`
+  entry. Package-authored controllers are recorded as the tier-2 sandbox
+  case (HANDOFF, ledger W14).
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.

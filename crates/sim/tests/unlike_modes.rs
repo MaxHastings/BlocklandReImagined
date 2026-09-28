@@ -879,7 +879,8 @@ const MOON_BEHAVIOUR: &str = r#"{
 }"#;
 
 /// A standard player under a sixth of normal gravity.
-const MOON_ARCHETYPE: &str = r#"{ "schema_version": 1, "name": "Moonwalker", "movement": { "gravity": 3.4 } }"#;
+const MOON_ARCHETYPE: &str =
+    r#"{ "schema_version": 1, "name": "Moonwalker", "movement": { "gravity": 3.4 } }"#;
 
 /// Every player on this server is a moonwalker.
 const MOON_SCRIPT: &str = r#"
@@ -1316,41 +1317,51 @@ fn a_king_of_the_hill_mode_keeps_its_leaderboard_across_restarts() {
 const KART_BEHAVIOUR: &str = r#"{
   "schema_version": 1,
   "script": "kart.rhai",
-  "commands": [{ "name": "board" }]
+  "commands": [{ "name": "board" }, { "name": "leave" }]
 }"#;
 
 const KART_SCRIPT: &str = r#"
 fn cmd_board(player) {
     let p = player(player);
-    spawn_entity("kart:entity/kart", p.x + 2.0, p.y, p.z, #{ driver: player });
-    control(player, "kart:entity/kart");
+    spawn_entity("kart:entity/kart", p.x + 3.0, p.y, p.z, #{ driver: player, boarded: false });
 }
-fn think(kart) { }
+fn cmd_leave(player) {
+    release(player);
+}
+fn think(kart) {
+    let driver = entity_get(kart.id, "driver");
+    if driver != () && !entity_get(kart.id, "boarded") {
+        entity_set(kart.id, "boarded", true);
+        control(driver, kart.id);
+    }
+}
 "#;
 
 const KART_ENTITY: &str = r#"{ "schema_version": 1, "name": "Kart", "model": "kart-look:model/kart",
-  "think": "think", "think_interval": 10, "speed": 1.0, "scale": 1.0, "health": 50.0, "max_alive": 8 }"#;
+  "think": "think", "think_interval": 10, "speed": 1.0, "scale": 1.0, "health": 50.0, "max_alive": 8,
+  "archetype": "kart:archetype/kart" }"#;
 
 /// E27 (player and control; category 9). A player drives something that is
-/// not their avatar: a package's kart takes the player's movement input.
-/// What a player controls is the closed `ControlObject` enum (player,
-/// camera, spy, corpse) and movement input reaches only those, so this is
-/// the open class W14 again. A player can now *be* a kart (E30: an
-/// archetype with turn steering); what stays closed is driving a second
-/// body while the avatar stays behind.
+/// not their avatar: a package's kart takes the player's movement input
+/// while the avatar stays behind. What a player controls was the closed
+/// `ControlObject` enum (player, camera, spy, corpse), so this was the open
+/// rest of W14. Now a package hands a player one of its own entities
+/// (`control(player, entity)`, back with `release(player)`); the entity's
+/// archetype says how it moves (the kart turns rather than strafes).
 #[test]
-#[ignore = "finding W14 (rest): what a player controls is a closed engine enum; a package entity cannot take a player's input"]
 fn a_player_drives_a_package_kart() {
     let behaviour_manifest = manifest(
         "kart",
-        &["entity"],
+        &["entity", "player"],
         &[
             ("behaviour", "kart", "behaviour.json"),
             ("script", "kart", "kart.rhai"),
             ("entity", "kart", "kart.json"),
+            ("archetype", "kart", "archetype.json"),
         ],
     );
     let look_manifest = manifest("kart-look", &[], &[("model", "kart", "kart.json")]);
+    let archetype = KART_ARCHETYPE.replace("bodies-look:model/kart", "kart-look:model/kart");
     let mut s = mode(
         "kart",
         &[
@@ -1362,6 +1373,7 @@ fn a_player_drives_a_package_kart() {
                     ("behaviour.json", KART_BEHAVIOUR),
                     ("kart.rhai", KART_SCRIPT),
                     ("kart.json", KART_ENTITY),
+                    ("archetype.json", &archetype),
                 ],
             },
             Package {
@@ -1377,23 +1389,78 @@ fn a_player_drives_a_package_kart() {
     steps(&mut s, 5);
     s.command(p, 1, command("kart", "board", vec![]))
         .unwrap_or_else(|e| panic!("{e:#}"));
-    let start = s.package_entities()[0].position;
-    for sequence in 0..120 {
-        s.movement(
-            p,
-            sequence + 1,
-            MoveInput {
-                forward: 1.0,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        s.step().unwrap();
-    }
-    let end = s.package_entities()[0].position;
+    steps(&mut s, 12);
+    let kart = s.package_entities()[0].id;
+    assert_eq!(
+        s.control(p),
+        Some(bri_sim::session::ControlObject::Entity(kart))
+    );
+    let avatar = s.snapshot().players[0].feet;
+    let start = s.package_entities()[0].clone();
+    let mut sequence = 0;
+    let mut drive = |s: &mut Session, input: MoveInput, ticks: u32| {
+        for _ in 0..ticks {
+            sequence += 1;
+            s.movement(p, sequence, input).unwrap();
+            s.step().unwrap();
+        }
+    };
+    drive(
+        &mut s,
+        MoveInput {
+            forward: 1.0,
+            ..Default::default()
+        },
+        120,
+    );
+    let ahead = s.package_entities()[0].clone();
     assert!(
-        Vec3::from(end).distance(Vec3::from(start)) > 5.0,
+        Vec3::from(ahead.position).distance(Vec3::from(start.position)) > 5.0,
         "the kart moved under the player's input"
+    );
+    assert!(
+        Vec3::from(s.snapshot().players[0].feet).distance(Vec3::from(avatar)) < 0.5,
+        "the avatar stayed behind"
+    );
+    // Right turns a kart (its archetype steers like a vehicle).
+    drive(
+        &mut s,
+        MoveInput {
+            forward: 1.0,
+            right: 1.0,
+            ..Default::default()
+        },
+        60,
+    );
+    let turned = s.package_entities()[0].clone();
+    assert!(
+        (turned.yaw - ahead.yaw).abs() > 0.5,
+        "the kart turned: {} to {}",
+        ahead.yaw,
+        turned.yaw
+    );
+    // Released, the player walks again and the kart stops taking input.
+    s.command(p, 2, command("kart", "leave", vec![]))
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(s.control(p), Some(bri_sim::session::ControlObject::Player));
+    // Let it coast to a stop.
+    steps(&mut s, 240);
+    let parked = s.package_entities()[0].position;
+    drive(
+        &mut s,
+        MoveInput {
+            forward: 1.0,
+            ..Default::default()
+        },
+        60,
+    );
+    assert!(
+        Vec3::from(s.package_entities()[0].position).distance(Vec3::from(parked)) < 0.5,
+        "a released kart takes no input"
+    );
+    assert!(
+        Vec3::from(s.snapshot().players[0].feet).distance(Vec3::from(avatar)) > 2.0,
+        "the avatar walks again"
     );
 }
 
@@ -1479,7 +1546,10 @@ fn a_zombie_wave_chases_and_bites_players() {
         !alive(&s, survivor),
         "the horde reached and killed the survivor: bitten {:?}, zombies {:?}, {:#?}",
         value(&s, "zombies", survivor, "bitten"),
-        s.package_entities().iter().map(|e| e.position).collect::<Vec<_>>(),
+        s.package_entities()
+            .iter()
+            .map(|e| e.position)
+            .collect::<Vec<_>>(),
         s.package_diagnostics()
     );
     assert!(
@@ -1557,7 +1627,10 @@ fn bodies() -> [String; 2] {
         manifest(
             "bodies-look",
             &[],
-            &[("model", "ball", "ball.json"), ("model", "kart", "kart.json")],
+            &[
+                ("model", "ball", "ball.json"),
+                ("model", "kart", "kart.json"),
+            ],
         ),
     ]
 }
@@ -1656,7 +1729,10 @@ fn players_can_be_bodies_beyond_the_blockhead() {
         "{:#?}",
         s.package_diagnostics()
     );
-    assert_eq!(archetype_of(&s, players[0]).id, "v20.player.playerstandardarmor");
+    assert_eq!(
+        archetype_of(&s, players[0]).id,
+        "v20.player.playerstandardarmor"
+    );
     assert_eq!(archetype_of(&s, players[1]).id, "v20.player.horsearmor");
     let ball = archetype_of(&s, players[2]);
     assert_eq!(ball.movement.body, bri_sim::player::Body::Ball);

@@ -63,6 +63,13 @@ pub enum Op {
         player: u64,
         archetype: String,
     },
+    /// Hand a player's movement input to one of the package's entities
+    /// (`entity`), or back to the player's own body (`None`). The avatar
+    /// stands where it was while the entity is driven.
+    Control {
+        player: u64,
+        entity: Option<u64>,
+    },
     /// `vars` are the entity's first package-local variables, so what a
     /// package creates is addressable from its first think (an owner, a
     /// team, a home).
@@ -103,7 +110,10 @@ impl Op {
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } => "chat",
-            Self::Teleport { .. } | Self::Respawn { .. } | Self::SetArchetype { .. } => "player",
+            Self::Teleport { .. }
+            | Self::Respawn { .. }
+            | Self::SetArchetype { .. }
+            | Self::Control { .. } => "player",
         }
     }
     /// Shape limits, independent of who asks.
@@ -112,7 +122,10 @@ impl Op {
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let ok = match self {
-            Self::RemoveBrick { .. } | Self::RemoveEntity { .. } | Self::Respawn { .. } => true,
+            Self::RemoveBrick { .. }
+            | Self::RemoveEntity { .. }
+            | Self::Respawn { .. }
+            | Self::Control { .. } => true,
             Self::Teleport { position, .. } => finite(position),
             Self::SetArchetype { archetype, .. } => {
                 archetype.len() <= 160 && !archetype.chars().any(char::is_control)
@@ -204,6 +217,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Teleport { .. } => "teleport",
         Op::Respawn { .. } => "respawn",
         Op::SetArchetype { .. } => "set_archetype",
+        Op::Control { .. } => "control",
         Op::Broadcast { .. } => "broadcast",
     }
 }

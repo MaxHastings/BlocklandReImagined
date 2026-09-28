@@ -83,8 +83,9 @@ impl Motion {
     pub fn predicting(&self) -> bool {
         self.predictor.is_some()
     }
-    /// Seated players do not walk: inputs are recorded and sent, and the
-    /// authoritative seat pose is shown instead of a prediction.
+    /// Seated players, and players driving a package entity, do not walk:
+    /// inputs are recorded and sent, and the authoritative pose is shown
+    /// instead of a prediction.
     pub fn set_mounted(&mut self, mounted: bool) {
         self.mounted = mounted;
     }

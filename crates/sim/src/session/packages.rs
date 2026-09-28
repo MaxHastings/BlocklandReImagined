@@ -220,6 +220,9 @@ struct Entity {
     interval: u64,
     speed: f32,
     next_think: u64,
+    /// The latest move of the player driving this entity (`control`), in
+    /// place of its think's steering until released.
+    drive: Option<MoveInput>,
 }
 
 struct Voxel {
@@ -1111,6 +1114,43 @@ impl Session {
                     .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
                 self.apply_minigame_effects(effects)
             }
+            Op::Control { player, entity } => {
+                let peer = self.peers.get(&player).context("No such player")?;
+                let Some(entity) = entity else {
+                    if matches!(peer.control, ControlObject::Entity(_)) {
+                        self.return_to_body(player)?;
+                    }
+                    return Ok(());
+                };
+                ensure!(peer.combat.alive, "Only living players can drive");
+                ensure!(
+                    !self.vehicles.is_mounted(player),
+                    "A seated player cannot drive an entity"
+                );
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                let e = host
+                    .entities
+                    .get_mut(&entity)
+                    .with_context(|| format!("No entity {entity}"))?;
+                ensure!(
+                    e.package == package,
+                    "Packages hand players only their own entities"
+                );
+                ensure!(
+                    !self
+                        .peers
+                        .iter()
+                        .any(|(o, p)| *o != player && p.control == ControlObject::Entity(entity)),
+                    "Another player drives that entity"
+                );
+                e.drive = Some(MoveInput {
+                    yaw: e.body.state().yaw,
+                    ..Default::default()
+                });
+                self.peers.get_mut(&player).expect("checked").control =
+                    ControlObject::Entity(entity);
+                Ok(())
+            }
             Op::SpawnEntity {
                 kind,
                 position,
@@ -1434,7 +1474,16 @@ impl Session {
         );
         let id = host.next_entity;
         let (package, def) = (package.id().to_string(), def.clone());
-        let tuning = PlayerTuning::default().scaled(def.scale);
+        let tuning = match &def.archetype {
+            Some(archetype) => {
+                let archetype = self
+                    .archetypes
+                    .find(archetype)
+                    .with_context(|| format!("{}: no archetype {archetype}", def.name))?;
+                self.archetypes.tuning(archetype, def.scale)
+            }
+            None => PlayerTuning::default().scaled(def.scale),
+        };
         let mut body = None;
         // Lift the spawn out of the ground: packages rarely know its height.
         for lift in 0..32 {
@@ -1469,6 +1518,7 @@ impl Session {
                 interval: u64::from(def.think_interval),
                 speed: def.speed.min(1.0),
                 next_think: tick,
+                drive: None,
             },
         );
         Ok(id)
@@ -1476,6 +1526,47 @@ impl Session {
     fn remove_package_entity(&mut self, id: u64) {
         if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.remove(&id)) {
             e.body.despawn(&mut self.simulation.physics);
+        }
+        self.release_entity(id);
+    }
+    /// Players driving a gone entity return to their own bodies.
+    fn release_entity(&mut self, id: u64) {
+        let drivers: Vec<OwnerId> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.control == ControlObject::Entity(id))
+            .map(|(owner, _)| *owner)
+            .collect();
+        for owner in drivers {
+            let _ = self.return_to_body(owner);
+        }
+    }
+    /// This tick's moves of players driving package entities. An entity no
+    /// player drives any more (its driver died, left or was handed back
+    /// their body) returns to its think's steering.
+    pub(super) fn drive_package_entities(&mut self, moves: Vec<(u64, MoveInput)>) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let driven: BTreeSet<u64> = self
+            .peers
+            .values()
+            .filter_map(|p| match p.control {
+                ControlObject::Entity(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        for (id, e) in host.entities.iter_mut() {
+            if !driven.contains(id) {
+                e.drive = None;
+            }
+        }
+        for (id, input) in moves {
+            if let Some(e) = host.entities.get_mut(&id)
+                && driven.contains(&id)
+            {
+                e.drive = Some(input);
+            }
         }
     }
 
@@ -1707,6 +1798,15 @@ impl Session {
         let mut fallen = Vec::new();
         if let Some(host) = self.packages.as_mut() {
             for (id, e) in host.entities.iter_mut() {
+                if let Some(input) = e.drive {
+                    let _ = e
+                        .body
+                        .step_in_water(&mut self.simulation.physics, input, &liquids);
+                    if e.body.state().feet[1] < KILL_Y {
+                        fallen.push(*id);
+                    }
+                    continue;
+                }
                 let (direction, jump) = e.steer;
                 let flat = Vec3::new(direction.x, 0.0, direction.z);
                 let moving = flat.length_squared() > 1e-6;
