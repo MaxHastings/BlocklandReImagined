@@ -2,6 +2,10 @@
 //! one place they are checked against a package's declared capabilities.
 use bri_package::diag::Diagnostic;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Variables an entity may be given when it is spawned.
+pub const MAX_SPAWN_VARS: usize = 16;
 
 /// Every capability a manifest may declare.
 pub const CAPABILITIES: &[&str] = &[
@@ -45,9 +49,13 @@ pub enum Op {
     Respawn {
         player: u64,
     },
+    /// `vars` are the entity's first package-local variables, so what a
+    /// package creates is addressable from its first think (an owner, a
+    /// team, a home).
     SpawnEntity {
         kind: String,
         position: [f32; 3],
+        vars: BTreeMap<String, serde_json::Value>,
     },
     RemoveEntity {
         entity: u64,
@@ -106,7 +114,16 @@ impl Op {
             Self::DamagePlayer { amount, .. } => {
                 amount.is_finite() && (0.0..=1000.0).contains(amount)
             }
-            Self::SpawnEntity { kind, position } => kind.len() <= 128 && finite(position),
+            Self::SpawnEntity {
+                kind,
+                position,
+                vars,
+            } => {
+                kind.len() <= 128
+                    && finite(position)
+                    && vars.len() <= MAX_SPAWN_VARS
+                    && vars.values().all(|v| crate::state::check_value(v).is_ok())
+            }
             Self::Steer { direction, .. } => finite(direction),
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),

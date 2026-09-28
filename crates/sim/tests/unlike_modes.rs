@@ -542,3 +542,156 @@ fn a_turn_based_board_game_runs_on_state_and_commands_alone() {
     assert_eq!(global["board"], serde_json::json!("xxxoo----"));
     assert_eq!(global["winner"], serde_json::json!("x"));
 }
+
+const RTS_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "rts.rhai",
+  "commands": [
+    { "name": "train", "cooldown_ticks": 2 },
+    { "name": "order", "aim_reach": 64.0 }
+  ],
+  "state": {
+    "player": {
+      "units": { "default": 0, "public": true },
+      "tx": { "default": 0.0 },
+      "tz": { "default": 0.0 }
+    }
+  }
+}"#;
+
+const RTS_UNIT: &str = r#"{
+  "schema_version": 1,
+  "name": "Worker",
+  "model": "rts-look:model/worker",
+  "think": "think",
+  "think_interval": 2,
+  "speed": 1.0,
+  "scale": 0.6,
+  "health": 10.0,
+  "max_alive": 16
+}"#;
+
+const RTS_MODEL: &str = r#"{
+  "schema_version": 1,
+  "boxes": [{ "center": [0.0, 0.5, 0.0], "size": [0.6, 1.0, 0.6], "color": [0.2, 0.5, 0.9, 1.0] }]
+}"#;
+
+/// Units belong to the player who trained them and walk where that player
+/// points; the player's own body is only a cursor.
+const RTS_SCRIPT: &str = r#"
+fn cmd_train(player) {
+    let p = player(player);
+    spawn_entity("rts:entity/worker", p.x + 2.0, p.y, p.z, #{ owner: player });
+    add_player(player, "units", 1);
+}
+
+fn cmd_order(player) {
+    let hit = aim();
+    if hit == () { tell(player, "Point at the ground."); return; }
+    set_player(player, "tx", hit.x);
+    set_player(player, "tz", hit.z);
+}
+
+fn think(unit) {
+    let me = me();
+    let owner = entity_get(me.id, "owner");
+    if owner == () || player(owner) == () { return; }
+    let dx = get_player(owner, "tx") - me.x;
+    let dz = get_player(owner, "tz") - me.z;
+    if dx * dx + dz * dz < 1.0 {
+        steer(me.id, 0.0, 0.0, false);
+    } else {
+        steer(me.id, dx, dz, false);
+    }
+}
+"#;
+
+/// E19 (categories 9, 1). A strategy mode: a player trains units that are
+/// theirs, points at the ground and their units walk there. Units must know
+/// who they belong to from the moment they exist.
+#[test]
+fn a_strategy_mode_commands_owned_units_by_pointing() {
+    let mut s = mode(
+        "rts",
+        &[
+            Package {
+                id: "rts",
+                side: Side::Server,
+                files: &[
+                    (
+                        "package.json",
+                        &manifest(
+                            "rts",
+                            &["entity", "chat"],
+                            &[
+                                ("behaviour", "rts", "behaviour.json"),
+                                ("script", "rts", "rts.rhai"),
+                                ("entity", "worker", "worker.json"),
+                            ],
+                        ),
+                    ),
+                    ("behaviour.json", RTS_BEHAVIOUR),
+                    ("rts.rhai", RTS_SCRIPT),
+                    ("worker.json", RTS_UNIT),
+                ],
+            },
+            Package {
+                id: "rts-look",
+                side: Side::Client,
+                files: &[
+                    (
+                        "package.json",
+                        &manifest("rts-look", &[], &[("model", "worker", "worker.json")]),
+                    ),
+                    ("worker.json", RTS_MODEL),
+                ],
+            },
+        ],
+    );
+    let a = s
+        .join("A".into(), Vec3::new(-20.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = s
+        .join("B".into(), Vec3::new(20.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 10);
+    let mut seq = [0_u64; 2];
+    for (who, i) in [(a, 0), (a, 0), (b, 1)] {
+        seq[i] += 1;
+        s.command(who, seq[i], command("rts", "train", vec![]))
+            .unwrap();
+        steps(&mut s, 3);
+    }
+    assert_eq!(
+        s.package_entities().len(),
+        3,
+        "{:#?}",
+        s.package_diagnostics()
+    );
+    // A points at the ground 10 units ahead of themselves.
+    seq[0] += 1;
+    s.command_with_aim(
+        a,
+        seq[0],
+        command("rts", "order", vec![]),
+        Some(bri_sim::session::ActionAim {
+            yaw: std::f32::consts::FRAC_PI_2,
+            pitch: -0.4,
+        }),
+    )
+    .unwrap();
+    let target = Vec3::new(
+        value(&s, "rts", a, "tx").as_f64().unwrap() as f32,
+        0.0,
+        value(&s, "rts", a, "tz").as_f64().unwrap() as f32,
+    );
+    assert!(target.x > -18.0, "the order points ahead of A: {target}");
+    steps(&mut s, 600);
+    let units = s.package_entities();
+    let near = |p: [f32; 3]| Vec3::new(p[0], 0.0, p[2]).distance(target) < 2.5;
+    assert_eq!(
+        units.iter().filter(|u| near(u.position)).count(),
+        2,
+        "A's two units went to the target, B's stayed: {units:#?}"
+    );
+}

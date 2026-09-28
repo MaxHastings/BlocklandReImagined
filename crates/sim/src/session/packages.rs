@@ -176,6 +176,17 @@ impl PackageSave {
                 .is_none_or(|w| w.removed.len() <= MAX_BRICKS * 4),
             "Oversized world edits"
         );
+        // Saved values meet the same limits as values a script can commit.
+        for ns in save.store.namespaces.values() {
+            for value in ns
+                .global
+                .values()
+                .chain(ns.players.values().flat_map(|m| m.values()))
+            {
+                bri_package_runtime::state::check_value(value)
+                    .map_err(|e| anyhow::anyhow!("Package save is damaged: {e}"))?;
+            }
+        }
         Ok(save)
     }
 }
@@ -235,7 +246,9 @@ pub(super) struct PackageHost {
     world: Option<GeneratedWorld>,
     entities: BTreeMap<u64, Entity>,
     next_entity: u64,
-    cooldowns: BTreeMap<(OwnerId, String, String), u64>,
+    /// Keyed by the durable player, so reconnecting does not reset a
+    /// cooldown (stress campaign W3).
+    cooldowns: BTreeMap<(PlayerKey, String, String), u64>,
     diagnostics: VecDeque<Diagnostic>,
     output: VecDeque<String>,
     /// Deaths since the last tick, for `on_death` hooks: victim, killer.
@@ -245,6 +258,8 @@ pub(super) struct PackageHost {
 /// Deaths held for `on_death` between ticks; more in one tick are dropped
 /// with a diagnostic rather than growing without bound.
 const MAX_PENDING_DEATHS: usize = 1024;
+/// Cooldown entries kept before expired ones are swept.
+const MAX_COOLDOWNS: usize = 4096;
 
 fn note(host: &mut PackageHost, diagnostic: Diagnostic) {
     if host.diagnostics.len() == MAX_DIAGNOSTICS {
@@ -619,6 +634,7 @@ impl Session {
             return Err(Diagnostic::error("package.none", "No packages are enabled"));
         };
         let state = host.store.namespace(package).cloned().unwrap_or_default();
+        let input = state.clone();
         let entity_vars = host
             .entities
             .iter()
@@ -649,7 +665,9 @@ impl Session {
             }
             host.output.push_back(format!("{package}: {line}"));
         }
-        // State may only use declared keys.
+        // A call may only write declared keys. Keys it left as they were (a
+        // save from an older version of the package, say) are kept, not
+        // blamed on this call.
         let schema = host
             .catalog
             .packages
@@ -660,15 +678,19 @@ impl Session {
         let undeclared = outcome
             .state
             .global
-            .keys()
-            .find(|k| !schema.global.contains_key(*k))
+            .iter()
+            .find(|(k, v)| !schema.global.contains_key(*k) && input.global.get(*k) != Some(v))
+            .map(|(k, _)| k)
             .or_else(|| {
-                outcome
-                    .state
-                    .players
-                    .values()
-                    .flat_map(|m| m.keys())
-                    .find(|k| !schema.player.contains_key(*k))
+                outcome.state.players.iter().find_map(|(player, m)| {
+                    let before = input.players.get(player);
+                    m.iter()
+                        .find(|(k, v)| {
+                            !schema.player.contains_key(*k)
+                                && before.and_then(|b| b.get(*k)) != Some(v)
+                        })
+                        .map(|(k, _)| k)
+                })
             });
         if let Some(key) = undeclared {
             let d = Diagnostic::error(
@@ -722,7 +744,7 @@ impl Session {
             }
         }
         for op in outcome.ops {
-            if let Err(error) = self.apply_package_op(package, op) {
+            if let Err(error) = self.apply_package_op(package, op, caller) {
                 let host = self.packages.as_mut().expect("installed");
                 note(
                     host,
@@ -732,16 +754,28 @@ impl Session {
         }
         Ok(())
     }
-    fn apply_package_op(&mut self, package: &str, op: Op) -> Result<()> {
+    /// Apply an authorized operation. `caller` is the player whose command
+    /// asked for it: brick changes then need that player's trust, so a
+    /// package cannot be used to reach another player's build (stress
+    /// campaign W9). Without a caller (hooks, think, generation) a package
+    /// acts only on world-owned bricks, such as its generated world.
+    fn apply_package_op(&mut self, package: &str, op: Op, caller: Option<OwnerId>) -> Result<()> {
         let tick = self.simulation.state().tick;
         match op {
-            Op::RemoveBrick { brick } => self.package_remove_brick(brick, None),
+            Op::RemoveBrick { brick } => self.package_remove_brick(brick, None, caller),
             Op::Explode {
                 position,
                 radius,
                 damage,
                 brick_radius,
-            } => self.explode(Vec3::from(position), radius, damage, brick_radius, package),
+            } => self.explode(
+                Vec3::from(position),
+                radius,
+                damage,
+                brick_radius,
+                package,
+                caller,
+            ),
             Op::DamagePlayer { player, amount, by } => self.damage_player(
                 player,
                 amount,
@@ -760,16 +794,29 @@ impl Session {
                 Ok(())
             }
             Op::Respawn { player } => {
-                let target = self.peers.get(&player).context("No such player")?.combat.player;
+                let target = self
+                    .peers
+                    .get(&player)
+                    .context("No such player")?
+                    .combat
+                    .player;
                 let effects = self
                     .minigames
                     .execute(bri_minigames::Command::ForceRespawn { target })
                     .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
                 self.apply_minigame_effects(effects)
             }
-            Op::SpawnEntity { kind, position } => self
-                .spawn_package_entity(&kind, Vec3::from(position))
-                .map(|_| ()),
+            Op::SpawnEntity {
+                kind,
+                position,
+                vars,
+            } => {
+                let id = self.spawn_package_entity(&kind, Vec3::from(position))?;
+                if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
+                    e.vars = vars;
+                }
+                Ok(())
+            }
             Op::RemoveEntity { entity } => {
                 self.remove_package_entity(entity);
                 Ok(())
@@ -815,6 +862,7 @@ impl Session {
         &mut self,
         brick: BrickId,
         blast: Option<super::debris::BrickBlast>,
+        caller: Option<OwnerId>,
     ) -> Result<()> {
         let b = self
             .simulation
@@ -822,6 +870,14 @@ impl Session {
             .bricks
             .get(&brick)
             .context("No such brick")?;
+        let trusted = b.owner == 0
+            || caller
+                .and_then(|c| self.peers.get(&c))
+                .is_some_and(|p| p.actor.trusted(b.owner, bri_world::authority::trust::FULL));
+        ensure!(
+            trusted,
+            "Brick {brick} belongs to a build the caller has no trust on"
+        );
         let definition = self.simulation.definitions.get(b)?;
         ensure!(
             !definition.indestructible && !b.base_plate,
@@ -867,6 +923,7 @@ impl Session {
         damage: f32,
         brick_radius: f32,
         source: &str,
+        caller: Option<OwnerId>,
     ) -> Result<()> {
         ensure!(
             center.is_finite()
@@ -938,7 +995,7 @@ impl Session {
             };
             for (_, brick) in hit.into_iter().take(MAX_BLAST_BRICKS) {
                 // Indestructible bricks and materials simply survive.
-                let _ = self.package_remove_brick(brick, Some(blast));
+                let _ = self.package_remove_brick(brick, Some(blast), caller);
             }
         }
         let tick = self.simulation.state().tick;
@@ -1086,7 +1143,11 @@ impl Session {
             return Err(reject("command.args", "Invalid command argument".into()));
         }
         let tick = self.simulation.state().tick;
-        let key = (owner, request.package.clone(), request.command.clone());
+        let key = (
+            self.player_key(owner),
+            request.package.clone(),
+            request.command.clone(),
+        );
         if host.cooldowns.get(&key).is_some_and(|until| tick < *until) {
             return Err(reject(
                 "command.cooldown",
@@ -1119,6 +1180,9 @@ impl Session {
         if cooldown > 0
             && let Some(host) = self.packages.as_mut()
         {
+            if host.cooldowns.len() >= MAX_COOLDOWNS {
+                host.cooldowns.retain(|_, until| *until > tick);
+            }
             host.cooldowns.insert(key, tick + cooldown);
         }
         self.run_package(

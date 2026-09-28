@@ -394,16 +394,13 @@ fn register_api(engine: &mut Engine) {
             by: None,
         })
     });
-    engine.register_fn(
-        "damage",
-        |player: Dynamic, amount: Dynamic, by: Dynamic| {
-            push(Op::DamagePlayer {
-                player: id(&player)?,
-                amount: float(&amount)?,
-                by: Some(id(&by)?),
-            })
-        },
-    );
+    engine.register_fn("damage", |player: Dynamic, amount: Dynamic, by: Dynamic| {
+        push(Op::DamagePlayer {
+            player: id(&player)?,
+            amount: float(&amount)?,
+            by: Some(id(&by)?),
+        })
+    });
     engine.register_fn(
         "teleport",
         |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
@@ -424,6 +421,21 @@ fn register_api(engine: &mut Engine) {
             push(Op::SpawnEntity {
                 kind: kind.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
+                vars: BTreeMap::new(),
+            })
+        },
+    );
+    engine.register_fn(
+        "spawn_entity",
+        |kind: &str, x: Dynamic, y: Dynamic, z: Dynamic, vars: Map| {
+            let vars = vars
+                .into_iter()
+                .map(|(k, v)| Ok((k.to_string(), to_json(&v)?)))
+                .collect::<Fallible<_>>()?;
+            push(Op::SpawnEntity {
+                kind: kind.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                vars,
             })
         },
     );

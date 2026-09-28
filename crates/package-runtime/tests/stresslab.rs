@@ -260,6 +260,7 @@ fn one_capability_gate_checks_every_operation() {
     let foreign = Op::SpawnEntity {
         kind: "other:entity/x".into(),
         position: [0.0; 3],
+        vars: Default::default(),
     };
     assert_eq!(
         authorize("stresslab-creeper", &["entity".into()], &foreign)
