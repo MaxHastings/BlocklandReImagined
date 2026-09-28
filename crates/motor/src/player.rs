@@ -724,9 +724,9 @@ impl Player {
         let query = physics.query_pipeline_with_filter(filter);
         // v20 updateMove (0x5ae2ea) crouches a fully submerged player as if
         // crouch were held, so swimmers under water use the crouch box.
-        let submerged = waters
-            .iter()
-            .any(|w| w.coverage(feet.to_array(), t.height(self.state.crouched)) >= 1.0);
+        let submerged =
+            bri_content::water::submersion(waters, feet.to_array(), t.height(self.state.crouched))
+                .is_some_and(|(_, coverage)| coverage >= 1.0);
         if input.crouch || submerged {
             self.state.crouched = true;
         } else if self.state.crouched {
