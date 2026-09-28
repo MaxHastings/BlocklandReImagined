@@ -707,6 +707,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
             sha256: hash(&data),
             native_file: None,
             diagnostics: vec![],
+            package: None,
         };
         match bri_convert::shape::read_dts(
             &data,
@@ -761,6 +762,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
                 sha256: digest,
                 native_file: Some(file),
                 diagnostics: vec![],
+                package: None,
             });
         }
     }

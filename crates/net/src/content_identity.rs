@@ -463,6 +463,7 @@ mod tests {
                 sha256: "a".repeat(64),
                 native_file: Some("shape.json".into()),
                 diagnostics: vec![],
+                package: None,
             }],
             diagnostics: vec![],
         };

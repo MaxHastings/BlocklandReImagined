@@ -1221,6 +1221,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             sha256: hash(&f.bytes),
             native_file: Some(rel.clone()),
             diagnostics: vec![],
+            package: None,
         });
     }
     cx.report

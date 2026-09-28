@@ -287,6 +287,23 @@ fn real_community_samples() {
         fire(&out, "weapon_shotgun:weapon/shotgunitem"),
         ["weapon_shotgun:projectile/shotgunprojectile"]
     );
+    // Merged with the base game's pack, when this checkout has generated content.
+    let vanilla =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009/weapons.json");
+    if vanilla.is_file() {
+        let base = Pack::from_json(&std::fs::read(&vanilla).unwrap()).unwrap();
+        let shotgun =
+            Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+        let (merged, notes) = base.merge(vec![("weapon_shotgun/assets".into(), shotgun)]);
+        merged.validate().unwrap();
+        assert!(merged.items.contains_key("v20.weapon.gunitem"));
+        assert!(
+            merged
+                .items
+                .contains_key("weapon_shotgun:weapon/shotgunitem")
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+    }
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
 
     // A vehicle that leans on the Jeep for effects and inherited explosions.
@@ -399,4 +416,126 @@ fn drive(package: &Path) {
         "did not drive: {:?}",
         s.vehicles[0].transform.position
     );
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(e.file_name());
+        if e.path().is_dir() {
+            copy_dir(&e.path(), &target);
+        } else {
+            std::fs::copy(e.path(), target).unwrap();
+        }
+    }
+}
+
+/// Step a of the multi-package proposal: two packages' weapons merge into
+/// one pack that the unchanged weapons runtime loads and fires from.
+#[test]
+fn imported_weapon_packs_merge_into_one_runtime_pack() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Weapon_Synthetic_Blaster");
+    let first = fresh("merge-a");
+    let second_src = first.parent().unwrap().join("Weapon_Second_Blaster");
+    copy_dir(&fixture, &second_src);
+    let second = first.parent().unwrap().join("second");
+    for (input, out) in [(fixture, first.clone()), (second_src, second.clone())] {
+        import(&Options {
+            input,
+            out,
+            reference: None,
+            core: vec![],
+            version: "1.0.0".into(),
+        })
+        .unwrap();
+    }
+    let load =
+        |p: &Path| Pack::from_json(&std::fs::read(p.join("assets/weapons.json")).unwrap()).unwrap();
+    let (merged, notes) = load(&first).merge(vec![("second/assets".into(), load(&second))]);
+    merged.validate().unwrap();
+    assert!(
+        merged
+            .items
+            .contains_key("weapon_synthetic_blaster:weapon/blasteritem")
+    );
+    assert!(
+        merged
+            .items
+            .contains_key("weapon_second_blaster:weapon/blasteritem")
+    );
+    // Explosions and damage types are still keyed by bare Torque name.
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("explosion blasterexplosion is already declared")),
+        "{notes:?}"
+    );
+    assert!(
+        merged
+            .resources
+            .iter()
+            .any(|r| r.package.as_deref() == Some("second/assets"))
+    );
+    assert!(merged.resources.iter().any(|r| r.package.is_none()));
+
+    let mut world = WeaponsWorld::new(merged.clone()).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    let slot = world
+        .give(ActorId(1), "weapon_second_blaster:weapon/blasteritem")
+        .unwrap();
+    world.equip(ActorId(1), Some(slot)).unwrap();
+    let mut spawned = vec![];
+    for tick in 0..240 {
+        if tick == 60 || tick == 61 {
+            world.trigger(ActorId(1), tick == 60).unwrap();
+        }
+        for e in world.step(&mut Empty) {
+            if let Event::Spawned { definition, .. } = e {
+                spawned.push(definition);
+            }
+        }
+    }
+    assert_eq!(
+        spawned,
+        ["weapon_second_blaster:projectile/blasterboltprojectile"]
+    );
+
+    // A package whose projectile nobody provides loses only that weapon.
+    let mut orphan = load(&second);
+    orphan.projectiles.clear();
+    orphan.id = "orphan".into();
+    for item in orphan.items.values_mut() {
+        item.id = item.id.replace("weapon_second_blaster", "orphan");
+        item.image = item.image.replace("weapon_second_blaster", "orphan");
+    }
+    orphan.items = orphan
+        .items
+        .into_values()
+        .map(|i| (i.id.clone(), i))
+        .collect();
+    orphan.images = orphan
+        .images
+        .into_values()
+        .map(|mut i| {
+            i.id = i.id.replace("weapon_second_blaster", "orphan");
+            i.projectile = Some("orphan:projectile/missing".into());
+            (i.id.clone(), i)
+        })
+        .collect();
+    let (merged, notes) = merged.merge(vec![("orphan".into(), orphan)]);
+    merged.validate().unwrap();
+    assert!(!merged.items.keys().any(|k| k.starts_with("orphan:")));
+    assert!(
+        merged
+            .items
+            .contains_key("weapon_second_blaster:weapon/blasteritem")
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("image orphan:image/blasterimage dropped")),
+        "{notes:?}"
+    );
+    std::fs::remove_dir_all(first.parent().unwrap()).unwrap();
 }
