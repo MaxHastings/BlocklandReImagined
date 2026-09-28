@@ -673,3 +673,32 @@ fn motion_events_name_the_colliders_the_sweep_hit() {
     }
     assert!(hit.contains(&wall), "{hit:?}");
 }
+
+#[test]
+fn a_swimmer_rising_from_the_bottom_stays_crouched_until_it_surfaces() {
+    // Slate Sea: the slate lies 9 under the surface. A player spawned on it
+    // floats up fully submerged; v20 holds the crouch pose all the way, and
+    // standing only once the crouched box breaks the surface.
+    let mut world = scene();
+    let waters = [bri_content::water::Water::volume(
+        [-100., -91., -100.],
+        [100., 9., 100.],
+    )];
+    let mut player = spawn(&mut world);
+    let mut flips = 0;
+    let mut last = None;
+    for _ in 0..500 {
+        player
+            .step_in_water(&mut world, MoveInput::default(), &waters)
+            .unwrap();
+        world.step();
+        let crouched = player.state().crouched;
+        if last.is_some_and(|l| l != crouched) {
+            flips += 1;
+        }
+        last = Some(crouched);
+    }
+    assert_eq!(flips, 1, "crouch should change once, at the surface");
+    assert!(!player.state().crouched);
+    assert!(player.state().feet[1] > 6.0, "{:?}", player.state());
+}
