@@ -2468,7 +2468,7 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   display. v20 keeps an accent's position when the hat changes, and so do we.
   The avatar pack file is unchanged: its defaults stay positions in its own
   lists and are named on load. v20 prefs are named once on import. A saved
-  part the pack no longer has falls back to the pack default. Protocol bump.
+  part the pack no longer has falls back to the pack default. Protocol 33.
   Evidence: `cargo test -p bri-ui --lib avatar -- --include-ignored`,
   `cargo test -p bri-client --lib avatar -- --include-ignored`,
   `cargo test -p bri-net --test loopback avatar -- --include-ignored`.
