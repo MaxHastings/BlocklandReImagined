@@ -274,6 +274,9 @@ pub(super) struct PackageHost {
     output: VecDeque<String>,
     /// Deaths since the last tick, for `on_death` hooks: victim, killer.
     deaths: VecDeque<(OwnerId, Option<OwnerId>)>,
+    /// Players whose items were set afresh since the last tick, for
+    /// `on_loadout` hooks.
+    loadouts: VecDeque<OwnerId>,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -521,6 +524,7 @@ impl Session {
             diagnostics: VecDeque::new(),
             output: VecDeque::new(),
             deaths: VecDeque::new(),
+            loadouts: VecDeque::new(),
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -797,6 +801,12 @@ impl Session {
                         look: p.player.state().forward().to_array(),
                         velocity: p.player.state().velocity,
                         item,
+                        minigame: self
+                            .minigames
+                            .player(p.combat.player)
+                            .ok()
+                            .and_then(|m| m.game)
+                            .map(|g| g.0),
                     }
                 })
                 .collect(),
@@ -1946,6 +1956,7 @@ impl Session {
     /// streaming around players, and `on_tick` hooks.
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
+        self.deliver_loadouts();
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };
@@ -2215,6 +2226,46 @@ impl Session {
     /// `on_death(victim, killer)` for every death since the last tick, in
     /// order. Deaths the hooks cause are delivered next tick, so a hook can
     /// never recurse.
+    /// A player's items were set afresh: `on_loadout` hooks hear of it next
+    /// tick.
+    pub(super) fn package_loadout(&mut self, owner: OwnerId) {
+        if let Some(host) = self.packages.as_mut()
+            && !self.bots.is_bot(owner)
+            && host.loadouts.len() < 1024
+            && !host.loadouts.contains(&owner)
+        {
+            host.loadouts.push_back(owner);
+        }
+    }
+    fn deliver_loadouts(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let owners = std::mem::take(&mut host.loadouts);
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_loadout)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for owner in owners {
+            if !self.peers.contains_key(&owner) {
+                continue;
+            }
+            for package in &hooks {
+                let _ = self.run_package(
+                    package,
+                    "on_loadout",
+                    vec![Dynamic::from_int(owner as i64)],
+                    Budget::Command,
+                    None,
+                    None,
+                    None,
+                );
+                self.charge_work(package);
+            }
+        }
+    }
     fn deliver_deaths(&mut self) {
         let Some(host) = self.packages.as_mut() else {
             return;

@@ -14,6 +14,6 @@
       "per_player": { "default": 3, "persist": false }
     }
   },
-  "on_join": true,
+  "on_loadout": true,
   "tick_interval": 240
 }

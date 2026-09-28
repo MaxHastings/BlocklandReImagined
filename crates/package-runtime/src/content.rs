@@ -140,6 +140,12 @@ pub struct Behaviour {
     /// start of the next tick.
     #[serde(default)]
     pub on_death: bool,
+    /// `on_loadout(player)` after a player's items are set afresh: when
+    /// they spawn or respawn, and when they join or leave a minigame. The
+    /// place to hand out an Add-On's items. Delivered at the start of the
+    /// next tick.
+    #[serde(default)]
+    pub on_loadout: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

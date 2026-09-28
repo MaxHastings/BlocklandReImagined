@@ -7,6 +7,9 @@
 // sphere, shoves players and vehicles aside with its weight, and, in
 // minigames, breaks bricks it strikes hard enough under the same rules a
 // rocket's hit follows. This script only decides when balls appear.
+//
+// Outside minigames every player gets the ball item whenever their items
+// are set; inside one, the minigame's loadout decides.
 
 fn mine(p) {
     let ball = get("ball");
@@ -64,11 +67,22 @@ fn release(p, speed, lift, follow_look) {
     spawn_vehicle(get("ball"), x, y, z, 0.0, [vx, vy, vz], p);
 }
 
-fn on_join(p) {
-    give_item(p, get("tool"), false);
+fn on_loadout(p) {
+    let me = player(p);
+    if me != () && me.minigame == () {
+        give_item(p, get("tool"), false);
+    }
 }
 
 fn cmd_steelball(p) {
+    let me = player(p);
+    if me == () {
+        return;
+    }
+    if me.minigame != () {
+        tell(p, "In a minigame, its loadout decides your items.");
+        return;
+    }
     give_item(p, get("tool"), true);
     tell(p, "Steel Ball: left click rolls one out, right click hurls it. /clearballs puts yours away.");
 }

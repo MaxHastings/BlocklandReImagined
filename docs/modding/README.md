@@ -111,6 +111,8 @@ refused. The engine calls:
 |---|---|
 | `on_join(player)` | a player joins, when `"on_join": true` |
 | `on_tick()` | every `tick_interval` ticks (120 ticks = 1 second) |
+| `on_death(victim, killer)` | any player dies, when `"on_death": true` (`killer` is `()` for none) |
+| `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -149,8 +151,8 @@ HUD panels can only show keys the viewer receives. `persist` (default
 
 A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
-unit direction they look), `vx`, `vy`, `vz` and `item` (the id of the item
-in their hand, or `""`).
+unit direction they look), `vx`, `vy`, `vz`, `item` (the id of the item
+in their hand, or `""`) and `minigame` (its id, or `()` outside one).
 
 **Moving things** (`physics`). Players, vehicles (every loose physics body:
 jeeps, balls, the tumble of a knocked-down player) and package entities

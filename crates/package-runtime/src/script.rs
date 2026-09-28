@@ -59,6 +59,9 @@ pub struct PlayerView {
     /// The item in their hand (`namespace:weapon/name`), or empty.
     #[serde(default)]
     pub item: String,
+    /// The minigame they play in, if any.
+    #[serde(default)]
+    pub minigame: Option<u64>,
 }
 /// A loose physics body or other movable thing, as scripts see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +305,11 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("vy", p.velocity[1]),
         float_entry("vz", p.velocity[2]),
         ("item", p.item.clone().into()),
+        (
+            "minigame",
+            p.minigame
+                .map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
+        ),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -964,6 +972,9 @@ impl Runtime {
             }
             if behaviour.on_join {
                 need("on_join".into(), 1, "on_join");
+            }
+            if behaviour.on_loadout {
+                need("on_loadout".into(), 1, "on_loadout");
             }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");

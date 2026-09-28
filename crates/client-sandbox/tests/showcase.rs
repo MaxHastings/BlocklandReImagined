@@ -4,7 +4,7 @@
 //! (`--ignored`), each renders offscreen to PNGs for a look.
 use bri_client_sandbox::{
     AddOn, AddOnCode, Budgets, Capability, FrameInput, Sandbox, TrustLevel, World,
-    world::{AddOnState, Player, Vehicle},
+    world::{Player, Vehicle},
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -180,7 +180,7 @@ fn beam(world: &mut World, player: u64, beam: [i64; 6]) {
     world
         .state
         .entry("gravity-gun".into())
-        .or_insert_with(AddOnState::default)
+        .or_default()
         .players
         .insert(
             player,

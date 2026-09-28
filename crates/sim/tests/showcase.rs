@@ -673,3 +673,40 @@ fn a_steel_ball_shoves_players_aside_and_only_hurts_in_minigames() {
     g.steps(180);
     assert!(g.s.vitals()[&b].health < 100.0 || !g.s.is_alive(b));
 }
+
+#[test]
+fn everyone_gets_both_items_outside_minigames_and_the_loadout_decides_inside() {
+    let mut g = Game::new();
+    let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("Bravo", Vec3::new(6.0, 0.05, 0.0));
+    let holds = |g: &Game, owner: OwnerId, item: &str| {
+        g.s.tool_inventories()[&owner]
+            .slots
+            .iter()
+            .any(|s| s.as_deref() == Some(item))
+    };
+    g.steps(2);
+    for owner in [a, b] {
+        assert!(holds(&g, owner, GUN) && holds(&g, owner, BALL_TOOL));
+    }
+    // A respawn sets the items afresh, and they come back.
+    g.cmd(b, Command::Suicide).unwrap();
+    g.steps(130);
+    g.cmd(b, Command::Respawn).unwrap();
+    g.steps(2);
+    assert!(holds(&g, b, GUN) && holds(&g, b, BALL_TOOL));
+    // In a minigame its loadout decides; asking by name is refused.
+    g.minigame(a, &[b]);
+    assert!(!holds(&g, b, GUN) && !holds(&g, b, BALL_TOOL));
+    g.cmd(
+        b,
+        Command::Package(PackageCommand {
+            package: String::new(),
+            command: "gravitygun".into(),
+            args: vec![],
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    assert!(!holds(&g, b, GUN), "no gun from a command in a minigame");
+}

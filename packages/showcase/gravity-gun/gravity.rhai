@@ -7,6 +7,11 @@
 // moving, and refuse anything the minigame or trust rules forbid; thrown
 // things credit the thrower, so a tank thrown in a minigame kills.
 //
+// Outside minigames every player gets the gun whenever their items are
+// set (spawning, respawning, leaving a minigame). Inside one, the
+// minigame's loadout decides: a host who wants a Gravity Gun match puts
+// it in the loadout.
+//
 // Each player's `beam` is what their game draws (the gravity-gun-fx
 // Add-On reads it): [held kind, held id, charging, shots fired, last shot's
 // kind, last shot's id]. Kinds: 0 nothing, 1 vehicle, 2 player, 3 entity.
@@ -37,11 +42,22 @@ fn heft(o) {
     clampf(sqrt(300.0 / maxf(o.mass, 30.0)), 0.45, 1.4)
 }
 
-fn on_join(p) {
-    give_item(p, get("tool"), false);
+fn on_loadout(p) {
+    let me = player(p);
+    if me != () && me.minigame == () {
+        give_item(p, get("tool"), false);
+    }
 }
 
 fn cmd_gravitygun(p) {
+    let me = player(p);
+    if me == () {
+        return;
+    }
+    if me.minigame != () {
+        tell(p, "In a minigame, its loadout decides your items.");
+        return;
+    }
     give_item(p, get("tool"), true);
     tell(p, "Gravity Gun: right click grabs or drops. Left click punts; hold it to charge a throw.");
 }

@@ -140,9 +140,7 @@ impl Session {
                     return None;
                 }
                 match world.body_of(VehicleId(v)) {
-                    Some(body) => Some(Vec3::from(
-                        self.simulation.physics.bodies.get(body)?.center_of_mass(),
-                    )),
+                    Some(body) => Some(self.simulation.physics.bodies.get(body)?.center_of_mass()),
                     None => world
                         .snapshot(&self.simulation.physics)
                         .vehicles
@@ -168,9 +166,7 @@ impl Session {
             ObjectRef::Vehicle(v) => {
                 let world = self.vehicles.world.as_ref()?;
                 match world.body_of(VehicleId(v)) {
-                    Some(body) => Some(Vec3::from(
-                        self.simulation.physics.bodies.get(body)?.linvel(),
-                    )),
+                    Some(body) => Some(self.simulation.physics.bodies.get(body)?.linvel()),
                     None => world
                         .snapshot(&self.simulation.physics)
                         .vehicles
