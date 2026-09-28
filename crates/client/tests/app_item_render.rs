@@ -87,7 +87,7 @@ fn native_core_tools_render_from_eye_and_original_mounts() -> Result<()> {
     std::fs::create_dir_all(&state)?;
     let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
-    app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer,
+    app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1, server_name: "Native held item render".into(), password: String::new(),
         admin_password: String::new(), super_admin_password: String::new() });
     pump(&mut app)?;
@@ -193,7 +193,7 @@ fn bricks_in_hand_render_the_grey_brick_in_first_and_third_person() -> Result<()
     std::fs::create_dir_all(&state)?;
     let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
-    app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer,
+    app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1, server_name: "Native held brick render".into(), password: String::new(),
         admin_password: String::new(), super_admin_password: String::new() });
     pump(&mut app)?;

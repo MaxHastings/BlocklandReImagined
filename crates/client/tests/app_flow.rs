@@ -70,7 +70,7 @@ fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> b
 fn host(app: &mut App, name: &str) -> RequestId {
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
-        mode: ServerMode::SinglePlayer,
+        mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1,
         server_name: name.into(),
         password: String::new(),
@@ -207,7 +207,7 @@ fn native_weather_map_settings_render_and_disconnect() -> Result<()> {
             &mut app,
             UiAction::HostGame {
                 map: map.into(),
-                mode: ServerMode::SinglePlayer,
+                mode: ServerMode::SinglePlayer, game_mode: None,
                 max_players: 1,
                 server_name: name.into(),
                 password: String::new(),

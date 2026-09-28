@@ -6,7 +6,7 @@ use crate::manifest::{MANIFEST_FILE, Manifest, Rejected, location};
 use bri_package::diag::Diagnostic;
 use bri_package::id::{Requirement, Version};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 /// One provided file with its bytes.
@@ -29,6 +29,7 @@ pub struct Package {
     pub entities: BTreeMap<String, content::EntityKind>,
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
+    pub modes: BTreeMap<String, content::GameMode>,
 }
 
 const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -183,6 +184,7 @@ impl Package {
             entities: BTreeMap::new(),
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
+            modes: BTreeMap::new(),
             manifest,
             assets,
         };
@@ -287,6 +289,11 @@ impl Package {
                         self.huds.insert(asset.id.clone(), h);
                     }
                 }
+                Kind::Mode => {
+                    if let Some(m) = parse::<content::GameMode>(asset, &id, |m| m.validate(), out) {
+                        self.modes.insert(asset.id.clone(), m);
+                    }
+                }
             }
         }
         if (!self.worlds.is_empty() || !self.entities.is_empty()) && self.behaviour.is_none() {
@@ -335,7 +342,7 @@ impl Catalog {
     pub fn inspect(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
         let mut catalog = Self::default();
         let mut out = Vec::new();
-        let mut failed = std::collections::BTreeSet::new();
+        let mut failed = BTreeSet::new();
         let listed: BTreeMap<&str, &PackageEntry> =
             set.packages.iter().map(|p| (p.id.as_str(), p)).collect();
         for entry in &set.packages {
@@ -522,21 +529,126 @@ impl Catalog {
                 }
             }
         }
-        let worlds: Vec<&String> = self
+        // Several world providers may be enabled; a hosted game runs one
+        // (`for_world`, `for_mode`). Each mode names only what it can run.
+        for (id, p) in &self.packages {
+            for (mode_id, mode) in &p.modes {
+                let at = location(id, mode_id);
+                for add_on in &mode.add_ons {
+                    if add_on != id && !p.manifest.dependencies.contains_key(add_on) {
+                        out.push(
+                            Diagnostic::error(
+                                "set.mode.add_on",
+                                format!("mode runs `{add_on}`, which `{id}` does not depend on"),
+                            )
+                            .at(at.clone())
+                            .hint(format!(
+                                "add `{add_on}` to dependencies, so turning the mode on turns it on"
+                            )),
+                        );
+                    }
+                }
+                if let Some(map) = mode.map.as_ref().filter(|m| m.contains(':')) {
+                    let roots = mode.add_ons.iter().map(String::as_str).chain([id.as_str()]);
+                    if !self
+                        .closure(roots)
+                        .iter()
+                        .any(|p| self.packages[*p].worlds.contains_key(map))
+                    {
+                        out.push(
+                            Diagnostic::error(
+                                "set.mode.map",
+                                format!(
+                                    "mode plays on `{map}`, which none of its Add-Ons provides"
+                                ),
+                            )
+                            .at(at.clone()),
+                        );
+                    }
+                }
+            }
+        }
+        out
+    }
+    /// Every game mode the enabled packages declare, by content id.
+    pub fn modes(&self) -> impl Iterator<Item = (&String, &content::GameMode)> {
+        self.packages.values().flat_map(|p| p.modes.iter())
+    }
+    /// `roots` and every enabled package they depend on, transitively.
+    fn closure<'a>(&'a self, roots: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
+        let mut out = BTreeSet::new();
+        let mut queue: Vec<&str> = roots.into_iter().collect();
+        while let Some(id) = queue.pop() {
+            let Some((id, p)) = self.packages.get_key_value(id) else {
+                continue;
+            };
+            if out.insert(id.as_str()) {
+                queue.extend(p.manifest.dependencies.keys().map(String::as_str));
+            }
+        }
+        out
+    }
+    fn only(&self, keep: &BTreeSet<&str>) -> Result<Catalog, Vec<Diagnostic>> {
+        let catalog = Catalog {
+            packages: self
+                .packages
+                .iter()
+                .filter(|(id, _)| keep.contains(id.as_str()))
+                .map(|(id, p)| (id.clone(), p.clone()))
+                .collect(),
+        };
+        let worlds: Vec<&String> = catalog
             .packages
             .values()
             .flat_map(|p| p.worlds.keys())
             .collect();
         if worlds.len() > 1 {
-            out.push(
+            return Err(vec![
                 Diagnostic::error(
                     "set.world.conflict",
-                    format!("more than one world provider is enabled: {worlds:?}"),
+                    format!("more than one world provider would run: {worlds:?}"),
                 )
-                .hint("a server runs one world provider"),
-            );
+                .hint("a game runs one world provider; pick a game mode that names one"),
+            ]);
         }
-        out
+        Ok(catalog)
+    }
+    /// What a host runs for game mode `mode`: its package, the Add-Ons it
+    /// names and their dependencies.
+    pub fn for_mode(&self, mode: &str) -> Result<Catalog, Vec<Diagnostic>> {
+        let owner = mode.split(':').next().unwrap_or_default();
+        let Some(m) = self.packages.get(owner).and_then(|p| p.modes.get(mode)) else {
+            return Err(vec![Diagnostic::error(
+                "set.mode.unknown",
+                format!("no enabled Add-On provides game mode `{mode}`"),
+            )]);
+        };
+        let roots = m.add_ons.iter().map(String::as_str).chain([owner]);
+        self.only(&self.closure(roots))
+    }
+    /// What a host runs on package world `world` without a game mode: every
+    /// enabled package except those that need a different world.
+    pub fn for_world(&self, world: &str) -> Result<Catalog, Vec<Diagnostic>> {
+        let catalog = self.only(&self.needing_only(world))?;
+        if catalog.world().is_none_or(|(_, id, _)| id != world) {
+            return Err(vec![Diagnostic::error(
+                "set.world.unknown",
+                format!("no enabled Add-On provides world `{world}`"),
+            )]);
+        }
+        Ok(catalog)
+    }
+    /// Packages whose dependencies provide no world other than `world`.
+    fn needing_only(&self, world: &str) -> BTreeSet<&str> {
+        self.packages
+            .keys()
+            .map(String::as_str)
+            .filter(|id| {
+                self.closure([*id])
+                    .iter()
+                    .all(|dep| self.packages[*dep].worlds.keys().all(|w| w == world))
+            })
+            .collect()
     }
     pub fn world(&self) -> Option<(&Package, &String, &content::ChunkWorld)> {
         self.packages

@@ -594,3 +594,68 @@ fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
     u.handle_input(InputEvent::Wheel { delta: 1.0 });
     assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
 }
+#[test]
+fn start_game_hosts_the_chosen_game_mode_on_its_map() {
+    let mut u = ui();
+    let strata = "stresslab-world:world/strata";
+    u.apply(UiUpdate::Maps(
+        ["native/bedroom", strata]
+            .map(|id| MapInfo {
+                id: id.into(),
+                name: id.into(),
+                description: String::new(),
+                preview: IconRef::None,
+            })
+            .to_vec(),
+    ));
+    u.apply(UiUpdate::GameModes(vec![GameModeInfo {
+        id: "stresslab-mode:mode/stresslab".into(),
+        name: "Stress Lab".into(),
+        description: "Dig.".into(),
+        map: Some(strata.into()),
+    }]));
+    click(&mut u, ScreenId::MainMenu, "start");
+    // The picker opens from Start Game; Select keeps Custom.
+    click(&mut u, ScreenId::StartMission, "SM_GameMode");
+    assert_eq!(u.top_id(), ScreenId::GameModes);
+    click(&mut u, ScreenId::GameModes, "GM_Select");
+    assert_eq!(u.top_id(), ScreenId::StartMission);
+    click(&mut u, ScreenId::StartMission, "host");
+    let hosted: Vec<_> = actions(&mut u)
+        .into_iter()
+        .filter(|a| matches!(a, UiAction::HostGame { .. }))
+        .collect();
+    assert!(
+        matches!(&hosted[..], [UiAction::HostGame { map, game_mode: None, .. }] if map == "native/bedroom"),
+        "{hosted:?}"
+    );
+    // A chosen mode hosts on its own map, whatever the list showed.
+    let mut u = ui();
+    u.apply(UiUpdate::Maps(vec![MapInfo {
+        id: "native/bedroom".into(),
+        name: "Bedroom".into(),
+        description: String::new(),
+        preview: IconRef::None,
+    }]));
+    u.apply(UiUpdate::GameModes(vec![GameModeInfo {
+        id: "stresslab-mode:mode/stresslab".into(),
+        name: "Stress Lab".into(),
+        description: String::new(),
+        map: Some(strata.into()),
+    }]));
+    u.core.prefs.set(
+        bri_ui::screens::modes::GAME_MODE,
+        "stresslab-mode:mode/stresslab",
+    );
+    click(&mut u, ScreenId::MainMenu, "start");
+    click(&mut u, ScreenId::StartMission, "host");
+    let hosted: Vec<_> = actions(&mut u)
+        .into_iter()
+        .filter(|a| matches!(a, UiAction::HostGame { .. }))
+        .collect();
+    assert!(
+        matches!(&hosted[..], [UiAction::HostGame { map, game_mode: Some(mode), .. }]
+            if map == strata && mode == "stresslab-mode:mode/stresslab"),
+        "{hosted:?}"
+    );
+}

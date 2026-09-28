@@ -185,6 +185,7 @@ fn package_set() -> bri_package::packages::PackageSet {
         ("stresslab-creeper-model", Side::Client),
         ("stresslab-economy", Side::Server),
         ("stresslab-hud", Side::Client),
+        ("stresslab-mode", Side::Server),
     ] {
         packages.push(PackageEntry { id: id.into(), version: "1.0.0".into(), side, dir: id.into(), role: None });
     }
@@ -221,7 +222,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper() -> Result<()
         &mut app,
         UiAction::HostGame {
             map: WORLD.into(),
-            mode: ServerMode::SinglePlayer,
+            mode: ServerMode::SinglePlayer, game_mode: None,
             max_players: 1,
             server_name: "Stress Lab".into(),
             password: String::new(),

@@ -21,12 +21,13 @@ use std::{
 };
 
 /// The Stress Lab packages, in load order, with the side each runs on.
-pub const PACKAGES: [(&str, Side); 5] = [
+pub const PACKAGES: [(&str, Side); 6] = [
     ("stresslab-world", Side::Server),
     ("stresslab-creeper", Side::Server),
     ("stresslab-creeper-model", Side::Client),
     ("stresslab-economy", Side::Server),
     ("stresslab-hud", Side::Client),
+    ("stresslab-mode", Side::Server),
 ];
 /// The brick the Stress Lab world draws its voxels with.
 pub const CUBE: &str = "v20/brick/brick4xcubedata";

@@ -2458,3 +2458,31 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   replicas agree). Handoff and labels: `docs/stress-lab/HANDOFF.md`.
 - Open: join mismatch naming waits on door-closers' Hello wiring; see the
   handoff's next steps.
+
+## 2026-09-28 Game modes in Start Game
+
+Max asked for easy in-game Add-On management; the coordinator scheduled the
+game mode picker once the Stress Lab landed (da5668e).
+
+- New server content kind `mode` (`bri_package_runtime::content::GameMode`):
+  name, description, optional map, `add_ons`. Checks `set.mode.add_on`,
+  `set.mode.map`; `Catalog::for_mode`, `Catalog::for_world` pick what a hosted
+  game runs, and the one-world check moved from load to hosting, so several
+  world Add-Ons can be turned on together.
+- UI: Start Game gets a **Mode:** button above Start opening the Game Mode
+  screen (`crates/ui/src/screens/modes.rs`); `UiUpdate::GameModes`,
+  `HostGame.game_mode`. Custom keeps today's behaviour.
+- Client: `packages::hosted` resolves mode, map, base map and save key;
+  `packages::modes` feeds the list.
+- `packages/stresslab/stresslab-mode` adds the Stress Lab mode (added to
+  `bri_stresslab::PACKAGES`).
+- Evidence: `cargo test -p bri-package-runtime -p bri-ui -p bri-stresslab`,
+  `-p bri-sim --test packages`, `-p bri-client --lib` all pass; clippy
+  `-D warnings` clean on those crates. New tests:
+  `the_stress_lab_mode_runs_its_world_and_rules`,
+  `a_package_world_without_a_mode_runs_every_add_on_that_fits_it`,
+  `a_mode_may_only_run_add_ons_its_package_depends_on`,
+  `hosting_runs_the_chosen_mode_or_the_plain_base_game`,
+  `start_game_hosts_the_chosen_game_mode_on_its_map`.
+- Not interactively checked; Max's playtest covers the screen's look.
+- Follow-up: the Add-Ons screen (PR #4) must list `mode` as a server kind.

@@ -193,6 +193,8 @@ pub struct Core {
     pub print_letters_visible: bool,
     // catalogs
     pub maps: Vec<MapInfo>,
+    /// Start Game's game modes, from the enabled Add-Ons.
+    pub game_modes: Vec<crate::api::GameModeInfo>,
     pub servers: Vec<ServerInfo>,
     pub lan_querying: bool,
     pub bricks: Vec<BrickInfo>,
@@ -912,6 +914,7 @@ impl Ui {
             options_open: false,
             print_letters_visible: false,
             maps: Vec::new(),
+            game_modes: Vec::new(),
             servers: Vec::new(),
             lan_querying: false,
             bricks: Vec::new(),
@@ -1273,6 +1276,7 @@ impl Ui {
                 }
             }
             UiUpdate::Maps(m) => c.maps = m,
+            UiUpdate::GameModes(m) => c.game_modes = m,
             UiUpdate::LanServers { servers, querying } => {
                 c.servers = servers;
                 c.lan_querying = querying;

@@ -6,6 +6,7 @@ pub mod admin;
 pub mod avatar;
 pub mod console;
 pub mod menus;
+pub mod modes;
 pub mod minigames;
 pub mod options;
 pub mod play;
@@ -63,6 +64,8 @@ pub enum ScreenId {
     About,
     /// v20 `ConsoleDlg` (`~`).
     Console,
+    /// Start Game's game mode picker (native; v20 had none).
+    GameModes,
 }
 
 pub trait Screen {
@@ -150,6 +153,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::Avatar => return Box::new(avatar::Avatar::new(core)),
         ScreenId::Play => return Box::new(play::Play::new(core)),
         ScreenId::Console => return Box::new(console::Console::new(core)),
+        ScreenId::GameModes => return Box::new(modes::GameModes::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),
