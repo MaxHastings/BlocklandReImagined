@@ -8,6 +8,7 @@
 //! the source function, as behaviour an agent must build natively.
 //! Findings: `docs/audits/spike-addon-import.md`.
 pub mod behaviour;
+pub mod ports;
 pub mod reference;
 pub mod report;
 pub mod source;
@@ -279,6 +280,11 @@ fn check_output(opts: &Options) -> Result<()> {
 }
 
 pub fn import(opts: &Options) -> Result<Report> {
+    import_with(opts, &ports::Ports::builtin())
+}
+
+/// [`import`] with a given ports list instead of the one built in.
+pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     check_output(opts)?;
     let src = source::read(&opts.input)?;
     let reference = match &opts.reference {
@@ -315,7 +321,13 @@ pub fn import(opts: &Options) -> Result<Report> {
     sounds_and_rest(&mut cx);
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
-    finish(cx, opts)
+    let mut bodies = ports::Bodies::new();
+    for f in scripts.iter().flat_map(|s| &s.functions) {
+        bodies
+            .entry(f.qualified().to_ascii_lowercase())
+            .or_insert_with(|| f.body.clone());
+    }
+    finish(cx, opts, ports, &bodies)
 }
 
 fn metadata(cx: &mut Ctx) {
@@ -2149,7 +2161,12 @@ fn runtime_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
     .collect()
 }
 
-fn finish(mut cx: Ctx, opts: &Options) -> Result<Report> {
+fn finish(
+    mut cx: Ctx,
+    opts: &Options,
+    ports: &ports::Ports,
+    bodies: &ports::Bodies,
+) -> Result<Report> {
     for a in cx
         .report
         .assets
@@ -2210,6 +2227,22 @@ fn finish(mut cx: Ctx, opts: &Options) -> Result<Report> {
         packages_json_entry: json!({ "id": cx.ns, "version": opts.version, "side": "shared", "dir": dir }),
         files: vec![],
     };
+    if let Some(port) = ports::apply(ports, &cx.src.name, &cx.src.sha256, bodies, &cx.out) {
+        for b in &mut cx.report.needs_behaviour {
+            if port
+                .covers
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(&b.function))
+            {
+                b.port = Some(report::PortRef {
+                    port: port.port.clone(),
+                    status: port.status.clone(),
+                    applied: port.applied,
+                });
+            }
+        }
+        cx.report.ports.push(port);
+    }
     cx.report.summarise();
     let mut files = vec![];
     let mut stack = vec![cx.out.clone()];

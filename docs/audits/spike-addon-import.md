@@ -417,6 +417,13 @@ state (`%obj.lastFireTime`), the missing capabilities
 (`projectiles.spawn`, `random.seeded`, `entities.animate`) and the native
 default it replaces. Everything else in the package is already data.
 
+**Ports (2026-09-28).** The list of verified native ports now exists:
+`crates/addon-import/ports/ports.json`, applied by the importer and named in
+the report (`ports`, and `port` on each covered `needs_behaviour` entry).
+The shotgun is the first. Its spread and recoil are the image's `shot` data,
+with the numbers read from the copy's own `onFire`. Recipe:
+[`docs/modding/porting.md`](../modding/porting.md).
+
 ## Tests
 
 `cargo test -p bri-addon-import`:

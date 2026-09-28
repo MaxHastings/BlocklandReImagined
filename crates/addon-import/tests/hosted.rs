@@ -200,10 +200,10 @@ fn community_shotgun_and_car_work_in_a_hosted_game() {
         .unwrap()
         .session;
 
-    // The shotgun fires its own pellet, beside the vanilla gun.
+    // The ported shotgun fires its three pellets, beside the vanilla gun.
     assert_eq!(
         fire(&mut session, spawn, "weapon_shotgun:weapon/shotgunitem"),
-        ["weapon_shotgun:projectile/shotgunprojectile"]
+        ["weapon_shotgun:projectile/shotgunprojectile"; 3]
     );
     assert_eq!(
         fire(&mut session, spawn, "v20.weapon.gunitem"),

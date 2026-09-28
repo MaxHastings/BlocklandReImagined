@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::fmt::Write;
 
-pub const REPORT_SCHEMA: u32 = 1;
+pub const REPORT_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Report {
@@ -19,8 +19,22 @@ pub struct Report {
     pub unsupported: Vec<Finding>,
     pub ambiguous: Vec<Finding>,
     pub needs_behaviour: Vec<crate::behaviour::NeedsBehaviour>,
+    /// The listed native port for this Add-On (`crates/addon-import/ports`),
+    /// whether it was applied, and why not.
+    pub ports: Vec<crate::ports::Applied>,
     /// Structure the readers skipped or repaired, per file.
     pub diagnostics: Vec<String>,
+}
+
+/// A native port that covers a script function.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortRef {
+    pub port: String,
+    /// `verified` or `partial`.
+    pub status: String,
+    /// False when this copy's script does not match the port; the report's
+    /// `ports` entry says why.
+    pub applied: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -70,6 +84,8 @@ pub struct Summary {
     pub unsupported: usize,
     pub ambiguous: usize,
     pub needs_behaviour: usize,
+    /// Of those, the ones a listed port covers and the import applied.
+    pub needs_behaviour_ported: usize,
     /// `converted`, `converted_with_gaps` or `recognised_only`.
     pub verdict: String,
 }
@@ -185,11 +201,16 @@ impl Report {
             unsupported: self.unsupported.len(),
             ambiguous: self.ambiguous.len(),
             needs_behaviour: self.needs_behaviour.len(),
+            needs_behaviour_ported: self
+                .needs_behaviour
+                .iter()
+                .filter(|b| b.port.as_ref().is_some_and(|p| p.applied))
+                .count(),
             verdict: String::new(),
         };
         let verdict = if s.datablocks_converted == 0 {
             "recognised_only"
-        } else if s.needs_behaviour
+        } else if s.needs_behaviour - s.needs_behaviour_ported
             + s.unsupported
             + s.dependencies_missing
             + s.datablocks_recognised_only
@@ -243,6 +264,7 @@ impl Report {
             ("Unsupported", s.unsupported),
             ("Ambiguous", s.ambiguous),
             ("Needs behaviour", s.needs_behaviour),
+            ("Needs behaviour, ported", s.needs_behaviour_ported),
         ] {
             let n = if label.starts_with("Dependencies") {
                 format!("{n} ({})", s.dependencies_missing)
@@ -276,7 +298,52 @@ impl Report {
             let _ = writeln!(m, "Nothing: every script function is covered by data.");
         }
         for b in &self.needs_behaviour {
-            let _ = writeln!(m, "- `{}` at {}: {}", b.function, b.source, b.summary);
+            let port = match &b.port {
+                Some(p) if p.applied => format!(" **Ported** by `{}` ({}).", p.port, p.status),
+                Some(p) => format!(
+                    " A port exists (`{}`, {}) but this copy does not match it; see Ports.",
+                    p.port, p.status
+                ),
+                None => String::new(),
+            };
+            let _ = writeln!(
+                m,
+                "- `{}` at {}: {}.{port}",
+                b.function, b.source, b.summary
+            );
+        }
+        if self.needs_behaviour.iter().any(|b| b.port.is_none()) {
+            let _ = writeln!(
+                m,
+                "\nNo port is listed for the rest yet. To make one, follow `docs/modding/porting.md`."
+            );
+        }
+        for p in &self.ports {
+            let _ = writeln!(m, "\n## Ports\n");
+            if p.applied {
+                let values: Vec<_> = p.values.iter().map(|(k, v)| format!("{k} {v}")).collect();
+                let _ = writeln!(
+                    m,
+                    "Applied the {} port `{}` ({} copy){}. Changed: {}.",
+                    p.status,
+                    p.port,
+                    p.copy,
+                    if values.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", read from this copy's script: {}", values.join(", "))
+                    },
+                    p.files_changed.join(", ")
+                );
+            } else {
+                let _ = writeln!(
+                    m,
+                    "The {} port `{}` was not applied: {}.",
+                    p.status,
+                    p.port,
+                    p.reason.as_deref().unwrap_or("unknown")
+                );
+            }
         }
         for (title, list) in [
             ("Unsupported", &self.unsupported),

@@ -33,6 +33,8 @@ pub struct NeedsBehaviour {
     /// Constructs that cannot be translated mechanically.
     pub blockers: Vec<String>,
     pub summary: String,
+    /// The listed native port that covers this function, when there is one.
+    pub port: Option<crate::report::PortRef>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -397,5 +399,6 @@ pub fn analyse(f: &Function, cx: &Context) -> Option<NeedsBehaviour> {
         entity_state: entity_state.into_iter().collect(),
         blockers,
         summary,
+        port: None,
     })
 }

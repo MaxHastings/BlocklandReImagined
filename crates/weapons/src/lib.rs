@@ -3,8 +3,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod debris;
-pub mod rotation;
 mod merge;
+pub mod rotation;
 pub use merge::resource_root;
 pub mod runtime;
 pub use runtime::*;
@@ -62,7 +62,11 @@ impl ItemBounds {
 /// field: `onMount`/`onCharge` calls to `playThread(1, armReady*)` in the
 /// Akimbo Guns and Item_Sports scripts. Other images follow `armReady`.
 pub fn scripted_arm_pose(image: &str, state: &str) -> Option<(bool, bool)> {
-    let name = image.rsplit('.').next().unwrap_or(image).to_ascii_lowercase();
+    let name = image
+        .rsplit('.')
+        .next()
+        .unwrap_or(image)
+        .to_ascii_lowercase();
     match name.as_str() {
         "lefthandedgunimage" | "basketballshootimage" | "dodgeballimage" => Some((true, true)),
         "basketballimage" => Some((true, false)),
@@ -155,6 +159,26 @@ pub struct Image {
     /// of firing a projectile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Several projectiles per shot, spread and recoil. None fires one
+    /// projectile straight along the aim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shot: Option<Shot>,
+}
+/// What v20 Add-Ons scripted in `onFire` with the common spread code
+/// (`%shellcount`, `%spread`, `%obj.setVelocity(... getEyeVector() * -n)`):
+/// the recoil first, then each projectile's velocity turned by its own
+/// random angles.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Shot {
+    /// Projectiles per shot, 1 to 64 (`%shellcount`).
+    pub projectiles: u32,
+    /// v20's `%spread`: each projectile's velocity turns by random Euler
+    /// angles of up to ±5π·spread radians about each axis.
+    #[serde(default)]
+    pub spread: f32,
+    /// Speed the shooter loses along their aim, in units per second.
+    #[serde(default)]
+    pub recoil: f32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
@@ -376,7 +400,11 @@ impl Pack {
                     && [e.seconds, e.play_speed]
                         .into_iter()
                         .chain(e.scale)
-                        .chain(e.sizes.iter().flat_map(|(s, t)| s.iter().copied().chain([*t])))
+                        .chain(
+                            e.sizes
+                                .iter()
+                                .flat_map(|(s, t)| s.iter().copied().chain([*t]))
+                        )
                         .all(|v| v.is_finite() && (0.0..=1000.0).contains(&v))
                     && e.sizes.len() <= 4
                     && e.shake.is_none_or(|s| {
@@ -426,6 +454,14 @@ impl Pack {
                         })
                 }),
                 "Invalid image command {id}"
+            );
+            ensure!(
+                image.shot.is_none_or(|s| {
+                    (1..=64).contains(&s.projectiles)
+                        && (0.0..=1.0).contains(&s.spread)
+                        && (0.0..=100.0).contains(&s.recoil)
+                }),
+                "Invalid image shot {id}"
             );
             for state in &image.states {
                 ensure!(

@@ -143,6 +143,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 min_shot_ticks: 0,
                 states,
                 command: None,
+                shot: None,
             },
         );
         items.insert(
