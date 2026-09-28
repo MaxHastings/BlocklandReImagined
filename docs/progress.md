@@ -4422,3 +4422,44 @@ that asserted the old rule); with content, `cargo test -p bri-sim --test
 vehicles a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it
 -- --ignored` (stock Vehicle Spawn and Jeep, non-admin guest); full
 `cargo test -p bri-sim -p bri-net`. Not seen in a window: Max's playtest.
+## 2026-09-28 The Stunt Plane ships as a default Add-On (branch `claude/project-thread-rwzbus`)
+
+Max asked for the Stunt Plane as a first-class Add-On that comes with the
+game. It is not in the v20 reference: its `Add-Ons` holds eight vehicles
+(Ball, Flying Wheeled Jeep, Horse, Jeep, Magic Carpet, Pirate Cannon,
+Rowboat, Tank). The only copy is the community `Vehicle_Stunt_Plane.zip`
+(Kaje and Ephialtes, no licence file, sha256 `e68fd173…329e`) in Maxwell's
+archive. Asked first because the repo treats that archive as not
+redistributable; Max said yes to shipping it in public releases.
+
+Picked: a packaged Add-On, not base content. Stock vehicles ship in the
+generated `v20-vehicles` pack, but the plane is not v20's, and a base pack is
+never offered to joining players (the join Add-Ons fix lets them in without
+it). As an Add-On it ships like the Duplicator:
+`content/addons/vehicle_stunt_plane`, turned on in the release's
+`packages.json`, offered for download by hosts, and players can turn it off.
+
+- `tools/shipped-addons.json` lists it (id, version, archive hash, vehicle
+  id). `tools/shipped_addons.py build` runs Import Add-On with the v20
+  reference and recovered core scripts into `content/shipped-addons/<id>`
+  and checks it; bootstrap does this when the archive is present. The
+  import converts with no failed assets; its `JeepVehicle.uiName = ""`
+  (hiding the Jeep) stays unsupported, so the Jeep keeps its place.
+- `package_playtest.ps1` refuses to package without it, copies it in and
+  turns it on; `-VerifyPackage` (run by the release workflow) refuses a
+  release that does not turn it on at `addons/vehicle_stunt_plane` with its
+  vehicle. `ci_content.py` packs it and `fetch` requires it, so the GitHub
+  release build carries it once the content zip is uploaded again.
+- Upgrades keep it on: the launcher keeps the new version's own list less
+  what the player turned off.
+
+Evidence: `tools/tests/Test-PlaytestPackaging.ps1` (the fixture release
+ships it on and shared; verify refuses a release without it; the packager
+refuses to build without it); `ci_content.py pack` over a fixture content
+root with and without it; `cargo test --release -p bri-client --test
+add_on_join -- --ignored a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it`
+(a host with it lists it among its spawnable vehicles; a guest with only
+the base game downloads it, joins and lists it). Not seen in a window:
+Max's playtest of spawning and flying it from a fresh standalone install.
+Needed on the PC: `python tools/ci_content.py upload`, or release runs stop
+at "Fetch the generated v20 content" asking for it.
