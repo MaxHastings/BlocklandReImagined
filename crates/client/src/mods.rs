@@ -52,6 +52,37 @@ pub fn load_fetched(
             },
         ));
     }
+    // A downloaded HUD may need the server's own rules (a server-only
+    // package the client never loads). The server runs them; list them as
+    // server-side so the client-side checks skip them, as they do for a
+    // host's own server packages.
+    let mut needs = Vec::new();
+    for f in fetched {
+        let Ok(text) = std::fs::read(f.dir.join(MANIFEST_FILE)) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if let Some(dependencies) = manifest.get("dependencies").and_then(|d| d.as_object()) {
+            needs.extend(dependencies.keys().cloned());
+        }
+    }
+    for id in needs {
+        if dirs.iter().any(|(_, e): &(std::path::PathBuf, PackageEntry)| e.id == id) {
+            continue;
+        }
+        dirs.push((
+            root.to_path_buf(),
+            PackageEntry {
+                id: id.clone(),
+                version: "0.0.0".into(),
+                side: bri_package::packages::Side::Server,
+                dir: id,
+                role: None,
+            },
+        ));
+    }
     let catalog = Catalog::load_dirs(&dirs, false).map_err(|problems| {
         anyhow::anyhow!(
             "A downloaded package does not load: {}",

@@ -202,6 +202,7 @@ pub async fn fetch_missing(
         cache,
         progress,
         u64::MAX,
+        &[],
     )
     .await
 }
@@ -209,12 +210,15 @@ pub async fn fetch_missing(
 /// [`fetch_missing`] from the host `pin` names (a saved certificate, an
 /// invite's key, or trust on first use, as for joining). A download over
 /// `approved` bytes stops before its first byte with [`NeedsApproval`].
+/// Packages in `have` (exactly as the client already runs them) are left
+/// out: neither downloaded nor returned.
 pub async fn fetch_missing_pinned(
     address: std::net::SocketAddr,
     pin: &HostPin,
     cache: &Cache,
     progress: &Progress,
     approved: u64,
+    have: &[PackageRef],
 ) -> Result<Vec<Fetched>> {
     let (endpoint, connection, _) =
         crate::client::connect_quic(address, pin, Duration::from_secs(10)).await?;
@@ -251,6 +255,7 @@ pub async fn fetch_missing_pinned(
             bail!("Expected the server's package list");
         };
         Environment::validate_refs(&offered)?;
+        let offered: Vec<PackageRef> = offered.into_iter().filter(|p| !have.contains(p)).collect();
         let mut listings = Vec::new();
         for package in &offered {
             if cache.installed(package).is_some() {

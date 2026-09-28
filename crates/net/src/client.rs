@@ -140,7 +140,9 @@ impl Client {
         )
         .await
     }
-    /// Joins like [`Client::connect_reporting`]; when the server refuses
+    /// Joins like [`Client::connect_reporting`], then fetches the
+    /// client-only packages the server offers that this client lacks (HUD
+    /// panels, models) and hands them to `load`. When the server refuses
     /// because shared packages differ and downloading can fix it (nothing
     /// the server lacks is required), fetches what the server offers into
     /// `cache` and joins once more. `load` receives the fetched packages,
@@ -162,6 +164,7 @@ impl Client {
         ask_above: u64,
         mut approve: impl FnMut(u64) -> Approval,
     ) -> Result<(Self, Vec<crate::packages::Fetched>)> {
+        let have = packages.clone();
         let refused = match Self::connect_pinned(
             address,
             pin.clone(),
@@ -174,7 +177,30 @@ impl Client {
         )
         .await
         {
-            Ok(client) => return Ok((client, Vec::new())),
+            Ok(client) => {
+                // Joined: every shared package matches. Client-only Add-Ons
+                // the server runs (HUD panels, models) come down now; a host
+                // that offers nothing leaves the join as it is.
+                let mut approved = ask_above;
+                let fetched = loop {
+                    let result = crate::packages::fetch_missing_pinned(
+                        address, &pin, cache, &progress, approved, &have,
+                    )
+                    .await;
+                    if let Err(error) = &result
+                        && let Some(&crate::packages::NeedsApproval(total)) = error.downcast_ref()
+                    {
+                        ensure!(approve(total).await, DownloadDeclined);
+                        approved = total;
+                        continue;
+                    }
+                    break result.unwrap_or_default();
+                };
+                if !fetched.is_empty() {
+                    load(&fetched)?;
+                }
+                return Ok((client, fetched));
+            }
             Err(error) => error,
         };
         let Some(differ) = refused.downcast_ref::<PackagesDiffer>() else {
@@ -193,7 +219,7 @@ impl Client {
         let mut approved = ask_above;
         let fetched = loop {
             let result =
-                crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, approved)
+                crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, approved, &have)
                     .await;
             if let Err(error) = &result
                 && let Some(&crate::packages::NeedsApproval(total)) = error.downcast_ref()

@@ -6,7 +6,7 @@
 //! under it, not yet listed in packages.json) and BRI_ADD_ON_JOIN_ROOT (base
 //! game only). The host listens on UDP BRI_ADD_ON_PORT (default 28117) so a
 //! game on 28000 is left alone. Skips when the roots are unset.
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_ui::{api::*, screens::ScreenId};
 use std::{
@@ -135,6 +135,23 @@ fn host(app: &mut App, port: u16) -> Result<()> {
     )
 }
 
+fn host_mode(app: &mut App, port: u16, mode: &GameModeInfo) -> Result<()> {
+    app.ui.core.prefs.set("$Pref::Server::Port", port.to_string());
+    request(
+        app,
+        UiAction::HostGame {
+            map: mode.map.clone().unwrap_or_else(|| SLATE.into()),
+            mode: ServerMode::Lan,
+            game_mode: Some(mode.id.clone()),
+            max_players: 4,
+            server_name: "Add-On join".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )
+}
+
 fn join(app: &mut App, port: u16) -> Result<()> {
     request(
         app,
@@ -203,25 +220,28 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download() -> Re
     println!("off: guest joined, no HUD");
     leave(&mut [&mut guest, &mut host_app])?;
 
-    // 2. A client-only Add-On on (the Stress Lab HUD): joiners need not
-    //    have it, and on Slate nobody sees it.
+    // 2. A client-only Add-On on (the Stress Lab HUD): on Slate nobody sees
+    //    it; in the Stress Lab game mode the guest downloads it and sees it.
     set_add_on(&mut host_app, "stresslab-hud", true)?;
+    set_add_on(&mut host_app, "stresslab-mode", true)?;
     host(&mut host_app, port)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
     join(&mut guest, port)?;
-    until(
-        &mut [&mut host_app, &mut guest],
-        "guest in game (HUD Add-On on)",
-        240,
-        |a| in_game(a[1]),
-    )?;
-    ensure!(
-        host_panels(&host_app).is_empty(),
-        "HUD shown on Slate: {:?}",
-        host_panels(&host_app)
-    );
-    println!("client-only on: guest joined, no HUD on Slate");
+    until(&mut [&mut host_app, &mut guest], "guest in game (HUD Add-On on)", 240, |a| in_game(a[1]))?;
+    ensure!(host_panels(&host_app).is_empty(), "HUD shown on Slate: {:?}", host_panels(&host_app));
     leave(&mut [&mut guest, &mut host_app])?;
+    let mode = host_app.ui.core.game_modes.first().cloned().context("no Stress Lab mode")?;
+    host_mode(&mut host_app, port, &mode)?;
+    until(&mut [&mut host_app], "host in the Stress Lab", 180, |a| in_game(a[0]))?;
+    join(&mut guest, port)?;
+    until(&mut [&mut host_app, &mut guest], "guest sees the miner panel", 240, |a| {
+        in_game(a[1]) && !host_panels(a[1]).is_empty()
+    })?;
+    let cache = guest_cache_ids(&guest);
+    ensure!(cache.iter().any(|c| c == "stresslab-hud"), "HUD not downloaded: {cache:?}");
+    println!("client-only: guest downloaded the HUD and sees {:?}", host_panels(&guest));
+    leave(&mut [&mut guest, &mut host_app])?;
+    set_add_on(&mut host_app, "stresslab-mode", false)?;
 
     // 3. A brick Add-On on: the guest downloads it, joins, and can use it.
     set_add_on(&mut host_app, "stresslab-hud", false)?;

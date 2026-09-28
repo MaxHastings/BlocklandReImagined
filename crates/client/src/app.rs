@@ -387,6 +387,9 @@ pub struct App {
     client_code: crate::client_code::ClientCode,
     /// Every enabled package including server behaviour, for hosting.
     server_packages: Option<Arc<bri_package_runtime::Catalog>>,
+    /// Tools and tests chose the Add-Ons with `enable_packages`; hosting
+    /// then runs those instead of re-reading packages.json.
+    packages_from_tools: bool,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
     /// Non-rendering bricks, drawn only while a building tool is out, and
@@ -597,11 +600,13 @@ impl App {
         self.package_catalog = client;
         self.server_packages = server;
         self.client_code = crate::client_code::ClientCode::load(root, set);
+        self.packages_from_tools = true;
         Ok(())
     }
     /// The Add-Ons screen changed which Add-Ons are on: the next game uses
     /// the new list, with no restart.
     fn add_ons_changed(&mut self, mut view: AddOnsView) {
+        self.packages_from_tools = false;
         let root = self.content.paths.root.clone();
         let applied = bri_package::packages::PackageSet::load_root(&root)
             .and_then(|set| self.apply_packages(&set));
@@ -1292,6 +1297,7 @@ impl App {
             package_catalog,
             client_code,
             server_packages,
+            packages_from_tools: false,
             package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_gpu: None,
@@ -1907,8 +1913,10 @@ impl App {
         // A host runs its own Add-On list as it is now; a game joined before
         // may have loaded another server's.
         self.disconnect();
-        let set = bri_package::packages::PackageSet::load_root(&self.content.paths.root)?;
-        self.apply_packages(&set)?;
+        if !self.packages_from_tools {
+            let set = bri_package::packages::PackageSet::load_root(&self.content.paths.root)?;
+            self.apply_packages(&set)?;
+        }
         // What runs: the chosen game mode's Add-Ons, or (Custom) every
         // enabled Add-On that fits the map. A package world stands on its
         // environment map; the packages then generate the ground.
