@@ -3466,3 +3466,18 @@ plus a 64-player crowd capped at 32 pushers: ~1 ms/frame in debug).
   game time, so sampling stays dense however slow the machine is; checks
   unchanged. Evidence: 12 runs six at a time pass, worst gap 0.006 rad; six
   more with the `claude/smoothing` pose clock applied pass.
+
+## 2026-09-28 Paint colour changes fade like v20
+
+- Maxwell remembered undo and painting fading bricks to their new colour.
+  v20's scripts only call `setColor`. The engine eases every drawn brick
+  colour toward its new colour at `k = 4 * dt` per frame (read from
+  `blocklandv20.exe` 0x53cc90), so paint cans, undo, the wrench and
+  `setColor` events all fade. The client now does the same
+  (`crates/client/src/brick_fade.rs`). Changing bricks leave their chunk and
+  are drawn alone until they settle. The recovered rules and limits are in
+  `docs/audits/bricks.md` ("Paint colour changes ease in"). Evidence:
+  `cargo test -p bri-client --lib`, `cargo clippy -p bri-client --lib
+  --tests`, `cargo build -p bri-client --bins`. Not yet seen in a visible
+  window. Maxwell's check is to paint a brick, undo it, and watch both fade
+  over about a second.

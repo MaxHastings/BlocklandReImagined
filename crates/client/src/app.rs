@@ -71,6 +71,8 @@ type WorldRender = (
 struct WorldJob {
     receiver: mpsc::Receiver<WorldRender>,
     abort: tokio::task::AbortHandle,
+    /// Easing bricks the rebuilt chunks leave out.
+    left_out: BTreeSet<u64>,
 }
 impl Drop for WorldJob {
     fn drop(&mut self) {
@@ -396,6 +398,11 @@ pub struct App {
     /// Killed-brick debris (v20 brick explosions) and its GPU models.
     brick_debris: crate::brick_debris::BrickDebris,
     debris_models: crate::brick_debris::DebrisModels,
+    /// Bricks easing to a new paint colour, drawn apart from their chunks.
+    brick_fades: crate::brick_fade::BrickFades,
+    fade_models: crate::brick_fade::FadeModels,
+    /// The easing bricks the applied chunks leave out.
+    chunks_left_out: BTreeSet<u64>,
     /// Client-side mod packages (HUD panels, models) from `packages.json`.
     package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
     /// Sandboxed code of enabled Add-Ons, run while a game is entered.
@@ -1339,6 +1346,9 @@ impl App {
             weapon_cue_drops: 0,
             brick_debris: Default::default(),
             debris_models: Default::default(),
+            brick_fades: Default::default(),
+            fade_models: Default::default(),
+            chunks_left_out: BTreeSet::new(),
             package_catalog,
             client_code,
             server_packages,
@@ -1492,6 +1502,7 @@ impl App {
         self.weapon_cue_drops = 0;
         self.brick_debris.clear();
         self.debris_models.clear();
+        self.fade_models.clear();
         self.package_models.clear();
         self.brick_kills.clear();
         self.hidden_gpu = None;
@@ -1522,6 +1533,9 @@ impl App {
         self.cpu_chunks.clear();
         self.gpu_chunks.clear();
         self.chunk_uploads.clear();
+        self.brick_fades.clear();
+        self.fade_models.clear();
+        self.chunks_left_out.clear();
         self.world_source = None;
         self.world_revision = 0;
         self.world_log = None;
@@ -3592,9 +3606,10 @@ impl App {
             self.brick_debris.sync_world(&view.world);
             self.hidden_uploaded = None;
         }
-        if let Some(job) = &self.world_job
+        if let Some(job) = &mut self.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
         {
+            let left_out = std::mem::take(&mut job.left_out);
             self.world_job = None;
             match result {
                 // Always applied: chunk state is consistent with `source`, and
@@ -3614,6 +3629,8 @@ impl App {
                     self.world_source = Some(source);
                     self.world_revision = revision;
                     self.world_log = Some(log);
+                    self.brick_fades.chunks_applied(&left_out);
+                    self.chunks_left_out = left_out;
                 }
                 Err(reason) => {
                     self.ui.apply_session(
@@ -3628,10 +3645,11 @@ impl App {
         if self.world_job.is_none()
             && let (Some(meshes), Some(materials), Some(palette), Some(view)) =
                 (&self.meshes, &self.materials, &self.palette, &a.view)
-            && self
+            && (self
                 .world_source
                 .as_ref()
                 .is_none_or(|previous| !Arc::ptr_eq(previous, &view.world))
+                || self.brick_fades.needs_rebuild(&self.chunks_left_out))
         {
             let meshes = meshes.clone();
             let materials = materials.clone();
@@ -3645,6 +3663,16 @@ impl App {
                 .as_ref()
                 .filter(|applied| Arc::ptr_eq(applied, &log))
                 .and_then(|log| log.between(self.world_revision, revision));
+            // v20 eases repainted bricks to their new colour (`brick_fade`).
+            match (&self.world_source, &known) {
+                (Some(drawn), Some(known)) if !known.palette => {
+                    self.brick_fades
+                        .observe(drawn, &world, known.bricks.iter().copied());
+                }
+                _ => self.brick_fades.settle_all(),
+            }
+            let left_out = self.brick_fades.left_out();
+            let job_left_out = left_out.clone();
             let mut chunked = std::mem::take(&mut self.chunked);
             let (send, receive) = mpsc::sync_channel(1);
             let load_limit = self.load_limit.clone();
@@ -3656,9 +3684,10 @@ impl App {
                 let result = tokio::task::spawn_blocking(move || {
                     let _permit = permit;
                     chunked
-                        .update(
+                        .update_leaving_out(
                             world,
                             known.as_ref(),
+                            &left_out,
                             &meshes,
                             &palette,
                             Some(&materials),
@@ -3674,6 +3703,7 @@ impl App {
             self.world_job = Some(WorldJob {
                 receiver: receive,
                 abort: task.abort_handle(),
+                left_out: job_left_out,
             });
         }
         if a.reloading
@@ -5242,6 +5272,8 @@ impl PlatformApp for App {
                 .brick_debris
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
+            self.brick_fades
+                .advance(game_elapsed.as_secs_f32(), &self.chunks_left_out);
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
@@ -6122,6 +6154,7 @@ impl PlatformApp for App {
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
+        self.fade_models.clear();
         self.package_models.clear();
         self.hidden_gpu = None;
         self.hidden_uploaded = None;
@@ -6166,6 +6199,7 @@ impl PlatformApp for App {
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
+        self.fade_models.clear();
         self.package_models.clear();
         self.hidden_gpu = None;
         self.hidden_uploaded = None;
@@ -6424,6 +6458,18 @@ impl PlatformApp for App {
                 materials,
                 &view.world.palette,
             )?;
+            if let Some(world) = &self.world_source {
+                self.fade_models.upload(
+                    &self.brick_fades,
+                    &self.chunks_left_out,
+                    world,
+                    renderer,
+                    frame.device,
+                    frame.queue,
+                    meshes,
+                    materials,
+                )?;
+            }
             self.package_models.upload(
                 package_catalog,
                 package_placements,
@@ -6672,6 +6718,7 @@ impl PlatformApp for App {
             }
         }
         scenes.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
+        scenes.extend(self.fade_models.scenes());
         let mut item_draws = self.world_items.draws();
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
@@ -6689,7 +6736,11 @@ impl PlatformApp for App {
             // projected shape shadows; bricks only with the BrickShadows pref.
             // The map's own shadows are baked. Whatever does not cast still
             // stops shadows passing through it (see bri_render::shadow).
-            let chunks: Vec<&GpuScene> = self.gpu_chunks.values().collect();
+            let chunks: Vec<&GpuScene> = self
+                .gpu_chunks
+                .values()
+                .chain(self.fade_models.scenes())
+                .collect();
             let (mut bodies, mut blockers) = if self.graphics.brick_shadows {
                 (chunks, Vec::new())
             } else {

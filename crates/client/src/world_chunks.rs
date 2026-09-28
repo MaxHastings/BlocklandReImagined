@@ -89,8 +89,10 @@ fn same_appearance(a: &Brick, b: &Brick) -> bool {
                 && a.definition == b.definition
                 && a.print == b.print))
 }
-fn visible_key(brick: Option<&Brick>) -> Option<ChunkKey> {
-    brick.filter(|b| b.visible).map(|b| chunk_key(b.position))
+fn visible_key(brick: Option<&Brick>, left_out: bool) -> Option<ChunkKey> {
+    brick
+        .filter(|b| b.visible && !left_out)
+        .map(|b| chunk_key(b.position))
 }
 
 /// CPU chunk membership for the last applied replica. Owned by one builder
@@ -101,6 +103,8 @@ pub struct ChunkedWorld {
     members: HashMap<ChunkKey, BTreeSet<u64>>,
     triangles: HashMap<ChunkKey, usize>,
     total_triangles: usize,
+    /// Visible bricks drawn elsewhere for now (easing to a new colour).
+    left_out: BTreeSet<u64>,
 }
 
 /// Rebuilt chunks; `None` removes a chunk that no longer holds visible bricks.
@@ -134,6 +138,31 @@ impl ChunkedWorld {
         materials: Option<&BrickMaterials>,
         max_triangles: usize,
     ) -> Result<ChunkChanges> {
+        let left_out = self.left_out.clone();
+        self.update_leaving_out(
+            next,
+            known,
+            &left_out,
+            meshes,
+            palette,
+            materials,
+            max_triangles,
+        )
+    }
+    /// `update`, leaving the `left_out` bricks out of their chunks while
+    /// something else draws them. Bricks entering or leaving that set
+    /// rebuild their chunks like any other change.
+    #[allow(clippy::too_many_arguments)] // `update` plus the left-out set
+    pub fn update_leaving_out(
+        &mut self,
+        next: Arc<PublicWorld>,
+        known: Option<&crate::network::WorldChanges>,
+        left_out: &BTreeSet<u64>,
+        meshes: &BTreeMap<String, BrickMesh>,
+        palette: &BrickPalette,
+        materials: Option<&BrickMaterials>,
+        max_triangles: usize,
+    ) -> Result<ChunkChanges> {
         ensure!(
             !next.palette.is_empty()
                 && next.palette.len() <= 256
@@ -146,13 +175,16 @@ impl ChunkedWorld {
         );
         let mut dirty = BTreeSet::new();
         let mut moves = Vec::new();
+        let was_out = &self.left_out;
         let mut change = |id: u64, old: Option<&Brick>, new: Option<&Brick>| {
+            let (out_before, out_now) = (was_out.contains(&id), left_out.contains(&id));
             if let (Some(old), Some(new)) = (old, new)
                 && same_appearance(old, new)
+                && out_before == out_now
             {
                 return;
             }
-            let (from, to) = (visible_key(old), visible_key(new));
+            let (from, to) = (visible_key(old, out_before), visible_key(new, out_now));
             dirty.extend(from);
             dirty.extend(to);
             if from.is_some() || to.is_some() {
@@ -165,7 +197,11 @@ impl ChunkedWorld {
             .as_ref()
             .filter(|previous| next.palette.starts_with(&previous.palette));
         if let (Some(previous), Some(known)) = (incremental, known) {
-            for id in &known.bricks {
+            for id in known
+                .bricks
+                .iter()
+                .chain(was_out.symmetric_difference(left_out))
+            {
                 change(*id, previous.bricks.get(id), next.bricks.get(id));
             }
         } else if let Some(previous) = incremental {
@@ -273,6 +309,7 @@ impl ChunkedWorld {
         }
         self.total_triangles = total;
         self.source = Some(next);
+        self.left_out = left_out.clone();
         Ok(changes)
     }
 }
@@ -485,6 +522,52 @@ mod tests {
             );
             assert_eq!(state.triangles(), 2);
         }
+    }
+
+    /// An easing brick leaves its chunk while drawn apart and comes back
+    /// once settled, both by rebuilding just that chunk.
+    #[test]
+    fn left_out_bricks_leave_and_rejoin_their_chunk() {
+        let base = world([(1, brick([1.0; 3])), (2, brick([2.0, 1.0, 1.0]))]);
+        let mut state = ChunkedWorld::default();
+        update(&mut state, &base, None);
+        let key = chunk_key([1.0; 3]);
+        let rebuild = |state: &mut ChunkedWorld, next: &Arc<PublicWorld>, out: &[u64]| {
+            let known = WorldChanges::default();
+            state
+                .update_leaving_out(
+                    next.clone(),
+                    Some(&known),
+                    &out.iter().copied().collect(),
+                    &meshes(),
+                    &BrickPalette::development(),
+                    None,
+                    100,
+                )
+                .unwrap()
+                .into_iter()
+                .map(|(key, scene)| (key, scene.map(|s| s.vertices.len())))
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(
+            rebuild(&mut state, &base, &[1]),
+            BTreeMap::from([(key, Some(4))])
+        );
+        assert_eq!(state.chunk_bricks(key), 1);
+        // Nothing changed: nothing rebuilt.
+        assert!(rebuild(&mut state, &base, &[1]).is_empty());
+        assert_eq!(
+            rebuild(&mut state, &base, &[]),
+            BTreeMap::from([(key, Some(8))])
+        );
+        assert_eq!(state.chunk_bricks(key), 2);
+        // A repaint while left out still keeps it out; `update` keeps the set.
+        let mut painted = (*base).clone();
+        painted.bricks.get_mut(&1).unwrap().color = 1;
+        rebuild(&mut state, &base, &[1]);
+        let painted = Arc::new(painted);
+        update(&mut state, &painted, Some(&[1]));
+        assert_eq!(state.chunk_bricks(key), 1);
     }
 
     #[test]
