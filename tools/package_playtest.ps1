@@ -165,7 +165,8 @@ if ($StressLab) {
         if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
         $files = @(Get-PackageFiles $dir.FullName)
-        $side = if (@($manifest.provides | Where-Object { $_.kind -in @('behaviour','script','world','entity') }).Count -gt 0) { 'server' } else { 'client' }
+        # Keep in step with bri_package::library::SERVER_KINDS.
+        $side = if (@($manifest.provides | Where-Object { $_.kind -in @('behaviour','script','world','entity','mode') }).Count -gt 0) { 'server' } else { 'client' }
         $modPackages += [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $dir.FullName; files = $files.Count }
     }
     if ($modPackages.Count -eq 0) { throw "No Stress Lab packages found in $modRoot" }
