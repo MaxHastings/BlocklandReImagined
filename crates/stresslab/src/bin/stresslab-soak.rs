@@ -214,7 +214,7 @@ async fn main() -> Result<()> {
         host_commands: report.commands,
         host_rejected: report.rejected,
         chunks_generated: chunks,
-        voxels_live: report.native_world.bricks.len(),
+        voxels_live: report.package_stats.voxels,
         voxels_removed: removed,
         world_bricks_at_end: report.native_world.bricks.len(),
         world_extent_chunks: extent,

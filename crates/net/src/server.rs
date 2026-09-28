@@ -141,6 +141,7 @@ pub struct ServerReport {
     #[serde(skip)]
     pub packages: Option<bri_sim::session::PackageSave>,
     pub package_diagnostics: Vec<bri_package::diag::Diagnostic>,
+    pub package_stats: bri_sim::session::PackageStats,
 }
 impl ServerHandle {
     /// Answer LAN discovery queries for this host until it stops.
@@ -857,6 +858,7 @@ async fn run(
         notices: session.take_notices(),
         packages: session.package_save(),
         package_diagnostics: session.package_diagnostics(),
+        package_stats: session.package_stats(),
     })
 }
 
