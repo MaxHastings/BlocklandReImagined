@@ -764,6 +764,7 @@ impl App {
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         elapsed: f32,
         flare_visible: impl Fn(Vec3) -> Result<bool>,
+        ground: impl Fn(Vec3, Vec3, f32) -> Option<(f32, Vec3)>,
     ) -> Result<()> {
         let body = |id: u64| {
             vehicles
@@ -788,6 +789,23 @@ impl App {
                 Some((*owner, feet, Vec3::from(player.velocity)))
             })
             .collect();
+        // The jet exhausts straight down (`ActorEffects::advance`); v20 casts
+        // its ground dust along the same axis.
+        let dust: Vec<_> = jets
+            .iter()
+            .flat_map(|(owner, feet, _)| {
+                feet.iter().zip(0u8..).filter_map(|(m, i)| {
+                    let origin = m.w_axis.truncate();
+                    let hit = ground(
+                        origin,
+                        Vec3::NEG_Y,
+                        crate::actor_effects::JET_GROUND_DISTANCE,
+                    );
+                    crate::actor_effects::jet_dust(*owner, i, origin, Vec3::NEG_Y, hit)
+                })
+            })
+            .collect();
+        actor_effects.update_jet_dust(&dust)?;
         let burning: Vec<_> = view
             .vehicles
             .values()
@@ -846,17 +864,6 @@ impl App {
             })
             .collect();
         actor_effects.update_water(elapsed, &swimmers)?;
-        let mut sprays = Vec::new();
-        for (id, info) in &view.vehicles {
-            let (Some(d), Some(frame)) = (
-                vehicle_assets.definition(&info.definition),
-                vehicles.frame(*id),
-            ) else {
-                continue;
-            };
-            sprays.extend(crate::actor_effects::tire_sprays(*id, d, frame));
-        }
-        actor_effects.update_tires(&sprays)?;
         let mut sprays = Vec::new();
         for (id, info) in &view.vehicles {
             let (Some(d), Some(frame)) = (
@@ -4883,6 +4890,10 @@ impl PlatformApp for App {
                 |at| {
                     Ok(eye.distance(at) < bri_fx_runtime::FLARE_MAX_DISTANCE
                         && building.effect_visible(bri_world::BrickId::MAX, eye, at)?)
+                },
+                |from, direction, length| {
+                    let hit = building.target(from, direction, length).ok()??;
+                    Some((hit.distance, hit.normal))
                 },
             )?;
             self.explosion_shapes.advance(game_elapsed.as_secs_f32());

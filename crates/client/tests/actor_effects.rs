@@ -93,6 +93,7 @@ fn effects() -> Arc<EffectsPack> {
                 emitter("v20/emitter/loveemitter", 0.),
                 emitter("v20/emitter/playerburnemitter", 0.),
                 emitter("v20/emitter/playerjetemitter", 0.),
+                emitter("v20/emitter/playerjetgroundemitter", 0.),
                 emitter("v20/emitter/vehicleburnemitter", 0.),
                 emitter("v20/emitter/vehiclesplashemitter", 0.1),
                 emitter("v20/emitter/vehiclesplashmistemitter", 0.25),
@@ -306,6 +307,39 @@ fn jets_burning_vehicles_and_splashes_follow_their_sources() -> Result<()> {
         "{:?}",
         fx.diagnostics.messages
     );
+    Ok(())
+}
+
+/// `PlayerStandardArmor.jetGroundDistance = 4` and the 0.1 lift of
+/// `Player::updateJetEffects` (blocklandv20.exe 0x5ad1b0, 0x711fb0): dust at
+/// full rate on the ground, fading linearly to none 4 units up.
+#[test]
+fn jet_dust_kicks_up_below_four_units_and_fades_with_height() -> Result<()> {
+    use bri_client::actor_effects::{jet_dust, JET_GROUND_DISTANCE, JET_GROUND_LIFT};
+    assert_eq!((JET_GROUND_DISTANCE, JET_GROUND_LIFT), (4.0, 0.1));
+    let at = Vec3::new(3., 10., 0.);
+    let dust = |foot, height: f32| jet_dust(7, foot, at, Vec3::NEG_Y, Some((height, Vec3::Y)));
+    let low = dust(0, 0.5).expect("dust half a unit up");
+    assert!(low.position.distance(Vec3::new(3., 9.6, 0.)) < 1e-6);
+    assert_eq!(low.normal, Vec3::Y);
+    assert!((low.rate - (4. - 0.4) / 4.).abs() < 1e-6);
+    assert!((dust(0, 2.1).unwrap().rate - 0.5).abs() < 1e-6);
+    assert!(dust(0, 4.1).is_none(), "the lifted point is past the cast");
+    assert!(jet_dust(7, 0, at, Vec3::NEG_Y, None).is_none());
+    // A slope ejects along its own normal.
+    let slope = jet_dust(7, 1, at, Vec3::NEG_Y, Some((1., Vec3::new(1., 1., 0.)))).unwrap();
+    assert!((slope.normal.length() - 1.).abs() < 1e-6 && slope.normal.x > 0.);
+
+    let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+    fx.update_jet_dust(&[low, dust(1, 1.).unwrap()])?;
+    fx.advance(0.1, head, &[], &[], &[])?;
+    assert_eq!(fx.jet_dust_count(), 2, "one source per foot");
+    assert!(fx.world().particle_count() > 0);
+    fx.update_jet_dust(&[low])?;
+    assert_eq!(fx.jet_dust_count(), 1);
+    fx.update_jet_dust(&[])?;
+    assert_eq!(fx.jet_dust_count(), 0);
+    assert!(fx.diagnostics.messages.is_empty(), "{:?}", fx.diagnostics.messages);
     Ok(())
 }
 

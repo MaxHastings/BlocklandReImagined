@@ -18,6 +18,12 @@ use std::{
 const MAX_MESSAGES: usize = 64;
 const TICK_SECONDS: f32 = 1.0 / bri_weapons::TICK_HZ as f32;
 const JET_EMITTER: &str = "v20/emitter/playerjetemitter";
+/// `PlayerStandardArmor.jetGroundEmitter`; every stock jetting type inherits it.
+const JET_GROUND_EMITTER: &str = "v20/emitter/playerjetgroundemitter";
+/// `PlayerStandardArmor.jetGroundDistance`.
+pub const JET_GROUND_DISTANCE: f32 = 4.0;
+/// How far above the surface the dust starts (blocklandv20.exe 0x711fb0).
+pub const JET_GROUND_LIFT: f32 = 0.1;
 /// `cameraImage`: its two states re-emit CameraEmitterA every 50 ms, so the
 /// admin camera glows for as long as it is mounted.
 const CAMERA_EMITTER: &str = "v20/emitter/cameraemittera";
@@ -170,6 +176,46 @@ pub fn tire_sprays(
         .collect()
 }
 
+/// One foot's jet ground dust this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JetDust {
+    pub actor: u64,
+    pub foot: u8,
+    /// Where the dust starts: the surface lifted along its normal.
+    pub position: Vec3,
+    /// The surface normal, the dust's ejection axis.
+    pub normal: Vec3,
+    /// Seconds of emitter time per second.
+    pub rate: f32,
+}
+
+/// `Player::updateJetEffects` (blocklandv20.exe 0x5ad1b0): while jetting,
+/// each foot (`LFoot`, `RFoot`) casts `jetGroundDistance` along its exhaust
+/// axis against the static world. On a hit, `jetGroundEmitter` runs at the
+/// hit point lifted 0.1 along the normal, ejecting along the normal, for
+/// `dt * (distance - d) / distance` of emitter time, where `d` runs from the
+/// foot to that lifted point: full rate at the ground, none at 4 units.
+/// `hit` is the cast's (distance, normal) along `axis` from `origin`.
+pub fn jet_dust(
+    actor: u64,
+    foot: u8,
+    origin: Vec3,
+    axis: Vec3,
+    hit: Option<(f32, Vec3)>,
+) -> Option<JetDust> {
+    let (distance, normal) = hit?;
+    let normal = normal.try_normalize()?;
+    let position = origin + axis * distance + normal * JET_GROUND_LIFT;
+    let rate = (JET_GROUND_DISTANCE - origin.distance(position)) / JET_GROUND_DISTANCE;
+    (rate > 0.0 && position.is_finite()).then_some(JetDust {
+        actor,
+        foot,
+        position,
+        normal,
+        rate: rate.min(1.0),
+    })
+}
+
 /// A presented player for liquid effects.
 #[derive(Clone, Copy, Debug)]
 pub struct Swimmer {
@@ -219,6 +265,8 @@ pub struct ActorEffects {
     /// Finite emitters that follow their anchor until they expire.
     one_shots: Vec<(Anchor, EffectHandle)>,
     jets: BTreeMap<(u64, u8), EffectHandle>,
+    /// Jet ground dust by (player, foot).
+    jet_dust: BTreeMap<(u64, u8), EffectHandle>,
     burning: BTreeMap<u64, EffectHandle>,
     lights: BTreeMap<u64, EffectHandle>,
     froth: BTreeMap<u64, Froth>,
@@ -251,6 +299,7 @@ impl ActorEffects {
             images: BTreeMap::new(),
             one_shots: Vec::new(),
             jets: BTreeMap::new(),
+            jet_dust: BTreeMap::new(),
             burning: BTreeMap::new(),
             lights: BTreeMap::new(),
             froth: BTreeMap::new(),
@@ -271,6 +320,9 @@ impl ActorEffects {
     }
     pub fn jet_count(&self) -> usize {
         self.jets.len()
+    }
+    pub fn jet_dust_count(&self) -> usize {
+        self.jet_dust.len()
     }
     pub fn burning_count(&self) -> usize {
         self.burning.len()
@@ -293,6 +345,7 @@ impl ActorEffects {
         self.images.clear();
         self.one_shots.clear();
         self.jets.clear();
+        self.jet_dust.clear();
         self.burning.clear();
         self.lights.clear();
         self.froth.clear();
@@ -502,6 +555,42 @@ impl ActorEffects {
                         self.tires.insert((s.vehicle, s.wheel), h);
                     }
                     Err(_) => self.note(format!("Tire emitter unavailable: {}", s.emitter)),
+                },
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs [`jet_dust`] sources; a foot without one drains its dust.
+    pub fn update_jet_dust(&mut self, dust: &[JetDust]) -> Result<()> {
+        let world = &mut self.world;
+        self.jet_dust.retain(|key, handle| {
+            let keep = dust.iter().any(|d| (d.actor, d.foot) == *key);
+            if !keep {
+                world.stop(*handle, StopMode::Drain);
+            }
+            keep && world.is_active(*handle)
+        });
+        for d in dust {
+            let transform = SourceTransform {
+                position: d.position,
+                rotation: Quat::from_rotation_arc(Vec3::Y, d.normal),
+                ..Default::default()
+            };
+            let options = SourceOptions {
+                time_scale: d.rate.clamp(0.001, 1.0),
+                ..Default::default()
+            };
+            match self.jet_dust.get(&(d.actor, d.foot)) {
+                Some(&h) => {
+                    self.world.update_source(h, transform)?;
+                    self.world.update_options(h, options)?;
+                }
+                None => match self.world.start_emitter(JET_GROUND_EMITTER, transform, options) {
+                    Ok(h) => {
+                        self.jet_dust.insert((d.actor, d.foot), h);
+                    }
+                    Err(_) => self.note(format!("Jet dust unavailable: {JET_GROUND_EMITTER}")),
                 },
             }
         }
