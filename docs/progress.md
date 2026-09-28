@@ -2420,3 +2420,21 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Open: a hosted game cannot load an imported package yet, because each system
   reads one pack per role. That seam and 19 others are in
   `docs/audits/spike-addon-import.md`.
+- 2026-09-28 In-game Add-Ons manager, first slice (`docs/architecture/mod-manager.md`,
+  player research in `docs/research/mod-manager-expectations.md`). Players see
+  one word, "Add-Ons"; "package" stays internal. `bri_package::library` scans
+  the content root: `packages.json` is the enabled list, a disabled package's
+  exact entry moves to `packages-disabled.json`, and unlisted directories with
+  a `package.json` are discovered as disabled. Enabling pulls in dependencies
+  first, disabling takes dependents, base `v20-*` packages stay on, and
+  refusals (missing or wrong-version dependency, newer API, role conflict,
+  unreadable manifest, missing folder) are named diagnostics. The main menu
+  gains an Add-Ons button opening a native dialog (grouped list, search,
+  details with what it adds, where it runs, what it needs and what it may do,
+  Enabled box, Defaults). A native join screen shows a server's missing
+  add-ons with byte progress and Cancel
+  (`ConnectionState::DownloadingPackages`). No wire change. Evidence:
+  `cargo test -p bri-package library`, `cargo test -p bri-ui --lib addons`,
+  `cargo test -p bri-client --lib add_ons`, all content-free. Open: toggles
+  take effect once multi-pack loading and door-closers' join wiring read
+  `packages.json`; the join screen needs PR #1's `fetch_missing` call.

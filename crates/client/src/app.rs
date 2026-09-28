@@ -4257,6 +4257,17 @@ impl PlatformApp for App {
                     });
                     Ok(())
                 }
+                UiAction::RequestAddOns => {
+                    let view = crate::add_ons::view(&self.content.paths.root);
+                    self.ui.apply(UiUpdate::AddOns(view));
+                    Ok(())
+                }
+                UiAction::SetAddOnEnabled { ref id, enabled } => {
+                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+                        .map(|view| self.ui.apply(UiUpdate::AddOns(view)))
+                }
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
+                    .map(|view| self.ui.apply(UiUpdate::AddOns(view))),
                 UiAction::Console { ref line } => {
                     let mut out = bri_console::Output::default();
                     let unknown = crate::console::registry().exec(self, line, &mut out);

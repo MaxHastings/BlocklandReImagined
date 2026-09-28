@@ -20,6 +20,7 @@ bri-minigames = { path = "../minigames" }
 bri-vehicles = { path = "../vehicles" }
 bri-identity = { path = "../identity" }
 bri-net = { path = "../net" }
+bri-package = { path = "../package" }
 bri-crash = { path = "../crash" }
 bri-render = { path = "../render" }
 bri-ui = { path = "../ui" }

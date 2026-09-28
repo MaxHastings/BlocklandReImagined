@@ -601,6 +601,14 @@ pub enum UiAction {
     ResetMiniGame { game: MiniGameId },
     RespawnMiniGameMembers { game: MiniGameId },
     EndMiniGame { game: MiniGameId },
+    // ---- add-ons (the package library; see docs/architecture/mod-manager.md)
+    /// Read the installed packages; answered with [`UiUpdate::AddOns`].
+    RequestAddOns,
+    /// Turn a package on or off. The host also turns on what it needs, or
+    /// off what needs it, and answers with the new [`UiUpdate::AddOns`].
+    SetAddOnEnabled { id: String, enabled: bool },
+    /// Turn off every package that is not part of the base game.
+    DefaultAddOns,
 }
 
 // -------------------------------------------------------------- view models
@@ -625,8 +633,78 @@ pub enum ConnectionState {
         single_player: bool,
         admin: bool,
     },
+    /// Fetching the packages a server needs before joining it.
+    DownloadingPackages(PackageDownload),
     /// Connection failed or was dropped; shown in a message box.
     Failed { reason: String },
+}
+
+/// Join-time package download, as the join screen shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackageDownload {
+    pub server: String,
+    pub packages: Vec<DownloadRow>,
+    /// Bytes fetched and to fetch over every package.
+    pub done_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadRow {
+    pub name: String,
+    pub version: String,
+    pub bytes: u64,
+    pub state: DownloadState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadState {
+    /// Already in the download cache; nothing to fetch.
+    Cached,
+    Waiting,
+    Downloading,
+    Done,
+}
+
+/// One package as the Add-Ons screen shows it. Everything is display text
+/// the host prepared; the screen does not interpret package data.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnRow {
+    /// Package id, sent back in [`UiAction::SetAddOnEnabled`].
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// Group heading ("Game Modes", "Weapons & Items", ...).
+    pub category: String,
+    pub enabled: bool,
+    /// Base game: shown on and cannot be turned off.
+    pub locked: bool,
+    /// Where it runs, in words ("Server only: players never download it").
+    pub runs: String,
+    pub description: String,
+    pub authors: String,
+    pub license: String,
+    pub source: String,
+    /// "3 weapons", "a world", ...
+    pub provides: Vec<String>,
+    /// Package names this one needs.
+    pub needs: Vec<String>,
+    /// Names of enabled packages that need this one; turning it off turns
+    /// them off too, so the screen asks first.
+    pub needed_by: Vec<String>,
+    /// What the package is allowed to do, in words.
+    pub allowed: Vec<String>,
+    /// Problems in words, worst first.
+    pub problems: Vec<String>,
+    /// A problem stops it from loading.
+    pub broken: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnsView {
+    pub rows: Vec<AddOnRow>,
+    /// Result of the last change ("Also turned on: ...") or a list problem.
+    pub notice: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -921,6 +999,8 @@ pub enum UiUpdate {
     },
     /// Avatar preview texture for the Player Appearance screen.
     AvatarPreview(IconRef),
+    /// The installed packages, for the Add-Ons screen.
+    AddOns(AddOnsView),
 }
 
 // ----------------------------------------------------------------- settings
