@@ -495,6 +495,25 @@ impl Core {
                 | ConnectionState::InGame { local: true, .. }
         )
     }
+    /// Every writer of prefs (Options, the console) calls this after
+    /// changing them, so the parts of the game that cache a pref see it.
+    pub fn apply_prefs(&mut self) {
+        use crate::screens::options::{VOLUMES, chat_lines, volume};
+        self.hud.prefs = self.hud_prefs();
+        self.selector.queue_brick_buying =
+            self.prefs.bool_or("$pref::Input::QueueBrickBuying", true);
+        self.chat.max_lines = chat_lines(&self.prefs);
+        self.chat.line_time_ms = self
+            .prefs
+            .i64_or("$Pref::Chat::LineTime", 6500)
+            .clamp(0, 30000);
+        for &(_, pref, channel) in VOLUMES {
+            self.request(UiAction::SetVolume {
+                channel: channel.into(),
+                value: volume(&self.prefs, pref),
+            });
+        }
+    }
     pub fn hud_prefs(&self) -> HudPrefs {
         let p = &self.prefs;
         HudPrefs {
@@ -848,7 +867,7 @@ impl Core {
         // scrollInventory: %val < 0 → +1 (Torque positive = wheel up).
         let dir = if delta < 0.0 { 1 } else { -1 };
         if self.zoom_on {
-            let mut fov = self.prefs.f32_or("$Pref::player::CurrentFOV", 45.0);
+            let mut fov = crate::screens::options::zoom_fov(&self.prefs);
             if dir > 0 {
                 if fov > 5.0 {
                     fov -= 5.0;
@@ -857,7 +876,8 @@ impl Core {
                 fov += 5.0;
             }
             self.prefs
-                .set("$Pref::player::CurrentFOV", format!("{fov}"));
+                .set(crate::screens::options::ZOOM_FOV, format!("{fov}"));
+            self.save_settings();
             self.game(GameAction::SetZoomFov { fov });
             return;
         }
@@ -914,8 +934,8 @@ impl Ui {
         let rep = prefs.i64_or("$Pref::Input::brickRepeatTime", 50).max(1) as u64;
         let chat = ChatModel::new(
             prefs.i64_or("$Pref::Chat::CacheLines", 1000) as usize,
-            prefs.i64_or("$Pref::Chat::MaxDisplayLines", 8) as usize,
-            prefs.i64_or("$Pref::Chat::LineTime", 6500),
+            crate::screens::options::chat_lines(&prefs),
+            prefs.i64_or("$Pref::Chat::LineTime", 6500).clamp(0, 30000),
         );
         let remap_commands = pack
             .data
@@ -1624,10 +1644,7 @@ impl Ui {
                     && dx.is_finite()
                     && dy.is_finite()
                 {
-                    let sens = self
-                        .core
-                        .prefs
-                        .f32_or("$pref::Input::MouseSensitivity", 0.75);
+                    let sens = crate::screens::options::mouse_sensitivity(&self.core.prefs);
                     let inv = if self.core.prefs.bool_or("$pref::Input::MouseInvert", false) {
                         -1.0
                     } else {

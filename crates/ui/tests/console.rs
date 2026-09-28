@@ -233,3 +233,23 @@ fn fov_drives_the_options_camera_setting() {
     assert_eq!(u.core.prefs.get(DEFAULT_FOV), Some("110"));
     assert!(log_has("fov: expected 70 to 140"));
 }
+
+#[test]
+fn console_settings_share_the_options_ranges_and_apply_at_once() {
+    use bri_ui::screens::options::{CHAT_LINES, MOUSE_SENSITIVITY, mouse_sensitivity};
+    let mut u = ui();
+    tilde(&mut u);
+    // The chat HUD sees a console change without reopening Options.
+    submit(&mut u, "chatlines 20");
+    assert_eq!(u.core.prefs.get(CHAT_LINES), Some("20"));
+    assert_eq!(u.core.chat.max_lines, 20);
+    // Outside the Options field's 4..100 is rejected, as the slider would.
+    submit(&mut u, "chatlines 2");
+    assert_eq!(u.core.chat.max_lines, 20);
+    // Mouse sensitivity takes the slider's range, so Options never clamps a
+    // console value behind the player's back.
+    submit(&mut u, "mousesensitivity 1.5");
+    assert_eq!(mouse_sensitivity(&u.core.prefs), 1.5);
+    submit(&mut u, "mousesensitivity 5");
+    assert_eq!(u.core.prefs.get(MOUSE_SENSITIVITY), Some("1.5"));
+}

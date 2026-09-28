@@ -77,7 +77,7 @@ impl Store for Core {
     fn set(&mut self, key: &str, value: &str) {
         let key = self.prefs.canonical(key).unwrap_or(key).to_string();
         self.prefs.set(&key, value);
-        self.hud.prefs = self.hud_prefs();
+        self.apply_prefs();
         self.save_settings();
     }
     fn keys(&self) -> Vec<String> {
@@ -237,7 +237,8 @@ pub fn registry(core: &Core) -> Registry<Core> {
     r.cvar("mutebackground", super::options::MUTE_IN_BACKGROUND, Kind::Bool, "Mute while another window has focus.");
     r.cvar("maxfps", super::options::MAX_FPS, Kind::Int { min: 0, max: 1000 }, "Frame-rate cap; 0 for unlimited.");
     r.cvar("menusounds", "$pref::Audio::MenuSounds", Kind::Bool, "Menu button sounds.");
-    r.cvar("mousesensitivity", "$pref::Input::MouseSensitivity", Kind::Float { min: 0.0, max: 10.0 }, "Mouse look speed.");
+    let (lo, hi) = super::options::MOUSE_SENSITIVITY_RANGE;
+    r.cvar("mousesensitivity", super::options::MOUSE_SENSITIVITY, Kind::Float { min: lo as f64, max: hi as f64 }, "Mouse look speed.");
     r.cvar("invertmouse", "$pref::Input::MouseInvert", Kind::Bool, "Invert mouse look.");
     r.cvar("keyboardturnspeed", super::options::KEYBOARD_TURN_SPEED, Kind::Float { min: 0.02, max: 1.0 }, "Keyboard turn rate.");
     // The Options FOV slider's pref and range; the camera reads it each frame.
@@ -248,7 +249,8 @@ pub fn registry(core: &Core) -> Registry<Core> {
         "Camera field of view in degrees (Options slider).",
     );
     r.cvar("chatsize", super::options::CHAT_SIZE, Kind::Int { min: 0, max: 10 }, "Chat text size.");
-    r.cvar("chatlines", "$Pref::Chat::MaxDisplayLines", Kind::Int { min: 1, max: 64 }, "Chat lines shown.");
+    let (lo, hi) = super::options::CHAT_LINES_RANGE;
+    r.cvar("chatlines", super::options::CHAT_LINES, Kind::Int { min: lo, max: hi }, "Chat lines shown.");
     r.cvar("shadows", "$pref::ShadowQuality", Kind::Int { min: 0, max: 4 }, "Shadow quality: 0 best .. 4 off.");
     r.cvar("antialiasing", "$pref::Video::AntiAliasing", Kind::Bool, "Multisample anti-aliasing.");
     r.cvar("anisotropy", "$pref::OpenGL::anisotropy", Kind::Float { min: 0.0, max: 1.0 }, "Anisotropic filtering, 0..1.");

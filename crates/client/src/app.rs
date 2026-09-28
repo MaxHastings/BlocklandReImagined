@@ -3681,7 +3681,7 @@ impl PlatformApp for App {
         let prefs = &self.ui.core.prefs;
         self.controls.set_fov_prefs(
             bri_ui::screens::options::default_fov(prefs),
-            prefs.f32_or("$Pref::player::CurrentFOV", 10.0),
+            bri_ui::screens::options::zoom_fov(prefs),
         );
         self.controls.set_invert_prefs(
             prefs.bool_or("$pref::Input::MouseInvert", false),

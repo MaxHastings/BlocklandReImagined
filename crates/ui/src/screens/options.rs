@@ -167,7 +167,7 @@ const VALUE_CLASSES: &[&str] = &[
     "GuiTextEditCtrl",
     "GuiTextListCtrl",
 ];
-const VOLUMES: &[(&str, &str, &str)] = &[
+pub(crate) const VOLUMES: &[(&str, &str, &str)] = &[
     (
         "OptAudioVolumeMaster",
         "$pref::Audio::masterVolume",
@@ -310,6 +310,40 @@ pub fn default_fov(p: &Prefs) -> f32 {
         fov.round().clamp(FOV_RANGE.0, FOV_RANGE.1)
     } else {
         90.0
+    }
+}
+
+/// `$pref::Input::MouseSensitivity`: v20 default 0.75, the Options slider's
+/// range. Every reader and writer uses this range.
+pub const MOUSE_SENSITIVITY: &str = "$pref::Input::MouseSensitivity";
+pub const MOUSE_SENSITIVITY_RANGE: (f32, f32) = (0.02, 2.0);
+pub fn mouse_sensitivity(p: &Prefs) -> f32 {
+    let v = p.f32_or(MOUSE_SENSITIVITY, 0.75);
+    if v.is_finite() {
+        v.clamp(MOUSE_SENSITIVITY_RANGE.0, MOUSE_SENSITIVITY_RANGE.1)
+    } else {
+        0.75
+    }
+}
+
+/// `$Pref::Chat::MaxDisplayLines`: v20 default 8, the Options field's range.
+pub const CHAT_LINES: &str = "$Pref::Chat::MaxDisplayLines";
+pub const CHAT_LINES_RANGE: (i64, i64) = (4, 100);
+pub fn chat_lines(p: &Prefs) -> usize {
+    p.i64_or(CHAT_LINES, 8)
+        .clamp(CHAT_LINES_RANGE.0, CHAT_LINES_RANGE.1) as usize
+}
+
+/// `$Pref::player::CurrentFOV`, the zoom FOV: v20 default 10; the wheel
+/// steps it by 5 within 5–85 while zoomed.
+pub const ZOOM_FOV: &str = "$Pref::player::CurrentFOV";
+pub const ZOOM_FOV_RANGE: (f32, f32) = (5.0, 85.0);
+pub fn zoom_fov(p: &Prefs) -> f32 {
+    let v = p.f32_or(ZOOM_FOV, 10.0);
+    if v.is_finite() {
+        v.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
+    } else {
+        10.0
     }
 }
 
@@ -579,9 +613,7 @@ impl Options {
         }
         s.slider(
             "SliderControlsMouseSensitivity",
-            core.prefs
-                .f32_or("$pref::Input::MouseSensitivity", 0.75)
-                .clamp(0.02, 2.0),
+            mouse_sensitivity(&core.prefs),
         );
         s.slider(
             "slider_KeyboardTurnSpeed",
@@ -954,7 +986,7 @@ impl Options {
             self.view.set_visible(
                 n,
                 self.draft
-                    .bool_or("$pref::Input::UseSuperShiftToggle", false),
+                    .bool_or("$pref::Input::UseSuperShiftToggle", true),
             );
         }
     }
@@ -988,9 +1020,9 @@ impl Options {
         for (name, pref, lo, hi) in [
             (
                 "SliderControlsMouseSensitivity",
-                "$pref::Input::MouseSensitivity",
-                0.02,
-                2.0,
+                MOUSE_SENSITIVITY,
+                MOUSE_SENSITIVITY_RANGE.0,
+                MOUSE_SENSITIVITY_RANGE.1,
             ),
             ("slider_KeyboardTurnSpeed", KEYBOARD_TURN_SPEED, 0.02, 1.0),
             ("SliderGraphicsAnisotropy", ANISOTROPY, 0.0, 1.0),
@@ -1039,9 +1071,9 @@ impl Options {
             (
                 "Opt_MaxChatLines",
                 "Max Chat Lines",
-                "$Pref::Chat::MaxDisplayLines",
-                4,
-                100,
+                CHAT_LINES,
+                CHAT_LINES_RANGE.0,
+                CHAT_LINES_RANGE.1,
             ),
         ] {
             if let Some(n) = self.view.id(name) {
@@ -1128,23 +1160,7 @@ impl Options {
             }
         }
         put_display(&mut core.prefs, self.applied_display);
-        core.hud.prefs = core.hud_prefs();
-        core.selector.queue_brick_buying =
-            core.prefs.bool_or("$pref::Input::QueueBrickBuying", true);
-        core.chat.max_lines = core
-            .prefs
-            .i64_or("$Pref::Chat::MaxDisplayLines", 8)
-            .clamp(4, 100) as usize;
-        core.chat.line_time_ms = core
-            .prefs
-            .i64_or("$Pref::Chat::LineTime", 6500)
-            .clamp(0, 30000);
-        for &(_, pref, channel) in VOLUMES {
-            core.request(UiAction::SetVolume {
-                channel: channel.into(),
-                value: volume(&core.prefs, pref),
-            });
-        }
+        core.apply_prefs();
         self.committed = true;
         core.save_settings();
         core.pop(ScreenId::Options);
