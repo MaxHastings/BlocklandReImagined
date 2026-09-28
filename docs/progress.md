@@ -3530,3 +3530,26 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   longer lists the join trust prompt as unbuilt; only elevated client code
   is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
   packaging test needs Windows (not run in the cloud).
+
+## 2026-09-28 Destructo Wand sound and admin menu (a17 report)
+
+- Max heard the Destructo Wand play a loud brick-break sound where the
+  hammer's break is quiet. v20's scripts give both tools the same path:
+  the hammer plays `hammerHitSound`, the wand its explosion's
+  `wandHitSound` (both `AudioClosest3d`, 5/30), and each `killBrick`
+  plays `BrickBreak` (`AudioClientClose3d`, 10/60) on the client. Our
+  server cues already match (new `tools.rs` test pins both). The
+  difference was the chain kill, which only the wand reaches (the hammer
+  refuses bricks that would strand others): we played one break sound
+  per popped brick, since each has its own origin. `blocklandv20.exe`
+  schedules the client's `BrickBreakSoundEvent` only when a ghost's death
+  is at least 80 ms from the last one scheduled for any brick
+  (0x539c10-0x539c57, last time at 0x81ac44) and plays it at that brick
+  (0x53a130, culled past `maxDistance`). `ClientAudio` now does the same.
+  `wandHitSound` stays: it is v20's own wand sound.
+- v20's `AdminGui_Wand` pops adminGui and escapeMenu after asking for the
+  wand; our admin screen now does too, as Max asked.
+Evidence: `cargo test -p bri-sim --test tools`, `cargo test -p bri-ui
+--test admin_screens` (the new test fails without the fix), `cargo test
+-p bri-client --lib audio -- --include-ignored`, clippy clean on the three
+crates. Not run: the gate; Max's interactive check.
