@@ -96,7 +96,10 @@ Each entry in `packages.json` has a `side`:
   version and theirs.
 
 The Add-Ons screen picks the side for Add-Ons it discovers: `server` when
-everything provided is behaviour, script or world, otherwise `shared`.
+everything provided is behaviour, script, world or entity; `client` when
+everything is a model or HUD panel; otherwise `shared`. An Add-On cannot mix
+server rules with client visuals: split it in two, the visuals depending on
+the rules, as `sample-points-hud` depends on `sample-survival-points`.
 
 ## 4. Scripts, commands, state and capabilities
 
