@@ -432,6 +432,15 @@ impl VehicleAssets {
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         self.pack.definitions.iter().find(|d| d.id == id)
     }
+    /// The player-type mount a vehicle carries as its attachment (the
+    /// Tank's `TankTurretPlayer`): the definition drawn with that model.
+    pub fn attachment_definition(&self, d: &Definition) -> Option<&Definition> {
+        let model = d.attachment_model.as_ref()?;
+        self.pack
+            .definitions
+            .iter()
+            .find(|a| a.is_actor() && a.model == *model)
+    }
     /// Whether the pack converted the model at this source path.
     pub fn has_source_model(&self, source: &str) -> bool {
         self.sources.contains_key(&source.to_ascii_lowercase())

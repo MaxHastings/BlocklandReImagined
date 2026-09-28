@@ -4364,3 +4364,39 @@ brick and colour, keep Demo Pong's events and stay unchanged on disk;
 clippy on the four crates. An offscreen render of Load Bricks shows the
 button fitting beside the ownership box. Not seen in a window: Max's
 playtest of dropping saves in and loading them.
+
+## 2026-09-28 Horse and turret third-person camera (branch `claude/horse-camera`)
+
+Max, a21: riding a horse, the third-person camera was wrong. Horse riders,
+like every player-type mount's rider (rowboat, pirate cannon, tank turret),
+fell through to the gunner chase camera: it orbited a pivot `cameraOffset`
+over the mount's feet (2.3 for the horse) along the untilted look and only
+turned the view down by `cameraTilt` afterwards. In v20 the horse is a
+`PlayerData` (`Vehicle_Horse/server.cs` `HorseArmor`: `cameraMaxDist` 8,
+`cameraVerticalOffset` 2.3, `cameraTilt` 0.261, box `2.5 2.5 2.4` x4) and
+the rider's control object, so the view is the horse's own
+`Player::getCameraTransform` (0x5ab7d0, `docs/player-simulation.md`): the
+pivot is the middle of the horse's box plus 2.3 (feet + 3.5, 1.2 higher than
+ours), the look is pitched down by the tilt and the camera sits 8 back along
+that tilted look. The Horse-Rayed player already used that camera.
+
+Now every `SeatRole::Actor` rider uses the same `pivot_camera` as players
+on foot, with the mount's collision hull as its box and its own camera
+fields. The same flaw hit the Tank's gunner: v20's `TankVehicle::onAdd`
+mounts a `TankTurretPlayer` (8 / 2.3 / 0.261, box 1.7) on mount2 and the
+gunner controls it, so the gunner now sees the turret's player camera from
+the mount2 node instead of the Tank's 13 / 7.5 / 0.4 camera. The turret's
+definition is found as the pack's player-type definition drawn with the
+Tank's attachment model (`VehicleAssets::attachment_definition`). The old
+chase camera only remains for a gunner seat with no turret player (none in
+the stock packs). Drivers of real vehicles are unchanged.
+
+Defaults picked: first person on a horse stays at the rider's seated eye
+(the horse's `Eye` node, 2.39 over its feet, was not adopted without v20
+first-person evidence); the mount's scale is not applied (the client does not
+know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
+`cargo test -p bri-client --lib -- camera horse --include-ignored`
+(`a_horse_rider_sees_the_horse_player_camera`: pivot feet + 3.5, 8 back,
+tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
+`TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
+playtest riding a horse and gunning a Tank in third person.
