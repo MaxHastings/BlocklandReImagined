@@ -3650,3 +3650,70 @@ Needs Max's playtest: F8, fly with and without left click and shift.
   `presentation.json` to the patched `weapons.json` and `item-physics.json`.
   `check-port` checks the pins the way hosts and players do, and the port
   tests assert them.
+## 2026-09-28 Add-On presentation never blocks a join
+
+- Max could not join a server running the Duplicator: the join reloaded
+  content, the item HUD found 22 weapons against 21 presented items and
+  failed with "Item HUD catalog coverage mismatch", and the player saw only
+  "Loading the server's Add-Ons". c5115c1 fixed the Duplicator; this makes
+  the rule general. `ItemUi::new` builds a row per weapon from the weapon
+  list (letter icon when there is no art). `ItemAssets::load_with` presents
+  every Add-On item, image and projectile: its own presentation if it
+  loads, stock art it names, else no model; broken Add-On textures and
+  models become stand-ins listed in `ItemAssets::faults`. The same fallback
+  now covers Add-On vehicle models and textures, explosion shapes, death
+  icons and brick icons. The base game's packs stay strict so `--check` and
+  the gate still catch importer regressions. A join that still fails to load
+  the server's Add-Ons shows the player the Add-On and file.
+  `bri-addon-check` warns when an Add-On's item presentation is missing or
+  stale.
+- Tests: `crates/client/tests/add_on_fallbacks.rs` (content-free) hosts four
+  broken Add-Ons over loopback, a clean client downloads them and loads the
+  item art and HUD; `add_on_join.rs`
+  `a_guest_joins_a_host_running_every_repository_add_on` (needs content,
+  runs in the gate) hosts every Add-On under `packages/` and joins with a
+  base-only guest. Evidence: `cargo test -p bri-client --lib --test
+  add_on_fallbacks`, `-p bri-package -p bri-package-runtime`, `-p bri-net
+  --lib --test package_sync` green; clippy -D warnings on those crates. The
+  content test was not run in the cloud (no generated content).
+- Seen once in four runs, unrelated: `package_sync`
+  `downloads_reach_only_offered_files` failed its "does not offer package
+  downloads" assertion (line 158); it passed alone and three times in full.
+- Max, 16:07Z: "should never have an issue joining a server like this ...
+  just download whatever we need and play". A join now downloads every
+  Add-On the server runs that the joiner lacks or has in another version
+  (matched by content hash; a cached copy of another version is never used)
+  with no question, however large: the 200 MB download prompt is gone
+  (`ASK_ABOVE_BYTES`, `NeedsApproval`, `DownloadDeclined`,
+  `UiAction::ApproveDownload`). The 4 GB safety cap stays. Shared Add-Ons
+  only the joiner runs no longer refuse the join: `connect_fetching` leaves
+  them out and returns them, and `mods::load_fetched` / `joined_set` load
+  the server's exact set. The only question a join can ask is the trust
+  prompt for sandboxed Add-On code.
+- The `downloads_reach_only_offered_files` failure was real: a server that
+  refused a connection (no downloads, wrong version, bad identity, full)
+  closed it as soon as the refusal was acknowledged, and QUIC discards
+  stream data the peer has not read yet, so the player could see
+  "connection lost: closed by peer" instead of the reason. The server now
+  lingers until the peer closes (`server::linger`, 3 s cap). Before: 4
+  failures in 40 full runs of `package_sync`; after: 0 in 160.
+- Tests: `package_sync` `a_join_downloads_exactly_the_servers_add_ons_without_asking`
+  (a joiner with no Add-Ons and one with a stale copy both run the server's
+  exact set) and the E31 test (an extra shared Add-On sits out);
+  `add_on_fallbacks.rs` adds a player with a stale copy and an Add-On of
+  their own, through `mods::load_fetched`, `joined_set` and the item art.
+- Gate's content test `a_guest_joins_a_host_running_every_repository_add_on`
+  failed with an empty download. Cause: `App::host()` re-read packages.json
+  unless `enable_packages` had chosen the set, so the set the test applied
+  with `apply_packages` was thrown away. `apply_packages` now marks the set
+  as the player's own; only a join that loaded another server's Add-Ons
+  clears that, so the next hosted game re-reads the player's list.
+- The same run showed the repository's own Add-Ons clashing: the Stress Lab
+  HUD and the Survival Points HUD both used J. The sample Leaderboard key is
+  now N (v20 keys untouched; Stress Lab keeps J). Left-out Add-Ons no longer
+  empty the set: a problem no Add-On owns leaves out the last listed
+  Add-On with a `set.left_out` warning, one at a time. A joiner uses the
+  same rule (`Catalog::load_dirs_skipping` in `mods::load_fetched`): a
+  downloaded Add-On that does not load on that PC is named in the console
+  and left out of what it shows, and the join goes ahead. Test:
+  `samples.rs` `add_ons_that_clash_are_left_out_one_by_one_and_never_empty_the_set`.

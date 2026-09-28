@@ -144,6 +144,75 @@ fn one_broken_addon_is_left_out_and_the_rest_still_run() {
     Runtime::compile(&catalog).unwrap_or_else(|e| panic!("{e:#?}"));
 }
 
+#[test]
+fn add_ons_that_clash_are_left_out_one_by_one_and_never_empty_the_set() {
+    // A second HUD taking the Leaderboard's key for another command, and an
+    // Add-On needing one that is not there: each is left out by name, and
+    // the Add-Ons that load fine keep running, from a content root or from
+    // a joiner's downloads.
+    let dir = tempfile::tempdir().unwrap();
+    for id in [
+        "sample-survival-points",
+        "sample-points-hud",
+        "sample-bubble-blaster",
+    ] {
+        copy_dir(&root().join(id), &dir.path().join(id));
+    }
+    let clash = dir.path().join("zz-clash-hud");
+    std::fs::create_dir(&clash).unwrap();
+    std::fs::write(
+        clash.join("package.json"),
+        std::fs::read_to_string(root().join("sample-points-hud/package.json"))
+            .unwrap()
+            .replace("sample-points-hud", "zz-clash-hud"),
+    )
+    .unwrap();
+    std::fs::write(
+        clash.join("points.json"),
+        std::fs::read_to_string(root().join("sample-points-hud/points.json"))
+            .unwrap()
+            .replace("\"command\": \"top\"", "\"command\": \"reset\""),
+    )
+    .unwrap();
+    let needy = dir.path().join("needy");
+    std::fs::create_dir(&needy).unwrap();
+    std::fs::write(
+        needy.join("package.json"),
+        r#"{ "schema_version": 1, "id": "needy", "version": "1.0.0", "api": 1,
+             "name": "Needy", "description": "Needs an Add-On nobody has.",
+             "authors": ["test"], "license": "CC0-1.0",
+             "provenance": { "source": "original" },
+             "dependencies": { "nowhere": "^1.0.0" }, "provides": [] }"#,
+    )
+    .unwrap();
+    let set = with(&[("zz-clash-hud", Side::Client), ("needy", Side::Shared)]);
+    assert!(Catalog::load(dir.path(), &set, true).is_err(), "strict load");
+    let kept = [
+        "sample-bubble-blaster",
+        "sample-points-hud",
+        "sample-survival-points",
+    ];
+    let check = |catalog: &Catalog, problems: &[bri_package::diag::Diagnostic]| {
+        assert_eq!(catalog.packages.keys().collect::<Vec<_>>(), kept, "{problems:#?}");
+        let named = |id: &str, code: &str| {
+            problems.iter().any(|p| {
+                p.code == code && p.location.as_deref().unwrap_or("").starts_with(&format!("{id}/"))
+            })
+        };
+        assert!(named("zz-clash-hud", "set.hud.key.conflict"), "{problems:#?}");
+        assert!(named("needy", "set.dependency.missing"), "{problems:#?}");
+    };
+    let (catalog, problems) = Catalog::load_skipping(dir.path(), &set, true);
+    check(&catalog, &problems);
+    let dirs: Vec<_> = set
+        .packages
+        .iter()
+        .map(|e| (dir.path().join(&e.dir), e.clone()))
+        .collect();
+    let (catalog, problems) = Catalog::load_dirs_skipping(&dirs, true);
+    check(&catalog, &problems);
+}
+
 fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {

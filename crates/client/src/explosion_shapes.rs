@@ -37,6 +37,19 @@ impl ExplosionShapes {
         let root = root.canonicalize()?;
         let mut models = BTreeMap::new();
         for (key, explosion) in pack.explosions.iter().filter(|(_, e)| !e.shape.is_empty()) {
+            // An Add-On's explosion shape that does not load is a cosmetic
+            // fault (`crate::cosmetic`): the explosion keeps its particles,
+            // lights and sounds and loses only the shape.
+            let owner = pack
+                .resources
+                .iter()
+                .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
+                .and_then(|r| {
+                    let dir = r.package.as_ref()?;
+                    Some(bri_package::library::add_on_label(&bri_weapons::resource_root(&root, r), dir))
+                })
+                .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
+            let model = (|| -> Result<Model> {
             let (resource, file) = pack
                 .resources
                 .iter()
@@ -104,9 +117,7 @@ impl ExplosionShapes {
                 duration > 0.0 && duration <= 60.0,
                 "Invalid explosion duration"
             );
-            models.insert(
-                key.clone(),
-                Model {
+            Ok(Model {
                     data,
                     gpu: None,
                     instances: None,
@@ -115,8 +126,17 @@ impl ExplosionShapes {
                     visibility,
                     duration,
                     base_scale: Vec3::from(explosion.scale),
-                },
-            );
+                })
+            })();
+            match (model, &owner) {
+                (Ok(model), _) => {
+                    models.insert(key.clone(), model);
+                }
+                (Err(error), Some(dir)) => {
+                    crate::cosmetic::add_on_fault(dir, &explosion.shape, format!("{error:#}"));
+                }
+                (Err(error), None) => return Err(error),
+            }
         }
         Ok(Self {
             models,

@@ -68,8 +68,10 @@ customers, forwarding won't help; a virtual LAN tool is the way around it.
 The first time you join a host, the game remembers who they are. If that
 host's identity later changes, the game asks before letting you continue.
 
-**Add-Ons on a server.** Joining a server that runs Add-Ons you don't have
-downloads them. Downloads over 200 MB ask first. If an Add-On wants to run
+**Add-Ons on a server.** Joining a server that runs Add-Ons you don't have,
+or have in a different version, downloads the server's copies and puts you
+in the game. Your own Add-Ons the server doesn't run are left off for that
+game. If an Add-On wants to run
 its own code on your PC, the game asks "Trust and join" or "Leave" before
 it runs. That code is kept in a sandbox, and you can take the trust back
 with Forget Trust on the Add-Ons screen.

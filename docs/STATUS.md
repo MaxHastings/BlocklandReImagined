@@ -106,8 +106,8 @@ Since a15 (`f95d273`), 33 commits. The full list is in the gate thread.
 - **Add-Ons:** the host's Add-Ons follow joiners, downloading what's
   missing. Toggling an Add-On applies at the next game, and a HUD shows only
   on servers that run its Add-On, which fixes the Stress Lab HUD Max saw in
-  a14 (`49c7165`). A changed server identity asks Continue or Cancel, and
-  Add-On downloads over 200 MB ask first (`364a427`).
+  a14 (`49c7165`). A changed server identity asks Continue or Cancel. Add-On
+  downloads no longer ask, whatever their size.
 - **v20 fidelity:** brick damage (below), the admin camera and orb, chat
   colours and emotes (/hug, /zombie, /bsd, /wtf), skis, Demo Pong playable in
   Bedroom, tire emitters, per-datablock impact sounds, horse fall damage,

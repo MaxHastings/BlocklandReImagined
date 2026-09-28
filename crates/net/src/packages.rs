@@ -22,22 +22,6 @@ use std::{
 /// Most a client downloads for one server before asking its player: a
 /// hostile server must not be able to fill a disk with valid packages.
 pub const MAX_FETCH_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-/// Downloads bigger than this ask the player first.
-pub const ASK_ABOVE_BYTES: u64 = 200 * 1024 * 1024;
-/// The download is bigger than the player has agreed to: its size in bytes.
-/// Nothing was downloaded; ask, then fetch again with that size approved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NeedsApproval(pub u64);
-impl std::fmt::Display for NeedsApproval {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "This server's Add-Ons need {} MB",
-            self.0.div_ceil(1024 * 1024)
-        )
-    }
-}
-impl std::error::Error for NeedsApproval {}
 /// A download connection that sends no request for this long is closed.
 pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(15);
 
@@ -201,23 +185,19 @@ pub async fn fetch_missing(
         &HostPin::from(certificate),
         cache,
         progress,
-        u64::MAX,
         &[],
     )
     .await
 }
 
 /// [`fetch_missing`] from the host `pin` names (a saved certificate, an
-/// invite's key, or trust on first use, as for joining). A download over
-/// `approved` bytes stops before its first byte with [`NeedsApproval`].
-/// Packages in `have` (exactly as the client already runs them) are left
+/// invite's key, or trust on first use, as for joining). Packages in `have` (exactly as the client already runs them) are left
 /// out: neither downloaded nor returned.
 pub async fn fetch_missing_pinned(
     address: std::net::SocketAddr,
     pin: &HostPin,
     cache: &Cache,
     progress: &Progress,
-    approved: u64,
     have: &[PackageRef],
 ) -> Result<Vec<Fetched>> {
     let (endpoint, connection, _) =
@@ -287,9 +267,6 @@ pub async fn fetch_missing_pinned(
             total / (1024 * 1024),
             MAX_FETCH_BYTES / (1024 * 1024)
         );
-        if total > approved {
-            return Err(NeedsApproval(total).into());
-        }
         progress.begin(Stage::DownloadingPackages, Unit::Bytes, Some(total));
         let mut done = 0_u64;
         let mut downloaded = BTreeMap::<String, u64>::new();

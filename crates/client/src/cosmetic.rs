@@ -3,8 +3,25 @@
 //! one effect, not the game (a16 closed on an invalid casing collision), so
 //! the frame counts the fault, logs its first occurrence per subsystem and
 //! carries on. Simulation, network and content integrity errors stay fatal.
+//!
+//! The same rule holds when content loads. An Add-On whose presentation
+//! (item art, icons, models, textures, death icons) is missing or broken
+//! loads with a stand-in, as v20 shows an item without an icon by its first
+//! letter, and [`add_on_fault`] logs what was replaced. Joining a server or
+//! turning an Add-On on never fails over how something looks; only gameplay
+//! data that cannot work stops a load, and that error names the Add-On and
+//! the file.
 use anyhow::Result;
 use std::collections::BTreeMap;
+
+/// Log that the Add-On `label` (`bri_package::library::add_on_label`) has
+/// presentation at `file` that could not be used and is shown with a
+/// stand-in; returns the logged line.
+pub fn add_on_fault(label: &str, file: &str, problem: impl std::fmt::Display) -> String {
+    let line = format!("Add-On {label}: {file}: {problem}; shown with a stand-in");
+    bri_console::warn(&line);
+    line
+}
 
 #[derive(Debug, Default)]
 pub struct CosmeticFaults {

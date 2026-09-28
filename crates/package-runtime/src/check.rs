@@ -227,13 +227,25 @@ pub fn check(folder: &Path) -> Report {
     // catalog, from `assets/weapons.json` whether or not `provides` lists it.
     for (manifest, dir) in &found {
         let file = parent.join(dir).join("assets/weapons.json");
-        if let Ok(bytes) = std::fs::read(&file)
-            && let Err(e) = bri_weapons::Pack::from_json(&bytes)
-        {
+        let Ok(bytes) = std::fs::read(&file) else {
+            continue;
+        };
+        if let Err(e) = bri_weapons::Pack::from_json(&bytes) {
             diagnostics.push(
                 Diagnostic::error("check.weapons", format!("{e:#}"))
                     .at(format!("{}/assets/weapons.json", manifest.id))
                     .hint("compare it with packages/samples/sample-bubble-blaster/assets/weapons.json"),
+            );
+            continue;
+        }
+        // Presentation is how items look. Without it the game still loads
+        // the Add-On: items use the stock models and icons they name, and
+        // one the base game lacks shows no model and its first letter.
+        if let Some(problem) = presentation_problem(&parent.join(dir).join("assets"), &bytes) {
+            diagnostics.push(
+                Diagnostic::warning("check.weapons.presentation", problem)
+                    .at(format!("{}/assets/presentation.json", manifest.id))
+                    .hint("items then use the stock models and icons they name; run bri-import-addon to convert the Add-On's own art"),
             );
         }
     }
@@ -252,6 +264,22 @@ pub fn check(folder: &Path) -> Report {
         add_ons,
         diagnostics,
     }
+}
+
+/// Why the item presentation beside a weapons pack will not be used, if
+/// it will not: missing, unreadable, or written for other `weapons` bytes.
+fn presentation_problem(assets: &Path, weapons: &[u8]) -> Option<String> {
+    use sha2::Digest;
+    let Ok(bytes) = std::fs::read(assets.join("presentation.json")) else {
+        return Some("weapons.json has no presentation.json beside it".into());
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(e) => return Some(format!("presentation.json does not read: {e}")),
+    };
+    let expected = format!("{:x}", sha2::Sha256::digest(weapons));
+    (value.get("weapons_sha256").and_then(|v| v.as_str()) != Some(expected.as_str()))
+        .then(|| "presentation.json was made for a different weapons.json".into())
 }
 
 impl std::fmt::Display for Report {
