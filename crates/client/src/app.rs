@@ -633,7 +633,10 @@ impl App {
             .map(|(owner, player)| crate::actor_effects::Swimmer {
                 actor: *owner,
                 feet: Vec3::from(player.feet),
-                height: bri_sim::water::body_height(player),
+                height: bri_sim::water::body_height(
+                    player,
+                    &view.archetypes.tuning(player.archetype, player.scale),
+                ),
                 velocity: Vec3::from(player.velocity),
             })
             .collect();
@@ -4175,7 +4178,10 @@ impl PlatformApp for App {
                     water_coverage: bri_sim::water::deepest(
                         &waters,
                         player.feet,
-                        bri_sim::water::body_height(player),
+                        bri_sim::water::body_height(
+                            player,
+                            &view.archetypes.tuning(player.archetype, player.scale),
+                        ),
                     )
                     .map_or(0.0, |(_, c)| c),
                 };

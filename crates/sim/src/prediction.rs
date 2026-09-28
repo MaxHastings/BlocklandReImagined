@@ -198,7 +198,7 @@ impl CollisionMirror {
     /// it is painted in `palette`, then map water.
     pub fn tinted_waters(
         &self,
-        bricks: &BTreeMap<BrickId, Brick>,
+        bricks: &bri_world::Bricks,
         palette: &[[f32; 4]],
     ) -> Vec<crate::water::TintedWater> {
         let bricks = self.brick_waters.iter().map(|(id, w)| {
