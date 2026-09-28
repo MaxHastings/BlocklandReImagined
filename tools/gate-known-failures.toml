@@ -10,11 +10,6 @@
 
 # Baseline on main, 2026-09-27.
 
-[[failure]]
-test = "vehicle_render.rs::stock_vehicles_render_with_wheels_and_paint"
-owner = "unassigned"
-reason = "v20.vehicle.horsearmor draws 0 pixels."
-
 # Tests the gate never runs: they need hardware or setup a gate run lacks.
 
 [[skip]]
