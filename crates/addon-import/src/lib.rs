@@ -479,7 +479,7 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
                 (
                     "unsupported",
                     vec![
-                        "client script: packages send data to clients, never code (principle 10)"
+                        "client script: TorqueScript is not run; client code must be sandboxed WebAssembly (principle 10)"
                             .into(),
                     ],
                 )

@@ -248,6 +248,8 @@ pub struct App {
     debris_models: crate::brick_debris::DebrisModels,
     /// Client-side mod packages (HUD panels, models) from `packages.json`.
     package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
+    /// Sandboxed code of enabled Add-Ons, run while a game is entered.
+    client_code: crate::client_code::ClientCode,
     /// Every enabled package including server behaviour, for hosting.
     server_packages: Option<Arc<bri_package_runtime::Catalog>>,
     package_models: crate::packages::PackageModels,
@@ -445,6 +447,7 @@ impl App {
         self.ui.apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
         self.package_catalog = client;
         self.server_packages = server;
+        self.client_code = crate::client_code::ClientCode::load(root, set);
         Ok(())
     }
     /// Package HUD panels and keys from the latest replicated state.
@@ -885,6 +888,11 @@ impl App {
             }
             catalog
         };
+        let client_code = crate::client_code::ClientCode::load(
+            &content.paths.root,
+            &bri_package::packages::PackageSet::load_root(&content.paths.root)
+                .unwrap_or_else(|_| bri_package::packages::PackageSet::base()),
+        );
         // Worlds that packages provide are hosted like maps.
         let server_packages = {
             let (catalog, problems) = crate::packages::load_server(&content.paths.root);
@@ -1060,6 +1068,7 @@ impl App {
             brick_debris: Default::default(),
             debris_models: Default::default(),
             package_catalog,
+            client_code,
             server_packages,
             package_models: Default::default(),
             brick_kills: Vec::new(),
@@ -1210,6 +1219,7 @@ impl App {
             self.closing.extend(attempt.worker.finish());
         }
         self.ui.apply(UiUpdate::UnsavedChanges(false));
+        self.client_code.stop();
         self.avatars.clear();
         self.mount_meshes.clear();
         self.avatar_actions.clear();
@@ -3026,6 +3036,16 @@ impl App {
                 },
             );
             a.entered = true;
+            // A game this player hosts runs their own Add-Ons' code; someone
+            // else's server runs only code the player trusted there.
+            self.client_code.start(
+                if a.local {
+                    crate::client_code::Host::Local
+                } else {
+                    crate::client_code::Host::Remote(&a.name)
+                },
+                &self.state_dir,
+            );
             if let Some(view) = &a.view {
                 self.reset_weapon_effect_session(a.id, view.checkpoint_cue_cursor);
             }
@@ -3518,6 +3538,11 @@ impl PlatformApp for App {
         self.poll_network()?;
         self.poll_files();
         self.update_package_hud();
+        if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
+            for text in self.client_code.take_messages() {
+                self.ui.apply_session(a.id, UiUpdate::Chat { text });
+            }
+        }
         let alive = self.local_alive();
         self.follow_control();
         self.controls.fly(elapsed.as_secs_f32());
@@ -4884,6 +4909,7 @@ impl PlatformApp for App {
         ));
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
+        self.client_code.gpu_stopped();
         let weather_limits = bri_weather::WeatherLimits::default();
         self.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
@@ -4929,7 +4955,11 @@ impl PlatformApp for App {
         self.ui.core.confirm_unsaved(bri_ui::ui::Callback::Quit);
         false
     }
+    fn gpu_lost(&mut self) {
+        self.client_code.device_lost();
+    }
     fn gpu_stopped(&mut self) {
+        self.client_code.gpu_stopped();
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
@@ -5277,6 +5307,19 @@ impl PlatformApp for App {
             right,
             up: right.cross(forward).normalize(),
         };
+        if self.client_code.is_started() {
+            self.client_code.run_frame(self.animation_time, eye, forward);
+            self.client_code.prepare(
+                frame.device,
+                frame.queue,
+                frame.format,
+                bri_render::scene::DEPTH_FORMAT,
+                renderer.samples(),
+                effects_camera.view_projection,
+                eye,
+                u64::from(frame.size.0) * u64::from(frame.size.1),
+            );
+        }
         let world_frame = self.effects.world.snapshot(&effects_camera);
         let weapon_frame = self.weapon_effects.world().snapshot(&effects_camera);
         let actor_frame = self.actor_effects.world().snapshot(&effects_camera);
@@ -5467,6 +5510,9 @@ impl PlatformApp for App {
         self.foliage.render(&mut pass);
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
+        self.client_code.render(&mut pass);
+        drop(pass);
+        self.client_code.resolve(frame.encoder);
         Ok(true)
     }
 }

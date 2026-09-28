@@ -2440,6 +2440,49 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
   new loopback `join_refusal_names_each_differing_shared_package`,
   `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.
+
+- 2026-09-28 Client sandbox: Add-Ons may send joining players sandboxed code
+  (Maxwell's decision; principle 10 is now trust tiers: data without asking,
+  sandboxed WebAssembly and WGSL after a per-server trust prompt, elevated
+  capabilities after a separate per-Add-On choice; native plugins are tier 3
+  with a typed confirmation, designed but not built). Crate
+  `bri-client-sandbox`: Wasmtime 45 with fuel, epoch deadlines and store limits;
+  capability-gated host functions (render layer, shaders, audio, focused
+  input, messages to the Add-On's server script); naga validation of Add-On
+  WGSL with every loop rewritten to draw on one per-invocation allowance; a
+  wgpu layer renderer; the trust prompt model and `addon-trust.json` store.
+  Sample `packages/samples/spinning-cube` draws a cube with an animated
+  shader. Red team round 1 found and fixed two issues: the wall-clock
+  deadline stopped advancing once the `Sandbox` was dropped (an endless loop
+  then ran forever), and modules shaped to compile slowly took 5 s (now
+  bounded at load; worst allowed 0.5 to 0.7 s on 4 cores). Open: compiling
+  on a worker thread with a cache. Design and findings: `docs/architecture/client-sandbox.md`.
+  Evidence: `cargo test -p bri-client-sandbox` (23 tests; the two GPU tests
+  are ignored without an adapter and passed on llvmpipe),
+  `bri-addon-preview packages/samples/spinning-cube <out>`.
+  In the client (`client_code.rs`): enabled Add-Ons' code starts when the
+  player enters a game they host, and on other servers only for code
+  `addon-trust.json` grants (the join-screen prompt is next, with PR #4);
+  layers draw in the world's last pass. Not yet seen in a real session:
+  the cloud container has no v20 content; verify on the PC.
+  Evidence: `cargo test -p bri-client --lib client_code`.
+  GPU budget fix after the verifier measured Maxwell's RTX 4070 SUPER (no
+  reset, but the heaviest allowed shader took about 2.4 s a frame and the
+  4 ms x 30-strike rule tolerated about 75 s of that). The loop allowance
+  is now set per frame (`bri_frame.limits.x`): 16 until the GPU is measured,
+  then fitted by `gpu::calibrate` (a small timed offscreen pass, once per
+  device) to the GPU's speed, the screen size and the shader's cost, and
+  halved after every frame whose timestamps show it over 4 ms. One frame
+  over 100 ms stops the Add-On at once; 20 slow frames in a row stop it.
+  Shaders whose helpers fan out (no loop, a million times the work) are
+  refused by an expanded-cost limit. A device loss stops every Add-On's code
+  until the next join. The client requests timestamp features where the GPU
+  has them. On llvmpipe the endless-loop shader over 512x512 went from 0.96 s
+  to 23, 5.8, then 4.6 ms a frame. Evidence: `cargo test -p
+  bri-client-sandbox` (25 tests; the 4 ignored GPU tests passed on llvmpipe with
+  `--ignored`), `cargo test -p bri-client --lib client_code` (4 tests),
+  clippy `-D warnings`. Next: re-measure on the PC.
+
 ## 2026-09-28 Stress Lab: gameplay from packages (protocol 32)
 
 - Package-defined gameplay seams: `bri-package-runtime` (mod package loading,

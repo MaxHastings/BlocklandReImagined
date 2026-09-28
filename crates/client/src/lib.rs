@@ -7,6 +7,7 @@ pub mod audio;
 pub mod avatar;
 pub mod brick_debris;
 pub mod building;
+pub mod client_code;
 pub mod console;
 pub mod content;
 pub mod controls;

@@ -70,6 +70,8 @@ pub trait PlatformApp {
     }
     /// The window gained or lost keyboard focus.
     fn focus_changed(&mut self, _focused: bool) {}
+    /// The device was lost (driver reset, TDR); `gpu_stopped` follows.
+    fn gpu_lost(&mut self) {}
     /// Return true after clearing/rendering a scene; false asks the platform to
     /// clear to its neutral background before compositing UI.
     fn render_scene(&mut self, _frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -147,9 +149,13 @@ fn open_gpu(
                     ..Default::default()
                 }))
                 .context("no compatible adapter")?;
+            // Timestamps, where the GPU has them, time Add-On code's layers.
             let (device, queue) =
-                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                    .context("creating the GPU device")?;
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                    required_features: bri_client_sandbox::gpu::timing_features(&adapter),
+                    ..Default::default()
+                }))
+                .context("creating the GPU device")?;
             Ok((surface, adapter, device, queue))
         })();
         match attempt {
@@ -719,6 +725,7 @@ impl Runner {
             return Ok(());
         };
         let display = lost.display.clone();
+        self.config.app.gpu_lost();
         self.config.app.gpu_stopped();
         drop(lost);
         let gpu = Graphics::new(window.clone(), self.config.vsync, display)?;

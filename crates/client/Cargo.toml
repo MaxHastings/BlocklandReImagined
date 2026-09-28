@@ -47,6 +47,8 @@ arboard = { version = "3", default-features = false }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
 
+bri-client-sandbox = { path = "../client-sandbox" }
+
 [dev-dependencies]
 tempfile = "3"
 bri-addon-import = { path = "../addon-import" }

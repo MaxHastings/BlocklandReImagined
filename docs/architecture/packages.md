@@ -244,6 +244,30 @@ carried over. Only its plain-language capabilities, strict manifests and the
 `check` report were kept. An exclusive slot for the server's game mode
 returns with the game mode picker, which is where it is first read.
 
+## Client code (`client` in `package.json`)
+
+An Add-On may carry code that runs on players' machines: a WebAssembly
+module and WGSL shaders, sandboxed and presentation only. It is declared in
+the `client` section of the Add-On's own `package.json`:
+
+```json
+"client": {
+  "module": "client/main.wasm",
+  "capabilities": ["render.layer", "render.shader"],
+  "shaders": ["client/cube.wgsl"],
+  "sounds": []
+}
+```
+
+Capabilities have tiers: `render.layer`, `render.shader`, `audio`,
+`input.focused` and `net.message` are sandboxed (the player trusts the
+server once); `net.http` and `files.addon_folder` are elevated (a separate,
+stronger per-Add-On choice); `native` (a native plugin) is elevated too,
+needs the server's name typed on the prompt, and does not run yet. A package with client code travels like any other
+`shared` or `client` package; the trust prompt comes before its code
+downloads. Checks, host API, budgets and prompts:
+[client-sandbox.md](client-sandbox.md). Code: `crates/client-sandbox`.
+
 ## Not built yet
 
 Downloading missing packages at join is the package sync work (the stress
