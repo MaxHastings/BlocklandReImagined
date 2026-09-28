@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "sample-survival-points",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Survival Points",
+  "description": "A sample game rule: every living player earns a point every five seconds, and anyone can ask for the leaderboard.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["chat"],
+  "provides": [
+    { "kind": "behaviour", "id": "sample-survival-points:behaviour/points", "file": "behaviour.json" },
+    { "kind": "script", "id": "sample-survival-points:script/points", "file": "points.rhai" }
+  ]
+}
