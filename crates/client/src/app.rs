@@ -4140,6 +4140,18 @@ fn caption(cue: &bri_sim::presentation::Cue, listener: Option<Vec3>) -> Option<&
         _ => return None,
     })
 }
+
+/// What the player's controls send. The Tutorial's walking limits (no jet,
+/// no jump) belong to the player's body, as v20's `PlayerNoJet` datablock
+/// did; a rider's jet still reaches the mount, where it dismounts
+/// (`doDismount`), and its jump still jumps the horse.
+fn rider_input(
+    abilities: bri_sim::session::Abilities,
+    input: bri_sim::player::MoveInput,
+    mounted: bool,
+) -> bri_sim::player::MoveInput {
+    if mounted { input } else { abilities.apply(input) }
+}
 /// A ghost the server would refuse, before `v20_temp_brick` brightens it.
 const BLOCKED_GHOST: [f32; 4] = [0.6, 0.05, 0.05, 1.0];
 /// The ghost is redrawn when it moves or the bricks around it change.
@@ -4251,8 +4263,13 @@ impl PlatformApp for App {
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
+            let mounted = a
+                .view
+                .as_ref()
+                .and_then(|v| v.vitals.get(&v.owner))
+                .is_some_and(|v| v.mounted.is_some());
             let input = if alive {
-                self.abilities.apply(self.controls.movement())
+                rider_input(self.abilities, self.controls.movement(), mounted)
             } else {
                 // Corpses ignore controls; keep aim so the server agrees.
                 bri_sim::player::MoveInput {
@@ -6427,6 +6444,27 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    /// Max, a16: in the Tutorial's horse lesson (no jet on foot) the jet
+    /// key never reached the horse, so the rider could not get off.
+    #[test]
+    fn a_tutorial_rider_still_sends_jet_and_jump_to_the_mount() {
+        let no_jet = bri_sim::session::Abilities {
+            run: true,
+            jump: false,
+            jet: false,
+        };
+        let pressed = bri_sim::player::MoveInput {
+            forward: 1.0,
+            jump: true,
+            jet: true,
+            ..Default::default()
+        };
+        let riding = super::rider_input(no_jet, pressed, true);
+        assert!(riding.jet && riding.jump, "dismount and horse jump reach the mount");
+        let walking = super::rider_input(no_jet, pressed, false);
+        assert!(!walking.jet && !walking.jump, "the lesson's limits still hold on foot");
+        assert_eq!(walking.forward, 1.0);
+    }
     #[test]
     fn fov_is_horizontal_like_torque() {
         let aspect = 16.0 / 9.0;
