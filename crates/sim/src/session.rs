@@ -1250,7 +1250,7 @@ impl Session {
         &mut self,
         owner: OwnerId,
         sequence: u64,
-        command: Command,
+        mut command: Command,
         aim: Option<ActionAim>,
         mut persist: impl FnMut(&bri_admin::DurableState) -> Result<()>,
     ) -> Result<Reply> {
@@ -1322,6 +1322,11 @@ impl Session {
                 bri_world::MAX_EVENTS_PER_BRICK
             );
             self.validate_event_rows(rows)?;
+        }
+        if !self.is_administrator(owner)
+            && let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command
+        {
+            events::clamp_relay_delays(rows);
         }
         self.tutorial_check(&command)?;
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;

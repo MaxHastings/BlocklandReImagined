@@ -7,6 +7,11 @@ pub const MAX_ACTORS: usize = 128;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
 pub const MAX_QUERY_TARGETS: usize = 128;
+/// Explosions one tick may queue with [`WeaponsWorld::spawn_explosion`].
+/// Each one queries and damages everything in its radius, so an event loop
+/// that spawns them without pause cannot stall the host; the excess is
+/// refused and the caller notes it.
+pub const MAX_EXPLOSIONS_PER_TICK: usize = 8;
 /// Core tool actions are implemented by the host's building authority. They
 /// share inventory/drop rules with weapons but have no weapon state machine.
 pub const HAMMER: &str = "v20.weapon.hammeritem";
@@ -476,6 +481,8 @@ pub struct WeaponsWorld {
     item_bounds: BTreeMap<String, ItemBounds>,
     next_id: u64,
     events: Vec<Event>,
+    /// Explosions queued for the next tick; they never fly.
+    explosions: Vec<Projectile>,
 }
 impl WeaponsWorld {
     pub fn new(pack: Pack) -> Result<Self> {
@@ -489,6 +496,7 @@ impl WeaponsWorld {
             item_bounds: BTreeMap::new(),
             next_id: 1,
             events: vec![],
+            explosions: vec![],
         })
     }
     pub fn image_state(&self, id: ActorId, hand: u8) -> Option<(&Image, &State)> {
@@ -932,9 +940,59 @@ impl WeaponsWorld {
         });
         Ok(id)
     }
+    /// `fxDTSBrick::spawnExplosion`: a projectile made where it is and
+    /// exploded at once (`%p.explode()`), without flying or becoming a live
+    /// projectile. It explodes at the start of the next tick, where the host's
+    /// world can be queried; at most [`MAX_EXPLOSIONS_PER_TICK`] wait.
+    pub fn spawn_explosion(
+        &mut self,
+        definition: &str,
+        source: ActorId,
+        position: Vec3,
+        scale: f32,
+    ) -> Result<()> {
+        ensure!(
+            self.explosions.len() < MAX_EXPLOSIONS_PER_TICK && self.events.len() < 8192,
+            "Explosion budget for this tick"
+        );
+        ensure!(
+            self.pack.projectiles.contains_key(definition),
+            "Unknown projectile"
+        );
+        ensure!(
+            position.is_finite()
+                && position.abs().max_element() < 1e7
+                && (0.01..=100.0).contains(&scale),
+            "Invalid explosion input"
+        );
+        let id = self.next_id;
+        self.next_id += 1;
+        self.explosions.push(Projectile {
+            id,
+            definition: definition.into(),
+            source,
+            position,
+            // `initialVelocity = "0 0 1"`: Torque up, native +Y.
+            velocity: Vec3::Y,
+            scale,
+            age: 0,
+            bounced: false,
+            stuck: false,
+            origin: position,
+            was_thrown: false,
+            paint: None,
+            heading: None,
+        });
+        Ok(())
+    }
     /// Advances exactly one 1/120s tick. Drain every returned event before the next tick.
     pub fn step(&mut self, q: &mut impl Query) -> Vec<Event> {
         self.tick += 1;
+        for p in std::mem::take(&mut self.explosions) {
+            if let Some(d) = self.pack.projectiles.get(&p.definition).cloned() {
+                self.explode(&p, &d, q, None);
+            }
+        }
         let ids: Vec<_> = self.actors.keys().copied().collect();
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();

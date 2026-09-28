@@ -4277,3 +4277,48 @@ brick and colour, keep Demo Pong's events and stay unchanged on disk;
 clippy on the four crates. An offscreen render of Load Bricks shows the
 button fitting beside the ownership box. Not seen in a window: Max's
 playtest of dropping saves in and loading them.
+
+## 2026-09-28 Event explosion loops no longer end the game (branch `claude/project-thread-xc3a5y`)
+
+Playtest report: a friend's endless relay loop of `spawnExplosion` ended the
+a20 host with "Network worker stopped". The session log held no other error.
+
+Cause, reproduced headlessly on main (`crates/net/tests/event_storm.rs`):
+- Event `spawnExplosion` spawned a stationary live projectile instead of
+  exploding it (v20 `%p.explode()`). A zero-delay loop filled the host's
+  1024-projectile budget within a tick and kept it full: nothing exploded,
+  every player's weapons were refused, and the debug host ran about 5x
+  slower than real time.
+- The dialog hid the real failure. When the network worker's `run` ends, the
+  movement channel closes at once, but `Event::Failed` was sent only after
+  the host finished stopping and saving (and with `try_send`, so a full UI
+  queue lost it). The next frame's movement send reported "Network worker
+  stopped" instead. The worker also died outright when 128 presentation
+  events or notices were waiting.
+
+Fix:
+- `WeaponsWorld::spawn_explosion` explodes where it is made at the start of
+  the next tick without flying; at most 8 per tick (`MAX_EXPLOSIONS_PER_TICK`).
+  Brick and player `spawnExplosion` use it; a fake-killed brick spawns none,
+  as v20. Event-spawned projectiles are also capped at 8 per host tick
+  (`MAX_EVENT_PROJECTILES_PER_TICK`), besides the owner quota. Over-limit
+  spawns are dropped and the host logs the count at most every 10 s.
+- Players who are not administrators get v20's `serverCmdAddEvent` floor:
+  `fireRelay*` rows under 33 ms are saved as 33 ms. Administrators (the
+  existing flag, so the admin-ranks lane's roles inherit it) and loaded
+  builds keep zero-delay relays. This narrows the alpha-contract item
+  "without an imposed 33 ms per-hop wait" to administrators, per the
+  playtesters' request relayed by Maxwell; the event engine is unchanged.
+- The client network worker waits (up to 5 s) to deliver `Event::Failed`,
+  movement sends to a stopped worker are dropped so the real reason is
+  shown, and presentation cues and notices only use queue room beyond what
+  replies need (256 slots, 98 reserved); excess cues are counted as dropped.
+
+Evidence: `cargo test -p bri-net --test event_storm -- --ignored` (debug
+and `--release`): a zero-delay loop for 1200 host ticks gives 9592
+explosions (8 per tick), no lingering rockets, no step errors; release ran
+in real time with 73 dropped ticks. A 33 ms loop gives 302 explosions in 10
+s (v20's 30 a second). On unmodified main the same loop held 1024 rockets
+and produced no explosions. `hardening_session`
+`relay_rows_keep_v20s_33_ms_floor_except_for_administrators`. Not seen in a
+window: Maxwell's playtest of an event explosion loop on a hosted game.
