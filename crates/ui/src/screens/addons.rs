@@ -19,6 +19,7 @@ const IMPORT: &str = "AO_Import";
 const STATUS: &str = "AO_Status";
 const DEFAULTS: &str = "AO_Defaults";
 const DONE: &str = "AO_Done";
+const FORGET_TRUST: &str = "AO_ForgetTrust";
 /// List rows that are group headings, not packages.
 const HEADING: i64 = -1;
 
@@ -117,6 +118,16 @@ impl AddOns {
                 DEFAULTS,
             ),
             DEFAULTS,
+        ));
+        win.children.push(named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(118, 404, 120, 28),
+                "base/client/ui/button1",
+                "Forget Trust",
+                FORGET_TRUST,
+            ),
+            FORGET_TRUST,
         ));
         win.children.push(named(
             button(
@@ -437,6 +448,11 @@ impl Screen for AddOns {
                 // The box shows the host's answer, not the click.
                 self.show_details(core);
             }
+            (FORGET_TRUST, EventKind::Click) => core.message_yes_no(
+                "Forget Trust",
+                "Forget every server you trusted to run Add-On code?",
+                Callback::Request(Box::new(UiAction::ForgetAddOnTrust)),
+            ),
             (DEFAULTS, EventKind::Click) => core.message_yes_no(
                 "Default Add-Ons",
                 // The message box does not wrap; keep it to one line.
@@ -936,6 +952,27 @@ mod tests {
             &mut ui.core,
         );
         assert!(ui.drain_actions().is_empty());
+    }
+
+    #[test]
+    fn forget_trust_asks_first_then_clears_every_grant() {
+        let mut ui = ui();
+        ui.apply(UiUpdate::AddOns(view()));
+        let mut s = AddOns::new(&ui.core);
+        ui.drain_actions();
+        s.on_event(
+            &ViewEvent {
+                node: s.view.id(FORGET_TRUST).unwrap(),
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        assert!(ui.drain_actions().is_empty());
+        assert!(ui.core.cmds.iter().any(|c| matches!(
+            c,
+            crate::ui::StackCmd::Message(m)
+                if m.on_yes == Callback::Request(Box::new(UiAction::ForgetAddOnTrust))
+        )));
     }
 
     #[test]

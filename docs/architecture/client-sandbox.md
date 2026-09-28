@@ -1,8 +1,8 @@
 # Client sandbox: Add-On code on players' machines
 
 Status: designed 2026-09-28; `crates/client-sandbox` (`bri-client-sandbox`)
-runs in the client's games (see "In the game"); the join-screen trust prompt
-is not built yet.
+runs in the client's games (see "In the game"), and joining a server asks
+before its sandboxed Add-On code runs.
 Maxwell chose (2026-09-28) to let Add-Ons send joining players sandboxed
 code, and set the guiding rule for it:
 
@@ -436,8 +436,15 @@ loaded and checked (`ClientCode::load`). When the player enters a game:
   Add-On is their trust decision);
 - on someone else's server, only code `addon-trust.json` grants for that
   server's address and exactly that code hash starts; the rest is named in
-  chat as off. Until the join-screen prompt lands, nothing grants it, so
-  remote code stays off.
+  chat as off. When some of it is sandboxed code not trusted yet, the game
+  asks as it is entered, before any of it runs: the prompt's title, words,
+  one line per Add-On with what it can do, and "Trust and join" / "Leave".
+  Trust and join saves the grant and starts that code; Leave disconnects.
+  The code has already downloaded by then (data only; nothing runs it
+  until the player trusts it). Elevated code is not asked about, since
+  nothing elevated runs in this build: it is named in chat as asking for
+  more than the sandbox allows. The Add-Ons screen's Forget Trust clears
+  every grant, so each server asks again.
 
 Each rendered frame runs every Add-On's `frame` with the camera, then its
 layer draws in the world's last pass (after particles and weather, before
@@ -451,9 +458,10 @@ a game. The cube appears three units in front of where you spawn.
 
 ## Not built yet
 
-In order: the trust state on PR #4's join screen and the Add-Ons
-screen's trusted-servers list; a `client` section in PR #1's manifest
-reader and listing;
+In order: asking before the code downloads rather than after, and a
+per-server list on the Add-Ons screen instead of Forget Trust's all at
+once; the elevated prompt (tick box, typed server name) once elevated
+capabilities run;
 `ui.panel`; a Rust guest crate (`bri-addon-guest`) with safe wrappers so
 Add-On authors never write raw pointers; the prediction interface; then
 `video.screen`.

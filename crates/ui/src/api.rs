@@ -586,6 +586,11 @@ pub enum UiAction {
     TrustNewServerIdentity { address: String },
     /// Download a server's Add-Ons the player was asked about.
     ApproveDownload,
+    /// Run the Add-On code the join's trust question showed ("Trust and
+    /// join").
+    TrustAddOnCode,
+    /// Stop trusting every server's Add-On code (Add-Ons screen).
+    ForgetAddOnTrust,
     /// Cancel a pending connection attempt or leave the loading screen.
     CancelConnect,
     /// Leave the game (disconnect, or stop hosting).

@@ -3648,6 +3648,16 @@ impl App {
                 },
                 &self.state_dir,
             );
+            // Code the player has not trusted on this server yet: ask before
+            // any of it runs. Leave ends the game.
+            if !a.local
+                && let Some(prompt) =
+                    self.client_code
+                        .trust_prompt(&server, &plain_chat(&a.name), &self.state_dir)
+            {
+                self.ui
+                    .apply_session(a.id, UiUpdate::Question(trust_question(&prompt)));
+            }
             if let Some(view) = &a.view {
                 self.reset_weapon_effect_session(a.id, view.checkpoint_cue_cursor);
             }
@@ -3957,6 +3967,26 @@ fn download_question(total: u64) -> bri_ui::api::Question {
         no: "Leave".into(),
         on_yes: Box::new(UiAction::ApproveDownload),
         on_no: Some(Box::new(UiAction::CancelConnect)),
+    }
+}
+/// The join's trust question for a server's sandboxed Add-On code, as
+/// `bri_client_sandbox::trust` words it.
+fn trust_question(prompt: &bri_client_sandbox::TrustPrompt) -> bri_ui::api::Question {
+    let rows: Vec<String> = prompt
+        .rows
+        .iter()
+        .map(|row| {
+            let changed = if row.changed { " (changed)" } else { "" };
+            format!("{}{changed}: {}", plain_chat(&row.name), row.can.join(", "))
+        })
+        .collect();
+    bri_ui::api::Question {
+        title: plain_chat(&prompt.title),
+        text: format!("{}\n\n{}\n\n{}", prompt.body, rows.join("\n"), prompt.footer),
+        yes: prompt.accept.into(),
+        no: prompt.decline.into(),
+        on_yes: Box::new(UiAction::TrustAddOnCode),
+        on_no: Some(Box::new(UiAction::Disconnect)),
     }
 }
 /// `serverCmdMessageSent`: `'\c7%1\c3%2\c7%3\c6: %4'` with the clan
@@ -5246,6 +5276,10 @@ impl PlatformApp for App {
                         continue;
                     }
                     result
+                }
+                UiAction::TrustAddOnCode => self.client_code.accept_trust(&self.state_dir),
+                UiAction::ForgetAddOnTrust => {
+                    crate::client_code::ClientCode::forget_trust(&self.state_dir)
                 }
                 UiAction::ApproveDownload => {
                     if let Some(a) = &self.attempt

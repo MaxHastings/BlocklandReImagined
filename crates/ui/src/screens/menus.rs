@@ -875,6 +875,17 @@ pub struct MessageScreen {
 /// v20's `MBSetText`: the message box grows to fit its reflowed text, and
 /// the buttons (bottom-anchored) move down with the frame's bottom edge.
 /// The Yes/No box is authored one line tall.
+/// Grow a button about its centre so a longer label than v20's Yes/No
+/// ("Trust and join") is not clipped.
+fn widen_to_label(view: &mut View, pack: &Pack, button: NodeId) {
+    let want = view.pixel_width(pack, button) + 16;
+    let c = &mut view.nodes[button].ctrl;
+    let grow = want - c.extent[0];
+    if grow > 0 {
+        c.extent[0] += grow;
+        c.position[0] -= grow / 2;
+    }
+}
 fn fit_message(view: &mut View, pack: &Pack, prefix: &str) {
     let (Some(frame), Some(text)) = (
         view.id(&format!("{prefix}Frame")),
@@ -919,8 +930,10 @@ impl MessageScreen {
                 let command = view.node(n).ctrl.command.clone().unwrap_or_default();
                 if command.contains("yesCallback") {
                     view.set_text(n, yes);
+                    widen_to_label(&mut view, &core.pack, n);
                 } else if command.contains("noCallback") {
                     view.set_text(n, no);
+                    widen_to_label(&mut view, &core.pack, n);
                 }
             }
         }

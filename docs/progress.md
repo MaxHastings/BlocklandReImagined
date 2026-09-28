@@ -3244,3 +3244,22 @@ session loading_over_a_build` (two overlapping saves), `cargo test -p bri-sim
 -- --include-ignored` (the stock-save test asserts no brick is skipped),
 `cargo test -p bri-net --test loopback` (its reload test now loads beside
 the first copy). No wire change.
+
+## 2026-09-28 Join trust question for Add-On code
+
+- Tidying the open pull requests (#5, #7-#14) found every one already on
+  main through the gate; the one piece PR #11 left unbuilt was the question
+  a joining player answers before a server's Add-On code runs, so remote
+  code never ran. Now, entering someone else's game whose sandboxed Add-On
+  code is not trusted for that host key asks "<server> wants to run Add-On
+  code" with each Add-On's plain-words capabilities, "Trust and join" and
+  "Leave" (`ClientCode::trust_prompt` / `accept_trust`, `trust_question` in
+  `app.rs`). Trust and join saves the grant to `addon-trust.json` and starts
+  the code; Leave disconnects. Elevated code is not offered (nothing
+  elevated runs yet) and is named in chat instead. The Add-Ons screen gained
+  Forget Trust, which clears every grant, so the prompt's "take this back on
+  the Add-Ons screen" holds. Message boxes widen a button whose label is
+  longer than v20's Yes/No. Asking before the code downloads, and a
+  per-server list, remain (`docs/architecture/client-sandbox.md`). Evidence:
+  `cargo test -p bri-client --lib client_code`, `cargo test -p bri-ui --test
+  runtime_input`.
