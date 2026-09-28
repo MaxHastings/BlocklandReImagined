@@ -2472,3 +2472,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Evidence: `cargo test -p bri-ui --lib avatar -- --include-ignored`,
   `cargo test -p bri-client --lib avatar -- --include-ignored`,
   `cargo test -p bri-net --test loopback avatar -- --include-ignored`.
+
+- 2026-09-27 Missing brick definitions no longer refuse a whole world or
+  build (door-closer P0). `Simulation::new` and `preflight_load` failed on the
+  first brick with an unknown or unresolved definition, so a v20 save with
+  one add-on brick, or a world after a package was removed, did not load at
+  all. Such bricks now move to `World.unloaded`: not placed or replicated,
+  kept exactly, saved again with the world and with builds, and offered again
+  when a build is loaded on a server that has them. Loading says what it
+  skipped ("1 bricks were not loaded because this server does not have their
+  definitions: 1 missing. They are kept and saved with the world.") in chat,
+  in map-load pending objects and in `bri-server`'s log. Geometry errors in
+  placeable bricks still refuse the load atomically. No protocol change.
+  Evidence: `cargo test -p bri-world -p bri-sim` (updated
+  `build_load_keeps_unknown_bricks_aside_and_preserves_existing_players`).

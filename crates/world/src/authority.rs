@@ -111,6 +111,25 @@ impl Authority {
         self.world.owners.insert(owner, record);
         Ok(())
     }
+    /// Keep bricks this server cannot place (no definition) with the world,
+    /// so saving writes them back. `palette` is the load's merged colorset,
+    /// which may extend the world's.
+    pub fn keep_unloaded(&mut self, palette: &[[f32; 4]], bricks: Vec<Brick>) -> Result<()> {
+        ensure!(
+            palette.starts_with(&self.world.palette) && palette.len() <= 256,
+            "The colorset changed while loading"
+        );
+        ensure!(
+            self.world.bricks.len() + self.world.unloaded.len() + bricks.len() <= MAX_BRICKS,
+            "Loaded build exceeds world brick limit"
+        );
+        for brick in &bricks {
+            brick.validate(palette.len())?;
+        }
+        self.world.palette = palette.to_vec();
+        self.world.unloaded.extend(bricks);
+        Ok(())
+    }
     /// Commit only a plan validated against the same world revision. Physics
     /// adapters must preflight all geometry before this infallible publication.
     pub fn load_build(

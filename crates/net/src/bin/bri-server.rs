@@ -109,6 +109,9 @@ async fn main() -> Result<()> {
     )?;
     simulation.attach_terrain(map.terrain, anchors)?;
     simulation.waters = map.waters;
+    if let Some(skipped) = bri_sim::simulation::unloaded_summary(&simulation.state().unloaded) {
+        eprintln!("{skipped}");
+    }
     let spawn_points =
         bri_sim::spawn::candidates(&simulation.physics, &map.scene, &Default::default())?;
     let mut session = Session::new(simulation);

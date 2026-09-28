@@ -33,6 +33,11 @@ that landed it.
   its number back on join, saved builds carry the table instead of an opaque
   session scope, and loads give recorded builders their bricks on any server.
   Trust now also covers offline builders in the table.
+- **Partial load (contract 3):** fixed. A world or build brick whose
+  definition this server lacks no longer refuses the whole load: it moves to
+  `World.unloaded`, kept exactly and saved again (and offered again when a
+  build is loaded elsewhere), and the load reports "N bricks were not loaded
+  ..." by definition in chat, at map load and in `bri-server`'s log.
 - **Avatar part names (contract 3):** fixed. `Appearance.parts` (saved,
   sent and replicated) and the settings file's avatar prefs name the chosen
   part (`hat: "helmet"`, `accent: "visor"`). The avatar pack keeps its

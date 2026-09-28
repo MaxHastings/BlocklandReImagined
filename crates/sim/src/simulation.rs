@@ -99,9 +99,55 @@ pub fn set_enabled(
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
     actor.trusted(brick.owner, bri_world::authority::trust::BUILD)
 }
+/// "3 bricks were not loaded because this server does not have their
+/// definitions: 2 v20/brick/x, 1 other:brick/y. ...", or None when all loaded.
+pub fn unloaded_summary(bricks: &[Brick]) -> Option<String> {
+    if bricks.is_empty() {
+        return None;
+    }
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for brick in bricks {
+        let name = match &brick.definition {
+            bri_world::ContentRef::Resolved(id) => id.clone(),
+            bri_world::ContentRef::Unresolved { namespace, name } => format!("{namespace}/{name}"),
+        };
+        *counts.entry(name).or_default() += 1;
+    }
+    let mut kinds: Vec<String> = counts
+        .iter()
+        .take(8)
+        .map(|(name, count)| format!("{count} {name}"))
+        .collect();
+    if counts.len() > 8 {
+        kinds.push(format!("and {} more kinds", counts.len() - 8));
+    }
+    Some(format!(
+        "{} bricks were not loaded because this server does not have their definitions: {}. They are kept and saved with the world.",
+        bricks.len(),
+        kinds.join(", ")
+    ))
+}
+
 impl Simulation {
-    pub fn new(world: World, definitions: Definitions, map: Vec<ColliderBuilder>) -> Result<Self> {
+    pub fn new(
+        mut world: World,
+        definitions: Definitions,
+        map: Vec<ColliderBuilder>,
+    ) -> Result<Self> {
         world.validate()?;
+        // A brick this server has no definition for is kept aside, not
+        // refused: the rest of the world still loads (see `World::unloaded`).
+        let missing: Vec<BrickId> = world
+            .bricks
+            .iter()
+            .filter(|(_, b)| definitions.get(b).is_err())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in missing {
+            if let Some(brick) = world.bricks.remove(&id) {
+                world.unloaded.push(brick);
+            }
+        }
         let mut physics = bri_physics::new_world();
         let map_handles = map
             .into_iter()
@@ -202,11 +248,26 @@ impl Simulation {
     ) -> Result<()> {
         self.authority.claim_owner(owner, record)
     }
-    /// Check every brick of a load against the brick definitions before any
-    /// of it is published.
+    /// Split a load's bricks into those this server can place and those it
+    /// has no definition for.
+    pub fn split_placeable(&self, bricks: Vec<Brick>) -> (Vec<Brick>, Vec<Brick>) {
+        bricks
+            .into_iter()
+            .partition(|b| self.definitions.get(b).is_ok())
+    }
+    /// Keep bricks without a definition with the world; see
+    /// [`bri_world::authority::Authority::keep_unloaded`].
+    pub fn keep_unloaded(&mut self, palette: &[[f32; 4]], bricks: Vec<Brick>) -> Result<()> {
+        self.authority.keep_unloaded(palette, bricks)
+    }
+    /// Check every placeable brick of a load against its definition before
+    /// any of it is published. Bricks without a definition are not placed
+    /// ([`Self::split_placeable`]).
     pub fn preflight_load(&self, plan: &bri_world::build::LoadPlan) -> Result<()> {
         for brick in plan.bricks().values() {
-            Bounds::new(brick, &self.definitions.get(brick)?.mesh)?;
+            if let Ok(definition) = self.definitions.get(brick) {
+                Bounds::new(brick, &definition.mesh)?;
+            }
         }
         Ok(())
     }
