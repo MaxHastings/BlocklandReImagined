@@ -18,6 +18,7 @@ bri-admin = { path = "../admin" }
 bri-identity = { path = "../identity" }
 bri-vehicles = { path = "../vehicles" }
 bri-events = { path = "../events" }
+bri-package = { path = "../package" }
 glam = "0.33"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }

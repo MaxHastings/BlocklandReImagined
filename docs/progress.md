@@ -2420,6 +2420,26 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Open: a hosted game cannot load an imported package yet, because each system
   reads one pack per role. That seam and 19 others are in
   `docs/audits/spike-addon-import.md`.
+
+- 2026-09-27 Content loads through `packages.json`; joins name differing
+  packages (door-closer P0, protocol 31). `ContentConfig` (18 fixed pack
+  fields and `client-content.json`) is gone: the client and `bri-server` read
+  `packages.json` from the content root, falling back to
+  `crates/package/base-packages.json`, and resolve each engine role to its
+  package directory. `bri-server` now takes `<content-root> <world.json>
+  <state-dir> <listen> [seconds]`. Hosting and joining hash every listed
+  package into an environment; `Hello` carries the client's shared and client
+  packages instead of one opaque content id, and the server refuses a join
+  whose shared packages differ with a message naming each one (server has X,
+  you have Y / you do not / the server does not). Client-only differences
+  join and are told in chat. The fingerprint chain in `content_identity.rs`
+  (and its tests) is removed; the weapon and item-physics startup snapshots
+  stay. The regeneration script, both packagers and the launchers use the
+  package list. Measured: the base environment is 333 MiB over 18 packages;
+  `bri-server` on the real content ran a 2 s smoke and published it.
+  Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
+  new loopback `join_refusal_names_each_differing_shared_package`,
+  `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.
 - 2026-09-28 In-game Add-Ons manager, first slice (`docs/architecture/mod-manager.md`,
   player research in `docs/research/mod-manager-expectations.md`). Players see
   one word, "Add-Ons"; "package" stays internal. `bri_package::library` scans

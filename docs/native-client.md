@@ -249,7 +249,7 @@ tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-
 ```
 
 `package_playtest.sh` is the Linux counterpart of `package_playtest.ps1`: it
-copies the release client and the packs ContentConfig selects into
+copies the release client and the packs the package list selects into
 `dist/BlocklandReImagined-alpha-<version>-linux/` with `launch.sh` and a
 checksummed `MANIFEST.json`; `--validate-only` and `--verify <dir>` work as on
 Windows.

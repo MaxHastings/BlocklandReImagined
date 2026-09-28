@@ -540,6 +540,7 @@ dependencies = [
  "bri-files",
  "bri-identity",
  "bri-minigames",
+ "bri-package",
  "bri-physics",
  "bri-progress",
  "bri-sim",

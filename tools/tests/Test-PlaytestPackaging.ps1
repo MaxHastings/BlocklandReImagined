@@ -9,19 +9,19 @@ $temp = Join-Path ([IO.Path]::GetTempPath()) "bri-package-test-$([Guid]::NewGuid
 try {
     $fixture = Join-Path $temp 'fixture'
     [IO.Directory]::CreateDirectory($fixture) | Out-Null
-    foreach ($path in @('crates/client/src','content','docs','bin')) { [IO.Directory]::CreateDirectory((Join-Path $fixture $path)) | Out-Null }
-    Copy-Item (Join-Path $repo 'crates/client/src/content.rs') (Join-Path $fixture 'crates/client/src/content.rs')
+    foreach ($path in @('content','docs','bin')) { [IO.Directory]::CreateDirectory((Join-Path $fixture $path)) | Out-Null }
     Copy-Item (Join-Path $repo 'docs/PLAYTEST.md') (Join-Path $fixture 'docs/PLAYTEST.md')
     Copy-Item (Join-Path $repo 'docs/KNOWN-ISSUES.md') (Join-Path $fixture 'docs/KNOWN-ISSUES.md')
-    $fields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','vehicles','events','tutorial')
-    $override = [ordered]@{ schema_version = 1 }
+    $fields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','weapon_debris','vehicles','events','tutorial')
+    $packages = @()
     foreach ($field in $fields) {
-        $override[$field] = "fixture-$field"
+        $packages += [ordered]@{ id = "fixture-$($field.Replace('_','-'))"; version = '1.0.0'; side = 'shared'; dir = "fixture-$field"; role = $field }
         $packageDir = Join-Path $fixture "content/fixture-$field"
         [IO.Directory]::CreateDirectory($packageDir) | Out-Null
         [IO.File]::WriteAllText((Join-Path $packageDir 'asset.bin'), "fixture-$field")
     }
-    [IO.File]::WriteAllText((Join-Path $fixture 'content/client-content.json'), (ConvertTo-Json $override -Depth 4))
+    $override = [ordered]@{ schema_version = 1; packages = $packages }
+    [IO.File]::WriteAllText((Join-Path $fixture 'content/packages.json'), (ConvertTo-Json $override -Depth 4))
     $exe = Join-Path $fixture 'bin/bri-client.exe'
     [IO.File]::WriteAllBytes($exe, [byte[]](0x4d,0x5a,0x01,0x02))
     $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash

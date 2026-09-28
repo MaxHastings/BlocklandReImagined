@@ -10,7 +10,7 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('bri launcher fixture ' + [Guid
 [IO.Directory]::CreateDirectory((Join-Path $fixture 'content')) | Out-Null
 try {
     Copy-Item -LiteralPath (Join-Path $repo 'tools/Launch-Playtest.ps1') -Destination $fixture
-    [IO.File]::WriteAllText((Join-Path $fixture 'content/client-content.json'), '{}')
+    [IO.File]::WriteAllText((Join-Path $fixture 'content/packages.json'), '{}')
     $source = @'
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();

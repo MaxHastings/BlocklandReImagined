@@ -54,6 +54,15 @@ pub struct Environment {
 }
 
 impl Environment {
+    /// No packages at all, for probes and tests that load no content.
+    pub fn empty() -> Self {
+        Self {
+            schema_version: ENVIRONMENT_SCHEMA,
+            api: API_LEVEL,
+            packages: Vec::new(),
+        }
+    }
+
     /// Hash every package in `set` under `root`.
     pub fn load(root: &Path, set: &PackageSet) -> Result<Self> {
         let mut packages = Vec::with_capacity(set.packages.len());

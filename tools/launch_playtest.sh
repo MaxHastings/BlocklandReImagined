@@ -9,8 +9,8 @@ mkdir -p user-state logs
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 stdout="logs/client-$stamp.stdout.log"
 stderr="logs/client-$stamp.stderr.log"
-if [[ ! -x ./bri-client || ! -f content/client-content.json ]]; then
-    echo "This package is incomplete: bri-client or content/client-content.json is missing."
+if [[ ! -x ./bri-client || ! -f content/packages.json ]]; then
+    echo "This package is incomplete: bri-client or content/packages.json is missing."
     exit 1
 fi
 ./bri-client --run ./content ./user-state >"$stdout" 2>"$stderr"

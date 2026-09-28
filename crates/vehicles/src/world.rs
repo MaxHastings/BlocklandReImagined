@@ -1943,6 +1943,7 @@ fn build_controller(
 mod scale_tests {
     use super::*;
     #[test]
+    #[ignore = "requires generated native vehicle content; CPU only"]
     fn native_wheel_geometry_scales_with_collision_and_mass_stays_authored() {
         let pack = Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),

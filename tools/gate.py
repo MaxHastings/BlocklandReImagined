@@ -6,6 +6,7 @@
     python tools/gate.py --install-hook  install the shared pre-push hook
     python tools/gate.py --hook ...      (called by the pre-push hook)
     python tools/gate.py --history-range BASE TIP   (history check only; CI)
+    python tools/gate.py --ci-test       content-free tests only (CI)
 
 Checks, cheapest first, on the exact commit being pushed:
   1. the commit already contains the latest origin/main (rebase first)
@@ -27,6 +28,7 @@ Commits made by `git revert` ("Revert ...") are allowed automatically.
 """
 import argparse
 import contextlib
+import json
 import os
 from pathlib import Path
 import re
@@ -34,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
 import tomllib
 
 ZERO = "0" * 40
@@ -44,7 +47,7 @@ UNDO_MIN_LINES = 10
 UNDO_FRACTION = 0.6
 PROTOCOL_FILE = "crates/net/src/protocol.rs"
 PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
-LOCK_STALE_SECONDS = 3 * 3600
+LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
 
 
@@ -216,53 +219,93 @@ def history_check(base, tip):
 # ---------------------------------------------------------------- build/test
 
 
-def process_alive(pid):
-    """Query only; never signals the process."""
+def process_dead(pid):
+    """True only when the OS positively reports no such process. Query only."""
     if not pid.isdigit():
         return False
     if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                             capture_output=True, text=True, errors="replace").stdout
-        return f'"{pid}"' in out
+        result = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                                capture_output=True, text=True, errors="replace")
+        return result.returncode == 0 and "No tasks" in result.stdout
     try:
         os.kill(int(pid), 0)
     except ProcessLookupError:
-        return False
-    except PermissionError:
+        return True
+    except OSError:
         pass
-    return True
+    return False
 
 
 class Lock:
+    """An exclusive file lock. The holder refreshes the file's mtime every
+    30 s; a lock whose heartbeat stopped for LOCK_STALE_SECONDS, or whose
+    holder the OS reports gone, is reclaimed. Only the owner removes it."""
+
     def __init__(self, path, label):
         self.path = path
         self.label = label
+        self.token = f"{os.getpid()} {time.time():.0f} {label}"
+        self.stop = threading.Event()
+
+    def owned(self):
+        try:
+            return self.path.read_text(encoding="utf-8") == self.token
+        except OSError:
+            return False
+
+    def heartbeat(self):
+        while not self.stop.wait(30):
+            if self.owned():
+                os.utime(self.path)
 
     def __enter__(self):
-        announced = False
+        announced = 0.0
         while True:
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, f"{os.getpid()} {time.time():.0f} {self.label}".encode())
+                os.write(fd, self.token.encode("utf-8"))
                 os.close(fd)
+                threading.Thread(target=self.heartbeat, daemon=True).start()
                 return self
             except FileExistsError:
+                pass
+            try:
+                holder = self.path.read_text(encoding="utf-8")
+                idle = time.time() - self.path.stat().st_mtime
+            except OSError:
+                time.sleep(1)
+                continue
+            parts = holder.split(" ", 2)
+            started = float(parts[1]) if len(parts) > 1 and parts[1].isdigit() else time.time()
+            if idle > LOCK_STALE_SECONDS or (idle > 60 and process_dead(parts[0])):
+                say(f"reclaiming stale gate lock ({holder}; no heartbeat for {idle:.0f}s)")
                 try:
-                    holder = self.path.read_text()
-                    age = time.time() - self.path.stat().st_mtime
+                    if self.path.read_text(encoding="utf-8") == holder:
+                        remove(self.path)
                 except OSError:
-                    continue
-                if age > LOCK_STALE_SECONDS or not process_alive(holder.split(" ", 1)[0]):
-                    say(f"removing stale gate lock ({holder})")
-                    self.path.unlink(missing_ok=True)
-                    continue
-                if not announced:
-                    say(f"waiting for the gate lock, held by: {holder}")
-                    announced = True
-                time.sleep(5)
+                    pass
+                continue
+            if time.time() - announced >= 300:
+                say(f"waiting for the gate lock, held for {(time.time() - started) / 60:.0f} min "
+                    f"by: {holder}")
+                announced = time.time()
+            time.sleep(5)
 
     def __exit__(self, *exc):
-        self.path.unlink(missing_ok=True)
+        self.stop.set()
+        if self.owned():
+            remove(self.path)
+
+
+def remove(path):
+    """Delete a file, retrying while a waiter briefly has it open (Windows)."""
+    for _ in range(100):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(0.1)
+    path.unlink(missing_ok=True)
 
 
 def run_step(name, command, cwd, log, env=None):
@@ -324,7 +367,11 @@ def prepare_worktree(root, sha):
         git("worktree", "add", "--detach", str(worktree), sha)
     else:
         git("checkout", "--detach", "--force", sha, cwd=worktree)
-        git("clean", "-fdq", "-e", "/content", cwd=worktree)
+        git("reset", "-q", "--hard", sha, cwd=worktree)
+        # -x also drops ignored leftovers, keeping the content junction,
+        # test report folders and any stray in-tree target/.
+        git("clean", "-fdxq", "-e", "/content", "-e", "/artifacts", "-e", "/target",
+            cwd=worktree)
     content = worktree / "content"
     if not content.exists():
         source = main_checkout() / "content"
@@ -338,6 +385,17 @@ def prepare_worktree(root, sha):
     for directory in (main_checkout() / "artifacts").glob("*/"):
         (worktree / "artifacts" / directory.name).mkdir(parents=True, exist_ok=True)
     return worktree
+
+
+def tree_intact(worktree, sha):
+    """The gate worktree still holds exactly sha, with no tracked changes."""
+    head = git("rev-parse", "HEAD", cwd=worktree).strip()
+    dirty = git("status", "--porcelain", "--untracked-files=no", cwd=worktree).strip()
+    if head != sha or dirty:
+        say(f"the gate worktree changed during this run (HEAD {head[:9]}, "
+            f"{'dirty' if dirty else 'clean'}); another process touched it. Rerun the gate.")
+        return False
+    return True
 
 
 def full_gate(sha, root):
@@ -363,6 +421,8 @@ def full_gate(sha, root):
                         "--", "-D", "warnings"]),
         ]
         for name, command in steps:
+            if not tree_intact(worktree, sha):
+                return False
             if not run_step(name, command, worktree, log, env):
                 print(tail(log, f"===== {name} ====="))
                 say(f"full log: {log}")
@@ -377,6 +437,8 @@ def full_gate(sha, root):
         skip_args = [arg for name in skips for arg in ("--skip", name)]
         run_step("test", ["cargo", "test", "--workspace", "--locked", "--no-fail-fast",
                           "--", "--include-ignored", *skip_args], worktree, log, env)
+        if not tree_intact(worktree, sha):
+            return False
         failed, compile_error = parse_failures(log)
         if compile_error:
             print(tail(log, "===== test ====="))
@@ -410,6 +472,8 @@ def full_gate(sha, root):
             for key in unexpected:
                 print(f"    {key}")
             say(f"full log: {log}")
+            return False
+        if not tree_intact(worktree, sha):
             return False
         passed.parent.mkdir(exist_ok=True)
         passed.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
@@ -477,6 +541,57 @@ def push_main():
     return False
 
 
+def ci_test():
+    """Run every test binary except targets that need generated v20 content.
+
+    GitHub runners have no v20 content. Those targets are listed as
+    [[ci_skip_target]] in tools/gate-known-failures.toml; the local gate still
+    runs them all.
+    """
+    top = Path(git("rev-parse", "--show-toplevel").strip())
+    data = tomllib.loads((top / "tools" / "gate-known-failures.toml").read_text(encoding="utf-8"))
+    skipped = {entry["target"] for entry in data.get("ci_skip_target", [])}
+    build = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run",
+                            "--message-format=json-render-diagnostics"],
+                           cwd=top, stdout=subprocess.PIPE, text=True, errors="replace")
+    if build.returncode:
+        return False
+    binaries = []
+    for line in build.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if message.get("reason") != "compiler-artifact" or not message.get("executable"):
+            continue
+        if not message["profile"].get("test"):
+            continue
+        package_id = message["package_id"]
+        package = (package_id.rsplit("#", 1)[1].split("@")[0] if "#" in package_id
+                   else package_id.split()[0])
+        target = message["target"]
+        label = f"{package}/{'lib' if 'lib' in target['kind'] else target['name']}"
+        cwd = Path(message["manifest_path"]).parent
+        binaries.append((label, message["executable"], cwd))
+    unknown = skipped - {label for label, _, _ in binaries}
+    if unknown:
+        say(f"ci_skip_target entries match no test target: {', '.join(sorted(unknown))}")
+        return False
+    failed = []
+    for label, executable, cwd in sorted(binaries):
+        if label in skipped:
+            say(f"skipping {label} (needs generated content)")
+            continue
+        say(f"running {label}")
+        if subprocess.run([executable], cwd=cwd).returncode:
+            failed.append(label)
+    if failed:
+        say(f"failing test targets: {', '.join(failed)}")
+        return False
+    say("all content-free test targets passed")
+    return True
+
+
 def hook(stdin):
     ok = True
     for line in stdin.read().splitlines():
@@ -530,6 +645,8 @@ def main():
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--install-hook", action="store_true")
     parser.add_argument("--diff-only", action="store_true")
+    parser.add_argument("--ci-test", action="store_true",
+                        help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--push", action="store_true",
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
@@ -541,11 +658,19 @@ def main():
             install_hook()
             return 0
         if args.history_range:
-            problems = history_check(*args.history_range)
+            base, tip = args.history_range
+            if subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"],
+                              capture_output=True).returncode:
+                # A force push replaced the previous tip; judge against main.
+                base = git("merge-base", "refs/remotes/origin/main", tip).strip()
+                say(f"previous tip is gone; checking from merge base {base[:9]}")
+            problems = history_check(base, tip)
             for problem in problems:
                 print(f"    {problem}")
             say("history check " + ("FAILED" if problems else "ok"))
             return 1 if problems else 0
+        if args.ci_test:
+            return 0 if ci_test() else 1
         if args.push:
             return 0 if push_main() else 1
         if args.hook is not None:

@@ -12,13 +12,33 @@ use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 pub struct ServerOptions {
     pub bind: SocketAddr,
-    pub content_id: String,
+    /// Every package this server loaded; joining clients must agree on the
+    /// shared ones.
+    pub environment: bri_package::environment::Environment,
     pub spawn_points: Vec<Vec3>,
     /// A persistent host identity lets joiners keep trusting this host
     /// across restarts. None generates a throwaway certificate.
     pub certificate: Option<HostCertificate>,
     /// Builds a configured, empty session for a map id (admin Change Map).
     pub map_loader: Option<MapLoader>,
+}
+/// Refuse a join whose shared packages differ from the server's, naming
+/// every differing package. Presentation-only differences are allowed and
+/// returned, for the joining player to be told about.
+fn check_packages(
+    environment: &bri_package::environment::Environment,
+    client: &[bri_package::environment::PackageRef],
+) -> Result<Vec<bri_package::environment::Mismatch>> {
+    let (blocking, cosmetic): (Vec<_>, Vec<_>) = environment
+        .compare(client)
+        .into_iter()
+        .partition(|m| m.blocks_join());
+    ensure!(
+        blocking.is_empty(),
+        "Your content does not match the server: {}",
+        bri_package::environment::describe(&blocking)
+    );
+    Ok(cosmetic)
 }
 /// Loads a map for Change Map; runs on a blocking thread.
 pub type MapLoader = Arc<dyn Fn(&str) -> Result<Session> + Send + Sync>;
@@ -364,8 +384,7 @@ fn start_configured(
     ensure!(
         !options.spawn_points.is_empty()
             && options.spawn_points.len() <= 256
-            && !options.content_id.is_empty()
-            && options.content_id.len() <= 128,
+            && options.environment.packages.len() <= bri_package::environment::MAX_PACKAGES,
         "Invalid server options"
     );
     let identity = match &options.certificate {
@@ -710,7 +729,7 @@ async fn run(
         Some(event)=incoming.recv()=>{match event {
             Event::Join{hello,principal,connection,out,answer}=>{
                 let join:Result<OwnerId>= (||{
-                    ensure!(hello.version==VERSION,"Incompatible protocol version");ensure!(hello.content_id==options.content_id,"Required content does not match");
+                    ensure!(hello.version==VERSION,"Incompatible protocol version");let cosmetic=check_packages(&options.environment,&hello.packages)?;
                     ensure!(peers.len()<max_players,"Server is full");
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
                     let (owner,token)=if let Some(token)=hello.resume {
@@ -729,6 +748,7 @@ async fn run(
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
+                    if !cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks});

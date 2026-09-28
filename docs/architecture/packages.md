@@ -1,7 +1,8 @@
 # Packages
 
-Status: format landed 2026-09-27 (platform API level 1). Code: `crates/package`
-(`bri-package`). This closes the shape of door-closer P0 items 2 (package
+Status: format landed 2026-09-27 (platform API level 1); the client, the
+dedicated server and the join check use it (protocol 31). Code:
+`crates/package` (`bri-package`). This closes the shape of door-closer P0 items 2 (package
 manifest) and 4 (one id grammar); see
 [`docs/audits/platform-door-closers.md`](../audits/platform-door-closers.md).
 
@@ -86,8 +87,23 @@ you have zombies 2.0.0 (77b2…), the server does not
 ```
 
 A mismatch in a `shared` package refuses the join and the rejection lists
-every difference; `client` differences are reported only. Server-only
-packages are never compared.
+every difference; `client` differences are told to the joining player in chat
+and do not refuse. Server-only packages are never compared.
+
+Where it is used:
+
+- `ClientContent::load` and `ContentPaths` read `packages.json` and resolve
+  each engine role to its package directory; `ContentPaths::environment()`
+  hashes the set when hosting or joining.
+- `bri-server <content-root> <world.json> <state-dir> <listen> [seconds]`
+  reads the same file and publishes its environment in `host.json`.
+- `Hello.packages` carries the joining client's shared and client packages;
+  `ServerOptions.environment` is the server's.
+- `tools/regenerate_content.py` builds the packs the base list names, and the
+  playtest packager copies the effective list into `content/packages.json`.
+- Mod packages with their own `package.json` (the Stress Lab packages) are
+  listed here like any other package; `bri-package-runtime` loads their
+  manifests from the same list.
 
 ## Turning packages on and off
 
