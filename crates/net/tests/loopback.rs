@@ -2209,7 +2209,17 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
     let mut game = session();
     game.set_spawn_points(options().spawn_points)?;
     game.set_map_list(maps.clone())?;
+    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let log = saved.clone();
     let mut opts = options();
+    // The timer never fires in this test; only the map change saves.
+    opts.autosave = Some(server::Autosave {
+        every: Duration::from_secs(3600),
+        save: std::sync::Arc::new(move |world: &World| {
+            log.lock().unwrap().push(world.name.clone());
+            Ok(())
+        }),
+    });
     opts.map_loader = Some(std::sync::Arc::new(move |map: &str| {
         let mut next = session();
         next.set_spawn_points(vec![Vec3::new(10.0, 0.05, 10.0), Vec3::new(13.0, 0.05, 10.0)])?;
@@ -2261,6 +2271,8 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
     };
     wait(&mut guest, moved).await?;
     wait(&mut admin, moved).await?;
+    // The world being left was saved before the new one replaced it.
+    assert_eq!(*saved.lock().unwrap(), ["Loopback".to_string()]);
     assert_eq!(guest.owner, guest_id);
     // Players keep their identity and chat history and can act on the new map.
     assert!(guest.replica.chat.iter().any(|l| l.text == "before"));

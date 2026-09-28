@@ -959,13 +959,21 @@ async fn run(
                 match done.await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave failed: {error}");}}
             }
             if autosaving.is_none() && let Some(autosave)=&autosave {
-                let world=session.simulation().state().clone();let save=autosave.save.clone();
+                let world=session.saved_world();let save=autosave.save.clone();
                 autosaving=Some(tokio::task::spawn_blocking(move||save(&world)));
             }
         },
         Some((admin,loaded))=map_rx.recv()=>{
             match loaded {
                 Ok(new)=>{
+                    // Every end of a world saves it, a map change included.
+                    if let Some(autosave)=&autosave {
+                        if let Some(task)=autosaving.take() {
+                            match task.await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave failed: {error}");}}
+                        }
+                        let world=session.saved_world();let save=autosave.save.clone();
+                        match tokio::task::spawn_blocking(move||save(&world)).await {Ok(Ok(()))=>autosaves+=1,Ok(Err(error))=>{autosave_failures+=1;eprintln!("Autosave before map change failed: {error:#}");},Err(error)=>{autosave_failures+=1;eprintln!("Autosave before map change failed: {error}");}}
+                    }
                     let old=std::mem::replace(&mut session,new);
                     session.adopt(old,admin)?;
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
@@ -1096,7 +1104,7 @@ async fn run(
     if let (Err(error), Some(autosave)) = (&outcome, &autosave) {
         // The report (and its world) is lost with the error; keep the world.
         eprintln!("Host stopped with an error ({error:#}); saving its world");
-        let world = session.simulation().state().clone();
+        let world = session.saved_world();
         let save = autosave.save.clone();
         if let Err(save_error) = tokio::task::spawn_blocking(move || save(&world)).await? {
             eprintln!("Final autosave failed: {save_error:#}");
@@ -1123,7 +1131,7 @@ async fn run(
         },
         autosaves,
         autosave_failures,
-        native_world: session.simulation().state().clone(),
+        native_world: session.saved_world(),
         notices: session.take_notices(),
         packages: session.package_save(),
         package_diagnostics: session.package_diagnostics(),

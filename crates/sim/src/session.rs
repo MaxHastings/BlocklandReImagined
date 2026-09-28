@@ -941,6 +941,20 @@ impl Session {
             .map(|p| (p.player.state().clone(), p.processed_move))
             .collect()
     }
+    /// The world as every save keeps it: manual saves, autosaves, the save
+    /// before a map change and the host's final world alike. A blown-up brick
+    /// is only fake-dead; v20 saves it as it will respawn, not hidden.
+    pub fn saved_world(&self) -> bri_world::World {
+        let mut world = self.simulation.state().clone();
+        for id in self.events.respawns.keys() {
+            if let Some(b) = world.bricks.get_mut(id) {
+                b.visible = true;
+                b.raycast = true;
+                b.colliding = true;
+            }
+        }
+        world
+    }
     pub fn names(&self) -> BTreeMap<OwnerId, String> {
         self.peers
             .iter()
@@ -1308,18 +1322,10 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::SaveBuild { events, ownership } => {
-                // A blown-up brick is only fake-dead; v20 saves it as it will
-                // respawn, not hidden.
-                let mut world = self.simulation.state().clone();
-                for id in self.events.respawns.keys() {
-                    if let Some(b) = world.bricks.get_mut(id) {
-                        b.visible = true;
-                        b.raycast = true;
-                        b.colliding = true;
-                    }
-                }
                 Ok(Reply::Saved(Box::new(bri_world::build::SavedBuild::capture(
-                    &world, events, ownership,
+                    &self.saved_world(),
+                    events,
+                    ownership,
                 )?)))
             }
             Command::LoadBuild { build, ownership } => {

@@ -255,6 +255,13 @@ fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn() {
                 .values()
                 .all(|b| b.visible && b.colliding && b.raycast)
         );
+        // Autosaves and the host's final world keep them the same way.
+        assert!(
+            s.saved_world()
+                .bricks
+                .values()
+                .all(|b| b.visible && b.colliding && b.raycast)
+        );
         // The minigame's brick respawn time brings them back.
         let mut back = false;
         for _ in 0..(120 * 60) {
