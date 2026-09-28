@@ -1996,17 +1996,19 @@ impl App {
             let address = route.address;
             let pins = pins_file.clone();
             let saved_key = pin_key.clone();
-            let pin = match (route.key, lan_hosts.get(&address.to_string())) {
-                (Some(key), _) => HostPin::Key(key),
-                (None, Some(certificate)) => HostPin::Certificate(certificate.clone()),
-                (None, None) => tokio::task::spawn_blocking(move || {
+            let saved = match route.key {
+                Some(_) => None,
+                None => tokio::task::spawn_blocking(move || {
                     read_small_json::<BTreeMap<String, Vec<u8>>>(&pins)
                         .and_then(|pins| pins.get(&saved_key).cloned())
-                        .map_or(HostPin::FirstUse, HostPin::Certificate)
                 })
                 .await?,
             };
-            let had_pin = matches!(pin, HostPin::Certificate(_));
+            let (pin, had_pin) = crate::servers::join_pin(
+                route.key,
+                saved,
+                lan_hosts.get(&address.to_string()),
+            );
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })

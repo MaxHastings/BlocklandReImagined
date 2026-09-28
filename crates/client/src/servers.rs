@@ -33,6 +33,26 @@ impl SavedServer {
     }
 }
 
+/// Which host a join must reach, strongest evidence first: an invite's key
+/// (just copied from the host), the certificate pinned on an earlier join,
+/// then a LAN listing's certificate. LAN listings are unsigned broadcast
+/// replies that anyone on the network can send for any address, so one may
+/// stand in for a first join but never overrides a pin. The flag says the
+/// pin came from the saved pins, the only pin a failed join may forget.
+pub fn join_pin(
+    invite: Option<bri_net::invite::HostKey>,
+    saved: Option<Vec<u8>>,
+    lan: Option<&Vec<u8>>,
+) -> (bri_net::client::HostPin, bool) {
+    use bri_net::client::HostPin;
+    match (invite, saved, lan) {
+        (Some(key), _, _) => (HostPin::Key(key), false),
+        (None, Some(certificate), _) => (HostPin::Certificate(certificate), true),
+        (None, None, Some(certificate)) => (HostPin::Certificate(certificate.clone()), false),
+        (None, None, None) => (HostPin::FirstUse, false),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SavedServers {
@@ -133,6 +153,26 @@ mod tests {
         assert!(!saved.toggle_favorite("HOST5.example.com:28000", None, ""));
         assert_eq!(saved.servers.len(), RECENT);
     }
+    #[test]
+    fn a_lan_listing_never_overrides_a_saved_pin() {
+        use bri_net::client::HostPin;
+        let (saved, spoofed) = (b"real host".to_vec(), b"someone on the LAN".to_vec());
+        // Anyone on the network can answer the LAN query for any address.
+        assert_eq!(
+            join_pin(None, Some(saved.clone()), Some(&spoofed)),
+            (HostPin::Certificate(saved.clone()), true)
+        );
+        // First joins may take the listing, but a failure there must not
+        // forget anything.
+        assert_eq!(
+            join_pin(None, None, Some(&spoofed)),
+            (HostPin::Certificate(spoofed.clone()), false)
+        );
+        let key = bri_net::invite::host_key(b"invite");
+        assert_eq!(join_pin(Some(key), Some(saved), None), (HostPin::Key(key), false));
+        assert_eq!(join_pin(None, None, None), (HostPin::FirstUse, false));
+    }
+
     #[test]
     fn saved_servers_round_trip_through_their_file() {
         let dir = tempfile::tempdir().unwrap();
