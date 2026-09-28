@@ -94,6 +94,16 @@ fn wrap_half(angle: f32) -> f32 {
     (angle + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::PI)
         - std::f32::consts::FRAC_PI_2
 }
+/// `bottomprintCannonStrength`: "Fire! :" and a bar of 20 `|`, yellow for
+/// the power so far (two per step of ten) and black for the rest.
+pub(super) fn cannon_strength(charge: u8, steps: u8) -> String {
+    let lit = (usize::from(charge) * 20 / usize::from(steps.max(1))).min(20);
+    format!(
+        "<just:center><color:FF0000>Fire! <color:FFFFFF>:<color:FFFF00>{}<color:000000>{}",
+        "|".repeat(lit),
+        "|".repeat(20 - lit)
+    )
+}
 fn occupant(peers: &BTreeMap<OwnerId, Peer>, owner: OwnerId) -> veh::Occupant {
     let tuning = peers
         .get(&owner)
@@ -1191,6 +1201,18 @@ impl Session {
                     }
                 }
                 Intent::Animation { .. } => {}
+                Intent::Charged {
+                    owner,
+                    charge,
+                    steps,
+                    ..
+                } => self.notify(
+                    owner.0,
+                    Notice::Bottom {
+                        text: cannon_strength(charge, steps),
+                        seconds: 1.0,
+                    },
+                ),
                 Intent::Destroyed { vehicle, .. } => {
                     if let Some(position) = self.vehicle_position(vehicle) {
                         self.cues.emit(

@@ -257,6 +257,14 @@ pub enum Intent {
         vehicle: VehicleId,
         id: String,
     },
+    /// A charging gun (the pirate cannon's `CannonStrengthLoop`) reached
+    /// `charge` of `steps`; the gunner sees it as a bottom print.
+    Charged {
+        vehicle: VehicleId,
+        owner: OwnerId,
+        charge: u8,
+        steps: u8,
+    },
     Destroyed {
         vehicle: VehicleId,
         by: OwnerId,
@@ -1763,8 +1771,17 @@ fn weapon_step(
     if weapon.charge_ticks > 0 {
         if c.fire && ready && (pressed || v.charge_started.is_some()) {
             let start = *v.charge_started.get_or_insert(tick);
-            v.charge = (1 + (tick - start) / weapon.charge_ticks)
+            let charge = (1 + (tick - start) / weapon.charge_ticks)
                 .min(u64::from(weapon.charge_steps)) as u8;
+            if charge != v.charge {
+                intents.push(Intent::Charged {
+                    vehicle: id,
+                    owner: occupant.owner,
+                    charge,
+                    steps: weapon.charge_steps,
+                });
+            }
+            v.charge = charge;
             if tick == start {
                 intents.push(Intent::Effect {
                     vehicle: id,
