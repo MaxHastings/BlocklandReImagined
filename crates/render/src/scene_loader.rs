@@ -251,11 +251,21 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
             .push("Map has no authored spawn; host must choose a valid spawn explicitly".into());
     }
     if let Some(sun) = scene.nodes.iter().find(|n| matches!(n.kind, Kind::Sun)) {
-        let d = rgb(
-            sun.properties.get("direction"),
-            [0.57735, 0.57735, -0.57735],
+        // The same angles the lighting bake uses; `direction` is stale.
+        let angle = |key, default| {
+            sun.properties
+                .get(key)
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|v| v.is_finite())
+                .unwrap_or(default)
+        };
+        let d = bri_content::scene::sun_direction(
+            angle("azimuth", 0.0),
+            angle("elevation", 35.0),
+            f32::sin,
+            f32::cos,
         );
-        out.sun_direction = [d[0], d[2], -d[1]]; // original Z-up to native Y-up
+        out.sun_direction = [d.x, d.z, -d.y]; // original Z-up to native Y-up
         out.sun_color = rgb(sun.properties.get("color"), out.sun_color);
         out.ambient = rgb(sun.properties.get("ambient"), out.ambient);
     }
