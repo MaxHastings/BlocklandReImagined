@@ -659,18 +659,41 @@ impl EntityDelta {
         last: &mut BTreeMap<u64, bri_sim::session::EntityInfo>,
         current: Vec<bri_sim::session::EntityInfo>,
     ) -> Option<Self> {
+        Self::between_joined(last, &[], current)
+    }
+    /// [`Self::between`] when players joined since `last` holding `joined`
+    /// (their checkpoints' entities): the update brings them in line too.
+    pub fn between_joined(
+        last: &mut BTreeMap<u64, bri_sim::session::EntityInfo>,
+        joined: &[Vec<bri_sim::session::EntityInfo>],
+        current: Vec<bri_sim::session::EntityInfo>,
+    ) -> Option<Self> {
         let mut delta = Self::default();
         let current: BTreeMap<u64, _> = current.into_iter().map(|e| (e.id, e)).collect();
+        // What each client holds: the last update's entities, or a joiner's.
+        let held: Vec<BTreeMap<u64, &bri_sim::session::EntityInfo>> = std::iter::once(
+            last.iter().map(|(id, e)| (*id, e)).collect(),
+        )
+        .chain(joined.iter().map(|view| view.iter().map(|e| (e.id, e)).collect()))
+        .collect();
         for (id, e) in &current {
-            match last.get(id) {
-                Some(old) if old == e => {}
-                Some(old) if old.kind == e.kind && old.model == e.model && old.label == e.label => {
-                    delta.moved.push((*id, e.position, e.yaw))
-                }
-                _ => delta.changed.push(e.clone()),
+            let olds = || held.iter().map(|h| h.get(id).copied());
+            if olds().all(|old| old == Some(e)) {
+                continue;
+            }
+            if olds().all(|old| {
+                old.is_some_and(|old| {
+                    old.kind == e.kind && old.model == e.model && old.label == e.label
+                })
+            }) {
+                delta.moved.push((*id, e.position, e.yaw));
+            } else {
+                delta.changed.push(e.clone());
             }
         }
-        delta.removed = last.keys().filter(|id| !current.contains_key(id)).copied().collect();
+        let ids: BTreeSet<u64> = held.iter().flat_map(|h| h.keys().copied()).collect();
+        drop(held);
+        delta.removed = ids.into_iter().filter(|id| !current.contains_key(id)).collect();
         *last = current;
         (delta != Self::default()).then_some(delta)
     }

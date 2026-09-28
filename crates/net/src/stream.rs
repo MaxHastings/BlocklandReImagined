@@ -254,15 +254,24 @@ pub struct WeaponStream {
     sent: WeaponView,
     tick: u64,
     falls: BTreeMap<String, f32>,
+    /// Views handed to players who joined since the last update. A joiner
+    /// holds what the host had then, which may differ from `sent`: a
+    /// projectile that came and went between two updates, say.
+    joined: Vec<WeaponView>,
 }
 impl WeaponStream {
-    /// Clients start again from `view` (a join's or a new map's checkpoint).
+    /// Every client starts again from `view` (a new map's checkpoint).
     pub fn reset(&mut self, view: WeaponView, tick: u64, falls: BTreeMap<String, f32>) {
         *self = Self {
             sent: view,
             tick,
             falls,
+            joined: Vec::new(),
         };
+    }
+    /// A player joined holding `view`; the next update brings it in line.
+    pub fn joined(&mut self, view: &WeaponView) {
+        self.joined.push(view.clone());
     }
     /// Projectiles clients are flying.
     pub fn in_flight(&self) -> bool {
@@ -277,16 +286,18 @@ impl WeaponStream {
             tick.saturating_sub(self.tick),
         );
         self.tick = tick;
+        let joined = std::mem::take(&mut self.joined);
+        let held = || std::iter::once(&self.sent).chain(&joined);
         let mut delta = WeaponDelta::default();
-        if self.sent.static_items != current.static_items {
+        if held().any(|v| v.static_items != current.static_items) {
             delta.static_items = Some(current.static_items.clone());
         }
         for (owner, images) in &current.images {
-            if self.sent.images.get(owner) != Some(images) {
+            if held().any(|v| v.images.get(owner) != Some(images)) {
                 delta.images.insert(*owner, images.clone());
             }
         }
-        for owner in self.sent.images.keys() {
+        for owner in held().flat_map(|v| v.images.keys()) {
             if !current.images.contains_key(owner) {
                 delta.images.insert(*owner, Vec::new());
             }
@@ -303,12 +314,11 @@ impl WeaponStream {
         }
         let live: std::collections::BTreeSet<u64> =
             current.projectiles.iter().map(|p| p.id).collect();
-        delta.removed = coasted
-            .keys()
-            .filter(|id| !live.contains(id))
-            .copied()
+        let held_ids: std::collections::BTreeSet<u64> = held()
+            .flat_map(|v| v.projectiles.iter().map(|p| p.id))
             .collect();
-        if self.sent.drops != current.drops {
+        delta.removed = held_ids.difference(&live).copied().collect();
+        if held().any(|v| v.drops != current.drops) {
             delta.drops = Some(current.drops.clone());
         }
         if delta == WeaponDelta::default() {
@@ -591,5 +601,37 @@ mod tests {
             ..Default::default()
         };
         assert!(bad.apply(&mut client).is_err());
+        // A joiner handed an entity that left before the next update, and
+        // one that was only just born, ends up like everyone else.
+        let mut joiner: BTreeMap<u64, EntityInfo> =
+            [(3, zombie(3, 9.0)), (4, zombie(4, 1.0))].into();
+        let joined = vec![joiner.values().cloned().collect::<Vec<_>>()];
+        let next = EntityDelta::between_joined(&mut host, &joined, vec![zombie(3, 9.5)]).unwrap();
+        assert_eq!(next.moved, [(3, [9.5, 0.0, 0.0], 0.5)]);
+        assert_eq!(next.removed, [4]);
+        next.apply(&mut client).unwrap();
+        next.apply(&mut joiner).unwrap();
+        assert_eq!(client, host);
+        assert_eq!(joiner, host);
+    }
+
+    #[test]
+    fn a_joiner_loses_projectiles_that_ended_between_updates() {
+        use bri_sim::session::WeaponView;
+        let mut stream = WeaponStream::default();
+        stream.reset(WeaponView::default(), 0, BTreeMap::new());
+        let spark = Projectile {
+            id: 7,
+            ..rocket(1, glam::Vec3::ZERO)
+        };
+        let checkpoint = WeaponView {
+            projectiles: vec![spark],
+            ..Default::default()
+        };
+        stream.joined(&checkpoint);
+        let delta = stream.delta(&WeaponView::default(), 6).unwrap();
+        assert_eq!(delta.removed, [7]);
+        // Only once.
+        assert_eq!(stream.delta(&WeaponView::default(), 12), None);
     }
 }

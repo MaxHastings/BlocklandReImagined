@@ -1041,6 +1041,8 @@ async fn run(
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
     let mut entities: BTreeMap<u64, _> = session.package_entities().into_iter().map(|e| (e.id, e)).collect();
+    // Entities players who joined since the last update were handed.
+    let mut joined_entities: Vec<Vec<bri_sim::session::EntityInfo>> = Vec::new();
     // What each client last received of package state (per viewer).
     let mut package_views: BTreeMap<OwnerId, bri_sim::session::PackageStateView> = BTreeMap::new();
     let mut minigames = Vec::new();
@@ -1110,7 +1112,7 @@ async fn run(
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities().into_iter().map(|e|(e.id,e)).collect();joined_entities.clear();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
@@ -1146,6 +1148,8 @@ async fn run(
                     // O(1) on the loop; the world is chunked and encoded off it.
                     let (mut checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
+                    // The next update brings the joiner in line with everyone else.
+                    weapons.joined(&checkpoint.weapons);joined_entities.push(checkpoint.entities.clone());
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks},traffic.clone(),1);
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
@@ -1208,7 +1212,7 @@ async fn run(
                 let current_palette=&session.simulation().state().palette;let changed_palette=if &palette!=current_palette{palette=current_palette.clone();Some(palette.clone())}else{None};
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
                 let changed_vitals=crate::stream::changed_entries(&mut vitals,session.vitals());
-                let changed_entities=EntityDelta::between(&mut entities,session.package_entities());
+                let changed_entities=EntityDelta::between_joined(&mut entities,&std::mem::take(&mut joined_entities),session.package_entities());
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};

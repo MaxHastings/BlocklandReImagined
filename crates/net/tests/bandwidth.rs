@@ -596,7 +596,12 @@ async fn a_rocket_fight_stays_under_its_byte_budget() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shot_sound_arrives_with_its_projectile() -> Result<()> {
     let mut pack = rocket_pack();
-    for state in &mut pack.images.get_mut(ROCKET_IMAGE).expect("rocket image").states {
+    for state in &mut pack
+        .images
+        .get_mut(ROCKET_IMAGE)
+        .expect("rocket image")
+        .states
+    {
         if state.name == "Fire" {
             state.sound = "gunShot1Sound".into();
         }
@@ -630,8 +635,12 @@ async fn a_shot_sound_arrives_with_its_projectile() -> Result<()> {
         .await?;
         let first = client.replica.poses[&shooter].acknowledged_input + 1;
         client.movement(first, &[MoveInput::default()], None)?;
-        client.command(Command::WeaponTrigger { down: true }).await?;
-        client.command(Command::WeaponTrigger { down: false }).await?;
+        client
+            .command(Command::WeaponTrigger { down: true })
+            .await?;
+        client
+            .command(Command::WeaponTrigger { down: false })
+            .await?;
         wait_for(&mut client, |c| {
             c.replica
                 .weapons
@@ -661,4 +670,49 @@ async fn wait_for(client: &mut Client, predicate: impl Fn(&Client) -> bool) -> R
         Result::<()>::Ok(())
     })
     .await?
+}
+
+/// v20's spawn projectile lives a tick or two, so it is gone before the next
+/// update after a join: the joiner's checkpoint holds it and no update ever
+/// did. The next update must remove it, or the joiner flies it on forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_joiner_drops_a_projectile_that_ended_before_the_next_update() -> Result<()> {
+    let mut pack = rocket_pack();
+    let mut spawn = pack.projectiles[ROCKET_PROJECTILE].clone();
+    spawn.id = bri_sim::session::SPAWN_PROJECTILE.into();
+    spawn.name = "spawnProjectile".into();
+    spawn.lifetime_ticks = 2;
+    spawn.brick.radius = 0.;
+    spawn.brick.direct = false;
+    pack.projectiles.insert(spawn.id.clone(), spawn);
+    pack.validate()?;
+    let mut session = common::session_with(empty_world());
+    session.set_weapon_pack(pack)?;
+    let server = server::start(session, common::options())?;
+    for round in 0..5 {
+        let mut client = Client::connect(
+            server.address,
+            &server.certificate,
+            format!("Joiner {round}"),
+            Vec::new(),
+            None,
+        )
+        .await?;
+        let joined = client.replica.tick;
+        wait_for(&mut client, |c| c.replica.tick > joined + 24).await?;
+        assert!(
+            client.replica.weapons.projectiles.is_empty(),
+            "round {round}: still flying {:?}",
+            client
+                .replica
+                .weapons
+                .projectiles
+                .iter()
+                .map(|p| (&p.definition, p.age))
+                .collect::<Vec<_>>()
+        );
+        client.close();
+    }
+    server.stop().await?;
+    Ok(())
 }
