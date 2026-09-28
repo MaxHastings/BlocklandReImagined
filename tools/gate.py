@@ -51,6 +51,8 @@ PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
 LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
 TEST_JOBS = 8
+HEAVY_JOBS = 3
+HEAVY_PREFIXES = ("bri-client/", "bri-render/")
 DOC_SUFFIXES = (".md",)
 
 
@@ -596,7 +598,11 @@ def test_binaries(top, env=None):
 
 def run_binaries(binaries, args, log, jobs):
     """Run test binaries in parallel, appending each one's output to log in
-    order. Returns True when every binary passed."""
+    listing order. Returns True when every binary passed.
+
+    Whole-app and GPU test binaries wait on wall-clock timeouts, so at most
+    HEAVY_JOBS of them run at once, in their own pool; the rest share the
+    remaining jobs."""
     def one(entry):
         label, executable, cwd, header = entry
         started = time.time()
@@ -604,15 +610,19 @@ def run_binaries(binaries, args, log, jobs):
                                 stderr=subprocess.STDOUT, text=True, errors="replace")
         return header, result.stdout, result.returncode, time.time() - started, label
 
+    def is_heavy(label):
+        return label.startswith(HEAVY_PREFIXES) and not label.endswith("/lib")
+
+    with concurrent.futures.ThreadPoolExecutor(HEAVY_JOBS) as heavy, \
+            concurrent.futures.ThreadPoolExecutor(max(1, jobs - HEAVY_JOBS)) as light:
+        futures = [(heavy if is_heavy(b[0]) else light).submit(one, b) for b in binaries]
+        results = [future.result() for future in futures]
     ok = True
-    slowest = []
-    with concurrent.futures.ThreadPoolExecutor(jobs) as pool, \
-            open(log, "a", encoding="utf-8", errors="replace") as handle:
-        for header, output, code, seconds, label in pool.map(one, binaries):
+    with open(log, "a", encoding="utf-8", errors="replace") as handle:
+        for header, output, code, _, _ in results:
             handle.write(f"{header}\n{output}\n")
             ok = ok and code == 0
-            slowest.append((seconds, label))
-    slowest.sort(reverse=True)
+    slowest = sorted(((secs, label) for _, _, _, secs, label in results), reverse=True)
     say("slowest test binaries: " + ", ".join(f"{label} {secs:.0f}s" for secs, label in slowest[:3]))
     return ok
 
