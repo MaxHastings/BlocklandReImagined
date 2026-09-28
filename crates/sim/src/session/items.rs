@@ -34,6 +34,7 @@ impl Session {
     }
     pub(super) fn drop_tool(&mut self, owner: OwnerId, slot: usize, direction: Vec3) -> Result<()> {
         let peer = self.peers.get(&owner).context("Unknown connection")?;
+        ensure!(peer.combat.alive, "Dead players cannot drop tools");
         let actor = ActorId(owner);
         let item = self
             .weapons

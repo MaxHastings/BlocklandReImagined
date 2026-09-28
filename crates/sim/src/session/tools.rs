@@ -324,21 +324,17 @@ impl Session {
             return Ok(());
         }
         let peer = self.peers.get(&owner).context("Unknown connection")?;
-        ensure!(peer.combat.alive, "Dead players cannot paint");
+        combat::ensure_may_build(
+            &peer.combat,
+            &self.minigames,
+            bri_minigames::BuildAction::Paint,
+        )?;
         if let Some(color) = paint {
             ensure!(
                 usize::from(color) < self.simulation.state().palette.len(),
                 "Color outside world palette"
             );
         }
-        ensure!(
-            !matches!(
-                self.minigames
-                    .can_build(peer.combat.player, bri_minigames::BuildAction::Paint),
-                Ok(bri_minigames::Decision::Deny(_))
-            ),
-            "Painting is disabled in this mini-game"
-        );
         self.hold_image(owner, image, paint)
     }
 
@@ -363,15 +359,11 @@ impl Session {
             return Ok(());
         }
         let peer = self.peers.get(&owner).context("Unknown connection")?;
-        ensure!(peer.combat.alive, "You are dead");
-        ensure!(
-            !matches!(
-                self.minigames
-                    .can_build(peer.combat.player, bri_minigames::BuildAction::Wand),
-                Ok(bri_minigames::Decision::Deny(_))
-            ),
-            "The wand is disabled in this mini-game"
-        );
+        combat::ensure_may_build(
+            &peer.combat,
+            &self.minigames,
+            bri_minigames::BuildAction::Wand,
+        )?;
         self.hold_image(owner, WAND_IMAGE, None)
     }
 
@@ -448,6 +440,20 @@ impl Session {
                 }
             }
             "wandimage" => {
+                // The wand item from a loadout or spawner obeys the same
+                // mini-game and tutorial rules as `/wand`.
+                let may_wand = self.tutorial_allows_wand(owner)
+                    && self.peers.get(&owner).is_some_and(|peer| {
+                        combat::ensure_may_build(
+                            &peer.combat,
+                            &self.minigames,
+                            bri_minigames::BuildAction::Wand,
+                        )
+                        .is_ok()
+                    });
+                if !may_wand {
+                    return Ok(());
+                }
                 let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
                     return Ok(());
                 };

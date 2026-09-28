@@ -189,6 +189,30 @@ impl DamageKind {
     }
 }
 
+/// The one gate every build action passes, whichever command or tool
+/// performs it: a living player, in no mini-game or in one that allows the
+/// action (`EnableBuilding`, `EnablePainting`, `EnableWand`).
+pub(super) fn ensure_may_build(
+    combat: &Combat,
+    minigames: &MinigamesWorld,
+    action: mg::BuildAction,
+) -> Result<()> {
+    ensure!(combat.alive, "You are dead");
+    let denied = matches!(
+        minigames.can_build(combat.player, action),
+        Ok(mg::Decision::Deny(_))
+    );
+    ensure!(
+        !denied,
+        match action {
+            mg::BuildAction::Build => "Building is disabled in this mini-game",
+            mg::BuildAction::Paint => "Painting is disabled in this mini-game",
+            mg::BuildAction::Wand => "The wand is disabled in this mini-game",
+        }
+    );
+    Ok(())
+}
+
 pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
     let mut items: BTreeMap<String, Option<String>> = CORE_TOOLS
         .iter()

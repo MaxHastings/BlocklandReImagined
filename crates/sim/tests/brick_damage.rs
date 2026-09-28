@@ -296,3 +296,43 @@ fn lan_hosts_let_minigame_rockets_break_anyones_bricks_like_v20() {
     }
     assert!(thrown.is_empty());
 }
+
+/// Planting passes the same build gate as painting and the wand: a mini-game
+/// with building off refuses it, and leaving the mini-game allows it again.
+#[test]
+fn planting_obeys_the_minigame_building_rule() {
+    let mut s = session();
+    let builder = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    plant(&mut s, builder, 1, [0.0, 0.3, -4.0]);
+    let settings = Settings {
+        enable_building: false,
+        ..Settings::default()
+    };
+    s.command(
+        builder,
+        2,
+        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap();
+    let refused = s
+        .command(
+            builder,
+            3,
+            Command::Plant {
+                definition: "brick".into(),
+                position: [2.0, 0.3, -4.0],
+                quarter_turns: 0,
+                color: 1,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("Building is disabled"),
+        "{refused:#}"
+    );
+    s.command(builder, 4, Command::MiniGame(MiniGameRequest::Leave))
+        .unwrap();
+    plant(&mut s, builder, 5, [2.0, 0.3, -4.0]);
+}

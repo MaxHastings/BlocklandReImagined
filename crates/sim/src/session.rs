@@ -1321,13 +1321,9 @@ impl Session {
                 self.equip_tool(owner, slot)?;
                 Ok(Reply::Accepted)
             }
-            Command::SaveBuild { events, ownership } => {
-                Ok(Reply::Saved(Box::new(bri_world::build::SavedBuild::capture(
-                    &self.saved_world(),
-                    events,
-                    ownership,
-                )?)))
-            }
+            Command::SaveBuild { events, ownership } => Ok(Reply::Saved(Box::new(
+                bri_world::build::SavedBuild::capture(&self.saved_world(), events, ownership)?,
+            ))),
             Command::LoadBuild { build, ownership } => {
                 let bricks = self.start_build_load(owner, *build, ownership)?;
                 Ok(Reply::Loaded { bricks })
@@ -1355,6 +1351,11 @@ impl Session {
                 quarter_turns,
                 color,
             } => {
+                combat::ensure_may_build(
+                    &peer.combat,
+                    &self.minigames,
+                    bri_minigames::BuildAction::Build,
+                )?;
                 let default_print = self
                     .tool_catalog
                     .brick_print_aspects
