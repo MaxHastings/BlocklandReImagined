@@ -704,20 +704,24 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
     pack
 }
 
-/// A rocket knocks out the brick it hits plus at most 64 in its blast.
-/// Bricks a first rocket already knocked out must not use up a second
-/// rocket's 64 at the same spot.
-#[test]
-fn a_second_rocket_knocks_out_bricks_the_first_left_standing() {
+/// Fire one synthetic rocket whose blast reaches `brick_radius` into 160
+/// bricks; how many it knocks out.
+fn rocket_into_160_bricks(brick_radius: f32) -> usize {
     let mut s = session();
     s.set_lan_host(true);
-    s.set_weapon_pack(synthetic_rocket_pack()).unwrap();
+    let mut pack = synthetic_rocket_pack();
+    pack.projectiles
+        .get_mut(SYNTHETIC_PROJECTILE)
+        .unwrap()
+        .brick
+        .radius = brick_radius;
+    s.set_weapon_pack(pack).unwrap();
     let shooter = s
         .join("Shooter".into(), Vec3::new(0.0, 0.05, 0.0), true)
         .unwrap();
     let mut seq = 0;
     let mut bricks = Vec::new();
-    for row in 0..10 {
+    for row in 0..16 {
         for column in 0..10 {
             seq += 1;
             let position = [column as f32 - 4.5, 0.3, -8.0 - row as f32];
@@ -732,34 +736,34 @@ fn a_second_rocket_knocks_out_bricks_the_first_left_standing() {
     seq += 1;
     s.command(shooter, seq, Command::EquipTool { slot: Some(slot) })
         .unwrap();
-    let knocked_out = |s: &Session| {
-        bricks
-            .iter()
-            .filter(|id| !s.simulation().state().bricks[*id].colliding)
-            .count()
-    };
-    let mut after = Vec::new();
-    for _ in 0..2 {
-        for _ in 0..120 {
-            s.step().unwrap();
-        }
-        let aim = aim_at(&mut s, shooter, Vec3::new(0.5, 0.3, -8.0));
-        for down in [true, false] {
-            seq += 1;
-            s.command_with_aim(shooter, seq, Command::WeaponTrigger { down }, Some(aim))
-                .unwrap();
-        }
-        for _ in 0..120 {
-            s.step().unwrap();
-        }
-        after.push(knocked_out(&s));
+    for _ in 0..120 {
+        s.step().unwrap();
     }
-    // The direct hit knocks out the brick it struck (v20 `onCollision`) and
-    // the explosion 64 more (`onExplode`, capped), so the first rocket
-    // leaves 35 of the 100 standing. The second knocks out the rest
-    // instead of finding its 64 used up by bricks that are already down.
-    assert!(
-        after == [65, 100],
-        "bricks knocked out after each rocket: {after:?}"
-    );
+    let aim = aim_at(&mut s, shooter, Vec3::new(0.5, 0.3, -8.0));
+    for down in [true, false] {
+        seq += 1;
+        s.command_with_aim(shooter, seq, Command::WeaponTrigger { down }, Some(aim))
+            .unwrap();
+    }
+    for _ in 0..120 {
+        s.step().unwrap();
+    }
+    bricks
+        .iter()
+        .filter(|id| !s.simulation().state().bricks[*id].colliding)
+        .count()
+}
+
+/// v20's `onExplode` knocks out every eligible brick in the radius, with no
+/// cap (it only sends them in messages of 100).
+#[test]
+fn a_rocket_knocks_out_every_brick_in_its_blast() {
+    assert_eq!(rocket_into_160_bricks(30.0), 160);
+}
+
+/// v20's `onCollision` knocks out only the brick a projectile hits; the
+/// radius is `onExplode`'s.
+#[test]
+fn a_direct_hit_knocks_out_only_the_brick_it_hits() {
+    assert_eq!(rocket_into_160_bricks(0.0), 1);
 }
