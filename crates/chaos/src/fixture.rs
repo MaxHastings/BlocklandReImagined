@@ -283,9 +283,18 @@ pub fn synthetic_vehicles() -> Result<(bri_vehicles::Pack, Vec<String>)> {
     for family in FAMILIES {
         let id = format!("v20.vehicle.chaos{}", family.to_ascii_lowercase());
         let wheeled = matches!(family, "Wheeled" | "FlyingWheeled");
+        // A flying wheeled vehicle is a wheeled one with the flying fields.
+        let (name, family) = (
+            family,
+            if family == "FlyingWheeled" {
+                "Wheeled"
+            } else {
+                family
+            },
+        );
         let armed = matches!(family, "Cannon" | "Turret");
         definitions.push(json!({
-            "id": id, "datablock": format!("Chaos{family}Vehicle"), "name": format!("Chaos {family}"),
+            "id": id, "datablock": format!("Chaos{name}Vehicle"), "name": format!("Chaos {name}"),
             "family": family,
             "energy": {"maximum": 100.0, "minimum_jet": 10.0, "drain_per_32ms": 1.0, "recharge_per_32ms": 1.0, "jet_force": 500.0},
             "flight": if family == "Flying" { json!({"hover_height": 2.0, "create_hover_height": 2.0, "min_drag": 1.0,
@@ -318,6 +327,9 @@ pub fn synthetic_vehicles() -> Result<(bri_vehicles::Pack, Vec<String>)> {
             "look_pitch": [-1.5, 1.5], "underwater_speeds": [5.0, 3.0, 3.0],
             "camera": {"max_dist": 8.0, "offset": 2.0, "tilt": 0.1, "lag": 0.1, "decay": 0.5},
             "look_limits": [0.0, 1.0],
+            "wheeled_flight": if name == "FlyingWheeled" { json!({"max_forward_vel": 40.0, "max_reverse_vel": 20.0,
+                "horizontal_surface_force": 100.0, "vertical_surface_force": 100.0, "stall_speed": 10.0,
+                "sled": false}) } else { Value::Null },
             "runover_speed": 5.0, "runover_damage": 20.0, "runover_push": 5.0,
             "protect_direct": false, "protect_radius": false, "protect_burn": false,
             "authored": {}, "adaptations": [],

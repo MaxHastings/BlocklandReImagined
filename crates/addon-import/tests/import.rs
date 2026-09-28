@@ -296,10 +296,8 @@ fn real_community_samples() {
         fire(&out, "weapon_shotgun:weapon/shotgunitem"),
         ["weapon_shotgun:projectile/shotgunprojectile"; 3]
     );
-    let checks: bri_addon_import::porting::Checks = serde_json::from_slice(include_bytes!(
-        "../ports/weapon_shotgun/checks.json"
-    ))
-    .unwrap();
+    let checks: bri_addon_import::porting::Checks =
+        serde_json::from_slice(include_bytes!("../ports/weapon_shotgun/checks.json")).unwrap();
     for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
         assert!(ok, "{line}");
     }
@@ -338,6 +336,44 @@ fn real_community_samples() {
     drive(&out);
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
 
+    // A WheeledVehicle with Blockland's flying fields, three wheels and a
+    // propeller its scripts switch by speed.
+    let (plane, out) = run("Vehicle_Stunt_Plane");
+    assert_eq!(plane.summary.assets_failed, 0, "{:?}", plane.assets);
+    // Its contrail images wait 10000 s: they are left out, not the weapons.
+    let unsupported: Vec<_> = plane.unsupported.iter().map(|u| u.what.as_str()).collect();
+    assert!(
+        unsupported.contains(&"image ContrailImage1") && !unsupported.contains(&"weapon lowering"),
+        "{unsupported:?}"
+    );
+    let pack = bri_vehicles::Pack::load(out.join("assets/vehicles.json")).unwrap();
+    let d = &pack.definitions[0];
+    assert_eq!(d.family, bri_vehicles::Family::Wheeled);
+    let f = d.wheeled_flight.as_ref().expect("flies");
+    assert_eq!(
+        (f.max_forward_vel, f.stall_speed, f.sled),
+        (40., 10., false)
+    );
+    assert!(!d.strafe_steering && d.steering.auto_return);
+    // WheeledVehicleData::onAdd with three wheels: the nose wheel steers,
+    // the other two drive.
+    let wheels: Vec<_> = d.wheels.iter().map(|w| (w.steering, w.powered)).collect();
+    assert_eq!(wheels, [(1., false), (0., true), (0., true)]);
+    let threads: Vec<_> = d
+        .threads
+        .iter()
+        .map(|t| (t.slot, t.sequence.as_str(), t.min_speed, t.max_speed))
+        .collect();
+    assert_eq!(
+        threads,
+        [
+            (0, "propslow", None, Some(5.)),
+            (0, "propfast", Some(5.), None)
+        ]
+    );
+    fly(&out, &d.id);
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+
     // A bot whose AI framework is another Add-On that is not installed.
     let (zombie, out) = run("Bot_Zombie");
     let hole = zombie
@@ -370,6 +406,63 @@ fn real_community_samples() {
 /// Spawns the imported car in the vehicles runtime on a flat floor, seats a
 /// driver and checks that throttle moves it forward.
 fn drive(package: &Path) {
+    let (mut v, mut w) = seated(
+        package,
+        "vehicle_blocko_car:vehicle/blockocarvehicle",
+        2.,
+        0.,
+    );
+    step(&mut v, &mut w, 240);
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(20),
+        Controls {
+            throttle: 1.,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 300);
+    let s = v.snapshot(&w);
+    assert!(
+        s.vehicles[0].transform.position[2] < -3.,
+        "did not drive: {:?}",
+        s.vehicles[0].transform.position
+    );
+}
+
+/// The imported plane launched at 45 high in the air under full throttle
+/// holds its height on lift, where a car would fall about 40 in two seconds.
+fn fly(package: &Path, id: &str) {
+    let (mut v, mut w) = seated(package, id, 45., 45.);
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(20),
+        Controls {
+            throttle: 1.,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 240);
+    let p = v.snapshot(&w).vehicles[0].transform.position;
+    assert!(p[1] > 38. && p[2] < -60., "did not fly: {p:?}");
+}
+
+use bri_vehicles::{Controls, OccupantId, OwnerId, VehiclesWorld};
+use rapier3d::prelude::PhysicsWorld;
+
+fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize) {
+    for _ in 0..n {
+        v.pre_step(w, &[]).unwrap();
+        w.step();
+        v.post_step(w).unwrap();
+    }
+}
+
+/// The package's vehicle `id` at `height`, moving `speed` toward its nose,
+/// over a flat floor with a driver seated.
+fn seated(package: &Path, id: &str, height: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
     use bri_vehicles::*;
     use rapier3d::prelude::*;
     let pack = Pack::load(package.join("assets/vehicles.json")).unwrap();
@@ -385,9 +478,9 @@ fn drive(package: &Path) {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: "vehicle_blocko_car:vehicle/blockocarvehicle".into(),
+            definition: id.into(),
             transform: Transform {
-                position: [0., 2., 0.],
+                position: [0., height, 0.],
                 ..Default::default()
             },
             spawn_id: None,
@@ -409,30 +502,9 @@ fn drive(package: &Path) {
         seat,
     )
     .unwrap();
-    let step = |v: &mut VehiclesWorld, w: &mut PhysicsWorld, n| {
-        for _ in 0..n {
-            v.pre_step(w, &[]).unwrap();
-            w.step();
-            v.post_step(w).unwrap();
-        }
-    };
-    step(&mut v, &mut w, 240);
-    v.set_controls(
-        OwnerId(10),
-        OccupantId(20),
-        Controls {
-            throttle: 1.,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    step(&mut v, &mut w, 300);
-    let s = v.snapshot(&w);
-    assert!(
-        s.vehicles[0].transform.position[2] < -3.,
-        "did not drive: {:?}",
-        s.vehicles[0].transform.position
-    );
+    let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    b.set_linvel(Vec3::new(0., 0., -speed), true);
+    (v, w)
 }
 
 fn copy_dir(from: &Path, to: &Path) {

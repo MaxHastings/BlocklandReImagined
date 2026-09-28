@@ -147,7 +147,7 @@ fn main() -> Result<()> {
     }
     let entries = [
         ("BallVehicle", Family::Ball),
-        ("FlyingWheeledJeepVehicle", Family::FlyingWheeled),
+        ("FlyingWheeledJeepVehicle", Family::Wheeled),
         ("HorseArmor", Family::Horse),
         ("JeepVehicle", Family::Wheeled),
         ("MagicCarpetVehicle", Family::Flying),
