@@ -49,7 +49,10 @@ fn read_text(p: &Path, sources: &mut Vec<SourceRecord>) -> Result<String> {
         fs::metadata(p)?.len() <= 64 * 1024 * 1024,
         "oversized script input"
     );
-    let b = fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+    let mut b = fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+    // As LF: a git checkout gives these scripts CRLF on Windows and LF
+    // elsewhere, and the pack records their hash and size.
+    b.retain(|&c| c != b'\r');
     sources.push(SourceRecord {
         path: p.to_string_lossy().replace('\\', "/"),
         sha256: sha(&b),
@@ -521,6 +524,26 @@ pub fn convert(inputs: &Inputs, out: &Path) -> Result<Report> {
         let (all, per) = data::accents(&text);
         pack.data.avatar.parts.insert("accent".to_string(), all);
         pack.data.avatar.accents_allowed = per;
+    }
+
+    // Help pages: `HelpDlg::onWake` lists `*.hfl` (v20 ships them in base/help/).
+    for p in vfs.list("base/help/") {
+        if !p.to_ascii_lowercase().ends_with(".hfl") {
+            continue;
+        }
+        let name = Path::new(&p)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        pack.data.help.push(bri_ui::schema::HelpPage {
+            name,
+            text: data::help_text(&vfs.read(&p)?),
+        });
+    }
+    pack.data.help.sort_by_key(|h| data::help_order(&h.name));
+    if pack.data.help.is_empty() {
+        pack.warnings.push("no help pages in base/help/".into());
     }
 
     // 8. Maps: every mission under Add-Ons (loose or zipped).

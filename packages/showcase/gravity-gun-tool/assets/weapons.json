@@ -1,0 +1,122 @@
+{
+  "schema_version": 3,
+  "id": "gravity-gun-tool",
+  "items": {
+    "gravity-gun-tool:weapon/gravitygun": {
+      "id": "gravity-gun-tool:weapon/gravitygun",
+      "name": "GravityGunItem",
+      "ui_name": "Gravity Gun",
+      "image": "gravity-gun-tool:image/gravitygun",
+      "model": "Add-Ons/Weapon_Rocket_Launcher/rocketLauncher.dts",
+      "icon": "Add-Ons/Weapon_Rocket_Launcher/icon_rocketLauncher",
+      "can_drop": true,
+      "sport": false
+    }
+  },
+  "images": {
+    "gravity-gun-tool:image/gravitygun": {
+      "id": "gravity-gun-tool:image/gravitygun",
+      "name": "GravityGunImage",
+      "model": "Add-Ons/Weapon_Rocket_Launcher/rocketLauncher.dts",
+      "projectile": null,
+      "mount_point": 0,
+      "offset": [0.0, 0.0, 0.0],
+      "eye_offset": [0.0, 0.0, 0.0],
+      "source_rotation_degrees": [0.0, 0.0, 0.0],
+      "correct_muzzle": true,
+      "melee": false,
+      "color": [1.0, 0.55, 0.12, 1.0],
+      "color_shift": true,
+      "arm_ready": true,
+      "casing": "",
+      "min_shot_ticks": 0,
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 12,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "weaponSwitchSound",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Ready",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": 2,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "Ready",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Charge",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": false,
+          "timeout": null,
+          "down": null,
+          "up": 3,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onCharge",
+          "sequence": "TrigDown",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Fire",
+          "ticks": 24,
+          "wait": true,
+          "allow_change": false,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onFire",
+          "sequence": "Fire",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        }
+      ],
+      "commands": {
+        "states": {
+          "oncharge": "gravity-gun:charge",
+          "onfire": "gravity-gun:fire"
+        },
+        "jet": "gravity-gun:grab"
+      }
+    }
+  },
+  "projectiles": {},
+  "damage_types": {},
+  "explosions": {},
+  "definitions": [],
+  "resources": [],
+  "diagnostics": []
+}

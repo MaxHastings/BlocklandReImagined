@@ -6,8 +6,8 @@ use bri_world::build::{MAX_BUILD_BYTES, SavedBuild};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs::{File, OpenOptions},
-    io::{Read, Write},
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -23,7 +23,16 @@ pub struct Store {
     directory: PathBuf,
     templates: Vec<Entry>,
     map_names: BTreeMap<String, String>,
+    /// v20 `.bls` saves players brought over, converted in the background.
+    old: Option<std::sync::Arc<crate::old_saves::OldSaves>>,
 }
+/// What the save dialogs say about a save file that cannot be read.
+const DAMAGED: &str =
+    "This save is damaged and can't be loaded. Saving over it keeps a copy of the old file.";
+/// How often a client-hosted game autosaves, and how many autosaves each map
+/// keeps (the dedicated server's `bri-server` uses the same numbers).
+pub const AUTOSAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+pub const AUTOSAVE_KEEP: usize = 3;
 pub fn valid_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".world.json") else {
         return false;
@@ -41,6 +50,13 @@ pub fn valid_name(name: &str) -> bool {
             "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
         ]
         .contains(&reserved.as_str())
+}
+/// The save name Load Bricks lists a v20 save under. v20 allowed names
+/// ending in a space or dot ("Afghanistan DM "), which a native save cannot
+/// have, so those are trimmed.
+pub fn v20_save_name(stem: &str) -> Option<String> {
+    let name = format!("{}.world.json", stem.trim_end_matches([' ', '.']));
+    valid_name(&name).then_some(name)
 }
 fn modified_date(seconds: u64) -> String {
     // Gregorian calendar in March-based 400-year eras. Fixed-width UTC text
@@ -67,7 +83,11 @@ fn modified_date(seconds: u64) -> String {
     )
 }
 impl Store {
-    pub fn new(state: &Path, content: &crate::content::ClientContent) -> Self {
+    pub fn new(
+        state: &Path,
+        content: &crate::content::ClientContent,
+        old: Option<std::sync::Arc<crate::old_saves::OldSaves>>,
+    ) -> Self {
         let map_names = content
             .maps
             .iter()
@@ -77,12 +97,12 @@ impl Store {
             directory: state.join("saves"),
             templates: vec![],
             map_names,
+            old,
         };
         for world in &content.worlds {
-            let name = format!("{}.world.json", world.name);
-            if !valid_name(&name) {
+            let Some(name) = v20_save_name(&world.name) else {
                 continue;
-            }
+            };
             store.templates.push(Entry {
                 info: SaveFileInfo {
                     name,
@@ -90,6 +110,7 @@ impl Store {
                     modified: "Converted original".into(),
                     description: "Original converted build".into(),
                     brick_count: Some(world.brick_count as u32),
+                    damaged: false,
                 },
                 map_id: world.map_id.clone(),
                 path: content.paths.worlds.join(&world.file),
@@ -97,6 +118,19 @@ impl Store {
             });
         }
         store
+    }
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        directory: PathBuf,
+        map_names: BTreeMap<String, String>,
+        old: Option<std::sync::Arc<crate::old_saves::OldSaves>>,
+    ) -> Self {
+        Self {
+            directory,
+            templates: vec![],
+            map_names,
+            old,
+        }
     }
     pub fn map_name(&self, id: &str) -> String {
         self.map_names.get(id).cloned().unwrap_or_else(|| {
@@ -141,6 +175,40 @@ impl Store {
                 )
             })
             .collect();
+        // Converted `.bls` saves shadow the stock ones and give way to saves
+        // made in this game, as a newer file of the same name would.
+        for save in self.old.iter().flat_map(|o| o.list()) {
+            let Some(name) = v20_save_name(&save.name) else {
+                continue;
+            };
+            let map = if crate::content::map_for_save_folder(&save.folder).is_some() {
+                self.map_name(&save.map_id)
+            } else {
+                // v20's Load Bricks capitalized the folder's first letter.
+                let mut chars = save.folder.chars();
+                chars.next().map_or_else(String::new, |first| {
+                    first.to_uppercase().collect::<String>() + chars.as_str()
+                })
+            };
+            let Some(old) = &self.old else { break };
+            files.insert(
+                (map.to_ascii_lowercase(), name.to_ascii_lowercase()),
+                Entry {
+                    info: SaveFileInfo {
+                        name,
+                        map,
+                        modified: modified_date(save.modified_s),
+                        description: save.description.join("
+"),
+                        brick_count: Some(save.bricks),
+                        damaged: false,
+                    },
+                    map_id: save.map_id,
+                    path: save.path,
+                    root: old.cache().to_path_buf(),
+                },
+            );
+        }
         let mut count = 0;
         let mut bytes = 0_u64;
         for directory in std::fs::read_dir(&root)? {
@@ -150,6 +218,7 @@ impl Store {
             {
                 continue;
             }
+            let folder = directory.file_name().to_string_lossy().into_owned();
             let directory = directory.path().canonicalize()?;
             ensure!(
                 directory.starts_with(&root),
@@ -179,17 +248,36 @@ impl Store {
                         ),
                         description: String::new(),
                         brick_count: None,
+                        damaged: false,
                     },
                     map_id: String::new(),
                     path: entry.path(),
                     root: root.clone(),
                 };
-                let saved = Self::read(&record)
-                    .with_context(|| format!("Could not read save {}", record.info.name))?;
-                record.map_id = saved.world.map_id;
-                record.info.map = self.map_name(&record.map_id);
-                record.info.description = saved.world.description.join("\n");
-                record.info.brick_count = Some(saved.world.bricks.len() as u32);
+                match Self::read(&record) {
+                    Ok(saved) => {
+                        record.map_id = saved.world.map_id;
+                        record.info.map = self.map_name(&record.map_id);
+                        record.info.description = saved.world.description.join("\n");
+                        record.info.brick_count = Some(saved.world.bricks.len() as u32);
+                    }
+                    // One bad file must not hide every other save: list it as
+                    // damaged under the map its folder names.
+                    Err(error) => {
+                        bri_console::warn(format!(
+                            "Save {} is damaged: {error:#}",
+                            record.path.display()
+                        ));
+                        record.map_id = self.map_for_folder(&folder).unwrap_or_default();
+                        record.info.map = if record.map_id.is_empty() {
+                            "Unknown map".into()
+                        } else {
+                            self.map_name(&record.map_id)
+                        };
+                        record.info.description = DAMAGED.into();
+                        record.info.damaged = true;
+                    }
+                }
                 files.insert(
                     (
                         record.info.map.to_ascii_lowercase(),
@@ -201,6 +289,44 @@ impl Store {
         }
         Ok(files.into_values().collect())
     }
+    /// Save `world` as the newest autosave of its map, keeping the last
+    /// [`AUTOSAVE_KEEP`]. It is an ordinary build in the map's save folder, so
+    /// the Load dialog lists it.
+    pub fn autosave(&self, world: &bri_world::World) -> Result<PathBuf> {
+        let mut build = SavedBuild::capture(world, true, true)?;
+        build.world.name = "Autosave".into();
+        build.world.description = vec!["Saved automatically while you played.".into()];
+        let bytes = bri_world::build::encode(&build)?;
+        let root = self.root()?;
+        let map = format!("map-{:x}", Sha256::digest(world.map_id.as_bytes()));
+        std::fs::create_dir_all(root.join(&map))?;
+        let directory = root.join(map).canonicalize()?;
+        ensure!(
+            directory.starts_with(&root),
+            "Save directory escapes storage"
+        );
+        bri_world::persistence::autosave_bytes(&directory, &bytes, AUTOSAVE_KEEP)
+    }
+    /// The host's autosave hook: writes only when the world changed since the
+    /// last autosave (or since `start`, the world the host began with), so an
+    /// idle game never pushes older autosaves out.
+    pub fn autosaver(&self, start: &bri_world::World) -> bri_net::server::SaveWorld {
+        let store = self.clone();
+        let last = std::sync::Mutex::new((start.map_id.clone(), start.revision));
+        std::sync::Arc::new(move |world: &bri_world::World| {
+            let key = (world.map_id.clone(), world.revision);
+            {
+                let last = last.lock().unwrap_or_else(|e| e.into_inner());
+                // Unchanged, or a fresh map nobody has built on yet.
+                if *last == key || (last.0 != key.0 && world.bricks.is_empty()) {
+                    return Ok(());
+                }
+            }
+            store.autosave(world)?;
+            *last.lock().unwrap_or_else(|e| e.into_inner()) = key;
+            Ok(())
+        })
+    }
     pub fn load(&self, map: &str, name: &str) -> Result<SavedBuild> {
         ensure!(valid_name(name), "Invalid native save filename");
         let entry = self
@@ -208,7 +334,15 @@ impl Store {
             .into_iter()
             .find(|e| e.info.map == map && e.info.name == name)
             .context("Selected save no longer exists")?;
+        ensure!(!entry.info.damaged, "{DAMAGED}");
         Self::read(&entry)
+    }
+    /// The map id whose save folder (`map-<sha256 of the id>`) is `folder`.
+    fn map_for_folder(&self, folder: &str) -> Option<String> {
+        self.map_names
+            .keys()
+            .find(|id| folder == format!("map-{:x}", Sha256::digest(id.as_bytes())))
+            .cloned()
     }
     pub fn save(
         &self,
@@ -275,45 +409,29 @@ impl Store {
                 "Unsafe existing save"
             );
         }
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let staging = directory.join(format!(".save-{}-{stamp}.tmp", std::process::id()));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staging)?;
-        let result = (|| -> Result<()> {
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            Ok(())
-        })();
-        drop(file);
-        let result = result.and_then(|()| {
-            if exists {
-                let history = directory.join(".history");
-                std::fs::create_dir_all(&history)?;
-                ensure!(
-                    history.canonicalize()?.starts_with(&root),
-                    "Save history escapes storage"
-                );
-                std::fs::hard_link(
-                    &path,
-                    history.join(format!(
-                        "{stamp}-{:x}.world.json",
-                        Sha256::digest(name.as_bytes())
-                    )),
-                )?;
-                std::fs::rename(&staging, &path)?;
-            } else {
-                std::fs::hard_link(&staging, &path)?;
-            }
-            Ok(())
-        });
-        if staging.exists() {
-            let _ = std::fs::remove_file(staging);
+        if exists {
+            // Keep the overwritten save in history before replacing it.
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos();
+            let history = directory.join(".history");
+            std::fs::create_dir_all(&history)?;
+            ensure!(
+                history.canonicalize()?.starts_with(&root),
+                "Save history escapes storage"
+            );
+            std::fs::hard_link(
+                &path,
+                history.join(format!(
+                    "{stamp}-{:x}.world.json",
+                    Sha256::digest(name.as_bytes())
+                )),
+            )?;
+            bri_files::replace(&path, &bytes)?;
+        } else {
+            bri_files::create_new(&path, &bytes)?;
         }
-        result
+        Ok(())
     }
 }
 
@@ -396,9 +514,95 @@ impl Jobs {
     }
 }
 
+/// `LoadBricks_GetColorDifference`: `None` when every colour the save's
+/// bricks use, paint and event colours alike, is already in the world's set,
+/// otherwise whether the save's new colours fit added on (the world holds 256).
+pub fn color_difference(world: &[[f32; 4]], build: &SavedBuild) -> Option<bool> {
+    let saved = &build.world.palette;
+    let used: std::collections::BTreeSet<u8> = build
+        .world
+        .bricks
+        .values()
+        .chain(&build.world.unloaded)
+        .flat_map(|b| b.colors())
+        .collect();
+    let missing = |c: &&[f32; 4]| !world.contains(c);
+    if !used
+        .iter()
+        .filter_map(|&i| saved.get(usize::from(i)))
+        .any(|c| missing(&c))
+    {
+        return None;
+    }
+    let mut new: Vec<&[f32; 4]> = saved.iter().filter(missing).collect();
+    new.dedup_by(|a, b| a == b);
+    Some(world.len() + new.len() <= 256)
+}
+
+/// `ColorWarning_ClickMatch` (colour method 3): each of the save's colours
+/// becomes the world's nearest, by v20's summed RGB difference, alpha
+/// counting half and a solid/translucent mismatch never matching first.
+pub fn match_colors(world: &[[f32; 4]], build: &mut SavedBuild) {
+    for color in &mut build.world.palette {
+        let diff = |c: &[f32; 4]| {
+            let rgb: f32 = (0..3).map(|i| (c[i].abs() - color[i].abs()).abs()).sum();
+            let alpha = if (c[3] > 0.99) != (color[3] > 0.99) {
+                1000.0
+            } else {
+                (c[3].abs() - color[3].abs()).abs() * 0.5
+            };
+            rgb + alpha
+        };
+        if let Some(nearest) = world.iter().min_by(|a, b| diff(a).total_cmp(&diff(b))) {
+            *color = *nearest;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_saves_colours_load_as_v20s_color_warning_offers() {
+        let world = vec![
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0, 0.5],
+        ];
+        let mut saved = bri_world::World::new(
+            "Save".into(),
+            "map".into(),
+            vec![
+                [0.9, 0.1, 0.0, 1.0],
+                [0.0, 0.9, 0.1, 1.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ],
+        );
+        let mut brick =
+            bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [0.0; 3], 1);
+        brick.color = 2;
+        saved.bricks.insert(1, brick.clone());
+        let mut build = SavedBuild::new(saved);
+        // Only the world's own red is used: nothing to ask.
+        assert_eq!(color_difference(&world, &build), None);
+        brick.color = 0;
+        build.world.bricks.insert(1, brick);
+        assert_eq!(color_difference(&world, &build), Some(true));
+        assert_eq!(color_difference(&[[0.5; 4]; 255], &build), Some(false));
+        match_colors(&world, &mut build);
+        // Near-red becomes red; solid green takes solid blue, not translucent green.
+        assert_eq!(build.world.palette[0], [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(build.world.palette[1], [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(color_difference(&world, &build), None);
+    }
+    #[test]
+    fn v20_names_ending_in_a_space_or_dot_are_listed_trimmed() {
+        assert_eq!(v20_save_name("Afghanistan DM ").as_deref(), Some("Afghanistan DM.world.json"));
+        assert_eq!(v20_save_name("A.T.C. Fort").as_deref(), Some("A.T.C. Fort.world.json"));
+        assert_eq!(v20_save_name("Wow..."), Some("Wow.world.json".into()));
+        assert_eq!(v20_save_name(" . "), None);
+        assert_eq!(v20_save_name("CON"), None);
+    }
     #[test]
     fn utc_save_dates_are_sortable_across_leap_year_boundaries() {
         assert_eq!(modified_date(0), "1970-01-01 00:00Z");
@@ -427,6 +631,7 @@ mod tests {
         let path = directory.join("original/source.json");
         std::fs::write(&path, &original)?;
         let store = Store {
+            old: None,
             directory: directory.join("user"),
             map_names: [("map".into(), "Map".into())].into(),
             templates: vec![Entry {
@@ -436,6 +641,7 @@ mod tests {
                     modified: "Original".into(),
                     description: String::new(),
                     brick_count: Some(1),
+                    damaged: false,
                 },
                 map_id: "map".into(),
                 path: path.clone(),
@@ -443,7 +649,7 @@ mod tests {
             }],
         };
         assert_eq!(store.load("Map", "Original.world.json")?.world, world);
-        let build = SavedBuild::capture(&world, Some("scope".into()), true, true)?;
+        let build = SavedBuild::capture(&world, true, true)?;
         assert!(
             store
                 .save("Original.world.json", "First", build.clone(), false)
@@ -503,6 +709,105 @@ mod tests {
         );
         // Deliberately leave no recursive deletion against a computed directory.
         // These small fixtures stay in the OS temporary directory.
+        Ok(())
+    }
+    #[test]
+    fn a_damaged_save_is_listed_as_damaged_and_hides_nothing_else() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-save-damaged-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let store = Store {
+            directory: directory.clone(),
+            map_names: [("map".into(), "Map".into())].into(),
+            templates: Vec::new(),
+            old: None,
+        };
+        let world = bri_world::World::new("Good".into(), "map".into(), vec![[1.0; 4]]);
+        let build = SavedBuild::capture(&world, true, true)?;
+        store.save("Good.world.json", "Fine", build.clone(), false)?;
+        let good = store.list()?[0].path.clone();
+        let broken = good.with_file_name("Broken.world.json");
+        std::fs::write(&broken, b"{\"truncated")?;
+        let entries = store.list()?;
+        assert_eq!(entries.len(), 2);
+        let damaged = entries
+            .iter()
+            .find(|e| e.info.name == "Broken.world.json")
+            .unwrap();
+        assert!(damaged.info.damaged);
+        // The folder names the map even though the file does not.
+        assert_eq!(damaged.info.map, "Map");
+        assert_eq!(damaged.info.brick_count, None);
+        assert!(store.load("Map", "Good.world.json").is_ok());
+        let error = format!("{:#}", store.load("Map", "Broken.world.json").unwrap_err());
+        assert!(error.contains("damaged and can't be loaded"), "{error}");
+        // Saving over it asks first, then keeps the old file in history.
+        assert!(
+            store
+                .save("Broken.world.json", "", build.clone(), false)
+                .is_err()
+        );
+        store.save("Broken.world.json", "Fixed", build, true)?;
+        assert!(store.list()?.iter().all(|e| !e.info.damaged));
+        let history: Vec<_> = std::fs::read_dir(good.parent().unwrap().join(".history"))?
+            .collect::<std::io::Result<_>>()?;
+        assert_eq!(std::fs::read(history[0].path())?, b"{\"truncated");
+        Ok(())
+    }
+    #[test]
+    fn hosted_games_autosave_changes_into_the_load_list() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-autosave-client-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let store = Store {
+            directory,
+            map_names: [("map".into(), "Map".into())].into(),
+            templates: Vec::new(),
+            old: None,
+        };
+        let mut world = bri_world::World::new("Live".into(), "map".into(), vec![[1.0; 4]]);
+        let save = store.autosaver(&world);
+        // Nothing changed since the host started: nothing is written.
+        save(&world)?;
+        assert!(store.list()?.is_empty());
+        for n in 0..5 {
+            world.bricks.insert(
+                n + 1,
+                bri_world::Brick::new(
+                    bri_world::ContentRef::Resolved("plate".into()),
+                    [n as f32, 0.0, 0.0],
+                    3,
+                ),
+            );
+            world.next_brick_id = n + 2;
+            world.revision += 1;
+            save(&world)?;
+            // The same revision again (an idle interval) writes nothing.
+            save(&world)?;
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let saves = store.list()?;
+        assert_eq!(saves.len(), AUTOSAVE_KEEP);
+        assert!(
+            saves
+                .iter()
+                .all(|e| e.info.map == "Map" && bri_world::persistence::is_autosave(&e.info.name))
+        );
+        let newest = saves.iter().max_by_key(|e| e.info.name.clone()).unwrap();
+        assert_eq!(newest.info.brick_count, Some(5));
+        assert_eq!(store.load("Map", &newest.info.name)?.world.bricks.len(), 5);
+        // A fresh map nobody built on is not autosaved.
+        let empty = bri_world::World::new("Next".into(), "other".into(), vec![[1.0; 4]]);
+        save(&empty)?;
+        assert_eq!(store.list()?.len(), AUTOSAVE_KEEP);
         Ok(())
     }
 }

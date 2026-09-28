@@ -44,7 +44,7 @@ fn world(color: u8, shape: u8) -> PublicWorld {
         name: "FX".into(),
         map_id: "test".into(),
         palette: vec![[0.3, 0.6, 0.2, 0.65]],
-        bricks: BTreeMap::from([(1, b)]),
+        bricks: bri_world::Bricks::unit(1, b),
     }
 }
 #[test]
@@ -54,10 +54,12 @@ fn authoritative_fx_metadata_materials_and_ghost_isolation() -> Result<()> {
         for shape in 0..=2 {
             let scene = build_world_scene_materials(&world(color, shape), &meshes, 2, None)?;
             for vertex in &scene.vertices {
-                assert_eq!(
-                    BrickFx::decode(vertex.lightmap_uv),
-                    Some(BrickFx { color, shape })
-                );
+                let decoded = BrickFx::decode(vertex.fx).expect("valid FX record");
+                assert_eq!(decoded.fx, BrickFx { color, shape });
+                if (color, shape) != (0, 0) {
+                    assert_eq!(decoded.depth_studs, 1);
+                    assert_eq!(decoded.centre, [0.; 3]);
+                }
                 assert_eq!(vertex.uv, [0.25, 0.75]);
                 assert_eq!(vertex.color, [0.3, 0.6, 0.2, 0.65]);
             }
@@ -72,7 +74,7 @@ fn authoritative_fx_metadata_materials_and_ghost_isolation() -> Result<()> {
         [1.; 4],
         [0; 6],
     )?;
-    assert!(ghost.vertices.iter().all(|v| v.lightmap_uv == [0.; 2]));
+    assert!(ghost.vertices.iter().all(|v| v.fx == [0.; 4]));
     let mut repeated = world(4, 1);
     for id in 2..=128 {
         repeated.bricks.insert(id, repeated.bricks[&1].clone());
@@ -82,8 +84,8 @@ fn authoritative_fx_metadata_materials_and_ghost_isolation() -> Result<()> {
         shared.materials.len() <= 2,
         "FX material count grew per brick"
     );
-    assert_eq!(BrickFx::new(0, 1)?.displacement_bounds(), [0.1; 3]);
-    assert_eq!(BrickFx::new(0, 2)?.displacement_bounds(), [0., 0.1, 0.]);
+    assert_eq!(BrickFx::new(0, 1)?.displacement_bounds(), [0.08; 3]);
+    assert_eq!(BrickFx::new(0, 2)?.displacement_bounds(), [0., 0.2, 0.]);
     Ok(())
 }
 #[test]
@@ -91,19 +93,26 @@ fn marker_validation_and_literal_offset_alpha_regression() -> Result<()> {
     for color in 0..=6 {
         for shape in 0..=2 {
             let fx = BrickFx::new(color, shape)?;
-            assert_eq!(BrickFx::decode(fx.encode()?), Some(fx));
+            let encoded = fx.encode([1.5, -2., 3.25], 3, 64)?;
+            let decoded = BrickFx::decode(encoded).unwrap();
+            assert_eq!(decoded.fx, fx);
+            if fx != BrickFx::default() {
+                assert_eq!((decoded.corner, decoded.depth_studs), (3, 64));
+                assert_eq!(decoded.centre, [1.5, -2., 3.25]);
+            }
         }
     }
-    for uv in [
-        [1., 1.],
-        [1025., 0.],
-        [1025.5, -4096.],
-        [1031., -4096.],
-        [1039., -4096.],
-        [f32::NAN, -4096.],
-        [1047., -4096.],
+    assert!(BrickFx::new(1, 0)?.encode([0.; 3], 4, 1).is_err());
+    assert!(BrickFx::new(1, 0)?.encode([0.; 3], 0, 0).is_err());
+    for fx in [
+        [0., 0., 0., 0.5],
+        [0., 0., 0., 129.5],
+        [0., 0., 0., 8.],
+        [0., 0., 0., 128.],
+        [f32::NAN, 0., 0., 130.],
+        [0., 0., 0., 24.],
     ] {
-        assert_eq!(BrickFx::decode(uv), None);
+        assert_eq!(BrickFx::decode(fx), None, "{fx:?}");
     }
     let meshes = BTreeMap::from([("test".into(), quad())]);
     let mut scene = build_world_scene_materials(&world(1, 0), &meshes, 2, None)?;
@@ -164,8 +173,9 @@ fn fx_marker_is_flat_across_perspective_triangles_offscreen() -> Result<()> {
     let mut w = world(3, 0);
     w.palette[0] = [0.25, 0.5, 0.75, 1.];
     let mut scene = build_world_scene_materials(&w, &meshes, 2, None)?;
+    // v20 glow lights the brick with ambient + sun/min(sun): exactly paint here.
     scene.ambient = [0.; 3];
-    scene.sun_color = [0.; 3];
+    scene.sun_color = [1.; 3];
     let gpu = Headless::new()?;
     let pixels = render(&gpu, &scene, 0.)?;
     let background = &pixels[..4];
@@ -290,10 +300,10 @@ fn render_uploaded(
 #[test]
 fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let materials = BrickMaterials::load(&root.join("content/brick-materials-001"))?;
+    let materials = BrickMaterials::load(&root.join("content/brick-materials-002"))?;
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-003"),
+        &root.join("content/maps-pass-008"),
     )?;
     let meshes: BTreeMap<_, _> = definitions
         .entries
@@ -373,10 +383,10 @@ fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
 #[test]
 fn native_original_brick_fx_prints_phase_and_paint_offscreen() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let materials = BrickMaterials::load(&root.join("content/brick-materials-001"))?;
+    let materials = BrickMaterials::load(&root.join("content/brick-materials-002"))?;
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-003"),
+        &root.join("content/maps-pass-008"),
     )?;
     let meshes: BTreeMap<_, _> = definitions
         .entries

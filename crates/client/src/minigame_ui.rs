@@ -21,6 +21,11 @@ const COLORS: [(&str, [u8; 3]); 10] = [
     ("Black", [0, 0, 0]),
 ];
 
+/// `$MiniGameColorI[index]`, the colour a member's name takes.
+pub fn color_rgb(index: u8) -> Option<[u8; 3]> {
+    COLORS.get(usize::from(index)).map(|(_, rgb)| *rgb)
+}
+
 pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
     ensure!(
         (1..=30).contains(&rules.respawn_seconds)
@@ -91,6 +96,7 @@ pub fn state(
     vitals: &BTreeMap<OwnerId, Vitals>,
     names: &BTreeMap<OwnerId, String>,
     items: &[(String, String)],
+    archetypes: &bri_sim::archetype::Archetypes,
     revision: u64,
 ) -> MiniGameUiState {
     let name = |owner: &OwnerId| names.get(owner).cloned().unwrap_or_default();
@@ -165,10 +171,23 @@ pub fn state(
             })
             .collect(),
         invitations,
-        player_types: vec![MiniGameChoice {
-            id: bri_minigames::STANDARD_PLAYER.into(),
-            name: "Standard Player".into(),
-        }],
+        player_types: bri_sim::player_types::PlayerType::ALL
+            .map(|t| MiniGameChoice {
+                id: t.id().into(),
+                name: t.name().into(),
+            })
+            .into_iter()
+            .chain(
+                archetypes
+                    .iter()
+                    .skip(bri_sim::player_types::PlayerType::EVERY.len())
+                    .filter(|(_, a)| !a.name.is_empty())
+                    .map(|(_, a)| MiniGameChoice {
+                        id: a.id.clone(),
+                        name: a.name.clone(),
+                    }),
+            )
+            .collect(),
         items: items
             .iter()
             .map(|(id, name)| MiniGameChoice {
@@ -246,7 +265,15 @@ mod tests {
             members: vec![2],
         };
         let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Guest".to_string())].into();
-        let state = state(3, &[view], &BTreeMap::new(), &names, &[], 1);
+        let state = state(
+            3,
+            &[view],
+            &BTreeMap::new(),
+            &names,
+            &[],
+            &Default::default(),
+            1,
+        );
         assert_eq!(state.colors.len(), 9);
         assert!(state.colors.iter().all(|c| c.index != 3));
         assert!(!state.owns_active_game);

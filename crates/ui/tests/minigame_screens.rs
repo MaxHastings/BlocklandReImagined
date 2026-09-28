@@ -41,6 +41,9 @@ fn test_ui()->Ui{
         bool_ctl("$MiniGame::FallingDamage",true),bool_ctl("$MiniGame::WeaponDamage",true),bool_ctl("$MiniGame::SelfDamage",true),
         bool_ctl("$MiniGame::VehicleDamage",true),bool_ctl("$MiniGame::BrickDamage",true),bool_ctl("$MiniGame::EnableWand",false),
         bool_ctl("$MiniGame::EnableBuilding",true),bool_ctl("$MiniGame::EnablePainting",true),
+        Control{visible:false,..ctl("GuiSwatchCtrl",Some("CMG_FavsHelper"),None,None)},
+        ctl("GuiBitmapButtonCtrl",None,Some("CreateMiniGameGui.ClickSetFavs();"),None),
+        ctl("GuiBitmapButtonCtrl",Some("BSD_FavButton3"),Some("CreateMiniGameGui.clickFav(3);"),None),
     ]));
     pack.layouts.insert("MiniGameInviteGui".into(),layout(vec![
         ctl("GuiMLTextCtrl",Some("MGI_Title"),None,None),ctl("GuiMLTextCtrl",Some("MGI_Name"),None,None),ctl("GuiMLTextCtrl",Some("MGI_BL_ID"),None,None),
@@ -149,4 +152,26 @@ fn editor_offers_reset_and_end_only_when_running_and_closes_after_acting() {
         .expect("v20 resets without a confirmation");
     ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
     assert!(!ui.is_open(ScreenId::MiniGameSettings), "resetting closes the editor");
+}
+
+#[test]
+fn set_favs_saves_the_form_to_a_slot_and_the_slot_fills_it_again(){
+    let mut ui=test_ui();
+    ui.apply(UiUpdate::MiniGames(game_state()));
+    ui.core.push(ScreenId::MiniGameSettings);ui.update(0);
+    let title=|ui:&mut Ui,text:Option<&str>|{
+        let i=ui.dialogs.iter().rposition(|s|s.id()==ScreenId::MiniGameSettings).unwrap();
+        let v=ui.dialogs[i].view_mut();
+        let n=v.walk().find(|&n|v.node(n).ctrl.variable.as_deref()==Some("$MiniGame::Title")).unwrap();
+        if let Some(t)=text{v.set_text(n,t);}
+        v.edit_text(n)
+    };
+    title(&mut ui,Some("Rocket Arena"));
+    click(&mut ui,ScreenId::MiniGameSettings,"CreateMiniGameGui.ClickSetFavs();");
+    click(&mut ui,ScreenId::MiniGameSettings,"CreateMiniGameGui.clickFav(3);");
+    assert_eq!(ui.core.settings.minigame_favorites[&3].rules.title,"Rocket Arena");
+    assert!(ui.drain_actions().iter().any(|(_,a)|matches!(a,UiAction::SaveSettings(s) if s.minigame_favorites.contains_key(&3))));
+    title(&mut ui,Some("Something Else"));
+    click(&mut ui,ScreenId::MiniGameSettings,"CreateMiniGameGui.clickFav(3);");
+    assert_eq!(title(&mut ui,None),"Rocket Arena");
 }

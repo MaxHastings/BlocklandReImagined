@@ -344,6 +344,9 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
+    /// The side buttons (Mouse 4 and 5), which v20 could not bind.
+    Back,
+    Forward,
 }
 
 impl MouseButton {
@@ -352,12 +355,14 @@ impl MouseButton {
             MouseButton::Left => "button0",
             MouseButton::Right => "button1",
             MouseButton::Middle => "button2",
+            MouseButton::Back => "button3",
+            MouseButton::Forward => "button4",
         }
     }
 }
 
 /// Host input, in physical window pixels (the UI divides by its scale).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum InputEvent {
     KeyDown {
         key: Key,

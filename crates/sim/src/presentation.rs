@@ -74,6 +74,14 @@ pub enum CueKind {
         actor: u64,
         seconds: f32,
     },
+    /// `Player::teleportEffect` and `Vehicle::teleportEffect`: a
+    /// PlayerTeleportExplosion at the cue position, `scale` times its size.
+    /// A player also wears PlayerTeleportImage on its back (`emote` slot).
+    Teleport {
+        actor: u64,
+        scale: f32,
+        player: bool,
+    },
     /// Emote image above the head (alarm, love, hate, confusion) or sit.
     Emote {
         actor: u64,
@@ -91,6 +99,12 @@ pub enum CueKind {
         vehicle: u64,
         effect: String,
         active: bool,
+    },
+    /// The engine's explosion operation went off here (package creatures,
+    /// scripted blasts). Clients choose the look; `source` names the package.
+    Explosion {
+        radius: f32,
+        source: String,
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,6 +188,14 @@ impl Cue {
             } => ensure!(
                 *vehicle > 0 && !name.is_empty() && text(name),
                 "Invalid vehicle cue"
+            ),
+            CueKind::Explosion { radius, source } => ensure!(
+                radius.is_finite() && (0.0..=64.0).contains(radius) && !source.is_empty() && text(source),
+                "Invalid explosion cue"
+            ),
+            CueKind::Teleport { actor, scale, .. } => ensure!(
+                *actor > 0 && scale.is_finite() && (0.01..=100.0).contains(scale),
+                "Invalid teleport cue"
             ),
             CueKind::Emote { actor, name } => ensure!(
                 *actor > 0 && crate::session::EMOTES.contains(&name.as_str()),

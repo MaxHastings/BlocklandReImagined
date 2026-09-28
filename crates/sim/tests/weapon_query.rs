@@ -46,6 +46,7 @@ fn swept_queries_share_player_map_collision_and_radius_occlusion() {
     let mut q = WeaponQuery {
         simulation: &sim,
         affect: &deny,
+        affect_radius: &deny,
         catch: &no_catch,
         responses: &Default::default(),
         truncated_targets: 0,

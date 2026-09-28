@@ -73,13 +73,9 @@ native behavior, with line ranges/hashes and retained original provenance.
 `octahedron.dts` uses DTS v18. Resolve required dependencies deliberately.
 
 Existing generated packs remain useful because shared source bytes match.
-`map-bundle-009` uses primary assets plus secondary lighting caches for six maps.
-`--lighting-cache-root` must be supplied explicitly. The converter verifies primary
-source hashes against conversion provenance, secondary mission/geometry byte
-identity, mission CRC and unique complete interior slot/dimension association.
-Those caches are derived data, not evidence of extra stock content. Their resource
-CRC fields are sentinels, so independent verification of the cached lighting result
-and a bake directly from cache-free originals remain work. No white terrain fallback.
+Mission lighting no longer depends on those caches: `map_bundle` bakes it from
+the reference originals and matches the cached results closely (see
+content-conversion.md, "Mission lighting bake").
 
 Slate has an authored collision interior with no visible surfaces. Its source
 sky renders below the horizon; inventing a visible floor would change the source.

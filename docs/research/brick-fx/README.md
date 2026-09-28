@@ -1,5 +1,9 @@
 # Native brick FX and legacy color handoff — 2026-09-26
 
+> Superseded 2026-09-27: the FX equations below were approximations. The exact
+> v20 per-vertex equations recovered from `blocklandv20.exe`, now used by the
+> shader, are in `docs/audits/bricks.md`.
+
 The actual replicated brick scene now binds color/shape FX to the persistent native scene renderer. This closes the missing rendering connection. It **does not establish original v20 visual parity**: recovered scripts establish the IDs, but no exact v20 brick rendering implementation or approved interactive comparison was available. The equations below are explicitly native visual approximations. Pumpkin numeric-color interpretation and transparent-paint interaction with negative-alpha offsets remain required, open fidelity work.
 
 ## Evidence and boundary

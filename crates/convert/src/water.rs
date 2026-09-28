@@ -136,7 +136,8 @@ pub fn convert(
             reflection,
             opacity: number(p, "surfaceopacity", 0.75)?,
             wave_amplitude: number(p, "wavemagnitude", 1.)?,
-            flow: [rate * angle.cos(), rate * angle.sin()],
+            // Portable sines keep imports identical across machines.
+            flow: [rate * libm::cosf(angle), rate * libm::sinf(angle)],
             distortion: [
                 number(p, "distortgridscale", 0.1)?,
                 number(p, "distortmag", 0.05)?,

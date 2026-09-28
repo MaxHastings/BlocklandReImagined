@@ -15,6 +15,9 @@ pub type NodeId = usize;
 /// Window skin piece indices (Torque GuiWindowCtrl bitmap array).
 mod win {
     pub const CLOSE: usize = 0;
+    pub const MAXIMIZE: usize = 3;
+    pub const NORMAL: usize = 6;
+    pub const MINIMIZE: usize = 9;
     pub const TOP_LEFT: usize = 12;
     pub const TOP_RIGHT: usize = 13;
     pub const TOP: usize = 14;
@@ -65,6 +68,14 @@ pub struct NodeState {
     pub frame: usize,
     /// Text-list row height from the profile font (`View::measure`).
     pub row_height: i32,
+    /// How far the player dragged this window from its laid-out place.
+    pub moved: (i32, i32),
+    /// How much the player widened and heightened this window.
+    pub resized: (i32, i32),
+    /// Maximized to fill its parent (`canMaximize`).
+    pub maximized: bool,
+    /// Minimized to its title bar of this height (`canMinimize`).
+    pub minimized: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,12 +188,28 @@ pub struct View {
     /// Scroll control whose thumb is being dragged: (control, grab offset,
     /// up arrow height, down arrow height).
     scroll_drag: Option<(NodeId, i32, i32, i32)>,
+    /// Window being dragged by its title bar: (window, last mouse x, y).
+    window_drag: Option<(NodeId, i32, i32)>,
+    /// Window being resized by its right and/or bottom edge: (window, last
+    /// mouse x, y, width, height).
+    window_resize: Option<(NodeId, i32, i32, bool, bool)>,
     last_click: Option<(NodeId, u64)>,
     pub time_ms: u64,
     canvas: (i32, i32),
     /// Last mouse position (logical pixels).
     pub mouse: (i32, i32),
     close_hot: bool,
+}
+
+/// How close to a resizable window's right or bottom edge a press resizes it.
+const RESIZE_EDGE: i32 = 6;
+
+/// `r` moved as little as possible to lie inside `within` (its top-left
+/// corner stays visible when it is the larger).
+fn keep_inside(r: Rect, within: Rect) -> Rect {
+    let x = r.x.min(within.right() - r.w).max(within.x);
+    let y = r.y.min(within.bottom() - r.h).max(within.y);
+    Rect::new(x, y, r.w, r.h)
 }
 
 fn authored_rect(c: &Control) -> Rect {
@@ -197,7 +224,7 @@ fn initial_value(c: &Control) -> Value {
         "GuiSliderCtrl" => Value::Num(c.field("value").and_then(|v| v.parse().ok()).unwrap_or(0.0)),
         "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => Value::Text(c.text.clone().unwrap_or_default()),
         "GuiPopUpMenuCtrl" | "GuiTextListCtrl" => Value::Selected(None),
-        "GuiProgressCtrl" => Value::Num(0.0),
+        "GuiProgressCtrl" | "GuiHealthBarHud" => Value::Num(0.0),
         _ => Value::None,
     }
 }
@@ -213,6 +240,8 @@ impl View {
             focus: None,
             popup: None,
             scroll_drag: None,
+            window_drag: None,
+            window_resize: None,
             last_click: None,
             time_ms: 0,
             canvas: (640, 480),
@@ -241,6 +270,10 @@ impl View {
                 cursor: 0,
                 frame: 0,
                 row_height: 16,
+                moved: (0, 0),
+                resized: (0, 0),
+                maximized: false,
+                minimized: None,
             },
             ctrl,
             parent,
@@ -421,6 +454,12 @@ impl View {
         self.layout_children(root, (authored.w, authored.h), Rect::new(0, 0, w, h));
     }
 
+    /// Lay out again for the current canvas (after content changed size).
+    pub fn relayout(&mut self) {
+        let (w, h) = self.canvas;
+        self.layout(w, h);
+    }
+
     fn layout_children(&mut self, id: NodeId, old_parent: (i32, i32), parent_rect: Rect) {
         let is_scroll = self.nodes[id].ctrl.class == "GuiScrollCtrl";
         let scroll_y = self.nodes[id].state.scroll_y;
@@ -437,6 +476,19 @@ impl View {
                 (parent_rect.w, parent_rect.h),
             );
             let mut abs = r.offset(parent_rect.x, parent_rect.y);
+            let (moved, resized) = (self.nodes[k].state.moved, self.nodes[k].state.resized);
+            if resized != (0, 0) {
+                abs.w = (abs.w + resized.0).min(parent_rect.w);
+                abs.h = (abs.h + resized.1).min(parent_rect.h);
+            }
+            if moved != (0, 0) || resized != (0, 0) {
+                abs = keep_inside(abs.offset(moved.0, moved.1), parent_rect);
+            }
+            if self.nodes[k].state.maximized {
+                abs = parent_rect;
+            } else if let Some(title) = self.nodes[k].state.minimized {
+                abs.h = title;
+            }
             if is_scroll {
                 abs = abs.offset(0, -scroll_y);
             }
@@ -445,6 +497,12 @@ impl View {
             // the authored extent are clipped away and cannot be reached.
             if self.nodes[k].ctrl.class == "GuiTextListCtrl" {
                 abs.h = abs.h.max(self.list_height(k));
+            }
+            // GuiConsole sizes itself to its log: one row per line, at least
+            // as wide as the scroll area it sits in.
+            if self.nodes[k].ctrl.class == "GuiConsole" {
+                abs.h = self.list_height(k);
+                abs.w = abs.w.max(parent_rect.w - a.x);
             }
             self.nodes[k].rect = abs;
             self.layout_children(k, (a.w, a.h), abs);
@@ -484,6 +542,43 @@ impl View {
             })
     }
 
+    fn profile_font<'a>(pack: &'a Pack, profile: &str) -> Option<Font<'a>> {
+        let style = pack.data.styles.get(profile)?;
+        Font::get(pack, Self::font_id(pack, style)?)
+    }
+
+    /// Height a `GuiMLTextCtrl` of this profile reflows `text` to at
+    /// `width`, line by line as `draw_ml` lays it out.
+    pub fn ml_height(pack: &Pack, profile: &str, text: &str, width: i32) -> i32 {
+        let Some(font) = Self::profile_font(pack, profile) else {
+            return 0;
+        };
+        text::layout_ml(pack, &font, text, width, Justify::Left)
+            .iter()
+            .map(|line| {
+                text::ml_rich_runs(&line.text)
+                    .iter()
+                    .filter_map(|run| match run {
+                        text::MlRun::Bitmap(id) => pack.image_size(id),
+                        _ => None,
+                    })
+                    .map(|(_, h)| h as i32)
+                    .fold(line.height, i32::max)
+            })
+            .sum()
+    }
+
+    /// `getPixelWidth`: the width of a control's text in its profile font.
+    pub fn pixel_width(&self, pack: &Pack, id: NodeId) -> i32 {
+        Self::profile_font(pack, &self.nodes[id].ctrl.style)
+            .map_or(0, |font| font.width(&self.text_of(id)))
+    }
+
+    /// Line height of a control's profile font.
+    pub fn line_height(&self, pack: &Pack, id: NodeId) -> i32 {
+        Self::profile_font(pack, &self.nodes[id].ctrl.style).map_or(0, |font| font.line_height())
+    }
+
     fn draw_node(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
         let n = &self.nodes[id];
         if !n.state.visible {
@@ -516,6 +611,20 @@ impl View {
         let s = pack.data.skins.get(image)?;
         let p = s.pieces.get(idx)?;
         Some([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32])
+    }
+
+    /// Full-screen backgrounds fill the canvas by cropping, never by
+    /// stretching, so screenshots keep their aspect on any window shape.
+    fn blit_cover(&self, pack: &Pack, dl: &mut DrawList, image: &str, r: Rect, tint: Rgba) {
+        if let Some((w, h)) = pack.image_size(image) {
+            dl.image(
+                TexKey::Image(image.to_string()),
+                cover_src((w as f32, h as f32), (r.w as f32, r.h as f32)),
+                [r.x as f32, r.y as f32, r.w as f32, r.h as f32],
+                tint,
+                Filter::Linear,
+            );
+        }
     }
 
     fn blit(&self, pack: &Pack, dl: &mut DrawList, image: &str, r: Rect, tint: Rgba) {
@@ -577,6 +686,23 @@ impl View {
         justify: Option<Justify>,
         color: Option<Rgba>,
     ) {
+        self.draw_text_outlined(pack, dl, id, r, text, justify, color, true);
+    }
+
+    /// `draw_text_in`, with the profile's `doFontOutline` only when
+    /// `outline` (Blockland outlines labels and chat, not list rows).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_outlined(
+        &self,
+        pack: &Pack,
+        dl: &mut DrawList,
+        id: NodeId,
+        r: Rect,
+        text: &str,
+        justify: Option<Justify>,
+        color: Option<Rgba>,
+        outline: bool,
+    ) {
         let Some(style) = self.style(pack, id) else {
             return;
         };
@@ -605,7 +731,7 @@ impl View {
                 y as f32,
                 line,
                 color,
-                style.font_outline,
+                style.font_outline.filter(|_| outline),
                 &style.font_colors,
             );
             y += font.line_height();
@@ -622,47 +748,70 @@ impl View {
         let Some(font) = Font::get(pack, fid) else {
             return;
         };
-        let color = style.font_color.unwrap_or(geom::BLACK);
+        // A runtime tint stands in for a profile whose `fontColor` Torque
+        // aliases to a later `fontColors[0]` (see `play::chat_base_color`).
+        let color = self.nodes[id]
+            .state
+            .tint
+            .or(style.font_color)
+            .unwrap_or(geom::BLACK);
         let mut y = r.y;
-        for line in text::layout_ml(&font, text, r.w, Justify::Left) {
-            let runs = text::ml_runs(&line.text);
+        // Each line starts in the profile's font and colour; the line's own
+        // markers (carried from the line before) switch them.
+        for line in text::layout_ml(pack, &font, text, r.w, Justify::Left) {
+            let runs = text::ml_rich_runs(&line.text);
             let bitmap_width: i32 = runs
                 .iter()
-                .filter(|(bitmap, _)| *bitmap)
-                .filter_map(|(_, id)| pack.image_size(id))
+                .filter_map(|run| match run {
+                    text::MlRun::Bitmap(id) => pack.image_size(id),
+                    _ => None,
+                })
                 .map(|(w, _)| w as i32)
                 .sum();
             let width = line.width + bitmap_width;
+            let left = r.x + line.indent;
             let mut x = match line.justify {
-                Justify::Left => r.x,
-                Justify::Center => r.x + (r.w - width) / 2,
+                Justify::Left => left,
+                Justify::Center => left + (r.w - line.indent - width) / 2,
                 Justify::Right => r.right() - width,
             };
-            let mut height = font.line_height();
-            for (bitmap, run) in runs {
-                if bitmap {
-                    if let Some((w, h)) = pack.image_size(run) {
-                        dl.image(
-                            TexKey::Image(run.to_string()),
-                            [0.0, 0.0, w as f32, h as f32],
-                            [x as f32, y as f32, w as f32, h as f32],
-                            geom::WHITE,
-                            crate::draw::Filter::Linear,
-                        );
-                        x += w as i32;
-                        height = height.max(h as i32);
+            let mut height = line.height;
+            let (mut run_font, mut run_color) = (font, color);
+            for run in runs {
+                match run {
+                    text::MlRun::Bitmap(image) => {
+                        if let Some((w, h)) = pack.image_size(image) {
+                            dl.image(
+                                TexKey::Image(image.to_string()),
+                                [0.0, 0.0, w as f32, h as f32],
+                                [x as f32, y as f32, w as f32, h as f32],
+                                geom::WHITE,
+                                crate::draw::Filter::Linear,
+                            );
+                            x += w as i32;
+                            height = height.max(h as i32);
+                        }
                     }
-                } else {
-                    font.draw_outlined(
-                        dl,
-                        x as f32,
-                        y as f32,
-                        run,
-                        color,
-                        style.font_outline,
-                        &style.font_colors,
-                    );
-                    x += font.width(run);
+                    text::MlRun::Font(id) => {
+                        if let Some(f) = text::font_named(pack, id) {
+                            run_font = f;
+                        }
+                    }
+                    text::MlRun::Rgb(rgb) => run_color = rgb,
+                    text::MlRun::Text(run) => {
+                        // Glyphs sit on the line's baseline.
+                        let top = y + line.height - run_font.line_height();
+                        run_font.draw_outlined(
+                            dl,
+                            x as f32,
+                            top as f32,
+                            run,
+                            run_color,
+                            style.font_outline,
+                            &style.font_colors,
+                        );
+                        x += run_font.width(run);
+                    }
                 }
             }
             y += height;
@@ -695,6 +844,8 @@ impl View {
                     let tint = n.state.tint.unwrap_or(WHITE);
                     if n.ctrl.field("wrap") == Some("1") {
                         self.blit_tiled(pack, dl, &b, r, tint);
+                    } else if r == Rect::new(0, 0, self.canvas.0, self.canvas.1) {
+                        self.blit_cover(pack, dl, &b, r, tint);
                     } else {
                         self.blit(pack, dl, &b, r, tint);
                     }
@@ -767,17 +918,32 @@ impl View {
                         t
                     };
                     let inner = Rect::new(r.x + s.text_offset[0] + 2, r.y, r.w - 4, r.h);
+                    let font = Self::font_id(pack, s).and_then(|f| Font::get(pack, f));
+                    let before: String = shown.chars().take(n.state.cursor).collect();
+                    // Like GuiTextEditCtrl, text slides left once the caret
+                    // passes the right edge, so long input stays editable.
+                    let scroll = match &font {
+                        Some(f) if n.ctrl.class == "GuiTextEditCtrl" => {
+                            (f.width(&before) - (inner.w - 2)).max(0)
+                        }
+                        _ => 0,
+                    };
                     if n.ctrl.class == "GuiMLTextEditCtrl" {
                         self.draw_ml(pack, dl, id, inner.offset(0, 2), &shown);
+                    } else if scroll > 0 {
+                        if dl.push_clip(inner) {
+                            let moved = Rect::new(inner.x - scroll, inner.y, inner.w + scroll, inner.h);
+                            self.draw_text_in(pack, dl, id, moved, &shown, Some(Justify::Left), None);
+                            dl.pop_clip();
+                        }
                     } else {
                         self.draw_text_in(pack, dl, id, inner, &shown, Some(Justify::Left), None);
                     }
                     if self.focus == Some(id)
                         && (self.time_ms / 500).is_multiple_of(2)
-                        && let Some(f) = s.font.as_deref().and_then(|f| Font::get(pack, f))
+                        && let Some(f) = font
                     {
-                        let before: String = shown.chars().take(n.state.cursor).collect();
-                        let cx = inner.x + f.width(&before);
+                        let cx = inner.x - scroll + f.width(&before);
                         let lh = f.line_height();
                         dl.fill(
                             Rect::new(cx, r.y + (r.h - lh) / 2, 1, lh),
@@ -842,6 +1008,7 @@ impl View {
             }
             "GuiScrollCtrl" => self.draw_scroll(pack, dl, id),
             "GuiTextListCtrl" => self.draw_list(pack, dl, id),
+            "GuiConsole" => self.draw_console(pack, dl, id),
             "GuiSliderCtrl" => {
                 let (lo, hi) = self.range(id);
                 let v = self.num(id);
@@ -867,6 +1034,41 @@ impl View {
                 let thumb = Rect::new(tx - 4, mid - 8, 8, 16);
                 dl.fill(thumb, [149, 152, 166, 255]);
                 dl.frame(thumb, geom::BLACK);
+            }
+            // Torque GuiHealthBarHud: background fill, the value bar in
+            // damageFillColor, then the frame.
+            "GuiHealthBarHud" => {
+                let color = |field: &str| -> Option<Rgba> {
+                    let c: Vec<u8> = n
+                        .ctrl
+                        .field(field)?
+                        .split_whitespace()
+                        .filter_map(|x| x.parse::<f32>().ok())
+                        .map(|x| (x.clamp(0.0, 1.0) * 255.0) as u8)
+                        .collect();
+                    c.try_into().ok()
+                };
+                let on = |field: &str| n.ctrl.field(field).is_some_and(|v| v == "1");
+                if on("showFill")
+                    && let Some(c) = color("fillColor")
+                {
+                    dl.fill(r, c);
+                }
+                let f = self.num(id).clamp(0.0, 1.0);
+                let bar = if on("flipped") {
+                    let w = (r.w as f32 * f) as i32;
+                    Rect::new(r.x + r.w - w, r.y, w, r.h)
+                } else {
+                    Rect::new(r.x, r.y, (r.w as f32 * f) as i32, r.h)
+                };
+                if let Some(c) = color("damageFillColor") {
+                    dl.fill(bar, c);
+                }
+                if on("showFrame")
+                    && let Some(c) = color("frameColor")
+                {
+                    dl.frame(r, c);
+                }
             }
             "GuiProgressCtrl" => {
                 if let Some(s) = style {
@@ -964,6 +1166,18 @@ impl View {
             let (c, cw, ch) = p(win::CLOSE + state);
             self.piece(dl, img, c, self.close_rect(id, cw, ch));
         }
+        // Maximize and minimize, left of the close box; each shows Normal
+        // (restore) while the window is in its state.
+        for (field, slot, on, piece) in [
+            ("canMaximize", 1, n.state.maximized, win::MAXIMIZE),
+            ("canMinimize", 2, n.state.minimized.is_some(), win::MINIMIZE),
+        ] {
+            if n.ctrl.field(field) == Some("1") {
+                let (c, cw, ch) = p(if on { win::NORMAL } else { piece });
+                let r = self.title_button(id, slot);
+                self.piece(dl, img, c, Rect::new(r.x, r.y, cw, ch));
+            }
+        }
         let title = self.text_of(id);
         if let Some(f) = style.font.as_deref().and_then(|f| Font::get(pack, f)) {
             let x = r.x + style.text_offset[0] + 4;
@@ -978,6 +1192,52 @@ impl View {
                 &style.font_colors,
             );
         }
+    }
+
+    /// The window skin's title bar: its top edge piece.
+    fn title_height(&self, pack: &Pack, id: NodeId) -> i32 {
+        self.style(pack, id)
+            .and_then(|s| s.bitmap.as_deref())
+            .and_then(|img| pack.data.skins.get(img))
+            .and_then(|skin| skin.pieces.get(win::TOP))
+            .map_or(20, |q| q[3] as i32)
+    }
+
+    /// Move a window by (dx, dy), keeping it inside its parent (the screen).
+    fn drag_window(&mut self, id: NodeId, dx: i32, dy: i32) {
+        let r = self.nodes[id].rect;
+        let parent = self.nodes[id]
+            .parent
+            .map_or(Rect::new(0, 0, self.canvas.0, self.canvas.1), |p| {
+                self.nodes[p].rect
+            });
+        let to = keep_inside(r.offset(dx, dy), parent);
+        let moved = &mut self.nodes[id].state.moved;
+        moved.0 += to.x - r.x;
+        moved.1 += to.y - r.y;
+        self.relayout();
+    }
+
+    /// Grow or shrink a window by (dw, dh). It never shrinks below its
+    /// authored size, so the dialog's own layout keeps its room, nor grows
+    /// past its parent (the screen); its children follow their sizing flags.
+    fn resize_window(&mut self, id: NodeId, dw: i32, dh: i32) {
+        let r = self.nodes[id].rect;
+        let parent = self.nodes[id]
+            .parent
+            .map_or(Rect::new(0, 0, self.canvas.0, self.canvas.1), |p| {
+                self.nodes[p].rect
+            });
+        let resized = &mut self.nodes[id].state.resized;
+        resized.0 = (resized.0 + dw).clamp(0, (parent.right() - r.x - r.w + resized.0).max(0));
+        resized.1 = (resized.1 + dh).clamp(0, (parent.bottom() - r.y - r.h + resized.1).max(0));
+        self.relayout();
+    }
+
+    /// Title bar box `slot` from the right: 0 close, 1 maximize, 2 minimize.
+    fn title_button(&self, id: NodeId, slot: i32) -> Rect {
+        let r = self.nodes[id].rect;
+        Rect::new(r.right() - 20 - slot * 18, r.y + 3, 16, 16)
     }
 
     fn close_rect(&self, id: NodeId, cw: i32, ch: i32) -> Rect {
@@ -1053,7 +1313,7 @@ impl View {
             .iter()
             .map(|&k| {
                 let c = &self.nodes[k];
-                if c.ctrl.class == "GuiTextListCtrl" {
+                if matches!(c.ctrl.class.as_str(), "GuiTextListCtrl" | "GuiConsole") {
                     c.ctrl.position[1] + self.list_height(k)
                 } else {
                     c.ctrl.position[1] + c.rect.h
@@ -1155,8 +1415,13 @@ impl View {
     /// scrolling and hit tests agree with drawing.
     pub fn measure(&mut self, pack: &Pack) {
         for id in 0..self.nodes.len() {
-            if self.nodes[id].ctrl.class == "GuiTextListCtrl" {
-                self.nodes[id].state.row_height = self.list_row_height(pack, id);
+            match self.nodes[id].ctrl.class.as_str() {
+                "GuiTextListCtrl" => self.nodes[id].state.row_height = self.list_row_height(pack, id),
+                // GuiConsole cells are exactly one font line tall.
+                "GuiConsole" => {
+                    self.nodes[id].state.row_height = self.line_height(pack, id).max(1);
+                }
+                _ => {}
             }
         }
     }
@@ -1204,11 +1469,47 @@ impl View {
                 }
                 let next = cols.get(c + 1).copied().unwrap_or(r.w);
                 let cell = Rect::new(r.x + x + 2, row.y, (next - x - 2).max(0), rh);
+                // Join Server's ServerListProfile sets doFontOutline (black
+                // on black), but v20's text lists drew rows without it.
                 if dl.push_clip(cell) {
-                    self.draw_text_in(pack, dl, id, cell, field, Some(Justify::Left), None);
+                    self.draw_text_outlined(
+                        pack,
+                        dl,
+                        id,
+                        cell,
+                        field,
+                        Some(Justify::Left),
+                        None,
+                        false,
+                    );
                     dl.pop_clip();
                 }
             }
+        }
+    }
+
+    /// GuiConsole rows: item ids are log levels (0 normal, 1 warning,
+    /// 2 error) drawn in the profile's normal, HL and NA font colours, 3px
+    /// in. Only rows inside the scroll area are drawn.
+    fn draw_console(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
+        let n = &self.nodes[id];
+        let Some(style) = self.style(pack, id) else {
+            return;
+        };
+        let r = n.rect;
+        let rh = n.state.row_height.max(1);
+        let visible = n.parent.map_or(r, |p| self.nodes[p].rect);
+        let first = ((visible.y - r.y) / rh).max(0) as usize;
+        let last = ((visible.bottom() - r.y) / rh + 1).max(0) as usize;
+        let black = geom::BLACK;
+        for (i, (text, level)) in n.state.items.iter().enumerate().take(last).skip(first) {
+            let color = match level {
+                1 => style.font_color_hl,
+                2 => style.font_color_na,
+                _ => style.font_color,
+            };
+            let row = Rect::new(r.x + 3, r.y + i as i32 * rh, r.w - 3, rh);
+            self.draw_text_in(pack, dl, id, row, text, Some(Justify::Left), Some(color.unwrap_or(black)));
         }
     }
 
@@ -1457,6 +1758,8 @@ impl View {
     pub fn mouse_leave(&mut self) {
         self.hover = None;
         self.scroll_drag = None;
+        self.window_drag = None;
+        self.window_resize = None;
         self.close_hot = false;
     }
 
@@ -1471,6 +1774,16 @@ impl View {
         }
         if let Some((id, grab, uh, dh)) = self.scroll_drag {
             self.drag_scroll(id, y - grab, uh, dh);
+            return;
+        }
+        if let Some((id, lx, ly)) = self.window_drag {
+            self.drag_window(id, x - lx, y - ly);
+            self.window_drag = Some((id, x, y));
+            return;
+        }
+        if let Some((id, lx, ly, w, h)) = self.window_resize {
+            self.resize_window(id, if w { x - lx } else { 0 }, if h { y - ly } else { 0 });
+            self.window_resize = Some((id, x, y, w, h));
             return;
         }
         if let Some((id, MouseButton::Left)) = self.pressed
@@ -1534,6 +1847,29 @@ impl View {
         };
         self.pressed = Some((t, b));
         let class = self.nodes[t].ctrl.class.clone();
+        // GuiWindowCtrl::onMouseDown: a press on the title bar, off the close
+        // box, drags the window (`canMove`).
+        // GuiWindowCtrl::onMouseDown: its right and bottom edges resize it
+        // (`resizeWidth`, `resizeHeight`); the title bar, off the close
+        // box, drags it (`canMove`).
+        let edges = (class == "GuiWindowCtrl" && b == MouseButton::Left).then(|| {
+            let r = self.nodes[t].rect;
+            let c = &self.nodes[t].ctrl;
+            (
+                c.field("resizeWidth") == Some("1") && x >= r.right() - RESIZE_EDGE,
+                c.field("resizeHeight") == Some("1") && y >= r.bottom() - RESIZE_EDGE,
+            )
+        });
+        if let Some((w, h)) = edges.filter(|(w, h)| *w || *h) {
+            self.window_resize = Some((t, x, y, w, h));
+        } else if class == "GuiWindowCtrl"
+            && b == MouseButton::Left
+            && self.nodes[t].ctrl.field("canMove") != Some("0")
+            && y < self.nodes[t].rect.y + self.title_height(pack, t)
+            && !(0..3).any(|slot| self.title_button(t, slot).contains(x, y))
+        {
+            self.window_drag = Some((t, x, y));
+        }
         match class.as_str() {
             "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => {
                 self.focus = Some(t);
@@ -1615,6 +1951,8 @@ impl View {
     ) {
         self.mouse = (x, y);
         self.scroll_drag = None;
+        self.window_drag = None;
+        self.window_resize = None;
         if let Some(mut open) = self.popup {
             // Press-drag-release over a row picks it, like Torque's list.
             let items = self.nodes[open.node].state.items.len();
@@ -1645,6 +1983,29 @@ impl View {
                     node: p,
                     kind: EventKind::Close,
                 });
+            }
+            ("GuiWindowCtrl", MouseButton::Left)
+                if self.nodes[p].ctrl.field("canMaximize") == Some("1")
+                    && self.title_button(p, 1).contains(x, y) =>
+            {
+                let s = &mut self.nodes[p].state;
+                s.maximized = !s.maximized;
+                s.minimized = None;
+                self.relayout();
+            }
+            ("GuiWindowCtrl", MouseButton::Left)
+                if self.nodes[p].ctrl.field("canMinimize") == Some("1")
+                    && self.title_button(p, 2).contains(x, y) =>
+            {
+                let title = self.title_height(_pack, p);
+                let s = &mut self.nodes[p].state;
+                s.minimized = if s.minimized.is_some() {
+                    None
+                } else {
+                    Some(title + 4)
+                };
+                s.maximized = false;
+                self.relayout();
             }
             ("GuiCheckBoxCtrl", MouseButton::Left) => {
                 let v = !self.bool_value(p);
@@ -1888,6 +2249,9 @@ pub fn resize(
     new: (i32, i32),
 ) -> Rect {
     let (dx, dy) = (new.0 - old.0, new.1 - old.1);
+    if matches!((h, v), (HSizing::Relative, VSizing::Relative)) && old.0 > 0 && old.1 > 0 {
+        return relative_uniform(a, min, old, new);
+    }
     let (mut x, mut y, mut w, mut hh) = (a.x, a.y, a.w, a.h);
     match h {
         HSizing::Center => x = (new.0 - a.w) >> 1,
@@ -1911,4 +2275,100 @@ pub fn resize(
     }
     // GuiControl::resize clamps the extent to minExtent.
     Rect::new(x, y, w.max(min[0]), hh.max(min[1]))
+}
+
+/// Source rectangle (pixels) of an image that covers `dst` at its own aspect,
+/// cropping the overflow evenly from both sides.
+fn cover_src(img: (f32, f32), dst: (f32, f32)) -> [f32; 4] {
+    if img.0 <= 0.0 || img.1 <= 0.0 || dst.0 <= 0.0 || dst.1 <= 0.0 {
+        return [0.0, 0.0, img.0, img.1];
+    }
+    let k = (dst.0 / img.0).max(dst.1 / img.1);
+    let (w, h) = (dst.0 / k, dst.1 / k);
+    [(img.0 - w) / 2.0, (img.1 - h) / 2.0, w, h]
+}
+
+/// Torque scales a relative/relative control by the parent's change on each
+/// axis separately, which squashes the main menu's text bitmaps on any aspect
+/// other than 4:3. Keep v20's relative placement but scale the extent by one
+/// factor so art keeps its aspect. Inside its relative cell the control hugs
+/// the parent edge it was authored against, otherwise it stays centred.
+fn relative_uniform(a: Rect, min: [i32; 2], old: (i32, i32), new: (i32, i32)) -> Rect {
+    let sx = new.0 as f32 / old.0 as f32;
+    let sy = new.1 as f32 / old.1 as f32;
+    let k = sx.min(sy);
+    let w = ((a.w as f32 * k).round() as i32).max(min[0]);
+    let h = ((a.h as f32 * k).round() as i32).max(min[1]);
+    let place = |pos: i32, len: i32, parent: i32, s: f32, fit: i32| {
+        let (start, cell) = (pos as f32 * s, len as f32 * s);
+        let slack = cell - fit as f32;
+        (if pos <= 0 {
+            start
+        } else if pos + len >= parent {
+            start + slack
+        } else {
+            start + slack / 2.0
+        })
+        .round() as i32
+    };
+    Rect::new(
+        place(a.x, a.w, old.0, sx, w),
+        place(a.y, a.h, old.1, sy, h),
+        w,
+        h,
+    )
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn relative_controls_scale_uniformly_on_widescreen() {
+        // v20's main menu Join button, left edge, on a 16:9 canvas.
+        let join = Rect::new(0, 200, 224, 40);
+        let r = resize(
+            join,
+            HSizing::Relative,
+            VSizing::Relative,
+            [8, 2],
+            (640, 480),
+            (960, 540),
+        );
+        assert_eq!(r, Rect::new(0, 225, 252, 45));
+        // The About button, authored past the right edge, hugs it.
+        let about = Rect::new(520, 390, 160, 30);
+        let r = resize(
+            about,
+            HSizing::Relative,
+            VSizing::Relative,
+            [8, 2],
+            (640, 480),
+            (960, 540),
+        );
+        assert_eq!((r.w, r.h), (180, 34));
+        assert_eq!(r.x + r.w, 1020);
+        // 4:3 matches Torque exactly.
+        let r = resize(
+            about,
+            HSizing::Relative,
+            VSizing::Relative,
+            [8, 2],
+            (640, 480),
+            (1280, 960),
+        );
+        assert_eq!(r, Rect::new(1040, 780, 320, 60));
+    }
+
+    #[test]
+    fn backgrounds_crop_to_cover() {
+        assert_eq!(
+            cover_src((640.0, 480.0), (960.0, 540.0)),
+            [0.0, 60.0, 640.0, 360.0]
+        );
+        assert_eq!(
+            cover_src((640.0, 480.0), (640.0, 480.0)),
+            [0.0, 0.0, 640.0, 480.0]
+        );
+    }
 }

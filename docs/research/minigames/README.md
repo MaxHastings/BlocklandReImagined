@@ -114,6 +114,5 @@ and a validated save/restore. Initial measured rules loop33.8352 ms on AMD Ryzen
 network work and is not the full eight-client acceptance benchmark.
 
 Reproduction commands are in the crate README. Logs, CPU/toolchain metadata and
-smoke results are under ignored `artifacts/native-minigames`. Root owns shared
-integration and the append to `docs/progress.md`; `progress-entry.md` is the handoff
-text for that record. The source installation was only read.
+smoke results are under ignored `artifacts/native-minigames`. The source
+installation was only read.

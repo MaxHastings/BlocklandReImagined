@@ -86,12 +86,17 @@ pub struct Presentation {
 pub struct ItemAssets {
     pub presentation: Presentation,
     pub item_physics: ItemPhysicsCatalog,
+    /// Add-On presentation replaced by a stand-in while loading
+    /// (`crate::cosmetic::add_on_fault`).
+    pub faults: Vec<String>,
     shapes: BTreeMap<String, Shape>,
     textures: BTreeMap<String, SceneImage>,
 }
 /// Resource bindings persist while the host updates only posed geometry.
 pub struct ItemMesh {
     pub data: SceneData,
+    /// Draws the first-person `detail9999` mesh; see `visible_detail`.
+    pub first_person: bool,
     model: String,
     tint: [f32; 4],
 }
@@ -114,7 +119,7 @@ impl ItemMesh {
             ..Default::default()
         };
         let bindings: Vec<_> = (0..shape.materials.len()).collect();
-        if let Some(detail) = visible_detail(shape) {
+        if let Some(detail) = visible_detail(shape, self.first_person) {
             scratch.append_shape(
                 ShapeInstance {
                     shape,
@@ -142,14 +147,30 @@ impl ItemMesh {
         Ok(changed)
     }
 }
-fn visible_detail(shape: &Shape) -> Option<usize> {
-    shape
-        .details
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| !d.collision)
-        .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
-        .map(|(i, _)| i)
+/// Blockland's tools and weapons carry a `detail9999` mesh that only the
+/// holder's first-person view reaches, and their `fire` sequences animate
+/// only that mesh. Everyone else sees the held image at its ordinary detail,
+/// which the swing leaves still (the arm's thread does the swinging).
+const FIRST_PERSON_DETAIL: f32 = 9999.0;
+
+fn visible_detail(shape: &Shape, first_person: bool) -> Option<usize> {
+    let visible = || {
+        shape
+            .details
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.collision)
+    };
+    let largest = |details: &mut dyn Iterator<Item = (usize, &bri_content::shape::Detail)>| {
+        details
+            .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
+            .map(|(i, _)| i)
+    };
+    if first_person {
+        return largest(&mut visible());
+    }
+    largest(&mut visible().filter(|(_, d)| d.pixel_threshold < FIRST_PERSON_DETAIL))
+        .or_else(|| largest(&mut visible()))
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -171,11 +192,18 @@ fn valid_tint(tint: [f32; 4]) -> bool {
 }
 /// One native DTS-derived shape as a posed scene. Opaque materials act as
 /// paint overlays (texture alpha over the tint), matching colorShift models.
+///
+/// `node_color` marks the tint as a v20 node colour (item/image colour shift).
+/// Translucent materials then show the colour under the texture at the
+/// colour's alpha, and opaque materials stay solid: `transspraycan.dts` flags
+/// only its `blank` body translucent, so a clear colour gives a clear body
+/// behind a solid label, rim and cap ridge.
 pub fn native_shape_scene(
     model: &str,
     shape: &Shape,
     textures: &[&SceneImage],
     tint: [f32; 4],
+    node_color: bool,
     transform: Mat4,
     pose: &Pose,
 ) -> Result<SceneData> {
@@ -202,7 +230,7 @@ pub fn native_shape_scene(
         let mut bindings = Vec::new();
         let mut image_bindings = BTreeMap::new();
         for (source, texture) in shape.materials.iter().zip(textures) {
-            let overlay = source.blend == "opaque";
+            let overlay = source.blend == "opaque" || (node_color && source.blend == "alpha");
             let key = (texture.label.clone(), overlay);
             let image = *image_bindings.entry(key).or_insert_with(|| {
                 let mut image = (*texture).clone();
@@ -224,7 +252,7 @@ pub fn native_shape_scene(
                 };
             }
             material.alpha = match source.blend.as_str() {
-                "opaque" if tint[3] >= 1. => AlphaMode::Opaque,
+                "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
                 "opaque" | "alpha" => AlphaMode::Blend,
                 "additive" => AlphaMode::Additive,
                 other => anyhow::bail!("Unsupported item blend {other}"),
@@ -293,12 +321,26 @@ impl ItemAssets {
     pub fn mesh(&self, model: &str, tint: [f32; 4]) -> Result<ItemMesh> {
         Ok(ItemMesh {
             data: self.model_scene(model, tint, Mat4::IDENTITY, None, 0.)?,
+            first_person: false,
             model: model.into(),
             tint,
         })
     }
     /// Both directories are native generated content. No source field is interpreted.
     pub fn load(root: &Path, weapons_root: &Path) -> Result<Self> {
+        Self::load_with(root, weapons_root, &[])
+    }
+    /// [`Self::load`] plus the presentation other weapon packages provide in
+    /// `assets/presentation.json` (see `content_identity::kind_providers`).
+    /// Their models and textures are read from their own directories; a
+    /// model key another package already provides is shared. Every item,
+    /// image and projectile of their weapons packs is presented: a gap or a
+    /// broken file becomes a stand-in listed in `faults`, never an error.
+    pub fn load_with(
+        root: &Path,
+        weapons_root: &Path,
+        extras: &[(String, std::path::PathBuf)],
+    ) -> Result<Self> {
         let root = root.canonicalize()?;
         let weapons_root = weapons_root.canonicalize()?;
         let bytes = crate::materials::read_resource(&root, "presentation.json", 8 * 1024 * 1024)?;
@@ -383,11 +425,13 @@ impl ItemAssets {
             &manifest.item_physics_sha256,
             1024 * 1024,
         )?;
-        let item_physics: ItemPhysicsCatalog = serde_json::from_slice(&physics_bytes)?;
+        let mut item_physics: ItemPhysicsCatalog = serde_json::from_slice(&physics_bytes)?;
         ensure!(
             item_physics.schema_version == 1,
             "Unknown item physics schema"
         );
+        let mut manifest = manifest;
+        euler_to_matrix_images(&mut manifest.images, &pack);
         ensure!(
             item_physics.items.len() == manifest.items.len()
                 && item_physics.items.keys().eq(manifest.items.keys()),
@@ -405,74 +449,206 @@ impl ItemAssets {
                 "Item physics bounds disagree with authored model: {id}"
             );
         }
-        let pixels = manifest.textures.values().try_fold(0u64, |total, t| {
-            ensure!(
-                t.width > 0 && t.height > 0 && t.width <= 4096 && t.height <= 4096,
-                "Invalid item image dimensions"
+        // Add-Ons merge after the base game. Their presentation never stops
+        // the load (`crate::cosmetic`): what is missing or broken falls back
+        // to the stock art it names, then to no model and a letter icon.
+        let mut added = Added::default();
+        let mut faults = Vec::new();
+        for (dir, abs) in extras {
+            // Faults name the Add-On as players do, not its folder.
+            let label = bri_package::library::add_on_label(abs, dir);
+            let dir = &label;
+            let abs = abs
+                .canonicalize()
+                .with_context(|| format!("Add-On {dir}: missing folder"))?;
+            let weapons = crate::materials::read_resource(&abs, "weapons.json", 32 * 1024 * 1024)
+                .with_context(|| format!("Add-On {dir}: weapons.json"))?;
+            let part_pack = bri_weapons::Pack::from_json(&weapons)
+                .with_context(|| format!("Add-On {dir}: weapons.json"))?;
+            if abs.join("presentation.json").is_file() {
+                match read_part(&abs, &weapons, &part_pack) {
+                    Ok((part, physics)) => merge_part(
+                        dir,
+                        &abs,
+                        part,
+                        physics,
+                        &mut manifest,
+                        &mut item_physics,
+                        &mut added,
+                        &mut faults,
+                    ),
+                    Err(error) => faults.push(crate::cosmetic::add_on_fault(
+                        dir,
+                        "presentation.json",
+                        format!("{error:#}"),
+                    )),
+                }
+            }
+            present_gaps(
+                dir,
+                &weapons,
+                &part_pack,
+                &mut manifest,
+                &mut item_physics,
+                &mut added,
+                &mut faults,
             );
-            let total = total + u64::from(t.width) * u64::from(t.height) * 4;
-            ensure!(
-                total <= 256 * 1024 * 1024,
-                "Item aggregate image budget exceeded"
-            );
-            Ok(total)
-        })?;
-        let _ = pixels;
+        }
+        let file_root = |kind: &str, id: &str| added.origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
         let mut textures = BTreeMap::new();
+        // Add-On textures replaced by a blank: models keep drawing, icons
+        // fall back to the item's letter.
+        let mut blanks = std::collections::BTreeSet::new();
+        let mut pixels = 0u64;
         let mut input_bytes = 0usize;
         for (id, t) in &manifest.textures {
-            let bytes = checked_read(&root, &t.file, &t.sha256, 16 * 1024 * 1024)?;
-            input_bytes += bytes.len();
-            ensure!(
-                input_bytes <= 256 * 1024 * 1024,
-                "Item aggregate input budget exceeded"
-            );
-            let reader =
-                image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
-            ensure!(
-                reader.into_dimensions()? == (t.width, t.height),
-                "Item image dimensions changed: {id}"
-            );
-            let rgba = image::load_from_memory(&bytes)?.to_rgba8().into_raw();
-            textures.insert(
-                id.clone(),
-                SceneImage {
+            let mut load = || -> Result<SceneImage> {
+                ensure!(
+                    t.width > 0 && t.height > 0 && t.width <= 4096 && t.height <= 4096,
+                    "Invalid item image dimensions"
+                );
+                ensure!(
+                    pixels + u64::from(t.width) * u64::from(t.height) * 4 <= 256 * 1024 * 1024,
+                    "Item aggregate image budget exceeded"
+                );
+                let bytes = checked_read(&file_root("texture", id), &t.file, &t.sha256, 16 * 1024 * 1024)?;
+                ensure!(
+                    input_bytes + bytes.len() <= 256 * 1024 * 1024,
+                    "Item aggregate input budget exceeded"
+                );
+                let reader =
+                    image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
+                ensure!(
+                    reader.into_dimensions()? == (t.width, t.height),
+                    "Item image dimensions changed: {id}"
+                );
+                let rgba = image::load_from_memory(&bytes)?.to_rgba8().into_raw();
+                pixels += u64::from(t.width) * u64::from(t.height) * 4;
+                input_bytes += bytes.len();
+                Ok(SceneImage {
                     label: id.clone(),
                     width: t.width,
                     height: t.height,
                     rgba,
                     srgb: false,
-                },
-            );
+                })
+            };
+            let image = match load() {
+                Ok(image) => image,
+                Err(error) if added.textures.contains(id) => {
+                    faults.push(crate::cosmetic::add_on_fault(
+                        &added.owner(&format!("texture:{id}")),
+                        &t.file,
+                        format!("{error:#}"),
+                    ));
+                    blanks.insert(id.clone());
+                    blank_texture(id)
+                }
+                Err(error) => return Err(error),
+            };
+            textures.insert(id.clone(), image);
         }
         let mut shapes = BTreeMap::new();
         let mut vertex_budget = 0usize;
         for (id, m) in &manifest.models {
-            let bytes = checked_read(&root, &m.file, &m.sha256, 32 * 1024 * 1024)?;
-            input_bytes += bytes.len();
-            ensure!(
-                input_bytes <= 256 * 1024 * 1024,
-                "Item aggregate input budget exceeded"
-            );
-            let shape: Shape = serde_json::from_slice(&bytes)?;
-            shape.validate()?;
-            vertex_budget += shape
-                .meshes
-                .iter()
-                .flatten()
-                .map(|m| m.positions.len())
-                .sum::<usize>();
-            ensure!(vertex_budget <= 2_000_000, "Item geometry budget exceeded");
-            ensure!(
-                m.textures.len() == shape.materials.len()
-                    && m.textures.iter().all(|id| textures.contains_key(id)),
-                "Unbound item material: {id}"
-            );
-            shapes.insert(id.clone(), shape);
+            let mut load = || -> Result<Shape> {
+                let bytes = checked_read(&file_root("model", id), &m.file, &m.sha256, 32 * 1024 * 1024)?;
+                ensure!(
+                    input_bytes + bytes.len() <= 256 * 1024 * 1024,
+                    "Item aggregate input budget exceeded"
+                );
+                let shape: Shape = serde_json::from_slice(&bytes)?;
+                shape.validate()?;
+                let vertices = shape
+                    .meshes
+                    .iter()
+                    .flatten()
+                    .map(|m| m.positions.len())
+                    .sum::<usize>();
+                ensure!(vertex_budget + vertices <= 2_000_000, "Item geometry budget exceeded");
+                ensure!(
+                    m.textures.len() == shape.materials.len()
+                        && m.textures.iter().all(|id| textures.contains_key(id)),
+                    "Unbound item material: {id}"
+                );
+                input_bytes += bytes.len();
+                vertex_budget += vertices;
+                Ok(shape)
+            };
+            match load() {
+                Ok(shape) => {
+                    shapes.insert(id.clone(), shape);
+                }
+                Err(error) if added.models.contains(id) => faults.push(crate::cosmetic::add_on_fault(
+                    &added.owner(&format!("model:{id}")),
+                    &m.file,
+                    format!("{error:#}"),
+                )),
+                Err(error) => return Err(error),
+            }
+        }
+        manifest.models.retain(|id, _| shapes.contains_key(id));
+        // What Add-Ons present is repaired rather than refused: an unknown
+        // model draws nothing, an invalid colour draws white, a missing icon
+        // shows the item's letter (`crate::item_ui`).
+        for (id, item) in manifest.items.iter_mut().filter(|(id, _)| added.items.contains(*id)) {
+            let owner = added.owner(&format!("item:{id}"));
+            if !item.model.is_empty() && !shapes.contains_key(&item.model) {
+                if !added.models.contains(&item.model) {
+                    faults.push(crate::cosmetic::add_on_fault(
+                        &owner,
+                        "presentation.json",
+                        format!("item {id} names model {}, which it does not list", item.model),
+                    ));
+                }
+                item.model.clear();
+                item_physics.items.remove(id);
+            }
+            if !valid_tint(item.tint) {
+                item.tint = [1.; 4];
+            }
+            if let Some(icon) = item.icon.clone().filter(|i| !textures.contains_key(i) || blanks.contains(i)) {
+                if !blanks.contains(&icon) {
+                    faults.push(crate::cosmetic::add_on_fault(
+                        &owner,
+                        "presentation.json",
+                        format!("item {id} names icon {icon}, which it does not list"),
+                    ));
+                }
+                item.icon = None;
+            }
+        }
+        for (_, image) in manifest.images.iter_mut().filter(|(id, _)| added.images.contains(*id)) {
+            if !shapes.contains_key(&image.model) {
+                image.model.clear();
+            }
+            if !valid_tint(image.tint) {
+                image.tint = [1.; 4];
+            }
+            image.mount_point = image.mount_point.min(31);
+            for v in image
+                .offset
+                .iter_mut()
+                .chain(&mut image.eye_offset)
+                .chain(&mut image.source_rotation_degrees)
+                .chain(&mut image.eye_rotation_degrees)
+            {
+                if !v.is_finite() || v.abs() > 10000. {
+                    *v = 0.;
+                }
+            }
+        }
+        for (_, p) in manifest.projectiles.iter_mut().filter(|(id, _)| added.projectiles.contains(*id)) {
+            if p.model.as_ref().is_some_and(|m| !shapes.contains_key(m)) {
+                p.model = None;
+            }
+            if !valid_tint(p.tint) {
+                p.tint = [1.; 4];
+            }
         }
         for (id, item) in &manifest.items {
             ensure!(
-                shapes.contains_key(&item.model)
+                (item.model.is_empty() || shapes.contains_key(&item.model))
                     && manifest.images.contains_key(&item.image)
                     && valid_tint(item.tint)
                     && item.icon.as_ref().is_none_or(|i| textures.contains_key(i)),
@@ -503,6 +679,7 @@ impl ItemAssets {
         Ok(Self {
             presentation: manifest,
             item_physics,
+            faults,
             shapes,
             textures,
         })
@@ -513,7 +690,7 @@ impl ItemAssets {
             .items
             .get(item)
             .context("Unknown item icon identity")?;
-        Ok(item.icon.as_ref().map(|id| &self.textures[id]))
+        Ok(item.icon.as_ref().and_then(|id| self.textures.get(id)))
     }
     pub fn shape(&self, model: &str) -> Result<&Shape> {
         self.shapes.get(model).context("Unknown native item model")
@@ -549,7 +726,7 @@ impl ItemAssets {
             .iter()
             .map(|id| &self.textures[id])
             .collect();
-        native_shape_scene(model, shape, &textures, tint, transform, &pose)
+        native_shape_scene(model, shape, &textures, tint, true, transform, &pose)
     }
     pub fn item_scene(&self, id: &str, transform: Mat4) -> Result<SceneData> {
         let item = self
@@ -557,6 +734,14 @@ impl ItemAssets {
             .items
             .get(id)
             .context("Unknown dropped item")?;
+        if item.model.is_empty() {
+            validate_transform(transform)?;
+            return Ok(SceneData {
+                id: id.into(),
+                name: "Add-On item without a model".into(),
+                ..Default::default()
+            });
+        }
         self.model_scene(&item.model, item.tint, transform, None, 0.)
     }
     pub fn image_scene(
@@ -667,10 +852,241 @@ impl ItemAssets {
         Ok(result)
     }
 }
+/// What Add-Ons contributed to the merged presentation, so their faults are
+/// repaired while the base game's stay errors, and where their files live.
+#[derive(Default)]
+struct Added {
+    items: std::collections::BTreeSet<String>,
+    images: std::collections::BTreeSet<String>,
+    projectiles: std::collections::BTreeSet<String>,
+    models: std::collections::BTreeSet<String>,
+    textures: std::collections::BTreeSet<String>,
+    /// `model:<id>` / `texture:<id>` to the Add-On folder holding the file.
+    origin: BTreeMap<String, std::path::PathBuf>,
+    /// The same keys to the Add-On's content directory, for fault lines.
+    owners: BTreeMap<String, String>,
+}
+impl Added {
+    fn owner(&self, key: &str) -> String {
+        self.owners.get(key).cloned().unwrap_or_default()
+    }
+}
+/// A 1x1 white stand-in for an Add-On texture that does not load.
+fn blank_texture(id: &str) -> SceneImage {
+    SceneImage {
+        label: id.into(),
+        width: 1,
+        height: 1,
+        rgba: vec![255; 4],
+        srgb: false,
+    }
+}
+/// An Add-On's own `presentation.json` and `item-physics.json`, bound to
+/// the `weapons.json` beside them.
+fn read_part(
+    abs: &Path,
+    weapons: &[u8],
+    pack: &bri_weapons::Pack,
+) -> Result<(Presentation, ItemPhysicsCatalog)> {
+    let bytes = crate::materials::read_resource(abs, "presentation.json", 8 * 1024 * 1024)?;
+    let mut part: Presentation = serde_json::from_slice(&bytes)?;
+    ensure!(part.schema_version == 2, "unknown item presentation schema");
+    ensure!(
+        part.weapons_sha256 == hash(weapons),
+        "presentation.json does not match weapons.json; rerun the importer"
+    );
+    euler_to_matrix_images(&mut part.images, pack);
+    let physics = checked_read(abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
+    let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
+    ensure!(physics.schema_version == 1, "unknown item physics schema");
+    Ok((part, physics))
+}
+/// Add one Add-On's presentation to the merged one. A model or texture key
+/// already provided is shared; an item, image or projectile already
+/// presented keeps its first presentation, as the weapons merge keeps the
+/// first definition.
+#[allow(clippy::too_many_arguments)]
+fn merge_part(
+    dir: &str,
+    abs: &Path,
+    part: Presentation,
+    physics: ItemPhysicsCatalog,
+    manifest: &mut Presentation,
+    item_physics: &mut ItemPhysicsCatalog,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) {
+    for (key, model) in part.models {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.models.entry(key) {
+            added.origin.insert(format!("model:{}", e.key()), abs.to_path_buf());
+            added.owners.insert(format!("model:{}", e.key()), dir.to_string());
+            added.models.insert(e.key().clone());
+            e.insert(model);
+        }
+    }
+    for (key, texture) in part.textures {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.textures.entry(key) {
+            added.origin.insert(format!("texture:{}", e.key()), abs.to_path_buf());
+            added.owners.insert(format!("texture:{}", e.key()), dir.to_string());
+            added.textures.insert(e.key().clone());
+            e.insert(texture);
+        }
+    }
+    for (id, item) in part.items {
+        if manifest.items.contains_key(&id) {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "presentation.json",
+                format!("item {id} is already presented by another Add-On"),
+            ));
+            continue;
+        }
+        match physics.items.get(&id) {
+            Some(bounds) if bounds.validate().is_ok() => {
+                item_physics.items.insert(id.clone(), *bounds);
+            }
+            _ => {}
+        }
+        added.items.insert(id.clone());
+        added.owners.insert(format!("item:{id}"), dir.to_string());
+        manifest.items.insert(id, item);
+    }
+    for (id, image) in part.images {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.images.entry(id) {
+            added.images.insert(e.key().clone());
+            e.insert(image);
+        }
+    }
+    for (id, projectile) in part.projectiles {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.projectiles.entry(id) {
+            added.projectiles.insert(e.key().clone());
+            e.insert(projectile);
+        }
+    }
+}
+/// Present whatever an Add-On's weapons pack defines and its own
+/// presentation does not (all of it when it has none, as the Duplicator's
+/// wand): from the stock models and icons it names, else with no model.
+/// Only a model or icon nothing provides is logged; borrowing stock art is
+/// how an Add-On reuses it.
+fn present_gaps(
+    dir: &str,
+    weapons: &[u8],
+    pack: &bri_weapons::Pack,
+    manifest: &mut Presentation,
+    item_physics: &mut ItemPhysicsCatalog,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) {
+    let sha256 = hash(weapons);
+    let evidence = || bri_weapons::Evidence {
+        path: format!("{dir}/weapons.json"),
+        sha256: sha256.clone(),
+        line: 0,
+    };
+    // The model key `name` presents, or none (logged once per model).
+    let mut missing = std::collections::BTreeSet::new();
+    let mut model = |manifest: &Presentation, faults: &mut Vec<String>, name: &str| -> String {
+        let model = name.replace('\\', "/").to_ascii_lowercase();
+        if model.is_empty() || manifest.models.contains_key(&model) {
+            return model;
+        }
+        if missing.insert(model.clone()) {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "weapons.json",
+                format!("model {name} is in neither this Add-On's presentation nor the base game"),
+            ));
+        }
+        String::new()
+    };
+    let mut images = BTreeMap::new();
+    for (id, image) in pack.images.iter().filter(|(id, _)| !manifest.images.contains_key(*id)) {
+        images.insert(
+            id.clone(),
+            ImagePresentation {
+                model: model(manifest, faults, &image.model),
+                mount_point: image.mount_point,
+                offset: image.offset,
+                eye_offset: image.eye_offset,
+                source_rotation_degrees: image.source_rotation_degrees,
+                eye_rotation_degrees: [0.0; 3],
+                tint: image.color,
+                evidence: evidence(),
+            },
+        );
+    }
+    euler_to_matrix_images(&mut images, pack);
+    added.images.extend(images.keys().cloned());
+    manifest.images.extend(images);
+    for (id, projectile) in &pack.projectiles {
+        if manifest.projectiles.contains_key(id) {
+            continue;
+        }
+        let model = model(manifest, faults, &projectile.model);
+        added.projectiles.insert(id.clone());
+        manifest.projectiles.insert(
+            id.clone(),
+            ProjectilePresentation {
+                model: (!model.is_empty()).then_some(model),
+                tint: [1.0; 4],
+            },
+        );
+    }
+    for (id, item) in &pack.items {
+        if manifest.items.contains_key(id) {
+            continue;
+        }
+        let model = model(manifest, faults, &item.model);
+        if let Some(stock) = manifest.models.get(&model) {
+            item_physics.items.insert(id.clone(), stock.bounds());
+        }
+        let icon = format!("{}.png", item.icon.replace('\\', "/").to_ascii_lowercase());
+        let icon = manifest.textures.contains_key(&icon).then_some(icon);
+        if icon.is_none() && !item.icon.is_empty() {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "weapons.json",
+                format!("icon {} of {} is not provided, so it shows its first letter", item.icon, item.ui_name.trim()),
+            ));
+        }
+        added.items.insert(id.clone());
+        manifest.items.insert(
+            id.clone(),
+            ItemPresentation {
+                model,
+                image: item.image.clone(),
+                tint: [1.0; 4],
+                icon,
+                evidence: evidence(),
+            },
+        );
+    }
+}
+/// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
+/// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
+fn euler_to_matrix_images(
+    images: &mut BTreeMap<String, ImagePresentation>,
+    pack: &bri_weapons::Pack,
+) {
+    for (id, image) in images.iter_mut() {
+        let Some(name) = pack.images.get(id).map(|i| i.name.as_str()) else {
+            continue;
+        };
+        for (field, degrees) in [
+            ("rotation", &mut image.source_rotation_degrees),
+            ("eyeRotation", &mut image.eye_rotation_degrees),
+        ] {
+            if bri_weapons::rotation::is_euler_to_matrix(pack, name, field) {
+                *degrees = bri_weapons::rotation::euler_to_matrix(*degrees);
+            }
+        }
+    }
+}
 /// Engine-family Euler composition Ry(-y)*Rx(-x)*Rz(-z), then native basis.
 /// Recovered v20 eulerToMatrix calls MatrixCreateFromEuler. The matrix convention
 /// is corroborated by pinned OpenMBG m_matF_set_euler_C, not a v20 engine build.
-fn source_euler(degrees: [f32; 3]) -> Quat {
+pub(crate) fn source_euler(degrees: [f32; 3]) -> Quat {
     let source = Quat::from_rotation_y(-degrees[1].to_radians())
         * Quat::from_rotation_x(-degrees[0].to_radians())
         * Quat::from_rotation_z(-degrees[2].to_radians());
@@ -685,11 +1101,43 @@ mod bounds_tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
     #[test]
+    #[ignore = "requires generated native item content; CPU only"]
+    fn others_see_held_tools_at_their_third_person_detail() -> Result<()> {
+        // The `fire` sequences swing only the first-person detail9999 mesh;
+        // drawing that for other players doubled the arm's swing.
+        let root = root();
+        let assets = ItemAssets::load(
+            &root.join("content/item-presentation-pack-010"),
+            &root.join("content/weapons-pack-009"),
+        )?;
+        for image in ["v20.image.wrenchimage", "v20.image.hammerimage"] {
+            let model = assets.presentation.images[image].model.clone();
+            let shape = assets.shape(&model)?;
+            let name = |detail: Option<usize>| detail.map(|d| shape.details[d].name.clone());
+            assert_eq!(name(visible_detail(shape, true)).as_deref(), Some("detail9999"));
+            assert_eq!(name(visible_detail(shape, false)).as_deref(), Some("detail32"));
+            let posed = |first_person: bool, seconds: f32| -> Result<Vec<Vec3>> {
+                let mut mesh = assets.mesh(&model, [1.; 4])?;
+                mesh.first_person = first_person;
+                mesh.pose(&assets, Mat4::IDENTITY, Some("fire"), seconds)?;
+                Ok(mesh.data.vertices.iter().map(|v| Vec3::from(v.position)).collect())
+            };
+            let moved = |first_person| -> Result<f32> {
+                let (rest, swung) = (posed(first_person, 0.)?, posed(first_person, 0.15)?);
+                Ok(rest.iter().zip(&swung).map(|(a, b)| a.distance(*b)).fold(0., f32::max))
+            };
+            assert!(moved(true)? > 0.05, "{image}: first-person swing");
+            assert!(moved(false)? < 1e-5, "{image}: others see the arm swing it");
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires generated native item content; CPU only"]
     fn original_dts_header_bounds_survive_native_float_roundtrip() -> Result<()> {
         let root = root();
         let assets = ItemAssets::load(
-            &root.join("content/item-presentation-pack-008"),
-            &root.join("content/weapons-pack-007"),
+            &root.join("content/item-presentation-pack-010"),
+            &root.join("content/weapons-pack-009"),
         )?;
         assert_eq!(assets.item_physics.items.len(), 21);
         // Independently inspected source pistol.dts bytes116..139, SHA
@@ -759,9 +1207,37 @@ mod bounds_tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires generated native item content; CPU only"]
+    fn translucent_spray_can_keeps_a_clear_colored_body_and_solid_trim() -> Result<()> {
+        let root = root();
+        let assets = ItemAssets::load(
+            &root.join("content/item-presentation-pack-009"),
+            &root.join("content/weapons-pack-008"),
+        )?;
+        let model = "base/data/shapes/transspraycan.dts";
+        let scene = assets.model_scene(model, [0.2, 0.4, 1., 0.5], Mat4::IDENTITY, None, 0.)?;
+        let material = |name: &str| {
+            scene
+                .materials
+                .iter()
+                .find(|m| m.name == format!("item/{model}/{name}"))
+                .unwrap()
+        };
+        // Only `blank` is authored translucent: the colour shows under its
+        // clear texture at the colour's alpha, and the trim stays solid.
+        let body = material("blank");
+        assert_eq!(body.kind, MaterialKind::BrickOverlay);
+        assert_eq!(body.alpha, AlphaMode::Blend);
+        for trim in ["spraycanLabel", "whiteCheck", "megaPhoneRidge"] {
+            assert_eq!(material(trim).alpha, AlphaMode::Opaque, "{trim}");
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires generated native item content; CPU only"]
     fn native_bounds_corruption_rejects_before_geometry_loading() -> Result<()> {
         let root = root();
-        let source = root.join("content/item-presentation-pack-008");
+        let source = root.join("content/item-presentation-pack-010");
         let base = root.join("artifacts/native-items");
         std::fs::create_dir_all(&base)?;
         let fixture = base.join(format!(
@@ -776,7 +1252,7 @@ mod bounds_tests {
             serde_json::from_slice(&std::fs::read(source.join("presentation.json"))?)?;
         let physics: serde_json::Value =
             serde_json::from_slice(&std::fs::read(source.join("item-physics.json"))?)?;
-        let weapons = root.join("content/weapons-pack-007");
+        let weapons = root.join("content/weapons-pack-009");
         for (mode, expected) in [
             (0, "Invalid authored model bounds"),
             (1, "missing field"),

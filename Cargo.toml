@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/render", "crates/physics", "crates/content", "crates/convert", "crates/world", "crates/admin", "crates/identity", "crates/sim", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import"]
+members = ["crates/files", "crates/chaos", "crates/crash", "crates/render", "crates/physics", "crates/content", "crates/convert", "crates/bls", "crates/world", "crates/progress", "crates/admin", "crates/identity", "crates/sim", "crates/motor", "crates/net", "crates/ui", "crates/ui-import", "crates/client", "crates/weapons", "crates/minigames", "crates/events", "crates/weapons-import", "crates/fx-runtime", "crates/fx-import", "crates/vehicles", "crates/vehicles-import", "crates/audio", "crates/audio-import", "crates/weather", "crates/weather-import", "crates/foliage", "crates/foliage-import", "crates/console", "crates/package", "crates/package-runtime", "crates/addon-import", "crates/stresslab", "crates/client-sandbox", "crates/launcher"]
 resolver = "2"
 
 [workspace.package]
@@ -13,6 +13,19 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bri-admin = { path = "crates/admin" }
+bri-files = { path = "crates/files" }
+
+# Full debug info tripled every build's output (42 GB for a cold
+# `cargo build --workspace --all-targets`, 13.5 GB with these settings on
+# 2026-09-28). Line tables keep file:line in panics and backtraces.
+[profile.dev]
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
+
+# Line tables make panic backtraces and native crash dumps name files and
+# lines in release builds, at no runtime cost.
+[profile.release]
+debug = "line-tables-only"

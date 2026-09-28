@@ -50,6 +50,9 @@ pub struct SourceOptions {
     /// Runtime emitter override keys, used only by authored useEmitterColors/Sizes.
     pub colors: Option<[[f32; 4]; 4]>,
     pub sizes: Option<[f32; 4]>,
+    /// Script-derived datablock copy (`color<N>Paint*Particle`): replaces the
+    /// authored RGB on every key, keeping the authored alpha keys.
+    pub recolor: Option<Recolor>,
     /// False pauses new emission; existing particles drain normally.
     pub emitting: bool,
     pub visible: bool,
@@ -66,6 +69,7 @@ impl Default for SourceOptions {
             wind: Vec3::ZERO,
             colors: None,
             sizes: None,
+            recolor: None,
             emitting: true,
             visible: true,
             first_person_owner: false,
@@ -91,11 +95,20 @@ impl SourceOptions {
                 .is_none_or(|c| c.iter().flatten().all(|v| v.is_finite() && *v >= 0.))
                 && self
                     .sizes
-                    .is_none_or(|s| s.iter().all(|v| v.is_finite() && *v >= 0.)),
+                    .is_none_or(|s| s.iter().all(|v| v.is_finite() && *v >= 0.))
+                && self
+                    .recolor
+                    .is_none_or(|r| r.rgb.iter().all(|v| v.is_finite() && *v >= 0.)),
             "Invalid source override keys"
         );
         Ok(())
     }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Recolor {
+    pub rgb: [f32; 3],
+    /// Overrides the particle's authored `useInvAlpha` when set.
+    pub blend: Option<BlendMode>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct EffectsLimits {
@@ -160,6 +173,9 @@ pub struct LightSnapshot {
     pub color: Vec3,
     pub radius: f32,
 }
+/// Distance at which v20 stops drawing fxLight flares.
+pub const FLARE_MAX_DISTANCE: f32 = 75.;
+
 /// Storage-buffer layout: 32 bytes, aligned vec4 fields. color is brightness-scaled.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -226,6 +242,7 @@ struct Particle {
     blend: BlendMode,
     colors: Option<[[f32; 4]; 4]>,
     sizes: Option<[f32; 4]>,
+    rgb: Option<[f32; 3]>,
     visible: bool,
 }
 pub struct EffectsWorld {
@@ -599,7 +616,9 @@ impl EffectsWorld {
             wind: s.options.wind,
             orient: e.orient,
             orient_velocity: e.orient_on_velocity,
-            blend: if self
+            blend: if let Some(blend) = s.options.recolor.and_then(|r| r.blend) {
+                blend
+            } else if self
                 .pack
                 .manifest
                 .emitter_alpha
@@ -621,6 +640,7 @@ impl EffectsWorld {
             } else {
                 None
             },
+            rgb: s.options.recolor.map(|r| r.rgb),
             visible: s.options.visible,
         };
         Self::integrate(&self.pack, &mut particle, pre_age, wind);
@@ -683,6 +703,9 @@ impl EffectsWorld {
                     colors[index][c] + (colors[index + 1][c] - colors[index][c]) * weight
                 });
             }
+            if let Some(rgb) = p.rgb {
+                color[..3].copy_from_slice(&rgb);
+            }
             if let Some(sizes) = p.sizes {
                 size = sizes[index] + (sizes[index + 1] - sizes[index]) * weight;
             }
@@ -730,6 +753,10 @@ impl EffectsWorld {
                     continue;
                 }
                 let distance = camera.position.distance(s.transform.position);
+                // v20's `fxLight::renderObject` only shows flares nearer than 75 units.
+                if distance >= FLARE_MAX_DISTANCE {
+                    continue;
+                }
                 let weight = ((distance - f.near_distance) / (f.far_distance - f.near_distance))
                     .clamp(0., 1.);
                 let size = 2.
@@ -744,8 +771,10 @@ impl EffectsWorld {
                 frame.particles.push(ParticleInstance {
                     position: s.transform.position,
                     size,
+                    // v20 divides the linked (brightness-scaled) colour by its
+                    // largest channel: a Brightness 5 white light flares white.
                     color: if f.link_color {
-                        color
+                        color / color.max_element()
                     } else {
                         Vec3::from_array(f.color)
                     }

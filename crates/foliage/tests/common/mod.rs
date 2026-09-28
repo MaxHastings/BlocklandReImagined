@@ -6,7 +6,7 @@ pub fn root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 pub fn pack() -> FoliagePack {
-    FoliagePack::load(root().join("content/foliage-pack-001/foliage.json")).unwrap()
+    FoliagePack::load(root().join("content/foliage-pack-003/foliage.json")).unwrap()
 }
 pub fn floor(ray: PlacementRay) -> Option<SurfaceHit> {
     Some(SurfaceHit {
@@ -37,7 +37,7 @@ pub fn camera(position: Vec3, target: Vec3) -> Camera {
     }
 }
 pub fn original_world() -> PhysicsWorld {
-    let path = root().join("content/map-bundle-015");
+    let path = root().join("content/map-bundle-017");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path.join("bundle.json")).unwrap()).unwrap();
     let scene_path = std::fs::read_dir(&path)

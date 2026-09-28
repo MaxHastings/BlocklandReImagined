@@ -2,9 +2,14 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+pub mod debris;
+mod merge;
+pub mod rotation;
+pub use merge::resource_root;
 pub mod runtime;
 pub use runtime::*;
-pub const SCHEMA: u32 = 2;
+/// 3 adds explosion vertical impulse and per-type vehicle damage scale.
+pub const SCHEMA: u32 = 3;
 pub const TICK_HZ: u32 = 120;
 /// Authored DTS object bounds converted offline to native coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -44,12 +49,58 @@ impl ItemBounds {
             max: max.to_array(),
         }
     }
+    /// Depth of a rotated box's lowest corner below its centre.
+    pub fn lowest(half: glam::Vec3, rotation: glam::Quat) -> f32 {
+        let m = glam::Mat3::from_quat(rotation);
+        (m.row(1).abs() * half).element_sum()
+    }
     pub fn overlaps(&self, other: &Self) -> bool {
         (0..3).all(|a| self.min[a] <= other.max[a] && self.max[a] >= other.min[a])
     }
 }
+/// Arms (right, left) raised by an image's script instead of its `armReady`
+/// field: `onMount`/`onCharge` calls to `playThread(1, armReady*)` in the
+/// Akimbo Guns and Item_Sports scripts. Other images follow `armReady`.
+pub fn scripted_arm_pose(image: &str, state: &str) -> Option<(bool, bool)> {
+    let name = image
+        .rsplit('.')
+        .next()
+        .unwrap_or(image)
+        .to_ascii_lowercase();
+    match name.as_str() {
+        "lefthandedgunimage" | "basketballshootimage" | "dodgeballimage" => Some((true, true)),
+        "basketballimage" => Some((true, false)),
+        "footballimage" if matches!(state, "Charge" | "Armed") => Some((true, false)),
+        _ => None,
+    }
+}
 pub fn native_id(kind: &str, name: &str) -> String {
     format!("v20.{kind}.{}", name.to_ascii_lowercase())
+}
+/// `setSprayCanColor` copies each `bluePaint*` datablock as
+/// `color<N>Paint*` for palette index N. Effects carry that name so the
+/// presentation tints the blue can's particles with the palette colour.
+pub fn paint_effect(definition: &str, paint: Option<u8>) -> String {
+    match (paint, definition.get(..9)) {
+        (Some(paint), Some(prefix)) if prefix.eq_ignore_ascii_case("bluepaint") => {
+            format!("color{paint}Paint{}", &definition[9..])
+        }
+        _ => definition.to_owned(),
+    }
+}
+/// Inverse of [`paint_effect`]: the palette index and the `bluePaint*` base.
+pub fn paint_effect_base(definition: &str) -> Option<(u8, String)> {
+    let rest = definition
+        .get(..5)?
+        .eq_ignore_ascii_case("color")
+        .then(|| &definition[5..])?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let paint = rest[..digits].parse().ok()?;
+    let suffix = rest[digits..]
+        .get(..5)?
+        .eq_ignore_ascii_case("paint")
+        .then(|| &rest[digits + 5..])?;
+    Some((paint, format!("bluePaint{suffix}")))
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
@@ -103,6 +154,74 @@ pub struct Image {
     pub casing: String,
     pub min_shot_ticks: u32,
     pub states: Vec<State>,
+    /// An Add-On tool's image: its `onFire` runs this Add-On command
+    /// (`package:command`) for the holder, aimed where they look, instead
+    /// of firing a projectile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// More of an Add-On tool's moments that run Add-On commands.
+    #[serde(default, skip_serializing_if = "ImageCommands::is_empty")]
+    pub commands: ImageCommands,
+    /// Several projectiles per shot, spread and recoil. None fires one
+    /// projectile straight along the aim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shot: Option<Shot>,
+}
+/// Add-On commands (`package:command`) an image runs for its holder, aimed
+/// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons
+/// scripted these in their image's state callbacks and `onTrigger`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageCommands {
+    /// By state script, lowercase (`oncharge`, `onfire`, `onabortcharge`):
+    /// entering a state with that script runs the command. A charge
+    /// (trigger held) and its release are two states of the image.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub states: BTreeMap<String, String>,
+    /// Pressing jet while the image is in hand (v20 `onTrigger` slot 4, the
+    /// right mouse button). Jetting players still jet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jet: Option<String>,
+}
+impl ImageCommands {
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty() && self.jet.is_none()
+    }
+    /// The command for entering a state with `script`, if any.
+    pub fn for_script(&self, script: &str) -> Option<&String> {
+        if script.is_empty() {
+            return None;
+        }
+        self.states.get(&script.to_ascii_lowercase())
+    }
+}
+/// A well-formed `package:command` an image may name.
+pub fn is_image_command(c: &str) -> bool {
+    c.len() <= 128
+        && c.split_once(':').is_some_and(|(package, command)| {
+            !package.is_empty()
+                && !command.is_empty()
+                && !command.contains(':')
+                && c.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-:".contains(&b))
+        })
+}
+
+/// What v20 Add-Ons scripted in `onFire` with the common spread code
+/// (`%shellcount`, `%spread`, `%obj.setVelocity(... getEyeVector() * -n)`):
+/// the recoil first, then each projectile's velocity turned by its own
+/// random angles.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Shot {
+    /// Projectiles per shot, 1 to 64 (`%shellcount`).
+    pub projectiles: u32,
+    /// v20's `%spread`: each projectile's velocity turns by random Euler
+    /// angles of up to ±5π·spread radians about each axis.
+    #[serde(default)]
+    pub spread: f32,
+    /// Speed the shooter loses along their aim, in units per second.
+    #[serde(default)]
+    pub recoil: f32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
@@ -122,6 +241,8 @@ pub struct Explosion {
     pub radius: f32,
     pub impulse: f32,
     pub impulse_radius: f32,
+    /// `impulseVertical`: a straight-up push alongside the radial one.
+    pub impulse_vertical: f32,
     pub burn_seconds: f32,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -174,6 +295,11 @@ pub struct Resource {
     pub sha256: String,
     pub native_file: Option<String>,
     pub diagnostics: Vec<String>,
+    /// Content-root-relative directory of the package holding `native_file`,
+    /// set when packs from several packages are merged; None is this pack's
+    /// own directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 /// `AddDamageType`: kill-message templates, `%1` the victim and `%2` the
 /// killer, with `<bitmap:...>` death icons kept verbatim.
@@ -182,6 +308,8 @@ pub struct DamageType {
     pub name: String,
     pub suicide_message: String,
     pub murder_message: String,
+    /// `$Damage::VehicleDamageScale`: vehicles take this share of the damage.
+    pub vehicle_scale: f32,
     pub direct: bool,
 }
 impl DamageType {
@@ -315,7 +443,11 @@ impl Pack {
                     && [e.seconds, e.play_speed]
                         .into_iter()
                         .chain(e.scale)
-                        .chain(e.sizes.iter().flat_map(|(s, t)| s.iter().copied().chain([*t])))
+                        .chain(
+                            e.sizes
+                                .iter()
+                                .flat_map(|(s, t)| s.iter().copied().chain([*t]))
+                        )
                         .all(|v| v.is_finite() && (0.0..=1000.0).contains(&v))
                     && e.sizes.len() <= 4
                     && e.shake.is_none_or(|s| {
@@ -352,6 +484,28 @@ impl Pack {
             ensure!(
                 image.min_shot_ticks <= 36000 && image.mount_point < 32,
                 "Invalid image mount/timing"
+            );
+            ensure!(
+                image.command.as_deref().is_none_or(is_image_command)
+                    && image.commands.states.len() <= 16
+                    && image.commands.states.iter().all(|(script, c)| {
+                        !script.is_empty()
+                            && script.len() <= 64
+                            && script
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                            && is_image_command(c)
+                    })
+                    && image.commands.jet.as_deref().is_none_or(is_image_command),
+                "Invalid image command {id}"
+            );
+            ensure!(
+                image.shot.is_none_or(|s| {
+                    (1..=64).contains(&s.projectiles)
+                        && (0.0..=1.0).contains(&s.spread)
+                        && (0.0..=100.0).contains(&s.recoil)
+                }),
+                "Invalid image shot {id}"
             );
             for state in &image.states {
                 ensure!(
@@ -416,7 +570,7 @@ impl Pack {
             );
         }
         for resource in &self.resources {
-            if let Some(path) = &resource.native_file {
+            for path in resource.native_file.iter().chain(&resource.package) {
                 ensure!(
                     !path.starts_with('/')
                         && !path.contains(':')

@@ -178,6 +178,7 @@ fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
     host.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
         mode: ServerMode::Lan,
+        game_mode: None,
         max_players: 4,
         server_name: "Name test".into(),
         password: String::new(),

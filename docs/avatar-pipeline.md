@@ -94,10 +94,12 @@ behavior and all appearance under every lighting condition remain fidelity work.
 The client renders original geometry from authoritative player poses and retains
 GPU resources across animation updates. Initial state selection covers root,
 forward/back/side movement, crouch variants, jump/fall and look; packs add the
-head-up layer. First person hides the local body. Remote poses still need
-interpolation, and movement-rate matching, left-strafe playback direction,
-transitions, footsteps/triggers, equipped tool poses, gestures/emotes, death/spawn
-and alternate vanilla player types remain required. CPU posing is not a claim of
+head-up layer. First person hides the local body. Remote poses are
+interpolated (`crates/client/src/motion.rs`). Strafing right plays the side clip
+backward; held tools raise the arms through the original `armReady` sequences;
+dead bodies hold `death1`; the `sit` emote holds the sit sequence
+(`crates/client/src/avatar.rs`). Movement-rate matching, transitions,
+footsteps/triggers and other gestures remain work. CPU posing is not a claim of
 acceptable eight-player/bot load performance.
 Mid-session LAN-name/clan changes are not yet replicated; this command currently
 changes appearance, while the established connection retains its joined name.

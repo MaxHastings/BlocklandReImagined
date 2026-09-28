@@ -9,11 +9,12 @@
 //!
 //! Remote players are rendered slightly in the past, interpolating between
 //! buffered authoritative poses on the server's tick timeline.
+use crate::crouch::{CROUCH_SECONDS, CrouchThread};
 use crate::network::View;
 use anyhow::Result;
 use bri_net::protocol::{POSE_INTERVAL, PublicWorld};
 use bri_sim::{
-    player::{MoveInput, PlayerState, PlayerTuning},
+    player::{MoveInput, PlayerState},
     prediction::{CollisionMirror, Predictor},
 };
 use bri_world::OwnerId;
@@ -39,27 +40,46 @@ const REMOTE_HISTORY: usize = 32;
 const SNAP_DISTANCE: f32 = 4.0;
 /// Visual correction decay rate per second.
 const CORRECTION_RATE: f32 = 14.0;
-/// Crouch eye-height blend rate per second.
-const EYE_RATE: f32 = 16.0;
+/// The presented server clock follows its estimate by running up to this
+/// much faster or slower, so an early pose never jumps remotes along.
+const CLOCK_SLEW: f64 = 0.05;
+/// Clock disagreements beyond this many ticks snap (a stall, a map change).
+const CLOCK_SNAP: f64 = 60.0;
+/// Larger disagreements close faster, over about this many seconds, so a
+/// hitch never leaves remotes lagging for long.
+const CLOCK_CATCH_UP: f64 = 2.0;
 
 #[derive(Default)]
 pub struct Motion {
     mirror: Option<CollisionMirror>,
     predictor: Option<Predictor>,
-    mirrored: Option<Arc<PublicWorld>>,
+    /// The replica world the collision mirror matches, with its change log
+    /// and revision.
+    mirrored: Option<(Arc<PublicWorld>, Arc<crate::network::WorldLog>, u64)>,
     owner: OwnerId,
     accumulator: f32,
     previous: Option<PlayerState>,
     correction: Vec3,
+    /// The local view follows v20's crouch thread, including its re-crouch snap.
+    crouch: CrouchThread,
     eye_height: Option<f32>,
     remotes: BTreeMap<OwnerId, VecDeque<bri_net::protocol::Pose>>,
     /// Estimated `server_tick - local_seconds * TICK_RATE`.
     clock_offset: Option<f64>,
+    /// The offset presented, slewing toward `clock_offset`.
+    shown_offset: Option<f64>,
     local_seconds: f64,
     newest_local_tick: u64,
     presented: BTreeMap<OwnerId, PlayerState>,
+    /// Each player's latest simulated tick, uninterpolated.
+    ticked: BTreeMap<OwnerId, PlayerState>,
     local_eye: Option<Vec3>,
     mounted: bool,
+    /// Last input sequence sent before a map change reset prediction.
+    sent_sequence: u64,
+    /// Fastest speed into a surface since `take_impact` (`Player::updatePos`
+    /// `bd`), for the ground impact camera shake.
+    impact: f32,
 }
 
 impl Motion {
@@ -68,27 +88,47 @@ impl Motion {
     }
     /// Collision world for prediction, prepared off the UI thread with the map.
     pub fn install(&mut self, mirror: CollisionMirror) {
+        let sent = self.predictor.as_ref().map_or(self.sent_sequence, |p| p.sequence());
         self.reset();
+        self.sent_sequence = sent;
         self.mirror = Some(mirror);
     }
     pub fn predicting(&self) -> bool {
         self.predictor.is_some()
     }
-    /// Seated players do not walk: inputs are recorded and sent, and the
-    /// authoritative seat pose is shown instead of a prediction.
+    /// The predicted player's fastest hit on a surface since the last call,
+    /// and its archetype.
+    pub fn take_impact(&mut self) -> Option<(f32, bri_sim::archetype::ArchetypeId)> {
+        let speed = std::mem::take(&mut self.impact);
+        let archetype = self.predictor.as_ref()?.state().archetype;
+        (speed > 0.0).then_some((speed, archetype))
+    }
+    /// Seated players, and players driving a package entity, do not walk:
+    /// inputs are recorded and sent, and the authoritative pose is shown
+    /// instead of a prediction.
     pub fn set_mounted(&mut self, mounted: bool) {
         self.mounted = mounted;
     }
     /// Estimated current server tick (for interpolating other entities).
     pub fn server_tick(&self) -> Option<f64> {
-        self.clock_offset
+        self.shown_offset
+            .or(self.clock_offset)
             .map(|offset| self.local_seconds * TICK_RATE + offset)
     }
     /// Replace a presented state (riders follow their rendered vehicle seat).
-    pub fn override_presented(&mut self, owner: OwnerId, feet: Vec3, yaw: f32, velocity: Vec3, local: bool) {
+    /// A `yaw` locks the rider facing the seat; passengers keep their own.
+    pub fn override_presented(
+        &mut self,
+        owner: OwnerId,
+        feet: Vec3,
+        yaw: Option<f32>,
+        up: Vec3,
+        velocity: Vec3,
+        local: bool,
+    ) {
         if let Some(state) = self.presented.get_mut(&owner) {
             state.feet = feet.to_array();
-            if !local {
+            if let Some(yaw) = yaw {
                 state.yaw = yaw;
             }
             state.velocity = velocity.to_array();
@@ -97,8 +137,13 @@ impl Motion {
             state.jetting = false;
         }
         if local {
-            // Seated eye height in the original sit pose.
-            self.local_eye = Some(feet + Vec3::Y * 1.6);
+            // Seated eye height in the original sit pose, along the seat's up.
+            let up = if up.is_finite() && up.length_squared() > 0.5 {
+                up.normalize()
+            } else {
+                Vec3::Y
+            };
+            self.local_eye = Some(feet + up * 1.6);
         }
     }
     /// Ingest the latest replicated view: brick collision, the local
@@ -108,19 +153,50 @@ impl Motion {
         if self
             .mirrored
             .as_ref()
-            .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
+            .is_none_or(|(old, _, _)| !Arc::ptr_eq(old, &view.world))
         {
-            if let Some(predictor) = &mut self.predictor {
-                predictor.sync_world(&view.world.bricks)?;
-            } else if let Some(mirror) = &mut self.mirror {
-                mirror.sync(&view.world.bricks)?;
+            // Sync only the bricks the replica logged since the mirrored
+            // revision; without that history, compare every brick.
+            let changes = self
+                .mirrored
+                .as_ref()
+                .filter(|(_, log, _)| Arc::ptr_eq(log, &view.world_log))
+                .and_then(|(_, log, revision)| log.between(*revision, view.world_revision));
+            let bricks = &view.world.bricks;
+            match (&mut self.predictor, &mut self.mirror, changes) {
+                (Some(predictor), _, Some(changes)) => {
+                    predictor.sync_world_changes(bricks, changes.bricks)?;
+                }
+                (Some(predictor), _, None) => {
+                    predictor.sync_world(bricks)?;
+                }
+                (None, Some(mirror), Some(changes)) => {
+                    mirror.sync_changes(bricks, changes.bricks)?;
+                }
+                (None, Some(mirror), None) => {
+                    mirror.sync(bricks)?;
+                }
+                (None, None, _) => {}
             }
-            self.mirrored = Some(view.world.clone());
+            self.mirrored = Some((
+                view.world.clone(),
+                view.world_log.clone(),
+                view.world_revision,
+            ));
+        }
+        match (&mut self.predictor, &mut self.mirror) {
+            (Some(predictor), _) => {
+                predictor.set_broken_shapes(&view.broken_shapes)?;
+            }
+            (None, Some(mirror)) => {
+                mirror.set_broken_shapes(&view.broken_shapes)?;
+            }
+            (None, None) => {}
         }
         for (owner, pose) in &view.poses {
             self.observe_clock(pose.tick);
             if *owner == view.owner {
-                self.observe_local(pose)?;
+                self.observe_local(pose, &view.archetypes)?;
             } else {
                 let history = self.remotes.entry(*owner).or_default();
                 if history.back().is_none_or(|last| last.tick < pose.tick) {
@@ -132,6 +208,22 @@ impl Motion {
             }
         }
         self.remotes.retain(|owner, _| view.poses.contains_key(owner));
+        // The host's motor collides with every other living body on foot;
+        // corpses and seated riders are sensors there, so a horse is not
+        // pushed by the player riding it.
+        if let Some(predictor) = &mut self.predictor {
+            predictor.set_others(
+                self.remotes
+                    .iter()
+                    .filter(|(owner, _)| {
+                        view.vitals
+                            .get(owner)
+                            .is_none_or(|v| v.alive && v.mounted.is_none() && v.ride.is_none())
+                    })
+                    .filter_map(|(_, history)| history.back())
+                    .map(|pose| &pose.player),
+            )?;
+        }
         Ok(())
     }
     fn observe_clock(&mut self, tick: u64) {
@@ -148,7 +240,11 @@ impl Motion {
             _ => sample,
         });
     }
-    fn observe_local(&mut self, pose: &bri_net::protocol::Pose) -> Result<()> {
+    fn observe_local(
+        &mut self,
+        pose: &bri_net::protocol::Pose,
+        archetypes: &bri_sim::archetype::Archetypes,
+    ) -> Result<()> {
         if self.mounted
             && let Some(predictor) = &mut self.predictor
         {
@@ -168,7 +264,8 @@ impl Motion {
                 }
             }
         } else if let Some(mirror) = self.mirror.take() {
-            let predictor = Predictor::new(mirror, pose.player.clone())?;
+            let mut predictor = Predictor::new(mirror, pose.player.clone(), archetypes.clone())?;
+            predictor.continue_after(self.sent_sequence);
             self.previous = Some(predictor.state().clone());
             self.predictor = Some(predictor);
         }
@@ -176,6 +273,13 @@ impl Motion {
     }
     /// Advance local time and run fixed prediction ticks. Returns the newest
     /// input sequence and the recent inputs to send when any tick ran.
+    /// Whether the tool in hand takes the jet button, so right click runs
+    /// it without jetting (as the host does).
+    pub fn set_tool_jet(&mut self, takes: bool) {
+        if let Some(predictor) = &mut self.predictor {
+            predictor.set_tool_jet(takes);
+        }
+    }
     pub fn advance(
         &mut self,
         seconds: f32,
@@ -188,6 +292,17 @@ impl Motion {
             0.0
         };
         self.local_seconds += f64::from(seconds);
+        if let Some(offset) = self.clock_offset {
+            let shown = self.shown_offset.unwrap_or(offset);
+            let error = offset - shown;
+            let step = (CLOCK_SLEW * TICK_RATE).max(error.abs() / CLOCK_CATCH_UP)
+                * f64::from(seconds);
+            self.shown_offset = Some(if error.abs() > CLOCK_SNAP {
+                offset
+            } else {
+                shown + error.clamp(-step, step)
+            });
+        }
         self.correction *= (-CORRECTION_RATE * seconds).exp();
         if self.correction.length_squared() < 1e-8 {
             self.correction = Vec3::ZERO;
@@ -203,21 +318,29 @@ impl Motion {
                 predictor.record(input)?;
             } else {
                 self.previous = Some(predictor.state().clone());
-                predictor.step(input)?;
+                let (_, events) = predictor.step(input)?;
+                for (_, speed) in events.hits {
+                    self.impact = self.impact.max(speed);
+                }
             }
             steps += 1;
         }
         if steps == MAX_STEPS {
             self.accumulator = self.accumulator.min(TICK);
         }
-        let target = predictor.state().eye(&PlayerTuning::default()).y
-            - predictor.state().feet[1];
-        let eye = self.eye_height.get_or_insert(target);
-        *eye += (target - *eye) * (1.0 - (-EYE_RATE * seconds).exp());
+        let tuning = predictor.tuning().clone();
+        self.crouch
+            .update(predictor.state().crouched, seconds, CROUCH_SECONDS);
+        self.eye_height = Some(tuning.eye_height(self.crouch.eye_fraction(CROUCH_SECONDS)));
         if steps == 0 {
             return Ok(None);
         }
-        let recent: Vec<_> = predictor.recent(redundancy).map(|(_, i)| *i).collect();
+        // Every input this frame produced plus recent history: a slow frame
+        // that ran more ticks than the redundancy window loses none of them.
+        let recent: Vec<_> = predictor
+            .recent(redundancy.max(steps as usize))
+            .map(|(_, i)| *i)
+            .collect();
         Ok(Some((predictor.sequence(), recent)))
     }
     /// Compute presented states for this frame. The local player uses its
@@ -230,9 +353,11 @@ impl Motion {
         head_yaw: f32,
     ) -> &BTreeMap<OwnerId, PlayerState> {
         self.presented.clear();
+        self.ticked.clear();
         self.local_eye = None;
         if let Some(predictor) = &self.predictor {
             let current = predictor.state();
+            self.ticked.insert(view.owner, current.clone());
             let previous = self.previous.as_ref().unwrap_or(current);
             let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
             let mut state = blend(previous, current, alpha);
@@ -241,31 +366,53 @@ impl Motion {
             state.yaw = yaw;
             state.pitch = pitch;
             state.head_yaw = head_yaw;
-            let eye = self
+            let tuning = predictor.tuning().clone();
+            let height = self
                 .eye_height
-                .unwrap_or_else(|| state.eye(&PlayerTuning::default()).y - feet.y);
-            self.local_eye = Some(feet + Vec3::Y * eye);
+                .unwrap_or_else(|| state.eye(&tuning).y - feet.y);
+            let ahead = Vec3::new(yaw.sin(), 0.0, -yaw.cos()) * tuning.eye_forward;
+            self.local_eye = Some(feet + Vec3::Y * height + ahead);
             self.presented.insert(view.owner, state);
         } else if let Some(pose) = view.poses.get(&view.owner) {
             self.presented.insert(view.owner, pose.player.clone());
         }
-        let render_tick = self
-            .clock_offset
-            .map(|offset| self.local_seconds * TICK_RATE + offset - INTERPOLATION_TICKS);
+        let render_tick = self.server_tick().map(|tick| tick - INTERPOLATION_TICKS);
         for (owner, pose) in &view.poses {
             if *owner == view.owner {
                 continue;
             }
-            let state = match (self.remotes.get(owner), render_tick) {
-                (Some(history), Some(tick)) if !history.is_empty() => sample(history, tick),
-                _ => pose.player.clone(),
+            let (state, ticked) = match (self.remotes.get(owner), render_tick) {
+                (Some(history), Some(tick)) if !history.is_empty() => (
+                    sample(history, tick),
+                    history
+                        .iter()
+                        .take_while(|pose| pose.tick as f64 <= tick)
+                        .last()
+                        .unwrap_or(history.front().unwrap())
+                        .player
+                        .clone(),
+                ),
+                _ => (pose.player.clone(), pose.player.clone()),
             };
+            self.ticked.insert(*owner, ticked);
             self.presented.insert(*owner, state);
         }
         &self.presented
     }
+    /// The local collision mirror, with the liquids prediction swims in.
+    pub fn collision(&self) -> Option<&CollisionMirror> {
+        self.predictor
+            .as_ref()
+            .map(|p| p.world())
+            .or(self.mirror.as_ref())
+    }
     pub fn presented(&self) -> &BTreeMap<OwnerId, PlayerState> {
         &self.presented
+    }
+    /// The simulated tick state at or before this frame's presented state:
+    /// the rotation and velocity the original action pick sees.
+    pub fn ticked(&self, owner: OwnerId) -> Option<&PlayerState> {
+        self.ticked.get(&owner)
     }
     /// Smoothed local eye (prediction, render interpolation and crouch blend).
     pub fn local_eye(&self) -> Option<Vec3> {
@@ -276,7 +423,9 @@ impl Motion {
 fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState {
     let first = history.front().unwrap();
     if tick <= first.tick as f64 {
-        return first.player.clone();
+        let mut state = first.player.clone();
+        state.feet = state.shown_feet();
+        return state;
     }
     for pair in history.iter().collect::<Vec<_>>().windows(2) {
         let (a, b) = (pair[0], pair[1]);
@@ -288,7 +437,7 @@ fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState
     let last = history.back().unwrap();
     let ahead = ((tick - last.tick as f64).min(EXTRAPOLATION_TICKS) / TICK_RATE) as f32;
     let mut state = last.player.clone();
-    let feet = Vec3::from(state.feet) + Vec3::from(state.velocity) * ahead;
+    let feet = Vec3::from(state.shown_feet()) + Vec3::from(state.velocity) * ahead;
     state.feet = feet.to_array();
     state
 }
@@ -296,7 +445,10 @@ fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState
 fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     let t = t.clamp(0.0, 1.0);
     let mut out = if t < 0.5 { a.clone() } else { b.clone() };
-    out.feet = Vec3::from(a.feet).lerp(Vec3::from(b.feet), t).to_array();
+    // Bodies move on v20's 32 ms ticks; draw them between ticks.
+    out.feet = Vec3::from(a.shown_feet())
+        .lerp(Vec3::from(b.shown_feet()), t)
+        .to_array();
     out.velocity = Vec3::from(a.velocity)
         .lerp(Vec3::from(b.velocity), t)
         .to_array();
@@ -321,7 +473,11 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
+            archetype: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
+            tick: Default::default(),
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {
@@ -329,6 +485,67 @@ mod tests {
             tick,
             acknowledged_input: 0,
             player: state(x, yaw),
+        }
+    }
+    /// Poses every 3 ticks with 80 ms latency plus up to 60 ms jitter,
+    /// frames at 144 Hz: the presented server clock never jumps or stalls.
+    #[test]
+    fn server_clock_runs_smoothly_under_jitter() {
+        let frame = 1.0 / 144.0;
+        let mut motion = Motion::default();
+        let mut rng = 7u64;
+        let mut arrivals = VecDeque::new();
+        let (mut time, mut sent) = (0.0f64, 0u64);
+        let mut previous: Option<f64> = None;
+        let mut worst: f64 = 0.0;
+        while time < 6.0 {
+            time += f64::from(frame);
+            while (sent + POSE_INTERVAL) as f64 / TICK_RATE <= time {
+                sent += POSE_INTERVAL;
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let jitter = (rng >> 40) as f64 / (1u64 << 24) as f64 * 0.06;
+                arrivals.push_back((sent as f64 / TICK_RATE + 0.08 + jitter, sent));
+            }
+            motion.advance(frame, MoveInput::default(), 1).unwrap();
+            let due: Vec<_> = arrivals.iter().filter(|(at, _)| *at <= time).copied().collect();
+            arrivals.retain(|(at, _)| *at > time);
+            for (_, tick) in due {
+                motion.observe_clock(tick);
+            }
+            let Some(now) = motion.server_tick() else {
+                continue;
+            };
+            if time > 1.0
+                && let Some(previous) = previous
+            {
+                let step = (now - previous) / (f64::from(frame) * TICK_RATE);
+                worst = worst.max((step - 1.0).abs());
+            }
+            previous = Some(now);
+            // It stays within the latency and jitter of the host's clock.
+            if time > 1.0 {
+                let behind = time * TICK_RATE - now;
+                assert!((0.0..=0.16 * TICK_RATE).contains(&behind), "{behind}");
+            }
+        }
+        assert!(worst <= CLOCK_SLEW + 1e-6, "clock rate off by {worst}");
+    }
+    /// After a hitch leaves the clock 40 ticks behind, it catches up within
+    /// a few seconds instead of creeping at the 5% slew.
+    #[test]
+    fn server_clock_catches_up_after_a_hitch() {
+        let mut motion = Motion::default();
+        motion.observe_clock(3);
+        motion.advance(0.01, MoveInput::default(), 1).unwrap();
+        let start = motion.server_tick().unwrap();
+        motion.observe_clock(3 + 40 + 1);
+        let mut seconds = 0.0;
+        while motion.server_tick().unwrap() - start - seconds * TICK_RATE < 39.0 {
+            motion.advance(1.0 / 144.0, MoveInput::default(), 1).unwrap();
+            seconds += 1.0 / 144.0;
+            assert!(seconds < 5.0, "still behind after {seconds} s");
         }
     }
     #[test]

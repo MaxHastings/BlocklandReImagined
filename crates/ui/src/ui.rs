@@ -28,6 +28,8 @@ pub struct UiSound {
 }
 
 const MAX_QUEUED_SOUNDS: usize = 128;
+/// Most scrollInventory steps one wheel event may take (a fast free spin).
+const NUM_WHEEL_STEPS: usize = 10;
 const AUDIO_ERROR: UiSound = UiSound {
     profile: "AudioError",
     trigger: "ui.error",
@@ -70,13 +72,28 @@ fn menu_hover_sound(screen: ScreenId, name: &str) -> Option<UiSound> {
     Some(UiSound { profile, trigger })
 }
 
+/// Not a v20 setting: the interface size in percent (0 = automatic, the
+/// largest whole scale that keeps 640x480 logical pixels).
+pub const UI_SCALE: &str = "$pref::Gui::Scale";
+/// The scale `$pref::Gui::Scale` asks for in a window of `size`, never so
+/// large that fewer than 640x480 logical pixels remain (the layouts' floor).
+pub fn preferred_scale(prefs: &crate::prefs::Prefs, size: (u32, u32)) -> Option<f32> {
+    let percent = prefs.i64_or(UI_SCALE, 0);
+    if percent <= 0 {
+        return None;
+    }
+    let fit = (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0).max(1.0);
+    Some((percent as f32 / 100.0).clamp(1.0, fit))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiConfig {
     /// Window size in physical pixels.
     pub size: (u32, u32),
     /// Logical→physical scale. `None` = automatic: the largest integer
     /// scale that keeps at least 640x480 logical pixels (Torque's minimum
-    /// canvas), so pixel art and bitmap fonts stay crisp.
+    /// canvas), so pixel art and bitmap fonts stay crisp. A window smaller
+    /// than that scales down to fit it, so no dialog is cut off.
     pub scale: Option<f32>,
     pub platform: Platform,
 }
@@ -86,8 +103,12 @@ impl UiConfig {
         match self.scale {
             Some(s) if s.is_finite() && s > 0.0 => s.clamp(0.5, 8.0),
             _ => {
-                let s = (self.size.0 / 640).min(self.size.1 / 480).max(1);
-                s as f32
+                let fit = (self.size.0 as f32 / 640.0).min(self.size.1 as f32 / 480.0);
+                if fit >= 1.0 {
+                    fit.floor()
+                } else {
+                    fit.max(0.5)
+                }
             }
         }
     }
@@ -107,7 +128,7 @@ pub enum StackCmd {
     Push(ScreenId),
     Pop(ScreenId),
     /// Show a message box (OK or Yes/No) with a callback.
-    Message(MessageBox),
+    Message(Box<MessageBox>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +137,10 @@ pub struct MessageBox {
     pub text: String,
     pub yes_no: bool,
     pub on_yes: Callback,
+    /// What NO (or Escape) does.
+    pub on_no: Callback,
+    /// Labels for YES and NO, when "Yes" and "No" would not say it.
+    pub buttons: Option<[String; 2]>,
 }
 
 /// What a message box's YES/OK does (v20 passed script strings).
@@ -138,8 +163,31 @@ pub enum Callback {
     },
     CloseEvents,
     MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
+    /// `TrustInviteGui.ignore()`.
+    IgnoreTrust { from: u64 },
+    /// Turn a package on or off once the player confirmed what else changes.
+    AddOn { id: String, enabled: bool },
+    /// Turn off every add-on outside the base game.
+    DefaultAddOns,
+    /// Send this request (a platform question answered YES).
+    Request(Box<crate::api::UiAction>),
+    /// Open a web page (a new release's download page).
+    OpenUrl(String),
+    /// Open a screen (the first-run name prompt opens Avatar).
+    Push(ScreenId),
+    /// First run: ask for a name once the Tutorial question is answered.
+    NamePrompt,
+    /// First run: play the Tutorial, then ask for a name back at the menu.
+    TutorialThenName,
 }
 
+/// First run's name question: "after_tutorial" while it waits for the
+/// player to come back from the Tutorial, "done" once asked.
+pub const NAME_PROMPT: &str = "$pref::Player::NamePrompt";
+
+/// How long a sound caption stays, and how many show at once.
+const CAPTION_MS: u64 = 3000;
+const MAX_CAPTIONS: usize = 4;
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
 /// follows mouse Y, so positive looks down.
 const KEYBOARD_TURN: [(&str, f32, f32); 4] = [
@@ -148,9 +196,10 @@ const KEYBOARD_TURN: [(&str, f32, f32); 4] = [
     ("panup", 0.0, -1.0),
     ("pandown", 0.0, 1.0),
 ];
-/// Radians per second at `KeyboardTurnSpeed` 1.0 (the v20 default 0.5 turns
-/// at 2 rad/s).
-const KEYBOARD_TURN_RATE: f32 = 4.0;
+/// Radians per second at `KeyboardTurnSpeed` 1.0. v20's getNextMove adds
+/// the `$mvYaw*Speed`/`$mvPitch*Speed` values to every 32 ms move
+/// (blocklandv20.exe 0x59571e), so the default 0.5 turns at 15.6 rad/s.
+const KEYBOARD_TURN_RATE: f32 = 1.0 / 0.032;
 
 /// What kind of answer a pending request is waiting for.
 #[derive(Debug, Clone, PartialEq)]
@@ -182,13 +231,21 @@ pub struct Core {
     pub prefs: Prefs,
     pub binds: BindMap,
     pub globals: BindMap,
+    /// The Options remap list ([`crate::binds::remap_entries`]).
+    pub remap: Vec<crate::schema::RemapEntry>,
     pub remap_commands: Vec<String>,
     pub remap_target: Option<usize>,
     pub remap_all: bool,
     pub options_open: bool,
+    /// HelpDlg is open (F1 closes it again).
+    pub help_open: bool,
+    /// The page `getHelp` asked HelpDlg to open on.
+    pub help_page: Option<String>,
     pub print_letters_visible: bool,
     // catalogs
     pub maps: Vec<MapInfo>,
+    /// Start Game's game modes, from the enabled Add-Ons.
+    pub game_modes: Vec<crate::api::GameModeInfo>,
     pub servers: Vec<ServerInfo>,
     pub lan_querying: bool,
     pub bricks: Vec<BrickInfo>,
@@ -196,29 +253,70 @@ pub struct Core {
     pub events: EventCatalog,
     pub datablocks: DatablockMenus,
     pub menu_backgrounds: Vec<IconRef>,
+    /// Music loop names for Start Game's Music Files.
+    pub music_tracks: Vec<String>,
+    /// Whether the save waiting in `LoadBricksColorGui` can add its colours.
+    pub color_append_fits: bool,
+    pub display_modes: Option<crate::api::DisplayModes>,
     pub avatar_preview: IconRef,
     pub save_maps: Vec<String>,
     pub save_files: Vec<SaveFileInfo>,
     pub save_context: Option<(String, IconRef)>,
+    /// Installed packages for the Add-Ons screen (host-prepared text).
+    pub add_ons: crate::api::AddOnsView,
+    /// Differing add-ons behind the last refused join (Can't Join dialog).
+    pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
+    /// See `UiUpdate::FailureQuestion`.
+    pub failure_question: Option<crate::api::Question>,
+    /// See `UiUpdate::UnsavedChanges`.
+    pub unsaved_changes: bool,
+    /// This build's version (`UiUpdate::Version`).
+    pub version: String,
+    /// A newer release's name and page, once one is found.
+    pub newer_version: Option<(String, String)>,
     // live state
     pub conn: ConnectionState,
     pub hud: HudModel,
     pub chat: ChatModel,
+    /// Who is typing, shown above the chat (`chatWhosTalkingText`).
+    pub talking: Vec<String>,
     pub selector: SelectorModel,
     pub wrench: WrenchState,
     pub players: Vec<PlayerRow>,
     pub admin: crate::models::admin::AdminModel,
     pub minigames: MiniGameUiState,
+    /// Open `TrustInviteGui` invitation.
+    /// Open trust invitations, newest last, one per sender, like mini-game
+    /// invitations: the dialog shows the newest and Escape leaves them open.
+    pub trust_invites: Vec<crate::api::TrustInvitation>,
+    /// Other players' names this frame (`GuiShapeNameHud`).
+    pub name_tags: Vec<crate::api::NameTag>,
+    /// HUD panels of enabled packages this frame (the `hud.overlay` slot).
+    pub package_panels: Vec<crate::api::PackagePanel>,
+    /// Keys package HUDs bind to package commands. Base game binds win.
+    pub package_keys: Vec<crate::api::PackageKey>,
     pub server_name: String,
     pub max_players: u32,
     pub center_print: Option<(String, Option<u64>)>,
     pub bottom_print: Option<(String, Option<u64>, bool)>,
     pub plant_error: Option<(PlantError, u64)>,
+    /// Sound captions on screen and when each one goes.
+    pub captions: Vec<(String, u64)>,
     /// Current damage flash opacity (0..=0.75), fading over time.
     pub damage_flash: f32,
-    pub net_graph: Option<String>,
+    pub energy: Option<f32>,
+    /// Current whiteout opacity (0..=1), fading over time.
+    pub whiteout: f32,
+    /// `GameRenderFilters`' liquid tints for the camera, drawn in order.
+    pub underwater: Vec<[f32; 4]>,
+    /// `NetGraphGui` while it is on the canvas (`toggleNetGraph`).
+    pub net_graph: Option<crate::models::perf::NetGraph>,
+    /// The performance overlay (not in v20).
+    pub perf: crate::models::perf::PerfOverlay,
     pub lagging: bool,
     pub shape_names: bool,
+    /// The camera is a player's or vehicle's first-person eye.
+    pub first_person: bool,
     pub super_shift: bool,
     super_shift_time: u64,
     pub zoom_on: bool,
@@ -235,6 +333,7 @@ pub struct Core {
     repeater: Repeater,
     held: BTreeMap<HeldInput, String>,
     held_controls: BTreeSet<HeldControl>,
+    pub console: screens::console::ConsoleState,
 }
 
 impl Core {
@@ -250,7 +349,10 @@ impl Core {
         }
         let starts = matches!(
             a,
-            UiAction::HostGame { .. } | UiAction::JoinServer { .. } | UiAction::StartTutorial
+            UiAction::HostGame { .. }
+                | UiAction::JoinServer { .. }
+                | UiAction::TrustNewServerIdentity { .. }
+                | UiAction::StartTutorial
         );
         let stops = matches!(a, UiAction::CancelConnect | UiAction::Disconnect);
         if starts || stops {
@@ -304,6 +406,7 @@ impl Core {
             self.chat.max_lines,
             self.chat.line_time_ms,
         );
+        self.talking.clear();
         self.selector.cart = [None; 10];
         self.selector.clicked_brick = None;
         self.selector.clicked_slot = None;
@@ -323,6 +426,9 @@ impl Core {
         self.bottom_print = None;
         self.plant_error = None;
         self.damage_flash = 0.0;
+        self.energy = None;
+        self.whiteout = 0.0;
+        self.underwater.clear();
         self.lagging = false;
         self.super_shift = false;
         self.zoom_on = false;
@@ -333,6 +439,7 @@ impl Core {
         self.save_files.clear();
         self.save_maps.clear();
         self.pending.clear();
+        self.console.reset_session();
     }
     pub fn request_pending(&mut self, a: UiAction, kind: Pending) -> RequestId {
         let id = self.request(a);
@@ -376,6 +483,19 @@ impl Core {
     pub fn is_pending(&self, kind: &Pending) -> bool {
         self.pending.values().any(|p| p == kind)
     }
+    /// `getHelp(name)`: HelpDlg on that page.
+    pub fn get_help(&mut self, page: Option<String>) {
+        self.help_page = page;
+        self.push(ScreenId::Help);
+    }
+    /// `contextHelp` (F1): close HelpDlg if it is open, else open it.
+    pub fn context_help(&mut self) {
+        if self.help_open {
+            self.pop(ScreenId::Help);
+        } else {
+            self.get_help(None);
+        }
+    }
     pub fn game(&mut self, g: GameAction) {
         self.request(UiAction::Game(g));
     }
@@ -389,20 +509,81 @@ impl Core {
         self.cmds.push(StackCmd::SetContent(s));
     }
     pub fn message_ok(&mut self, title: &str, text: &str) {
-        self.cmds.push(StackCmd::Message(MessageBox {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
             title: title.into(),
             text: text.into(),
             yes_no: false,
             on_yes: Callback::None,
-        }));
+            on_no: Callback::None,
+            buttons: None,
+        })));
+    }
+    /// Ask before leaving a hosted game whose world changed since it was last
+    /// saved. The autosave keeps it either way; this is about a named save.
+    pub fn confirm_unsaved(&mut self, on_yes: Callback) {
+        self.message_yes_no(
+            "Unsaved Changes",
+            "Your build has changes you haven't saved. It is kept as an autosave you can \
+             load later from Load Bricks, but not under a name of your own.\n\nLeave anyway?",
+            on_yes,
+        );
+    }
+    /// First run, after the controls question: offer the Tutorial, then
+    /// the name. v20 had no such welcome; everyone started as "Blockhead".
+    pub fn first_run_welcome(&mut self) {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: "Welcome to Blockland ReImagined".into(),
+            text: "New here? The Tutorial teaches moving, building, tools and driving in a \
+                   few minutes. You can also start it later from the main menu.\n\nPlay the \
+                   Tutorial now?"
+                .into(),
+            yes_no: true,
+            on_yes: Callback::TutorialThenName,
+            on_no: Callback::NamePrompt,
+            buttons: Some(["Play Tutorial".into(), "Not Now".into()]),
+        })));
+    }
+    /// Ask once for a name when the player still has the default one.
+    pub fn name_prompt(&mut self) {
+        if self.prefs.str_or(NAME_PROMPT, "") == "done" {
+            return;
+        }
+        self.prefs.set(NAME_PROMPT, "done");
+        self.save_settings();
+        if self.settings.avatar.lan_name != "Blockhead" {
+            return;
+        }
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: "Your Name".into(),
+            text: "Other players will see you as \"Blockhead\". Choose your name and look \
+                   now? You can change them any time in Avatar."
+                .into(),
+            yes_no: true,
+            on_yes: Callback::Push(ScreenId::Avatar),
+            on_no: Callback::None,
+            buttons: Some(["Choose Name".into(), "Later".into()]),
+        })));
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
-        self.cmds.push(StackCmd::Message(MessageBox {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
             title: title.into(),
             text: text.into(),
             yes_no: true,
             on_yes,
-        }));
+            on_no: Callback::None,
+            buttons: None,
+        })));
+    }
+    /// A question with its own button labels; each answer sends its request.
+    pub fn ask(&mut self, q: crate::api::Question) {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: q.title,
+            text: q.text,
+            yes_no: true,
+            on_yes: Callback::Request(q.on_yes),
+            on_no: q.on_no.map_or(Callback::None, Callback::Request),
+            buttons: Some([q.yes, q.no]),
+        })));
     }
     /// `strupr(getWord(moveMap.getBinding(cmd), 1))` as used in HUD tips.
     pub fn key_name(&self, command: &str) -> String {
@@ -424,18 +605,50 @@ impl Core {
         let s = Box::new(self.settings.clone());
         self.request(UiAction::SaveSettings(s));
     }
+    /// `NetGraph::toggleNetGraph`: add `NetGraphGui` to the canvas, or
+    /// remove it (and its history).
+    pub fn toggle_net_graph(&mut self) {
+        self.net_graph = match self.net_graph {
+            Some(_) => None,
+            None => Some(Default::default()),
+        };
+    }
     pub fn in_game(&self) -> bool {
         matches!(self.conn, ConnectionState::InGame { .. })
     }
     pub fn is_local(&self) -> bool {
         matches!(self.conn, ConnectionState::InGame { local: true, .. })
     }
+    /// The live administrator snapshot decides once it has arrived; the flag
+    /// copied at entry only covers the moments before it.
     pub fn is_admin(&self) -> bool {
+        if self.admin.snapshot.is_some() {
+            return self.admin.is_admin();
+        }
         matches!(
             self.conn,
             ConnectionState::InGame { admin: true, .. }
                 | ConnectionState::InGame { local: true, .. }
         )
+    }
+    /// Every writer of prefs (Options, the console) calls this after
+    /// changing them, so the parts of the game that cache a pref see it.
+    pub fn apply_prefs(&mut self) {
+        use crate::screens::options::{VOLUMES, chat_lines, volume};
+        self.hud.prefs = self.hud_prefs();
+        self.selector.queue_brick_buying =
+            self.prefs.bool_or("$pref::Input::QueueBrickBuying", true);
+        self.chat.max_lines = chat_lines(&self.prefs);
+        self.chat.line_time_ms = self
+            .prefs
+            .i64_or("$Pref::Chat::LineTime", 6500)
+            .clamp(0, 30000);
+        for &(_, pref, channel) in VOLUMES {
+            self.request(UiAction::SetVolume {
+                channel: channel.into(),
+                value: volume(&self.prefs, pref),
+            });
+        }
     }
     pub fn hud_prefs(&self) -> HudPrefs {
         let p = &self.prefs;
@@ -488,6 +701,19 @@ impl Core {
         {
             return;
         }
+        // Toggle crouch: each press flips it; releasing does nothing.
+        let down = if control == HeldControl::Crouch
+            && self
+                .prefs
+                .bool_or(crate::screens::options::TOGGLE_CROUCH, false)
+        {
+            if !down {
+                return;
+            }
+            !self.held_controls.contains(&control)
+        } else {
+            down
+        };
         let changed = if down {
             self.held_controls.insert(control)
         } else {
@@ -621,6 +847,7 @@ impl Core {
             }
             "togglesupershift" => self.toggle_super_shift(down),
             _ if !down => {}
+            "toggleconsole" => self.toggle_console(),
             "escapemenu.toggle();" => self.escape_toggle(),
             "togglefirstperson" => {
                 let fast = self
@@ -648,7 +875,9 @@ impl Core {
             "dodofscreenshot" => self.game(GameAction::Screenshot {
                 kind: ScreenshotKind::DepthOfField,
             }),
-            "togglenetgraph" => self.game(GameAction::ToggleNetGraph),
+            "togglenetgraph" => self.toggle_net_graph(),
+            "toggleperfoverlay" => self.perf.cycle(),
+            "saveperfcapture" => self.game(GameAction::SavePerfCapture),
             "togglefullscreen();" => self.game(GameAction::ToggleFullscreen),
             "togglebuildmacrorecording" => self.game(GameAction::ToggleBuildMacroRecording),
             "playbackbuildmacro" => self.game(GameAction::PlayBackBuildMacro),
@@ -687,6 +916,11 @@ impl Core {
                 self.request(UiAction::OpenAdmin);
             }
             "toggleshapenamehud" => self.shape_names = !self.shape_names,
+            // `openBSD`: with building disabled it only says so, so the
+            // selector (and its "Bricks" cue) never opens.
+            "openbsd" if self.hud.building_disabled => {
+                self.center_print("\u{E005}Building is currently disabled.", 2.0)
+            }
             "openbsd" => self.push(ScreenId::BrickSelector),
             "usebricks" => {
                 let mut o = Outbox::default();
@@ -731,13 +965,11 @@ impl Core {
                     let mut o = Outbox::default();
                     self.hud.direct_select_inv(i, &bsd_key, &mut o);
                     self.apply_outbox(o);
+                } else if other == "contexthelp();" {
+                    self.context_help();
                 } else {
-                    // Console, help and debug render modes are excluded from the
-                    // alpha (no script console); they are recognised but inert.
-                    return matches!(
-                        other,
-                        "toggleconsole" | "contexthelp();" | "cycledebugrendermode"
-                    );
+                    // Debug render modes are recognised but inert.
+                    return other == "cycledebugrendermode";
                 }
             }
         }
@@ -793,7 +1025,7 @@ impl Core {
         // scrollInventory: %val < 0 → +1 (Torque positive = wheel up).
         let dir = if delta < 0.0 { 1 } else { -1 };
         if self.zoom_on {
-            let mut fov = self.prefs.f32_or("$Pref::player::CurrentFOV", 45.0);
+            let mut fov = crate::screens::options::zoom_fov(&self.prefs);
             if dir > 0 {
                 if fov > 5.0 {
                     fov -= 5.0;
@@ -802,7 +1034,8 @@ impl Core {
                 fov += 5.0;
             }
             self.prefs
-                .set("$Pref::player::CurrentFOV", format!("{fov}"));
+                .set(crate::screens::options::ZOOM_FOV, format!("{fov}"));
+            self.save_settings();
             self.game(GameAction::SetZoomFov { fov });
             return;
         }
@@ -824,16 +1057,34 @@ pub struct Ui {
     wheel_rest: f32,
     sounds: Vec<UiSound>,
     dropped_sounds: u64,
+    /// A global bind consumed the last key press; drop the character it
+    /// types (the `~` that opened the console must not appear in it).
+    swallow_char: bool,
+    /// The scale the host asked for; the player's UI size replaces it.
+    host_scale: Option<f32>,
+    /// `$pref::Gui::Scale` as last applied.
+    applied_scale_pref: i64,
 }
 
 impl Ui {
     /// Create the UI. `settings` are the host-persisted values (use
     /// `Settings::default()` on first run: Default Controls will show).
     pub fn new(pack: Rc<Pack>, cfg: UiConfig, settings: Settings) -> Ui {
-        let prefs = Prefs::new(&pack.data.data.prefs, &settings.prefs);
+        let mut defaults = pack.data.data.prefs.clone();
+        defaults.retain(|k, _| {
+            !crate::screens::options::MACHINE_PREFS
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(k))
+        });
+        let prefs = Prefs::new(&defaults, &settings.prefs);
         let platform = cfg.platform;
+        let remap = crate::binds::remap_entries(&pack.data.data);
         let binds = match &settings.binds {
-            Some(b) => BindMap { entries: b.clone() },
+            Some(b) => {
+                let mut binds = BindMap { entries: b.clone() };
+                binds.add_missing_extras(&remap);
+                binds
+            }
             None => BindMap::defaults(
                 &pack.data.data,
                 crate::binds::DEFAULT_MOUSE,
@@ -856,23 +1107,18 @@ impl Ui {
         let rep = prefs.i64_or("$Pref::Input::brickRepeatTime", 50).max(1) as u64;
         let chat = ChatModel::new(
             prefs.i64_or("$Pref::Chat::CacheLines", 1000) as usize,
-            prefs.i64_or("$Pref::Chat::MaxDisplayLines", 8) as usize,
-            prefs.i64_or("$Pref::Chat::LineTime", 6500),
+            crate::screens::options::chat_lines(&prefs),
+            prefs.i64_or("$Pref::Chat::LineTime", 6500).clamp(0, 30000),
         );
-        let remap_commands = pack
-            .data
-            .data
-            .remap
-            .iter()
-            .map(|r| r.command.clone())
-            .collect();
+        let remap_commands = remap.iter().map(|r| r.command.clone()).collect();
         let mut settings = settings;
         if settings.binds.is_none() {
             settings.mouse_type = crate::binds::DEFAULT_MOUSE;
             settings.keyboard_type = crate::binds::DEFAULT_KEYBOARD;
         }
         if settings.avatar.values.is_empty() {
-            settings.avatar = AvatarPrefs::from_prefs(&prefs, &pack.data.data.prefs);
+            settings.avatar =
+                AvatarPrefs::from_prefs(&prefs, &pack.data.data.prefs, &pack.data.data.avatar);
         }
         let mut core = Core {
             pack: pack.clone(),
@@ -883,12 +1129,16 @@ impl Ui {
             prefs,
             binds,
             globals,
+            remap,
             remap_commands,
             remap_target: None,
             remap_all: false,
             options_open: false,
+            help_open: false,
+            help_page: None,
             print_letters_visible: false,
             maps: Vec::new(),
+            game_modes: Vec::new(),
             servers: Vec::new(),
             lan_querying: false,
             bricks: Vec::new(),
@@ -896,27 +1146,47 @@ impl Ui {
             events: EventCatalog::default(),
             datablocks: DatablockMenus::new(),
             menu_backgrounds: Vec::new(),
+            music_tracks: Vec::new(),
+            color_append_fits: true,
+            display_modes: None,
             avatar_preview: IconRef::None,
             save_maps: Vec::new(),
             save_files: Vec::new(),
             save_context: None,
+            add_ons: Default::default(),
+            add_on_mismatch: None,
+            failure_question: None,
+            unsaved_changes: false,
+            version: String::new(),
+            newer_version: None,
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
+            talking: Vec::new(),
             selector,
             wrench: WrenchState::default(),
             players: Vec::new(),
             admin: Default::default(),
             minigames: MiniGameUiState::default(),
+            trust_invites: Vec::new(),
+            name_tags: Vec::new(),
+            package_panels: Vec::new(),
+            package_keys: Vec::new(),
             server_name: String::new(),
             max_players: 0,
             center_print: None,
             bottom_print: None,
             plant_error: None,
+            captions: Vec::new(),
             damage_flash: 0.0,
+            energy: None,
+            whiteout: 0.0,
+            underwater: Vec::new(),
             net_graph: None,
+            perf: Default::default(),
             lagging: false,
             shape_names: true,
+            first_person: true,
             super_shift: false,
             super_shift_time: 0,
             zoom_on: false,
@@ -931,6 +1201,7 @@ impl Ui {
             repeater: Repeater::new(first, rep),
             held: BTreeMap::new(),
             held_controls: BTreeSet::new(),
+            console: Default::default(),
         };
         core.hud.prefs = core.hud_prefs();
         let content = screens::make(ScreenId::MainMenu, &mut core);
@@ -944,7 +1215,11 @@ impl Ui {
             wheel_rest: 0.0,
             sounds: Vec::new(),
             dropped_sounds: 0,
+            swallow_char: false,
+            host_scale: cfg.scale,
+            applied_scale_pref: 0,
         };
+        ui.apply_scale_pref();
         if ui.core.settings.binds.is_none() {
             ui.core.push(ScreenId::DefaultControls);
         }
@@ -952,6 +1227,12 @@ impl Ui {
         ui.flush();
         ui.relayout();
         ui
+    }
+
+    /// Commands the host runs itself (arriving as `UiAction::Console`), so
+    /// the console lists, describes and completes them.
+    pub fn set_console_commands(&mut self, commands: Vec<bri_console::CommandInfo>) {
+        self.core.console.host_commands = commands;
     }
 
     pub fn config(&self) -> UiConfig {
@@ -966,10 +1247,23 @@ impl Ui {
 
     /// Window resized or UI scale changed.
     pub fn resize(&mut self, size: (u32, u32), scale: Option<f32>) {
+        self.host_scale = scale;
         self.cfg.size = size;
-        self.cfg.scale = scale;
+        self.cfg.scale = preferred_scale(&self.core.prefs, size).or(scale);
         self.core.logical = self.cfg.logical();
         self.relayout();
+    }
+    /// The scale the host configured (the player's UI size aside).
+    pub fn host_scale(&self) -> Option<f32> {
+        self.host_scale
+    }
+    /// Follow a changed UI size preference (Options, console).
+    fn apply_scale_pref(&mut self) {
+        let pref = self.core.prefs.i64_or(UI_SCALE, 0);
+        if pref != self.applied_scale_pref {
+            self.applied_scale_pref = pref;
+            self.resize(self.cfg.size, self.host_scale);
+        }
     }
 
     fn relayout(&mut self) {
@@ -1077,9 +1371,14 @@ impl Ui {
                     std::mem::replace(&mut self.content, screens::make(id, &mut self.core));
                 old.on_sleep(&mut self.core);
                 // v20 pops every dialog when the content changes except
-                // those the new content pushes itself.
-                for mut d in self.dialogs.drain(..) {
-                    d.on_sleep(&mut self.core);
+                // those the new content pushes itself. The console sits on
+                // its own canvas layer (pushDialog(ConsoleDlg, 99)) and stays.
+                for mut d in std::mem::take(&mut self.dialogs) {
+                    if d.id() == ScreenId::Console {
+                        self.dialogs.push(d);
+                    } else {
+                        d.on_sleep(&mut self.core);
+                    }
                 }
                 self.content.layout(w, h, &mut self.core);
                 self.content.on_wake(&mut self.core);
@@ -1107,7 +1406,7 @@ impl Ui {
             }
             StackCmd::Message(m) => {
                 self.core.release_all();
-                let mut s = screens::menus::MessageScreen::new(&self.core, m);
+                let mut s = screens::menus::MessageScreen::new(&self.core, *m);
                 s.layout(w, h, &mut self.core);
                 self.dialogs.push(Box::new(s));
             }
@@ -1191,6 +1490,7 @@ impl Ui {
                     ConnectionState::Idle | ConnectionState::Failed { .. } => ScreenId::MainMenu,
                     ConnectionState::Connecting { .. } => self.content.id(),
                     ConnectionState::Loading { .. } => ScreenId::Loading,
+                    ConnectionState::DownloadingPackages(_) => ScreenId::PackageDownload,
                     ConnectionState::InGame { .. } => ScreenId::Play,
                 };
                 if let ConnectionState::InGame {
@@ -1225,10 +1525,21 @@ impl Ui {
                     c.pop(ScreenId::Connecting);
                 }
                 if let Some(r) = failed {
-                    c.message_ok("Connection Failed", &r);
+                    bri_console::warn(format!("Connection failed: {r}"));
+                    if let Some(question) = c.failure_question.take() {
+                        c.ask(question);
+                    } else if c.add_on_mismatch.is_some() {
+                        c.push(ScreenId::AddOnMismatch);
+                    } else {
+                        c.message_ok(
+                            "Connection Failed",
+                            &crate::models::disconnect::explain(&r),
+                        );
+                    }
                 }
             }
             UiUpdate::Maps(m) => c.maps = m,
+            UiUpdate::GameModes(m) => c.game_modes = m,
             UiUpdate::LanServers { servers, querying } => {
                 c.servers = servers;
                 c.lan_querying = querying;
@@ -1275,8 +1586,15 @@ impl Ui {
             }
             UiUpdate::Chat { text } => {
                 let now = c.time_ms;
+                // `newChatHud_AddLine`: Censor Chat (on in v20's defaults).
+                let text = if c.prefs.bool_or("$Pref::Chat::CurseFilter", true) {
+                    crate::models::chat::censor(&text, c.prefs.str_or("$Pref::Chat::CurseList", ""))
+                } else {
+                    text
+                };
                 c.chat.add(&text, now);
             }
+            UiUpdate::Talking(names) => c.talking = names,
             UiUpdate::CenterPrint { text, seconds } => c.center_print(&text, seconds),
             UiUpdate::BottomPrint {
                 text,
@@ -1291,7 +1609,45 @@ impl Ui {
                 c.bottom_print = None;
             }
             UiUpdate::PlantError(e) => c.plant_error = Some((e, c.time_ms + 800)),
-            UiUpdate::NetGraph(text) => c.net_graph = text,
+            UiUpdate::NetSample(sample) => {
+                if let Some(graph) = &mut c.net_graph {
+                    graph.add(sample);
+                }
+                if c.perf.wants_net() {
+                    c.perf.net = Some(sample);
+                }
+            }
+            UiUpdate::PerfFrame(frame) => c.perf.push_frame(frame),
+            UiUpdate::PerfStats(stats) => {
+                if c.perf.visible() {
+                    c.perf.stats = stats;
+                }
+            }
+            UiUpdate::Caption(text) => {
+                if c.prefs.bool_or(crate::screens::options::CAPTIONS, false) {
+                    // A repeated sound refreshes its line instead of stacking.
+                    c.captions.retain(|(t, _)| *t != text);
+                    c.captions.push((text, c.time_ms + CAPTION_MS));
+                    let extra = c.captions.len().saturating_sub(MAX_CAPTIONS);
+                    c.captions.drain(..extra);
+                }
+            }
+            UiUpdate::FirstPerson(on) => c.first_person = on,
+            UiUpdate::Whiteout(amount) => {
+                if amount.is_finite() {
+                    c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
+                }
+            }
+            UiUpdate::Underwater(tints) => {
+                c.underwater = tints
+                    .into_iter()
+                    .filter(|t| t.iter().all(|v| v.is_finite()))
+                    .take(2)
+                    .collect();
+            }
+            UiUpdate::Energy(energy) => {
+                c.energy = energy.filter(|e| e.is_finite()).map(|e| e.clamp(0.0, 1.0));
+            }
             UiUpdate::DamageFlash(amount) => {
                 if amount.is_finite() {
                     c.damage_flash = (c.damage_flash + amount.max(0.0)).min(0.75);
@@ -1308,6 +1664,18 @@ impl Ui {
             }
             UiUpdate::MiniGames(state) => {
                 c.minigames = state;
+            }
+            UiUpdate::MessageBox { title, text } => c.message_ok(&title, &text),
+            UiUpdate::Confirm {
+                title,
+                text,
+                action,
+            } => c.message_yes_no(&title, &text, Callback::Request(action)),
+            UiUpdate::TrustInvite(invitation) => {
+                c.trust_invites.retain(|i| i.from != invitation.from);
+                c.trust_invites.push(invitation);
+                c.pop(ScreenId::TrustInvitation);
+                c.push(ScreenId::TrustInvitation);
             }
             UiUpdate::MiniGameInvite(invitation) => {
                 c.minigames.invitations.retain(|i| i.game != invitation.game);
@@ -1361,12 +1729,46 @@ impl Ui {
                 c.print_aspect = Some(aspect);
                 c.push(ScreenId::PrintSelector);
             }
+            UiUpdate::ColorWarning { append } => {
+                c.color_append_fits = append;
+                c.push(ScreenId::LoadBricksColor);
+            }
             UiUpdate::SaveFiles { maps, files } => {
                 c.save_maps = maps;
                 c.save_files = files;
             }
             UiUpdate::SaveContext { map, preview } => c.save_context = Some((map, preview)),
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
+            UiUpdate::AddOns(view) => c.add_ons = view,
+            UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
+            UiUpdate::Question(q) => c.ask(q),
+            UiUpdate::FailureQuestion(q) => c.failure_question = Some(q),
+            UiUpdate::UnsavedChanges(unsaved) => c.unsaved_changes = unsaved,
+            UiUpdate::Version(v) => c.version = v,
+            UiUpdate::NewerVersion { name, url } => {
+                c.message_yes_no(
+                    "New Version Available",
+                    &format!(
+                        "A newer version of Blockland ReImagined, {name}, is available.\n\nOpen the download page?"
+                    ),
+                    Callback::OpenUrl(url.clone()),
+                );
+                c.newer_version = Some((name, url));
+            }
+            UiUpdate::SetPrefs(prefs) => {
+                for (key, value) in prefs {
+                    c.prefs.set(&key, value);
+                }
+                c.save_settings();
+            }
+            UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
+            UiUpdate::DisplayChanged {
+                resolution,
+                fullscreen,
+            } => {
+                crate::screens::options::record_display(&mut c.prefs, resolution, fullscreen);
+                c.save_settings();
+            }
         }
         self.content.on_update(&mut self.core);
         for d in &mut self.dialogs {
@@ -1474,16 +1876,14 @@ impl Ui {
                 }
             }
             InputEvent::MouseDelta { dx, dy } => {
+                // A captured pointer always drives the camera; any screen
+                // that wants the mouse shows a cursor, which releases it.
                 if !self.cursor_visible()
                     && self.game_input_active()
-                    && self.dialogs.is_empty()
                     && dx.is_finite()
                     && dy.is_finite()
                 {
-                    let sens = self
-                        .core
-                        .prefs
-                        .f32_or("$pref::Input::MouseSensitivity", 0.75);
+                    let sens = crate::screens::options::mouse_sensitivity(&self.core.prefs);
                     let inv = if self.core.prefs.bool_or("$pref::Input::MouseInvert", false) {
                         -1.0
                     } else {
@@ -1543,15 +1943,21 @@ impl Ui {
                 if !delta.is_finite() || delta == 0.0 {
                     return;
                 }
+                // High-resolution wheels and touchpads send fractions of a
+                // notch; v20 (DirectInput, 120 per notch) acts once per notch,
+                // so menus and scrollInventory both step on whole notches.
+                if self.wheel_rest != 0.0 && self.wheel_rest.signum() != delta.signum() {
+                    self.wheel_rest = 0.0;
+                }
+                self.wheel_rest += delta;
+                let steps = self.wheel_rest.trunc();
+                self.wheel_rest -= steps;
+                if steps == 0.0 {
+                    return;
+                }
                 if self.cursor_visible() {
-                    // Touchpads send fractions of a notch; scroll whole rows.
-                    self.wheel_rest += delta;
-                    let steps = self.wheel_rest.trunc();
-                    self.wheel_rest -= steps;
                     let t = self.mouse_target();
-                    let used = steps == 0.0
-                        || self.with_target(t, |s, _| s.view_mut().wheel(steps as i32));
-                    if used {
+                    if self.with_target(t, |s, _| s.view_mut().wheel(steps as i32)) {
                         return;
                     }
                 }
@@ -1561,7 +1967,9 @@ impl Ui {
                 if self.content.id() == ScreenId::Play && dialogs == 0 {
                     match self.core.binds.command_for(&BindInput::Wheel) {
                         Some(c) if c.eq_ignore_ascii_case("scrollInventory") => {
-                            self.core.wheel_scroll(delta)
+                            for _ in 0..(steps.abs() as usize).min(NUM_WHEEL_STEPS) {
+                                self.core.wheel_scroll(steps.signum());
+                            }
                         }
                         _ => {}
                     }
@@ -1582,6 +1990,7 @@ impl Ui {
                     self.flush();
                 }
             }
+            InputEvent::Char(_) if std::mem::take(&mut self.swallow_char) => {}
             InputEvent::Char(ch) => {
                 let t = self.dialogs.len().checked_sub(1);
                 let mut out = Vec::new();
@@ -1592,6 +2001,7 @@ impl Ui {
             }
             InputEvent::FocusLost => {
                 self.core.release_all();
+                self.wheel_rest = 0.0;
                 self.mods = Modifiers::NONE;
                 self.content.view_mut().pressed = None;
                 self.content.view_mut().mouse_leave();
@@ -1607,6 +2017,7 @@ impl Ui {
 
     fn key_down(&mut self, key: Key, mods: Modifiers, repeat: bool) {
         self.mods = mods;
+        self.swallow_char = false;
         // 1. Global action map (console, fullscreen, help).
         if !repeat
             && let Some(cmd) = self
@@ -1616,6 +2027,7 @@ impl Ui {
                 .map(str::to_string)
         {
             self.core.run_command(&cmd, true);
+            self.swallow_char = true;
             self.flush();
             return;
         }
@@ -1625,6 +2037,22 @@ impl Ui {
             let mut out = Vec::new();
             self.with_target(top, |s, _| s.view_mut().key(key, mods, &mut out));
             self.dispatch(top, out);
+            return;
+        }
+        // The key that opens a dialog toggles it, like the console's.
+        if !repeat
+            && let Some(t) = top
+            && let Some(opening) = self.dialogs[t].opening_command()
+            && self
+                .core
+                .binds
+                .command_for_key(key, mods)
+                .is_some_and(|c| c.eq_ignore_ascii_case(opening))
+        {
+            let id = self.dialogs[t].id();
+            self.core.pop(id);
+            self.swallow_char = true;
+            self.flush();
             return;
         }
         // 3. The top screen's own key handling (remap capture, text entry).
@@ -1680,6 +2108,18 @@ impl Ui {
             .command_for_key(key, mods)
             .map(str::to_string)
         else {
+            // Keys the base game leaves unbound may belong to a package HUD.
+            if let Key::Letter(letter) = key
+                && mods == Modifiers::NONE
+                && let Some(k) = self.core.package_keys.iter().find(|k| k.key == letter)
+            {
+                let action = GameAction::Package {
+                    package: k.package.clone(),
+                    command: k.command.clone(),
+                };
+                self.core.game(action);
+                self.flush();
+            }
             return;
         };
         // NoShiftMoveMap: while a wrench dialog or the chat input is open,
@@ -1694,10 +2134,12 @@ impl Ui {
 
     /// Advance timers (animations, key repeat, print timeouts).
     pub fn update(&mut self, dt_ms: u64) {
+        self.apply_scale_pref();
         let c = &mut self.core;
         c.time_ms = c.time_ms.saturating_add(dt_ms);
         c.keyboard_turn(dt_ms);
         c.damage_flash = (c.damage_flash - dt_ms as f32 / 1000.0).max(0.0);
+        c.whiteout = (c.whiteout - dt_ms as f32 / 1000.0).max(0.0);
         let now = c.time_ms;
         for cmd in c.repeater.due(now) {
             let (super_mode, base) = match cmd.strip_prefix("super:") {
@@ -1743,6 +2185,7 @@ impl Ui {
         {
             c.plant_error = None;
         }
+        c.captions.retain(|(_, until)| *until > now);
         c.hud.tick(dt_ms);
         self.content.view_mut().tick(dt_ms);
         self.content.tick(dt_ms, &mut self.core);
@@ -1762,6 +2205,7 @@ impl Ui {
         for d in &self.dialogs {
             d.draw(pack, &mut dl, &self.core);
         }
+        crate::screens::perf::draw(pack, &mut dl, &self.core);
         dl
     }
 

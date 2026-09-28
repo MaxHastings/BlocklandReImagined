@@ -60,7 +60,9 @@ impl Bounds {
             3 => (w - 1 - z, x),
             _ => return b'-',
         };
-        mesh.attachment_rows[((d - 1 - lz) * h + (h - 1 - y)) as usize].as_bytes()[lx as usize]
+        // A BLB's first depth slice is its largest y, which the converter
+        // turns into our smallest z (`z = -y`).
+        mesh.attachment_rows[(lz * h + (h - 1 - y)) as usize].as_bytes()[lx as usize]
     }
     fn any(self, mut f: impl FnMut([i32; 3]) -> bool) -> bool {
         let max = self.max();
@@ -274,6 +276,65 @@ mod tests {
             needs_external_collision: false,
             coverage: None,
             quads: vec![],
+        }
+    }
+    /// A stock ramp grid: one plate-high cell per row, slices in BLB order.
+    fn ramp(id: &str, rows: &[&str]) -> Mesh {
+        Mesh {
+            id: id.into(),
+            footprint_studs: [1, rows.len() as u32 / 3],
+            height_plates: 3,
+            attachment_rows: rows.iter().map(|r| (*r).into()).collect(),
+            ..mesh()
+        }
+    }
+    fn placed(mesh: &Mesh, position: [f32; 3], turns: u8) -> (Brick, Bounds) {
+        let mut brick = Brick::new(ContentRef::Resolved(mesh.id.clone()), position, 1);
+        brick.quarter_turns = turns;
+        let bounds = Bounds::new(&brick, mesh).unwrap();
+        (brick, bounds)
+    }
+    #[test]
+    fn blb_slices_run_from_the_far_end_like_the_mesh() {
+        // 1x3ramp.blb: its stud top is in the last slice, at BLB y -1.5..-0.5,
+        // which the converted mesh puts at +z.
+        let r = ramp("1x3ramp", &["-", "x", "d", "x", "x", "d", "u", "x", "d"]);
+        let (_, bounds) = placed(&r, [0.25, 0.3, 0.75], 0);
+        assert_eq!(bounds.min, [0, 0, 0]);
+        assert_eq!(bounds.cell([0, 2, 2], 0, &r), b'u');
+        assert_eq!(bounds.cell([0, 2, 0], 0, &r), b'-');
+        let (_, turned) = placed(&r, [0.25, 0.3, 0.75], 2);
+        assert_eq!(turned.cell([0, 2, 0], 2, &r), b'u');
+    }
+    /// Ramp pairs from the stock saves (Arch of Constantine) that v20 loads
+    /// in full: each fills the other's empty wedge cell, so neither overlaps.
+    #[test]
+    fn stock_ramp_pairs_fit_into_each_others_wedges() {
+        let ramp_1x2 = ramp("1x2ramp", &["x", "x", "d", "u", "x", "d"]);
+        let rampup_1x3 = ramp("1x3rampup", &["u", "x", "-", "u", "x", "x", "u", "x", "d"]);
+        let crest_1x2 = ramp("1x2cresthigh", &["x", "x", "d", "x", "x", "d"]);
+        for ((a, pa, ta), (b, pb, tb)) in [
+            (
+                (&ramp_1x2, [0.75, 297.7, 144.0], 0),
+                (&rampup_1x3, [0.75, 298.1, 143.25], 2),
+            ),
+            (
+                (&rampup_1x3, [-6.75, 298.1, 162.25], 0),
+                (&crest_1x2, [-6.75, 297.7, 161.5], 0),
+            ),
+        ] {
+            let (ba, bounds_a) = placed(a, pa, ta);
+            let (bb, bounds_b) = placed(b, pb, tb);
+            assert!(bounds_a.intersection(bounds_b).is_some());
+            assert!(!overlaps((&ba, a, bounds_a), (&bb, b, bounds_b)));
+            // Read with the slices reversed, as before this was fixed, the
+            // pair collides and the load skips one of them.
+            let reversed = |m: &Mesh| Mesh {
+                attachment_rows: m.attachment_rows.chunks(3).rev().flatten().cloned().collect(),
+                ..m.clone()
+            };
+            let (a, b) = (reversed(a), reversed(b));
+            assert!(overlaps((&ba, &a, bounds_a), (&bb, &b, bounds_b)));
         }
     }
     #[test]

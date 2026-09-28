@@ -9,12 +9,12 @@ pub const MAX_DROPS: usize = 1024;
 pub const MAX_QUERY_TARGETS: usize = 128;
 /// Core tool actions are implemented by the host's building authority. They
 /// share inventory/drop rules with weapons but have no weapon state machine.
-pub const CORE_TOOLS: [&str; 4] = [
-    "v20.weapon.hammeritem",
-    "v20.weapon.wrenchitem",
-    "v20.weapon.printgun",
-    "v20.weapon.wanditem",
-];
+pub const HAMMER: &str = "v20.weapon.hammeritem";
+pub const WRENCH: &str = "v20.weapon.wrenchitem";
+pub const PRINTER: &str = "v20.weapon.printgun";
+pub const WAND: &str = "v20.weapon.wanditem";
+/// The core tools in their inventory order; name one by its constant.
+pub const CORE_TOOLS: [&str; 4] = [HAMMER, WRENCH, PRINTER, WAND];
 /// Images whose v20 `onFire` is a script that raycasts and acts on the hit
 /// object (`hammerImage::onFire`, `wrenchImage::onFire`, ...) instead of
 /// calling `Parent::onFire`. The runtime reports [`Event::ToolFire`] and the
@@ -142,9 +142,27 @@ pub struct ProjectileContact {
 pub enum ContactResponse {
     Continue,
     Delete,
+    /// `Projectile::Explode`: explode at the contact, armed or not.
+    Explode,
     Bounce(f32),
-    Redirect { vector: Vec3, normalized: bool },
+    Redirect {
+        vector: Vec3,
+        normalized: bool,
+    },
 }
+/// The liquid holding a box: how much of the box it covers and the
+/// liquid's density and viscosity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Liquid {
+    pub coverage: f32,
+    pub density: f32,
+    pub viscosity: f32,
+}
+/// `density` of every stock v20 `ItemData` (tools, weapons, keys, skis and
+/// balls). `drag` is never set, so items feel no liquid drag.
+pub const ITEM_DENSITY: f32 = 0.2;
+/// `Item::mGravity`.
+const ITEM_GRAVITY: f32 = 20.0;
 /// Adapter must sweep the entire segment, including thin native map and brick colliders.
 /// Radius results use closest bounds distance, deterministic target order, and the given cap.
 /// Permissions and visibility are authoritative host decisions; no numeric ID grants access.
@@ -155,10 +173,36 @@ pub trait Query {
     }
 
     fn sweep(&mut self, start: Vec3, end: Vec3, filter: Filter) -> Option<Hit>;
+    /// Sweep a box of `half` extents and `rotation` whose centre moves from
+    /// `start` to `end`; the hit position is the box centre at contact.
+    /// Adapters without shape casts sweep the box's lowest point instead.
+    fn sweep_box(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        half: Vec3,
+        rotation: Quat,
+        filter: Filter,
+    ) -> Option<Hit> {
+        let bottom = Vec3::Y * -ItemBounds::lowest(half, rotation);
+        self.sweep(start - bottom, end - bottom, filter)
+            .map(|hit| Hit {
+                position: hit.position + bottom,
+                ..hit
+            })
+    }
     fn radius(&mut self, center: Vec3, radius: f32, limit: usize) -> Vec<Nearby>;
-    fn visible(&mut self, from: Vec3, target: &Nearby) -> bool;
     fn can_affect(&self, source: ActorId, target: TargetId) -> bool;
+    /// Explosion splash; unlike a direct hit it also honours `selfDamage`.
+    fn can_affect_radius(&self, source: ActorId, target: TargetId) -> bool {
+        self.can_affect(source, target)
+    }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool;
+    /// The liquid covering most of the axis-aligned box standing on `bottom`
+    /// and `height` tall, if any.
+    fn liquid(&mut self, _bottom: Vec3, _height: f32) -> Option<Liquid> {
+        None
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
@@ -174,11 +218,18 @@ pub enum Event {
         actor: ActorId,
         hand: u8,
     },
-    /// A [`HOST_TOOL_IMAGES`] image entered its `onFire` state.
+    /// A [`HOST_TOOL_IMAGES`] image, or an Add-On tool's image with a
+    /// `command`, entered its `onFire` state.
     ToolFire {
         actor: ActorId,
         image: String,
         hand: u8,
+        command: Option<String>,
+    },
+    /// A shot's recoil: add `velocity` to the shooter's own velocity.
+    Recoil {
+        actor: ActorId,
+        velocity: Vec3,
     },
     ImageState {
         actor: ActorId,
@@ -275,6 +326,11 @@ pub enum Event {
     StopSkis {
         actor: ActorId,
     },
+    /// `SkiWeaponImage::onFire` while riding another vehicle: the host
+    /// center-prints "Can't use skis right now." for two seconds.
+    SkisUnavailable {
+        actor: ActorId,
+    },
     SkiNodes {
         actor: ActorId,
         visible: bool,
@@ -343,6 +399,30 @@ pub struct Projectile {
     /// Palette index of a colour spray can's paint (`colorID`).
     #[serde(default)]
     pub paint: Option<u8>,
+    /// The direction a stuck projectile flew in: its velocity is zero, but
+    /// its model keeps pointing that way (v20 keeps the last transform).
+    #[serde(default)]
+    pub heading: Option<Vec3>,
+}
+/// Vertical speed a projectile loses each tick of flight (`gravityMod`);
+/// none unless it is ballistic.
+pub fn fall_per_tick(d: &crate::ProjectileDef) -> f32 {
+    if d.ballistic {
+        9.81 * d.gravity / 120.0
+    } else {
+        0.0
+    }
+}
+/// One tick of free flight, exactly as the host moves a projectile that hits
+/// nothing. Clients coast replicated projectiles with it between the host's
+/// corrections, so a projectile's flight costs no bandwidth.
+pub fn coast(p: &mut Projectile, fall: f32) {
+    p.age = p.age.saturating_add(1);
+    if p.stuck {
+        return;
+    }
+    p.velocity.y -= fall;
+    p.position += p.velocity * (1.0 / 120.0);
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Drop {
@@ -392,6 +472,8 @@ pub struct WeaponsWorld {
     actors: BTreeMap<ActorId, Actor>,
     projectiles: BTreeMap<u64, Projectile>,
     drops: BTreeMap<u64, Drop>,
+    /// Authored item boxes; a drop without one falls as a point.
+    item_bounds: BTreeMap<String, ItemBounds>,
     next_id: u64,
     events: Vec<Event>,
 }
@@ -404,6 +486,7 @@ impl WeaponsWorld {
             actors: BTreeMap::new(),
             projectiles: BTreeMap::new(),
             drops: BTreeMap::new(),
+            item_bounds: BTreeMap::new(),
             next_id: 1,
             events: vec![],
         })
@@ -427,6 +510,15 @@ impl WeaponsWorld {
     }
     pub fn projectiles(&self) -> impl Iterator<Item = &Projectile> {
         self.projectiles.values()
+    }
+    /// [`fall_per_tick`] of every projectile that falls, by definition.
+    pub fn projectile_falls(&self) -> BTreeMap<String, f32> {
+        self.pack
+            .projectiles
+            .iter()
+            .map(|(id, d)| (id.clone(), fall_per_tick(d)))
+            .filter(|(_, fall)| *fall != 0.0)
+            .collect()
     }
     pub fn drops(&self) -> impl Iterator<Item = &Drop> {
         self.drops.values()
@@ -454,6 +546,14 @@ impl WeaponsWorld {
             },
         );
         Ok(())
+    }
+    /// Remove one live projectile without exploding it (`killObjects`).
+    pub fn remove_projectile(&mut self, projectile: u64) -> bool {
+        let removed = self.projectiles.remove(&projectile).is_some();
+        if removed {
+            self.events.push(Event::Removed { projectile });
+        }
+        removed
     }
     pub fn remove_actor(&mut self, id: ActorId) {
         if let Some(mut a) = self.actors.remove(&id) {
@@ -493,11 +593,9 @@ impl WeaponsWorld {
     /// `give` so they fill the first available slot instead.
     pub fn give_at(&mut self, id: ActorId, slot: usize, item: &str) -> Result<()> {
         ensure!(self.contains_item(item), "Unknown item");
+        // `ItemData::onPickup` takes the first free slot; v20 has no
+        // duplicate check, so a player may carry two of one item.
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
-        ensure!(
-            !a.inventory.iter().flatten().any(|i| i == item),
-            "Duplicate item"
-        );
         let place = a.inventory.get_mut(slot).context("Invalid item slot")?;
         ensure!(place.is_none(), "Occupied item slot");
         *place = Some(item.into());
@@ -507,12 +605,8 @@ impl WeaponsWorld {
     /// selection and install `items` slot for slot. In-flight projectiles keep
     /// flying; they belong to the world, not the inventory.
     pub fn set_inventory(&mut self, id: ActorId, items: &[Option<String>]) -> Result<()> {
-        let mut seen = std::collections::BTreeSet::new();
         for item in items.iter().flatten() {
-            ensure!(
-                self.contains_item(item) && seen.insert(item),
-                "Unknown or duplicate loadout item"
-            );
+            ensure!(self.contains_item(item), "Unknown loadout item");
         }
         let slots = self
             .actors
@@ -528,6 +622,10 @@ impl WeaponsWorld {
         a.spawn_tick = self.tick;
         self.actors.insert(id, a);
         Ok(())
+    }
+    /// Authored item boxes that dropped items fall and rest on.
+    pub fn set_item_bounds(&mut self, bounds: BTreeMap<String, ItemBounds>) {
+        self.item_bounds = bounds;
     }
     pub fn contains_item(&self, item: &str) -> bool {
         self.pack.items.contains_key(item) || CORE_TOOLS.contains(&item)
@@ -643,9 +741,6 @@ impl WeaponsWorld {
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
         if let Some(e) = &mut a.images[0] {
             e.trigger = down;
-        }
-        if down && let Some(e) = &mut a.images[1] {
-            e.trigger = false;
         }
         Ok(())
     }
@@ -825,6 +920,7 @@ impl WeaponsWorld {
                 origin: position,
                 was_thrown: false,
                 paint: None,
+                heading: None,
             },
         );
         self.events.push(Event::Spawned {
@@ -842,6 +938,13 @@ impl WeaponsWorld {
         let ids: Vec<_> = self.actors.keys().copied().collect();
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();
+            // v20 `Player::updateMove` sets image slot 1's trigger from move
+            // trigger 1, which Blockland never sends, before the images run.
+            // `AkimboGunImage::onFireAkimbo`'s setImageTrigger(1, 1) is
+            // therefore a pulse the left gun sees only in the tick it is set.
+            if let Some(left) = &mut a.images[1] {
+                left.trigger = false;
+            }
             for hand in 0..2 {
                 if let Some(mut e) = a.images[hand].take() {
                     let keep = self.advance(id, &mut a, &mut e, q);
@@ -861,36 +964,58 @@ impl WeaponsWorld {
                 self.events.push(Event::Removed { projectile: id });
             }
         }
+        // v20 `Item::updatePos`: the item's box falls under gravity 20 and
+        // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
         for d in self.drops.values_mut() {
             if d.velocity.length_squared() < 0.000001 {
                 continue;
             }
-            d.velocity.y -= 20.0 / 120.0;
-            let end = d.position + d.velocity / 120.0;
-            if let Some(hit) = q.sweep(
-                d.position,
-                end,
-                Filter {
-                    projectile_age_ticks: None,
-                    source: d.source,
-                    players: false,
-                    world_only: true,
-                },
-            ) {
+            let shape = self.item_bounds.get(&d.item).map(|b| {
+                let min = Vec3::from(b.min) * d.scale;
+                let max = Vec3::from(b.max) * d.scale;
+                (d.rotation * ((min + max) * 0.5), (max - min) * 0.5)
+            });
+            let (offset, half) = shape.unwrap_or((Vec3::ZERO, Vec3::ZERO));
+            // `Item::updateVelocity` with `ShapeBase::updateContainer`: from
+            // 10% coverage, buoyancy is density ratio times coverage against
+            // gravity, so a density-0.2 item floats a fifth under.
+            let rise = shape
+                .and_then(|_| {
+                    let extent = ItemBounds::lowest(half, d.rotation);
+                    let bottom = d.position + offset - Vec3::Y * extent;
+                    q.liquid(bottom, extent * 2.0)
+                })
+                .filter(|l| l.coverage >= 0.1 && l.density.is_finite())
+                .map_or(0.0, |l| l.density / ITEM_DENSITY * l.coverage.min(1.0));
+            d.velocity.y -= ITEM_GRAVITY * (1.0 - rise) / 120.0;
+            let start = d.position + offset;
+            let end = start + d.velocity / 120.0;
+            let filter = Filter {
+                projectile_age_ticks: None,
+                source: d.source,
+                players: false,
+                world_only: true,
+            };
+            let hit = if shape.is_some() {
+                q.sweep_box(start, end, half, d.rotation, filter)
+            } else {
+                q.sweep(start, end, filter)
+            };
+            if let Some(hit) = hit {
                 if hit.position.is_finite()
                     && hit.normal.is_finite()
                     && hit.normal.length_squared() > 0.1
                 {
                     let normal = hit.normal.normalize();
                     let vn = normal * d.velocity.dot(normal);
-                    d.position = hit.position + normal * 0.002;
+                    d.position = hit.position - offset + normal * 0.002;
                     d.velocity = ((d.velocity - vn) * 0.4 - vn) * 0.2;
                     if d.velocity.length() < 0.15 {
                         d.velocity = Vec3::ZERO;
                     }
                 }
             } else {
-                d.position = end;
+                d.position = end - offset;
             }
         }
         let expired: Vec<_> = self
@@ -956,7 +1081,7 @@ impl WeaponsWorld {
                 if !state.emitter.is_empty() {
                     self.events.push(Event::Effect {
                         source: TargetId::Actor(id),
-                        definition: state.emitter.clone(),
+                        definition: crate::paint_effect(&state.emitter, e.paint),
                         position: a.frame.muzzle[e.hand as usize],
                         node: state.emitter_node.clone(),
                         seconds: state.emitter_seconds,
@@ -1030,6 +1155,20 @@ impl WeaponsWorld {
         q: &mut impl Query,
     ) -> bool {
         let name = image.name.to_ascii_lowercase();
+        // An Add-On tool's own moments run its commands, then carry on.
+        if let Some(command) = image.commands.for_script(script)
+            && !(script.eq_ignore_ascii_case("onfire") && image.command.is_some())
+        {
+            self.events.push(Event::ToolFire {
+                actor: id,
+                image: image.id.clone(),
+                hand: e.hand,
+                command: Some(command.clone()),
+            });
+            if script.eq_ignore_ascii_case("onfire") {
+                return true;
+            }
+        }
         match script.to_ascii_lowercase().as_str() {
             "oncharge" => {
                 if name.contains("spear") || name.contains("football") {
@@ -1043,7 +1182,10 @@ impl WeaponsWorld {
                 } else if name == "wrenchimage" {
                     self.animation(id, "wrench");
                 } else if name.contains("sword")
-                    || matches!(name.as_str(), "hammerimage" | "wandimage" | "adminwandimage")
+                    || matches!(
+                        name.as_str(),
+                        "hammerimage" | "wandimage" | "adminwandimage"
+                    )
                 {
                     self.animation(id, "armattack");
                 }
@@ -1054,20 +1196,18 @@ impl WeaponsWorld {
                 }
             }
             "onfire" => {
-                if HOST_TOOL_IMAGES.contains(&name.as_str()) {
+                if HOST_TOOL_IMAGES.contains(&name.as_str()) || image.command.is_some() {
                     self.events.push(Event::ToolFire {
                         actor: id,
                         image: image.id.clone(),
                         hand: e.hand,
+                        command: image.command.clone(),
                     });
                     return true;
                 }
                 if name == "skiweaponimage" {
                     match a.frame.mount {
-                        Mount::Other => self.events.push(Event::Diagnostic {
-                            actor: Some(id),
-                            message: "Can't use skis right now.".into(),
-                        }),
+                        Mount::Other => self.events.push(Event::SkisUnavailable { actor: id }),
                         Mount::Skis => {
                             a.skiing = false;
                             self.events.push(Event::StopSkis { actor: id });
@@ -1235,22 +1375,47 @@ impl WeaponsWorld {
                         }
                     }
                 }
-                if let Err(error) = self.spawn(
-                    projectile,
-                    id,
-                    origin,
-                    velocity * a.frame.scale,
-                    a.frame.scale,
-                ) {
-                    self.events.push(Event::Diagnostic {
-                        actor: Some(id),
-                        message: error.to_string(),
+                let shot = image.shot.unwrap_or(Shot {
+                    projectiles: 1,
+                    spread: 0.0,
+                    recoil: 0.0,
+                });
+                if shot.recoil > 0.0 {
+                    // Recoil lands before the projectiles, which inherit it.
+                    let kick = -direction * shot.recoil;
+                    velocity += kick * p.inherit;
+                    self.events.push(Event::Recoil {
+                        actor: id,
+                        velocity: kick,
                     });
-                    return true;
                 }
-                if let Some(p) = self.projectiles.get_mut(&(self.next_id - 1)) {
-                    p.was_thrown = name.contains("football");
-                    p.paint = e.paint;
+                for n in 0..shot.projectiles {
+                    let turn = if shot.spread > 0.0 {
+                        let angle = |axis: u64| {
+                            let r = unit_random(self.tick, id.0, u64::from(n) * 3 + axis);
+                            (r - 0.5) * 10.0 * std::f32::consts::PI * shot.spread
+                        };
+                        Quat::from_euler(glam::EulerRot::XYZ, angle(0), angle(1), angle(2))
+                    } else {
+                        Quat::IDENTITY
+                    };
+                    if let Err(error) = self.spawn(
+                        projectile,
+                        id,
+                        origin,
+                        turn * velocity * a.frame.scale,
+                        a.frame.scale,
+                    ) {
+                        self.events.push(Event::Diagnostic {
+                            actor: Some(id),
+                            message: error.to_string(),
+                        });
+                        return true;
+                    }
+                    if let Some(p) = self.projectiles.get_mut(&(self.next_id - 1)) {
+                        p.was_thrown = name.contains("football");
+                        p.paint = e.paint;
+                    }
                 }
                 if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearThrow");
@@ -1275,6 +1440,8 @@ impl WeaponsWorld {
         }
         true
     }
+    /// One tick of a projectile's flight. [`coast`] is the same motion when
+    /// it hits nothing.
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
         let d = self.pack.projectiles[&p.definition].clone();
         p.age += 1;
@@ -1287,9 +1454,7 @@ impl WeaponsWorld {
         if p.stuck {
             return true;
         }
-        if d.ballistic {
-            p.velocity.y -= 9.81 * d.gravity / 120.0;
-        }
+        p.velocity.y -= fall_per_tick(&d);
         let mut remaining = 1.0 / 120.0;
         for _ in 0..4 {
             let end = p.position + p.velocity * remaining;
@@ -1333,6 +1498,10 @@ impl WeaponsWorld {
             match q.on_contact(&contact) {
                 ContactResponse::Continue => {}
                 ContactResponse::Delete => return false,
+                ContactResponse::Explode => {
+                    self.explode(p, &d, q, Some(normal));
+                    return false;
+                }
                 response => match redirected_velocity(&contact, response) {
                     Ok(velocity) => {
                         p.velocity = velocity;
@@ -1374,41 +1543,25 @@ impl WeaponsWorld {
                             position: hit.position,
                         });
                     } else if q.can_catch(p.source, target)
-                        && let Some(mut a) = self.actors.remove(&target)
+                        && let Some(image) = self.mount_ball(target, image)
                     {
-                        if a.images[0].is_none() && self.tick >= a.ball_ready {
-                            let horse = native_id(
-                                "image",
-                                &format!("horse{}", image.rsplit('.').next().unwrap()),
-                            );
-                            let image = if a.frame.horse && self.pack.images.contains_key(&horse) {
-                                horse
-                            } else {
-                                image.clone()
-                            };
-                            self.mount(target, &mut a, &image, 0);
-                            a.ball_ready = self.tick + 36;
-                            if d.name.eq_ignore_ascii_case("footballProjectile") && !p.bounced {
-                                let delta = a.frame.position - p.origin;
-                                self.events.push(Event::FootballCatch {
-                                    source: p.source,
-                                    catcher: target,
-                                    distance_feet: (Vec3::new(delta.x, 0.0, delta.z).length()
-                                        * 1.875)
-                                        .round()
-                                        as u32,
-                                    was_thrown: p.was_thrown,
-                                });
-                            }
-                            self.actors.insert(target, a);
-                            self.events.push(Event::BallCaught {
-                                actor: target,
-                                projectile: p.id,
-                                image,
+                        if d.name.eq_ignore_ascii_case("footballProjectile") && !p.bounced {
+                            let catcher = self.actors[&target].frame.position;
+                            let delta = catcher - p.origin;
+                            self.events.push(Event::FootballCatch {
+                                source: p.source,
+                                catcher: target,
+                                distance_feet: (Vec3::new(delta.x, 0.0, delta.z).length() * 1.875)
+                                    .round() as u32,
+                                was_thrown: p.was_thrown,
                             });
-                            return false;
                         }
-                        self.actors.insert(target, a);
+                        self.events.push(Event::BallCaught {
+                            actor: target,
+                            projectile: p.id,
+                            image,
+                        });
+                        return false;
                     }
                 }
             } else if allowed {
@@ -1469,6 +1622,7 @@ impl WeaponsWorld {
                     .to_degrees();
                 if incidence < d.bounce_angle / 2.0 {
                     p.stuck = true;
+                    p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
                     self.effect(p, &d.stick_effect, Some(normal));
                     return true;
@@ -1491,11 +1645,43 @@ impl WeaponsWorld {
                 } else {
                     "soccerBallItem"
                 };
+                let item = native_id("weapon", item);
                 self.events.push(Event::BallRest {
                     projectile: p.id,
-                    item: native_id("weapon", item),
+                    item: item.clone(),
                     position: p.position,
                 });
+                // `onRest`: a popping item facing the ball's travel.
+                if self.drops.len() < MAX_DROPS {
+                    let drop = self.next_id;
+                    self.next_id += 1;
+                    let travel = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
+                    let rotation = if travel.length_squared() > 1e-6 {
+                        Quat::from_rotation_arc(Vec3::NEG_Z, travel.normalize())
+                    } else {
+                        Quat::IDENTITY
+                    };
+                    self.drops.insert(
+                        drop,
+                        Drop {
+                            rotation,
+                            scale: p.scale,
+                            id: drop,
+                            item: item.clone(),
+                            position: p.position,
+                            velocity: Vec3::ZERO,
+                            source: p.source,
+                            pickup_after: self.tick,
+                            expires: self.tick + 1200,
+                        },
+                    );
+                    self.events.push(Event::Dropped {
+                        drop,
+                        item,
+                        position: p.position,
+                        velocity: Vec3::ZERO,
+                    });
+                }
                 return false;
             }
             remaining *= 1.0 - hit.fraction;
@@ -1530,7 +1716,7 @@ impl WeaponsWorld {
         if !definition.is_empty() {
             self.events.push(Event::Effect {
                 source: TargetId::Actor(p.source),
-                definition: definition.into(),
+                definition: crate::paint_effect(definition, p.paint),
                 position: p.position,
                 node: String::new(),
                 seconds: 0.0,
@@ -1568,25 +1754,26 @@ impl WeaponsWorld {
                 message: "Radius adapter exceeded target budget".into(),
             });
         }
-        for target in targets.into_iter().take(MAX_QUERY_TARGETS) {
-            if !target.distance.is_finite()
-                || target.distance < 0.0
-                || !target.center.is_finite()
-                || !q.can_affect(p.source, target.target)
-                || !q.visible(p.position, &target)
-            {
-                continue;
-            }
-            let damage_factor = if d.explosion.radius > 0.0 {
-                (1.0 - target.distance / (d.explosion.radius * p.scale)).clamp(0.0, 1.0)
+        // `ProjectileData::onExplode`: no line-of-sight test; distance is
+        // taken to the target's centre and both falloffs are quadratic.
+        let falloff = |distance: f32, radius: f32| {
+            if radius > 0.0 {
+                (1.0 - (distance / radius).powi(2)).clamp(0.0, 1.0)
             } else {
                 0.0
-            };
+            }
+        };
+        for target in targets.into_iter().take(MAX_QUERY_TARGETS) {
+            if !target.center.is_finite() || !q.can_affect_radius(p.source, target.target) {
+                continue;
+            }
+            let distance = target.center.distance(p.position);
+            let damage_factor = falloff(distance, d.explosion.radius * p.scale);
             if damage_factor > 0.0 && d.explosion.damage > 0.0 {
                 self.events.push(Event::Damage {
                     source: p.source,
                     target: target.target,
-                    amount: d.explosion.damage * damage_factor,
+                    amount: d.explosion.damage * p.scale * damage_factor,
                     kind: d.radius_damage_type.clone(),
                     position: p.position,
                 });
@@ -1598,17 +1785,34 @@ impl WeaponsWorld {
                     });
                 }
             }
-            let impulse_factor = if d.explosion.impulse_radius > 0.0 {
-                (1.0 - target.distance / (d.explosion.impulse_radius * p.scale)).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            if impulse_factor > 0.0 && d.explosion.impulse > 0.0 {
+            let impulse_factor = falloff(distance, d.explosion.impulse_radius * p.scale);
+            if impulse_factor > 0.0
+                && (d.explosion.impulse > 0.0 || d.explosion.impulse_vertical > 0.0)
+            {
+                // `radiusImpulse` flattens a downward push on anything
+                // standing within three units of the ground.
+                let mut push = target.center - p.position;
+                if push.y < 0.0
+                    && q.sweep(
+                        target.center,
+                        target.center - Vec3::Y * 3.0,
+                        Filter {
+                            projectile_age_ticks: None,
+                            source: p.source,
+                            players: false,
+                            world_only: true,
+                        },
+                    )
+                    .is_some_and(|hit| matches!(hit.target, TargetId::Map(_) | TargetId::Brick(_)))
+                {
+                    push.y = 0.0;
+                }
                 self.events.push(Event::Impulse {
                     source: p.source,
                     target: target.target,
-                    impulse: (target.center - p.position).normalize_or_zero()
-                        * d.explosion.impulse
+                    impulse: (push.normalize_or_zero() * d.explosion.impulse
+                        + Vec3::Y * d.explosion.impulse_vertical)
+                        * p.scale
                         * impulse_factor,
                     position: p.position,
                 });
@@ -1686,4 +1890,16 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
         _ => return Err(anyhow::anyhow!("Response does not redirect")),
     };
     Ok(velocity.clamp_length_max(200.0))
+}
+/// A number in [0, 1) that host and players compute alike for one shot, so
+/// spread needs no random state and nothing on the wire.
+fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
+    let mut z = tick
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(actor.wrapping_mul(0xBF58_476D_1CE4_E5B9))
+        .wrapping_add(n.wrapping_mul(0x94D0_49BB_1331_11EB));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 40) as f32 / (1u64 << 24) as f32
 }

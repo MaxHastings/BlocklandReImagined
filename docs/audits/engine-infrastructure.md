@@ -17,6 +17,11 @@ cargo run --release -p bri-client --bin perf_probe -- content artifacts/perf/gol
   surface's texel in the shared sheet. Coordinates are now remapped onto the
   texels centered inside each surface.
 
+- Items 1-4 below (2026-09-27, render-infra): chunked brick meshes and
+  change-logged query/collision mirrors; mipmaps with v20's filtering
+  prefs; cascaded sun shadows (Shadow Quality); 4x MSAA. See
+  `docs/progress.md`.
+
 ## Remaining, by payoff
 
 1. Any brick change rebuilds the whole world mesh (Golden Gate: ~460 ms on a

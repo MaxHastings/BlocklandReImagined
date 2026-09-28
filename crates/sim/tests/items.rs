@@ -8,6 +8,7 @@ use bri_sim::{
     session::{Command, Session},
     simulation::Simulation,
 };
+use bri_sim::player::PlayerTuning;
 use bri_weapons::{CORE_TOOLS, ItemBounds};
 use bri_world::{Brick, ContentRef, World};
 use glam::Vec3;
@@ -105,14 +106,24 @@ fn static_pickup_is_contact_driven_not_builder_trust_and_duplicates_do_not_resta
     assert!(s.tool_inventories()[&far].slots[3].is_none());
     let timer = s.weapon_view().static_items[0].available_at;
     assert_eq!(timer, 121);
+    // v20 has no duplicate check: the respawned wand fills the last slot.
+    for _ in 0..125 {
+        s.step().unwrap();
+    }
+    assert_eq!(
+        s.tool_inventories()[&player].slots[4].as_deref(),
+        Some(CORE_TOOLS[3])
+    );
+    let timer = s.weapon_view().static_items[0].available_at;
+    assert!(timer > 121);
+    // A full inventory leaves the next respawn in place.
     for _ in 0..125 {
         s.step().unwrap();
     }
     assert_eq!(s.weapon_view().static_items[0].available_at, timer);
-    assert!(s.tool_inventories()[&player].slots[4].is_none());
     assert!(s.set_item_bounds(bounds()).is_err());
     // After the original owner leaves, another overlapping player can consume
-    // the respawned item; an occupied full/duplicate inventory did not consume it.
+    // the respawned item.
     s.disconnect(player).unwrap();
     let next = s
         .join("Next".into(), Vec3::new(0., 0.35, 0.), false)
@@ -294,4 +305,79 @@ fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
             .is_ok()
     );
     assert_eq!(world.bricks.len(), bri_sim::item_spawners::MAX_STATIC_ITEMS);
+}
+#[test]
+fn dropped_item_rests_on_the_bottom_of_its_box() {
+    let mut tall = bounds();
+    // v20 hammerItem's authored box: origin mid-handle, 0.73 above its foot.
+    tall.insert(
+        CORE_TOOLS[0].into(),
+        ItemBounds {
+            min: [-0.18, -0.73, -0.32],
+            max: [0.18, 0.73, 0.32],
+        },
+    );
+    let mut s = session();
+    s.set_item_bounds(tall).unwrap();
+    let a = s
+        .join("Thrower".into(), Vec3::new(8., 1., 8.), false)
+        .unwrap();
+    s.command(a, 2, Command::DropTool { slot: 0 }).unwrap();
+    for _ in 0..600 {
+        s.step().unwrap();
+    }
+    let drop = s.weapon_view().drops[0].clone();
+    assert_eq!(drop.velocity, Vec3::ZERO);
+    assert!(
+        (drop.position.y - 0.73).abs() < 0.01,
+        "hammer origin rests {} above the floor",
+        drop.position.y
+    );
+}
+#[test]
+fn dropping_and_picking_up_a_tool_play_the_item_sound() {
+    use bri_sim::session::Notice;
+    let mut s = session();
+    let a = s
+        .join("Thrower".into(), Vec3::new(8., 1., 8.), false)
+        .unwrap();
+    let b = s
+        .join("Recipient".into(), Vec3::new(8., 2.4, 6.3), false)
+        .unwrap();
+    s.command(b, 1, Command::DropTool { slot: 0 }).unwrap();
+    s.take_private_notices();
+    s.command(a, 1, Command::DropTool { slot: 0 }).unwrap();
+    s.step().unwrap();
+    let sounds: Vec<_> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(_, n)| matches!(n, Notice::Sound(p) if p == "ItemPickup"))
+        .map(|(o, _)| o)
+        .collect();
+    assert_eq!(sounds, [a, b]);
+}
+
+#[test]
+fn pickups_need_the_player_box_itself_to_touch_the_item() {
+    // PlayerData::preload: pickupRadius (0.625) below the box's larger XY
+    // side (1.25) is raised to it, so pickupDelta = (S32)(radius - side) = 0
+    // and the item box must overlap the player's own box, unexpanded
+    // (TGE lineage player.cc; 0.625 is below the side at any player scale).
+    let half = PlayerTuning::default().width * 0.5;
+    assert!(0.625 <= 2.0 * half, "pickupRadius never widens the box");
+    for (gap, picked) in [(-0.02, true), (0.05, false)] {
+        let mut s = session();
+        let at = Vec3::from(s.weapon_view().static_items[0].position);
+        // Item bounds reach 0.1 from its origin.
+        let x = at.x + half + 0.1 + gap;
+        let player = s
+            .join("Reacher".into(), Vec3::new(x, 0.35, at.z), false)
+            .unwrap();
+        s.step().unwrap();
+        assert_eq!(
+            s.tool_inventories()[&player].slots[3].is_some(),
+            picked,
+            "gap {gap}"
+        );
+    }
 }

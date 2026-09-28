@@ -105,7 +105,16 @@ struct Job {
     output: String,
     action: Action,
     row_snapshot: Row,
+    /// Logical time the row was scheduled: its activation's time, or the
+    /// due time of the job whose relay or chain fired it.
+    #[serde(default)]
+    scheduled: u64,
     due: u64,
+    /// Which activation of its host tick set this row off. v20 stamps every
+    /// input with its own millisecond; activations sharing one of our ticks
+    /// keep that order, and everything they schedule inherits it.
+    #[serde(default)]
+    order: u32,
     sequence: u64,
     cancelable: bool,
     depth: u32,
@@ -137,6 +146,8 @@ struct Snapshot {
     now: u64,
     next_sequence: u64,
     last_origin: u64,
+    #[serde(default)]
+    next_order: u32,
     bricks: Vec<BrickProgram>,
     jobs: Vec<Job>,
     reappear: Vec<(Id, u64)>,
@@ -144,7 +155,11 @@ struct Snapshot {
 struct Plan {
     jobs: Vec<Job>,
     cancel: BTreeSet<Id>,
+    /// Logical instant of the activation; its cancels see only jobs pending then.
+    at: Instant,
 }
+/// A logical event time: microseconds, then activation order within them.
+type Instant = (u64, u32);
 struct CompiledRow {
     input: String,
     class: Class,
@@ -159,10 +174,11 @@ pub struct EventWorld {
     now: u64,
     next_sequence: u64,
     last_origin: u64,
+    next_order: u32,
     bricks: BTreeMap<Id, BrickProgram>,
     compiled: BTreeMap<Id, Vec<Option<CompiledRow>>>,
     names: BTreeMap<(u64, String), BTreeSet<Id>>,
-    queues: BTreeMap<u64, BTreeMap<(u64, u64), Job>>,
+    queues: BTreeMap<u64, BTreeMap<(u64, u32, u64), Job>>,
     pending: usize,
     held: BTreeMap<u64, Job>,
     program_costs: BTreeMap<Id, usize>,
@@ -190,6 +206,7 @@ impl EventWorld {
             now: 0,
             next_sequence: 1,
             last_origin: 0,
+            next_order: 0,
             bricks: BTreeMap::new(),
             compiled: BTreeMap::new(),
             names: BTreeMap::new(),
@@ -208,6 +225,24 @@ impl EventWorld {
     }
     pub fn pending(&self) -> usize {
         self.pending
+    }
+    /// Rows `input` on brick `id` would schedule now, as v20's
+    /// `ProcessInputEvent` counts them against the schedule quota.
+    pub fn activation_count(&self, id: Id, input: &str) -> Result<usize> {
+        self.expansion_count(&[id], input)
+    }
+    /// Scheduled rows from bricks of owner `scope` still waiting to run.
+    pub fn pending_for_scope(&self, scope: u64) -> usize {
+        self.queues
+            .values()
+            .flat_map(|q| q.values())
+            .chain(self.held.values())
+            .filter(|j| {
+                self.bricks
+                    .get(&j.context.source)
+                    .is_some_and(|b| b.owner_scope == scope)
+            })
+            .count()
     }
     pub fn now_us(&self) -> u64 {
         self.now
@@ -319,10 +354,28 @@ impl EventWorld {
         Ok(())
     }
     pub fn cancel_source(&mut self, id: Id, mode: CancelMode) -> usize {
-        if mode == CancelMode::AuthoredDelayed && !self.delayed.contains_key(&id) {
+        match mode {
+            CancelMode::All => self.retain_jobs(|j| j.context.source != id),
+            CancelMode::AuthoredDelayed => {
+                self.cancel_authored(&BTreeSet::from([id]), (self.now, self.next_order))
+            }
+        }
+    }
+    /// v20's `cancelEvents` at logical time `at`: removes the sources'
+    /// delayed rows that were already scheduled by then and have not run yet.
+    /// Rows scheduled later (a click after a late cancel came due) and rows
+    /// due earlier (which v20 had already run) are untouched.
+    fn cancel_authored(&mut self, sources: &BTreeSet<Id>, at: Instant) -> usize {
+        if sources.iter().all(|id| !self.delayed.contains_key(id)) {
             return 0;
         }
-        self.retain_jobs(|j| !(j.context.source == id && (mode == CancelMode::All || j.cancelable)))
+        self.retain_jobs(|j| !Self::cancelled_by(j, sources, at))
+    }
+    fn cancelled_by(j: &Job, sources: &BTreeSet<Id>, at: Instant) -> bool {
+        j.cancelable
+            && sources.contains(&j.context.source)
+            && (j.scheduled, j.order) <= at
+            && (j.due, j.order) >= at
     }
     pub fn cancel_origin(&mut self, origin: u64) -> usize {
         self.retain_jobs(|j| j.context.origin != origin)
@@ -412,7 +465,7 @@ impl EventWorld {
         }
         Ok(())
     }
-    fn plan(&self, t: &Trigger, fired_at: u64, depth: u32) -> Result<Plan> {
+    fn plan(&self, t: &Trigger, fired_at: u64, order: u32, depth: u32) -> Result<Plan> {
         let brick = self
             .bricks
             .get(&t.source)
@@ -426,6 +479,7 @@ impl EventWorld {
         let mut plan = Plan {
             jobs: Vec::new(),
             cancel: BTreeSet::new(),
+            at: (fired_at, order),
         };
         if input.name.eq_ignore_ascii_case("onRelay") && brick.implicit_cancel_relays {
             plan.cancel.insert(brick.id);
@@ -460,9 +514,18 @@ impl EventWorld {
                     output: compiled.output.clone(),
                     action: action.clone(),
                     row_snapshot: row.clone(),
+                    scheduled: fired_at,
                     due: fired_at
                         .checked_add(u64::from(row.delay_ms) * 1000)
                         .context("Event deadline overflow")?,
+                    // A runaway zero-delay chain gives up its place in its
+                    // instant and queues behind everything else due then, so
+                    // other activations' chains keep taking turns with it.
+                    order: if row.delay_ms == 0 && depth >= self.limits.loop_warning_depth {
+                        u32::MAX
+                    } else {
+                        order
+                    },
                     sequence: 0,
                     cancelable: row.delay_ms > 0
                         && (!input.name.eq_ignore_ascii_case("onToolBreak")
@@ -478,11 +541,17 @@ impl EventWorld {
         if p.jobs.is_empty() && p.cancel.is_empty() {
             return true;
         }
-        let (cancelled, cancelled_bytes) = p
-            .cancel
-            .iter()
-            .filter_map(|id| self.delayed.get(id))
-            .fold((0usize, 0usize), |(n, b), (dn, db)| (n + dn, b + db));
+        let (cancelled, cancelled_bytes) =
+            if p.cancel.iter().any(|id| self.delayed.contains_key(id)) {
+                self.queues
+                    .values()
+                    .flat_map(|q| q.values())
+                    .chain(self.held.values())
+                    .filter(|j| Self::cancelled_by(j, &p.cancel, p.at))
+                    .fold((0usize, 0usize), |(n, b), j| (n + 1, b + j.encoded_bytes))
+            } else {
+                (0, 0)
+            };
         let added_bytes: usize = p.jobs.iter().map(|j| j.encoded_bytes).sum();
         let mut origins: BTreeSet<u64> = if cancelled == 0 {
             self.queues
@@ -495,7 +564,7 @@ impl EventWorld {
                 .values()
                 .flat_map(|q| q.values())
                 .chain(self.held.values())
-                .filter(|j| !j.cancelable || !p.cancel.contains(&j.context.source))
+                .filter(|j| !Self::cancelled_by(j, &p.cancel, p.at))
                 .map(|j| j.context.origin)
                 .collect()
         };
@@ -513,11 +582,7 @@ impl EventWorld {
         if p.jobs.is_empty() && p.cancel.is_empty() {
             return 0;
         }
-        let n = if p.cancel.iter().all(|id| !self.delayed.contains_key(id)) {
-            0
-        } else {
-            self.retain_jobs(|j| !j.cancelable || !p.cancel.contains(&j.context.source))
-        };
+        let n = self.cancel_authored(&p.cancel, p.at);
         for mut j in p.jobs {
             j.sequence = self.next_sequence;
             self.next_sequence += 1;
@@ -549,16 +614,17 @@ impl EventWorld {
         self.queues
             .entry(j.context.origin)
             .or_default()
-            .insert((j.due, j.sequence), j);
+            .insert((j.due, j.order, j.sequence), j);
         self.pending += 1;
     }
     /// Atomic admission. On error caller retains the input and explicitly retries/reports it.
     pub fn trigger(&mut self, t: Trigger) -> Result<usize> {
-        let p = self.plan(&t, self.now, 0)?;
+        let p = self.plan(&t, self.now, self.next_order, 0)?;
         ensure!(
             self.can_commit(&p),
             "Event admission backpressure: no mutation committed"
         );
+        self.next_order = self.next_order.saturating_add(1);
         let count = p.jobs.len();
         self.commit(p);
         Ok(count)
@@ -613,6 +679,7 @@ impl EventWorld {
         let mut p = Plan {
             jobs: Vec::new(),
             cancel: BTreeSet::new(),
+            at: (parent.due, parent.order),
         };
         for id in ids {
             let mut t = Trigger::new(id, input, parent.context.origin);
@@ -625,7 +692,10 @@ impl EventWorld {
             {
                 t.targets.insert(Slot::Client, client);
             }
-            let child = self.plan(&t, self.now, parent.depth.saturating_add(1))?;
+            // Chained rows are scheduled when their parent ran, as v20's
+            // `schedule` from inside the parent's call, not at this phase's
+            // later clock.
+            let child = self.plan(&t, parent.due, parent.order, parent.depth.saturating_add(1))?;
             ensure!(
                 p.jobs.len() + child.jobs.len() <= self.limits.pending,
                 "Relay fanout exceeds pending limit"
@@ -640,30 +710,47 @@ impl EventWorld {
             report.diagnostics.push(text);
         }
     }
-    pub fn advance(&mut self, now_us: u64, host: &mut impl Host) -> Result<RunReport> {
+    /// Move the clock to the current host tick without running anything, so
+    /// inputs triggered during that tick measure their delays from it.
+    pub fn set_clock(&mut self, now_us: u64) -> Result<()> {
         ensure!(now_us >= self.now, "Event clock cannot run backwards");
+        if now_us > self.now {
+            self.next_order = 0;
+        }
         self.now = now_us;
+        Ok(())
+    }
+    pub fn advance(&mut self, now_us: u64, host: &mut impl Host) -> Result<RunReport> {
+        self.set_clock(now_us)?;
         let mut r = RunReport::default();
         let mut blocked = BTreeSet::new();
 
         while r.steps < self.limits.steps_per_phase {
-            let mut candidates: Vec<_> = self
+            // v20 runs every scheduled row from one queue, earliest due
+            // first and then in scheduling order. Rows from different
+            // activations therefore interleave exactly as they were
+            // scheduled: a click's 100 ms revert runs before a later click's
+            // glow, and a late cancelEvents only sees rows scheduled before
+            // it. Origins are only budget and deferral boundaries.
+            let Some(origin) = self
                 .queues
                 .iter()
-                .filter(|(origin, q)| {
+                .filter(|(origin, _)| {
                     !blocked.contains(*origin)
                         && r.origins.get(origin).map_or(0, |v| v.steps)
                             < self.limits.steps_per_origin
-                        && q.first_key_value()
-                            .is_some_and(|((due, _), _)| *due <= self.now)
                 })
-                .map(|(o, _)| *o)
-                .collect();
-            if candidates.is_empty() {
+                .filter_map(|(origin, q)| {
+                    q.first_key_value()
+                        .map(|(key, _)| key)
+                        .filter(|(due, _, _)| *due <= self.now)
+                        .map(|key| (*key, *origin))
+                })
+                .min()
+                .map(|(_, origin)| origin)
+            else {
                 break;
-            }
-            candidates.sort_by_key(|o| (*o <= self.last_origin, *o));
-            let origin = candidates[0];
+            };
             self.last_origin = origin;
             let q = self.queues.get_mut(&origin).unwrap();
             let (_, job) = q.pop_first().unwrap();
@@ -758,13 +845,15 @@ impl EventWorld {
         let mut child = Plan {
             jobs: Vec::new(),
             cancel: BTreeSet::new(),
+            at: (j.due, j.order),
         };
         let mut digit = None;
         let mut timer = None;
         let mut expanded = 0;
         let intent = match &j.action {
             Action::Cancel => {
-                r.cancelled += self.cancel_source(j.target.id, CancelMode::AuthoredDelayed);
+                r.cancelled +=
+                    self.cancel_authored(&BTreeSet::from([j.target.id]), (j.due, j.order));
                 return Ok(true);
             }
             Action::SetEnabled(selection, value) => {
@@ -867,8 +956,9 @@ impl EventWorld {
                     job.context.source = j.target.id;
                     job.output = "reappear".into();
                     job.cancelable = false;
-                    job.due = self
-                        .now
+                    job.scheduled = j.due;
+                    job.due = j
+                        .due
                         .checked_add(*seconds as u64 * 1_000_000)
                         .context("Reappear deadline overflow")?;
                     job.measure();
@@ -954,6 +1044,7 @@ impl EventWorld {
             now: self.now,
             next_sequence: self.next_sequence,
             last_origin: self.last_origin,
+            next_order: self.next_order,
             bricks: self.bricks.values().cloned().collect(),
             jobs: self
                 .queues
@@ -995,6 +1086,7 @@ impl EventWorld {
                     && j.sequence < s.next_sequence
                     && sequence.insert(j.sequence)
                     && j.context.origin > 0
+                    && j.scheduled <= j.due
                     && w.bricks.contains_key(&j.context.source)
                     && j.target.id.index > 0
                     && j.target.id.generation > 0,
@@ -1079,6 +1171,7 @@ impl EventWorld {
         w.now = s.now;
         w.next_sequence = s.next_sequence;
         w.last_origin = s.last_origin;
+        w.next_order = s.next_order;
         ensure!(
             s.reappear.len() <= w.limits.bricks,
             "Reappear checkpoint bound"

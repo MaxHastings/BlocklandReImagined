@@ -50,6 +50,7 @@ fn main() -> Result<()> {
                 Occupant {
                     id: OccupantId(i as u64 + 1),
                     owner: OwnerId(1),
+                    body: [1.25, 2.65],
                 },
                 s.transform.position,
             )?;
@@ -66,17 +67,16 @@ fn main() -> Result<()> {
         }
     }
     world.detect_collisions(&(), &());
+    // A pool 4 deep between x 170 and 210 for the boats.
+    let waters = [bri_content::water::Water::volume(
+        [170., -1000., -1e4],
+        [210., 4., 1e4],
+    )];
     let start = std::time::Instant::now();
     let mut fires = 0;
     let mut intent_count = 0;
     for _ in 0..1200 {
-        vehicles.pre_step(&mut world, |p| {
-            if p[0] > 170. && p[0] < 210. {
-                Some(4.)
-            } else {
-                None
-            }
-        })?;
+        vehicles.pre_step(&mut world, &waters)?;
         world.step();
         vehicles.post_step(&mut world)?;
         let intents = vehicles.drain_intents();

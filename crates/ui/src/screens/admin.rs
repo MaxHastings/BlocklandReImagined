@@ -39,65 +39,59 @@ fn native_dialog(title: &str) -> View {
     root.children.push(win);
     View::new(&root)
 }
-fn option_pairs(o: &AdminOptions) -> Vec<(&'static str, String)> {
-    let mut p = vec![
-        ("Port", o.port.to_string()),
-        ("BrickLimit", o.brick_limit.to_string()),
-        ("MaxBricksPerSecond", o.bricks_per_second.to_string()),
-        ("MaxChatLen", o.max_chat_length.to_string()),
-        ("MaxPhysVehicles_Total", o.physics_vehicles.to_string()),
-        ("MaxPlayerVehicles_Total", o.player_vehicles.to_string()),
-        (
-            "RandomBrickColor",
-            u8::from(o.random_brick_color).to_string(),
-        ),
-        ("ETardFilter", u8::from(o.chat_filter).to_string()),
-        ("FallingDamage", u8::from(o.falling_damage).to_string()),
-        (
-            "BrickPublicDomainTimeout",
-            o.public_domain_timeout_minutes.to_string(),
-        ),
-        ("TooFarDistance", o.too_far_distance.to_string()),
-    ];
-    for (q, keys) in [
-        (
-            &o.per_player,
-            [
-                "Quota::Schedules",
-                "Quota::Misc",
-                "Quota::Projectile",
-                "Quota::Item",
-                "Quota::Environment",
-                "Quota::Player",
-                "Quota::Vehicle",
-            ],
-        ),
-        (
-            &o.lan,
-            [
-                "QuotaLAN::Schedules",
-                "QuotaLAN::Misc",
-                "QuotaLAN::Projectile",
-                "QuotaLAN::Item",
-                "QuotaLAN::Environment",
-                "QuotaLAN::Player",
-                "QuotaLAN::Vehicle",
-            ],
-        ),
-    ] {
-        for (k, n) in keys.into_iter().zip([
-            q.schedules,
-            q.misc,
-            q.projectiles,
-            q.items,
-            q.environment,
-            q.players,
-            q.vehicles,
-        ]) {
-            p.push((k, n.to_string()));
+/// Stable names for serverConfigGui's unnamed `$Pref::Server::*` fields.
+fn name_option_fields(view: &mut View) {
+    for n in view.walk().collect::<Vec<_>>() {
+        if let Some(var) = view.nodes[n].ctrl.variable.clone()
+            && let Some(suffix) = var.to_ascii_lowercase().strip_prefix("$pref::server::")
+        {
+            let name = format!("AdminOption_{suffix}");
+            view.names.insert(name.clone(), n);
+            view.nodes[n].ctrl.name = Some(name);
         }
     }
-    p
+}
+/// Show `o` in serverConfigGui's fields.
+fn fill_options(view: &mut View, o: &AdminOptions) {
+    for (k, value) in option_pairs(o) {
+        if let Some(n) = view.id(&format!("AdminOption_{}", k.to_ascii_lowercase())) {
+            if view.node(n).ctrl.class == "GuiCheckBoxCtrl" {
+                view.set_bool(n, value == "1");
+            } else {
+                view.set_text(n, value);
+            }
+        }
+    }
+}
+/// serverConfigGui's fields over `base` (which keeps what the form lacks).
+fn collect_options(view: &View, base: AdminOptions) -> Result<AdminOptions, String> {
+    let mut o = base.clone();
+    for (k, _) in option_pairs(&base) {
+        let name = format!("AdminOption_{}", k.to_ascii_lowercase());
+        let Some(n) = view.id(&name) else { continue };
+        let value = if view.node(n).ctrl.class == "GuiCheckBoxCtrl" {
+            if view.bool_value(n) {
+                "1".into()
+            } else {
+                "0".into()
+            }
+        } else {
+            view.edit_text(n)
+        };
+        set_option(&mut o, k, &value)?;
+    }
+    Ok(o)
+}
+/// Sends the confirmed request. `changeMapButton::click` also pops
+/// changeMapGui and adminGui, so the loading GUI takes over the screen.
+fn accept_confirmation(core: &mut Core) {
+    if let Some(c) = core.admin.confirmation.take() {
+        if matches!(c.action, AdminAction::ChangeMap { .. }) {
+            core.pop(ScreenId::AdminMaps);
+            core.pop(ScreenId::Admin);
+        }
+        core.admin_request(c.action);
+    }
 }
 impl AdminScreen {
     pub fn new(id: ScreenId, core: &Core) -> Self {
@@ -113,21 +107,13 @@ impl AdminScreen {
             _ => "",
         };
         let mut view = if id == ScreenId::AdminCredentials {
-            native_dialog("Native Server Credentials")
+            native_dialog("Server Passwords")
         } else {
             layout_view(core, layout)
         };
         let parent = window(&view).unwrap_or(view.root);
         // Stable native names identify unnamed source buttons for internal tests.
-        for n in view.walk().collect::<Vec<_>>() {
-            if let Some(var) = view.nodes[n].ctrl.variable.clone()
-                && let Some(suffix) = var.to_ascii_lowercase().strip_prefix("$pref::server::")
-            {
-                let name = format!("AdminOption_{suffix}");
-                view.names.insert(name.clone(), n);
-                view.nodes[n].ctrl.name = Some(name);
-            }
-        }
+        name_option_fields(&mut view);
         if id == ScreenId::Admin {
             for (name, label, y) in [
                 ("NativeHostOptions", "Host Options", 246),
@@ -210,7 +196,7 @@ impl AdminScreen {
                 text(
                     "GuiTextProfile",
                     Rect::new(15, 266, 390, 22),
-                    "Native controls; changes require host acknowledgement.",
+                    "Changes take effect once the server accepts them.",
                 ),
             );
         }
@@ -229,8 +215,44 @@ impl AdminScreen {
                 Rect::new(205, 158, 98, 83)
             } else {
                 let h = view.nodes[parent].ctrl.extent[1];
-                view.nodes[parent].ctrl.extent[1] = h + 29;
-                Rect::new(12, h, view.nodes[parent].ctrl.extent[0] - 24, 27)
+                // The status row grows the window, but never past v20's
+                // 640x480 canvas, the smallest the automatic UI scale
+                // leaves (2560x1440 is 853x480): a full-height window takes
+                // the row from its tallest scroll box instead.
+                let over = (h + 29 - 480).max(0);
+                let mut span = (12, view.nodes[parent].ctrl.extent[0] - 24);
+                if over > 0 {
+                    let children = view.nodes[parent].children.clone();
+                    let scroll = children
+                        .iter()
+                        .copied()
+                        .filter(|&c| view.nodes[c].ctrl.class.eq_ignore_ascii_case("GuiScrollCtrl"))
+                        .max_by_key(|&c| view.nodes[c].ctrl.extent[1]);
+                    if let Some(scroll) = scroll {
+                        let bottom =
+                            view.nodes[scroll].ctrl.position[1] + view.nodes[scroll].ctrl.extent[1];
+                        view.nodes[scroll].ctrl.extent[1] -= over;
+                        // Under the box it came from, clear of the buttons.
+                        span = (
+                            view.nodes[scroll].ctrl.position[0],
+                            view.nodes[scroll].ctrl.extent[0],
+                        );
+                        for c in children {
+                            if view.nodes[c].ctrl.position[1] >= bottom {
+                                view.nodes[c].ctrl.position[1] -= over;
+                            }
+                        }
+                    }
+                }
+                // Controls v20 parked below the window (AdminLoginGui's
+                // escape `closer`) stay clipped out of sight.
+                for c in view.nodes[parent].children.clone() {
+                    if view.nodes[c].ctrl.position[1] >= h {
+                        view.nodes[c].ctrl.position[1] += 29 - over;
+                    }
+                }
+                view.nodes[parent].ctrl.extent[1] = h + 29 - over;
+                Rect::new(span.0, h - over, span.1, 27)
             };
             let mut c = text("GuiMLTextProfile", r, "");
             c.class = "GuiMLTextCtrl".into();
@@ -268,18 +290,7 @@ impl AdminScreen {
     }
     fn populate_options(&mut self) {
         if let Some(o) = &self.options {
-            for (k, value) in option_pairs(o) {
-                if let Some(n) = self
-                    .view
-                    .id(&format!("AdminOption_{}", k.to_ascii_lowercase()))
-                {
-                    if self.view.node(n).ctrl.class == "GuiCheckBoxCtrl" {
-                        self.view.set_bool(n, value == "1");
-                    } else {
-                        self.view.set_text(n, value);
-                    }
-                }
-            }
+            fill_options(&mut self.view, o);
             set(&mut self.view, "AdminServerName", o.name.clone());
             set(&mut self.view, "AdminMaxPlayers", o.max_players.to_string());
         }
@@ -610,9 +621,10 @@ impl AdminScreen {
             }
             if let Some(n) = self.view.id("AdminPasswordSlot") {
                 let selected = self.view.selected(n);
+                // No server checks a join password yet, so there is no
+                // Join slot to set.
                 self.view.state(n).items = if host {
                     vec![
-                        ("Join".into(), 0),
                         ("Admin".into(), 1),
                         ("Super Admin".into(), 2),
                     ]
@@ -702,59 +714,10 @@ impl AdminScreen {
         });
     }
     fn collect_options(&self) -> Result<AdminOptions, String> {
-        let mut o = self.options.clone().ok_or("Host settings unavailable")?;
-        let val = |key: &str| {
-            edit(
-                &self.view,
-                &format!("AdminOption_{}", key.to_ascii_lowercase()),
-            )
-        };
-        let number = |key: &str| {
-            val(key)
-                .parse::<u32>()
-                .map_err(|_| format!("Invalid {key}"))
-        };
-        o.port = u16::try_from(number("Port")?).map_err(|_| "Invalid port")?;
-        if o.port < 1024 {
-            return Err("Port must be 1024–65535.".into());
-        }
-        o.brick_limit = number("BrickLimit")?;
-        o.bricks_per_second = number("MaxBricksPerSecond")?;
-        o.max_chat_length = number("MaxChatLen")?;
-        o.physics_vehicles = number("MaxPhysVehicles_Total")?;
-        o.player_vehicles = number("MaxPlayerVehicles_Total")?;
-        o.public_domain_timeout_minutes = val("BrickPublicDomainTimeout")
-            .parse()
-            .map_err(|_| "Invalid public-domain timeout")?;
-        o.too_far_distance = val("TooFarDistance")
-            .parse()
-            .map_err(|_| "Invalid distance")?;
-        if !o.too_far_distance.is_finite()
-            || o.too_far_distance < 0.
-            || o.public_domain_timeout_minutes < -1
-        {
-            return Err("Invalid distance or timeout.".into());
-        }
-        for (field, key) in [
-            (&mut o.random_brick_color, "RandomBrickColor"),
-            (&mut o.chat_filter, "ETardFilter"),
-            (&mut o.falling_damage, "FallingDamage"),
-        ] {
-            *field = check(
-                &self.view,
-                &format!("AdminOption_{}", key.to_ascii_lowercase()),
-            );
-        }
-        for (q, prefix) in [(&mut o.per_player, "Quota"), (&mut o.lan, "QuotaLAN")] {
-            q.schedules = number(&format!("{prefix}::Schedules"))?;
-            q.misc = number(&format!("{prefix}::Misc"))?;
-            q.projectiles = number(&format!("{prefix}::Projectile"))?;
-            q.items = number(&format!("{prefix}::Item"))?;
-            q.environment = number(&format!("{prefix}::Environment"))?;
-            q.players = number(&format!("{prefix}::Player"))?;
-            q.vehicles = number(&format!("{prefix}::Vehicle"))?;
-        }
-        Ok(o)
+        collect_options(
+            &self.view,
+            self.options.clone().ok_or("Host settings unavailable")?,
+        )
     }
 }
 impl Screen for AdminScreen {
@@ -818,9 +781,7 @@ impl Screen for AdminScreen {
             return true;
         }
         if self.id == ScreenId::AdminConfirm && matches!(key, Key::Return | Key::NumpadEnter) {
-            if let Some(c) = core.admin.confirmation.take() {
-                core.admin_request(c.action);
-            }
+            accept_confirmation(core);
             core.pop(self.id);
             return true;
         }
@@ -863,9 +824,7 @@ impl Screen for AdminScreen {
         let cmd = command_of(&self.view, ev.node).to_ascii_lowercase();
         if self.id == ScreenId::AdminConfirm {
             if !cmd.contains("nocallback") {
-                if let Some(c) = core.admin.confirmation.take() {
-                    core.admin_request(c.action);
-                }
+                accept_confirmation(core);
             } else {
                 core.admin.confirmation = None;
             }
@@ -914,8 +873,12 @@ impl Screen for AdminScreen {
             "admingui::spy();" => {
                 core.admin_request(AdminAction::Spy { target });
             }
+            // `AdminGui_Wand` pops adminGui and escapeMenu too, so the
+            // wand is in hand the moment it is picked.
             "admingui_wand();" => {
                 core.admin_request(AdminAction::Wand);
+                core.pop(ScreenId::Admin);
+                core.pop(ScreenId::EscapeMenu);
             }
             "canvas.pushdialog(unbangui);" => core.push(ScreenId::AdminUnban),
             "canvas.pushdialog(changemapgui);" => core.push(ScreenId::AdminMaps),
@@ -995,6 +958,10 @@ impl Screen for AdminScreen {
             "nativeadmincredentials" => core.push(ScreenId::AdminCredentials),
             "canvas.popdialog(serverconfiggui);" => match self.collect_options() {
                 Ok(options) => {
+                    // Only the local host changes these; they are its saved
+                    // `$Pref::Server::*`, as in v20.
+                    options_to_prefs(&options, &mut core.prefs);
+                    core.save_settings();
                     core.admin_request(AdminAction::ConfigureHost {
                         options: Box::new(options),
                     });
@@ -1052,5 +1019,65 @@ impl Screen for AdminScreen {
             _ => {}
         }
         self.refresh(core);
+    }
+}
+
+/// Start Game's Advanced Config: v20's serverConfigGui over the saved
+/// `$Pref::Server::*`, which the next hosted game starts with. Done saves
+/// them; Defaults puts v20's values back in the form.
+pub struct ServerConfig {
+    view: View,
+}
+impl ServerConfig {
+    pub fn new(core: &Core) -> Self {
+        let mut view = layout_view(core, "serverConfigGui");
+        name_option_fields(&mut view);
+        fill_options(&mut view, &options_from_prefs(&core.prefs));
+        Self { view }
+    }
+    fn done(&mut self, core: &mut Core) {
+        match collect_options(&self.view, options_from_prefs(&core.prefs)) {
+            Ok(options) => {
+                options_to_prefs(&options, &mut core.prefs);
+                core.save_settings();
+                core.pop(ScreenId::ServerConfig);
+            }
+            Err(e) => core.message_ok("Advanced Config", &e),
+        }
+    }
+}
+impl Screen for ServerConfig {
+    fn id(&self) -> ScreenId {
+        ScreenId::ServerConfig
+    }
+    fn view(&self) -> &View {
+        &self.view
+    }
+    fn view_mut(&mut self) -> &mut View {
+        &mut self.view
+    }
+    fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
+        if key == Key::Escape {
+            core.pop(ScreenId::ServerConfig);
+            return true;
+        }
+        false
+    }
+    fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
+        if ev.kind == EventKind::Close {
+            core.pop(ScreenId::ServerConfig);
+            return;
+        }
+        if !matches!(ev.kind, EventKind::Click | EventKind::Submit) {
+            return;
+        }
+        let command = command_of(&self.view, ev.node).to_ascii_lowercase();
+        match command.as_str() {
+            "canvas.popdialog(serverconfiggui);" => self.done(core),
+            "serverconfiggui.clickdefaults();" => {
+                fill_options(&mut self.view, &AdminOptions::default())
+            }
+            _ => {}
+        }
     }
 }

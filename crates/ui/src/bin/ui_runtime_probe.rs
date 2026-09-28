@@ -56,7 +56,7 @@ fn click(ui: &mut Ui, screen: ScreenId, name: &str) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let pack_path = PathBuf::from(args.first().map_or("content/ui-pack-003", String::as_str));
+    let pack_path = PathBuf::from(args.first().map_or("content/ui-pack-004", String::as_str));
     let out = PathBuf::from(
         args.get(1)
             .map_or("artifacts/native-ui-runtime", String::as_str),
@@ -173,6 +173,25 @@ fn main() -> Result<()> {
             Ok(())
         };
         render(&ui, "main-menu", &mut renderer, &mut report)?;
+        // `~` console over the main menu: echo, help, a warning and an error.
+        ui.core.toggle_console();
+        ui.update(0);
+        bri_console::warn("Example warning line");
+        bri_console::error("Example error line");
+        for line in ["help", "volume"] {
+            for c in line.chars() {
+                ui.handle_input(InputEvent::Char(c));
+            }
+            key(&mut ui, Key::Return);
+        }
+        for c in "conn".chars() {
+            ui.handle_input(InputEvent::Char(c));
+        }
+        ui.update(16);
+        ensure!(ui.top_id() == ScreenId::Console, "console must open");
+        render(&ui, "console", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
+        ui.update(200);
         ui.core.push(ScreenId::JoinServer);
         ui.apply(UiUpdate::LanServers {
             servers: vec![ServerInfo {
@@ -185,6 +204,7 @@ fn main() -> Result<()> {
                 max_players: 8,
                 bricks: 1534,
                 map: "Bedroom".into(),
+                favorite: true,
             }],
             querying: false,
         });
@@ -227,7 +247,7 @@ fn main() -> Result<()> {
         ui.apply(UiUpdate::Connection(ConnectionState::Loading {
             map: "Bedroom".into(),
             preview: IconRef::None,
-            phase: LoadPhase::Ghosting,
+            status: "RECEIVING WORLD".into(),
             progress: 0.6,
         }));
         render(&ui, "loading", &mut renderer, &mut report)?;
@@ -296,6 +316,41 @@ fn main() -> Result<()> {
         ui.core.run_command("useTools", true);
         ui.update(120);
         render(&ui, "hud-tools", &mut renderer, &mut report)?;
+        // A v20-shaped chat history: player chat, server messages and the
+        // save/load messages, then the Say and Team boxes, then a page up.
+        for text in [
+            "\u{E003}Blockhead\u{E006}: hello",
+            "\u{E003}Max\u{E000} cleared all bricks.",
+            "Loading bricks. Please wait.",
+            "412 / 412 bricks created in 3 seconds",
+            "\u{E001}Blockhead \u{E006}spawned the \u{E003}Jeep",
+            "\u{E003}Max\u{E006}: nice build",
+        ] {
+            ui.apply(UiUpdate::Chat { text: text.into() });
+        }
+        ui.apply(UiUpdate::Talking(vec!["Blockhead".into(), "Max".into()]));
+        ui.core.run_command("useTools", true);
+        ui.core.run_command("globalChat", true);
+        ui.update(16);
+        render(&ui, "hud-chat-say", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
+        ui.core.run_command("teamChat", true);
+        ui.update(16);
+        render(&ui, "hud-chat-team", &mut renderer, &mut report)?;
+        key(&mut ui, Key::Escape);
+        ui.apply(UiUpdate::Talking(vec![]));
+        for i in 0..12 {
+            ui.apply(UiUpdate::Chat {
+                text: format!("\u{E003}Blockhead\u{E006}: line {i}"),
+            });
+        }
+        ui.core.run_command("pageUpNewChatHud", true);
+        ui.core.run_command("pageUpNewChatHud", true);
+        ui.update(16);
+        render(&ui, "hud-chat-scrolled", &mut renderer, &mut report)?;
+        for _ in 0..3 {
+            ui.core.run_command("pageDownNewChatHud", true);
+        }
         ui.core.push(ScreenId::MiniGameSettings);
         ui.update(0);
         render(&ui, "minigame-settings", &mut renderer, &mut report)?;
@@ -350,6 +405,7 @@ fn main() -> Result<()> {
                 super_admin: false,
                 bl_id: None,
                 trust: "You".into(),
+                ignoring: false,
             }],
             server_name: "Native UI verification".into(),
             max_players: 8,
@@ -370,6 +426,7 @@ fn main() -> Result<()> {
                 modified: "2026-09-26".into(),
                 description: "Original Demo build".into(),
                 brick_count: Some(150),
+                damaged: false,
             }],
         });
         ui.core.push(ScreenId::SaveBricks);

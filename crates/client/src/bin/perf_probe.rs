@@ -165,11 +165,7 @@ fn main() -> Result<()> {
         humans[0],
         1,
         Command::LoadBuild {
-            build: Box::new(bri_world::build::SavedBuild {
-                schema_version: 1,
-                ownership_scope: None,
-                world: spawners,
-            }),
+            build: Box::new(bri_world::build::SavedBuild::new(spawners)),
             ownership: false,
         },
     )?;
@@ -244,7 +240,7 @@ fn main() -> Result<()> {
         if now.is_multiple_of(bri_net::protocol::POSE_INTERVAL) {
             let t = Instant::now();
             for (player, acknowledged_input) in session.motion_states() {
-                let bytes = serde_json::to_vec(&Datagram::Pose(Pose {
+                let bytes = bri_net::codec::encode_datagram(&Datagram::Pose(Pose {
                     tick: now,
                     acknowledged_input,
                     player,
@@ -254,7 +250,7 @@ fn main() -> Result<()> {
                 pose_datagrams += 1;
             }
             for pose in session.vehicle_poses() {
-                pose_bytes += serde_json::to_vec(&Datagram::Vehicle(pose))?.len();
+                pose_bytes += bri_net::codec::encode_datagram(&Datagram::Vehicle(pose))?.len();
                 pose_datagrams += 1;
             }
             replication_ms.push(ms(t.elapsed()));
@@ -287,15 +283,31 @@ fn main() -> Result<()> {
     let seconds = TICKS as f64 / 120.0;
     let over_budget = step_ms.iter().filter(|v| **v > 1000.0 / 120.0).count();
 
-    // Late join: the checkpoint is built and compressed on the authority loop.
+    // Late join: an O(1) snapshot on the authority loop, then the world is
+    // chunked and compressed off it and reassembled by the client.
     let t = Instant::now();
-    let checkpoint = Checkpoint::from_session(&session, 0);
+    let (checkpoint, bricks) = Checkpoint::from_session(&session, 0);
     let checkpoint_build_ms = ms(t.elapsed());
     let t = Instant::now();
-    let checkpoint_frame = bri_net::codec::encode(&checkpoint)?;
+    let frames = bri_net::protocol::WorldTransfer {
+        head: bri_net::protocol::Message::MapChanged(checkpoint),
+        bricks,
+    }
+    .encode()?;
     let checkpoint_encode_ms = ms(t.elapsed());
+    let checkpoint_bytes: usize = frames.iter().map(Vec::len).sum();
     let t = Instant::now();
-    let decoded: Checkpoint = bri_net::codec::decode(&checkpoint_frame)?;
+    let bri_net::protocol::Message::MapChanged(head) = bri_net::codec::decode(&frames[0])? else {
+        anyhow::bail!("Expected a checkpoint")
+    };
+    let mut assembly = bri_net::protocol::WorldAssembly::new(head)?;
+    for frame in &frames[1..] {
+        let bri_net::protocol::Message::WorldChunk(chunk) = bri_net::codec::decode(frame)? else {
+            anyhow::bail!("Expected a world chunk")
+        };
+        assembly.add(chunk)?;
+    }
+    let decoded = assembly.finish()?;
     let checkpoint_decode_ms = ms(t.elapsed());
     let world = Arc::new(decoded.world);
 
@@ -306,19 +318,28 @@ fn main() -> Result<()> {
         .map(|(id, def)| (id.clone(), def.mesh.clone()))
         .collect();
     let materials = bri_client::materials::BrickMaterials::load(&paths.brick_materials)?;
+    let palette = bri_client::world_chunks::BrickPalette::new(&materials)?;
     let mut mesh_ms = Vec::new();
-    let mut scene = None;
+    let mut chunked = None;
     for _ in 0..3 {
         let t = Instant::now();
-        scene = Some(bri_client::world_scene::build_world_scene_materials(
-            &world,
+        let mut state = bri_client::world_chunks::ChunkedWorld::default();
+        let changes = state.update(
+            world.clone(),
+            None,
             &meshes,
-            4_000_000,
+            &palette,
             Some(&materials),
-        )?);
+            4_000_000,
+        )?;
         mesh_ms.push(ms(t.elapsed()));
+        chunked = Some((state, changes));
     }
-    let world_scene = scene.unwrap();
+    let (mut chunked, world_chunks) = chunked.unwrap();
+    let world_chunks: Vec<_> = world_chunks
+        .into_iter()
+        .filter_map(|(key, scene)| Some((key, scene?)))
+        .collect();
     let mut mirror = bri_sim::prediction::CollisionMirror::new(
         definitions.clone(),
         loaded.query_colliders.clone(),
@@ -327,8 +348,13 @@ fn main() -> Result<()> {
     let t = Instant::now();
     mirror.sync(&world.bricks)?;
     let mirror_full_ms = ms(t.elapsed());
-    // One planted brick: today's client path rebuilds the full world mesh and
-    // diffs every brick for collision.
+    let mut building =
+        bri_client::building::Building::new(definitions.clone(), loaded.query_colliders.clone())?;
+    let t = Instant::now();
+    building.sync_world(&world)?;
+    let building_full_ms = ms(t.elapsed());
+    // One planted brick: the client diffs the replica, rebuilds the touched
+    // chunk and re-syncs the collision mirror.
     let mut one_more: PublicWorld = (*world).clone();
     let mut planted = one_more
         .bricks
@@ -339,21 +365,70 @@ fn main() -> Result<()> {
     planted.position[1] += 50.0;
     one_more.bricks.insert(u64::MAX - 1, planted);
     let t = Instant::now();
-    mirror.sync(&one_more.bricks)?;
+    mirror.sync_changes(&one_more.bricks, [u64::MAX - 1])?;
     let mirror_one_ms = ms(t.elapsed());
     let t = Instant::now();
-    let _ = bri_client::world_scene::build_world_scene_materials(
+    building.sync_world_changes(
         &one_more,
+        Some(&bri_client::network::WorldChanges {
+            bricks: [u64::MAX - 1].into(),
+            palette: false,
+        }),
+    )?;
+    let building_one_ms = ms(t.elapsed());
+    // The previous path rebuilt the whole world; it is also the render reference.
+    let reference = Instant::now();
+    let full_world = bri_client::world_scene::build_world_scene_materials(
+        &world,
         &meshes,
         4_000_000,
         Some(&materials),
     )?;
+    let full_rebuild_reference_ms = ms(reference.elapsed());
+    let same = Arc::new((*world).clone());
+    let t = Instant::now();
+    let unchanged = chunked.update(same, None, &meshes, &palette, Some(&materials), 4_000_000)?;
+    ensure!(unchanged.is_empty(), "Unchanged replica rebuilt chunks");
+    let diff_only_ms = ms(t.elapsed());
+    let one_more = Arc::new(one_more);
+    let t = Instant::now();
+    let one_brick_changes = chunked.update(
+        one_more,
+        Some(&bri_client::network::WorldChanges {
+            bricks: [u64::MAX - 1].into(),
+            palette: false,
+        }),
+        &meshes,
+        &palette,
+        Some(&materials),
+        4_000_000,
+    )?;
     let one_brick_mesh_ms = ms(t.elapsed());
+    let (one_brick_key, one_brick_chunk) = one_brick_changes
+        .into_iter()
+        .find_map(|(key, scene)| Some((key, scene?)))
+        .context("Planted brick rebuilt no chunk")?;
+    let one_brick_chunk_bricks = chunked.chunk_bricks(one_brick_key);
+    let largest_chunk_bricks = world_chunks
+        .iter()
+        .map(|(key, _)| chunked.chunk_bricks(*key))
+        .max()
+        .unwrap_or(0);
 
     // ---- GPU: offscreen frames ---------------------------------------------
     let map_scene = load_map_bundle(&paths.map_bundle, &entry.map_id)?.scene;
-    let gpu = gpu_frames(&map_scene, &world_scene, &world, spawn)
-        .unwrap_or_else(|e| json!({ "error": format!("{e:#}") }));
+    let snapshots = report_path.with_extension("snapshots");
+    let gpu = gpu_frames(
+        &snapshots,
+        &full_world,
+        &map_scene,
+        &palette,
+        &world_chunks,
+        &one_brick_chunk,
+        &world,
+        spawn,
+    )
+    .unwrap_or_else(|e| json!({ "error": format!("{e:#}") }));
 
     let report = json!({
         "world": { "name": entry.name, "map": entry.map_id, "bricks": entry.brick_count },
@@ -373,16 +448,24 @@ fn main() -> Result<()> {
             "checkpoint_build_ms": checkpoint_build_ms,
             "checkpoint_encode_ms": checkpoint_encode_ms,
             "checkpoint_decode_ms": checkpoint_decode_ms,
-            "checkpoint_compressed_bytes": checkpoint_frame.len(),
+            "checkpoint_compressed_bytes": checkpoint_bytes,
         },
         "client": {
             "world_mesh_build": percentiles(&mut mesh_ms),
-            "world_triangles": world_scene.indices.len() / 3,
-            "world_vertex_bytes": world_scene.vertices.len() * std::mem::size_of::<bri_render::scene::SceneVertex>(),
-            "world_batches": world_scene.batches.len(),
+            "world_triangles": chunked.triangles(),
+            "world_vertex_bytes": world_chunks.iter().map(|(_, c)| c.vertices.len()).sum::<usize>() * std::mem::size_of::<bri_render::scene::SceneVertex>(),
+            "world_chunks": world_chunks.len(),
+            "world_batches": world_chunks.iter().map(|(_, c)| c.batches.len()).sum::<usize>(),
             "one_brick_rebuild_ms": one_brick_mesh_ms,
+            "one_brick_full_rebuild_reference_ms": full_rebuild_reference_ms,
+            "unchanged_replica_diff_ms": diff_only_ms,
+            "one_brick_chunk_bricks": one_brick_chunk_bricks,
+            "largest_chunk_bricks": largest_chunk_bricks,
+            "one_brick_chunk_vertex_bytes": one_brick_chunk.vertices.len() * std::mem::size_of::<bri_render::scene::SceneVertex>(),
             "collision_mirror_full_ms": mirror_full_ms,
             "collision_mirror_one_brick_ms": mirror_one_ms,
+            "building_query_full_ms": building_full_ms,
+            "building_query_one_brick_ms": building_one_ms,
             "map_triangles": map_scene.indices.len() / 3,
             "map_batches": map_scene.batches.len(),
             "map_images": map_scene.images.len(),
@@ -397,9 +480,61 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Read an Rgba8 render target back to tightly packed pixels.
+fn read_back(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &wgpu::Texture,
+) -> Result<Vec<u8>> {
+    let (width, height) = (target.width(), target.height());
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("probe readback"),
+        size: u64::from(row) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        target.size(),
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    })?;
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|e| anyhow::anyhow!("readback: {e:?}"))?;
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for line in mapped.chunks_exact(row as usize) {
+        pixels.extend_from_slice(&line[..width as usize * 4]);
+    }
+    Ok(pixels)
+}
+
+#[allow(clippy::too_many_arguments)] // offscreen harness inputs
 fn gpu_frames(
+    snapshots: &std::path::Path,
+    reference_world: &bri_render::scene::SceneData,
     map: &bri_render::scene::SceneData,
-    world: &bri_render::scene::SceneData,
+    palette: &bri_client::world_chunks::BrickPalette,
+    chunks: &[(
+        bri_client::world_chunks::ChunkKey,
+        bri_render::scene::SceneData,
+    )],
+    planted: &bri_render::scene::SceneData,
     public: &PublicWorld,
     spawn: Vec3,
 ) -> Result<serde_json::Value> {
@@ -428,7 +563,7 @@ fn gpu_frames(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = target.create_view(&Default::default());
@@ -436,12 +571,27 @@ fn gpu_frames(
     let mut renderer = SceneRenderer::new(&device, format);
     let t = Instant::now();
     let gpu_map = renderer.upload(&device, &queue, map)?;
-    let gpu_world = renderer.upload(&device, &queue, world)?;
+    let gpu_palette = renderer.upload(&device, &queue, &palette.scene)?;
+    let gpu_world = chunks
+        .iter()
+        .map(|(_, chunk)| renderer.upload_chunk(&device, chunk, &gpu_palette))
+        .collect::<Result<Vec<_>>>()?;
     device.poll(wgpu::PollType::Wait {
         submission_index: None,
         timeout: None,
     })?;
     let upload_ms = ms(t.elapsed());
+    let t = Instant::now();
+    let _planted = renderer.upload_chunk(&device, planted, &gpu_palette)?;
+    device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    })?;
+    let one_chunk_upload_ms = ms(t.elapsed());
+    let mut scenes = vec![&gpu_map];
+    scenes.extend(gpu_world.iter());
+    let gpu_reference = renderer.upload(&device, &queue, reference_world)?;
+    std::fs::create_dir_all(snapshots)?;
 
     let (min, max) = public.bricks.values().fold(
         (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
@@ -461,9 +611,11 @@ fn gpu_frames(
             center + Vec3::new(extent * 0.6, extent * 0.4, extent * 0.6),
             center,
         ),
+        // Inside the shadow distance, looking down across the build.
+        ("near", center + Vec3::new(40.0, 25.0, 40.0), center),
     ];
     let mut out = serde_json::Map::new();
-    for (name, eye, look) in views {
+    for &(name, eye, look) in &views {
         let mut camera = Camera::perspective(
             eye.to_array(),
             look.to_array(),
@@ -482,7 +634,7 @@ fn gpu_frames(
                 &mut encoder,
                 &view,
                 &depth,
-                &[&gpu_map, &gpu_world],
+                &scenes,
                 Some(wgpu::Color::BLACK),
             );
             queue.submit([encoder.finish()]);
@@ -494,12 +646,219 @@ fn gpu_frames(
                 frames.push(ms(t.elapsed()));
             }
         }
-        out.insert(name.into(), percentiles(&mut frames));
+        // Chunked (culled) and whole-world renders must match; coplanar
+        // faces may resolve differently, so report the fraction that differs.
+        let chunked = read_back(&device, &queue, &target)?;
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.render(
+            &mut encoder,
+            &view,
+            &depth,
+            &[&gpu_map, &gpu_reference],
+            Some(wgpu::Color::BLACK),
+        );
+        queue.submit([encoder.finish()]);
+        let reference = read_back(&device, &queue, &target)?;
+        let differing = chunked
+            .chunks_exact(4)
+            .zip(reference.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
+            .count();
+        for (label, pixels) in [("chunked", &chunked), ("reference", &reference)] {
+            image::save_buffer(
+                snapshots.join(format!("{name}-{label}.png")),
+                pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            )?;
+        }
+        let mut stats = percentiles(&mut frames);
+        stats["pixels_differing_from_whole_world"] =
+            json!(differing as f64 / (width * height) as f64);
+        out.insert(name.into(), stats);
     }
+    let variants = quality_variants(
+        &device,
+        &queue,
+        snapshots,
+        map,
+        palette,
+        chunks,
+        &views,
+        (width, height),
+    )?;
     Ok(json!({
         "adapter": format!("{} ({:?})", info.name, info.backend),
         "resolution": [width, height],
         "upload_map_and_world_ms": upload_ms,
+        "one_brick_chunk_upload_ms": one_chunk_upload_ms,
         "frames": out,
+        "quality_variants": variants,
     }))
+}
+
+/// Render each view with each graphics option set the client offers, saving
+/// `{view}-{variant}.png` and frame times, as the client composes its passes.
+#[allow(clippy::too_many_arguments)] // offscreen harness inputs
+fn quality_variants(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    snapshots: &std::path::Path,
+    map: &bri_render::scene::SceneData,
+    palette: &bri_client::world_chunks::BrickPalette,
+    chunks: &[(
+        bri_client::world_chunks::ChunkKey,
+        bri_render::scene::SceneData,
+    )],
+    views: &[(&str, Vec3, Vec3)],
+    (width, height): (u32, u32),
+) -> Result<serde_json::Value> {
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let texture = |samples: u32, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("variant target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let resolved = texture(
+        1,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let resolved_view = resolved.create_view(&Default::default());
+    let mut out = serde_json::Map::new();
+    use bri_render::shadow::ShadowSettings;
+    for (variant, samples, shadows) in [
+        ("no-msaa", 1, None),
+        ("msaa4", 4, None),
+        ("msaa4-shadows-low", 4, Some(ShadowSettings::LOW)),
+        ("msaa4-shadows-best", 4, Some(ShadowSettings::BEST)),
+    ] {
+        let mut renderer = SceneRenderer::with_settings(device, format, samples, shadows);
+        let gpu_map = renderer.upload(device, queue, map)?;
+        let gpu_palette = renderer.upload(device, queue, &palette.scene)?;
+        let gpu_world = chunks
+            .iter()
+            .map(|(_, chunk)| renderer.upload_chunk(device, chunk, &gpu_palette))
+            .collect::<Result<Vec<_>>>()?;
+        let mut scenes = vec![&gpu_map];
+        scenes.extend(gpu_world.iter());
+        let multisampled = (samples > 1).then(|| {
+            texture(samples, wgpu::TextureUsages::RENDER_ATTACHMENT)
+                .create_view(&Default::default())
+        });
+        let depth = bri_render::scene::create_depth_samples(device, width, height, samples)
+            .create_view(&Default::default());
+        let mut results = serde_json::Map::new();
+        for &(name, eye, look) in views {
+            let mut camera = Camera::perspective(
+                eye.to_array(),
+                look.to_array(),
+                width as f32 / height as f32,
+                90f32.to_radians(),
+                0.05,
+                4000.0,
+            );
+            camera.apply_environment(map);
+            renderer.update_camera(queue, &camera);
+            let mut frames = Vec::new();
+            for i in 0..40 {
+                let t = Instant::now();
+                let mut encoder = device.create_command_encoder(&Default::default());
+                renderer.render_shadows(
+                    &mut encoder,
+                    bri_render::scene::ShadowCasters {
+                        scenes: &scenes[1..],
+                        instances: &[],
+                    },
+                    bri_render::scene::ShadowCasters {
+                        scenes: &scenes[..1],
+                        instances: &[],
+                    },
+                );
+                renderer.render(
+                    &mut encoder,
+                    multisampled.as_ref().unwrap_or(&resolved_view),
+                    &depth,
+                    &scenes,
+                    Some(wgpu::Color::BLACK),
+                );
+                if let Some(color) = &multisampled {
+                    // The client resolves in its last world pass.
+                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("variant resolve"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: color,
+                            depth_slice: None,
+                            resolve_target: Some(&resolved_view),
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Discard,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+                queue.submit([encoder.finish()]);
+                device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })?;
+                if i >= 10 {
+                    frames.push(ms(t.elapsed()));
+                }
+            }
+            let pixels = read_back(device, queue, &resolved)?;
+            image::save_buffer(
+                snapshots.join(format!("{name}-{variant}.png")),
+                &pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            )?;
+            let mut stats = percentiles(&mut frames);
+            if shadows.is_some() {
+                // The caster passes alone, to separate them from receiver cost.
+                let mut casters = Vec::new();
+                for _ in 0..20 {
+                    let t = Instant::now();
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    renderer.render_shadows(
+                        &mut encoder,
+                        bri_render::scene::ShadowCasters {
+                            scenes: &scenes[1..],
+                            instances: &[],
+                        },
+                        bri_render::scene::ShadowCasters {
+                            scenes: &scenes[..1],
+                            instances: &[],
+                        },
+                    );
+                    queue.submit([encoder.finish()]);
+                    device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: None,
+                    })?;
+                    casters.push(ms(t.elapsed()));
+                }
+                stats["shadow_casters_only"] = percentiles(&mut casters);
+            }
+            results.insert(name.into(), stats);
+        }
+        out.insert(variant.into(), results.into());
+    }
+    Ok(out.into())
 }

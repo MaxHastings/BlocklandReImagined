@@ -44,7 +44,7 @@ weather.clear();
 renderer.prepare(queue, camera.view_projection, &weather.snapshot())?;
 ```
 
-Root integration now loads this pack in the actual client, queries native solids/water and draws through the shared host pass. See ../../docs/runtime-weather.md for current evidence and remaining gaps. CPU-only users set `default-features = false`. `Arc<WeatherPack>` and runtime state are Send-friendly; the collision closure executes synchronously on the calling thread, with no independent physics.
+The client loads this pack, queries native solids/water and draws through the shared host pass. See ../../docs/runtime-weather.md for current evidence and remaining gaps. CPU-only users set `default-features = false`. `Arc<WeatherPack>` and runtime state are Send-friendly; the collision closure executes synchronously on the calling thread, with no independent physics.
 
 `set_map` replaces all systems and resets diagnostics/time/cache. A verified dry map legitimately returns zero systems; it is not a catalog lookup error. Wind and density persist across map changes, so the host must set the destination environment. `clear` also retains those settings but removes every particle and splash. There are no global resources or background tasks.
 

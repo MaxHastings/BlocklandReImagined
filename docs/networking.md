@@ -2,7 +2,7 @@
 
 `bri-net` runs the same `bri-sim::Session` used by local headless tests. Quinn
 provides QUIC with a reliable ordered control stream and unreliable movement/
-pose datagrams. This is implemented backend networking, not a finished join UI.
+pose datagrams.
 The runtime dependency graph contains no Torque readers.
 
 ## Authority and replication
@@ -13,16 +13,39 @@ The runtime dependency graph contains no Torque readers.
   membership, duplicate item IDs and invalid selected slots reject a delta
   before world mutation. It also replicates mounted image/state, projectiles and
   dropped-item views, with reliable sound/effect/animation/shell cues. Native
-  Gun firing and projectile late join are tested through real QUIC. Rendering
-  those item views and full inventory HUD reconciliation remain integration work.
-  Runtime content identity8 includes native weapon definitions/resource bytes;
-  item presentation pack hashing will extend this separately.
+  Gun firing and projectile late join are tested through real QUIC. The client
+  draws held, dropped and projectile items (`crates/client/src/world_items.rs`)
+  and shows tool names/icons in the HUD (`crates/client/src/item_ui.rs`).
+  Runtime content identity 8 includes native weapon definitions/resource bytes;
+  identity 9 adds the item presentation pack.
 - The host assigns owner IDs. Commands cannot supply positions for the player,
   privileges or owner identities. Build transforms remain validated against
   authoritative reach, geometry, support and permissions.
-- Reliable messages carry actions, results, compressed initial checkpoints and
-  dirty-brick deltas. Native source records remain on the host; public brick
-  state preserves supported gameplay properties and events.
+- Reliable messages carry actions, results, checkpoints and dirty-brick deltas.
+  Native source records remain on the host; public brick state preserves
+  supported gameplay properties and events.
+- Wire format: one codec (`codec.rs`). Every message is MessagePack with named
+  fields, strictly decoded (a buffer is exactly one message); server frames are
+  zstd compressed. Datagrams (movement, poses, vehicles) are bounded to 1,100
+  bytes so any encodable one fits a minimum-MTU QUIC path.
+- World transfer: a Welcome or MapChanged checkpoint carries everything but the
+  bricks, plus `world_bricks`, the count that follows as `WorldChunk` frames of
+  at most 4,096 bricks and 8 MiB by `Brick::stored_bound` (stress campaign
+  W7: a count alone let about 30 event-heavy bricks overflow a frame, so no
+  client could join). The authority loop takes only an O(1) snapshot of the
+  persistent brick map (`bri_world::Bricks`, an `imbl::OrdMap`); stripping
+  source records, chunking and compression run on a blocking thread, and the
+  peer's writer sends the frames at that point in its ordered stream. Clients
+  assemble with `WorldAssembly`, which accepts exactly the announced bricks
+  (no duplicates, no overrun) before building the replica, and emit
+  `ClientEvent::MapChanging` at a map change's head. There is no world size
+  ceiling beyond `MAX_BRICKS`, and joins no longer stall other players.
+- Congestion control is BBR: random loss (Wi-Fi, mobile) is not congestion,
+  and loss-based Cubic stalled reliable replies for seconds at 5% loss in the
+  soak test (`tests/soak.rs`, through `impair::ImpairedLink`).
+- Replica worlds are the same persistent map: publishing a new world revision
+  to the frame thread after an edit is O(1) (6 us on Golden Gate, was 12-21 ms
+  of deep copy on the network worker that also sends movement).
 - Protocol version 4 retains optional validated yaw/pitch snapshots on reliable
   actions. The native client captures body aim at dispatch, so look/fire/look
   sequences remain correct even when the movement channel only delivers the
@@ -36,35 +59,83 @@ The runtime dependency graph contains no Torque readers.
 - Movement datagrams carry separately sequenced intent. The motor runs at 120 Hz;
   snapshots and reliable world updates run at 20 Hz. Input expiry stops unattended
   movement after 60 simulation ticks.
+- While an admin, spy or death camera has control, movement datagrams also
+  carry the client's camera view (eye, yaw, pitch). The server keeps it as the
+  connection's camera transform: `DropPlayerAtCamera` (F7) lands there, and
+  free cameras stream to everyone as unreliable `Orb` datagrams with the poses,
+  so other players see the v20 `cameraImage` glow. The worst-case codec test
+  bounds both within the 1,100-byte datagram budget.
 - Clients reject replication gaps and invalid deltas before mutating their world.
   Remote pose history ignores older ticks and interpolates yaw across its seam.
 - Local prediction reuses the player motor, retains at most240 unacknowledged
   inputs, restores an authoritative pose including jump-edge state, then replays
-  pending inputs. It does not advance unrelated dynamic bodies. Wiring this into
-  the windowed client, collision updates and visual correction is still required.
+  pending inputs. It does not advance unrelated dynamic bodies. The windowed
+  client runs it against a mirrored collision world and blends out visual
+  corrections (`crates/client/src/motion.rs`).
 - TLS verifies an explicitly supplied host certificate. Random 256-bit reconnect
   credentials resume an existing owner; old numeric Blockland IDs confer no
-  authority. Server lookup stores credential hashes. Credentials and certificates
-  currently last for one server process; restart persistence remains required.
-- Limits:64 peers,80 simultaneous connection/handshake tasks, bounded channels,
-  64 KiB Hello,64 MiB command requests,16 MiB compressed frames,128 MiB decoded
-  frames and bounded zstd window. A shared 128 MiB command-body admission budget
-  is acquired before allocation and held through command dispatch; it measures
-  wire body bytes, not all parsed/object memory. Body reads retain a 10-second
-  deadline. These are working limits, not proven maximum-load capacity.
+  authority. Server lookup stores credential hashes. Resume credentials last for
+  one server process. A host can keep a persistent certificate, and a world's
+  owner table maps each player's durable principal to their owner number, so
+  ownership survives a restart.
+- Limits:64 peers, bounded channels, 64 KiB Hello, 16 MiB compressed frames,
+  128 MiB decoded frames and bounded zstd window. These are working limits, not
+  proven maximum-load capacity.
+- Protocol 26: a connection's `JoinBegin` names its purpose. `Download`
+  connections fetch packages before a join (see
+  `docs/architecture/packages.md`, "Distribution") and hold their own
+  admission slot: 16 in total, 2 per address.
+- Admission is budgeted per origin, so no one source can exhaust a pool that
+  other players need (stress campaign W1, `docs/stress-lab/weakness-ledger.md`):
+  - Connections that have not joined yet are bounded to 64 in total and 8 per
+    source address, and the whole pre-join exchange shares one 10-second
+    deadline. When half the pending slots are taken, unvalidated sources must
+    first answer a stateless QUIC Retry, so spoofed addresses cannot hold slots.
+    A joined player no longer holds a pending slot; joined players are bounded
+    by the player limit.
+  - Command bodies are reserved from the declared length before allocation and
+    held through dispatch, against the sending peer's own 4 MiB allowance
+    (each command costs at least 512 KiB of it, so at most 8 are in flight).
+    A player command may be at most 4 MiB (the worst native event list is
+    about 2.4 MB). Larger bulk requests (build loads, up to 64 MiB) are only
+    accepted from a peer the host currently regards as administrator and draw
+    on a shared 128 MiB bulk budget; anyone else declaring one is disconnected
+    with the reason before a body byte is read. The client refuses such a
+    request locally. Body reads retain a 10-second deadline.
 
 The clock uses actual monotonic elapsed time, retaining fractional ticks and
 running up to 8 catch-up steps per wakeup. Coarse Windows timer wakeups previously
 slowed gameplay (144 ticks in a two-second smoke); the corrected smoke reached241
 ticks with zero dropped ticks. Longer stalls discard excess debt and record it
-as `dropped_ticks`. Large checkpoint preparation still occurs in the authority
-loop; removing those stalls is pending performance work.
+as `dropped_ticks`. Checkpoint preparation is off the authority loop (see
+World transfer above).
+
+## Hosting and joining
+
+Joining needs only the game port. The host's certificate is pinned by the
+client (saved pin, LAN listing, an invite's key, or trust on first use), and
+protocol 34's `Challenge` carries the server listing so the join list and the
+host's reachability check can probe a server over the game port without
+joining. Internet hosts and non-loopback dedicated servers ask the router to
+forward the port (UPnP, then NAT-PMP), take their public address from the
+router, probe it, and tell the host in plain words whether friends can reach
+them. No outside service is contacted. See
+[architecture/hosting.md](architecture/hosting.md).
 
 ## Executable host
 
 ```powershell
-cargo run -p bri-net --release --bin bri-server -- content/stock-catalog-004 content/maps-pass-003 content/worlds-pass-004/1d1679fca49fa09325f55b8ac77c35ddc7c4131d6ff2e4ae96096c1af54dfca8.world.json content/map-bundle-014 content/brick-materials-001 content/effects-pass-004 content/avatar-pack-001 content/effects-runtime-pack-001 content/audio-pack-001 content/weather-pack-001 content/foliage-pack-001 content/weapons-pack-003 content/item-presentation-pack-003 artifacts/native-network/server-clock-smoke 127.0.0.1:0 2
+cargo run -p bri-net --release --bin bri-server -- content content/worlds-pass-005/<world>.world.json artifacts/native-network/server-clock-smoke 127.0.0.1:0 2
 ```
+
+The first argument is the content root. The server loads the packages its
+`packages.json` lists (the base game's list, `crates/package/base-packages.json`,
+when the root has none) and hashes each one into its environment
+(`docs/architecture/packages.md`). A joining client sends its shared and
+client packages; the join is refused when a shared package differs, and the
+refusal names every differing package. Differences in client-only
+(presentation) packages are allowed and told to the joining player in chat.
+`host.json` records the environment.
 
 The optional final duration bounds a headless smoke. Without it the host runs
 until Ctrl+C. Public host metadata and certificate go to the supplied state
@@ -91,7 +162,7 @@ count. This adds `item-presentation-dir` after `weapons-dir` in the dedicated CL
 No renderer or original-file reader is required by the dedicated loader.
 See [item startup integration](research/item-spawners/startup-integration.md) and
 [checked physics startup](research/item-spawners/item-physics-startup.md).
-The protocol wire version is 8; it is independent of content identity version 9.
+The protocol wire version (35 at this writing) is independent of content identity version 9.
 Content digest domains distinguish older packs before entering a session.
 Pending scene objects and finite terrain coverage are disclosed in host metadata.
 
@@ -103,8 +174,9 @@ paths on disk do not contribute to the digest. The dedicated host installs the
 same print/light/emitter tool catalog as the client-hosted server, including the
 original Letters/A default. `fingerprint_runtime` adds the avatar rig, customization
 tables and every declared face/decal/surface image in a V3 domain, checking hashes.
-This does not yet include complete tool/UI/audio packages, dependency resolution
-or automatic content delivery. Earlier fingerprints remain for diagnostic probes.
+A joining client downloads the server's missing Add-Ons before it joins, and
+asks the player first when the download is large (`crates/net/src/client.rs`).
+Earlier fingerprints remain for diagnostic probes.
 
 ## Evidence
 
@@ -118,8 +190,9 @@ any movement datagrams; each hits its own target and leaves body aim/input
 acknowledgments unchanged. Simulation tests reject invalid aim and replay while
 preserving ownership checks.
 
-A real QUIC test submits all 4,096 event rows (565,349 bytes), verifies live
-replicas, late join and native save/reload, and rejects a 4,097-row edit atomically.
+A real QUIC test submits a full list of 1,024 event rows (`MAX_EVENTS_PER_BRICK`),
+verifies live replicas, late join and native save/reload, and rejects an
+over-limit edit atomically.
 Oversized local serialization writes no partial frame and the connection remains
 usable. A maximum escaped native event payload fits the larger command bound;
 Hello stays small. Separate transport tests exercise admission/retained permits
@@ -166,11 +239,8 @@ omit map geometry and spawn players away from the build to isolate transport;
 the separate host smoke loads the actual Bedroom map. Timings are single local
 runs, not WAN, frame-rate,64-player or platform-portability evidence.
 
-## Still required for the alpha
+## Known gaps
 
-Windowed client integration; stable host identity and restart-safe ownership;
-LAN discovery and direct-IP certificate onboarding; the UI action dispatcher;
-native content packaging; sustained mixed-player/build workloads and WAN tests.
 Action timeouts currently require client teardown/reconnect because their outcome
 can be unknown. Imported provenance is retained server-side but unsupported rows
 need an explicit UI metadata path. Full multiplayer acceptance remains unchecked.

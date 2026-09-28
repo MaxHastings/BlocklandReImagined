@@ -1,7 +1,8 @@
 //! Native avatar resources, outfit binding and live player pose rendering.
+use crate::crouch::CrouchThread;
 use anyhow::{Context, Result, ensure};
 use bri_content::{
-    animation::{Layer, sample_layers},
+    animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
 };
 use bri_render::{
@@ -19,6 +20,8 @@ pub struct AvatarAssets {
     pub rig: Rig,
     images: BTreeMap<String, SceneImage>,
     detail: usize,
+    /// `HorseArmor`'s horse.dts and sequences, for players of that datablock.
+    horse: Option<Box<AvatarAssets>>,
 }
 impl AvatarAssets {
     pub fn load(root: &Path) -> Result<Self> {
@@ -82,15 +85,175 @@ impl AvatarAssets {
             rig,
             images,
             detail,
+            horse: None,
         })
+    }
+    /// Load `HorseArmor`'s shape, sequence aliases and paint textures from
+    /// the vehicle pack, so a player of that datablock draws as a horse.
+    pub fn load_horse(&mut self, vehicles: &Path) -> Result<()> {
+        const HORSE: &str = "v20.vehicle.horsearmor";
+        let root = vehicles.canonicalize()?;
+        let pack = bri_vehicles::Pack::load(root.join("vehicles.json"))?;
+        let definition = pack
+            .definitions
+            .iter()
+            .find(|d| d.id == HORSE)
+            .context("Vehicle pack has no HorseArmor")?;
+        let asset = |path: &str| {
+            pack.assets
+                .iter()
+                .find(|a| a.path == path)
+                .with_context(|| format!("Undeclared vehicle asset {path}"))
+        };
+        let model = asset(&definition.model)?;
+        let shape: bri_content::shape::Shape = serde_json::from_slice(
+            &crate::items::checked_read(&root, &model.path, &model.sha256, 32 << 20)?,
+        )?;
+        shape.validate()?;
+        let mut sequences = BTreeMap::new();
+        for (key, clips) in &pack.animation_aliases {
+            let Some(alias) = key.strip_prefix(&format!("{HORSE}::")) else {
+                continue;
+            };
+            let clips = asset(clips)?;
+            let set: bri_content::shape::ClipSet = serde_json::from_slice(
+                &crate::items::checked_read(&root, &clips.path, &clips.sha256, 8 << 20)?,
+            )?;
+            // Each alias names one authored `.dsq`, holding its one sequence.
+            let mut clip = set
+                .animations
+                .into_iter()
+                .next()
+                .with_context(|| format!("Empty horse clip {alias}"))?;
+            // horse.dts fills the Blockhead's arm, head and action sequences
+            // with copies of `h_root.dsq`: they must pose nothing, layered
+            // like the Blockhead's own sequence of that name.
+            if !clip.name.eq_ignore_ascii_case(alias) {
+                clip.nodes.clear();
+                clip.objects.clear();
+                clip.additive = self.rig.sequence(alias).is_some_and(|b| b.additive);
+            }
+            sequences.insert(alias.to_ascii_lowercase(), clip);
+        }
+        let mut images = BTreeMap::new();
+        for material in &shape.materials {
+            let name = material.name.to_ascii_lowercase();
+            let texture = pack
+                .assets
+                .iter()
+                .filter(|a| a.kind == "texture")
+                .find(|a| {
+                    a.virtual_path
+                        .to_ascii_lowercase()
+                        .ends_with(&format!("/{name}.png"))
+                })
+                .with_context(|| format!("Missing horse texture {name}"))?;
+            let bytes = crate::items::checked_read(&root, &texture.path, &texture.sha256, 16 << 20)?;
+            let pixels = image::load_from_memory(&bytes)?.to_rgba8();
+            images.insert(
+                name.clone(),
+                SceneImage {
+                    label: format!("horse/{name}"),
+                    width: pixels.width(),
+                    height: pixels.height(),
+                    rgba: pixels.into_raw(),
+                    srgb: false,
+                },
+            );
+        }
+        let detail = shape
+            .details
+            .iter()
+            .position(|d| !d.collision)
+            .context("Horse has no visible detail")?;
+        let rig = Rig {
+            schema_version: self.rig.schema_version,
+            id: HORSE.into(),
+            shape,
+            sequences,
+            sources: Vec::new(),
+            omissions: Vec::new(),
+        };
+        for needed in ["root", "run", "back", "side", "crouch", "look", "headside"] {
+            ensure!(rig.sequence(needed).is_some(), "Horse lacks {needed}");
+        }
+        self.horse = Some(Box::new(Self {
+            package: self.package.clone(),
+            rig,
+            images,
+            detail,
+            horse: None,
+        }));
+        Ok(())
+    }
+    /// A player of `HorseArmor`: `ApplyBodyColors` paints the body with the
+    /// chest colour and the head black; the ski nodes stay hidden.
+    pub fn horse_mesh(&self, appearance: Appearance) -> Result<AvatarMesh> {
+        let horse = self.horse.as_deref().context("Horse model is not loaded")?;
+        let chest = appearance
+            .colors
+            .get("chest")
+            .copied()
+            .unwrap_or([1.0; 4]);
+        let outfit = Outfit {
+            nodes: [("body".into(), chest), ("head".into(), [0.0, 0.0, 0.0, 1.0])].into(),
+            face: String::new(),
+            decal: String::new(),
+            head_up: false,
+        };
+        let mut data = SceneData {
+            name: "Horse".into(),
+            ..Default::default()
+        };
+        let mut materials = Vec::new();
+        for source in &horse.rig.shape.materials {
+            let name = source.name.to_ascii_lowercase();
+            let image = data.images.len();
+            data.images.push(horse.images[&name].clone());
+            materials.push(data.materials.len());
+            data.materials
+                .push(Material::brick_overlay(format!("horse/{name}"), image));
+        }
+        let translucent_materials: Vec<_> = materials
+            .iter()
+            .map(|index| {
+                let mut material = data.materials[*index].clone();
+                material.alpha = AlphaMode::Blend;
+                let index = data.materials.len();
+                data.materials.push(material);
+                index
+            })
+            .collect();
+        let mut mesh = self.mesh_from(appearance, data, outfit, materials, translucent_materials);
+        mesh.horse = true;
+        Ok(mesh)
+    }
+    /// The rig and textures this mesh draws with.
+    fn for_mesh(&self, mesh: &AvatarMesh) -> &AvatarAssets {
+        match (&self.horse, mesh.horse) {
+            (Some(horse), true) => horse,
+            _ => self,
+        }
     }
     pub fn from_prefs(&self, prefs: &AvatarPrefs) -> Result<Appearance> {
         let mut appearance = self.package.defaults.clone();
+        // A part this pack does not have (removed, renamed, or not a name at
+        // all) keeps the pack default rather than failing the whole avatar.
+        let package = &self.package;
+        let known = |slot: &str, name: &str| {
+            let lists = if slot == "accent" {
+                package.accents_allowed.values().collect::<Vec<_>>()
+            } else {
+                package.parts.get(slot).into_iter().collect()
+            };
+            name == "none" || lists.iter().any(|l| l.iter().any(|n| n.eq_ignore_ascii_case(name)))
+        };
         for slot in appearance.parts.keys().cloned().collect::<Vec<_>>() {
             if let Some(value) = prefs.get(&slot) {
-                appearance
-                    .parts
-                    .insert(slot, value.parse().context("Invalid avatar index")?);
+                let name = value.trim().to_ascii_lowercase();
+                if known(&slot, &name) {
+                    appearance.parts.insert(slot, name);
+                }
             }
         }
         for slot in appearance.colors.keys().cloned().collect::<Vec<_>>() {
@@ -166,34 +329,78 @@ impl AvatarAssets {
                 index
             })
             .collect();
-        Ok(AvatarMesh {
+        Ok(self.mesh_from(appearance, data, outfit, materials, translucent_materials))
+    }
+    fn mesh_from(
+        &self,
+        appearance: Appearance,
+        data: SceneData,
+        outfit: Outfit,
+        materials: Vec<usize>,
+        translucent_materials: Vec<usize>,
+    ) -> AvatarMesh {
+        AvatarMesh {
+            horse: false,
             appearance,
             data,
             gpu: None,
+            uploaded_topology: Default::default(),
             outfit,
             materials,
             translucent_materials,
             mode: "root",
+            forward: true,
             phase: 0.0,
             last_time: None,
+            channels: None,
+            transition: None,
+            crouch: CrouchThread::default(),
             posed_nodes: Vec::new(),
             model_transform: Mat4::IDENTITY,
-        })
+        }
+    }
+}
+
+impl AvatarMesh {
+    /// `Player::startSkiing` unhides the LSki/RSki nodes in paint color.
+    pub fn set_skis(&mut self, color: Option<[f32; 4]>) {
+        for node in ["lski", "rski"] {
+            match color {
+                Some(color) => {
+                    self.outfit.nodes.insert(node.into(), color);
+                }
+                None => {
+                    self.outfit.nodes.remove(node);
+                }
+            }
+        }
     }
 }
 
 pub struct AvatarMesh {
+    /// Drawn with the `HorseArmor` rig instead of the Blockhead.
+    pub horse: bool,
     posed_nodes: Vec<Mat4>,
     model_transform: Mat4,
     pub appearance: Appearance,
     pub data: SceneData,
     pub gpu: Option<GpuScene>,
+    /// Indices and batch layout last uploaded to `gpu`; a frame whose posed
+    /// topology differs (visibility or detail changes) needs a full upload.
+    uploaded_topology: (Vec<u32>, Vec<(std::ops::Range<u32>, usize)>),
     outfit: Outfit,
     materials: Vec<usize>,
     translucent_materials: Vec<usize>,
     mode: &'static str,
+    /// Torque plays the side clip backward to strafe right.
+    forward: bool,
     phase: f32,
     last_time: Option<f64>,
+    /// Locomotion channels of the last pose, frozen when a transition starts.
+    channels: Option<Channels>,
+    /// Frozen source pose and start time of the current action transition.
+    transition: Option<(Channels, f64)>,
+    crouch: CrouchThread,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -229,6 +436,16 @@ impl HeldToolPose {
     }
 }
 
+/// `Player::updateLookAnimation`: the arm thread follows the head pitch over
+/// the arm range, then Blockland clamps it to the seated look limits.
+fn look_position(pitch: f32, limits: Option<[f32; 2]>) -> f32 {
+    let position = (0.5 - pitch / std::f32::consts::PI).clamp(0.0, 1.0);
+    match limits {
+        Some([down, up]) if down <= up => position.clamp(down, up),
+        _ => position,
+    }
+}
+
 /// An active original avatar-thread animation. `started_at` is in the same
 /// monotonic seconds domain passed to `pose_with_animation`.
 #[derive(Clone, Debug, PartialEq)]
@@ -241,51 +458,136 @@ pub struct ActionAnimation {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AvatarAnimationInput {
     pub held_tool_pose: HeldToolPose,
+    /// A seated rider's `setLookLimits(up, down)`: the arm `look` thread
+    /// position, 0 looking straight up to 1 straight down, stays inside
+    /// `[down, up]`. The view itself is not limited.
+    pub look_limits: Option<[f32; 2]>,
+    /// A seated rider's full mount rotation, in place of the upright yaw,
+    /// so they sit flush with a tilted seat.
+    pub mount_rotation: Option<Quat>,
     /// Current thread-2 action from the authoritative animation cue stream.
     /// Clear this on the corresponding vanilla stop/root cue or image switch.
     pub action: Option<ActionAnimation>,
+    /// Current thread-3 builder or chat animation (`playThread(3, ...)`):
+    /// brick shifts, rotations, plant, undo, activate and talk.
+    pub gesture: Option<ActionAnimation>,
     /// Dead bodies hold the original `death1` sequence.
     pub dead: bool,
     /// The `sit` emote holds the original sit sequence until the player moves.
     pub sitting: bool,
+    /// The latest simulated tick state. v20 picks the action from the tick's
+    /// own rotation and velocity, not from the render-interpolated body or the
+    /// live mouse yaw; mixing those breaks the exact tie at 45 degrees.
+    pub tick_state: Option<PlayerState>,
+    /// The fraction of the body in liquid, for `pickActionAnimation`'s
+    /// water rules.
+    pub water_coverage: f32,
 }
 
-/// v20 `Player::pickActionAnimation`: jetting always holds the root pose;
-/// otherwise only a real fall (below -10 vertical speed) uses `fall`.
-pub fn locomotion(player: &PlayerState) -> &'static str {
+/// `sAnimationTransitionTime`, and the shorter jump transition.
+const TRANSITION_TIME: f64 = 0.25;
+const JUMP_TRANSITION_TIME: f64 = 0.15;
+
+/// A picked action sequence and its play direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocomotionAction {
+    pub sequence: &'static str,
+    pub forward: bool,
+}
+
+/// Speeds within this of each other tie. v20 rotates velocity into object
+/// space with the transpose of the same z rotation that built it, so a
+/// 45 degree move yields bit-identical forward and side components. Our
+/// dot products differ by a few ulps instead, which alone must not flip it.
+const PICK_TIE: f32 = 1e-4;
+
+/// v20 `Player::pickActionAnimation` (blocklandv20.exe 0x5a2fe0): jetting
+/// always holds the root pose; otherwise only a real fall (below -10 vertical
+/// speed) uses `fall`.
+///
+/// On the ground an object-space velocity shorter than 0.4, vertical speed
+/// included, is root. Otherwise it walks `actionList` in order (run, back,
+/// side) and keeps the first sequence whose direction dotted with velocity
+/// beats the running maximum, which starts at 0.1. The comparison is strict,
+/// so an exact diagonal keeps `run` or `back`, never `side`. The Blockhead
+/// clips carry no ground motion, so their directions are the table defaults:
+/// run +Y, back -Y and side -X (left). Only the side clip is reused in
+/// reverse, for strafing right. Crouching maps these to the crouch clips.
+///
+/// Then water (0x5a3308): over 60% covered always holds the root pose, as does
+/// any coverage while off the ground or sinking faster than 0.1. (v20 also
+/// roots a wading player holding jump; remote players' triggers are not
+/// replicated, so that clause is left out.)
+pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
+    let forward = |sequence| LocomotionAction {
+        sequence,
+        forward: true,
+    };
     if player.jetting {
-        return "root";
+        return forward("root");
+    }
+    let root = if player.crouched { "crouch" } else { "root" };
+    if coverage > 0.6 || (coverage > 0.01 && (!player.grounded || player.velocity[1] < -0.1)) {
+        return forward(root);
     }
     if !player.grounded {
-        return if player.velocity[1] < -10.0 {
+        return forward(if player.velocity[1] < -10.0 {
             "fall"
         } else if player.velocity[1] > 0.5 {
             "jump"
         } else {
             "root"
-        };
+        });
     }
-    let forward = Vec3::new(player.yaw.sin(), 0.0, -player.yaw.cos());
+    let facing = Vec3::new(player.yaw.sin(), 0.0, -player.yaw.cos());
     let right = Vec3::new(player.yaw.cos(), 0.0, player.yaw.sin());
     let velocity = Vec3::from(player.velocity);
-    let f = velocity.dot(forward);
-    let r = velocity.dot(right);
-    if f.abs().max(r.abs()) < 0.1 {
-        return if player.crouched { "crouch" } else { "root" };
+    let (f, r) = (velocity.dot(facing), velocity.dot(right));
+    let [root, run, back, side] = if player.crouched {
+        ["crouch", "crouchrun", "crouchback", "crouchside"]
+    } else {
+        ["root", "run", "back", "side"]
+    };
+    let mut action = forward(root);
+    if velocity.length() < 0.4 {
+        return action;
     }
-    match (player.crouched, r.abs() > f.abs(), f < 0.0) {
-        (true, true, _) => "crouchside",
-        (true, false, true) => "crouchback",
-        (true, false, false) => "crouchrun",
-        (false, true, _) => "side",
-        (false, false, true) => "back",
-        _ => "run",
+    let mut best = 0.1;
+    for (sequence, d) in [(run, f), (back, -f), (side, -r)] {
+        if d > best + PICK_TIE {
+            best = d;
+            action = forward(sequence);
+        } else if sequence == side && -d > best + PICK_TIE {
+            best = -d;
+            action = LocomotionAction {
+                sequence,
+                forward: false,
+            };
+        }
     }
+    action
 }
 impl AvatarMesh {
     /// The same sampled node matrices used by this frame's visible character.
     /// Missing nodes remain missing; attachments must not invent a hand offset.
+    /// The player's object transform: feet position and body yaw.
+    pub fn body_transform(&self) -> Mat4 {
+        self.model_transform
+    }
+    /// A node's last posed transform relative to the model (feet, facing
+    /// -Z, unscaled), for placing something on it before this frame's pose.
+    pub fn model_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
+        let assets = assets.for_mesh(self);
+        let index = assets
+            .rig
+            .shape
+            .nodes
+            .iter()
+            .position(|n| n.name.eq_ignore_ascii_case(name))?;
+        self.posed_nodes.get(index).copied()
+    }
     pub fn world_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
+        let assets = assets.for_mesh(self);
         let index = assets
             .rig
             .shape
@@ -328,11 +630,13 @@ impl AvatarMesh {
         time: f64,
         animation_input: &AvatarAnimationInput,
     ) -> Result<()> {
+        let assets = assets.for_mesh(self);
         ensure!(
             time.is_finite()
-                && animation_input.action.as_ref().is_none_or(|action| {
-                    action.started_at.is_finite() && !action.sequence.is_empty()
-                })
+                && [&animation_input.action, &animation_input.gesture]
+                    .into_iter()
+                    .flatten()
+                    .all(|action| action.started_at.is_finite() && !action.sequence.is_empty())
                 && player
                     .feet
                     .iter()
@@ -341,31 +645,58 @@ impl AvatarMesh {
                     .all(|v| v.is_finite()),
             "Invalid avatar pose input"
         );
+        let first = self.last_time.is_none();
         let elapsed = self
             .last_time
             .map_or(0.0, |last| (time - last).clamp(0.0, 0.25) as f32);
         self.last_time = Some(time);
-        let mode = if animation_input.dead {
-            "death1"
+        let scripted = if animation_input.dead {
+            Some("death1")
         } else if animation_input.sitting {
-            "sit"
+            Some("sit")
         } else {
-            locomotion(player)
+            None
         };
-        if self.mode != mode {
-            self.mode = mode;
-            self.phase = 0.0;
-        } else {
-            self.phase += elapsed;
-        }
+        // v20 picks every client frame: it kept `delayTicks` but dropped the
+        // test that would hold an action for `sNewAnimationTickTime`.
+        let next = Some(scripted.map_or_else(
+            || {
+                locomotion(
+                    animation_input.tick_state.as_ref().unwrap_or(player),
+                    animation_input.water_coverage,
+                )
+            },
+            |sequence| LocomotionAction {
+                sequence,
+                forward: true,
+            },
+        ));
+        // `Player::setActionThread` ignores a request for the running action,
+        // even in the other play direction.
+        let next = next.filter(|action| action.sequence != self.mode);
         let clip = assets
             .rig
-            .sequence(mode)
+            .sequence(next.map_or(self.mode, |action| action.sequence))
             .context("Missing avatar movement clip")?;
+        if let Some(action) = next {
+            self.transition = self
+                .channels
+                .take()
+                .filter(|_| !first)
+                .map(|channels| (channels, time));
+            self.mode = action.sequence;
+            self.forward = action.forward;
+            self.phase = if action.forward { 0.0 } else { clip.duration };
+        } else if self.forward {
+            self.phase += elapsed;
+        } else {
+            self.phase -= elapsed;
+        }
+        let mode = self.mode;
         if clip.looping && clip.duration > 0.0 {
             self.phase = self.phase.rem_euclid(clip.duration);
         } else {
-            self.phase = self.phase.min(clip.duration);
+            self.phase = self.phase.clamp(0.0, clip.duration);
         }
         let mut layers = Vec::new();
         layers.push(Layer {
@@ -397,14 +728,16 @@ impl AvatarMesh {
                 weight: 1.0,
             });
         }
-        if player.crouched {
-            let crouch = assets
-                .rig
-                .sequence("crouch")
-                .context("Missing crouch clip")?;
+        let crouch = assets
+            .rig
+            .sequence("crouch")
+            .context("Missing crouch clip")?;
+        self.crouch
+            .update(player.crouched, elapsed, crouch.duration);
+        if let Some(time) = self.crouch.time() {
             layers.push(Layer {
                 animation: crouch,
-                time: crouch.duration,
+                time,
                 weight: 1.0,
             });
         }
@@ -427,7 +760,7 @@ impl AvatarMesh {
         let look = assets.rig.sequence("look").context("Missing look clip")?;
         layers.push(Layer {
             animation: look,
-            time: (0.5 - player.pitch / std::f32::consts::PI).clamp(0.0, 1.0) * look.duration,
+            time: look_position(player.pitch, animation_input.look_limits) * look.duration,
             weight: 1.0,
         });
         // `Player::updateLookAnimation`: free look turns only the head,
@@ -442,7 +775,11 @@ impl AvatarMesh {
                 * headside.duration,
             weight: 1.0,
         });
-        if let Some(action) = &animation_input.action {
+        let threads = [(2, &animation_input.action), (3, &animation_input.gesture)];
+        for (thread, action) in threads {
+            let Some(action) = action else {
+                continue;
+            };
             let name = action.sequence.to_ascii_lowercase();
             if name != "root" {
                 let clip = assets
@@ -451,7 +788,7 @@ impl AvatarMesh {
                     .with_context(|| format!("Missing avatar action clip {}", action.sequence))?;
                 ensure!(
                     clip.additive,
-                    "Thread-2 avatar action clip {} must be additive",
+                    "Thread-{thread} avatar action clip {} must be additive",
                     action.sequence
                 );
                 let action_time = (time - action.started_at).max(0.0) as f32;
@@ -462,8 +799,40 @@ impl AvatarMesh {
                 });
             }
         }
-        let pose = sample_layers(&assets.rig.shape, &layers)?;
-        self.finish_pose(assets, player, pose)
+        // `transitionToSequence` blends the locomotion thread from the pose it
+        // had when the action changed. Its channels end right after the
+        // locomotion clip, or where the absolute layers end for additive jumps.
+        let at = if clip.additive {
+            layers
+                .iter()
+                .position(|layer| layer.animation.additive)
+                .unwrap_or(layers.len())
+        } else {
+            layers
+                .iter()
+                .position(|layer| std::ptr::eq(layer.animation, clip))
+                .context("Missing avatar movement layer")?
+                + 1
+        };
+        let transition_time = if mode == "jump" {
+            JUMP_TRANSITION_TIME
+        } else {
+            TRANSITION_TIME
+        };
+        if self
+            .transition
+            .as_ref()
+            .is_some_and(|(_, start)| time - start >= transition_time)
+        {
+            self.transition = None;
+        }
+        let from = self.transition.as_ref().map(|(channels, start)| {
+            let progress = ((time - start) / transition_time).clamp(0.0, 1.0);
+            (channels, 1.0 - progress as f32)
+        });
+        let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
+        self.channels = Some(channels);
+        self.finish_pose(assets, player, pose, animation_input.mount_rotation)
     }
 
     fn finish_pose(
@@ -471,9 +840,14 @@ impl AvatarMesh {
         assets: &AvatarAssets,
         player: &PlayerState,
         pose: bri_content::animation::Pose,
+        mount_rotation: Option<Quat>,
     ) -> Result<()> {
-        let model_transform = Mat4::from_rotation_translation(
-            Quat::from_rotation_y(-player.yaw),
+        // `setScale` scales the whole shape about the feet.
+        let model_transform = Mat4::from_scale_rotation_translation(
+            Vec3::splat(player.scale),
+            mount_rotation
+                .filter(|q| q.is_finite() && q.is_normalized())
+                .unwrap_or_else(|| Quat::from_rotation_y(-player.yaw)),
             Vec3::from(player.feet),
         );
         self.data.vertices.clear();
@@ -495,12 +869,36 @@ impl AvatarMesh {
         self.posed_nodes.clone_from(&pose.nodes);
         Ok(())
     }
+    /// Takes over another mesh's action thread (sequence, direction, time
+    /// and transition), for a rebuilt outfit of the same player.
+    pub fn continue_animation(&mut self, old: &AvatarMesh) {
+        self.mode = old.mode;
+        self.forward = old.forward;
+        self.phase = old.phase;
+        self.last_time = old.last_time;
+        self.channels.clone_from(&old.channels);
+        self.transition.clone_from(&old.transition);
+    }
     pub fn upload(
         &mut self,
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
+        let same_topology = self.gpu.as_ref().is_some_and(|gpu| {
+            gpu.vertex_count == self.data.vertices.len()
+                && self.uploaded_topology.0 == self.data.indices
+                && self.uploaded_topology.1.len() == self.data.batches.len()
+                && self
+                    .uploaded_topology
+                    .1
+                    .iter()
+                    .zip(&self.data.batches)
+                    .all(|((range, material), b)| *range == b.indices && *material == b.material)
+        });
+        if !same_topology {
+            self.gpu = None;
+        }
         if let Some(gpu) = &mut self.gpu {
             gpu.update_vertices(
                 queue,
@@ -514,6 +912,14 @@ impl AvatarMesh {
             )?;
         } else {
             self.gpu = Some(renderer.upload(device, queue, &self.data)?);
+            self.uploaded_topology = (
+                self.data.indices.clone(),
+                self.data
+                    .batches
+                    .iter()
+                    .map(|b| (b.indices.clone(), b.material))
+                    .collect(),
+            );
         }
         Ok(())
     }
@@ -588,7 +994,11 @@ impl Preview {
                 grounded: true,
                 crouched: false,
                 jetting: false,
-                jump_held: false,
+                jump: Default::default(),
+                archetype: Default::default(),
+                scale: 1.0,
+                energy: 100.0,
+                tick: Default::default(),
             },
             0.0,
         )?;
@@ -653,34 +1063,80 @@ mod tests {
             grounded: true,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
+            archetype: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
+            tick: Default::default(),
         }
+    }
+    #[test]
+    fn water_holds_the_root_pose_like_v20() {
+        let mut p = player();
+        p.velocity = [0.0, 0.0, -7.0];
+        assert_eq!(locomotion(&p, 0.5).sequence, "run", "wading runs");
+        assert_eq!(locomotion(&p, 0.7).sequence, "root", "deeper stands");
+        p.velocity = [0.0, -0.2, -7.0];
+        assert_eq!(locomotion(&p, 0.3).sequence, "root", "sinking");
+        p.velocity = [0.0, -20.0, 0.0];
+        p.grounded = false;
+        assert_eq!(locomotion(&p, 0.0).sequence, "fall");
+        assert_eq!(locomotion(&p, 0.3).sequence, "root", "no fall in water");
+        p.crouched = true;
+        assert_eq!(locomotion(&p, 1.0).sequence, "crouch");
     }
     #[test]
     fn movement_pose_uses_body_facing_and_distinguishes_air_crouch_and_strafe() {
         let mut p = player();
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
         p.velocity = [0.0, 0.0, -7.0];
-        assert_eq!(locomotion(&p), "run");
+        assert_eq!(locomotion(&p, 0.0).sequence, "run");
         p.yaw = std::f32::consts::PI;
-        assert_eq!(locomotion(&p), "back");
+        assert_eq!(locomotion(&p, 0.0).sequence, "back");
         p.crouched = true;
-        assert_eq!(locomotion(&p), "crouchback");
+        assert_eq!(locomotion(&p, 0.0).sequence, "crouchback");
         p.velocity = [3.0, 0.0, 0.0];
-        assert_eq!(locomotion(&p), "crouchside");
+        assert_eq!(locomotion(&p, 0.0).sequence, "crouchside");
         p.velocity = [0.0; 3];
-        assert_eq!(locomotion(&p), "crouch");
+        assert_eq!(locomotion(&p, 0.0).sequence, "crouch");
         p.grounded = false;
         p.velocity[1] = 4.0;
-        assert_eq!(locomotion(&p), "jump");
+        assert_eq!(locomotion(&p, 0.0).sequence, "jump");
         p.velocity[1] = -4.0;
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
         p.velocity[1] = -12.0;
-        assert_eq!(locomotion(&p), "fall");
+        assert_eq!(locomotion(&p, 0.0).sequence, "fall");
         p.jetting = true;
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
         p.velocity[1] = 4.0;
-        assert_eq!(locomotion(&p), "root");
+        assert_eq!(locomotion(&p, 0.0).sequence, "root");
+    }
+
+    #[test]
+    fn pick_follows_torque_action_list_order_and_reverses_side_for_right() {
+        let mut p = player();
+        let action = |p: &PlayerState| {
+            let a = locomotion(p, 0.0);
+            (a.sequence, a.forward)
+        };
+        // Yaw 0 faces -Z with +X on the right.
+        p.velocity = [-6.0, 0.0, 0.0];
+        assert_eq!(action(&p), ("side", true));
+        p.velocity = [6.0, 0.0, 0.0];
+        assert_eq!(action(&p), ("side", false));
+        // Exact diagonals tie; the strict comparison keeps the earlier entry.
+        p.velocity = [4.0, 0.0, -4.0];
+        assert_eq!(action(&p), ("run", true));
+        p.velocity = [4.0, 0.0, 4.0];
+        assert_eq!(action(&p), ("back", true));
+        p.velocity = [4.001, 0.0, -4.0];
+        assert_eq!(action(&p), ("side", false));
+        // Every dot product must exceed 0.1.
+        p.velocity = [0.1, 0.0, -0.1];
+        assert_eq!(action(&p), ("root", true));
+        p.crouched = true;
+        p.velocity = [2.0, 0.0, 0.0];
+        assert_eq!(action(&p), ("crouchside", false));
     }
 
     #[test]
@@ -710,7 +1166,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn item_mounts_use_the_same_sampled_avatar_pose_and_body_transform() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         assert!(mesh.world_node(&assets, "mount0").is_none());
@@ -742,7 +1198,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn held_and_action_arm_layers_keep_locomotion_and_mounts_coherent() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let arm_ready = assets
             .rig
@@ -831,10 +1287,12 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn held_arm_pose_precedes_additive_look_and_pack_headup_layers() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut appearance = assets.package.defaults.clone();
-        appearance.parts.insert("pack".into(), 1);
+        appearance
+            .parts
+            .insert("pack".into(), assets.package.parts["pack"][1].clone());
         let mut baseline = assets.mesh(appearance.clone())?;
         let mut held = assets.mesh(appearance)?;
         let mut p = player();
@@ -886,8 +1344,62 @@ mod tests {
 
     #[test]
     #[ignore = "requires original native avatar package"]
+    fn rebuilt_outfit_continues_the_running_clip() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
+        let assets = AvatarAssets::load(&root)?;
+        let mut kept = assets.mesh(assets.package.defaults.clone())?;
+        let mut p = player();
+        p.velocity = [0.0, 0.0, -7.0];
+        for frame in 0..20 {
+            kept.pose(&assets, &p, f64::from(frame) / 60.0)?;
+        }
+        let mut rebuilt = assets.mesh(assets.package.defaults.clone())?;
+        rebuilt.continue_animation(&kept);
+        let time = 20.0 / 60.0;
+        kept.pose(&assets, &p, time)?;
+        rebuilt.pose(&assets, &p, time)?;
+        let leg = |mesh: &AvatarMesh| mesh.world_node(&assets, "RightLeg").unwrap();
+        assert!(leg(&kept).abs_diff_eq(leg(&rebuilt), 1e-5));
+        let mut fresh = assets.mesh(assets.package.defaults.clone())?;
+        fresh.pose(&assets, &p, time)?;
+        assert!(!leg(&kept).abs_diff_eq(leg(&fresh), 1e-3));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires the converted avatar pack"]
+    fn seated_body_takes_the_mount_rotation() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
+        let assets = AvatarAssets::load(&root)?;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let tilt = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(0.35);
+        mesh.pose_with_animation(
+            &assets,
+            &player(),
+            0.0,
+            &AvatarAnimationInput {
+                mount_rotation: Some(tilt),
+                sitting: true,
+                ..Default::default()
+            },
+        )?;
+        let up = mesh.body_transform().transform_vector3(Vec3::Y);
+        assert!(up.dot(tilt * Vec3::Y) > 0.999, "{up}");
+        Ok(())
+    }
+    #[test]
+    fn seated_look_limits_bound_the_arms_not_the_view() {
+        // The Jeep's `setLookLimits(0.65, 0.45)`.
+        let limits = Some([0.45, 0.65]);
+        assert_eq!(super::look_position(0.0, limits), 0.5);
+        assert_eq!(super::look_position(1.2, limits), 0.45);
+        assert_eq!(super::look_position(-1.2, limits), 0.65);
+        assert!((super::look_position(-1.2, None) - (0.5 + 1.2 / std::f32::consts::PI)).abs() < 1e-6);
+    }
+    #[test]
+    #[ignore = "requires original native avatar package"]
     fn free_look_turns_only_the_head_toward_the_camera() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let mut p = player();
@@ -910,7 +1422,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn original_outfits_materials_and_customization_rules() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let package = &assets.package;
         assert_eq!(
@@ -926,9 +1438,9 @@ mod tests {
             if slot == "accent" {
                 continue;
             }
-            for index in 0..options.len() {
+            for option in options {
                 let mut appearance = package.defaults.clone();
-                appearance.parts.insert(slot.clone(), index);
+                appearance.parts.insert(slot.clone(), option.clone());
                 let mut mesh = assets.mesh(appearance)?;
                 mesh.pose(&assets, &player(), 0.0)?;
                 mesh.data.validate()?;
@@ -938,37 +1450,33 @@ mod tests {
         }
         let mut skirt = package.defaults.clone();
         for (hat_name, accents) in &package.accents_allowed {
-            let hat_index = package.parts["hat"]
-                .iter()
-                .position(|name| name.eq_ignore_ascii_case(hat_name))
-                .context("Accent list has no hat")?;
-            for accent in 0..accents.len() {
+            for accent in accents {
                 let mut appearance = package.defaults.clone();
-                appearance.parts.insert("hat".into(), hat_index);
-                appearance.parts.insert("accent".into(), accent);
+                appearance.parts.insert("hat".into(), hat_name.clone());
+                appearance.parts.insert("accent".into(), accent.clone());
                 let mut mesh = assets.mesh(appearance)?;
                 mesh.pose(&assets, &player(), 0.0)?;
                 mesh.data.validate()?;
                 cases += 1;
             }
         }
-        skirt.parts.insert("hip".into(), 1);
+        skirt.parts.insert("hip".into(), "skirthip".into());
         skirt.colors.insert("lleg".into(), [0.3, 0.6, 0.9, 0.2]);
         let outfit = package.resolve(&skirt)?;
         assert!(!outfit.nodes.contains_key("lshoe") && !outfit.nodes.contains_key("rshoe"));
         assert_eq!(outfit.nodes["skirttrimleft"], [0.3, 0.6, 0.9, 1.0]);
-        skirt.parts.insert("lleg".into(), 63);
+        skirt.parts.insert("lleg".into(), "nosuchleg".into());
         assert!(package.resolve(&skirt).is_err());
         let mut hat = package.defaults.clone();
-        hat.parts.insert("hat".into(), 1);
-        hat.parts.insert("accent".into(), 1);
+        hat.parts.insert("hat".into(), package.parts["hat"][1].clone());
+        hat.parts.insert("accent".into(), "visor".into());
         let outfit = package.resolve(&hat)?;
         assert!(outfit.nodes.contains_key("visor"));
         assert_eq!(outfit.nodes["visor"][3], 0.7);
-        hat.parts.insert("hat".into(), 2);
+        hat.parts.insert("hat".into(), package.parts["hat"][2].clone());
         assert!(package.resolve(&hat).is_err());
         let mut pack = package.defaults.clone();
-        pack.parts.insert("pack".into(), 1);
+        pack.parts.insert("pack".into(), package.parts["pack"][1].clone());
         assert!(package.resolve(&pack)?.head_up);
         let mut selected = package.defaults.clone();
         for (kind, choices) in [("face", &package.faces), ("decal", &package.decals)] {

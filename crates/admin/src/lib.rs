@@ -14,6 +14,10 @@ pub const MAX_BANS: usize = 4096;
 pub const MAX_AUTO_ROLES: usize = 4096;
 pub const MAX_SAVE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 4096;
+/// Identities whose failed password guesses are remembered across reconnects.
+pub const MAX_LOGIN_STRIKES: usize = 4096;
+/// How long an identity's failed guesses count against it after the last one.
+pub const LOGIN_STRIKE_SECONDS: u64 = 600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ConnectionId(pub u64);
@@ -261,7 +265,8 @@ impl Action {
                 if map.is_empty()
                     || !map
                         .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b))
+                    || map.split('/').any(|part| matches!(part, "" | "." | ".."))
                 {
                     Err(Error::InvalidValue)
                 } else {
@@ -588,6 +593,9 @@ impl DurableState {
 #[derive(Clone, Default)]
 pub struct Administration {
     sessions: BTreeMap<ConnectionId, Session>,
+    /// Failed guesses per durable identity (count, unix seconds of the last),
+    /// so reconnecting never buys fresh guesses.
+    login_strikes: BTreeMap<Principal, (u8, u64)>,
     durable: DurableState,
     last_connection_id: u64,
 }
@@ -619,6 +627,11 @@ impl Administration {
                 return Err(Error::Banned);
             }
         }
+        let failed_logins = c
+            .principal
+            .and_then(|p| self.login_strikes.get(&p))
+            .filter(|(_, last)| now.saturating_sub(*last) < LOGIN_STRIKE_SECONDS)
+            .map_or(0, |(count, _)| *count);
         let role = if c.is_owner || c.is_local {
             Role::SuperAdmin
         } else {
@@ -638,7 +651,7 @@ impl Administration {
             Session {
                 trusted: c,
                 role,
-                failed_logins: 0,
+                failed_logins,
                 locked: false,
             },
         );
@@ -777,10 +790,19 @@ impl Administration {
                 if password.expose().is_empty() {
                     return Ok(vec![Effect::LoginIgnored]);
                 }
-                if let Some(role @ (Role::Admin | Role::SuperAdmin)) =
+                // Guess budgets follow the durable identity; an anonymous
+                // connection could reconnect for fresh guesses forever.
+                let principal = s.trusted.principal.ok_or(Error::Denied)?;
+                // An identity that used up its guesses is refused without
+                // checking the password until its strikes expire.
+                let verified = if s.failed_logins > 3 {
+                    None
+                } else {
                     verify_password(password.expose())
-                {
+                };
+                if let Some(role @ (Role::Admin | Role::SuperAdmin)) = verified {
                     s.role = role;
+                    self.login_strikes.remove(&principal);
                     return Ok(vec![Effect::RoleChanged {
                         target: s.trusted.id,
                         role,
@@ -788,6 +810,18 @@ impl Administration {
                 }
                 s.failed_logins = s.failed_logins.saturating_add(1);
                 s.locked = s.failed_logins > 3;
+                if !self.login_strikes.contains_key(&principal)
+                    && self.login_strikes.len() >= MAX_LOGIN_STRIKES
+                    && let Some(stale) = self
+                        .login_strikes
+                        .iter()
+                        .min_by_key(|(_, (_, last))| *last)
+                        .map(|(p, _)| *p)
+                {
+                    self.login_strikes.remove(&stale);
+                }
+                self.login_strikes
+                    .insert(principal, (s.failed_logins, now));
                 let mut out = vec![Effect::LoginRejected {
                     attempts: s.failed_logins,
                     disconnect: s.locked,

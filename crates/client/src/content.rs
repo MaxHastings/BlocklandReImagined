@@ -13,6 +13,7 @@ use bri_ui::{
     pack::Pack,
     schema::{PACK_SCHEMA_VERSION, UiPack},
 };
+use bri_package::{environment::Environment, packages::PackageSet};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Digest;
 use std::{
@@ -41,61 +42,24 @@ pub const LOADABLE_MAPS: &[&str] = &[
     "v20/add-ons/map_slate_desert/slatedesert.mis",
     "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
     "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
-    "v20/add-ons/map_tutorial/tutorial.mis",
+    bri_sim::tutorial::MAP_ID,
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ContentConfig {
-    pub schema_version: u32,
-    pub map_bundle: String,
-    pub brick_catalog: String,
-    pub geometry: String,
-    pub effects: String,
-    pub worlds: String,
-    pub ui_pack: String,
-    pub brick_materials: String,
-    pub avatar: String,
-    pub effects_runtime: String,
-    pub audio: String,
-    pub weather: String,
-    pub foliage: String,
-    pub weapons: String,
-    pub item_presentation: String,
-    pub vehicles: String,
-    pub events: String,
-    pub tutorial: String,
-}
-impl Default for ContentConfig {
-    fn default() -> Self {
-        Self {
-            schema_version: 1,
-            map_bundle: "map-bundle-015".into(),
-            brick_catalog: "stock-catalog-004".into(),
-            geometry: "maps-pass-003".into(),
-            effects: "effects-pass-004".into(),
-            worlds: "worlds-pass-005".into(),
-            ui_pack: "ui-pack-003".into(),
-            brick_materials: "brick-materials-001".into(),
-            avatar: "avatar-pack-001".into(),
-            effects_runtime: "effects-runtime-pack-002".into(),
-            audio: "audio-pack-001".into(),
-            weather: "weather-pack-001".into(),
-            foliage: "foliage-pack-001".into(),
-            weapons: "weapons-pack-007".into(),
-            item_presentation: "item-presentation-pack-008".into(),
-            vehicles: "vehicles-pack-009".into(),
-            events: "events-pack-002".into(),
-            tutorial: "tutorial-pack-001".into(),
-        }
-    }
-}
+/// How a source checkout creates or refreshes its content (tools/bootstrap.py).
+pub const REGENERATE_HINT: &str = "If content packs are missing or out of date, regenerate them from a source checkout with: python tools/bootstrap.py --v20 \"<Blockland v20 folder>\" (docs/content-regeneration.md)";
 
 /// Send-friendly handles for a background hosting/loading worker. These paths
 /// contain generated native content only; Rc<Pack> never crosses threads.
 #[derive(Debug, Clone)]
 pub struct ContentPaths {
     pub root: PathBuf,
+    /// The packages.json this content was resolved from.
+    pub packages: PackageSet,
+    /// Other packages adding weapons and vehicles to the base packages
+    /// (`content_identity::kind_providers`).
+    pub weapon_extras: Vec<(String, PathBuf)>,
+    pub vehicle_extras: Vec<(String, PathBuf)>,
+    pub brick_extras: Vec<(String, PathBuf)>,
     pub map_bundle: PathBuf,
     pub brick_catalog: PathBuf,
     pub geometry: PathBuf,
@@ -110,6 +74,7 @@ pub struct ContentPaths {
     pub foliage: PathBuf,
     pub weapons: PathBuf,
     pub item_presentation: PathBuf,
+    pub weapon_debris: PathBuf,
     pub vehicles: PathBuf,
     pub events: PathBuf,
     pub tutorial: PathBuf,
@@ -139,6 +104,8 @@ pub struct LoadedMap {
     pub terrain: Vec<std::sync::Arc<bri_content::terrain_field::TerrainField>>,
     /// The Tutorial map's lesson zones and brick layouts.
     pub tutorial: Option<bri_sim::tutorial::TutorialMap>,
+    /// Glass shapes a fast player smashes.
+    pub breakables: Vec<bri_sim::map::Breakable>,
 }
 
 pub struct ClientContent {
@@ -147,6 +114,9 @@ pub struct ClientContent {
     pub maps: Vec<MapInfo>,
     pub bricks: Vec<BrickInfo>,
     pub catalog: Catalog,
+    /// Every brick the brick menu offers, stock then Add-On, with its
+    /// orientation fix: the one list hosting, joining and Change Map use.
+    pub selectable: Vec<(String, u8)>,
     pub paint: Vec<PaintDivision>,
     pub datablocks: DatablockMenus,
     pub worlds: Vec<WorldEntry>,
@@ -283,40 +253,83 @@ fn file(root: &Path, name: &str, limit: u64) -> Result<PathBuf> {
 }
 
 impl ContentPaths {
-    pub fn resolve(root: &Path, config: &ContentConfig) -> Result<Self> {
-        ensure!(
-            config.schema_version == 1,
-            "Unsupported client content config schema {}",
-            config.schema_version
-        );
+    pub fn resolve(root: &Path, packages: &PackageSet) -> Result<Self> {
+        packages.validate().into_result()?;
+        let given = root;
         let root = root
             .canonicalize()
-            .context("Content root is missing; supply the generated content directory")?;
-        let package = |name: &str| -> Result<PathBuf> {
-            let path = contained(&root, name)?;
-            ensure!(path.is_dir(), "Expected native package directory: {name}");
-            Ok(path)
-        };
+            .with_context(|| format!("Content directory {} is missing", root.display()))?;
+        // Name every absent package at once so one regeneration run fixes them all.
+        let missing: Vec<String> = packages
+            .packages
+            .iter()
+            .filter(|p| !root.join(&p.dir).is_dir())
+            .map(|p| format!("{} ({})", p.id, p.dir))
+            .collect();
+        ensure!(
+            missing.is_empty(),
+            "Content packages missing from {}: {}",
+            given.display(),
+            missing.join(", ")
+        );
+        let role = |role: &str| packages.role_dir(&root, role);
         Ok(Self {
-            map_bundle: package(&config.map_bundle)?,
-            brick_catalog: package(&config.brick_catalog)?,
-            geometry: package(&config.geometry)?,
-            effects: package(&config.effects)?,
-            worlds: package(&config.worlds)?,
-            ui_pack: package(&config.ui_pack)?,
-            brick_materials: package(&config.brick_materials)?,
-            avatar: package(&config.avatar)?,
-            effects_runtime: package(&config.effects_runtime)?,
-            audio: package(&config.audio)?,
-            weather: package(&config.weather)?,
-            foliage: package(&config.foliage)?,
-            weapons: package(&config.weapons)?,
-            item_presentation: package(&config.item_presentation)?,
-            vehicles: package(&config.vehicles)?,
-            events: package(&config.events)?,
-            tutorial: package(&config.tutorial)?,
+            map_bundle: role("map_bundle")?,
+            brick_catalog: role("brick_catalog")?,
+            geometry: role("geometry")?,
+            effects: role("effects")?,
+            worlds: role("worlds")?,
+            ui_pack: role("ui_pack")?,
+            brick_materials: role("brick_materials")?,
+            avatar: role("avatar")?,
+            effects_runtime: role("effects_runtime")?,
+            audio: role("audio")?,
+            weather: role("weather")?,
+            foliage: role("foliage")?,
+            weapons: role("weapons")?,
+            item_presentation: role("item_presentation")?,
+            weapon_debris: role("weapon_debris")?,
+            vehicles: role("vehicles")?,
+            events: role("events")?,
+            tutorial: role("tutorial")?,
+            weapon_extras: bri_net::content_identity::kind_providers(&root, packages, "weapons.json")?,
+            vehicle_extras: bri_net::content_identity::kind_providers(&root, packages, "vehicles.json")?,
+            brick_extras: bri_net::content_identity::brick_catalog_providers(&root, packages)?,
+            packages: packages.clone(),
             root,
         })
+    }
+
+    /// The base weapons pack merged with every other package's.
+    pub fn weapon_content(&self) -> Result<bri_net::content_identity::WeaponContent> {
+        bri_net::content_identity::WeaponContent::load_with(&self.weapons, &self.weapon_extras)
+    }
+    pub fn item_physics(
+        &self,
+        weapons: &bri_net::content_identity::WeaponContent,
+    ) -> Result<bri_net::content_identity::ItemPhysicsContent> {
+        bri_net::content_identity::ItemPhysicsContent::load_with(
+            &self.item_presentation,
+            weapons,
+            &self.weapon_extras,
+        )
+    }
+    /// The base vehicles pack merged with every other package's.
+    pub fn vehicle_pack(&self) -> Result<bri_vehicles::Pack> {
+        let mut parts = Vec::new();
+        for (dir, abs) in &self.vehicle_extras {
+            let part = bri_vehicles::Pack::load(abs.join("vehicles.json"))?;
+            part.verify_assets(abs)?;
+            parts.push((dir.clone(), part));
+        }
+        let (pack, _) = bri_vehicles::Pack::load(self.vehicles.join("vehicles.json"))?.merge(parts);
+        pack.validate()?;
+        Ok(pack)
+    }
+
+    /// Hash every package this content loads. Blocking: run it on a worker.
+    pub fn environment(&self) -> Result<Environment> {
+        Environment::load(&self.root, &self.packages)
     }
 
     /// Expensive geometry decoding and collider construction belongs on the host
@@ -361,9 +374,9 @@ impl ContentPaths {
             let palette = palette(&pack)?.into_iter().flat_map(|p| p.colors).collect();
             bri_world::World::new(entry.name.clone(), map_id.into(), palette)
         };
-        let weapons = bri_net::content_identity::WeaponContent::load(&self.weapons)?;
+        let weapons = self.weapon_content()?;
         let mut unresolved_items = weapons.resolve_world_items(&mut world)?;
-        let definitions = Definitions::load(&self.brick_catalog, &self.geometry)
+        let definitions = Definitions::load_with(&self.brick_catalog, &self.geometry, &self.brick_extras)
             .context("Loading native brick definitions")?;
         let native =
             NativeMap::load(&self.map_bundle, map_id).context("Loading native map collision")?;
@@ -406,7 +419,11 @@ impl ContentPaths {
         } else {
             None
         };
+        let breakables = native.breakables;
         let mut pending_objects = native.pending_objects;
+        pending_objects.extend(bri_sim::simulation::unloaded_summary(
+            &simulation.state().unloaded,
+        ));
         if unresolved_items > 0 {
             pending_objects.push(format!(
                 "{unresolved_items} unresolved brick item references retained"
@@ -421,31 +438,22 @@ impl ContentPaths {
             query_colliders,
             terrain,
             tutorial,
+            breakables,
         })
     }
 }
 
 impl ClientContent {
-    /// Optional root/client-content.json overrides versioned package locations.
+    /// Loads the packages listed by `root/packages.json`, or the base game's
+    /// packages when the content root has none.
     pub fn load(root: &Path) -> Result<Self> {
-        let config = if root.join("client-content.json").exists() {
-            read_json(
-                &file(root, "client-content.json", INDEX_LIMIT)?,
-                INDEX_LIMIT,
-            )?
-        } else {
-            ContentConfig::default()
-        };
-        Self::load_config(root, &config)
+        Self::load_packages(root, &PackageSet::load_root(root)?)
     }
 
-    pub fn load_config(root: &Path, config: &ContentConfig) -> Result<Self> {
-        let paths = ContentPaths::resolve(root, config)?;
-        let weapons = bri_net::content_identity::WeaponContent::load(&paths.weapons)?;
-        let item_physics = bri_net::content_identity::ItemPhysicsContent::load(
-            &paths.item_presentation,
-            &weapons,
-        )?;
+    pub fn load_packages(root: &Path, packages: &PackageSet) -> Result<Self> {
+        let paths = ContentPaths::resolve(root, packages)?;
+        let weapons = paths.weapon_content()?;
+        let item_physics = paths.item_physics(&weapons)?;
         let mut schema = load_ui_schema(&paths.ui_pack)?;
         install_death_icons(&mut schema, &weapons.pack, &paths.weapons)?;
         let paint = palette(&schema)?;
@@ -491,6 +499,12 @@ impl ClientContent {
         }
         let catalog = validate_catalog(&paths)?;
         let mut bricks = Vec::new();
+        let mut selectable: Vec<_> = catalog
+            .bricks
+            .iter()
+            .filter(|b| b.selectable())
+            .map(|b| (b.id.clone(), b.orientation_fix))
+            .collect();
         for entry in catalog.bricks.iter().filter(|b| b.selectable()) {
             let icon = entry.icon_source.replace('\\', "/").to_ascii_lowercase();
             let icon = icon
@@ -510,6 +524,10 @@ impl ClientContent {
                 subcategory: entry.subcategory.clone(),
                 icon: IconRef::Pack(icon),
             });
+        }
+        for (dir, catalog_dir) in &paths.brick_extras {
+            install_package_bricks(&mut schema, &mut bricks, &mut selectable, dir, catalog_dir)
+                .with_context(|| format!("Loading bricks of {dir}"))?;
         }
         let effects: Library = read_json(
             &file(&paths.effects, "effects.json", INDEX_LIMIT)?,
@@ -564,8 +582,7 @@ impl ClientContent {
                 bundle.unresolved_textures.len()
             ));
         }
-        let vehicles = bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))
-            .context("Loading native vehicles")?;
+        let vehicles = paths.vehicle_pack().context("Loading native vehicles")?;
         let music = music_choices(&paths.audio)?;
         let event_sounds = event_sound_choices(&paths.audio)?;
         let events = bri_events::Catalog::load(paths.events.join("catalog.json"))
@@ -580,6 +597,7 @@ impl ClientContent {
             maps,
             bricks,
             catalog,
+            selectable,
             paint,
             datablocks,
             worlds,
@@ -825,40 +843,123 @@ fn install_death_icons(
     weapons: &bri_weapons::Pack,
     root: &Path,
 ) -> Result<()> {
-    for id in weapons.damage_types.values().flat_map(|t| t.icons()) {
+    for (key, id) in weapons
+        .damage_types
+        .iter()
+        .flat_map(|(key, t)| t.icons().map(move |id| (key, id)))
+    {
         if schema.images.contains_key(&id) {
             continue;
         }
         let source = format!("{id}.png");
-        let (resource, native) = weapons
+        let resource = weapons
             .resources
             .iter()
-            .find(|r| r.path.eq_ignore_ascii_case(&source))
-            .and_then(|r| Some((r, r.native_file.as_deref()?)))
-            .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
-        let path = file(root, native, INDEX_LIMIT)?;
-        let bytes = fs::read(&path)?;
-        ensure!(
-            format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
-            "Death icon checksum mismatch: {id}"
-        );
-        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
-            .with_guessed_format()?
-            .into_dimensions()?;
-        ensure!(
-            width > 0 && height > 0 && width <= 256 && height <= 256,
-            "Invalid death icon size: {id}"
-        );
-        schema.images.insert(
-            id,
-            bri_ui::schema::ImageEntry {
+            .find(|r| r.path.eq_ignore_ascii_case(&source));
+        let entry = (|| -> Result<bri_ui::schema::ImageEntry> {
+            let (resource, native) = resource
+                .and_then(|r| Some((r, r.native_file.as_deref()?)))
+                .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
+            let path = file(&bri_weapons::resource_root(root, resource), native, INDEX_LIMIT)?;
+            let bytes = fs::read(&path)?;
+            ensure!(
+                format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
+                "Death icon checksum mismatch: {id}"
+            );
+            let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+                .with_guessed_format()?
+                .into_dimensions()?;
+            ensure!(
+                width > 0 && height > 0 && width <= 256 && height <= 256,
+                "Invalid death icon size: {id}"
+            );
+            Ok(bri_ui::schema::ImageEntry {
                 file: path.to_string_lossy().into_owned(),
                 width,
                 height,
                 sha256: resource.sha256.clone(),
                 source: resource.path.clone(),
-            },
-        );
+            })
+        })();
+        // An Add-On's death icon that does not load leaves the kill message
+        // as text (`crate::cosmetic`).
+        let owner = resource
+            .and_then(|r| {
+                let dir = r.package.as_ref()?;
+                Some(bri_package::library::add_on_label(&bri_weapons::resource_root(root, r), dir))
+            })
+            .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
+        match (entry, owner) {
+            (Ok(entry), _) => {
+                schema.images.insert(id, entry);
+            }
+            (Err(error), Some(dir)) => {
+                crate::cosmetic::add_on_fault(&dir, &source, format!("{error:#}"));
+            }
+            (Err(error), None) => return Err(error),
+        }
+    }
+    Ok(())
+}
+/// Another package's selectable bricks join the brick menu under the
+/// category and subcategory they declare, with the icons the package stores
+/// beside its catalog (`brick-icons.json`, written by `bri-import-addon`).
+fn install_package_bricks(
+    schema: &mut UiPack,
+    bricks: &mut Vec<BrickInfo>,
+    selectable: &mut Vec<(String, u8)>,
+    dir: &str,
+    catalog_dir: &Path,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Icons {
+        icons: BTreeMap<String, bri_ui::schema::ImageEntry>,
+    }
+    let catalog: Catalog = read_json(&file(catalog_dir, "stock-catalog.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
+    let icons = if catalog_dir.join("brick-icons.json").is_file() {
+        read_json::<Icons>(&file(catalog_dir, "brick-icons.json", INDEX_LIMIT)?, INDEX_LIMIT)?.icons
+    } else {
+        BTreeMap::new()
+    };
+    for entry in catalog.bricks.iter().filter(|b| b.selectable()) {
+        let loaded = icons.get(&entry.icon_source).map(|image| -> Result<_> {
+            let path = file(catalog_dir, &image.file, INDEX_LIMIT)?;
+            let bytes = fs::read(&path)?;
+            ensure!(
+                format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
+                "Brick icon checksum mismatch: {}",
+                entry.id
+            );
+            Ok(bri_ui::schema::ImageEntry {
+                file: path.to_string_lossy().into_owned(),
+                ..image.clone()
+            })
+        });
+        // A brick icon that does not load leaves the brick without one
+        // (`crate::cosmetic`), as a brick with no icon already shows.
+        let icon = match loaded {
+            Some(Ok(image)) => {
+                schema.images.insert(entry.icon_source.clone(), image);
+                IconRef::Pack(entry.icon_source.clone())
+            }
+            Some(Err(error)) => {
+                let label = bri_package::library::add_on_label(
+                    catalog_dir.parent().unwrap_or(catalog_dir),
+                    dir,
+                );
+                crate::cosmetic::add_on_fault(&label, &entry.icon_source, format!("{error:#}"));
+                IconRef::None
+            }
+            None => IconRef::None,
+        };
+        bricks.push(BrickInfo {
+            id: entry.id.clone(),
+            ui_name: entry.display_name.clone(),
+            category: entry.category.clone(),
+            subcategory: entry.subcategory.clone(),
+            icon,
+        });
+        selectable.push((entry.id.clone(), entry.orientation_fix));
     }
     Ok(())
 }
@@ -936,6 +1037,20 @@ fn palette(pack: &UiPack) -> Result<Vec<PaintDivision>> {
     Ok(paint)
 }
 
+/// The map a v20 `saves/<folder>/` belongs to. v20 names the folder after the
+/// mission's `saveName`, which every Slate variant shares with Slate and the
+/// dark rooms share with their lit ones, so the base map stands for them.
+pub fn map_for_save_folder(folder: &str) -> Option<&'static str> {
+    Some(match folder.to_ascii_lowercase().as_str() {
+        "bedroom" => LOADABLE_MAPS[0],
+        "kitchen" => LOADABLE_MAPS[1],
+        "slopes" => LOADABLE_MAPS[2],
+        "slate" => LOADABLE_MAPS[3],
+        "tutorial" => bri_sim::tutorial::MAP_ID,
+        _ => return None,
+    })
+}
+
 fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
     let report: WorldReport = read_json(&file(root, "report.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
     ensure!(
@@ -958,15 +1073,7 @@ fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
         let name = name
             .strip_suffix(".bls")
             .context("Reference-world source lacks BLS provenance suffix")?;
-        let map_id = match folder.to_ascii_lowercase().as_str() {
-            "bedroom" => LOADABLE_MAPS[0],
-            "kitchen" => LOADABLE_MAPS[1],
-            "slopes" => LOADABLE_MAPS[2],
-            "slate" => LOADABLE_MAPS[3],
-            "tutorial" => LOADABLE_MAPS[13],
-            _ => "",
-        }
-        .to_string();
+        let map_id = map_for_save_folder(folder).unwrap_or("").to_string();
         let id = format!(
             "v20/world/{}/{}",
             folder.to_ascii_lowercase(),
@@ -1017,6 +1124,39 @@ mod tests {
             );
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn add_on_bricks_join_the_one_selectable_list() {
+        let fixture = Fixture::new();
+        let entry = |id: &str, name: &str, fix: u8| {
+            serde_json::json!({
+                "id": id, "display_name": name, "category": "Bricks",
+                "subcategory": "Odd", "mesh_id": id, "collision_source": null,
+                "icon_source": "", "print_aspect_ratio": null,
+                "orientation_fix": fix, "can_cover": false,
+                "indestructible": false, "special_kind": null,
+                "other_properties": {}
+            })
+        };
+        fs::write(
+            fixture.0.join("stock-catalog.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "bricks": [entry("pkg:odd", "Odd Brick", 3), entry("pkg:hidden", "", 0)],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut schema = UiPack::default();
+        let (mut bricks, mut selectable) = (Vec::new(), vec![("plate".to_string(), 0)]);
+        install_package_bricks(&mut schema, &mut bricks, &mut selectable, "fixture", &fixture.0).unwrap();
+        // The menu entry and the plantable list agree.
+        assert_eq!(bricks.len(), 1);
+        assert_eq!(
+            selectable,
+            [("plate".to_string(), 0), ("pkg:odd".to_string(), 3)]
+        );
     }
 
     #[test]
@@ -1082,15 +1222,8 @@ mod tests {
     #[test]
     fn config_and_paths_are_send_without_ui_pack() {
         fn send<T: Send + Sync>() {}
-        send::<ContentConfig>();
+        send::<PackageSet>();
         send::<ContentPaths>();
-    }
-    #[test]
-    fn old_content_config_defaults_native_item_presentation_path() {
-        let config: ContentConfig =
-            serde_json::from_str(r#"{"schema_version":1,"weapons":"weapons-pack-007"}"#).unwrap();
-        assert_eq!(config.item_presentation, "item-presentation-pack-008");
-        assert!(serde_json::from_str::<ContentConfig>(r#"{"item_presentaton":"typo"}"#).is_err());
     }
     #[test]
     fn portable_content_paths_reject_traversal_and_alias_spellings() {
@@ -1107,13 +1240,13 @@ mod tests {
         ] {
             assert!(relative_name(p).is_err(), "{p}");
         }
-        assert!(relative_name("ui-pack-003/images/base/client/ui/btn.png").is_ok());
+        assert!(relative_name("ui-pack-004/images/base/client/ui/btn.png").is_ok());
     }
     #[test]
     fn invalid_config_fails_before_filesystem_loading() {
-        let c = ContentConfig {
+        let c = PackageSet {
             schema_version: 99,
-            ..Default::default()
+            ..PackageSet::base()
         };
         assert!(
             ContentPaths::resolve(Path::new("nonexistent"), &c)
@@ -1214,5 +1347,51 @@ mod tests {
             serde_json::to_vec_pretty(&report).unwrap(),
         )
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tutorial_hammer {
+    use super::*;
+    /// The Tutorial's walls must come down with the hammer alone, top first,
+    /// as in v20: every layout brick eventually stops holding others up.
+    #[test]
+    #[ignore = "requires generated native content; CPU only"]
+    fn every_tutorial_brick_can_be_hammered_top_down() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let content = ClientContent::load(&root).unwrap();
+        let map = "v20/add-ons/map_tutorial/tutorial.mis";
+        let tutorial = content.load_map(map, None).unwrap().tutorial.unwrap();
+        for world in [tutorial.part1, tutorial.part2] {
+            let mut sim = content.load_map(map, None).unwrap().simulation;
+            let actor = bri_world::authority::Actor {
+                owner: 1,
+                administrator: true,
+                ..Default::default()
+            };
+            let build = bri_world::build::SavedBuild {
+                schema_version: bri_world::build::BUILD_SCHEMA,
+                world,
+            };
+            let plan =
+                bri_world::build::LoadPlan::prepare(sim.state(), build, 1, false, 2).unwrap();
+            sim.load_build(&actor, plan).unwrap();
+            loop {
+                let ids: Vec<_> = sim.state().bricks.keys().copied().collect();
+                let free = ids
+                    .iter()
+                    .copied()
+                    .find(|&id| !sim.will_cause_chain_kill(id).unwrap());
+                let Some(free) = free else {
+                    let stuck: Vec<_> = ids
+                        .iter()
+                        .map(|id| (*id, sim.state().bricks[id].position))
+                        .collect();
+                    assert!(stuck.is_empty(), "never hammerable: {stuck:?}");
+                    break;
+                };
+                sim.remove(&actor, free).unwrap();
+            }
+        }
     }
 }

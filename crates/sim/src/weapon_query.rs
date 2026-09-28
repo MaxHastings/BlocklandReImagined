@@ -1,7 +1,10 @@
 //! Weapon queries against the same native collision world used by players.
-use crate::simulation::Simulation;
-use bri_weapons::{ActorId, ContactResponse, Filter, Hit, Nearby, ProjectileContact, Query, TargetId};
-use glam::Vec3;
+use crate::simulation::{Simulation, hit_normal};
+use bri_weapons::{
+    ActorId, ContactResponse, Filter, Hit, Liquid, Nearby, ProjectileContact, Query, TargetId,
+};
+use glam::{Quat, Vec3};
+use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 use std::collections::BTreeMap;
 
@@ -9,6 +12,8 @@ pub struct WeaponQuery<'a> {
     pub simulation: &'a Simulation,
     /// Host-owned gameplay policy. This is never supplied by a packet.
     pub affect: &'a dyn Fn(ActorId, TargetId) -> bool,
+    /// Explosion splash policy (adds the minigame's `selfDamage`).
+    pub affect_radius: &'a dyn Fn(ActorId, TargetId) -> bool,
     pub catch: &'a dyn Fn(ActorId, ActorId) -> bool,
     /// Zero-delay `onProjectileHit -> Projectile` event rows by brick.
     pub responses: &'a BTreeMap<u64, ContactResponse>,
@@ -29,7 +34,69 @@ fn target(tag: u128) -> Option<TargetId> {
     }
 }
 
+/// Whether projectiles and explosion sight lines hit this collider. For a
+/// brick that is v20's Ray Casting setting, the same one tools and clicks
+/// obey; Colliding only decides whether bodies pass through. Water bricks are
+/// zones, never surfaces. Other sensors are never hit.
+fn ray_hits(simulation: &Simulation, collider: &Collider, target: TargetId) -> bool {
+    match target {
+        TargetId::Brick(id) => simulation.state().bricks.get(&id).is_some_and(|brick| {
+            brick.raycast
+                && simulation
+                    .definitions
+                    .get(brick)
+                    .is_ok_and(|d| d.special != crate::definitions::Special::Water)
+        }),
+        _ => !collider.is_sensor(),
+    }
+}
+
+impl WeaponQuery<'_> {
+    /// Line of sight to a radius target through the map and bricks.
+    pub fn visible(&mut self, from: Vec3, nearby: &Nearby) -> bool {
+        let delta = nearby.center - from;
+        let distance = delta.length();
+        if !from.is_finite() || !nearby.center.is_finite() || !distance.is_finite() {
+            return false;
+        }
+        if distance < 0.000001 {
+            return true;
+        }
+        let simulation = self.simulation;
+        let predicate = |_: ColliderHandle, collider: &Collider| {
+            matches!(
+                target(collider.user_data),
+                Some(t @ (TargetId::Map(_) | TargetId::Brick(_))) if ray_hits(simulation, collider, t)
+            )
+        };
+        let direction = delta / distance;
+        let advance = 0.001_f32.min(distance * 0.5);
+        let ray = Ray::new(
+            Vector::from_array((from + direction * advance).to_array()),
+            Vector::from_array(direction.to_array()),
+        );
+        let reach = (distance - advance - 0.001).max(0.);
+        self.simulation
+            .terrain_ray(from + direction * advance, direction, reach)
+            .is_none()
+            && self
+                .simulation
+                .physics
+                .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
+                .cast_ray(&ray, reach, true)
+                .is_none()
+    }
+}
+
 impl Query for WeaponQuery<'_> {
+    fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
+        let (water, coverage) = self.simulation.liquid_at(bottom.to_array(), height)?;
+        Some(Liquid {
+            coverage,
+            density: water.density,
+            viscosity: water.viscosity,
+        })
+    }
     fn on_contact(&mut self, contact: &ProjectileContact) -> ContactResponse {
         match contact.target {
             TargetId::Brick(brick) => self
@@ -47,10 +114,23 @@ impl Query for WeaponQuery<'_> {
             return None;
         }
         let origin = Vector::from_array(start.to_array());
+        let simulation = self.simulation;
         let predicate = |_: ColliderHandle, collider: &Collider| {
             let Some(target) = target(collider.user_data) else {
                 return false;
             };
+            if !ray_hits(simulation, collider, target) {
+                return false;
+            }
+            // A ray never hits the brick it starts inside, so a projectile
+            // can leave the brick it spawned in (event `spawnProjectile`
+            // starts at the brick's centre).
+            if let TargetId::Brick(_) = target
+                && filter.projectile_age_ticks.is_some()
+                && collider.shape().contains_point(collider.position(), origin)
+            {
+                return false;
+            }
             if let TargetId::Actor(actor) = target {
                 if !filter.players || filter.world_only {
                     return false;
@@ -75,18 +155,14 @@ impl Query for WeaponQuery<'_> {
                 .map(|(time, normal)| Hit {
                     target: TargetId::Map(0),
                     position: start + direction * time,
-                    normal,
+                    normal: hit_normal(normal, direction),
                     fraction: time / distance,
                     color: None,
                 });
         let physical = self
             .simulation
             .physics
-            .query_pipeline_with_filter(
-                QueryFilter::default()
-                    .exclude_sensors()
-                    .predicate(&predicate),
-            )
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
             .cast_ray_and_get_normal(&ray, distance, true)
             .and_then(|(handle, hit)| {
                 let target = target(self.simulation.physics.colliders[handle].user_data)?;
@@ -104,10 +180,84 @@ impl Query for WeaponQuery<'_> {
                 Some(Hit {
                     target,
                     position: start + direction * hit.time_of_impact,
-                    normal: Vec3::from_array(hit.normal.to_array()),
+                    normal: hit_normal(Vec3::from_array(hit.normal.to_array()), direction),
                     fraction: hit.time_of_impact / distance,
                     color,
                 })
+            });
+        match (physical, terrain) {
+            (Some(a), Some(b)) => Some(if b.fraction < a.fraction { b } else { a }),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn sweep_box(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        half: Vec3,
+        rotation: Quat,
+        filter: Filter,
+    ) -> Option<Hit> {
+        let delta = end - start;
+        let distance = delta.length();
+        if !start.is_finite()
+            || !end.is_finite()
+            || !half.is_finite()
+            || half.min_element() < 0.0
+            || !(0.000001..=10000.).contains(&distance)
+        {
+            return None;
+        }
+        // Items collide with the world only: map, terrain and bricks.
+        let predicate = |_: ColliderHandle, collider: &Collider| {
+            matches!(
+                target(collider.user_data),
+                Some(TargetId::Map(_) | TargetId::Brick(_))
+            ) || (!filter.world_only && target(collider.user_data).is_some())
+        };
+        let shape = Cuboid::new(Vector::from_array(half.max(Vec3::splat(0.001)).to_array()));
+        let pose = Pose::from_parts(Vector::from_array(start.to_array()), rotation);
+        let physical = self
+            .simulation
+            .physics
+            .query_pipeline_with_filter(
+                QueryFilter::default()
+                    .exclude_sensors()
+                    .predicate(&predicate),
+            )
+            .cast_shape(
+                &pose,
+                Vector::from_array(delta.to_array()),
+                &shape,
+                ShapeCastOptions {
+                    max_time_of_impact: 1.0,
+                    stop_at_penetration: false,
+                    compute_impact_geometry_on_penetration: true,
+                    ..Default::default()
+                },
+            )
+            .and_then(|(handle, hit)| {
+                Some(Hit {
+                    target: target(self.simulation.physics.colliders[handle].user_data)?,
+                    position: start + delta * hit.time_of_impact,
+                    normal: hit_normal(Vec3::from_array(hit.normal1.to_array()), delta),
+                    fraction: hit.time_of_impact,
+                    color: None,
+                })
+            });
+        // Terrain is a heightfield outside Rapier: sweep the box's lowest point.
+        let bottom = Vec3::Y * bri_weapons::ItemBounds::lowest(half, rotation);
+        let direction = delta / distance;
+        let terrain = self
+            .simulation
+            .terrain_ray(start - bottom, direction, distance)
+            .map(|(time, normal)| Hit {
+                target: TargetId::Map(0),
+                position: start + direction * time,
+                normal: hit_normal(normal, direction),
+                fraction: time / distance,
+                color: None,
             });
         match (physical, terrain) {
             (Some(a), Some(b)) => Some(if b.fraction < a.fraction { b } else { a }),
@@ -151,44 +301,11 @@ impl Query for WeaponQuery<'_> {
         found
     }
 
-    fn visible(&mut self, from: Vec3, nearby: &Nearby) -> bool {
-        let delta = nearby.center - from;
-        let distance = delta.length();
-        if !from.is_finite() || !nearby.center.is_finite() || !distance.is_finite() {
-            return false;
-        }
-        if distance < 0.000001 {
-            return true;
-        }
-        let predicate = |_: ColliderHandle, collider: &Collider| {
-            matches!(
-                target(collider.user_data),
-                Some(TargetId::Map(_) | TargetId::Brick(_))
-            )
-        };
-        let direction = delta / distance;
-        let advance = 0.001_f32.min(distance * 0.5);
-        let ray = Ray::new(
-            Vector::from_array((from + direction * advance).to_array()),
-            Vector::from_array(direction.to_array()),
-        );
-        let reach = (distance - advance - 0.001).max(0.);
-        self.simulation
-            .terrain_ray(from + direction * advance, direction, reach)
-            .is_none()
-            && self
-                .simulation
-                .physics
-                .query_pipeline_with_filter(
-                    QueryFilter::default()
-                        .exclude_sensors()
-                        .predicate(&predicate),
-                )
-                .cast_ray(&ray, reach, true)
-                .is_none()
-    }
     fn can_affect(&self, source: ActorId, target: TargetId) -> bool {
         (self.affect)(source, target)
+    }
+    fn can_affect_radius(&self, source: ActorId, target: TargetId) -> bool {
+        (self.affect_radius)(source, target)
     }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool {
         (self.catch)(source, target)

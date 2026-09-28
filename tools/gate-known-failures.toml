@@ -1,0 +1,53 @@
+# Tests that already fail on main. The push gate (tools/gate.py) tolerates
+# these so one broken test does not block every session. Each entry needs an
+# owner: the thread fixing it. The owner removes the entry in the same commit
+# that makes the test pass; the gate prints a reminder once it passes.
+#
+# `test` matches the end of "<target>::<test path>" as the gate prints it,
+# e.g. "some_test_name" or "app_flow.rs::some_test_name". [[skip]] entries
+# are passed to libtest as --skip and never run in the gate. A new failure
+# that passes when retried alone is reported as flaky and does not block.
+
+# Baseline on main, 2026-09-27.
+
+# Tests the gate never runs: they need hardware or setup a gate run lacks.
+
+[[skip]]
+test = "local_router_answers_upnp"
+reason = "Needs a real UPnP router on the LAN."
+
+[[skip]]
+test = "world_checkpoint_wire_cost"
+reason = "Benchmark; needs BRI_BENCH_WORLD."
+
+# Test targets GitHub Actions skips because they load generated v20 content,
+# which the runner cannot have. The local gate still runs them. Prefer
+# #[ignore = "requires generated ... content"] on individual tests; list a
+# whole target here only when all of it needs content. Format:
+# "<package>/<test target>", or "<package>/lib" for unit tests.
+
+[[ci_skip_target]]
+target = "bri-client/brick_fx"
+
+[[ci_skip_target]]
+target = "bri-client/item_rendering"
+
+[[ci_skip_target]]
+target = "bri-sim/tools"
+
+[[ci_skip_target]]
+target = "bri-vehicles/flying_jeep"
+
+[[ci_skip_target]]
+target = "bri-vehicles/native"
+
+[[ci_skip_target]]
+target = "bri-weapons/runtime"
+
+# Test targets that host a game on the fixed ports (UDP 28000/28050). The gate
+# runs them one at a time, after one another, instead of in parallel. Prefer
+# BRI_TEST_HOST_PORT / BRI_TEST_DISCOVERY_PORT (see multiplayer.rs) so a test
+# never needs the game's ports. Format: "<package>/<test target>".
+
+[[port_bound]]
+target = "bri-client/night_qa"

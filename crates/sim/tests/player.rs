@@ -1,4 +1,4 @@
-use bri_sim::player::{MoveInput, Player, PlayerTuning};
+use bri_sim::player::{MotionEvents, MoveInput, Player, PlayerTuning};
 use glam::Vec3;
 use rapier3d::prelude::*;
 fn scene() -> PhysicsWorld {
@@ -66,9 +66,11 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         player.state().feet[1] > 1.0,
         "Submerged player did not rise"
     );
-    // v20 swim push 0.5 per 32 ms against drag 0.1 * viscosity 40.
+    assert!(player.state().crouched, "v20 crouches fully submerged players");
+    // v20 swim push 0.5 per 32 ms tick, then drag 0.1 * viscosity 40 takes
+    // 12.8% of the speed: 0.5 * 0.872 / 0.128 = 3.41.
     assert!(
-        (-3.9..-3.6).contains(&player.state().velocity[2]),
+        (-3.5..-3.3).contains(&player.state().velocity[2]),
         "Swim speed/drag not applied: {:?}",
         player.state()
     );
@@ -87,6 +89,7 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         player.state().velocity[2].abs() < 0.001,
         "Liquid drag did not stop idle momentum"
     );
+    assert!(!player.state().crouched, "a floating player stands");
     // Holding crouch dives to the bottom and holds the player there.
     for _ in 0..360 {
         player
@@ -106,7 +109,8 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         "Crouch did not dive: {:?}",
         player.state()
     );
-    assert!(player.state().feet[1] < 0.01);
+    // v20 rests a player 0.01 (the post-hit back-off) above the floor.
+    assert!(player.state().feet[1] < 0.011, "{:?}", player.state());
     // Holding jump swims back up faster than floating does.
     let mut surfaced = None;
     for tick in 0..240 {
@@ -150,6 +154,16 @@ fn step(p: &mut Player, w: &mut PhysicsWorld, input: MoveInput, n: usize) {
         w.step();
     }
 }
+/// Step until the motor runs its next 32 ms Torque tick: that tick's events.
+fn tick(p: &mut Player, w: &mut PhysicsWorld, input: MoveInput) -> MotionEvents {
+    loop {
+        let events = p.step(w, input).unwrap();
+        w.step();
+        if events.ticked {
+            return events;
+        }
+    }
+}
 fn spawn(w: &mut PhysicsWorld) -> Player {
     let mut p = Player::spawn(w, 1, Vec3::new(0.0, 0.05, 0.0), PlayerTuning::default()).unwrap();
     step(&mut p, w, MoveInput::default(), 60);
@@ -170,7 +184,8 @@ fn walking_speed_jump_edge_and_landing() {
         },
         120,
     );
-    assert!((p.state().velocity[2] + 7.0).abs() < 0.01);
+    // v20 applies drag after the run force: 7 * (1 - 0.1 * 0.032) per tick.
+    assert!((p.state().velocity[2] + 6.9776).abs() < 0.001, "{:?}", p.state());
     assert!(p.state().feet[2] < -6.0);
     step(&mut p, &mut world, MoveInput::default(), 30);
     assert!(Vec3::from(p.state().velocity).length() < 0.01);
@@ -178,30 +193,69 @@ fn walking_speed_jump_edge_and_landing() {
         jump: true,
         ..Default::default()
     };
-    assert!(p.step(&mut world, jump).unwrap().jumped);
-    world.step();
+    assert!(tick(&mut p, &mut world, jump).jumped);
     step(&mut p, &mut world, jump, 45);
     assert!(p.state().feet[1] > 3.0, "{:?}", p.state());
-    step(&mut p, &mut world, jump, 220);
+    step(&mut p, &mut world, MoveInput::default(), 220);
     assert!(p.state().grounded);
     assert!(p.state().feet[1] < 0.02);
-    assert!(!p.step(&mut world, jump).unwrap().jumped);
-    world.step();
-    step(&mut p, &mut world, MoveInput::default(), 1);
-    assert!(p.step(&mut world, jump).unwrap().jumped);
+    // v20 jumps whenever jump is held and jumpDelay has run out: holding it
+    // hops again after the landing tick plus 3 Torque ticks of contact.
+    let mut landed_at = None;
+    let mut rehop_after = None;
+    assert!(tick(&mut p, &mut world, jump).jumped);
+    for tick in 0..100 {
+        let events = self::tick(&mut p, &mut world, jump);
+        if events.landed {
+            landed_at = Some(tick);
+        }
+        if events.jumped {
+            rehop_after = landed_at.map(|landed| tick - landed);
+            break;
+        }
+    }
+    assert_eq!(rehop_after, Some(4), "{landed_at:?}");
+}
+#[test]
+fn a_jump_stays_available_briefly_after_walking_off_a_ledge() {
+    let mut world = bri_physics::new_world();
+    world.insert_collider(
+        ColliderBuilder::cuboid(2.0, 0.5, 2.0).translation(Vector::new(0.0, -0.5, 0.0)),
+        None,
+    );
+    world.detect_collisions(&(), &());
+    let mut p = spawn(&mut world);
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    let mut airborne = 0;
+    for _ in 0..400 {
+        p.step(&mut world, walk).unwrap();
+        world.step();
+        if !p.state().grounded {
+            airborne += 1;
+            if airborne == 20 {
+                break;
+            }
+        }
+    }
+    assert_eq!(airborne, 20, "{:?}", p.state());
+    let late = MoveInput { jump: true, ..walk };
+    assert!(tick(&mut p, &mut world, late).jumped, "{:?}", p.state());
+    assert!(p.state().velocity[1] > 8.0, "{:?}", p.state());
 }
 #[test]
 fn crouch_clearance_wall_slide_and_camera_occlusion() {
     let mut world = scene();
     let mut p = spawn(&mut world);
-    step(
+    tick(
         &mut p,
         &mut world,
         MoveInput {
             crouch: true,
             ..Default::default()
         },
-        1,
     );
     assert!(p.state().crouched);
     let ceiling = world.insert_collider(
@@ -397,7 +451,9 @@ fn ramps_are_walked_at_running_speed() {
         ramp(&mut w, 1.0, run, rise);
         // v20 runs at full speed along the slope: 7 u/s over the ramp's length.
         let length = run / degrees.to_radians().cos();
-        let ticks = ((1.0 + length + 1.0) / 7.0 * 120.0 * 1.25) as usize;
+        // Running off the top of a steep ramp launches the player, as in v20:
+        // allow half a second more to land.
+        let ticks = ((1.0 + length + 1.0) / 7.0 * 120.0 * 1.25) as usize + 60;
         walk_forward(&mut p, &mut w, ticks);
         let s = p.state();
         assert!(
@@ -504,7 +560,7 @@ fn v20_steps_need_only_player_height_beneath_ceilings() {
     let mut p = spawn(&mut w);
     low_room(&mut w, 0.2, 2.8);
     walk_forward(&mut p, &mut w, 150);
-    assert!(p.state().feet[2] > -1.0 && p.state().feet[1] < 0.01);
+    assert!(p.state().feet[2] > -1.0 && p.state().feet[1] < 0.011, "{:?}", p.state());
 }
 #[test]
 fn jumping_under_a_v20_lintel_bumps_the_head_and_keeps_walking() {
@@ -519,19 +575,211 @@ fn jumping_under_a_v20_lintel_bumps_the_head_and_keeps_walking() {
         jump: true,
         ..Default::default()
     };
-    assert!(p.step(&mut w, jump).unwrap().jumped);
-    w.step();
+    assert!(tick(&mut p, &mut w, jump).jumped);
     let mut peak = 0.0_f32;
+    let walk = MoveInput {
+        jump: false,
+        ..jump
+    };
     for _ in 0..60 {
-        p.step(&mut w, jump).unwrap();
+        p.step(&mut w, walk).unwrap();
         w.step();
         peak = peak.max(p.state().feet[1]);
     }
     assert!(peak > 0.1 && peak < 0.16, "head passed the ceiling: {peak}");
     assert!(
-        p.state().grounded && p.state().feet[1] < 0.01,
+        p.state().grounded && p.state().feet[1] < 0.011,
         "{:?}",
         p.state()
     );
     assert!(p.state().velocity[2] < -6.5, "{:?}", p.state());
+}
+#[test]
+fn jumps_add_to_slope_velocity_along_the_surface_normal() {
+    // v20 adds jumpForce along the surface normal to the current velocity, so
+    // a jump while running up a ramp carries the run's climb with it.
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    let degrees = 25.0_f32;
+    ramp(&mut w, 1.0, 6.0, 6.0 * degrees.to_radians().tan());
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    for _ in 0..240 {
+        if p.state().feet[1] > 1.0 && p.state().grounded {
+            break;
+        }
+        p.step(&mut w, walk).unwrap();
+        w.step();
+    }
+    assert!(
+        p.state().grounded && p.state().feet[1] > 1.0,
+        "{:?}",
+        p.state()
+    );
+    let jump = MoveInput { jump: true, ..walk };
+    assert!(tick(&mut p, &mut w, jump).jumped);
+    let expected = 7.0 * degrees.to_radians().sin() + 12.0 * degrees.to_radians().cos();
+    let rise = p.state().velocity[1];
+    assert!((rise - expected).abs() < 0.5, "{rise} vs {expected}");
+}
+#[test]
+fn crouched_jets_push_flat_along_the_facing_without_lift() {
+    let mut world = scene();
+    let mut p = spawn(&mut world);
+    // Jet up first, then crouch-jet with no move input: v20 thrusts along the
+    // body's forward axis only, so the player dashes forward and sinks.
+    step(
+        &mut p,
+        &mut world,
+        MoveInput {
+            jet: true,
+            ..Default::default()
+        },
+        240,
+    );
+    let start = p.state().clone();
+    step(
+        &mut p,
+        &mut world,
+        MoveInput {
+            jet: true,
+            crouch: true,
+            ..Default::default()
+        },
+        60,
+    );
+    let s = p.state();
+    assert!(s.crouched && s.jetting);
+    // Half a second of 2000/90 thrust forward (-Z at yaw 0), less drag.
+    assert!(s.velocity[2] < start.velocity[2] - 10.0, "{s:?}");
+    assert!(s.velocity[0].abs() < 0.01, "{s:?}");
+    assert!(s.velocity[1] < start.velocity[1] - 5.0, "{s:?}");
+}
+#[test]
+fn motion_events_name_the_colliders_the_sweep_hit() {
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    let wall = w.insert_collider(
+        ColliderBuilder::cuboid(3.0, 2.0, 0.25).translation(Vector::new(0.0, 2.0, -2.0)),
+        None,
+    );
+    w.detect_collisions(&(), &());
+    let forward = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    let mut hit = vec![];
+    for _ in 0..60 {
+        hit.extend(
+            p.step(&mut w, forward)
+                .unwrap()
+                .hits
+                .into_iter()
+                .map(|(c, _)| c),
+        );
+        w.step();
+    }
+    assert!(hit.contains(&wall), "{hit:?}");
+}
+
+/// A level slide lane like "Mr.Block's Slides": two 72 degree ramp faces
+/// (74.5 degrees: rise 1.8 over run 0.5) facing each other along z, their
+/// feet 0.5 apart, so the 1.25 wide box wedges between them.
+fn v_lane() -> PhysicsWorld {
+    let mut w = bri_physics::new_world();
+    for side in [-1.0_f32, 1.0] {
+        let mut points = vec![];
+        for z in [-200.0, 200.0] {
+            points.push(Vector::new(side * 0.25, 0.0, z));
+            points.push(Vector::new(side * 0.75, 1.8, z));
+            points.push(Vector::new(side * 0.75, 0.0, z));
+        }
+        w.insert_collider(ColliderBuilder::convex_hull(&points).unwrap(), None);
+    }
+    w.detect_collisions(&(), &());
+    w
+}
+
+/// Wedged in a level lane, a v20 rider keeps speeding up with no input: each
+/// 32 ms tick gravity and drag apply, `updatePos` removes the speed into one
+/// face and then the other (each leaving 0.01 of elasticity), and Torque's
+/// crease rule re-aims the remaining speed along the lane. Iterating exactly
+/// those per-tick equations from 2 u/s settles at 6.517 u/s after 30 s; the
+/// same rules at 120 Hz settle at 3.248, which is why the motor runs
+/// Torque's ticks.
+#[test]
+fn a_wedged_rider_gains_lane_speed_on_v20_ticks() {
+    let lane_speed = |torque_tick: Option<f32>| {
+        let mut w = v_lane();
+        let mut p =
+            Player::spawn(&mut w, 1, Vec3::new(0.0, 1.5, -150.0), PlayerTuning::default()).unwrap();
+        p.set_motion(Vec3::new(0.0, 0.0, 2.0), false);
+        let mut speeds = vec![];
+        for second in 0..30 {
+            match torque_tick {
+                Some(dt) => {
+                    for _ in 0..(1.0 / dt).round() as usize {
+                        p.torque_tick(&mut w, MoveInput::default(), &[], dt).unwrap();
+                    }
+                }
+                None => step(&mut p, &mut w, MoveInput::default(), 120),
+            }
+            let v = Vec3::from(p.state().velocity);
+            let feet = Vec3::from(p.state().feet);
+            // Still wedged in the lane, moving along it.
+            assert!(feet.x.abs() < 0.01 && (1.3..1.45).contains(&feet.y), "{second}: {feet}");
+            speeds.push(v.z);
+        }
+        speeds
+    };
+    let v20 = lane_speed(None);
+    eprintln!("120 Hz steps on 32 ms ticks: {v20:?}");
+    let settled = v20[29];
+    assert!((settled - 6.517).abs() < 0.01, "settled at {settled}");
+    assert!(v20.windows(2).all(|w| w[1] >= w[0] - 0.01), "{v20:?}");
+    // Stepping the server at 120 Hz runs exactly Torque's ticks.
+    let ticks = lane_speed(Some(0.032));
+    assert!((ticks[29] - settled).abs() < 0.2, "{ticks:?}");
+    let fast = lane_speed(Some(1.0 / 120.0));
+    assert!((fast[29] - 3.248).abs() < 0.05, "120 Hz ticks settle at {}", fast[29]);
+}
+
+#[test]
+fn a_swimmer_rising_from_the_bottom_stays_crouched_until_it_surfaces() {
+    // Slate Sea: the slate lies 9 under the surface. A player spawned on it
+    // floats up fully submerged; v20 holds the crouch pose all the way, and
+    // standing only once the crouched box breaks the surface.
+    // Each 32 ms tick adds buoyancy (1 / 0.7 - 1) x gravity 20 and then
+    // removes drag 0.1 x viscosity 40 of the speed, so the rise settles at
+    // 8.571 x (1 - 4 x 0.032) / 4 = 1.869 units a second.
+    let mut world = scene();
+    let waters = [bri_content::water::Water::volume(
+        [-100., -91., -100.],
+        [100., 9., 100.],
+    )];
+    let mut player = spawn(&mut world);
+    // The crouch state each time it changes; the motor may not tick on the
+    // very first step.
+    let mut poses = vec![];
+    let mut fastest: f32 = 0.0;
+    for _ in 0..900 {
+        player
+            .step_in_water(&mut world, MoveInput::default(), &waters)
+            .unwrap();
+        world.step();
+        fastest = fastest.max(player.state().velocity[1]);
+        let crouched = player.state().crouched;
+        if poses.last() != Some(&crouched) {
+            poses.push(crouched);
+        }
+    }
+    assert!((fastest - 1.869).abs() < 0.005, "rose at {fastest}");
+    assert!(
+        poses.ends_with(&[true, false]) && poses.iter().filter(|&&c| c).count() == 1,
+        "crouch should end once, at the surface: {poses:?}"
+    );
+    assert!(!player.state().crouched);
+    assert!(player.state().feet[1] > 6.0, "{:?}", player.state());
 }

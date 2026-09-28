@@ -4,8 +4,8 @@
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
 use anyhow::{Result, ensure};
 use bri_fx_runtime::{
-    EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, SourceOptions, SourceTransform,
-    StopMode,
+    BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
+    SourceTransform, StopMode,
 };
 use bri_sim::{
     presentation::{Cue, CueKind, MAX_CUES},
@@ -68,6 +68,8 @@ pub struct WeaponEffects {
     pending: VecDeque<HostRequest>,
     cursor: u64,
     limits: EffectsLimits,
+    /// World palette for `color<N>Paint*` spray effects.
+    palette: Vec<[f32; 4]>,
     pub diagnostics: Diagnostics,
 }
 
@@ -146,6 +148,7 @@ impl WeaponEffects {
             pending: VecDeque::new(),
             cursor: 0,
             limits,
+            palette: Vec::new(),
             diagnostics: Diagnostics::default(),
         })
     }
@@ -161,6 +164,33 @@ impl WeaponEffects {
     }
     pub fn timed_count(&self) -> usize {
         self.timed.len()
+    }
+    pub fn set_palette(&mut self, palette: &[[f32; 4]]) {
+        if self.palette != palette {
+            self.palette = palette.to_vec();
+        }
+    }
+    /// Binding and source options for a cue effect. `color<N>Paint*` is the
+    /// `setSprayCanColor` copy of the blue can's effect in palette colour N.
+    fn resolve(&self, definition: &str) -> Option<(Binding, SourceOptions)> {
+        if let Some(binding) = self.bindings.get(&definition.to_ascii_lowercase()) {
+            return Some((binding.clone(), SourceOptions::default()));
+        }
+        let (paint, base) = bri_weapons::paint_effect_base(definition)?;
+        let binding = self.bindings.get(&base.to_ascii_lowercase())?.clone();
+        let color = self.palette.get(usize::from(paint))?;
+        let recolor = paint_recolor(*color, matches!(binding.kind, Kind::Composite));
+        Some((
+            binding,
+            SourceOptions {
+                recolor: Some(recolor),
+                ..Default::default()
+            },
+        ))
+    }
+    /// Whether a cue naming this effect would draw anything.
+    pub fn resolves(&self, definition: &str) -> bool {
+        self.resolve(definition).is_some()
     }
     pub fn take_host_requests(&mut self) -> impl Iterator<Item = HostRequest> + '_ {
         self.pending.drain(..)
@@ -338,9 +368,7 @@ impl WeaponEffects {
                     direction,
                     ..
                 } => {
-                    let Some(binding) =
-                        self.bindings.get(&definition.to_ascii_lowercase()).cloned()
-                    else {
+                    let Some((binding, options)) = self.resolve(definition) else {
                         self.missing(format!("Missing cue effect {definition}"));
                         continue;
                     };
@@ -367,11 +395,9 @@ impl WeaponEffects {
                         continue;
                     }
                     let result = match binding.kind {
-                        Kind::Composite => self.world.play_composite(
-                            &binding.id,
-                            transform,
-                            SourceOptions::default(),
-                        ),
+                        Kind::Composite => {
+                            self.world.play_composite(&binding.id, transform, options)
+                        }
                         Kind::Emitter | Kind::Light => {
                             let authored_finite = matches!(binding.kind, Kind::Emitter)
                                 && self
@@ -388,11 +414,7 @@ impl WeaponEffects {
                                 continue;
                             }
                             let started = if matches!(binding.kind, Kind::Emitter) {
-                                self.world.start_emitter(
-                                    &binding.id,
-                                    transform,
-                                    SourceOptions::default(),
-                                )
+                                self.world.start_emitter(&binding.id, transform, options)
                             } else {
                                 self.world.start_light(
                                     &binding.id,
@@ -463,6 +485,26 @@ impl WeaponEffects {
     }
 }
 
+/// `setSprayCanColor`: the explosion and droplet copies take the palette RGB
+/// (at least 8/255 per channel when translucent) and draw translucent colours
+/// additively (`useInvAlpha = 0`). The nozzle's `bluePaintEmitter` is tinted
+/// by the image's colour shift through `useEmitterColors`; its particle keeps
+/// its authored blend.
+fn paint_recolor(color: [f32; 4], explosion: bool) -> Recolor {
+    let opaque = color[3] > 0.99;
+    let mut rgb = [color[0], color[1], color[2]].map(|c| c.clamp(0., 1.));
+    if !opaque && rgb.iter().all(|c| *c < 8. / 255.) {
+        rgb = [8. / 255.; 3];
+    }
+    Recolor {
+        rgb,
+        blend: explosion.then_some(if opaque {
+            BlendMode::Alpha
+        } else {
+            BlendMode::Additive
+        }),
+    }
+}
 fn projectile_light(id: &str) -> String {
     format!("weapon/projectile-light/{id}")
 }

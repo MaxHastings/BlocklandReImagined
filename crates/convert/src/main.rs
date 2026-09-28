@@ -44,6 +44,60 @@ fn normalize(value: &str) -> Result<String> {
     Ok(value)
 }
 
+/// The add-on archives of the designated v20 reference
+/// (`docs/vanilla-reference-inventory.json`): path and SHA-256.
+struct Reference {
+    archives: std::collections::BTreeMap<String, String>,
+    seen: std::cell::RefCell<std::collections::BTreeSet<String>>,
+}
+
+impl Reference {
+    fn load(path: &Path) -> Result<Self> {
+        let inventory: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(path).with_context(|| format!("Reading {}", path.display()))?,
+        )?;
+        let mut archives = std::collections::BTreeMap::new();
+        for package in inventory["packages"]
+            .as_array()
+            .context("Reference inventory lists no packages")?
+        {
+            let path = package["path"].as_str().context("Package lacks path")?;
+            let sha256 = package["sha256"].as_str().context("Package lacks sha256")?;
+            archives.insert(path.to_lowercase(), sha256.to_lowercase());
+        }
+        Ok(Self {
+            archives,
+            seen: Default::default(),
+        })
+    }
+
+    /// Whether to convert this Add-Ons file: a listed archive with the
+    /// reference's bytes. Anything else in the folder is skipped; a listed
+    /// archive with other bytes is an error, as it would convert differently.
+    fn check(&self, relative: &str, path: &Path) -> Result<bool> {
+        let key = relative.to_lowercase();
+        let Some(expected) = self.archives.get(&key) else {
+            return Ok(false);
+        };
+        let actual = digest(&std::fs::read(path)?);
+        ensure!(
+            &actual == expected,
+            "differs from the v20 reference archive (SHA-256 {actual}, expected {expected})"
+        );
+        self.seen.borrow_mut().insert(key);
+        Ok(true)
+    }
+
+    fn missing(&self) -> Vec<String> {
+        let seen = self.seen.borrow();
+        self.archives
+            .keys()
+            .filter(|k| !seen.contains(*k))
+            .map(|k| format!("{k}: missing; the v20 reference has it"))
+            .collect()
+    }
+}
+
 fn digest(data: &[u8]) -> String {
     format!("{:x}", Sha256::digest(data))
 }
@@ -136,10 +190,23 @@ fn convert(source: String, virtual_path: String, input: Result<Vec<u8>>, output:
 }
 
 fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    // `--reference <inventory.json>` converts only the add-on archives the
+    // v20 reference inventory lists, and only when their bytes match it, so
+    // every player's install converts to the same pack whatever else their
+    // Add-Ons folder holds.
+    let reference = match args.iter().position(|a| a == "--reference") {
+        Some(at) => {
+            ensure!(at + 1 < args.len(), "Missing reference inventory");
+            let path = PathBuf::from(args.remove(at + 1));
+            args.remove(at);
+            Some(Reference::load(&path)?)
+        }
+        None => None,
+    };
     ensure!(
         args.len() == 2,
-        "Usage: bri-convert <original-v20-directory> <new-output-directory> (terrain, brick, model and animation pass)"
+        "Usage: bri-convert <original-v20-directory> <new-output-directory> [--reference <inventory.json>] (terrain, brick, model and animation pass)"
     );
     let root = PathBuf::from(&args[0])
         .canonicalize()
@@ -188,6 +255,18 @@ fn main() -> Result<()> {
                 .strip_prefix(&root)?
                 .to_string_lossy()
                 .replace('\\', "/");
+            if folder == "Add-Ons"
+                && let Some(reference) = &reference
+            {
+                match reference.check(&relative, path) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        scan_errors.push(format!("{relative}: {error:#}"));
+                        continue;
+                    }
+                }
+            }
             let extension = path
                 .extension()
                 .unwrap_or_default()
@@ -257,6 +336,9 @@ fn main() -> Result<()> {
                 }
             }
         }
+    }
+    if let Some(reference) = &reference {
+        scan_errors.extend(reference.missing());
     }
     records.sort_by(|a, b| {
         a.virtual_path

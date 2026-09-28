@@ -1,6 +1,6 @@
 //! Native build snapshots and atomic append planning. A build is not a running
 //! simulation checkpoint: queued actions are never replayed when planting it.
-use crate::{Brick, BrickId, EventValue, OwnerId, World};
+use crate::{Brick, BrickId, OwnerId, OwnerRecord, World};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -38,8 +38,7 @@ pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
     let build = match serde_json::from_slice::<SavedBuild>(bytes) {
         Ok(build) => build,
         Err(build_error) => SavedBuild {
-            schema_version: 1,
-            ownership_scope: None,
+            schema_version: BUILD_SCHEMA,
             world: serde_json::from_slice::<World>(bytes).with_context(|| {
                 format!("Invalid native build ({build_error}) or imported world")
             })?,
@@ -49,35 +48,34 @@ pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
     Ok(build)
 }
 
+pub const BUILD_SCHEMA: u32 = 2;
+
+/// A saved build. Brick owners are the world's owner numbers, and the
+/// world's owner table says which player (principal) each one is, so loading
+/// the build on any server gives each builder's bricks back to that player.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SavedBuild {
     pub schema_version: u32,
-    /// Opaque session namespace, not an authentication credential. Other-session
-    /// owner numbers are remapped to reserved, unclaimed native owners on load.
-    pub ownership_scope: Option<String>,
     pub world: World,
 }
 impl SavedBuild {
+    pub fn new(world: World) -> Self {
+        Self {
+            schema_version: BUILD_SCHEMA,
+            world,
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == 1
-                && self
-                    .ownership_scope
-                    .as_ref()
-                    .is_none_or(|s| !s.is_empty() && s.len() <= 128),
-            "Invalid native build schema/ownership scope"
+            self.schema_version == BUILD_SCHEMA,
+            "Unsupported native build schema"
         );
         self.world.validate()
     }
-    pub fn capture(
-        world: &World,
-        scope: Option<String>,
-        events: bool,
-        ownership: bool,
-    ) -> Result<Self> {
+    pub fn capture(world: &World, events: bool, ownership: bool) -> Result<Self> {
         let mut world = world.clone();
-        for brick in world.bricks.values_mut() {
+        let strip = |brick: &mut Brick| {
             if !events {
                 brick.events.clear();
             }
@@ -89,12 +87,22 @@ impl SavedBuild {
                 (events || !tag.eq_ignore_ascii_case("+-EVENT"))
                     && (ownership || !tag.eq_ignore_ascii_case("+-OWNER"))
             });
-        }
-        let result = Self {
-            schema_version: 1,
-            ownership_scope: ownership.then_some(scope).flatten(),
-            world,
         };
+        crate::update_bricks(&mut world.bricks, strip);
+        world.unloaded.iter_mut().for_each(strip);
+        if !ownership {
+            world.owners.clear();
+        } else {
+            // Only the owners whose bricks are saved travel with the build.
+            let used: std::collections::BTreeSet<OwnerId> = world
+                .bricks
+                .values()
+                .chain(&world.unloaded)
+                .map(|b| b.owner)
+                .collect();
+            world.owners.retain(|owner, _| used.contains(owner));
+        }
+        let result = Self::new(world);
         result.validate()?;
         Ok(result)
     }
@@ -106,6 +114,8 @@ pub struct LoadPlan {
     pub(crate) next_id: BrickId,
     pub(crate) palette: Vec<[f32; 4]>,
     pub(crate) bricks: BTreeMap<BrickId, Brick>,
+    /// Owner numbers this load gives to principals new to the world.
+    pub(crate) owners: BTreeMap<OwnerId, OwnerRecord>,
     pub next_owner: OwnerId,
 }
 
@@ -113,12 +123,62 @@ impl LoadPlan {
     pub fn bricks(&self) -> &BTreeMap<BrickId, Brick> {
         &self.bricks
     }
+    pub fn owners(&self) -> &BTreeMap<OwnerId, OwnerRecord> {
+        &self.owners
+    }
+    /// Take the new owner records out, to claim them when the load starts
+    /// while its bricks follow in batches.
+    pub fn take_owners(&mut self) -> BTreeMap<OwnerId, OwnerRecord> {
+        std::mem::take(&mut self.owners)
+    }
+    /// The merged palette and the prepared bricks in save order, to publish
+    /// a few at a time with [`LoadPlan::batch`].
+    pub fn into_parts(self) -> (Vec<[f32; 4]>, Vec<Brick>) {
+        (self.palette, self.bricks.into_values().collect())
+    }
+    /// The next bricks of a prepared load against the world as it is now.
+    /// The world palette may only have been extended by this same load.
+    pub fn batch(
+        target: &World,
+        palette: &[[f32; 4]],
+        bricks: Vec<Brick>,
+        next_owner: OwnerId,
+    ) -> Result<Self> {
+        ensure!(
+            palette.starts_with(&target.palette),
+            "The colorset changed while loading"
+        );
+        ensure!(
+            target
+                .bricks
+                .len()
+                .checked_add(bricks.len())
+                .is_some_and(|n| n <= crate::MAX_BRICKS),
+            "Loaded build exceeds world brick limit"
+        );
+        let next_id = target
+            .next_brick_id
+            .checked_add(bricks.len() as u64)
+            .context("Brick IDs exhausted")?;
+        target
+            .revision
+            .checked_add(1)
+            .context("World revision exhausted")?;
+        Ok(Self {
+            base_revision: target.revision,
+            first_id: target.next_brick_id,
+            next_id,
+            palette: palette.to_vec(),
+            bricks: (target.next_brick_id..).zip(bricks).collect(),
+            owners: BTreeMap::new(),
+            next_owner,
+        })
+    }
     pub fn prepare(
         target: &World,
         build: SavedBuild,
         load_owner: OwnerId,
         preserve_ownership: bool,
-        scope: Option<&str>,
         next_owner: OwnerId,
     ) -> Result<Self> {
         build.validate()?;
@@ -131,14 +191,14 @@ impl LoadPlan {
             target
                 .bricks
                 .len()
-                .checked_add(build.world.bricks.len())
+                .checked_add(build.world.bricks.len() + build.world.unloaded.len())
                 .is_some_and(|n| n <= crate::MAX_BRICKS),
             "Loaded build exceeds world brick limit"
         );
-        ensure!(!build.world.bricks.is_empty(), "Build contains no bricks");
+        ensure!(!(build.world.bricks.is_empty() && build.world.unloaded.is_empty()), "Build contains no bricks");
         let next_id = target
             .next_brick_id
-            .checked_add(build.world.bricks.len() as u64)
+            .checked_add((build.world.bricks.len() + build.world.unloaded.len()) as u64)
             .context("Brick IDs exhausted")?;
         target
             .revision
@@ -159,32 +219,38 @@ impl LoadPlan {
             };
             colors.push(index as u8);
         }
-        let same_scope = scope.is_some() && scope == build.ownership_scope.as_deref();
-        let mut owners = BTreeMap::new();
+        // Saved owner number -> owner number in the target world.
+        let mut owners: BTreeMap<OwnerId, OwnerId> = BTreeMap::new();
+        let mut new_owners = BTreeMap::new();
         let mut next_owner = next_owner;
         let mut bricks = BTreeMap::new();
-        for (offset, mut brick) in build.world.bricks.into_values().enumerate() {
-            brick.color = colors[brick.color as usize];
-            for event in &mut brick.events {
-                for value in &mut event.params {
-                    if let EventValue::Color(color) = value {
-                        *color = colors[*color as usize];
-                    }
-                }
-            }
+        // Bricks the source world could not place are offered again: this
+        // server may have their definitions.
+        let saved = build.world.bricks.into_iter().map(|(_, b)| b);
+        for (offset, mut brick) in saved.chain(build.world.unloaded).enumerate() {
+            brick.recolor(|c| colors[usize::from(c)]);
             brick.owner = if !preserve_ownership {
                 load_owner
             } else if brick.owner == 0 {
                 0
-            } else if same_scope {
-                next_owner =
-                    next_owner.max(brick.owner.checked_add(1).context("Owner IDs exhausted")?);
-                brick.owner
             } else if let Some(owner) = owners.get(&brick.owner) {
                 *owner
             } else {
-                let owner = next_owner;
-                next_owner = next_owner.checked_add(1).context("Owner IDs exhausted")?;
+                // A known player gets their bricks back under the number
+                // they have in this world; anyone else gets a fresh number,
+                // claimed by their principal when there is one.
+                let record = build.world.owners.get(&brick.owner);
+                let owner = match record.and_then(|r| target.owner_of(&r.principal)) {
+                    Some(owner) => owner,
+                    None => {
+                        let owner = next_owner;
+                        next_owner = next_owner.checked_add(1).context("Owner IDs exhausted")?;
+                        if let Some(record) = record {
+                            new_owners.insert(owner, record.clone());
+                        }
+                        owner
+                    }
+                };
                 owners.insert(brick.owner, owner);
                 owner
             };
@@ -197,6 +263,7 @@ impl LoadPlan {
             next_id,
             palette,
             bricks,
+            owners: new_owners,
             next_owner,
         })
     }
@@ -235,10 +302,10 @@ mod item_spawn_tests {
             world.bricks.insert(id, b);
         }
         world.next_brick_id = 3;
-        let build = SavedBuild::capture(&world, None, false, false).unwrap();
+        let build = SavedBuild::capture(&world, false, false).unwrap();
         let restored = decode(&encode(&build).unwrap()).unwrap();
         let target = World::new("target".into(), "map/test".into(), vec![[1.0; 4]]);
-        let plan = LoadPlan::prepare(&target, restored, 9, false, None, 10).unwrap();
+        let plan = LoadPlan::prepare(&target, restored, 9, false, 10).unwrap();
         for id in [1, 2] {
             assert_eq!(plan.bricks()[&id].item_spawn, world.bricks[&id].item_spawn);
             assert_eq!(

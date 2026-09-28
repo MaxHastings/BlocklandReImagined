@@ -93,6 +93,8 @@ pub struct ClientFoliage {
     images: Vec<Image>,
     pub prepared: PreparedFoliage,
     renderer: Option<FoliageRenderer>,
+    /// Samples per pixel of the world pass the foliage draws into.
+    samples: u32,
     seconds: f64,
     pub stats: RenderStats,
 }
@@ -105,6 +107,7 @@ impl ClientFoliage {
             images,
             prepared: PreparedFoliage::default(),
             renderer: None,
+            samples: 1,
             seconds: 0.,
             stats: RenderStats::default(),
         })
@@ -121,6 +124,13 @@ impl ClientFoliage {
     }
     pub fn gpu_stopped(&mut self) {
         self.renderer = None;
+    }
+    /// Match the world pass's samples per pixel; the renderer is rebuilt.
+    pub fn set_samples(&mut self, samples: u32) {
+        if samples != self.samples {
+            self.samples = samples;
+            self.renderer = None;
+        }
     }
     pub fn advance(&mut self, elapsed: std::time::Duration) {
         self.seconds += elapsed.as_secs_f64();
@@ -145,7 +155,7 @@ impl ClientFoliage {
                 RenderConfig {
                     target: frame.format,
                     depth: bri_render::scene::DEPTH_FORMAT,
-                    samples: 1,
+                    samples: self.samples.max(1),
                 },
             )?);
         }
@@ -205,7 +215,7 @@ mod tests {
     fn actual_client_collision_places_original_foliage_on_allowed_surfaces() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let map_id = "v20/add-ons/map_bedroom/bedroom.mis";
-        let map = bri_sim::map::NativeMap::load(&root.join("map-bundle-015"), map_id)?;
+        let map = bri_sim::map::NativeMap::load(&root.join("map-bundle-017"), map_id)?;
         let mut building = Building::new(
             Definitions {
                 entries: BTreeMap::new(),
@@ -214,7 +224,7 @@ mod tests {
         )?;
         building.attach_terrain(map.terrain);
         let prepared = PreparedFoliage::load(
-            &root.join("foliage-pack-001"),
+            &root.join("foliage-pack-003"),
             map_id,
             &building,
             &map.waters,

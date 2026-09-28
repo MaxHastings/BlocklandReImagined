@@ -4,7 +4,7 @@ use bri_admin::{
     Action, Administration, BanRecord, ConnectionId, DurableState, Effect, GameplayCommand, Origin,
     PasswordSlot, Principal, Request, Role, Secret, TrustedConnection,
 };
-use bri_world::{OwnerId, authority::Actor};
+use bri_world::OwnerId;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,6 +24,16 @@ pub enum AdminCapability {
     WorldCommands,
     DestructoWand,
     Spy,
+    /// `/fetch`, `/find`, `/warp`.
+    Teleport,
+    /// `/resetVehicles`, `/clearVehicles`.
+    Vehicles,
+    /// `/timeScale`.
+    TimeScale,
+    /// Admin menu Change Map.
+    ChangeMap,
+    /// Server settings (brick limit, plant rate, chat length, reach).
+    HostOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,9 +68,18 @@ pub enum AdminData {
         rows: Vec<BanRecord>,
         now_unix_seconds: u64,
     },
+    /// `serverCmdGetMapList`.
+    Maps(Vec<MapListing>),
 }
 
+/// A map the host can change to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MapListing {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminSnapshot {
     pub revision: u64,
     pub role: Role,
@@ -68,9 +87,11 @@ pub struct AdminSnapshot {
     pub legacy_lan: bool,
     pub supported: BTreeSet<AdminCapability>,
     pub players: Vec<AdminPlayer>,
+    /// The server settings, for whoever may change them.
+    pub options: Option<bri_admin::ServerSettings>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminReply {
     pub snapshot: AdminSnapshot,
     pub data: AdminData,
@@ -79,9 +100,46 @@ pub struct AdminReply {
 #[derive(Debug)]
 pub struct AdminCall {
     pub reply: AdminReply,
-    /// Network adapter must close these authenticated peer connections before
-    /// returning success for a kick or failed-password disconnect.
-    pub disconnects: Vec<OwnerId>,
+}
+
+/// The close message a disconnected player sees (v20 showed the kick or ban
+/// reason and how long a ban lasts).
+pub fn disconnect_message(
+    reason: &bri_admin::DisconnectReason,
+    durable: &DurableState,
+    now: u64,
+) -> String {
+    match reason {
+        bri_admin::DisconnectReason::Kicked => "You were kicked from the server by an admin.".into(),
+        bri_admin::DisconnectReason::FailedPasswords => {
+            "You were disconnected after too many wrong admin passwords.".into()
+        }
+        bri_admin::DisconnectReason::Banned(id) => {
+            let ban = durable.bans.iter().find(|b| b.id == *id);
+            let length = match ban.and_then(|b| b.expires_unix_seconds) {
+                None if ban.is_some() => " permanently".to_string(),
+                None => String::new(),
+                Some(end) => {
+                    let minutes = end.saturating_sub(now).div_ceil(60).max(1);
+                    match minutes {
+                        1 => " for 1 minute".into(),
+                        m if m < 120 => format!(" for {m} minutes"),
+                        m if m < 48 * 60 => format!(" for {} hours", m.div_ceil(60)),
+                        m => format!(" for {} days", m.div_ceil(24 * 60)),
+                    }
+                }
+            };
+            let reason: String = ban
+                .map(|b| b.reason.chars().filter(|c| !c.is_control()).take(120).collect())
+                .unwrap_or_default();
+            let reason = reason.trim();
+            if reason.is_empty() {
+                format!("You were banned from this server{length}.")
+            } else {
+                format!("You were banned from this server{length}. Reason: {reason}")
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -92,6 +150,10 @@ pub(super) struct AdminRuntime {
     next_connection: u64,
     revision: u64,
     passwords: BTreeMap<PasswordSlot, Secret>,
+    /// The host installed a map list, so Change Map works.
+    pub(super) maps_available: bool,
+    /// Server settings the host applies (v20's `$Pref::Server::*`).
+    pub(super) settings: bri_admin::ServerSettings,
 }
 
 impl AdminRuntime {
@@ -210,6 +272,12 @@ impl AdminRuntime {
             supported.insert(AdminCapability::WorldCommands);
             supported.insert(AdminCapability::DestructoWand);
             supported.insert(AdminCapability::Spy);
+            supported.insert(AdminCapability::Teleport);
+            supported.insert(AdminCapability::Vehicles);
+            supported.insert(AdminCapability::TimeScale);
+            if self.maps_available {
+                supported.insert(AdminCapability::ChangeMap);
+            }
             if rows.iter().any(|row| {
                 row.durable_identity_available
                     && !row.is_owner
@@ -222,14 +290,26 @@ impl AdminRuntime {
         if role == Role::SuperAdmin || self.authority.host_authority(Origin::Connection(id))? {
             supported.insert(AdminCapability::AdminPassword);
         }
+        let host = self.authority.host_authority(Origin::Connection(id))?;
+        if host {
+            supported.insert(AdminCapability::HostOptions);
+        }
         Ok(AdminSnapshot {
             revision: self.revision,
             role,
-            local_host: self.authority.host_authority(Origin::Connection(id))?,
+            local_host: host,
             legacy_lan: false,
             supported,
             players,
+            options: host.then(|| self.settings.clone()),
         })
+    }
+
+    fn target_owner(&self, target: ConnectionId) -> Result<OwnerId> {
+        self.connection_to_owner
+            .get(&target)
+            .copied()
+            .context("That player is no longer connected")
     }
 
     fn request(
@@ -263,8 +343,17 @@ impl AdminRuntime {
                 | Action::DestructoWand
                 | Action::Spy { .. }
                 | Action::DropCameraAtPlayer
+                | Action::Fetch { .. }
+                | Action::Find { .. }
+                | Action::Warp
+                | Action::ResetVehicles
+                | Action::ClearVehicles
+                | Action::TimeScale { .. }
+                | Action::RequestMaps
+                | Action::ChangeMap { .. }
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
+                | Action::HostConfigure { .. }
                 | Action::HostSetPassword {
                     slot: PasswordSlot::Admin | PasswordSlot::SuperAdmin,
                     ..
@@ -284,6 +373,40 @@ impl AdminRuntime {
             self.authority.permission(origin, &request.action)?;
             anyhow::bail!("Join password is not connected to transport admission");
         }
+        // v20's `MsgAdminForce` lines need names and the ban terms before
+        // the request is consumed.
+        let actor_name = session
+            .peers
+            .get(&owner)
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let prior_role = self.authority.role(id);
+        let ban_line = match &request.action {
+            Action::Ban {
+                target,
+                duration,
+                reason,
+            } => self
+                .connection_to_owner
+                .get(target)
+                .and_then(|victim| session.peers.get(victim))
+                .map(|victim| {
+                    let label: String = victim
+                        .principal
+                        .map(|p| p.0[..4].iter().map(|b| format!("{b:02x}")).collect())
+                        .unwrap_or_default();
+                    let (a, v) = (&actor_name, &victim.name);
+                    match duration {
+                        bri_admin::BanDuration::Forever => format!(
+                            "\u{E003}{a}\u{E002} permanently banned \u{E003}{v}\u{E002} (ID: {label}) - \u{E002}\"{reason}\""
+                        ),
+                        bri_admin::BanDuration::Minutes(m) => format!(
+                            "\u{E003}{a}\u{E002} banned \u{E003}{v}\u{E002} (ID: {label}) for {m} minutes - \u{E002}\"{reason}\""
+                        ),
+                    }
+                }),
+            _ => None,
+        };
         let passwords = &self.passwords;
         let mut candidate = self.authority.clone();
         let effects = candidate.handle(origin, request, now, |attempt| {
@@ -309,12 +432,28 @@ impl AdminRuntime {
         self.authority = candidate;
         let mut data = AdminData::None;
         let mut disconnects = Vec::new();
+        let mut disconnect_messages = BTreeMap::new();
         let mut changed = false;
+        if let Some(line) = ban_line {
+            session.admin_announce(line);
+        }
         for effect in effects {
             match effect {
-                Effect::Disconnect { target, .. } => {
+                Effect::Disconnect { target, reason } => {
                     if let Some(owner) = self.connection_to_owner.get(&target).copied() {
+                        // `serverCmdKick` (the LAN form: no BL_ID to show).
+                        if reason == bri_admin::DisconnectReason::Kicked {
+                            let name = session.peers.get(&owner).map(|p| p.name.clone());
+                            session.admin_announce(format!(
+                                "\u{E003}{actor_name}\u{E002} kicked \u{E003}{}",
+                                name.unwrap_or_default()
+                            ));
+                        }
                         disconnects.push(owner);
+                        disconnect_messages.insert(
+                            owner,
+                            disconnect_message(&reason, self.authority.durable(), now),
+                        );
                     }
                 }
                 Effect::RoleChanged { target, role } => {
@@ -322,12 +461,20 @@ impl AdminRuntime {
                         .connection_to_owner
                         .get(&target)
                         .context("Administration role target is no longer connected")?;
-                    session
-                        .peers
-                        .get_mut(&target_owner)
-                        .context("Administration target is not in the session")?
-                        .actor
-                        .administrator = role.is_admin();
+                    // `serverCmdSAD`: announced only when the level rises.
+                    if target == id && prior_role != Some(role) {
+                        let how = match role {
+                            bri_admin::Role::SuperAdmin => Some("Super Admin (Password)"),
+                            bri_admin::Role::Admin => Some("Admin (Password)"),
+                            _ => None,
+                        };
+                        if let Some(how) = how {
+                            session.admin_announce(format!(
+                                "\u{E002}{actor_name} has become {how}"
+                            ));
+                        }
+                    }
+                    session.set_role(target_owner, role.is_admin())?;
                     changed = true;
                 }
                 Effect::PasswordChange { slot, password } => {
@@ -338,7 +485,15 @@ impl AdminRuntime {
                     }
                     changed = true;
                 }
-                Effect::LoginRejected { attempts, .. } => {
+                Effect::LoginRejected {
+                    attempts,
+                    disconnect,
+                } => {
+                    if disconnect {
+                        session.admin_announce(format!(
+                            "\u{E003}{actor_name}\u{E002} failed to guess the admin password."
+                        ));
+                    }
                     data = AdminData::LoginRejected { attempts };
                 }
                 Effect::Gameplay { actor, command } => {
@@ -352,10 +507,7 @@ impl AdminRuntime {
                         .get(&actor_owner)
                         .context("Administration actor is not in the session")?
                         .actor;
-                    let session_actor = Actor {
-                        owner: actor_owner,
-                        administrator: peer_actor.administrator,
-                    };
+                    let session_actor = peer_actor.clone();
                     match command {
                         GameplayCommand::RequestBrickGroups => {
                             data = AdminData::BrickGroups(brick_groups(session));
@@ -364,6 +516,14 @@ impl AdminRuntime {
                             let ids: Vec<_> =
                                 session.simulation.state().bricks.keys().copied().collect();
                             preflight_removal(session, ids.len())?;
+                            // `ServerCmdClearAllBricks`.
+                            if !ids.is_empty() {
+                                let name = session.peers[&actor_owner].name.clone();
+                                session.system_message(
+                                    Some(super::MessageTag::ClearBricks),
+                                    format!("\u{E003}{name}\u{E000} cleared all bricks."),
+                                );
+                            }
                             for brick in ids {
                                 session.simulation.remove(&session_actor, brick)?;
                                 session.dirty.insert(brick);
@@ -381,6 +541,21 @@ impl AdminRuntime {
                                 .collect();
                             ensure!(!ids.is_empty(), "Unknown brick group");
                             preflight_removal(session, ids.len())?;
+                            // `ServerCmdClearBrickGroup`: the LAN host's own
+                            // group is just "the bricks".
+                            let name = session.peers[&actor_owner].name.clone();
+                            let text = if group == actor_owner && session.lan_host {
+                                format!("\u{E003}{name}\u{E002} cleared the bricks")
+                            } else {
+                                let owner = brick_groups(session)
+                                    .into_iter()
+                                    .find(|g| g.id == group)
+                                    .map_or_else(String::new, |g| g.name);
+                                format!(
+                                    "\u{E003}{name}\u{E002} cleared \u{E003}{owner}\u{E002}'s bricks"
+                                )
+                            };
+                            session.system_message(Some(super::MessageTag::ClearBricks), text);
                             for brick in ids {
                                 session.simulation.remove(&session_actor, brick)?;
                                 session.dirty.insert(brick);
@@ -390,7 +565,7 @@ impl AdminRuntime {
                         GameplayCommand::HighlightBrickGroup(group) => {
                             session.highlight_brick_group(group)?;
                         }
-                        GameplayCommand::RealBrickCount => session.admin_brick_count(actor_owner),
+                        GameplayCommand::RealBrickCount => session.brick_count(actor_owner),
                         GameplayCommand::CancelAllEvents => {
                             session.admin_cancel_all_events(actor_owner)
                         }
@@ -405,8 +580,32 @@ impl AdminRuntime {
                                 .context("That player has no body to spy on")?;
                             session.set_control(actor_owner, ControlObject::Spy(target))?;
                         }
+                        GameplayCommand::Fetch(target) => {
+                            let victim = self.target_owner(target)?;
+                            session.admin_fetch(actor_owner, victim)?;
+                        }
+                        GameplayCommand::Find(target) => {
+                            let victim = self.target_owner(target)?;
+                            session.admin_find(actor_owner, victim)?;
+                        }
+                        GameplayCommand::Warp => session.admin_warp(actor_owner)?,
+                        GameplayCommand::RequestMaps => {
+                            data = AdminData::Maps(session.map_list.clone());
+                        }
+                        GameplayCommand::ChangeMap(map) => {
+                            session.request_map_change(actor_owner, map)?;
+                        }
+                        GameplayCommand::ResetVehicles => {
+                            session.admin_reset_vehicles(actor_owner)?
+                        }
+                        GameplayCommand::ClearVehicles => {
+                            session.admin_clear_vehicles(actor_owner)?
+                        }
+                        GameplayCommand::TimeScale(scale) => {
+                            session.admin_time_scale(actor_owner, scale)?
+                        }
                         GameplayCommand::DropCameraAtPlayer => {
-                            session.set_control(actor_owner, ControlObject::Camera)?;
+                            session.drop_camera_at_player(actor_owner)?;
                         }
                         other => {
                             anyhow::bail!("Administration action is not implemented: {other:?}")
@@ -421,18 +620,27 @@ impl AdminRuntime {
                     }
                 }
                 Effect::BansChanged | Effect::AutoRolesChanged => changed = true,
-                Effect::Configure(_) => {
-                    anyhow::bail!("Administration setting has no installed host adapter")
+                Effect::Configure(settings) => {
+                    // Applied: brick limit and plant rate (planting), max
+                    // chat length and TooFarDistance. The rest are kept and
+                    // shown as set.
+                    settings.validate()?;
+                    self.settings = settings;
+                    changed = true;
                 }
             }
         }
         if changed {
             self.revision = self.revision.saturating_add(1);
         }
+        // Committed effects are published before the reply is built: the
+        // reply can fail (a sender who just locked itself out has no
+        // snapshot) and must not take the disconnects with it.
+        session.admin_disconnects.extend(disconnects);
+        session.admin_disconnect_messages.extend(disconnect_messages);
         let snapshot = self.snapshot(owner)?;
         Ok(AdminCall {
             reply: AdminReply { snapshot, data },
-            disconnects,
         })
     }
 }
@@ -511,6 +719,21 @@ impl Session {
             .as_secs();
         self.admin
             .connect(owner, name, trusted_host, is_bot, principal, now)
+            .map_err(|error| {
+                // Tell a banned player how long is left and why, as v20 did.
+                let durable = self.admin.durable();
+                let ban = principal
+                    .filter(|_| matches!(error.downcast_ref(), Some(bri_admin::Error::Banned)))
+                    .and_then(|p| durable.bans.iter().find(|b| b.principal == p && b.active(now)));
+                match ban {
+                    Some(ban) => anyhow::anyhow!(
+                        "{}",
+                        disconnect_message(&bri_admin::DisconnectReason::Banned(ban.id), durable, now)
+                            .replacen("You were banned", "You are banned", 1)
+                    ),
+                    None => error,
+                }
+            })
     }
 
     pub fn restore_admin_state(&mut self, bytes: &[u8]) -> Result<()> {

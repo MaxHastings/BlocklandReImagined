@@ -10,12 +10,8 @@ declared sky image memory before uploading textures.
 
 The current client uses `content/map-bundle-014`, covering all 14 reference maps.
 Primary geometry and resources come from the new E: reference via maps-pass-006.
-Six missions use explicitly supplied secondary lighting caches after checking
-mission CRCs and byte identity of the secondary mission/referenced geometry.
-Tutorial's two interior chunks have a unique complete slot/dimension association;
-ambiguous associations reject. Resource CRC sentinel fields still cannot prove
-that a cached image was generated from its accompanying geometry. Independent
-lighting bake/visual acceptance remains work.
+Mission lighting is baked from the reference originals by the converter; see
+content-conversion.md. Remaining lighting gaps are listed there.
 
 Environment schema 2 corrects a schema-1 conversion error: DML slot 6 (zero based)
 is a reflection map; cloud layers start at slot 7. The first pack mistakenly drew
@@ -81,9 +77,10 @@ leaves and burners without authored collision do not become solid obstacles.
 A nonuniform placement/raycast test distinguishes visual geometry from authored
 collision. The 14-map loader/render checks cover all static placements without
 omitted StaticModel/DatablockModel diagnostics. Kitchen visual inspection confirms
-the fixtures in their map context. These checks do not yet prove interactive
-glass destruction, clock ticking/blinking/explosions, repair, distance LOD or
-replicated grass. Those remain explicit diagnostics and alpha work. Translucent
+the fixtures in their map context. Glass shapes (Bedroom windows and bulb,
+Kitchen lights) break on hard player impact and stay broken until the mission
+reloads (`crates/sim/src/session/breakables.rs`). These checks do not prove
+clock ticking/blinking or distance LOD. Translucent
 glass still uses mesh-batch-center sorting, with intersecting-surface limits.
 
 Water rendering/host coverage now use the versioned native records in bundle 014;

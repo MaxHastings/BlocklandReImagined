@@ -6,7 +6,6 @@ struct Scene {
     hit: Option<Hit>,
     near: Vec<Nearby>,
     deny: bool,
-    occluded: bool,
     response: Option<ContactResponse>,
 }
 impl Query for Scene {
@@ -38,9 +37,6 @@ impl Query for Scene {
     fn radius(&mut self, _: Vec3, _: f32, limit: usize) -> Vec<Nearby> {
         self.near.iter().take(limit).cloned().collect()
     }
-    fn visible(&mut self, _: Vec3, _: &Nearby) -> bool {
-        !self.occluded
-    }
     fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
         !self.deny
     }
@@ -53,7 +49,7 @@ fn load() -> Pack {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/weapons-pack-007/weapons.json")
+                .join("../../content/weapons-pack-009/weapons.json")
         });
     Pack::from_json(&std::fs::read(path).expect("Run documented importer first")).unwrap()
 }
@@ -123,8 +119,10 @@ fn core_tools_share_slots_drops_and_validated_checkpoints() {
     for (slot, item) in CORE_TOOLS[..3].iter().enumerate() {
         assert_eq!(w.give(a, item).unwrap(), slot);
     }
+    // v20 allows a second copy of an item.
+    assert_eq!(w.give(a, CORE_TOOLS[0]).unwrap(), 3);
+    w.drop_item(a, 3).unwrap();
     let before = w.actor(a).unwrap().inventory.clone();
-    assert!(w.give(a, CORE_TOOLS[0]).is_err());
     assert!(w.give(a, "v20.weapon.unknown").is_err());
     assert_eq!(w.actor(a).unwrap().inventory, before);
     w.equip(a, Some(0)).unwrap();
@@ -142,7 +140,7 @@ fn core_tools_share_slots_drops_and_validated_checkpoints() {
     assert!(restored.pickup(a, drop).is_err());
     assert_eq!(restored.give(a, CORE_TOOLS[3]).unwrap(), 0);
     let mut corrupt = restored.save();
-    corrupt.actors[0].1.inventory[4] = Some(CORE_TOOLS[3].into());
+    corrupt.actors[0].1.inventory[4] = Some("v20.weapon.unknown".into());
     assert!(WeaponsWorld::restore(empty(), &serde_json::to_vec(&corrupt).unwrap()).is_err());
 }
 
@@ -241,7 +239,9 @@ fn inventory_drop_pickup_and_disconnect() {
     let mut w = world("GunItem");
     let mut q = Scene::default();
     run(&mut w, 30, &mut q);
-    assert!(w.give(ActorId(1), &native_id("weapon", "GunItem")).is_err());
+    // v20 `ItemData::onPickup` has no duplicate check: a second gun takes
+    // the next free slot.
+    assert_eq!(w.give(ActorId(1), &native_id("weapon", "GunItem")).unwrap(), 1);
     let d = w.drop_item(ActorId(1), 0).unwrap();
     assert!(w.pickup(ActorId(1), d).is_err());
     w.add_actor(ActorId(2), 5).unwrap();
@@ -402,38 +402,36 @@ fn horse_ray_transforms_without_nominal_damage() {
 }
 #[test]
 #[ignore = "requires converted vanilla weapons pack"]
-fn explosion_radius_occlusion_permissions_and_brick_intents() {
-    for blocked in [false, true] {
-        let mut w = WeaponsWorld::new(load()).unwrap();
-        w.spawn(
-            &native_id("projectile", "rocketLauncherProjectile"),
-            ActorId(1),
-            Vec3::ZERO,
-            Vec3::NEG_Z * 65.0,
-            1.0,
-        )
-        .unwrap();
-        let mut q = Scene {
-            hit: Some(hit(TargetId::Map(1), -0.25)),
-            near: vec![Nearby {
-                target: TargetId::Actor(ActorId(2)),
-                center: Vec3::new(1.5, 0.0, -0.25),
-                distance: 1.5,
-            }],
-            occluded: blocked,
-            ..Default::default()
-        };
-        let e = w.step(&mut q);
-        assert_eq!(
-            e.iter()
-                .any(|e| matches!(e,Event::Damage{amount,..}if (*amount-50.0).abs()<0.001)),
-            !blocked
-        );
-        assert!(
-            e.iter()
-                .any(|e| matches!(e, Event::BrickImpact { target: None, .. }))
-        );
-    }
+fn explosion_radius_falloff_ignores_cover_and_intends_bricks() {
+    // v20 `onExplode`: no line-of-sight test and a quadratic falloff,
+    // 100 * (1 - (1.5 / 3)^2) = 75 at half the rocket's damage radius.
+    let mut w = WeaponsWorld::new(load()).unwrap();
+    w.spawn(
+        &native_id("projectile", "rocketLauncherProjectile"),
+        ActorId(1),
+        Vec3::ZERO,
+        Vec3::NEG_Z * 65.0,
+        1.0,
+    )
+    .unwrap();
+    let mut q = Scene {
+        hit: Some(hit(TargetId::Map(1), -0.25)),
+        near: vec![Nearby {
+            target: TargetId::Actor(ActorId(2)),
+            center: Vec3::new(1.5, 0.0, -0.25),
+            distance: 1.0,
+        }],
+        ..Default::default()
+    };
+    let e = w.step(&mut q);
+    assert!(
+        e.iter()
+            .any(|e| matches!(e,Event::Damage{amount,..}if (*amount-75.0).abs()<0.001))
+    );
+    assert!(
+        e.iter()
+            .any(|e| matches!(e, Event::BrickImpact { target: None, .. }))
+    );
 }
 #[test]
 #[ignore = "requires converted vanilla weapons pack"]
@@ -544,16 +542,17 @@ fn sports_charge_throw_consume_catch_and_dodgeball_damage() {
 #[ignore = "requires converted vanilla weapons pack"]
 fn malicious_projectile_and_state_inputs_are_bounded() {
     let mut p = load();
-    p.images
+    // A zero-tick cycle between two states. A state timing out into itself
+    // is the wands' timed sparkle loop, so the cycle must span two states.
+    let states = &mut p
+        .images
         .get_mut(&native_id("image", "gunImage"))
         .unwrap()
-        .states[0]
-        .ticks = 0;
-    p.images
-        .get_mut(&native_id("image", "gunImage"))
-        .unwrap()
-        .states[0]
-        .timeout = Some(0);
+        .states;
+    for (state, next) in [(0, 1), (1, 0)] {
+        states[state].ticks = 0;
+        states[state].timeout = Some(next);
+    }
     let mut w = WeaponsWorld::new(p).unwrap();
     w.add_actor(ActorId(1), 5).unwrap();
     w.give(ActorId(1), &native_id("weapon", "GunItem")).unwrap();
@@ -579,7 +578,8 @@ fn malicious_projectile_and_state_inputs_are_bounded() {
 #[ignore = "requires converted vanilla weapons pack"]
 fn pack_complete_native_models_and_hidden_variants() {
     let p = load();
-    assert_eq!(p.items.len(), 17);
+    // 17 weapons plus the hammer, wrench, printer and wand images.
+    assert_eq!(p.items.len(), 21);
     for n in [
         "LeftHandedGunImage",
         "basketballShootImage",
@@ -630,9 +630,6 @@ impl Query for PhysicsScene {
     }
     fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
         vec![]
-    }
-    fn visible(&mut self, _: Vec3, _: &Nearby) -> bool {
-        true
     }
     fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
         true
@@ -885,4 +882,228 @@ fn synchronous_brick_output_redirects_before_explosion() {
         Event::Damage { .. } | Event::Removed { .. } | Event::BrickImpact { .. }
     )));
     assert!(events.iter().any(|e| matches!(e, Event::Bounced { .. })));
+}
+#[test]
+fn spray_paint_effects_carry_the_palette_index() {
+    assert_eq!(
+        paint_effect("bluePaintEmitter", Some(12)),
+        "color12PaintEmitter"
+    );
+    assert_eq!(
+        paint_effect("bluePaintExplosion", None),
+        "bluePaintExplosion"
+    );
+    assert_eq!(paint_effect("gunExplosion", Some(3)), "gunExplosion");
+    assert_eq!(
+        paint_effect_base("color12PaintEmitter"),
+        Some((12, "bluePaintEmitter".into()))
+    );
+    assert_eq!(
+        paint_effect_base("color0PaintExplosion"),
+        Some((0, "bluePaintExplosion".into()))
+    );
+    for name in [
+        "colorPaintEmitter",
+        "color999PaintEmitter",
+        "color3Spray",
+        "gunExplosion",
+    ] {
+        assert_eq!(paint_effect_base(name), None, "{name}");
+    }
+}
+#[test]
+fn scripted_arm_poses_follow_the_original_on_mount_threads() {
+    // AkimboGunImage mounts LeftHandedGunImage, whose onMount raises both arms.
+    assert_eq!(
+        scripted_arm_pose("v20.image.lefthandedgunimage", "Ready"),
+        Some((true, true))
+    );
+    assert_eq!(
+        scripted_arm_pose("v20.image.basketballimage", "Ready"),
+        Some((true, false))
+    );
+    assert_eq!(scripted_arm_pose("v20.image.footballimage", "Ready"), None);
+    assert_eq!(
+        scripted_arm_pose("v20.image.footballimage", "Charge"),
+        Some((true, false))
+    );
+    assert_eq!(scripted_arm_pose("v20.image.gunimage", "Ready"), None);
+}
+#[test]
+fn removed_projectiles_vanish_without_exploding() {
+    let mut w = world("gunitem");
+    let id = w
+        .spawn(
+            "v20.projectile.tankshellprojectile",
+            ActorId(1),
+            Vec3::ZERO,
+            Vec3::X,
+            1.0,
+        )
+        .unwrap();
+    assert!(w.remove_projectile(id));
+    assert!(!w.remove_projectile(id));
+    assert!(w.projectiles().next().is_none());
+}
+/// Drives the trigger from `down(tick)` and returns the ticks that spawned a bullet.
+fn shot_ticks(w: &mut WeaponsWorld, ticks: usize, down: impl Fn(usize) -> bool) -> Vec<usize> {
+    let mut q = Scene::default();
+    let mut held = None;
+    let mut out = vec![];
+    for t in 0..ticks {
+        if held != Some(down(t)) {
+            held = Some(down(t));
+            w.trigger(ActorId(1), down(t)).unwrap();
+        }
+        out.extend(std::iter::repeat_n(t, shots(&w.step(&mut q))));
+    }
+    out
+}
+#[test]
+#[ignore = "requires converted vanilla weapons pack"]
+fn akimbo_fire_rate_over_seconds_matches_v20() {
+    const SECOND: usize = 120;
+    // Held: the right gun fires once and waits for release; the left gun fires
+    // once on release (onFireAkimbo), then nothing for the rest of the window.
+    let mut w = world("AkimboGunItem");
+    let held = shot_ticks(&mut w, 10 * SECOND, |t| t < 5 * SECOND);
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert!(held[0] < SECOND && (5 * SECOND..5 * SECOND + 30).contains(&held[1]));
+    // Four clicks a second: two bullets per click, never more.
+    let mut w = world("AkimboGunItem");
+    let clicks = shot_ticks(&mut w, 25 + 5 * SECOND, |t| t >= 25 && (t - 25) % 30 < 15);
+    assert_eq!(clicks.len(), 40, "{clicks:?}");
+    // Mashing faster than the guns cycle: v20's Fire (0.09 s), Smoke and
+    // FireAkimbo (0.09 s) cap it at about ten bullets a second, and the left
+    // trigger is a one-tick pulse, so a busy left gun drops its shot.
+    let mut w = world("AkimboGunItem");
+    let mash = shot_ticks(&mut w, 25 + 3 * SECOND, |t| t >= 25 && (t - 25) % 4 < 2);
+    for window in mash.windows(12) {
+        assert!(window[11] - window[0] >= SECOND, "{mash:?}");
+    }
+}
+
+#[test]
+fn explosion_debris_lowers_every_stock_debris_explosion() {
+    let debris = bri_weapons::debris::explosion_debris(&load());
+    let names: Vec<&str> = debris.keys().map(String::as_str).collect();
+    assert_eq!(
+        names,
+        [
+            "cannonbaseexplosion",
+            "jeepexplosion",
+            "jeepfinalexplosion",
+            "tankfinalexplosion",
+            "tankshellexplosion",
+            "tankturretexplosion"
+        ]
+    );
+    let tires = &debris["jeepexplosion"];
+    assert_eq!(tires.model, "Add-Ons/Vehicle_Jeep/jeepTire.dts");
+    assert_eq!(tires.emitters, ["JeepTireDebrisTrailEmitter"]);
+    assert_eq!((tires.count, tires.theta, tires.launch_speed), (4, [40., 85.], 14.));
+    assert_eq!((tires.bounces, tires.gravity, tires.lifetime), (3, 2., 2.));
+    let sparks = &debris["tankshellexplosion"];
+    assert_eq!((sparks.count, sparks.count_variance), (30, 10));
+    assert_eq!((sparks.launch_speed, sparks.launch_variance), (140., 50.));
+    assert_eq!(sparks.emitters, ["rocketTrailEmitter"]);
+    assert_eq!((sparks.gravity, sparks.lifetime, sparks.fade), (0., 0.1, false));
+}
+
+#[test]
+#[ignore = "requires converted vanilla weapons pack"]
+fn a_stuck_arrow_remembers_the_direction_it_flew() {
+    // arrowProjectile sticks past minStickVelocity 10 when it hits head-on.
+    let mut w = world("BowItem");
+    let mut q = Scene {
+        hit: Some(hit(TargetId::Brick(3), -6.0)),
+        ..Default::default()
+    };
+    run(&mut w, 70, &mut q);
+    w.trigger(ActorId(1), true).unwrap();
+    run(&mut w, 10, &mut q);
+    w.trigger(ActorId(1), false).unwrap();
+    run(&mut w, 60, &mut q);
+    let stuck: Vec<_> = w.projectiles().filter(|p| p.stuck).collect();
+    assert!(!stuck.is_empty(), "the arrow sticks");
+    for p in stuck {
+        assert_eq!(p.velocity, Vec3::ZERO);
+        let heading = p.heading.expect("stuck heading");
+        assert!(heading.dot(Vec3::NEG_Z) > 0.9, "{heading}");
+    }
+}
+
+/// Open water whose surface is y = 0, with no floor.
+#[derive(Default)]
+struct Pool;
+impl Query for Pool {
+    fn sweep(&mut self, _: Vec3, _: Vec3, _: Filter) -> Option<Hit> {
+        None
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        vec![]
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        true
+    }
+    fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
+        let coverage = (-bottom.y / height).clamp(0.0, 1.0);
+        (coverage > 0.0).then_some(Liquid {
+            coverage,
+            density: 1.0,
+            viscosity: 40.0,
+        })
+    }
+}
+
+#[test]
+fn dropped_items_float_a_fifth_under_like_v20_items() {
+    // Every stock ItemData has density 0.2 and no drag, so an item thrown
+    // into water rises and bobs about 20% submerged without settling.
+    let mut w = WeaponsWorld::new(empty()).unwrap();
+    let actor = ActorId(7);
+    w.add_actor(actor, 5).unwrap();
+    w.give(actor, CORE_TOOLS[0]).unwrap();
+    let half = 0.5;
+    w.set_item_bounds(BTreeMap::from([(
+        CORE_TOOLS[0].to_string(),
+        ItemBounds {
+            min: [-half, 0.0, -half],
+            max: [half, 1.0, half],
+        },
+    )]));
+    w.drop_item(actor, 0).unwrap();
+    let id = w.drops().next().unwrap().id;
+    let mut pool = Pool;
+    let (mut low, mut high) = (f32::MAX, f32::MIN);
+    for tick in 0..1200 {
+        w.step(&mut pool);
+        let Some(drop) = w.drops().find(|d| d.id == id) else {
+            break;
+        };
+        if tick > 600 {
+            low = low.min(drop.position.y);
+            high = high.max(drop.position.y);
+        }
+    }
+    assert!(
+        low < -0.2 && high > -0.2,
+        "bobs about 0.2 under: {low}..{high}"
+    );
+    assert!(
+        low > -3.0 && high < 3.0,
+        "stays near the surface: {low}..{high}"
+    );
+    // Without water it simply falls.
+    let mut w = WeaponsWorld::new(empty()).unwrap();
+    w.add_actor(actor, 5).unwrap();
+    w.give(actor, CORE_TOOLS[0]).unwrap();
+    w.drop_item(actor, 0).unwrap();
+    for _ in 0..600 {
+        w.step(&mut Scene::default());
+    }
+    assert!(w.drops().next().unwrap().position.y < -50.0);
 }

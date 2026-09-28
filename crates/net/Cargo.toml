@@ -5,12 +5,16 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-files.workspace = true
 bri-weapons = { path = "../weapons" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_bytes = "0.11"
+bri-package = { path = "../package" }
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
+bri-progress = { path = "../progress" }
 bri-sim = { path = "../sim" }
 bri-admin = { path = "../admin" }
 bri-identity = { path = "../identity" }
@@ -23,10 +27,18 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 getrandom = "0.4"
 sha2 = "0.10"
 ring = "0.17.14"
-tempfile = "3"
 zstd = "0.13"
+rmp-serde = "1"
+bytes = "1"
+bri-crash = { path = "../crash" }
 igd-next = { version = "0.17", default-features = false }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_Ndis"] }
+
 [dev-dependencies]
+bri-package-runtime = { path = "../package-runtime" }
+tempfile = "3"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 bri-physics = { path = "../physics" }
+bri-minigames = { path = "../minigames" }

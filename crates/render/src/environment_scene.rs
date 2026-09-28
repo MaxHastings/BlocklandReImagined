@@ -39,6 +39,7 @@ fn quad(
             uv: uv[i],
             lightmap_uv: [0.0; 2],
             color: colors[i],
+            fx: [0.; 4],
         });
     }
     out.indices

@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! bri-audio-import --v20 <install root> --decompiled .research/v20-dso
-//!                  (--out content/audio-pack-001 | --out-root content)
+//!                  (--out content/audio-pack-002 | --out-root content)
 //!                  [--evidence artifacts/native-audio] [--coverage docs/research/audio/coverage.md]
 //!                  [--label "text"] [--decompiled-label .research/v20-dso]
 //! ```

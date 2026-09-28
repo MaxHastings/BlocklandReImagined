@@ -1,0 +1,9 @@
+[package]
+name = "bri-console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Blockland ReImagined console: process-wide log and a typed command/cvar registry"
+
+[dependencies]

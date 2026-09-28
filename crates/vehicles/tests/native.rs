@@ -4,7 +4,7 @@ use rapier3d::prelude::*;
 fn pack() -> Pack {
     Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-009/vehicles.json"
+        "/../../content/vehicles-pack-011/vehicles.json"
     ))
     .unwrap()
 }
@@ -45,6 +45,7 @@ fn mount(v: &mut VehiclesWorld, w: &PhysicsWorld, seat: usize) {
         Occupant {
             id: OccupantId(20 + seat as u64),
             owner: OwnerId(10),
+            body: [1.25, 2.65],
         },
         p,
     )
@@ -52,7 +53,11 @@ fn mount(v: &mut VehiclesWorld, w: &PhysicsWorld, seat: usize) {
 }
 fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize, water: Option<f32>) {
     for _ in 0..n {
-        v.pre_step(w, |_| water).unwrap();
+        let waters: Vec<_> = water
+            .map(|h| bri_content::water::Water::volume([-1e4, -1e4, -1e4], [1e4, h, 1e4]))
+            .into_iter()
+            .collect();
+        v.pre_step(w, &waters).unwrap();
         w.step();
         v.post_step(w).unwrap();
     }
@@ -62,7 +67,7 @@ fn native_catalog_assets_and_authored_values() {
     let p = pack();
     p.verify_assets(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-009"
+        "/../../content/vehicles-pack-011"
     ))
     .unwrap();
     assert_eq!(p.definitions.len(), 11);
@@ -207,28 +212,24 @@ fn horse_run_jump_and_collision() {
 }
 #[test]
 fn flight_and_water_families() {
-    for name in ["magiccarpetvehicle", "flyingwheeledjeepvehicle"] {
-        let (mut v, mut w) = setup();
-        spawn(&mut v, &mut w, name, 5.);
-        mount(&mut v, &w, 0);
-        if name == "flyingwheeledjeepvehicle" {
-            v.set_energy(VehicleId(1), 100.).unwrap();
-        }
-        v.set_controls(
-            OwnerId(10),
-            OccupantId(20),
-            Controls {
-                throttle: 0.5,
-                vertical: 1.,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        step(&mut v, &mut w, 120, None);
-        let p = v.snapshot(&w).vehicles[0].transform.position;
-        println!("flight {name} {p:?}");
-        assert!(p[1] > 1. && p[2] < -1.);
-    }
+    // The Flying Wheeled Jeep has no jet lift in v20; see tests/flying_jeep.rs.
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "magiccarpetvehicle", 5.);
+    mount(&mut v, &w, 0);
+    v.set_controls(
+        OwnerId(10),
+        OccupantId(20),
+        Controls {
+            throttle: 0.5,
+            vertical: 1.,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    step(&mut v, &mut w, 120, None);
+    let p = v.snapshot(&w).vehicles[0].transform.position;
+    println!("flight magiccarpetvehicle {p:?}");
+    assert!(p[1] > 1. && p[2] < -1.);
     let (mut v, mut w) = setup();
     spawn(&mut v, &mut w, "rowboatarmor", 3.);
     mount(&mut v, &w, 0);
@@ -341,7 +342,8 @@ fn ball_rolls_without_mounts() {
             0,
             Occupant {
                 id: OccupantId(20),
-                owner: OwnerId(10)
+                owner: OwnerId(10),
+                body: [1.25, 2.65]
             },
             [0., 4., 0.]
         )
@@ -468,7 +470,7 @@ fn rejects_invalid_native_data_and_fixed_rate() {
     assert!(p.validate().is_err());
     let (mut v, mut w) = setup();
     w.integration_parameters.dt = 1. / 60.;
-    assert!(v.pre_step(&mut w, |_| None).is_err());
+    assert!(v.pre_step(&mut w, &[]).is_err());
 }
 #[test]
 fn velocity_transfer_and_runover_intents() {
@@ -741,7 +743,7 @@ fn checkpoint_requires_completed_tick_and_consumed_intents() {
     mount(&mut v, &w, 0);
     assert!(v.checkpoint(&w).is_err());
     v.drain_intents();
-    v.pre_step(&mut w, |_| None).unwrap();
+    v.pre_step(&mut w, &[]).unwrap();
     assert!(v.checkpoint(&w).is_err());
     w.step();
     v.post_step(&mut w).unwrap();
@@ -852,7 +854,7 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
     let wheeled: Vec<_> = pack()
         .definitions
         .into_iter()
-        .filter(|d| matches!(d.family, Family::Wheeled | Family::FlyingWheeled))
+        .filter(|d| d.family == Family::Wheeled)
         .collect();
     assert_eq!(wheeled.len(), 3);
     for d in wheeled {
@@ -912,6 +914,14 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
             Controls {
                 throttle: 1.,
                 steer: 1.,
+                // The Jeep's strafe keys steer; mouse-steered vehicles turn
+                // by accumulating mouse motion.
+                strafe: if d.strafe_steering { 1. } else { 0. },
+                look_delta: if d.strafe_steering {
+                    [0.; 2]
+                } else {
+                    [0.02, 0.]
+                },
                 ..Default::default()
             },
         )
@@ -925,4 +935,88 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
             "{name} must turn right on positive steer"
         );
     }
+}
+#[test]
+fn runover_needs_speed_but_always_pushes_and_skips_player_type_mounts() {
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+    let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+    b.set_linvel(Vec3::new(5., 0., 0.), true);
+    // No driver: minRunOverSpeed 4 plus 2, so 5 m/s only pushes.
+    v.player_contact(&w, VehicleId(1), OccupantId(99), [0.; 3])
+        .unwrap();
+    let push = v.drain_intents().into_iter().find_map(|i| match i {
+        Intent::RunOver {
+            damage, velocity, ..
+        } => Some((damage, velocity)),
+        _ => None,
+    });
+    assert_eq!(push, Some((0., [6., 0., 0.])));
+    let (mut v, mut w) = setup();
+    spawn(&mut v, &mut w, "horsearmor", 0.2);
+    v.player_contact(&w, VehicleId(1), OccupantId(99), [0.; 3])
+        .unwrap();
+    assert!(
+        v.drain_intents().is_empty(),
+        "horses do not run players over"
+    );
+}
+#[test]
+fn vehicle_spawned_before_an_unrelated_collision_pass_still_simulates() {
+    let (mut v, mut w) = setup();
+    step(&mut v, &mut w, 2, None);
+    // A player joining or leaving runs a collision pass before the next step.
+    spawn(&mut v, &mut w, "jeepvehicle", 3.);
+    w.detect_collisions(&(), &());
+    step(&mut v, &mut w, 60, None);
+    let s = &v.snapshot(&w).vehicles[0];
+    assert!(s.transform.position[1] < 3., "the jeep fell under gravity");
+}
+#[test]
+fn restored_vehicles_join_an_island_even_before_their_first_pre_step() {
+    let (mut a, mut aw) = setup();
+    spawn(&mut a, &mut aw, "jeepvehicle", 3.);
+    step(&mut a, &mut aw, 12, None);
+    let cp = save(&mut a, &aw);
+    let (mut b, mut bw) = setup();
+    b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
+    // Other shared-world users may step physics before vehicles do.
+    for _ in 0..30 {
+        bw.step();
+    }
+    assert!(
+        bw.bodies
+            .iter()
+            .any(|(_, body)| body.is_dynamic() && body.linvel().y < -1.)
+    );
+}
+
+#[test]
+fn jeeps_sink_and_stop_spinning_in_water() {
+    // JeepVehicle: mass 300, density 5, drag 1.6. In water of viscosity 40,
+    // buoyancy is a fifth of its weight and `torque -= angMomentum * mDrag`
+    // decays spin at 64 per second; `mDrag` on velocity is not mass-scaled.
+    let spin_after = |water: Option<f32>| {
+        let (mut v, mut w) = setup();
+        spawn(&mut v, &mut w, "jeepvehicle", 60.);
+        for (_, body) in w.bodies.iter_mut() {
+            if body.is_dynamic() {
+                body.set_angvel(Vec3::Y * 10., true);
+            }
+        }
+        step(&mut v, &mut w, 12, water);
+        let spin = w
+            .bodies
+            .iter()
+            .filter(|(_, b)| b.is_dynamic())
+            .map(|(_, b)| b.angvel().length())
+            .fold(0., f32::max);
+        (spin, v.snapshot(&w).vehicles[0].transform.position[1])
+    };
+    let (dry, dry_y) = spin_after(None);
+    let (wet, wet_y) = spin_after(Some(1000.));
+    assert!(dry > 5., "{dry}");
+    assert!(wet < 0.05, "{wet}");
+    // Still sinking, only a little slower than falling through air.
+    assert!(wet_y < 60. && wet_y > dry_y, "{wet_y} {dry_y}");
 }

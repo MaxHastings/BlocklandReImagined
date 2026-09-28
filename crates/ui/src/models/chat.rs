@@ -20,6 +20,37 @@ pub struct ChatModel {
     pub page_end: Option<usize>,
     /// Absolute index of `lines[0]` (lines dropped from the cache).
     dropped: usize,
+    /// Lines this player sent, oldest first (`NMH_Type`'s history, which
+    /// `$pref::Chat::ChatRepeat` lets Up and Down recall).
+    pub sent: Vec<String>,
+}
+
+/// `NMH_Type.historySize` with Press Up to Repeat Chat on.
+pub const SENT_HISTORY: usize = 10;
+
+/// `censorString`: each word of `$Pref::Chat::CurseList` (comma separated,
+/// matched case-insensitively, a space after the line so " ass " matches at
+/// its end) becomes as many asterisks, its spaces kept.
+pub fn censor(line: &str, list: &str) -> String {
+    let mut line = line.to_string();
+    for word in list.split(',').filter(|w| !w.is_empty()) {
+        let word = word.to_ascii_lowercase();
+        // A replacement can only shorten the matches left, so this ends.
+        for _ in 0..1000 {
+            let lower = format!("{} ", line.to_ascii_lowercase());
+            let Some(at) = lower.find(&word) else { break };
+            let end = (at + word.len()).min(line.len());
+            if !line.is_char_boundary(at) || !line.is_char_boundary(end) {
+                break;
+            }
+            let stars: String = line[at..end]
+                .chars()
+                .map(|c| if c == ' ' { ' ' } else { '*' })
+                .collect();
+            line.replace_range(at..end, &stars);
+        }
+    }
+    line
 }
 
 impl ChatModel {
@@ -32,6 +63,18 @@ impl ChatModel {
             line_time_ms: line_time_ms.min(30_000),
             page_end: None,
             dropped: 0,
+            sent: Vec::new(),
+        }
+    }
+
+    /// Remember a sent line for Up and Down (`GuiTextEditCtrl` history).
+    pub fn remember_sent(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        self.sent.push(text.to_string());
+        if self.sent.len() > SENT_HISTORY {
+            self.sent.remove(0);
         }
     }
 
@@ -227,5 +270,24 @@ mod tests {
         let mut c = ChatModel::new(10, 8, 0);
         c.add("x<br>y\nz", 0);
         assert_eq!(c.lines[0].text, "x y z");
+    }
+}
+
+#[cfg(test)]
+mod censor_tests {
+    use super::*;
+
+    #[test]
+    fn censor_stars_listed_words_like_censor_string() {
+        let list = "shit,fuck, ass ";
+        assert_eq!(censor("Oh SHIT no", list), "Oh **** no");
+        assert_eq!(censor("fuck fuck", list), "**** ****");
+        // " ass " matches a whole word, at the end too (a space is added).
+        assert_eq!(censor("kick ass", list), "kick ***");
+        assert_eq!(censor("classy", list), "classy");
+        assert_eq!(
+            censor("\u{E003}Max\u{E000}: shit", list),
+            "\u{E003}Max\u{E000}: ****"
+        );
     }
 }

@@ -13,6 +13,7 @@
 //! prints, event tables, datablock menus) come from catalogs the host
 //! supplies; the UI pack only provides the original art, fonts and layouts.
 
+use crate::geom::Rgba;
 use crate::input::{Chord, MouseButton};
 use crate::schema::ParamSpec;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,17 @@ pub enum IconRef {
 }
 
 // ----------------------------------------------------------------- catalogs
+
+/// A game mode an enabled Add-On declares, for Start Game.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameModeInfo {
+    /// Content id the host understands (`package:mode/name`).
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// The map id it always plays on, or None when the host picks.
+    pub map: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapInfo {
@@ -52,6 +64,9 @@ pub struct ServerInfo {
     pub max_players: u32,
     pub bricks: u32,
     pub map: String,
+    /// Starred by the player (listed first; Favorite button toggles it).
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// One brick in the server's catalog, in datablock (registration) order.
@@ -265,13 +280,31 @@ pub enum ParamValue {
     PaintColor(u32),
 }
 
+/// The avatar part keys of `$pref::Avatar::*`.
+pub const AVATAR_PART_KEYS: [&str; 12] = [
+    "Hat",
+    "Accent",
+    "Pack",
+    "SecondPack",
+    "Chest",
+    "Hip",
+    "LArm",
+    "RArm",
+    "LHand",
+    "RHand",
+    "LLeg",
+    "RLeg",
+];
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AvatarPrefs {
-    /// `$pref::Avatar::*` values by short name in the v20 formats: part
-    /// indices (`Hat`, `Accent`, `Pack`, `SecondPack`, `Chest`, `Hip`,
-    /// `LArm`…) as integers into the pack's part lists, `FaceName`/`DecalName`
-    /// as file base names, colours (`HatColor`, `HeadColor`, `TorsoColor`…)
-    /// as `"r g b a"` 0..1 floats.
+    /// `$pref::Avatar::*` values by short name: parts (`Hat`, `Accent`,
+    /// `Pack`, `SecondPack`, `Chest`, `Hip`, `LArm`…) by the lowercase name of
+    /// the chosen part (`helmet`, `visor`), never a position in the pack's
+    /// lists; `FaceName`/`DecalName` as file base names; colours (`HatColor`,
+    /// `HeadColor`, `TorsoColor`…) as `"r g b a"` 0..1 floats. `FaceColor` and
+    /// `DecalColor` are v20's image-list frames, re-derived from the names.
     pub values: BTreeMap<String, String>,
     pub symmetry: bool,
     pub lan_name: String,
@@ -295,10 +328,29 @@ impl AvatarPrefs {
             .unwrap_or_else(|| k.to_string());
         self.values.insert(key, v.into());
     }
-    pub fn index(&self, k: &str) -> usize {
-        self.get(k)
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .map_or(0, |v| v.max(0.0) as usize)
+    /// The chosen part's name for `k` (`Hat` -> `helmet`), empty when unset.
+    pub fn part(&self, k: &str) -> &str {
+        self.get(k).unwrap_or_default()
+    }
+    /// v20 prefs store parts as positions in the pack's lists; name them.
+    /// Values that are already names are kept.
+    pub fn name_parts(&mut self, data: &crate::schema::AvatarData) {
+        let position = |v: &str| v.trim().parse::<f64>().ok().map(|i| i.max(0.0) as usize);
+        for key in AVATAR_PART_KEYS.iter().filter(|k| **k != "Accent") {
+            if let Some(index) = self.get(key).and_then(position) {
+                let list = data.parts.get(&key.to_ascii_lowercase());
+                let name = list.and_then(|l| l.get(index).or(l.first()));
+                self.set(key, name.map_or("none".into(), |n| n.to_ascii_lowercase()));
+            }
+        }
+        if let Some(index) = self.get("Accent").and_then(position) {
+            let hat = self.part("Hat").to_ascii_lowercase();
+            let name = data.accents_allowed.get(&hat).and_then(|l| l.get(index));
+            self.set(
+                "Accent",
+                name.map_or("none".into(), |n| n.to_ascii_lowercase()),
+            );
+        }
     }
     pub fn color(&self, k: &str) -> [f32; 4] {
         let v: Vec<f32> = self
@@ -317,8 +369,13 @@ impl AvatarPrefs {
     pub fn set_color(&mut self, k: &str, c: [f32; 4]) {
         self.set(k, format!("{} {} {} {}", c[0], c[1], c[2], c[3]));
     }
-    /// Stock defaults from the pack's `$pref::Avatar::*` / `$pref::Player::*`.
-    pub fn from_prefs(p: &crate::prefs::Prefs, pack_prefs: &BTreeMap<String, String>) -> Self {
+    /// Stock defaults from the pack's `$pref::Avatar::*` / `$pref::Player::*`,
+    /// with v20's part positions named from `data`.
+    pub fn from_prefs(
+        p: &crate::prefs::Prefs,
+        pack_prefs: &BTreeMap<String, String>,
+        data: &crate::schema::AvatarData,
+    ) -> Self {
         let mut a = AvatarPrefs::default();
         for k in pack_prefs.keys() {
             let low = k.to_ascii_lowercase();
@@ -333,6 +390,7 @@ impl AvatarPrefs {
         a.lan_name = p.str_or("$pref::Player::LANName", "Blockhead").to_string();
         a.clan_prefix = p.str_or("$Pref::Player::ClanPrefix", "").to_string();
         a.clan_suffix = p.str_or("$Pref::Player::ClanSuffix", "").to_string();
+        a.name_parts(data);
         a
     }
 }
@@ -344,6 +402,8 @@ pub struct SaveFileInfo {
     pub modified: String,
     pub description: String,
     pub brick_count: Option<u32>,
+    /// The file could not be read; it is listed so it can be saved over.
+    pub damaged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -441,14 +501,67 @@ pub enum GameAction {
     Screenshot {
         kind: ScreenshotKind,
     },
-    ToggleNetGraph,
+    /// Write the performance overlay's recent history to a file.
+    SavePerfCapture,
     ToggleFullscreen,
     Emote {
         name: String,
     },
     ToggleBuildMacroRecording,
     PlayBackBuildMacro,
+    /// A key a package HUD declared: send that package's command.
+    Package {
+        package: String,
+        command: String,
+    },
 }
+
+/// Where a package HUD panel sits on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelAnchor {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+/// A HUD panel an enabled package declared, with values already resolved
+/// from replicated state by the host. Data only: the UI draws it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackagePanel {
+    pub anchor: PanelAnchor,
+    pub title: String,
+    pub background: Rgba,
+    pub accent: Rgba,
+    pub text: Rgba,
+    /// (label, value, colour)
+    pub rows: Vec<(String, String, Rgba)>,
+    /// (key letter, label) hints.
+    pub keys: Vec<(char, String)>,
+}
+/// A key a package HUD binds to one of its commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageKey {
+    /// Lower-case letter.
+    pub key: char,
+    pub package: String,
+    pub command: String,
+}
+
+/// How a save whose colours differ from the world's is loaded
+/// (`ColorWarning_Click*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorLoad {
+    /// Each colour becomes the nearest one the world has.
+    Match,
+    /// The save's colours are added to the world's.
+    Append,
+    /// Back to Load Bricks without loading.
+    Cancel,
+}
+
+/// A load the player canceled in `LoadBricksColorGui`: Load Bricks stays
+/// open without an error.
+pub const LOAD_CANCELED: &str = "Load canceled";
 
 /// Requests from the UI. See the module docs for the request/answer rules.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -463,17 +576,35 @@ pub enum UiAction {
     HostGame {
         map: String,
         mode: ServerMode,
+        /// A game mode an enabled Add-On declares (content id), or None for
+        /// Custom: every enabled Add-On that fits the map.
+        game_mode: Option<String>,
         max_players: u32,
         server_name: String,
         password: String,
         admin_password: String,
         super_admin_password: String,
     },
+    /// Search the LAN and check the servers the player joined or starred.
     QueryLan,
+    /// Star or unstar a server in the join list.
+    ToggleFavorite {
+        address: String,
+    },
+    /// Let the game through Windows Firewall (one Windows permission prompt).
+    AllowFirewall { port: u16 },
     JoinServer {
         address: String,
         password: String,
     },
+    /// Join a saved server whose identity changed, trusting its new one
+    /// (the player chose Continue).
+    TrustNewServerIdentity { address: String },
+    /// Run the Add-On code the join's trust question showed ("Trust and
+    /// join").
+    TrustAddOnCode,
+    /// Stop trusting every server's Add-On code (Add-Ons screen).
+    ForgetAddOnTrust,
     /// Cancel a pending connection attempt or leave the loading screen.
     CancelConnect,
     /// Leave the game (disconnect, or stop hosting).
@@ -491,6 +622,11 @@ pub enum UiAction {
         channel: String,
         value: f32,
     },
+    /// Open a web page in the player's browser (a new release's page).
+    OpenUrl(String),
+    /// Show the saves folder, where old `.bls` saves can be dropped, in
+    /// the file browser.
+    OpenSavesFolder,
     // ---- in game
     Chat {
         channel: ChatChannel,
@@ -502,6 +638,12 @@ pub enum UiAction {
         args: Vec<String>,
     },
     StartTyping,
+    /// `SteeringPrefsEvent`: `$pref::Input::UseStrafeSteering` and
+    /// `$pref::Input::UseAutoReturnSteering`, sent on joining and on change.
+    SteeringPrefs {
+        strafe: bool,
+        auto_return: bool,
+    },
     StopTyping,
     /// Brick selector DONE: buy all ten slots (brick ids, `None` = empty).
     BuyBricks {
@@ -571,10 +713,17 @@ pub enum UiAction {
         name: String,
         ownership: bool,
     },
+    /// The choice in `LoadBricksColorGui` for the load waiting on it.
+    LoadBricksColors(ColorLoad),
     RequestSaveList {
         map: Option<String>,
     },
     OpenAdmin,
+    /// A console statement for a command the host registered with
+    /// `Ui::set_console_commands`. Output goes to `bri_console`'s log.
+    Console {
+        line: String,
+    },
     // ---- vanilla mini-games. The host resolves the caller from the authenticated session.
     RequestMiniGameList,
     CreateMiniGame { color: u8, rules: MiniGameRules },
@@ -585,9 +734,28 @@ pub enum UiAction {
     AcceptMiniGameInvite { game: MiniGameId },
     RejectMiniGameInvite { game: MiniGameId, ignore_owner: bool },
     RemoveMiniGameMember { target: MiniGamePlayerId },
+    /// `commandToServer('Trust_Invite')`: level 1 build, 2 full.
+    TrustInvite { target: u64, level: u8 },
+    /// `commandToServer('Trust_Demote')`: level 0 none, 1 build.
+    TrustDemote { target: u64, level: u8 },
+    /// `commandToServer('UnIgnore')`.
+    UnIgnore { target: u64 },
+    /// Trust invitation dialog answer.
+    AnswerTrustInvite { from: u64, answer: TrustAnswer },
     ResetMiniGame { game: MiniGameId },
     RespawnMiniGameMembers { game: MiniGameId },
     EndMiniGame { game: MiniGameId },
+    // ---- add-ons (the package library; see docs/architecture/mod-manager.md)
+    /// Read the installed packages; answered with [`UiUpdate::AddOns`].
+    RequestAddOns,
+    /// Turn a package on or off. The host also turns on what it needs, or
+    /// off what needs it, and answers with the new [`UiUpdate::AddOns`].
+    SetAddOnEnabled { id: String, enabled: bool },
+    /// Turn off every package that is not part of the base game.
+    DefaultAddOns,
+    /// Convert an old Blockland add-on waiting in the drop folder into a
+    /// package (a row with `importable`). Answered when the import finishes.
+    ImportAddOn { id: String },
 }
 
 // -------------------------------------------------------------- view models
@@ -598,11 +766,13 @@ pub enum ConnectionState {
     Idle,
     /// Waiting for the server ("Connecting to Local Host…").
     Connecting { text: String },
-    /// Mission download: phase text as v20 shows it and progress 0..1.
+    /// Loading a mission: what is happening, in v20's upper-case
+    /// `LoadingProgressTxt` style (`bri_progress::Snapshot::status`), and the
+    /// current stage's progress 0..1.
     Loading {
         map: String,
         preview: IconRef,
-        phase: LoadPhase,
+        status: String,
         progress: f32,
     },
     InGame {
@@ -612,16 +782,118 @@ pub enum ConnectionState {
         single_player: bool,
         admin: bool,
     },
+    /// Fetching the packages a server needs before joining it.
+    DownloadingPackages(PackageDownload),
     /// Connection failed or was dropped; shown in a message box.
     Failed { reason: String },
 }
 
+/// A question with two named answers (Continue/Cancel, Download/Leave).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Question {
+    pub title: String,
+    pub text: String,
+    pub yes: String,
+    pub no: String,
+    pub on_yes: Box<UiAction>,
+    /// `None`: NO only closes the question.
+    pub on_no: Option<Box<UiAction>>,
+}
+
+/// A join refused because this player's add-ons differ from the server's
+/// shared ones, as the Can't Join dialog lists them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnMismatch {
+    pub rows: Vec<MismatchRow>,
+    /// What differs, in plain words, when the version numbers alone do not
+    /// say (the same version with different files). Empty otherwise.
+    #[serde(default)]
+    pub explanation: String,
+    /// Some row is part of the base game rather than an Add-On.
+    #[serde(default)]
+    pub base_game: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MismatchRow {
+    pub name: String,
+    /// The server's version, or empty when it does not use it.
+    pub server: String,
+    /// This player's version, or empty when they do not have it on.
+    pub yours: String,
+}
+
+/// Join-time package download, as the join screen shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackageDownload {
+    pub server: String,
+    pub packages: Vec<DownloadRow>,
+    /// Bytes fetched and to fetch over every package.
+    pub done_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadRow {
+    pub name: String,
+    pub version: String,
+    pub bytes: u64,
+    pub state: DownloadState,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LoadPhase {
-    WaitingForServer,
-    LoadingObjects,
-    LightingMission,
-    Ghosting,
+pub enum DownloadState {
+    /// Already in the download cache; nothing to fetch.
+    Cached,
+    Waiting,
+    Downloading,
+    Done,
+}
+
+/// One package as the Add-Ons screen shows it. Everything is display text
+/// the host prepared; the screen does not interpret package data.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnRow {
+    /// Package id, sent back in [`UiAction::SetAddOnEnabled`].
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// Group heading ("Game Modes", "Weapons & Items", ...).
+    pub category: String,
+    pub enabled: bool,
+    /// Base game: shown on and cannot be turned off.
+    pub locked: bool,
+    /// Where it runs, in words ("Server only: players never download it").
+    pub runs: String,
+    pub description: String,
+    pub authors: String,
+    pub license: String,
+    pub source: String,
+    /// "3 weapons", "a world", ...
+    pub provides: Vec<String>,
+    /// Package names this one needs.
+    pub needs: Vec<String>,
+    /// Names of enabled packages that need this one; turning it off turns
+    /// them off too, so the screen asks first.
+    pub needed_by: Vec<String>,
+    /// What the package is allowed to do, in words.
+    pub allowed: Vec<String>,
+    /// Problems in words, worst first.
+    pub problems: Vec<String>,
+    /// A problem stops it from loading.
+    pub broken: bool,
+    /// An old Blockland add-on not converted yet: the screen offers Import
+    /// instead of Enabled.
+    pub importable: bool,
+    /// Being imported right now.
+    pub importing: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnsView {
+    pub rows: Vec<AddOnRow>,
+    /// Result of the last change ("Also turned on: ...") or a list problem.
+    pub notice: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -639,6 +911,8 @@ pub enum PlantError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerRow {
     pub id: u64,
+    /// This viewer ignores the player's trust invites.
+    pub ignoring: bool,
     pub name: String,
     pub score: i32,
     pub admin: bool,
@@ -723,6 +997,45 @@ pub struct MiniGameMemberRow {
     pub admin: bool,
     pub in_local_game: bool,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NameTag {
+    /// Anchor in logical pixels: the name is centered above it.
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    /// Distance fade, 0..=1.
+    pub opacity: f32,
+    /// `ShapeBase::setShapeNameColor`: white, or the player's mini-game colour.
+    #[serde(default = "white_name")]
+    pub color: [u8; 3],
+}
+fn white_name() -> [u8; 3] {
+    [255; 3]
+}
+/// The outline `GuiShapeNameHud::drawName` (blocklandv20.exe 0x527630) draws
+/// under a name: white under a dark name (red and green both below 0.3),
+/// otherwise black.
+pub fn name_outline(color: [u8; 3]) -> [u8; 3] {
+    if f32::from(color[0]) / 255.0 < 0.3 && f32::from(color[1]) / 255.0 < 0.3 {
+        [255; 3]
+    } else {
+        [0; 3]
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustInvitation {
+    pub from: u64,
+    pub name: String,
+    pub bl_id: String,
+    /// 1 build, 2 full.
+    pub level: u8,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrustAnswer {
+    Accept,
+    Reject,
+    Ignore,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameInvitation {
     pub game: MiniGameId,
@@ -760,6 +1073,14 @@ pub struct MiniGameUiState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MiniGameOperation { List, Create, Configure, Join, Leave, Invite, AcceptInvite, RejectInvite, IgnoreInvite, RemoveMember, Reset, RespawnAll, End }
 
+/// Fullscreen is borderless at the monitor's `native` size; a window may take
+/// any `windowed` size, each smaller than the desktop as v20's list was.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayModes {
+    pub native: (u32, u32),
+    pub windowed: Vec<(u32, u32)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
     Admin(crate::models::admin::AdminUpdate),
@@ -770,11 +1091,21 @@ pub enum UiUpdate {
     },
     Connection(ConnectionState),
     Maps(Vec<MapInfo>),
+    /// Game modes the enabled Add-Ons declare (Start Game).
+    GameModes(Vec<GameModeInfo>),
     LanServers {
         servers: Vec<ServerInfo>,
         querying: bool,
     },
     MainMenuBackgrounds(Vec<IconRef>),
+    /// The window's monitor: what Options may offer (platform to UI).
+    DisplayModes(DisplayModes),
+    /// The platform changed the display itself (Alt+Enter, or a saved mode
+    /// the monitor cannot show); the UI records it in the video prefs.
+    DisplayChanged {
+        resolution: (u32, u32),
+        fullscreen: bool,
+    },
     // ---- server content (sent after mission download)
     Bricks(Vec<BrickInfo>),
     Colorset(Vec<PaintDivision>),
@@ -799,6 +1130,8 @@ pub enum UiUpdate {
     Chat {
         text: String,
     },
+    /// Names typing in the chat box, in the order they started (`WhoTalkSO`).
+    Talking(Vec<String>),
     CenterPrint {
         text: String,
         seconds: f32,
@@ -810,10 +1143,27 @@ pub enum UiUpdate {
     },
     ClearPrints,
     PlantError(PlantError),
+    /// A sound caption ("[Explosion]"), shown while captions are on.
+    Caption(String),
     /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
     DamageFlash(f32),
-    /// Net graph text (`toggleNetGraph`); None hides it.
-    NetGraph(Option<String>),
+    /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it
+    /// (`clientCmdShowEnergyBar`, from the datablock's `showEnergyBar`).
+    Energy(Option<f32>),
+    /// White screen (`setWhiteout`) that fades over a second per unit.
+    Whiteout(f32),
+    /// The camera's liquid tints (`GameRenderFilters`): a water brick zone's
+    /// colour and/or map water's, alpha already clamped.
+    Underwater(Vec<[f32; 4]>),
+    /// Whether the camera is a first-person eye; the crosshair shows only
+    /// then (`GuiCrossHairHud` checks `isFirstPerson`).
+    FirstPerson(bool),
+    /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
+    NetSample(crate::models::perf::NetSample),
+    /// A presented frame's timing; dropped while the overlay is hidden.
+    PerfFrame(crate::models::perf::FrameSample),
+    /// The performance overlay's slower figures.
+    PerfStats(crate::models::perf::PerfStats),
     Players {
         rows: Vec<PlayerRow>,
         server_name: String,
@@ -821,6 +1171,16 @@ pub enum UiUpdate {
     },
     MiniGames(MiniGameUiState),
     MiniGameInvite(MiniGameInvitation),
+    /// Server `MessageBoxOK`.
+    MessageBox { title: String, text: String },
+    /// A yes/no question from the platform; YES sends `action`.
+    Confirm {
+        title: String,
+        text: String,
+        action: Box<UiAction>,
+    },
+    /// `clientCmdTrustInvite`.
+    TrustInvite(TrustInvitation),
     Lagging(bool),
     /// Open the wrench for a brick the server says we may edit.
     OpenWrench {
@@ -845,6 +1205,11 @@ pub enum UiUpdate {
         aspect: String,
         current: Option<String>,
     },
+    /// A save's colours differ from the world's: ask how to load them
+    /// (`LoadBricksColorGui`). `append` is whether they fit added on.
+    ColorWarning {
+        append: bool,
+    },
     SaveFiles {
         maps: Vec<String>,
         files: Vec<SaveFileInfo>,
@@ -856,12 +1221,34 @@ pub enum UiUpdate {
     },
     /// Avatar preview texture for the Player Appearance screen.
     AvatarPreview(IconRef),
+    /// The installed packages, for the Add-Ons screen.
+    AddOns(AddOnsView),
+    /// The next connection failure is a refused join over differing
+    /// add-ons: show these instead of a plain message box.
+    AddOnMismatch(AddOnMismatch),
+    /// Ask now; each answer sends its request.
+    Question(Question),
+    /// The next connection failure asks this instead of showing its reason.
+    FailureQuestion(Question),
+    /// The hosted world changed since it was last saved under a name (or
+    /// loaded); leaving and quitting ask first.
+    UnsavedChanges(bool),
+    /// This build's version, shown on the main menu.
+    Version(String),
+    /// A newer release exists: say so once and offer its page.
+    NewerVersion { name: String, url: String },
+    /// The host chose preferences for the player (the first run's graphics
+    /// quality); they are saved like the player's own.
+    SetPrefs(Vec<(String, String)>),
 }
 
 // ----------------------------------------------------------------- settings
 
 /// Everything the UI persists through the host (`UiAction::SaveSettings`).
+/// Missing fields take their defaults, so adding a field never makes an
+/// older settings file unreadable.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// `$pref::`-style values by their original names (stock defaults from
     /// the UI pack are used for missing keys).
@@ -876,8 +1263,17 @@ pub struct Settings {
     pub brick_favorites: BTreeMap<u8, Vec<String>>,
     pub avatar: AvatarPrefs,
     pub avatar_favorites: BTreeMap<u8, AvatarPrefs>,
-    #[serde(default)]
     pub avatar_colors: Vec<[f32; 4]>,
+    /// Create Mini-Game favourites by slot 0..=9 (v20
+    /// `config/client/MiniGameFavorites/<slot>.cs`).
+    pub minigame_favorites: BTreeMap<u8, MiniGameFavorite>,
+}
+
+/// One Create Mini-Game favourite: the form's rules and its colour's name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameFavorite {
+    pub rules: MiniGameRules,
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -903,6 +1299,8 @@ impl BindInput {
                 "button0" => Some(BindInput::Mouse(MouseButton::Left)),
                 "button1" => Some(BindInput::Mouse(MouseButton::Right)),
                 "button2" => Some(BindInput::Mouse(MouseButton::Middle)),
+                "button3" => Some(BindInput::Mouse(MouseButton::Back)),
+                "button4" => Some(BindInput::Mouse(MouseButton::Forward)),
                 "zaxis" => Some(BindInput::Wheel),
                 "xaxis" => Some(BindInput::MouseX),
                 "yaxis" => Some(BindInput::MouseY),
@@ -916,6 +1314,8 @@ impl BindInput {
             BindInput::Mouse(MouseButton::Left) => "Left Mouse".into(),
             BindInput::Mouse(MouseButton::Right) => "Right Mouse".into(),
             BindInput::Mouse(MouseButton::Middle) => "Middle Mouse".into(),
+            BindInput::Mouse(MouseButton::Back) => "Mouse 4".into(),
+            BindInput::Mouse(MouseButton::Forward) => "Mouse 5".into(),
             BindInput::Wheel => "Mouse Wheel".into(),
             BindInput::MouseX => "Mouse X".into(),
             BindInput::MouseY => "Mouse Y".into(),

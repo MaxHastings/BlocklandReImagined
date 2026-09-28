@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "steel-ball-fx",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Steel Ball Shine",
+  "description": "Draws every Steel Ball as polished steel that mirrors the map's sky and sun, and makes it clank and thud when it hits things. Without it the ball is plain brushed steel.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "dependencies": {
+    "steel-ball-kit": "^1.0.0"
+  },
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": [
+      "render.layer",
+      "render.shader",
+      "audio",
+      "world.read"
+    ],
+    "shaders": [
+      "client/steel.wgsl"
+    ],
+    "sounds": [
+      "client/sounds/clank.wav",
+      "client/sounds/thud.wav"
+    ]
+  }
+}

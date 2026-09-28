@@ -11,6 +11,7 @@ fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode) -> SceneData {
             uv: [0.0; 2],
             lightmap_uv: [0.0; 2],
             color,
+            fx: [0.; 4],
         })
         .collect();
     let mut data = SceneData {
@@ -115,7 +116,7 @@ fn water_depth_mask_and_time_motion_use_one_upload() -> Result<()> {
         rgba: vec![255, 50, 20, 255, 20, 50, 255, 255],
         srgb: true,
     });
-    bri_render::water_scene::append(&mut data, &water, [1, 1, 0], |x, _| {
+    bri_render::water_scene::append(&mut data, &water, [1, 1, 0], ([1.0; 4], 6.0), true, |x, _| {
         Some(if x < 0. { 2. } else { -4. })
     })?;
     let mask = &data.images.last().unwrap().rgba;
@@ -912,7 +913,7 @@ fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires locally converted map-bundle-015; produces offscreen evidence only"]
+#[ignore = "requires locally converted map-bundle-017; produces offscreen evidence only"]
 fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = root.join("artifacts/persistent-scene");
@@ -920,7 +921,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let gpu = Gpu::new()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut reports = vec![];
-    let bundle_path = root.join("content/map-bundle-015");
+    let bundle_path = root.join("content/map-bundle-017");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle_path.join("bundle.json"))?)?;
     let maps = bundle["maps"].as_array().unwrap();

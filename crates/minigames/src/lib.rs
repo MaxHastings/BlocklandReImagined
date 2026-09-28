@@ -540,6 +540,10 @@ impl MinigamesWorld {
                 }
                 self.spawn(actor, SpawnReason::Respawn, &mut out);
             }
+            Command::ForceRespawn { target } => {
+                self.player(target)?;
+                self.spawn(target, SpawnReason::Respawn, &mut out);
+            }
             Command::Message {
                 game,
                 authority,

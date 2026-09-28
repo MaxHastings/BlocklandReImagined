@@ -19,4 +19,7 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
     out.position=camera.view_projection*vec4(position_size.xyz+(right*corner.x+up*corner.y)*position_size.w*0.5,1.);
     out.uv=vec2(corner.x*0.5+0.5,0.5-corner.y*0.5);out.color=color;return out;
 }
-@fragment fn fs_main(input:Out)->@location(0) vec4<f32> {return textureSample(image,image_sampler,input.uv)*input.color;}
+@fragment fn fs_main(input:Out)->@location(0) vec4<f32> {
+    let texel=textureSample(image,image_sampler,input.uv);
+    return vec4(output_color(display_color(texel.rgb)*input.color.rgb),texel.a*input.color.a);
+}

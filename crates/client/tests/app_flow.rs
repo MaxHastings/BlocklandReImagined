@@ -50,7 +50,10 @@ fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> b
         }
         ensure!(
             start.elapsed() < timeout,
-            "Timed out waiting for {what}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+            "Timed out waiting for {what}; screens {:?}; tools {:?}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+            app.ui.stack(),
+            app.network_view()
+                .and_then(|v| v.tools.get(&v.owner).cloned()),
             app.ui.core.conn,
             app.network_view().map(|v| v.world.bricks.len()),
             app.pending_requests(),
@@ -68,7 +71,7 @@ fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> b
 fn host(app: &mut App, name: &str) -> RequestId {
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
-        mode: ServerMode::SinglePlayer,
+        mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1,
         server_name: name.into(),
         password: String::new(),
@@ -205,7 +208,7 @@ fn native_weather_map_settings_render_and_disconnect() -> Result<()> {
             &mut app,
             UiAction::HostGame {
                 map: map.into(),
-                mode: ServerMode::SinglePlayer,
+                mode: ServerMode::SinglePlayer, game_mode: None,
                 max_players: 1,
                 server_name: name.into(),
                 password: String::new(),
@@ -495,7 +498,8 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
         .unwrap()
         .world
         .bricks
-        .first_key_value()
+        .iter()
+        .next()
         .unwrap();
     let planted = planted.clone();
     assert_eq!(planted.position, ghost.position);
@@ -707,7 +711,7 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     );
     ensure!(
         app.audio_requests()
-            .get("tool.wrench.hit")
+            .get("wrenchHitSound")
             .copied()
             .unwrap_or(0)
             >= 1,
@@ -885,7 +889,7 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
                     .any(|f| f.name == "Native round trip.world.json")
         },
     )?;
-    let store = bri_client::saves::Store::new(&state, &app.content);
+    let store = bri_client::saves::Store::new(&state, &app.content, None);
     let saved_build = store.load("Bedroom", "Native round trip.world.json")?;
     assert_eq!(
         saved_build.world.bricks.values().next().unwrap(),
@@ -909,6 +913,25 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     )?;
     app.ui.core.pop(ScreenId::LoadBricks);
 
+    // v20 undoes newest first: the Letters/B print, then the plant.
+    action(&mut app, UiAction::Game(GameAction::UndoBrick))?;
+    until(
+        &mut app,
+        "authoritative print undo restores the previous print",
+        Duration::from_secs(5),
+        |a| {
+            a.network_view()
+                .unwrap()
+                .world
+                .bricks
+                .values()
+                .next()
+                .unwrap()
+                .print
+                != Some(bri_world::ContentRef::Resolved(print_b.clone()))
+                && a.pending_requests() == 0
+        },
+    )?;
     action(&mut app, UiAction::Game(GameAction::UndoBrick))?;
     until(
         &mut app,

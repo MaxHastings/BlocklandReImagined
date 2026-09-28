@@ -41,28 +41,39 @@ async fn main() -> Result<()> {
             Definitions::load(&args[0], &args[1])?,
             vec![],
         )?);
-        let checkpoint = Checkpoint::from_session(&session, 0);
-        let count = checkpoint.world.bricks.len();
-        let expected = checkpoint.world;
-        let checkpoint = Checkpoint::from_session(&session, 0);
+        let (checkpoint, bricks) = Checkpoint::from_session(&session, 0);
+        let count = bricks.len();
+        let mut expected = checkpoint.world.clone();
+        expected.bricks = bri_net::protocol::public_bricks(&bricks);
         let message = Message::Welcome {
             administrator: false,
             owner: 1,
             resume: ResumeToken([0; 32]),
             checkpoint,
         };
-        let raw_bytes = serde_json::to_vec(&message)?.len();
-        let compressed_bytes = codec::encode(&message)?.len();
+        let raw_bytes = codec::encode_request(&message, codec::MAX_DECODED)?.len()
+            + codec::encode_request(&expected.bricks, codec::MAX_DECODED)?.len();
+        let compressed_bytes: usize = bri_net::protocol::WorldTransfer {
+            head: message,
+            bricks,
+        }
+        .encode()?
+        .iter()
+        .map(Vec::len)
+        .sum();
         let server = server::start(
             session,
             ServerOptions {
                 bind: "127.0.0.1:0".parse()?,
-                content_id: "native-probe-only".into(),
+                environment: bri_package::environment::Environment::empty(),
                 spawn_points: vec![
                     Vec3::new(2000.0, 2000.0, 2000.0),
                     Vec3::new(2003.0, 2000.0, 2000.0),
                 ],
                 certificate: None,
+                map_loader: None,
+                autosave: None,
+                packages: None,
             },
         )?;
         let start = Instant::now();
@@ -70,7 +81,7 @@ async fn main() -> Result<()> {
             server.address,
             &server.certificate,
             "First".into(),
-            "native-probe-only".into(),
+            Vec::new(),
             None,
         )
         .await?;
@@ -84,7 +95,7 @@ async fn main() -> Result<()> {
             server.address,
             &server.certificate,
             "Late join".into(),
-            "native-probe-only".into(),
+            Vec::new(),
             None,
         )
         .await?;

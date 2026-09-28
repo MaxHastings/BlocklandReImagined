@@ -44,7 +44,8 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
         supported: snapshot
             .supported
             .iter()
-            .map(|capability| match capability {
+            .filter_map(|capability| {
+                Some(match capability {
                 Capability::Login => ui::AdminFeature::Login,
                 Capability::Kick => ui::AdminFeature::Kick,
                 Capability::Ban => ui::AdminFeature::Ban,
@@ -55,6 +56,13 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::WorldCommands => ui::AdminFeature::ClearBricks,
                 Capability::DestructoWand => ui::AdminFeature::Wand,
                 Capability::Spy => ui::AdminFeature::Spy,
+                Capability::ChangeMap => ui::AdminFeature::Maps,
+                Capability::HostOptions => ui::AdminFeature::HostOptions,
+                // Chat commands only; the Admin menu has no buttons for them.
+                Capability::Teleport | Capability::Vehicles | Capability::TimeScale => {
+                    return None;
+                }
+                })
             })
             .collect(),
         players: snapshot
@@ -71,7 +79,97 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 persistent_identity: player.persistent_identity,
             })
             .collect(),
-        options: None,
+        options: snapshot.options.as_ref().map(options),
+    }
+}
+fn quotas(q: &bri_admin::Quotas) -> ui::AdminQuotas {
+    ui::AdminQuotas {
+        schedules: q.schedules,
+        misc: q.misc,
+        projectiles: q.projectiles,
+        items: q.items,
+        environment: q.environment,
+        players: q.players,
+        vehicles: q.vehicles,
+    }
+}
+fn server_quotas(q: &ui::AdminQuotas) -> bri_admin::Quotas {
+    bri_admin::Quotas {
+        schedules: q.schedules,
+        misc: q.misc,
+        projectiles: q.projectiles,
+        items: q.items,
+        environment: q.environment,
+        players: q.players,
+        vehicles: q.vehicles,
+    }
+}
+fn options(s: &bri_admin::ServerSettings) -> ui::AdminOptions {
+    ui::AdminOptions {
+        name: s.name.clone(),
+        port: s.port,
+        max_players: s.max_players,
+        brick_limit: s.brick_limit,
+        bricks_per_second: s.bricks_per_second,
+        max_chat_length: s.max_chat_length,
+        physics_vehicles: s.physics_vehicles,
+        player_vehicles: s.player_vehicles,
+        random_brick_color: s.random_brick_color,
+        chat_filter: s.chat_filter,
+        falling_damage: s.falling_damage,
+        public_domain_timeout_minutes: s.public_domain_timeout_minutes,
+        too_far_distance: s.too_far_distance,
+        per_player: quotas(&s.per_player),
+        lan: quotas(&s.lan),
+    }
+}
+/// A new host's Server Settings: the saved Advanced Config (`$Pref::Server::*`)
+/// with this game's name and player limit. Saved values the host would
+/// refuse fall back to v20's defaults.
+pub fn host_settings(
+    o: &ui::AdminOptions,
+    name: &str,
+    max_players: u16,
+) -> bri_admin::ServerSettings {
+    let base = bri_admin::ServerSettings {
+        name: name.into(),
+        max_players,
+        ..Default::default()
+    };
+    let saved = settings(
+        &ui::AdminOptions {
+            name: name.into(),
+            max_players,
+            ..o.clone()
+        },
+        &base,
+    );
+    if saved.validate().is_ok() {
+        saved
+    } else {
+        base
+    }
+}
+/// The Server Settings dialog's values over the host's current settings
+/// (keeping those the dialog does not show).
+fn settings(o: &ui::AdminOptions, current: &bri_admin::ServerSettings) -> bri_admin::ServerSettings {
+    bri_admin::ServerSettings {
+        name: o.name.clone(),
+        port: o.port,
+        max_players: o.max_players,
+        brick_limit: o.brick_limit,
+        bricks_per_second: o.bricks_per_second,
+        max_chat_length: o.max_chat_length,
+        physics_vehicles: o.physics_vehicles,
+        player_vehicles: o.player_vehicles,
+        random_brick_color: o.random_brick_color,
+        chat_filter: o.chat_filter,
+        falling_damage: o.falling_damage,
+        public_domain_timeout_minutes: o.public_domain_timeout_minutes,
+        too_far_distance: o.too_far_distance,
+        per_player: server_quotas(&o.per_player),
+        lan: server_quotas(&o.lan),
+        ..current.clone()
     }
 }
 
@@ -125,6 +223,10 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
             Action::HighlightBrickGroup { group: *group },
         ),
         ui::AdminAction::Wand => (Capability::DestructoWand, Action::DestructoWand),
+        ui::AdminAction::RequestMaps => (Capability::ChangeMap, Action::RequestMaps),
+        ui::AdminAction::ChangeMap { map } => {
+            (Capability::ChangeMap, Action::ChangeMap { map: map.clone() })
+        }
         ui::AdminAction::SetPassword {
             slot: ui::AdminPasswordSlot::Admin,
             password,
@@ -132,6 +234,18 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
             Capability::AdminPassword,
             Action::SetAdminPassword {
                 password: Secret::new(password.0.clone())?,
+            },
+        ),
+        ui::AdminAction::ConfigureHost { options } => (
+            Capability::HostOptions,
+            Action::HostConfigure {
+                settings: settings(
+                    options,
+                    snapshot
+                        .options
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Host settings unavailable"))?,
+                ),
             },
         ),
         _ => bail!("This administration operation is not connected to gameplay yet"),
@@ -143,9 +257,68 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
     let allowed = match capability {
         Capability::Login => true,
         Capability::AdminPassword => snapshot.local_host || snapshot.role == Role::SuperAdmin,
+        Capability::HostOptions => snapshot.local_host,
         _ => snapshot.role.is_admin(),
     };
     ensure!(allowed, "Administration permission has changed");
+    let request = Request::new(action);
+    request.validate()?;
+    Ok(Some(Command::Admin(request)))
+}
+
+/// v20 `findClientByName`: the name that contains `partial` earliest.
+fn find_player(snapshot: &AdminSnapshot, partial: &str) -> Result<ConnectionId> {
+    let partial = partial.to_lowercase();
+    snapshot
+        .players
+        .iter()
+        .filter(|p| !p.bot)
+        .filter_map(|p| p.name.to_lowercase().find(&partial).map(|at| (at, p)))
+        .min_by_key(|(at, _)| *at)
+        .map(|(_, p)| ConnectionId(p.connection))
+        .ok_or_else(|| anyhow::anyhow!("No player named {partial}"))
+}
+
+/// Administrator chat commands (`/fetch`, `/find`, `/warp`, `/timeScale`,
+/// `/resetVehicles`, `/clearVehicles`, `/realBrickCount`, `/cancelAllEvents`,
+/// `/clearBots`). `None` when `name` is not one of them.
+pub fn chat_command(
+    name: &str,
+    args: &[String],
+    snapshot: &AdminSnapshot,
+) -> Result<Option<Command>> {
+    let joined = args.join(" ");
+    let (capability, action) = match name.to_ascii_lowercase().as_str() {
+        "fetch" => (Capability::Teleport, Action::Fetch { target: find_player(snapshot, &joined)? }),
+        "find" => (Capability::Teleport, Action::Find { target: find_player(snapshot, &joined)? }),
+        "warp" => (Capability::Teleport, Action::Warp),
+        // `serverCmdSpy`: watch a player through a corpse camera; `/ret`
+        // returns (any player may return to their own body).
+        "spy" => (
+            Capability::Spy,
+            Action::Spy {
+                target: find_player(snapshot, &joined)?,
+            },
+        ),
+        "timescale" => (
+            Capability::TimeScale,
+            Action::TimeScale {
+                // `mClampF` of a non-number is 0, clamped up to 0.2.
+                scale: args.first().and_then(|a| a.parse().ok()).unwrap_or(0.0),
+            },
+        ),
+        "resetvehicles" => (Capability::Vehicles, Action::ResetVehicles),
+        "clearvehicles" => (Capability::Vehicles, Action::ClearVehicles),
+        "realbrickcount" => (Capability::WorldCommands, Action::RealBrickCount),
+        "cancelallevents" => (Capability::WorldCommands, Action::CancelAllEvents),
+        "clearbots" => (Capability::WorldCommands, Action::ClearBots),
+        _ => return Ok(None),
+    };
+    // Stock servers ignore these from non-administrators.
+    ensure!(
+        snapshot.role.is_admin() && snapshot.supported.contains(&capability),
+        "You are not an administrator"
+    );
     let request = Request::new(action);
     request.validate()?;
     Ok(Some(Command::Admin(request)))
@@ -212,6 +385,19 @@ pub fn reply_updates(
                     .collect(),
             }));
         }
+        (AdminData::Maps(rows), ui::AdminAction::RequestMaps) => {
+            updates.push(UiUpdate::Admin(ui::AdminUpdate::Maps {
+                request: id,
+                revision: reply.snapshot.revision,
+                rows: rows
+                    .iter()
+                    .map(|row| ui::AdminMap {
+                        id: row.id.clone(),
+                        name: plain(&row.name),
+                    })
+                    .collect(),
+            }));
+        }
         (AdminData::None, ui::AdminAction::Login { .. }) => ensure!(
             reply.snapshot.role.is_admin(),
             "Host did not grant administrator permission"
@@ -224,6 +410,7 @@ pub fn reply_updates(
             | ui::AdminAction::Unban { .. }
             | ui::AdminAction::ClearBrickGroup { .. }
             | ui::AdminAction::ClearAllBricks
+            | ui::AdminAction::ChangeMap { .. }
             | ui::AdminAction::SetPassword { .. },
         ) => {}
         _ => bail!("Host returned an unexpected administration reply"),
@@ -248,6 +435,7 @@ mod tests {
             ]
             .into(),
             players: vec![],
+            options: None,
         }
     }
     #[test]
@@ -285,6 +473,55 @@ mod tests {
         assert!(!mapped.supported.contains(&ui::AdminFeature::Ban));
         assert!(!mapped.supported.contains(&ui::AdminFeature::HostOptions));
         Ok(())
+    }
+    #[test]
+    fn spy_watches_a_player_named_in_chat_for_admins_only() -> Result<()> {
+        let mut s = snapshot(Role::Admin);
+        s.supported.insert(Capability::Spy);
+        s.players.push(bri_sim::session::AdminPlayer {
+            connection: 9,
+            name: "Builder".into(),
+            identity_label: String::new(),
+            role: Role::Player,
+            owner: false,
+            local: false,
+            bot: false,
+            persistent_identity: true,
+        });
+        let Some(Command::Admin(request)) = chat_command("spy", &["buil".into()], &s)? else {
+            panic!("missing request")
+        };
+        assert_eq!(
+            request.action,
+            Action::Spy {
+                target: ConnectionId(9)
+            }
+        );
+        s.role = Role::Player;
+        assert!(chat_command("spy", &["buil".into()], &s).is_err());
+        Ok(())
+    }
+    #[test]
+    fn advanced_config_defaults_are_the_hosts() {
+        let d = bri_admin::ServerSettings::default();
+        assert_eq!(options(&d), ui::AdminOptions::default());
+        assert_eq!(
+            host_settings(&ui::AdminOptions::default(), &d.name, d.max_players),
+            d
+        );
+        let mut saved = ui::AdminOptions {
+            max_chat_length: 40,
+            random_brick_color: true,
+            ..Default::default()
+        };
+        let s = host_settings(&saved, "Build", 12);
+        assert_eq!((s.max_chat_length, s.random_brick_color), (40, true));
+        assert_eq!((s.name.as_str(), s.max_players), ("Build", 12));
+        saved.max_chat_length = 5000;
+        assert_eq!(
+            host_settings(&saved, "Build", 12).max_chat_length,
+            d.max_chat_length
+        );
     }
     #[test]
     fn rejected_password_and_wrong_reply_never_report_success() {

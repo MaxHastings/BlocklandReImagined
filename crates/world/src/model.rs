@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -7,10 +7,29 @@ pub const MAX_BRICKS: usize = 1_000_000;
 /// Native admission bound, not the original 100-row editor limit. Runtime work
 /// budgets and usable large-list editing are separate acceptance requirements.
 pub const MAX_EVENTS_PER_BRICK: usize = 1024;
+/// What a world's bricks may add up to by [`Brick::stored_bound`]: the save
+/// file's limit less room for the owner table and the rest of the world.
+/// Admission enforces it, so every world a server accepts can be saved and
+/// streamed to a joining client.
+pub const MAX_STORED_BYTES: u64 = crate::persistence::MAX_SAVE_BYTES - 64 * 1024 * 1024;
 pub const TICKS_PER_SECOND: u64 = 120;
 pub type BrickId = u64;
 /// Assigned by the server's identity service; zero is world-owned content.
 pub type OwnerId = u64;
+/// A world's bricks. A persistent (structurally shared) ordered map: a copy
+/// is O(1) and an edit copies O(log n), so snapshots handed to other threads
+/// (replication, rendering, collision) never deep-clone the world.
+pub type Bricks = imbl::OrdMap<BrickId, Brick>;
+/// Mutate every brick (a persistent map has no `values_mut`).
+pub fn update_bricks(bricks: &mut Bricks, mut f: impl FnMut(&mut Brick)) {
+    *bricks = std::mem::take(bricks)
+        .into_iter()
+        .map(|(id, mut brick)| {
+            f(&mut brick);
+            (id, brick)
+        })
+        .collect();
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -119,6 +138,31 @@ impl ItemSpawn {
         (u64::from(self.respawn_ms) * TICKS_PER_SECOND).div_ceil(1000)
     }
 }
+/// A package block drawn on this brick in place of its colour: per-face
+/// textures and flipbooks (`namespace:block/name`), in one of the block's
+/// named states. Game rules change `state`; clients draw it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockLook {
+    pub block: String,
+    /// `""` is the block's own faces; other names are its declared states.
+    #[serde(default)]
+    pub state: String,
+}
+impl BlockLook {
+    pub fn validate(&self) -> Result<()> {
+        let plain = |s: &str| !s.chars().any(char::is_control);
+        ensure!(
+            !self.block.is_empty() && self.block.len() <= 160 && plain(&self.block),
+            "Invalid block look"
+        );
+        ensure!(
+            self.state.len() <= 64 && plain(&self.state),
+            "Invalid block state"
+        );
+        Ok(())
+    }
+}
 /// Wrench event rows: the vanilla input/target/output model executed by
 /// `bri-events` (the single event system for bricks).
 pub use bri_events::{Row as EventRow, Target as EventTarget, Value as EventValue};
@@ -155,6 +199,9 @@ pub struct Brick {
     pub events: Vec<EventRow>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
+    /// A package block's faces drawn in place of the colour.
+    #[serde(default)]
+    pub look: Option<BlockLook>,
 }
 impl Brick {
     pub fn new(definition: ContentRef, position: [f32; 3], owner: OwnerId) -> Self {
@@ -179,6 +226,27 @@ impl Brick {
             vehicle: None,
             events: vec![],
             source_records: vec![],
+            look: None,
+        }
+    }
+    /// Every palette index this brick names: its paint, then each event
+    /// `Color` parameter. The one colour rule: all of them must index the
+    /// world's palette, and anything that remaps colours remaps all of them.
+    pub fn colors(&self) -> impl Iterator<Item = u8> + '_ {
+        std::iter::once(self.color).chain(self.events.iter().flat_map(|e| {
+            e.params.iter().filter_map(|v| match v {
+                EventValue::Color(c) => Some(*c),
+                _ => None,
+            })
+        }))
+    }
+    /// Map every palette index [`Brick::colors`] names through `remap`.
+    pub fn recolor(&mut self, mut remap: impl FnMut(u8) -> u8) {
+        self.color = remap(self.color);
+        for value in self.events.iter_mut().flat_map(|e| &mut e.params) {
+            if let EventValue::Color(c) = value {
+                *c = remap(*c);
+            }
         }
     }
     pub fn transform(&self) -> glam::Mat4 {
@@ -186,6 +254,66 @@ impl Brick {
             * glam::Mat4::from_rotation_y(
                 -(self.quarter_turns as f32) * std::f32::consts::FRAC_PI_2,
             )
+    }
+    /// An upper bound on this brick's size in any carrier: its JSON save
+    /// entry, and (far larger than) its network encoding. Structural and
+    /// allocation-free, so admission can charge it on every mutation; see
+    /// [`MAX_STORED_BYTES`].
+    pub fn stored_bound(&self) -> u64 {
+        // A JSON string: its bytes, five more for each escaped one
+        // (`\u00XX`), and quotes. Fixed-size fields fit in the constants.
+        fn text(s: &str) -> u64 {
+            let escaped = s
+                .bytes()
+                .filter(|b| *b < 0x20 || *b == b'"' || *b == b'\\')
+                .count();
+            (s.len() + 5 * escaped) as u64 + 2
+        }
+        fn content(c: &ContentRef) -> u64 {
+            match c {
+                ContentRef::Resolved(id) => text(id) + 40,
+                ContentRef::Unresolved { namespace, name } => text(namespace) + text(name) + 64,
+            }
+        }
+        let optional = |c: &Option<ContentRef>| c.as_ref().map_or(0, content);
+        let mut bytes = 512
+            + content(&self.definition)
+            + optional(&self.print)
+            + self.name.as_deref().map_or(0, text)
+            + self.light.as_ref().map_or(0, |l| content(&l.asset))
+            + self.emitter.as_ref().map_or(0, |e| optional(&e.asset))
+            + optional(&self.item_spawn.item)
+            + optional(&self.sound)
+            + self.vehicle.as_ref().map_or(0, |v| content(&v.vehicle))
+            + self
+                .look
+                .as_ref()
+                .map_or(0, |l| 32 + text(&l.block) + text(&l.state));
+        for row in &self.events {
+            bytes += 192 + text(&row.input) + text(&row.output);
+            if let Some(p) = &row.preserved {
+                bytes += text(&p.original) + text(&p.diagnostic);
+            }
+            if let EventTarget::Named(n) = &row.target {
+                bytes += text(n);
+            }
+            for value in &row.params {
+                bytes += 32
+                    + match value {
+                        EventValue::Text(t) | EventValue::Datablock(Some(t)) => text(t),
+                        // Up to "65535," each.
+                        EventValue::Rows(bri_events::RowSelection::Indices(rows)) => {
+                            6 * rows.len() as u64
+                        }
+                        // Numbers, a vector of three floats, flags.
+                        _ => 64,
+                    };
+            }
+        }
+        for record in &self.source_records {
+            bytes += 64 + text(&record.text) + record.diagnostic.as_deref().map_or(0, text);
+        }
+        bytes
     }
     pub fn validate(&self, palette_len: usize) -> Result<()> {
         self.definition.validate()?;
@@ -195,10 +323,10 @@ impl Brick {
                 .all(|v| v.is_finite() && v.abs() <= 1_000_000.0),
             "Invalid brick position"
         );
-        ensure!(
-            self.quarter_turns < 4 && (self.color as usize) < palette_len,
-            "Invalid brick angle/color"
-        );
+        ensure!(self.quarter_turns < 4, "Invalid brick angle");
+        if let Some(c) = self.colors().find(|c| usize::from(*c) >= palette_len) {
+            bail!("Color {c} outside the {palette_len}-color palette");
+        }
         ensure!(
             self.color_effect <= 6 && self.shape_effect <= 2,
             "Invalid effect code"
@@ -219,6 +347,9 @@ impl Brick {
             }
         }
         self.item_spawn.validate()?;
+        if let Some(look) = &self.look {
+            look.validate()?;
+        }
         if let Some(sound) = &self.sound {
             sound.validate()?;
         }
@@ -251,9 +382,6 @@ impl Brick {
             }
             for value in &e.params {
                 match value {
-                    EventValue::Color(c) => {
-                        ensure!((*c as usize) < palette_len, "Event color outside palette")
-                    }
                     EventValue::Text(t) => {
                         ensure!(t.chars().count() <= 200, "Event text too long")
                     }
@@ -287,11 +415,64 @@ pub struct World {
     pub tick: u64,
     pub revision: u64,
     pub next_brick_id: BrickId,
-    pub bricks: BTreeMap<BrickId, Brick>,
+    pub bricks: Bricks,
     pub source_sha256: Option<String>,
     pub source_encoding: Option<String>,
+    /// Who each brick owner number is: the durable principal of the player
+    /// who built with it. Owner numbers are world-scoped; a returning player
+    /// gets their number back from this table. Owners with no entry are
+    /// unclaimed (imported or anonymous builds).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub owners: BTreeMap<OwnerId, OwnerRecord>,
+    /// Bricks this server has no definition for (a removed package, an
+    /// add-on brick in an imported save). They are not in the world, but they
+    /// are kept exactly and saved again, so nothing is lost when the content
+    /// comes back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unloaded: Vec<Brick>,
+}
+
+pub const MAX_OWNERS: usize = 65_536;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerRecord {
+    /// The player's public key, 64 lowercase hex characters.
+    pub principal: String,
+    /// Last name the player joined with, for display while they are away.
+    pub name: String,
+}
+impl OwnerRecord {
+    pub fn new(principal: [u8; 32], name: String) -> Self {
+        Self {
+            principal: principal.iter().map(|b| format!("{b:02x}")).collect(),
+            name,
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.principal.len() == 64
+                && self
+                    .principal
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+            "Invalid owner principal"
+        );
+        ensure!(
+            self.name.len() <= 48 && !self.name.chars().any(char::is_control),
+            "Invalid owner name"
+        );
+        Ok(())
+    }
 }
 impl World {
+    /// The owner number a principal built with in this world.
+    pub fn owner_of(&self, principal: &str) -> Option<OwnerId> {
+        self.owners
+            .iter()
+            .find(|(_, record)| record.principal == principal)
+            .map(|(owner, _)| *owner)
+    }
     pub fn new(name: String, map_id: String, palette: Vec<[f32; 4]>) -> Self {
         Self {
             schema_version: WORLD_SCHEMA,
@@ -302,9 +483,11 @@ impl World {
             tick: 0,
             revision: 0,
             next_brick_id: 1,
-            bricks: BTreeMap::new(),
+            bricks: Bricks::new(),
             source_sha256: None,
             source_encoding: None,
+            owners: BTreeMap::new(),
+            unloaded: Vec::new(),
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -334,15 +517,27 @@ impl World {
             "Invalid world palette"
         );
         ensure!(
-            self.bricks.len() <= MAX_BRICKS && !self.bricks.contains_key(&0),
+            self.bricks.len() + self.unloaded.len() <= MAX_BRICKS && !self.bricks.contains_key(&0),
             "Invalid brick IDs/count"
         );
         ensure!(
             self.next_brick_id > self.bricks.keys().next_back().copied().unwrap_or(0),
             "Brick ID would be reused"
         );
-        for b in self.bricks.values() {
+        for b in self.bricks.values().chain(&self.unloaded) {
             b.validate(self.palette.len())?;
+        }
+        ensure!(
+            self.owners.len() <= MAX_OWNERS && !self.owners.contains_key(&0),
+            "Invalid owner table"
+        );
+        let mut principals = std::collections::BTreeSet::new();
+        for record in self.owners.values() {
+            record.validate()?;
+            ensure!(
+                principals.insert(&record.principal),
+                "A principal owns two owner numbers"
+            );
         }
         Ok(())
     }

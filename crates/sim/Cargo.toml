@@ -11,10 +11,18 @@ serde_json.workspace = true
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
+bri-motor = { path = "../motor" }
 bri-weapons = { path = "../weapons" }
 bri-admin = { path = "../admin" }
 bri-minigames = { path = "../minigames" }
 bri-vehicles = { path = "../vehicles" }
 bri-events = { path = "../events" }
+bri-package = { path = "../package" }
+bri-package-runtime = { path = "../package-runtime" }
 glam = "0.33"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

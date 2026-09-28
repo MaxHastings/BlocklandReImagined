@@ -9,11 +9,12 @@ use anyhow::{Context, Result, ensure};
 use bri_content::{brick::Brick as Mesh, terrain_field::TerrainField};
 use bri_net::protocol::PublicWorld;
 use bri_sim::{
+    blueprint::Blueprint,
     definitions::Definitions,
     ghost,
     grid::{self, Bounds, Index},
-    player::{PlayerState, PlayerTuning},
-    session::{Command, ToolAction, ToolInventory},
+    player::PlayerState,
+    session::{BuildGesture, Command, ToolAction, ToolInventory},
     simulation::Hit,
 };
 use bri_ui::api::{GameAction, HeldControl, IconRef, ToolInfo, UiAction, UiUpdate};
@@ -24,6 +25,21 @@ use std::{collections::BTreeMap, sync::Arc};
 
 const SLOTS: usize = 10;
 const DEPLOY_REACH: f32 = 15.0;
+
+/// A copied build as the player moves it: the pivot's place, the turn, and
+/// the bricks there.
+#[derive(Debug, Clone)]
+struct CopyGhost {
+    blueprint: Blueprint,
+    anchor: [f32; 3],
+    turns: u8,
+    bricks: Vec<Brick>,
+}
+impl CopyGhost {
+    fn place(&mut self) {
+        self.bricks = self.blueprint.placed(self.anchor, self.turns);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Equipment {
@@ -47,6 +63,8 @@ pub struct BuildingResponse {
 
 pub struct Building {
     definitions: Definitions,
+    /// The host's player archetypes, for the local player's eye.
+    archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     /// Stock selectable IDs and authored orientation corrections, not every
     /// hidden state variant that happens to have a native definition.
     catalog: BTreeMap<String, u8>,
@@ -62,14 +80,23 @@ pub struct Building {
     /// The server shows an image in this player's right hand (for example
     /// a ball picked up without a tool slot), so fire goes to its trigger.
     held_image: bool,
+    /// The server shows the grey brick (`brickImage`) in this player's hand.
+    held_brick: bool,
     fire_request: u64,
     tool_catalog_installed: bool,
     latest_equipment_request: u64,
     paint: u8,
+    /// Random Brick Color's colour for the next brick, shown on the ghost
+    /// until a paint is picked.
+    random_color: Option<u8>,
     palette_len: usize,
     ghost: Option<Brick>,
+    /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
+    /// the brick keys while its tool is in hand.
+    copy: Option<CopyGhost>,
     ghost_generation: u64,
     map: PhysicsWorld,
+    broken: bri_sim::prediction::BrokenShapes,
     terrain: Vec<Arc<TerrainField>>,
     bricks: BTreeMap<BrickId, Brick>,
     index: Index,
@@ -81,11 +108,13 @@ pub struct Building {
 impl Building {
     pub fn new(definitions: Definitions, map_colliders: Vec<ColliderBuilder>) -> Result<Self> {
         let mut map = PhysicsWorld::new();
-        for collider in map_colliders {
-            map.insert_collider(collider, None);
-        }
-        map.detect_collisions(&(), &());
+        let handles = map_colliders
+            .into_iter()
+            .map(|collider| map.insert_collider(collider, None))
+            .collect();
+        bri_physics::detect_collisions(&mut map);
         Ok(Self {
+            archetypes: Default::default(),
             definitions,
             catalog: BTreeMap::new(),
             default_prints: BTreeMap::new(),
@@ -93,9 +122,9 @@ impl Building {
             selected_slot: None,
             equipment: Equipment::None,
             tool_catalog: [
-                tool(bri_weapons::CORE_TOOLS[0], "Hammer", "hammer"),
-                tool(bri_weapons::CORE_TOOLS[1], "Wrench", "wrench"),
-                tool(bri_weapons::CORE_TOOLS[2], "Printer", "printer"),
+                tool(bri_weapons::HAMMER, "Hammer", "hammer"),
+                tool(bri_weapons::WRENCH, "Wrench", "wrench"),
+                tool(bri_weapons::PRINTER, "Printer", "printer"),
             ]
             .into_iter()
             .map(|t| (t.id.clone(), t))
@@ -105,16 +134,20 @@ impl Building {
             active_tool: None,
             weapon_fire_down: false,
             held_image: false,
+            held_brick: false,
             fire_request: 0,
             tool_catalog_installed: false,
             latest_equipment_request: 0,
             paint: 0,
+            random_color: None,
             palette_len: 0,
             ghost: None,
+            copy: None,
             ghost_generation: 0,
             map,
+            broken: bri_sim::prediction::BrokenShapes::new(handles, &[]),
             terrain: Vec::new(),
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
             index: Index::default(),
             camera_index: Index::default(),
             visibility_index: Index::default(),
@@ -122,6 +155,17 @@ impl Building {
         })
     }
 
+    /// The map's breakable shapes (`NativeMap::breakables`).
+    pub fn set_breakables(&mut self, shapes: &[bri_sim::map::Breakable]) {
+        self.broken.set_shapes(shapes);
+    }
+    /// Smashed shapes no longer stop build rays (`Session::broken_shapes`).
+    pub fn set_broken_shapes(&mut self, broken: &std::collections::BTreeSet<u32>) -> Result<()> {
+        if self.broken.apply(&mut self.map, broken)? {
+            self.query_generation = self.query_generation.wrapping_add(1);
+        }
+        Ok(())
+    }
     /// Exact map terrain for every query; it is never approximated by tiles.
     pub fn attach_terrain(&mut self, terrain: Vec<Arc<TerrainField>>) {
         self.terrain = terrain;
@@ -141,18 +185,36 @@ impl Building {
             .map(|(handle, hit)| {
                 (
                     hit.time_of_impact,
-                    Vec3::from_array(hit.normal.to_array()),
+                    bri_sim::simulation::hit_normal(
+                        Vec3::from_array(hit.normal.to_array()),
+                        direction,
+                    ),
                     self.map.colliders[handle].user_data,
                 )
             });
-        let terrain = bri_sim::map::cast_terrain(&self.terrain, origin, direction, distance)
-            .map(|(time, normal)| (time, normal, bri_sim::map::MapSurface::Terrain as u128));
+        let terrain = bri_sim::map::cast_terrain(&self.terrain, origin, direction, distance).map(
+            |(time, normal)| {
+                (
+                    time,
+                    bri_sim::simulation::hit_normal(normal, direction),
+                    bri_sim::map::MapSurface::Terrain as u128,
+                )
+            },
+        );
         match (physical, terrain) {
             (Some(a), Some(b)) => Some(if b.0 < a.0 { b } else { a }),
             (a, b) => a.or(b),
         }
     }
 
+    /// Terrain or interiors between two points (`GuiShapeNameHud` sight test).
+    pub fn map_blocks(&self, from: Vec3, to: Vec3) -> bool {
+        let delta = to - from;
+        let distance = delta.length();
+        distance > 0.001
+            && delta.is_finite()
+            && self.map_ray(from, delta / distance, distance).is_some()
+    }
     pub fn set_catalog(&mut self, entries: Vec<(String, u8)>) -> Result<()> {
         let mut catalog = BTreeMap::new();
         for (id, orientation) in entries {
@@ -198,17 +260,54 @@ impl Building {
         Ok(())
     }
 
+    /// v20 `serverCmdSetPrint`: later bricks of the printed aspect take the
+    /// player's last print, and a ghost of that aspect changes at once.
+    pub fn remember_print(&mut self, last: &crate::tool_ui::LastPrint) -> Result<()> {
+        ContentRef::Resolved(last.print.clone()).validate()?;
+        for definition in &last.definitions {
+            if let Some(print) = self.default_prints.get_mut(definition) {
+                print.clone_from(&last.print);
+            }
+        }
+        if let Some(ghost) = &mut self.ghost
+            && let ContentRef::Resolved(id) = &ghost.definition
+            && last.definitions.contains(id)
+        {
+            ghost.print = Some(ContentRef::Resolved(last.print.clone()));
+            self.ghost_generation = self.ghost_generation.wrapping_add(1);
+        }
+        Ok(())
+    }
+
     /// Reconcile only changed query geometry/flags. Colors, ownership, events,
     /// palette and player-pose changes never rebuild map physics or the index.
     /// Return whether query geometry changed (not whether any world field did).
     pub fn sync_world(&mut self, world: &PublicWorld) -> Result<bool> {
+        self.sync_world_changes(world, None)
+    }
+    /// As `sync_world`; `known` lists every brick that may differ from the
+    /// last synced world, so a brick plant costs one brick, not the world.
+    pub fn sync_world_changes(
+        &mut self,
+        world: &PublicWorld,
+        known: Option<&crate::network::WorldChanges>,
+    ) -> Result<bool> {
         ensure!(
             !world.palette.is_empty() && world.palette.len() <= 256,
             "Invalid world palette"
         );
+        let candidates: Box<dyn Iterator<Item = (&u64, &Brick)>> = match known {
+            Some(known) => Box::new(
+                known
+                    .bricks
+                    .iter()
+                    .filter_map(|id| world.bricks.get_key_value(id)),
+            ),
+            None => Box::new(world.bricks.iter()),
+        };
         // Validate all changed candidates first: malformed updates are atomic.
         let mut changed = Vec::new();
-        for (&id, brick) in &world.bricks {
+        for (&id, brick) in candidates {
             if self
                 .bricks
                 .get(&id)
@@ -226,12 +325,20 @@ impl Building {
                 changed.push((id, brick.clone(), Bounds::new(brick, &definition.mesh)?));
             }
         }
-        let removed: Vec<_> = self
-            .bricks
-            .keys()
-            .filter(|id| !world.bricks.contains_key(id))
-            .copied()
-            .collect();
+        let removed: Vec<_> = match known {
+            Some(known) => known
+                .bricks
+                .iter()
+                .filter(|id| self.bricks.contains_key(id) && !world.bricks.contains_key(*id))
+                .copied()
+                .collect(),
+            None => self
+                .bricks
+                .keys()
+                .filter(|id| !world.bricks.contains_key(*id))
+                .copied()
+                .collect(),
+        };
         let dirty = !changed.is_empty() || !removed.is_empty();
         for id in removed {
             self.bricks.remove(&id);
@@ -277,6 +384,121 @@ impl Building {
 
     pub fn ghost(&self) -> Option<&Brick> {
         self.ghost.as_ref()
+    }
+    /// Whether the server would refuse the ghost for a reason this client
+    /// can already see: it overlaps a brick, or nothing holds it up (no brick
+    /// to attach to and no map floor or terrain under it). The server still
+    /// decides; this only warns before the click.
+    pub fn ghost_blocked(&self) -> bool {
+        if let Some(copy) = self.copy_ghost() {
+            // A copy must clear every brick, and the world must hold up at
+            // least one of it (its bricks hold up each other).
+            let mut supported = false;
+            for brick in copy {
+                match self.placement(brick) {
+                    Some((true, _)) => return true,
+                    Some((false, held)) => supported |= held,
+                    None => {}
+                }
+            }
+            return !supported;
+        }
+        let Some(ghost) = &self.ghost else {
+            return false;
+        };
+        self.placement(ghost)
+            .is_some_and(|(overlaps, supported)| overlaps || !supported)
+    }
+    /// Whether `ghost` overlaps a replicated brick, and whether a brick or
+    /// the map would hold it up; `None` when the client cannot tell.
+    fn placement(&self, ghost: &Brick) -> Option<(bool, bool)> {
+        let definition = self.definitions.entries.get(match &ghost.definition {
+            ContentRef::Resolved(id) => id.as_str(),
+            ContentRef::Unresolved { .. } => return None,
+        })?;
+        let bounds = Bounds::new(ghost, &definition.mesh).ok()?;
+        let mut supported = false;
+        for id in self.index.query(bounds.expanded(1)) {
+            let Some(existing) = self.bricks.get(&id) else {
+                continue;
+            };
+            let Some(other) = self.definitions.get(existing).ok() else {
+                continue;
+            };
+            let placed = (existing, &other.mesh, self.index.bounds(id));
+            if grid::overlaps((ghost, &definition.mesh, bounds), placed) {
+                return Some((true, supported));
+            }
+            supported |= grid::connected((ghost, &definition.mesh, bounds), placed);
+        }
+        if supported {
+            return Some((false, true));
+        }
+        // The server's ground rule: from the top down to 0.1 under the
+        // bottom, map floor or terrain under any footprint cell.
+        let bottom = bounds.min[1] as f32 * 0.2;
+        let top = bounds.max()[1] as f32 * 0.2;
+        let reach = top - bottom + 0.1;
+        let grounded = (bounds.min[2]..bounds.max()[2]).any(|z| {
+            (bounds.min[0]..bounds.max()[0]).any(|x| {
+                let origin = Vec3::new((x as f32 + 0.5) * 0.5, top, (z as f32 + 0.5) * 0.5);
+                self.map_ray(origin, Vec3::NEG_Y, reach).is_some()
+            })
+        });
+        Some((false, grounded))
+    }
+
+    /// Take a copied build from the server (`None` takes it away). It
+    /// starts over the original, as v20's Duplicator ghost did.
+    pub fn set_blueprint(&mut self, blueprint: Option<Blueprint>) -> Result<()> {
+        self.copy = match blueprint {
+            Some(blueprint) => {
+                blueprint.validate()?;
+                for brick in &blueprint.bricks {
+                    self.definitions.get(brick)?;
+                }
+                let mut copy = CopyGhost {
+                    anchor: blueprint.origin,
+                    blueprint,
+                    turns: 0,
+                    bricks: Vec::new(),
+                };
+                copy.place();
+                Some(copy)
+            }
+            None => None,
+        };
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+        Ok(())
+    }
+    /// The copied build's ghost bricks while its tool is in hand.
+    pub fn copy_ghost(&self) -> Option<&[Brick]> {
+        self.active_copy().map(|c| c.bricks.as_slice())
+    }
+    /// Where the copy's pivot is and how it is turned, while in hand.
+    pub fn copy_pose(&self) -> Option<([f32; 3], u8)> {
+        self.active_copy().map(|c| (c.anchor, c.turns))
+    }
+    fn active_copy(&self) -> Option<&CopyGhost> {
+        self.copy
+            .as_ref()
+            .filter(|c| matches!(&self.equipment, Equipment::Weapon(id) if *id == c.blueprint.tool))
+    }
+    fn copy_in_hand(&mut self) -> Option<&mut CopyGhost> {
+        self.active_copy()?;
+        self.copy.as_mut()
+    }
+    /// `tempBrick.setColor` under Random Brick Color: the host's colour for
+    /// the next brick, shown on the ghost.
+    pub fn set_random_color(&mut self, color: u8) {
+        if usize::from(color) >= self.palette_len {
+            return;
+        }
+        self.random_color = Some(color);
+        if let Some(ghost) = &mut self.ghost {
+            ghost.color = color;
+            self.ghost_generation = self.ghost_generation.wrapping_add(1);
+        }
     }
     pub fn ghost_generation(&self) -> u64 {
         self.ghost_generation
@@ -332,7 +554,20 @@ impl Building {
     pub fn set_held_image(&mut self, held: bool) {
         self.held_image = held;
     }
+    /// Replicated grey brick in the local player's right hand.
+    pub fn set_held_brick(&mut self, held: bool) {
+        self.held_brick = held;
+    }
 
+    /// A map change builds a new controller; the player keeps the bricks
+    /// they bought (those the new catalog still offers) and their paint,
+    /// which the next world sync clamps to the new palette.
+    pub fn carry_over(&mut self, old: &Building) {
+        for (slot, id) in self.inventory.iter_mut().zip(&old.inventory) {
+            *slot = id.clone().filter(|id| self.catalog.contains_key(id));
+        }
+        self.paint = old.paint;
+    }
     pub fn initial_updates(&self) -> Vec<UiUpdate> {
         vec![
             UiUpdate::BrickInventory(self.inventory.to_vec()),
@@ -413,10 +648,10 @@ impl Building {
                         .and_then(Option::as_ref)
                         .is_some_and(|id| match equipment {
                             Equipment::Weapon(expected) => id == expected,
-                            Equipment::Hammer => id == bri_weapons::CORE_TOOLS[0],
-                            Equipment::Wrench => id == bri_weapons::CORE_TOOLS[1],
-                            Equipment::Printer => id == bri_weapons::CORE_TOOLS[2],
-                            Equipment::Wand => id == bri_weapons::CORE_TOOLS[3],
+                            Equipment::Hammer => id == bri_weapons::HAMMER,
+                            Equipment::Wrench => id == bri_weapons::WRENCH,
+                            Equipment::Printer => id == bri_weapons::PRINTER,
+                            Equipment::Wand => id == bri_weapons::WAND,
                             _ => false,
                         })
                 })
@@ -575,14 +810,36 @@ impl Building {
                 nearest = Some(Hit {
                     brick: Some(id),
                     position: origin + direction * distance,
-                    normal: brick
-                        .transform()
-                        .transform_vector3(Vec3::from(normal.to_array())),
+                    normal: bri_sim::simulation::hit_normal(
+                        brick
+                            .transform()
+                            .transform_vector3(Vec3::from(normal.to_array())),
+                        direction,
+                    ),
                     distance,
                 });
             }
         }
         Ok(nearest)
+    }
+
+    /// `GuiShapeNameHud::onRender`'s line of sight (blocklandv20.exe
+    /// 0x527c99): mask 0x200001d, the map plus `FxBrickObjectType`, which
+    /// only bricks with raycasting on carry. Players and vehicles never hide
+    /// a name.
+    pub fn name_visible(&self, eye: Vec3, target: Vec3) -> Result<bool> {
+        ensure!(
+            eye.is_finite() && target.is_finite(),
+            "Invalid name sight ray"
+        );
+        let delta = target - eye;
+        let distance = delta.length();
+        if distance <= 0.002 {
+            return Ok(true);
+        }
+        Ok(self
+            .trace(eye, delta / distance, distance - 0.001, &self.index)?
+            .is_none())
     }
 
     /// Cosmetic line of sight uses visible bricks independently of tool-ray flags.
@@ -772,6 +1029,12 @@ impl Building {
             .collect()
     }
 
+    pub fn archetypes(&self) -> &bri_sim::archetype::Archetypes {
+        &self.archetypes
+    }
+    pub fn set_archetypes(&mut self, archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>) {
+        self.archetypes = archetypes;
+    }
     /// Local updates acknowledge equipment choices only. Commands require the
     /// transport's authoritative reply; no planting/removal is predicted here.
     /// Player yaw/pitch must be current body aim, not a free-look camera vector.
@@ -834,9 +1097,11 @@ impl Building {
                     "Color outside world palette"
                 );
                 self.paint = *color as u8;
+                self.random_color = None;
                 self.equipment = Equipment::Paint(self.paint);
                 self.active_tool = None;
-                out.commands.push(Command::UseSprayCan { color: self.paint });
+                out.commands
+                    .push(Command::UseSprayCan { color: self.paint });
                 if let Some(ghost) = &mut self.ghost {
                     ghost.color = self.paint;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
@@ -860,7 +1125,10 @@ impl Building {
                     self.weapon_fire_down = false;
                     out.commands.push(Command::WeaponTrigger { down: false });
                 } else if *down && (self.held_image || image_equipment(&self.equipment)) {
-                    if !self.weapon_fire_down {
+                    // A tool switched since the last trigger mounts a fresh
+                    // image, so a new click must reach it even before the
+                    // switch is acknowledged.
+                    if !self.weapon_fire_down || self.latest_equipment_request > self.fire_request {
                         self.weapon_fire_down = true;
                         out.commands.push(Command::WeaponTrigger { down: true });
                     }
@@ -879,35 +1147,64 @@ impl Building {
                     (-1..=1).contains(x) && (-1..=1).contains(y) && (-3..=3).contains(z),
                     "Invalid brick shift"
                 );
-                if let Some(brick) = &mut self.ghost {
-                    let mesh = &self.definitions.get(brick)?.mesh;
-                    let body = body_forward(player)?;
-                    ghost::shift(
-                        brick,
-                        mesh,
+                let super_shift =
+                    matches!(action, UiAction::Game(GameAction::SuperShiftBrick { .. }));
+                let body = body_forward(player)?;
+                if let Some(copy) = self.copy_in_hand() {
+                    copy.anchor = bri_sim::blueprint::shift(
+                        copy.anchor,
+                        copy.blueprint.turned_size(copy.turns),
                         body,
                         *x,
                         *y,
                         *z,
-                        matches!(action, UiAction::Game(GameAction::SuperShiftBrick { .. })),
+                        super_shift,
                     );
+                    copy.place();
+                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
+                } else if let Some(brick) = &mut self.ghost {
+                    let mesh = &self.definitions.get(brick)?.mesh;
+                    ghost::shift(brick, mesh, body, *x, *y, *z, super_shift);
                     Bounds::new(brick, mesh)?;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
                 }
             }
             UiAction::Game(GameAction::RotateBrick { dir }) => {
                 ensure!((-1..=1).contains(dir), "Invalid brick rotation");
-                if let Some(brick) = &mut self.ghost {
+                if let Some(copy) = self.copy_in_hand() {
+                    copy.turns = (i32::from(copy.turns) + dir.signum()).rem_euclid(4) as u8;
+                    copy.place();
+                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
+                } else if let Some(brick) = &mut self.ghost {
                     let mesh = &self.definitions.get(brick)?.mesh;
                     ghost::rotate(brick, mesh, body_forward(player)?, *dir);
                     Bounds::new(brick, mesh)?;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
                 }
             }
             UiAction::Game(GameAction::CancelBrick) => {
-                if self.ghost.take().is_some() {
+                if self.copy_in_hand().is_some() {
+                    // Put the copy away; clicking a build copies again.
+                    self.copy = None;
+                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                } else if self.ghost.take().is_some() {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                 }
+            }
+            UiAction::Game(GameAction::PlantBrick) if self.active_copy().is_some() => {
+                let copy = self.active_copy().expect("checked");
+                out.commands.push(Command::PlaceBlueprint {
+                    position: copy.anchor,
+                    quarter_turns: copy.turns,
+                });
             }
             UiAction::Game(GameAction::PlantBrick) => {
                 let brick = self
@@ -925,7 +1222,7 @@ impl Building {
                 });
             }
             UiAction::Game(GameAction::UndoBrick) => {
-                out.commands.push(Command::Tool(ToolAction::UndoPlant))
+                out.commands.push(Command::Tool(ToolAction::UndoBrick))
             }
             _ => return Ok(None),
         }
@@ -961,7 +1258,7 @@ impl Building {
                 .get(id)
                 .cloned()
                 .map(ContentRef::Resolved);
-            brick.color = self.paint;
+            brick.color = self.random_color.unwrap_or(self.paint);
             // Preserve the ghost's anchored centre, re-snapping only where a
             // changed footprint/height requires a different parity lattice.
             snap(&mut brick, &self.definitions.entries[id].mesh);
@@ -976,7 +1273,14 @@ impl Building {
         let command = match &self.equipment {
             Equipment::Brick(id) => {
                 self.selectable(id)?;
-                let eye = player.eye(&PlayerTuning::default());
+                // The click also fires `brickImage`, as in v20: its Fire
+                // state swings the brick and streams `brickTrailEmitter`,
+                // and `brickDeployProjectile` puffs where it lands.
+                if self.held_brick && !self.weapon_fire_down {
+                    self.weapon_fire_down = true;
+                    out.commands.push(Command::WeaponTrigger { down: true });
+                }
+                let eye = self.archetypes.eye(player);
                 let Some(hit) = self.target(eye, player.forward(), DEPLOY_REACH)? else {
                     return Ok(());
                 };
@@ -999,23 +1303,21 @@ impl Building {
                 } else {
                     -0.05
                 };
-                brick.color = self.paint;
+                brick.color = self.random_color.unwrap_or(self.paint);
                 brick.print = self
                     .default_prints
                     .get(id)
                     .cloned()
                     .map(ContentRef::Resolved);
                 snap(&mut brick, &definition.mesh);
-                // Map surfaces need not lie on the brick lattice (Bedroom's
-                // carpet is one example). Choose the first non-penetrating
-                // plate plane, within the native authority's one-plate support
-                // distance. Do not relax authoritative collision validation.
+                // Map surfaces need not lie on the brick lattice (a raised
+                // Bedroom surface is at 354.062). Like v20, rest on the plate
+                // plane nearest the floor: at most half a plate above it
+                // (still supported) or into it (the authority's floor
+                // allowance). v20's stock saves sit this way on every map.
                 if hit.brick.is_none() {
-                    if hit.normal.y > 0.9
-                        && brick.position[1] - height * 0.5 < hit.position.y - 0.002
-                    {
-                        brick.position[1] =
-                            ((hit.position.y - 0.002) / 0.2).ceil() * 0.2 + height * 0.5;
+                    if hit.normal.y > 0.9 {
+                        brick.position[1] = (hit.position.y / 0.2).round() * 0.2 + height * 0.5;
                     } else if hit.normal.y < -0.9
                         && brick.position[1] + height * 0.5 > hit.position.y + 0.002
                     {
@@ -1158,7 +1460,7 @@ mod tests {
             name: "Test".into(),
             map_id: "map".into(),
             palette: vec![[1.0; 4]; 2],
-            bricks: BTreeMap::new(),
+            bricks: Default::default(),
         }
     }
     #[test]
@@ -1203,6 +1505,28 @@ mod tests {
         assert!(!building.effect_visible(9, Vec3::Y, -Vec3::Y).unwrap());
     }
     #[test]
+    fn names_hide_behind_raycasting_bricks_and_the_map() {
+        let mut building = controller();
+        let mut world = world();
+        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 1.1, 0.25], 1);
+        brick.colliding = false;
+        brick.visible = false;
+        world.bricks.insert(1, brick);
+        building.sync_world(&world).unwrap();
+        let eye = Vec3::new(0.5, 1.1, 2.);
+        let head = Vec3::new(0.5, 1.1, -2.);
+        assert!(!building.name_visible(eye, head).unwrap());
+        assert!(!building.name_visible(head, eye).unwrap());
+        assert!(building.name_visible(eye + Vec3::Y * 3., head + Vec3::Y * 3.).unwrap());
+        // v20's mask is FxBrickObjectType: a brick with raycasting off does
+        // not hide a name, visible or not.
+        world.bricks.get_mut(&1).unwrap().raycast = false;
+        world.bricks.get_mut(&1).unwrap().visible = true;
+        building.sync_world(&world).unwrap();
+        assert!(building.name_visible(eye, head).unwrap());
+        assert!(!building.name_visible(Vec3::Y, -Vec3::Y).unwrap(), "the ground");
+    }
+    #[test]
     fn extended_loaded_colors_remain_usable_for_paint_without_rebuilding_queries() {
         let mut building = controller();
         let mut world = world();
@@ -1232,7 +1556,11 @@ mod tests {
             grounded: false,
             crouched: false,
             jetting: false,
-            jump_held: false,
+            jump: Default::default(),
+            archetype: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
+            tick: Default::default(),
         }
     }
     fn fire() -> UiAction {
@@ -1246,6 +1574,91 @@ mod tests {
         slots[3] = Some("plate".into());
         b.ui_action(&UiAction::BuyBricks { slots }, &player())
             .unwrap();
+    }
+
+    #[test]
+    fn a_map_change_keeps_the_brick_bar_and_paint() {
+        let mut old = controller();
+        buy(&mut old);
+        old.ui_action(&UiAction::UseSprayCan { color: 1 }, &player())
+            .unwrap();
+        // The controller the next map builds starts empty, as on first entry.
+        let mut new = controller();
+        assert!(new.inventory().iter().all(Option::is_none));
+        new.carry_over(&old);
+        assert_eq!(new.inventory()[3].as_deref(), Some("plate"));
+        assert!(
+            new.initial_updates()
+                .iter()
+                .any(|u| matches!(u, UiUpdate::BrickInventory(slots) if slots[3].is_some()))
+        );
+        new.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        new.ui_action(&fire(), &player()).unwrap();
+        assert_eq!(new.ghost().map(|g| g.color), Some(1));
+    }
+
+    #[test]
+    fn random_brick_colors_ghost_shows_the_next_colour_until_a_paint_is_picked() {
+        let mut b = controller();
+        buy(&mut b);
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.ui_action(&fire(), &player()).unwrap();
+        assert_eq!(b.ghost().map(|g| g.color), Some(0));
+        b.set_random_color(1);
+        assert_eq!(b.ghost().map(|g| g.color), Some(1));
+        b.ui_action(&UiAction::UseSprayCan { color: 0 }, &player())
+            .unwrap();
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.ui_action(&fire(), &player()).unwrap();
+        assert_eq!(b.ghost().map(|g| g.color), Some(0));
+    }
+
+    #[test]
+    fn a_ghost_that_would_overlap_or_float_is_blocked() {
+        let mut b = controller();
+        let plate = |y: f32| {
+            let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, y, 0.25], 1);
+            brick.color = 0;
+            brick
+        };
+        assert!(!b.ghost_blocked(), "no ghost");
+        b.ghost = Some(plate(0.1));
+        assert!(!b.ghost_blocked(), "on the floor");
+        b.ghost = Some(plate(1.1));
+        assert!(b.ghost_blocked(), "floating");
+        let mut world = world();
+        world.bricks = bri_world::Bricks::unit(7, plate(0.1));
+        b.sync_world(&world).unwrap();
+        b.ghost = Some(plate(0.1));
+        assert!(b.ghost_blocked(), "overlapping a planted brick");
+        b.ghost = Some(plate(0.3));
+        assert!(!b.ghost_blocked(), "on top of it");
+    }
+    #[test]
+    fn deploying_with_the_grey_brick_in_hand_also_fires_its_image() {
+        let mut b = controller();
+        buy(&mut b);
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.set_held_brick(true);
+        let fired = b.ui_action(&fire(), &player()).unwrap().unwrap();
+        assert!(b.ghost().is_some(), "the ghost still deploys locally");
+        assert!(matches!(
+            fired.commands[..],
+            [Command::WeaponTrigger { down: true }]
+        ));
+        let release = UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down: false,
+        });
+        let released = b.ui_action(&release, &player()).unwrap().unwrap();
+        assert!(matches!(
+            released.commands[..],
+            [Command::WeaponTrigger { down: false }]
+        ));
     }
 
     #[test]
@@ -1267,11 +1680,18 @@ mod tests {
         Bounds::new(&deployed, &mesh).unwrap();
 
         // Looking straight down must not collapse horizontal body-facing shifts.
-        b.ui_action(
-            &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
-            &player(),
-        )
-        .unwrap();
+        let shift = b
+            .ui_action(
+                &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
+                &player(),
+            )
+            .unwrap()
+            .unwrap();
+        // The ghost stays local; the server only animates the builder.
+        assert!(matches!(
+            shift.commands.as_slice(),
+            [Command::BuildGesture(BuildGesture::ShiftAway)]
+        ));
         assert_eq!(b.ghost().unwrap().position[2], deployed.position[2] - 0.5);
         b.ui_action(
             &UiAction::Game(GameAction::SuperShiftBrick { x: 1, y: 0, z: 1 }),
@@ -1311,26 +1731,130 @@ mod tests {
     }
 
     #[test]
-    fn map_surface_between_grid_planes_never_deploys_inside_floor() {
+    fn a_copied_build_moves_turns_and_plants_whole_while_its_tool_is_in_hand() {
+        const TOOL: &str = "duplicator-tool:weapon/duplicator";
         let mut b = controller();
-        b.map = PhysicsWorld::new();
-        b.map.insert_collider(
-            ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(0.0, -0.412, 0.0)),
-            None,
-        );
-        b.map.detect_collisions(&(), &());
-        b.ui_action(
-            &UiAction::InstantUseBrick {
-                brick: "plate".into(),
+        let mut catalog = b.tool_catalog.clone();
+        catalog.insert(
+            TOOL.to_string(),
+            ToolInfo {
+                id: TOOL.into(),
+                name: "Duplicator".into(),
+                icon: IconRef::None,
+                tint: None,
             },
+        );
+        b.set_tool_catalog(catalog).unwrap();
+        let plate =
+            |x: f32, y: f32| Brick::new(ContentRef::Resolved("plate".into()), [x, y, 0.25], 1);
+        let copy =
+            Blueprint::capture(TOOL, &[plate(0.5, 0.1), plate(1.0, 0.3)], &b.definitions).unwrap();
+        b.set_blueprint(Some(copy.clone())).unwrap();
+        assert!(b.copy_ghost().is_none(), "shown only with its tool in hand");
+        let mut inventory = ToolInventory {
+            slots: vec![Some(TOOL.into()), None, None, None, None],
+            selected: Some(0),
+        };
+        b.sync_tools(&inventory).unwrap();
+        // It starts over the original, standing on the floor.
+        assert_eq!(b.copy_pose(), Some((copy.origin, 0)));
+        assert_eq!(b.copy_ghost().unwrap()[1].position, [1.0, 0.3, 0.25]);
+        assert!(!b.ghost_blocked());
+        // The brick keys move it: away from the body is -Z here.
+        let generation = b.ghost_generation();
+        let shift = b
+            .ui_action(
+                &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
+                &player(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            shift.commands.as_slice(),
+            [Command::BuildGesture(_)]
+        ));
+        assert!(b.ghost_generation() > generation);
+        let (anchor, _) = b.copy_pose().unwrap();
+        assert_eq!(anchor, [copy.origin[0], 0.0, copy.origin[2] - 0.5]);
+        // A super shift up moves by the copy's height: now it floats.
+        b.ui_action(
+            &UiAction::Game(GameAction::SuperShiftBrick { x: 0, y: 0, z: 1 }),
             &player(),
         )
         .unwrap();
-        b.ui_action(&fire(), &player()).unwrap();
-        let ghost = b.ghost().unwrap();
-        let bottom = ghost.position[1] - 0.1;
-        assert!(bottom >= 0.088 && bottom - 0.088 < 0.2);
-        Bounds::new(ghost, &b.definitions.entries["plate"].mesh).unwrap();
+        assert!((b.copy_pose().unwrap().0[1] - 0.4).abs() < 1e-5);
+        assert!(b.ghost_blocked(), "nothing holds it up");
+        b.ui_action(
+            &UiAction::Game(GameAction::SuperShiftBrick { x: 0, y: 0, z: -1 }),
+            &player(),
+        )
+        .unwrap();
+        // Turning keeps every brick on the grid.
+        b.ui_action(
+            &UiAction::Game(GameAction::RotateBrick { dir: 1 }),
+            &player(),
+        )
+        .unwrap();
+        for brick in b.copy_ghost().unwrap() {
+            assert_eq!(brick.quarter_turns, 1);
+            Bounds::new(brick, &b.definitions.entries["plate"].mesh).unwrap();
+        }
+        // Planting sends the pivot and turn; the server places the bricks.
+        let (anchor, turns) = b.copy_pose().unwrap();
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            plant.commands.as_slice(),
+            [Command::PlaceBlueprint { position, quarter_turns }] if *position == anchor && *quarter_turns == turns
+        ));
+        // Another tool in hand: the keys go back to the brick ghost.
+        inventory.selected = None;
+        b.sync_tools(&inventory).unwrap();
+        assert!(b.copy_ghost().is_none());
+        inventory.selected = Some(0);
+        b.sync_tools(&inventory).unwrap();
+        assert!(b.copy_ghost().is_some(), "and it comes back where it was");
+        // Cancel puts the copy away.
+        b.ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
+            .unwrap();
+        assert!(b.copy_ghost().is_none());
+        // A copy of a brick this client cannot draw is refused.
+        let mut unknown = copy;
+        unknown.bricks[0].definition = ContentRef::Resolved("missing".into());
+        assert!(b.set_blueprint(Some(unknown)).is_err());
+    }
+
+    #[test]
+    fn map_floor_between_grid_planes_deploys_onto_the_nearest_plane() {
+        // Floor tops 0.088 above a plane (Bedroom's carpet, before its map is
+        // lifted) and 0.15 above one: v20 rests on the nearer plane.
+        for (top, bottom) in [(0.088, 0.0), (0.15, 0.2), (0.012, 0.0)] {
+            let mut b = controller();
+            b.map = PhysicsWorld::new();
+            b.map.insert_collider(
+                ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(
+                    0.0,
+                    top - 0.5,
+                    0.0,
+                )),
+                None,
+            );
+            bri_physics::detect_collisions(&mut b.map);
+            b.ui_action(
+                &UiAction::InstantUseBrick {
+                    brick: "plate".into(),
+                },
+                &player(),
+            )
+            .unwrap();
+            b.ui_action(&fire(), &player()).unwrap();
+            let ghost = b.ghost().unwrap();
+            let got = ghost.position[1] - 0.1;
+            assert!((got - bottom).abs() < 1e-4, "floor {top}: bottom {got}");
+            Bounds::new(ghost, &b.definitions.entries["plate"].mesh).unwrap();
+        }
     }
 
     #[test]
@@ -1339,7 +1863,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let definitions = Definitions::load(
             &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-003"),
+            &root.join("content/maps-pass-008"),
         )?;
         let mut b = Building::new(definitions, vec![])?;
         let ids: Vec<_> = b.definitions.entries.keys().cloned().collect();
@@ -1623,7 +2147,7 @@ mod tests {
         ToolInventory {
             slots: vec![
                 Some("v20.weapon.gunitem".into()),
-                Some(bri_weapons::CORE_TOOLS[0].into()),
+                Some(bri_weapons::HAMMER.into()),
                 Some("v20.weapon.bowitem".into()),
                 None,
                 None,
@@ -1778,6 +2302,34 @@ mod tests {
         assert!(!b.weapon_fire_down);
     }
     #[test]
+    fn click_after_switching_tools_fires_the_new_image_before_the_ack() {
+        let mut b = weapon_controller();
+        b.sync_tools(&weapon_inventory()).unwrap();
+        choose(&mut b, 1, 1);
+        let down = b
+            .ui_action(&fire(), &player())
+            .unwrap()
+            .unwrap()
+            .commands
+            .remove(0);
+        b.command_sent(2, &down).unwrap();
+        // The trigger is never released; the player switches and clicks again.
+        choose(&mut b, 3, 2);
+        let again = b.ui_action(&fire(), &player()).unwrap().unwrap().commands;
+        assert!(matches!(
+            &again[..],
+            [Command::WeaponTrigger { down: true }]
+        ));
+        b.command_sent(4, &again[0]).unwrap();
+        assert!(
+            b.ui_action(&fire(), &player())
+                .unwrap()
+                .unwrap()
+                .commands
+                .is_empty()
+        );
+    }
+    #[test]
     fn queue_failure_and_slot_replacement_cannot_leave_a_pending_tool_grant() {
         let mut b = weapon_controller();
         let mut inventory = weapon_inventory();
@@ -1796,6 +2348,36 @@ mod tests {
         assert!(fresh.pending_equipment.is_empty());
         assert!(!fresh.weapon_fire_down);
         assert_eq!(fresh.tools, ToolInventory::default());
+    }
+
+    #[test]
+    fn last_print_updates_the_ghost_and_later_bricks_of_its_aspect() {
+        let mut b = controller();
+        b.set_catalog(vec![("plate".into(), 1)]).unwrap();
+        b.set_default_prints([("plate".into(), "v20/print/letters/a".into())].into())
+            .unwrap();
+        let p = player();
+        b.ui_action(
+            &UiAction::InstantUseBrick {
+                brick: "plate".into(),
+            },
+            &p,
+        )
+        .unwrap();
+        b.ui_action(&fire(), &p).unwrap();
+        let generation = b.ghost_generation();
+        let last = crate::tool_ui::LastPrint {
+            definitions: vec!["plate".into()],
+            print: "v20/print/2x2f/arrow".into(),
+        };
+        b.remember_print(&last).unwrap();
+        let arrow = Some(ContentRef::Resolved("v20/print/2x2f/arrow".into()));
+        assert_eq!(b.ghost().unwrap().print, arrow);
+        assert_ne!(b.ghost_generation(), generation);
+        assert_eq!(
+            b.default_prints["plate"], "v20/print/2x2f/arrow",
+            "the next plate ghost starts with the last print"
+        );
     }
 
     #[test]

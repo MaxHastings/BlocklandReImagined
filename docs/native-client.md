@@ -1,7 +1,6 @@
 # Native client integration
 
-This is a development client, not the complete vanilla alpha handoff. The
-previous UI milestone is now connected to native content, an authoritative
+The native UI is connected to native content, an authoritative
 loopback/LAN host, QUIC client state and a persistent world renderer.
 
 ## Application and transport
@@ -14,9 +13,8 @@ running the executable without `--run`.
 Hosting from the typed UI action loads any of the 14 reference map architectures on a
 background worker and starts the existing 120 Hz authoritative server. Solo
 binds loopback with one player; LAN binds port 28000 and enforces the selected
-player limit. Password fields are rejected explicitly until authentication is
-implemented. Host/admin privileges, discovery, durable identity and reconnect
-are still required. Current local hosting does not silently grant administrator
+player limit. Join password fields are rejected explicitly because no server checks a join
+password yet. Current local hosting does not silently grant administrator
 status to a network peer.
 
 Movement intentions travel at 60 Hz while reliable requests and replies remain
@@ -31,8 +29,9 @@ are connected. Free look does not rotate the player's movement frame. Chat
 round-trips through the real server; UI markup/control markers in names and chat
 are treated as plain text. Original Blockheads now render from authoritative
 poses, with native outfit/material selection and initial movement/look layers.
-Client prediction, remote interpolation and animation transitions/tool/emote
-selection remain work. The camera uses authoritative pose updates;
+The client predicts local movement by replaying unacknowledged inputs through
+the server's motor (`bri_sim::prediction`) and draws remote players slightly in
+the past, interpolating buffered poses (`crates/client/src/motion.rs`). The camera uses authoritative pose updates;
 third person sweeps a sphere up to eight units behind the eye against native map
 geometry and replicated brick collision shapes. Collision respects the brick's
 collision flag independently of visibility and targeting. Dynamic actors,
@@ -41,9 +40,19 @@ Spawn-sphere distribution/orientation and exact FOV feel
 also require fidelity work; the initial Bedroom center faces a nearby wall.
 
 LAN hosts advertise a listing and their public QUIC certificate over UDP
-discovery (port 28050); the Join Server list uses it. Direct-IP joins query the
-address once and pin its certificate in `trusted-hosts.json` (trust on first
-use). LAN hosts keep a persistent certificate/key pair in their state
+discovery (port 28050). Opening Join Server lists those and probes every saved
+server (`servers.json`: favourites, then the last ten joins) over its game
+port for name, map, players and ping; the Favorite button (v20's unused Query
+Internet) stars the selected server. Connect to IP accepts an IP, a host name
+with an optional port, or a `bri://` invite, and needs only the game port: a
+first join accepts the certificate the host presents during the QUIC handshake
+(its signature is still verified) and pins it in `trusted-hosts.json` (trust on
+first use); an invite's key is checked instead. A pin that no longer matches is
+reported as a changed identity and forgotten, so joining again trusts the new
+one. Internet hosts open the game port on the router, check whether friends can
+reach them and put an invite on the clipboard (`/invite` copies it again); LAN
+and Internet hosts on Windows are offered a one-prompt Windows Firewall fix when
+friends would be blocked. Details: `docs/architecture/hosting.md`. LAN hosts keep a persistent certificate/key pair in their state
 directory so pins stay valid across restarts; single-player hosts use a
 throwaway certificate. There is no insecure certificate fallback.
 
@@ -57,23 +66,39 @@ lifetimes. Opaque brick batches are coalesced; transparent batches retain
 ordering. Replicated brick state drives native geometry, paint, visibility and
 rotation through background mesh builds, including after joining a populated
 world. The current four-million-triangle replacement budget rejects excessive
-worlds explicitly; chunked updates/culling/streaming remain necessary for large
-builds.
+worlds explicitly. Bricks are meshed in 32-unit chunks (`world_chunks`) against
+one shared material palette; a replica change rebuilds only the chunks it
+touches, and chunks are frustum culled.
+
+Scene textures are mipmapped (lightmaps and weight maps bind their base level
+only) and follow v20's Trilinear, Sharp Filter and Anisotropy prefs. The world
+pass uses 4x MSAA unless Anti-Aliasing is off. Cascaded sun shadows
+(`bri_render::shadow`, Shadow Quality; Minimum is off) are cast by players,
+vehicles and held/dropped items, like v20's projected shape shadows, and by
+bricks only with Brick Shadows. Bricks that do not cast, interiors and terrain
+render into a separate occluder depth map: a shadow is dropped wherever an
+occluder lies between the caster and the receiving surface, so a player on a
+brick tower shades the tower top and not the floor beneath it
+(`crates/render/tests/shadow_occluders.rs`). Baked surfaces darken by a
+bounded share of the mission's ambient/sun ratio; vertex-lit surfaces lose the
+sun term.
 
 The renderer now draws original sky faces and moving cloud layers with distance
 fog for all 14 reference maps. Sky orientation/depth/translation and cloud
 motion have offscreen tests; full environment fidelity is not accepted yet.
-The renderer records remaining omissions: fog volumes/storm transitions,
-water/snow, decorations, material detail, terrain holes/streaming and several
+Water, rain/snow and foliage draw in their own passes, and terrain draws as
+camera-following tiles with its holes. The renderer records remaining
+omissions: fog volumes/storm transitions, material detail and several
 map-specific objects. Secondary lighting-cache provenance and the complete map
 set are recorded in `vanilla-reference.md`.
-The current terrain patch is `[-64, -64, 384, 384]` cells. Brick meshes bind the
+Brick meshes bind the
 five original top/side/bottom/ramp overlays and all 77 converted stock prints,
 including original BLS print-name aliases. Texture alpha controls pigment
 coverage separately from brick opacity. Signed paint-offset colors are adapted;
 transparent-paint interaction and pumpkin literal RGB remain explicit fidelity
-questions. Color/shape FX, lights and particles still need rendering. These
-omissions remain mandatory alpha work.
+questions. The scene shader draws v20 color FX (Pearl, Chrome, Glow, Blink, Swirl,
+Rainbow) and shape FX (Undulo, Water); `bri-fx-runtime` draws lights and
+particles.
 
 The client content index validates package paths and reads the 35-world report
 without reading all save payloads at startup. Map/simulation loading is lazy.
@@ -106,17 +131,17 @@ pose packet. The ghost has a translucent original-material preview.
 Ordinary wrench properties, print selection and the implemented brick-event
 subset use server inspections and reject stale edits. Catalog IDs, print aspects,
 target reach and ownership are checked by the server. Opaque imported records
-remain read-only and server-owned. Planting undo retains the last 512 placements
-per owner. Sound/vehicle/item wrench behaviors, additional events and other
-unfinished adapters still report explicit errors.
+remain read-only and server-owned. Ctrl+Z follows v20's per-client undo queue
+(511 entries): plants break like hammered bricks, and spray paint, FX paint and
+prints revert. The wrench also sets a brick's item, music loop and vehicle, and
+respawns a vehicle spawn's vehicle.
 
 Remaining building fidelity includes exact ghost re-centering/snapping, the
-terrain-only placement offset, projectile tool-flight timing, paint/FX/print undo,
-held tools/animations/audio and complete trust/minigame/equipment rules. Reliable
+terrain-only placement offset, projectile tool-flight timing,
+and held tool animations. Reliable
 actions capture body aim when dispatched, independently of movement datagrams.
 The server validates this aim and still owns position, reach and permissions;
 an action neither rewinds movement nor overwrites the current body orientation.
-Minigames, vehicles, weapons, audio and the full vanilla contract remain required.
 
 Save/Load now connects the native dialogs to authoritative snapshots and local
 files under `<state-dir>/saves/map-<map-id-sha256>/`. Converted original saves are
@@ -126,11 +151,14 @@ Overwriting a local save first retains its prior bytes under `.history/`, then
 publishes a flushed replacement. Publication requires filesystem hard-link support;
 failure leaves the prior save intact. Names are case-insensitive across platforms.
 
-Native `.world.json` build files wrap a versioned world plus an opaque ownership
-scope. The scope grants no privileges. Same-session loads can preserve owners;
-other-session/imported owner numbers map to reserved unclaimed identities. Loading
-without ownership assigns the loading host. Future joins cannot claim imported
-numbers. Queued actions are omitted; authored events, prints and retained source
+Native `.world.json` build files wrap a versioned world. The world's owner
+table records which player (public-key principal) each owner number is. A
+player who joins gets back the number the world has for their principal, so
+their bricks are theirs again after a restart. Loading a build with ownership
+gives each recorded builder's bricks to that player's number on this server;
+owner numbers with no principal (imports, anonymous builds) map to fresh,
+unclaimed numbers. Loading without ownership assigns the loading host. Future
+joins cannot claim unclaimed or recorded numbers. Queued actions are omitted; authored events, prints and retained source
 records survive. Save options can exclude events/ownership and their corresponding
 legacy records. Both wrapped saves and earlier converted world files are readable;
 dedicated startup also accepts these wrapped builds.
@@ -149,7 +177,7 @@ limits are 63 MiB per build, eight local file operations, four server save/load
 requests per 120 ticks, and a listing scan of 1,000 local saves/512 MiB. A corrupt
 save currently produces an explicit listing error. Large loads still perform
 planning/collision publication/replication on the authority loop; asynchronous
-chunked loading, smooth large-world rendering and persistent identity remain work.
+chunked loading and smooth large-world rendering remain work.
 
 Current client and dedicated host use a matching full native content identity
 covering geometry/map bindings, materials/prints, effects and the avatar rig,
@@ -169,10 +197,10 @@ cargo build -p bri-client --release --locked
 ```
 
 The ignored tests require the generated local assets and/or an offscreen GPU.
-They never create a visible window or send OS input. Windows compilation is
-verified; actual window/input behavior and macOS/Linux execution are not yet
-verified. Maxwell performs interactive playtests when the complete alpha is
-ready.
+They never create a visible window or send OS input. Windows is verified.
+Linux x86_64 builds and passes `--check` (see "Linux" below); its window, input
+and audio are not yet verified, nor is macOS. Maxwell performs interactive
+playtests when the complete alpha is ready.
 
 Evidence:
 
@@ -205,7 +233,39 @@ When the state directory is omitted, it uses the current user's application data
 on Linux. An explicit directory still overrides this, including for isolated
 headless tests. Existing development `client-state/` directories are not moved;
 pass that directory explicitly to retain those settings/saves.
-It has deliberately not been launched visibly during this work. Native settings
+Native settings
 are versioned, atomically replaced and corruption is reported without erasing
 the existing file. Alt+Enter is currently transient; Options display changes
 use acknowledgment before committing preferences.
+
+## Linux
+
+`bri-client` builds and runs on x86_64 Linux with the same code; the only
+platform branches are the state directory above and the identity file (Windows
+user data protection there; a `0600` file on Linux).
+
+Build requirements beyond Rust: a C compiler and the ALSA headers
+(`pacman -S base-devel alsa-lib` on Arch/CachyOS, `apt install build-essential
+libasound2-dev pkg-config` on Debian/Ubuntu). Windowing uses Wayland or X11
+through libraries loaded at run time; graphics need a Vulkan driver (Mesa or
+the vendor driver) since wgpu picks Vulkan on Linux.
+
+```sh
+cargo build -p bri-client --release --locked
+python tools/regenerate_content.py --v20 "/path/to/Blockland v20"   # docs/content-regeneration.md
+target/release/bri-client --check content
+target/release/bri-client --run content
+tools/package_playtest.sh --version a8 --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
+```
+
+`package_playtest.sh` is the Linux counterpart of `package_playtest.ps1`: it
+copies the release client and the packs the package list selects into
+`dist/BlocklandReImagined-alpha-<version>-linux/` with `launch.sh` and a
+checksummed `MANIFEST.json`; `--validate-only` and `--verify <dir>` work as on
+Windows.
+
+Verified on 2026-09-27 from Windows: the client compiles for
+`x86_64-unknown-linux-gnu` without warnings, links against an Ubuntu 24.04
+sysroot, and the linked binary passes `--check` under WSL Ubuntu against the
+full content folder. Not yet verified: opening a window, input, audio output,
+and GPU rendering on a real Linux desktop.

@@ -1,0 +1,8 @@
+*.sh text eol=lf
+# Package bytes are hashed for join agreement; keep them identical on every checkout.
+packages/** -text
+# Importer inputs copied into shared packs: the same bytes on every checkout.
+docs/vanilla-reference-files.json text eol=lf
+crates/weather-import/atlas-adaptations.json text eol=lf
+# Every session appends to the progress log; merge appends instead of conflicting.
+docs/progress.md merge=union

@@ -53,26 +53,21 @@ impl AdminStore {
         if let Ok(metadata) = fs::symlink_metadata(&self.path) {
             ensure!(metadata.file_type().is_file(), "Admin state target is not a regular file");
         }
-        let parent = self.path.parent().context("Admin state path has no parent")?;
-        let mut staged = tempfile::NamedTempFile::new_in(parent)
-            .context("Create admin state staging file")?;
-        state.write(&mut staged)?;
-        staged.as_file().sync_all().context("Flush staged admin state")?;
-        staged
-            .persist(&self.path)
-            .map_err(|error| error.error)
-            .context("Atomically replace admin state")?;
+        let mut bytes = Vec::new();
+        state.write(&mut bytes)?;
+        if let Err(error) = bri_files::replace_private(&self.path, &bytes) {
+            if bri_files::is_uncertain(&error) {
+                // The replacement committed but may not survive a crash; do not
+                // publish the candidate or accept another durable mutation.
+                self.poisoned = true;
+                return Err(error).context("Admin state durability uncertain; restart required");
+            }
+            return Err(error).context("Atomically replace admin state");
+        }
         #[cfg(test)]
         if self.fail_after_commit_for_test {
             self.poisoned = true;
             anyhow::bail!("injected post-rename durability uncertainty");
-        }
-        #[cfg(unix)]
-        if let Err(error) = File::open(parent).and_then(|directory| directory.sync_all()) {
-            // Rename already committed; do not publish the candidate or accept
-            // another durable mutation while crash durability is ambiguous.
-            self.poisoned = true;
-            return Err(error).context("Sync admin state directory; restart required");
         }
         Ok(())
     }
@@ -105,8 +100,9 @@ mod tests {
         fs::create_dir(&parent).unwrap();
         let path = parent.join("admin.json");
         let (mut store, state) = AdminStore::open(&path).unwrap();
+        // A folder now sits where the state file was: nothing is replaced.
         fs::remove_file(&path).unwrap();
-        fs::remove_dir(&parent).unwrap();
+        fs::create_dir(&path).unwrap();
         assert!(store.persist(&state).is_err());
         assert!(!store.poisoned());
     }

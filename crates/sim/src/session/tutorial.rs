@@ -8,7 +8,7 @@
 //! respawning at the start restarts the tutorial.
 use super::*;
 use crate::tutorial::{TutorialMap, Zone, ZoneKind};
-use bri_weapons::ActorId;
+use bri_weapons::{ActorId, PRINTER, WRENCH};
 
 /// Tutorial triggers tick every 50 ms (`tickPeriodMS`) at 120 ticks/s.
 const PERIOD: u64 = 6;
@@ -25,14 +25,18 @@ const TROPHY: &str = "<bitmap:base/client/ui/CI/trophy>";
 /// The completion dialog counts 18 goals (Secrets included).
 const GOAL_COUNT: u32 = 18;
 
-const WRENCH: &str = bri_weapons::CORE_TOOLS[1];
-const PRINTER: &str = bri_weapons::CORE_TOOLS[2];
 const GUN: &str = "v20.weapon.gunitem";
 const HAMMER_IMAGE: &str = "v20.image.hammerimage";
 const WRENCH_IMAGE: &str = "v20.image.wrenchimage";
 const PRINTER_IMAGE: &str = "v20.image.printgunimage";
 const GUN_IMAGE: &str = "v20.image.gunimage";
 const WAND_IMAGE: &str = "v20.image.wandimage";
+const BRICK_IMAGE: &str = "v20.image.brickimage";
+/// `HorseArmor.brickImage` (Vehicle_Horse): the brick sits on mount3.
+const HORSE_BRICK_IMAGE: &str = "v20.image.horsebrickimage";
+/// The images `hold_brick` mounts for bricks in hand. They only show the
+/// brick; a click still places the client's ghost, not an image trigger.
+pub const BRICK_HAND_IMAGES: [&str; 2] = [BRICK_IMAGE, HORSE_BRICK_IMAGE];
 const HORSE: &str = "v20.vehicle.horsearmor";
 const JEEP: &str = "v20.vehicle.jeepvehicle";
 const REWARD_SOUND: &str = "v20/sound/rewardsound";
@@ -142,7 +146,8 @@ impl Abilities {
 
 /// Client-owned building state the server cannot see: whether the brick
 /// inventory holds bricks (`inventory[]`), bricks are in hand (`brickImage`)
-/// and a ghost brick exists (`tempBrick`). Only the tutorial's prompts read it.
+/// and a ghost brick exists (`tempBrick`). The tutorial's prompts read it and
+/// `equipped` mounts `brickImage`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrickHand {
@@ -237,14 +242,97 @@ impl Session {
         Ok(())
     }
 
-    /// Record a client's brick inventory state.
+    /// Record a client's brick inventory state. Taking bricks in hand mounts
+    /// the grey 2x2 `brickImage` in the right hand (`fxDTSBrickData::onUse`);
+    /// putting them away unmounts it unless a tool already replaced it.
     pub(super) fn set_brick_hand(&mut self, owner: OwnerId, hand: BrickHand) -> Result<()> {
-        self.peers
-            .get_mut(&owner)
-            .context("Unknown connection")?
-            .tutorial
-            .hand = hand;
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let was = std::mem::replace(&mut peer.tutorial.hand, hand).equipped;
+        let alive = peer.combat.alive;
+        if !alive || was == hand.equipped {
+            return Ok(());
+        }
+        if hand.equipped {
+            self.hold_brick(owner)
+        } else if self.holds_brick(owner) {
+            self.weapons.equip(ActorId(owner), None)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Record a client's ghost brick, for the others to see. Only a living
+    /// player with bricks in hand has one; a brick the server does not know
+    /// is refused.
+    pub(super) fn set_ghost_brick(
+        &mut self,
+        owner: OwnerId,
+        ghost: Option<super::GhostBrick>,
+    ) -> Result<()> {
+        if let Some(ghost) = &ghost {
+            ghost.validate()?;
+            let state = self.simulation.state();
+            ensure!(
+                self.simulation.definitions.entries.contains_key(&ghost.definition),
+                "Unknown ghost brick"
+            );
+            ensure!(
+                usize::from(ghost.color) < state.palette.len().max(1),
+                "Invalid ghost brick colour"
+            );
+        }
+        self.peers.get_mut(&owner).context("Unknown connection")?.ghost = ghost;
         Ok(())
+    }
+
+    /// The ghost brick others see: only while its owner lives with bricks in
+    /// hand and a ghost out.
+    pub(super) fn ghost_brick(&self, owner: OwnerId) -> Option<super::GhostBrick> {
+        let peer = self.peers.get(&owner)?;
+        let hand = peer.tutorial.hand;
+        peer.ghost
+            .clone()
+            .filter(|_| peer.combat.alive && hand.equipped && hand.ghost)
+    }
+
+    /// Bricks are in hand on the client.
+    pub(super) fn brick_equipped(&self, owner: OwnerId) -> bool {
+        self.peers
+            .get(&owner)
+            .is_some_and(|peer| peer.tutorial.hand.equipped)
+    }
+
+    /// `%player.mountImage(%player.getDataBlock().brickImage, 0)`. Packs
+    /// without the image mount nothing.
+    pub(super) fn hold_brick(&mut self, owner: OwnerId) -> Result<()> {
+        let image = self.brick_image(owner);
+        if !self.weapons.pack.images.contains_key(image)
+            || self
+                .weapons
+                .image_state(ActorId(owner), 0)
+                .is_some_and(|(held, _)| held.id == image)
+        {
+            return Ok(());
+        }
+        self.weapons.drop_ball(ActorId(owner))?;
+        self.weapons.mount_image(ActorId(owner), image, None)?;
+        self.weapon_triggers.remove(&owner);
+        Ok(())
+    }
+
+    /// The datablock's `brickImage`.
+    fn brick_image(&self, owner: OwnerId) -> &'static str {
+        let horse = self.peers.get(&owner).is_some_and(|peer| {
+            peer.player.state().archetype == crate::player_types::PlayerType::Horse.archetype()
+        });
+        if horse { HORSE_BRICK_IMAGE } else { BRICK_IMAGE }
+    }
+
+    /// Either datablock's brick is mounted.
+    pub(super) fn holds_brick(&self, owner: OwnerId) -> bool {
+        self.weapons
+            .image_state(ActorId(owner), 0)
+            .is_some_and(|(image, _)| BRICK_HAND_IMAGES.contains(&image.id.as_str()))
     }
 
     /// `noBreak` bricks and the vehicle pads' `vehicleLimit`.
@@ -272,6 +360,21 @@ impl Session {
             _ => {}
         }
         Ok(())
+    }
+
+    /// `servercmdWand` / `servercmdMagicWand` in `TutorialParentingPackage`:
+    /// until the tutorial is completed the wand only comes out in the wand
+    /// room. Elsewhere the command does nothing.
+    pub(super) fn tutorial_allows_wand(&self, owner: OwnerId) -> bool {
+        self.tutorial.as_deref().is_none_or(|t| t.completed)
+            || self.peers.get(&owner).is_some_and(|p| p.tutorial.can_wand)
+    }
+
+    /// `servercmdUseSprayCan` / `servercmdUseFXCan`: the cans only work
+    /// once this life has reached the spray room (`canUseSpray`).
+    pub(super) fn tutorial_allows_spray(&self, owner: OwnerId) -> bool {
+        self.tutorial.as_deref().is_none_or(|t| t.completed)
+            || self.peers.get(&owner).is_some_and(|p| p.tutorial.can_spray)
     }
 
     /// Whether the tutorial keeps this brick from being broken.
@@ -333,7 +436,7 @@ impl Session {
         if !peer.combat.alive {
             return Ok(());
         }
-        let bounds = peer.player.world_bounds();
+        let bounds = crate::player::item_bounds(&peer.player);
         let (min, max) = (Vec3::from(bounds.min), Vec3::from(bounds.max));
         let inside: BTreeSet<usize> = self
             .tutorial()
@@ -477,30 +580,26 @@ impl Session {
         let actor = Actor {
             owner,
             administrator: true,
+            ..Default::default()
         };
         let existing: Vec<BrickId> = self.simulation.state().bricks.keys().copied().collect();
         for id in existing {
             self.simulation.remove(&actor, id)?;
             self.dirty.insert(id);
         }
-        self.plant_undo.clear();
+        self.undo.clear();
         let tutorial = self.tutorial.as_deref().unwrap();
         let world = if part2 {
             &tutorial.map.part2
         } else {
             &tutorial.map.part1
         };
-        let build = bri_world::build::SavedBuild {
-            schema_version: 1,
-            ownership_scope: None,
-            world: world.clone(),
-        };
+        let build = bri_world::build::SavedBuild::new(world.clone());
         let plan = bri_world::build::LoadPlan::prepare(
             self.simulation.state(),
             build,
             owner,
             false,
-            None,
             self.next_owner,
         )?;
         self.item_spawners
@@ -947,6 +1046,7 @@ impl Session {
                             "{TROPHY}{C3} Goal Completed! - Shooting - Time: {time}\n({hit}/{launched} targets hit with {accuracy}% accuracy)"
                         ),
                         seconds: 8.0,
+                        hide_bar: false,
                     },
                 );
                 self.clear_center(owner);
@@ -1118,6 +1218,7 @@ impl Session {
             Notice::Bottom {
                 text: String::new(),
                 seconds: 0.0,
+                hide_bar: false,
             },
         );
         let text = format!(
@@ -1194,6 +1295,7 @@ impl Session {
             Notice::Bottom {
                 text: format!("{TROPHY}{C3} Goal Completed! - {goal} - Time: {time}"),
                 seconds: 3.0,
+                hide_bar: false,
             },
         );
     }
@@ -1274,6 +1376,7 @@ impl Session {
                 &Actor {
                     owner,
                     administrator: true,
+                    ..Default::default()
                 },
                 id,
             )?;

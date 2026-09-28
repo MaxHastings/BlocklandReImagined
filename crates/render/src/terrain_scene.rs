@@ -86,6 +86,7 @@ impl TerrainScene {
                     uv: [uv[0] * texture_repeats, uv[1] * texture_repeats],
                     lightmap_uv: uv,
                     color: [1.0; 4],
+                    fx: [0.; 4],
                 });
             }
             let start = data.indices.len() as u32;
@@ -200,7 +201,7 @@ pub fn parameters(
     sun_direction: [f32; 3],
     detail_size: Option<[u32; 2]>,
     bump_bound: bool,
-) -> [[f32; 4]; 3] {
+) -> [[f32; 4]; 4] {
     // Classic distances use the integer square size.
     let square = field.spacing.round().max(1.0) as i32;
     let zero = |shift: i32| {
@@ -233,6 +234,7 @@ pub fn parameters(
             f32::from(flags),
         ],
         [field.spacing, field.origin.x, field.origin.z, 0.0],
+        [0.0; 4],
     ]
 }
 
@@ -348,7 +350,9 @@ mod tests {
                 kind: MaterialKind::Terrain,
                 alpha: AlphaMode::Opaque,
                 double_sided: false,
-                parameters: Some([[0.0; 4]; 3]),
+                clamp_nearest: false,
+                temp_brick_flash: false,
+                parameters: Some([[0.0; 4]; 4]),
             }],
             ..Default::default()
         };

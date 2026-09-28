@@ -7,7 +7,7 @@
 
 use crate::api::{BindEntry, BindInput};
 use crate::input::{Chord, Key, Modifiers};
-use crate::schema::{BindAtom, DefaultBind, UiData};
+use crate::schema::{BindAtom, DefaultBind, RemapEntry, UiData};
 use std::collections::BTreeMap;
 
 /// Mouse types (`defaultControlsGui`): 0 one button, 1 two button,
@@ -41,6 +41,62 @@ fn applies(b: &DefaultBind, mouse: u8, keyboard: u8, platform: Platform) -> bool
         .all(|(a, pol)| holds(a, mouse, keyboard, platform) == *pol)
 }
 
+/// A command v20 did not have. It joins the Options remap list after
+/// `after` and is bound to `key` by default.
+pub struct ExtraCommand {
+    pub after: &'static str,
+    pub name: &'static str,
+    pub command: &'static str,
+    pub key: &'static str,
+}
+
+/// Not in v20: the performance overlay and its capture sit with v20's
+/// Toggle NetGraph (F3 and Ctrl+F3 are unbound in v20).
+pub const EXTRA_COMMANDS: &[ExtraCommand] = &[
+    ExtraCommand {
+        after: "toggleNetGraph",
+        name: "Toggle Performance Overlay",
+        command: "togglePerfOverlay",
+        key: "f3",
+    },
+    ExtraCommand {
+        after: "togglePerfOverlay",
+        name: "Save Performance Capture",
+        command: "savePerfCapture",
+        key: "ctrl f3",
+    },
+];
+
+/// The Options remap list: v20's `$RemapName`/`$RemapCmd` entries with
+/// [`EXTRA_COMMANDS`] inserted after the commands they follow (a list
+/// without that command gains none).
+pub fn remap_entries(data: &UiData) -> Vec<RemapEntry> {
+    let mut list = data.remap.clone();
+    for extra in EXTRA_COMMANDS {
+        if list
+            .iter()
+            .any(|r| r.command.eq_ignore_ascii_case(extra.command))
+        {
+            continue;
+        }
+        let Some(at) = list
+            .iter()
+            .position(|r| r.command.eq_ignore_ascii_case(extra.after))
+        else {
+            continue;
+        };
+        list.insert(
+            at + 1,
+            RemapEntry {
+                division: None,
+                name: extra.name.into(),
+                command: extra.command.into(),
+            },
+        );
+    }
+    list
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemapOutcome {
     /// Bound (or already bound to this command).
@@ -69,7 +125,28 @@ impl BindMap {
                 m.bind(input, &b.command);
             }
         }
+        m.add_missing_extras(&remap_entries(data));
         m
+    }
+
+    /// Bind each [`EXTRA_COMMANDS`] entry in `remap` that has no binding to
+    /// its default key while that key is free, so saved controls from before
+    /// a command existed gain it without losing any of the player's binds.
+    pub fn add_missing_extras(&mut self, remap: &[RemapEntry]) {
+        for extra in EXTRA_COMMANDS {
+            if !remap
+                .iter()
+                .any(|r| r.command.eq_ignore_ascii_case(extra.command))
+            {
+                continue;
+            }
+            let Some(input) = BindInput::parse(crate::schema::Device::Keyboard, extra.key) else {
+                continue;
+            };
+            if self.binding_of(extra.command).is_none() && self.command_for(&input).is_none() {
+                self.bind(input, extra.command);
+            }
+        }
     }
 
     /// `GlobalActionMap` binds (console, fullscreen, help).
@@ -139,6 +216,8 @@ impl BindMap {
                     crate::input::MouseButton::Left => 1,
                     crate::input::MouseButton::Right => 2,
                     crate::input::MouseButton::Middle => 3,
+                    crate::input::MouseButton::Back => 4,
+                    crate::input::MouseButton::Forward => 5,
                 };
                 format!("MOUSE{n}")
             }

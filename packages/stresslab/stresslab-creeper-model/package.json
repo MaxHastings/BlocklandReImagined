@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "stresslab-creeper-model",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stress Lab Creeper Model",
+  "description": "The creeper's look: a boxy green body that flashes white while its fuse burns.",
+  "authors": ["Stress Lab"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "model", "id": "stresslab-creeper-model:model/creeper", "file": "models/creeper.json" }
+  ]
+}
