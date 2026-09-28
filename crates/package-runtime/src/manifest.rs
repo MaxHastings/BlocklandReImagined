@@ -50,10 +50,16 @@ pub fn location(package: &str, file: impl std::fmt::Display) -> String {
 
 impl Manifest {
     /// Parse and check a manifest. `expected` is the id `packages.json` lists
-    /// it under; the two must agree. The manifest comes back whenever its
-    /// JSON has the right shape, with every problem found, so a loader can
-    /// keep checking the package's content in the same run.
-    pub fn parse(bytes: &[u8], expected: &str) -> (Option<Self>, Vec<Diagnostic>) {
+    /// it under; the two must agree.
+    pub fn parse(bytes: &[u8], expected: &str) -> Result<Self, Vec<Diagnostic>> {
+        match Self::inspect(bytes, expected) {
+            (Some(manifest), problems) if problems.is_empty() => Ok(manifest),
+            (_, problems) => Err(problems),
+        }
+    }
+    /// Like [`Manifest::parse`], but also returns a manifest whose JSON has
+    /// the right shape despite problems, so a loader can keep checking.
+    pub fn inspect(bytes: &[u8], expected: &str) -> (Option<Self>, Vec<Diagnostic>) {
         match Self::parse_inner(bytes, expected) {
             Ok(manifest) => (Some(manifest), Vec::new()),
             Err(rejected) => *rejected,

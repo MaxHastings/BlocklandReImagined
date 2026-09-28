@@ -73,7 +73,7 @@ impl Package {
                 ],
             )
         })?;
-        let (manifest, mut out) = Manifest::parse(&manifest_bytes, &entry.id);
+        let (manifest, mut out) = Manifest::inspect(&manifest_bytes, &entry.id);
         let Some(manifest) = manifest else {
             return Err(Box::new((None, out)));
         };
