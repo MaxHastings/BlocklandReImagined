@@ -34,6 +34,23 @@ fn target(tag: u128) -> Option<TargetId> {
     }
 }
 
+/// Whether projectiles and explosion sight lines hit this collider. For a
+/// brick that is v20's Ray Casting setting, the same one tools and clicks
+/// obey; Colliding only decides whether bodies pass through. Water bricks are
+/// zones, never surfaces. Other sensors are never hit.
+fn ray_hits(simulation: &Simulation, collider: &Collider, target: TargetId) -> bool {
+    match target {
+        TargetId::Brick(id) => simulation.state().bricks.get(&id).is_some_and(|brick| {
+            brick.raycast
+                && simulation
+                    .definitions
+                    .get(brick)
+                    .is_ok_and(|d| d.special != crate::definitions::Special::Water)
+        }),
+        _ => !collider.is_sensor(),
+    }
+}
+
 impl WeaponQuery<'_> {
     /// Line of sight to a radius target through the map and bricks.
     pub fn visible(&mut self, from: Vec3, nearby: &Nearby) -> bool {
@@ -45,10 +62,11 @@ impl WeaponQuery<'_> {
         if distance < 0.000001 {
             return true;
         }
+        let simulation = self.simulation;
         let predicate = |_: ColliderHandle, collider: &Collider| {
             matches!(
                 target(collider.user_data),
-                Some(TargetId::Map(_) | TargetId::Brick(_))
+                Some(t @ (TargetId::Map(_) | TargetId::Brick(_))) if ray_hits(simulation, collider, t)
             )
         };
         let direction = delta / distance;
@@ -64,11 +82,7 @@ impl WeaponQuery<'_> {
             && self
                 .simulation
                 .physics
-                .query_pipeline_with_filter(
-                    QueryFilter::default()
-                        .exclude_sensors()
-                        .predicate(&predicate),
-                )
+                .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
                 .cast_ray(&ray, reach, true)
                 .is_none()
     }
@@ -92,10 +106,14 @@ impl Query for WeaponQuery<'_> {
             return None;
         }
         let origin = Vector::from_array(start.to_array());
+        let simulation = self.simulation;
         let predicate = |_: ColliderHandle, collider: &Collider| {
             let Some(target) = target(collider.user_data) else {
                 return false;
             };
+            if !ray_hits(simulation, collider, target) {
+                return false;
+            }
             if let TargetId::Actor(actor) = target {
                 if !filter.players || filter.world_only {
                     return false;
@@ -127,11 +145,7 @@ impl Query for WeaponQuery<'_> {
         let physical = self
             .simulation
             .physics
-            .query_pipeline_with_filter(
-                QueryFilter::default()
-                    .exclude_sensors()
-                    .predicate(&predicate),
-            )
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&predicate))
             .cast_ray_and_get_normal(&ray, distance, true)
             .and_then(|(handle, hit)| {
                 let target = target(self.simulation.physics.colliders[handle].user_data)?;
