@@ -854,7 +854,7 @@ impl Session {
         };
         ensure!(
             owner != 0 && peer.actor.trusted(brick.owner, level::BUILD),
-            "Brick edit denied"
+            "The brick's owner does not trust you enough to do that."
         );
         if let ToolAction::Inspect { mode } = action {
             // The events dialog opens from the wrench dialog of the same brick.

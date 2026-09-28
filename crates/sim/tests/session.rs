@@ -595,7 +595,7 @@ fn two_players_build_edit_and_late_join_share_authoritative_state() {
         s.edit_brick(b, id, Edit::Color(1))
         .unwrap_err()
         .to_string()
-        .contains("denied")
+        .contains("needs full trust")
     );
     assert_eq!(*s.simulation().state(), before);
     s.edit_brick(a, id, Edit::Color(1)).unwrap();

@@ -235,7 +235,12 @@ impl Authority {
     fn permission(actor: &Actor, brick: &Brick, level: u8) -> Result<()> {
         ensure!(
             actor.administrator || (actor.owner != 0 && actor.trust_level(brick.owner) >= level),
-            "Brick edit denied"
+            "{}",
+            match level {
+                trust::FULL => "That change needs full trust from the brick's owner.",
+                trust::YOU => "Only the brick's owner can do that.",
+                _ => "The brick's owner does not trust you enough to do that.",
+            }
         );
         Ok(())
     }
