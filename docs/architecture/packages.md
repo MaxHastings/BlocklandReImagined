@@ -198,6 +198,21 @@ Rules:
 - A weapon reference no loaded package satisfies drops only the image or item
   that needs it, with a diagnostic (`merge: ...`, printed by `bri-server`). It
   never refuses the whole set.
+- How an Add-On looks never stops a load, a host or a join
+  (`crate::cosmetic` in the client). Every item, image and projectile of a
+  merged weapons pack is presented: from the Add-On's own
+  `presentation.json` when it has one that matches its `weapons.json`, else
+  from the stock models and icons it names, else with no model and, in the
+  item HUD, the item's first letter (v20's `handleItemPickup` fallback). The
+  item HUD is built from the weapon list, so the two cannot disagree. A
+  missing or broken Add-On texture, model, explosion shape, vehicle model,
+  death icon or brick icon gets a stand-in and a console line naming the
+  Add-On (`bri_package::library::add_on_label`) and the file. Gameplay data
+  that cannot work (an unreadable `weapons.json` or `vehicles.json`, drop
+  bounds that do not match their weapons) still stops the load, and the
+  message the player sees names the Add-On and the file. `bri-addon-check`
+  warns (`check.weapons.presentation`) when the presentation is missing or
+  made for a different `weapons.json`.
 - A merged resource or asset records its package directory
   (`Resource::package`, `Asset::package`). Paths stay relative to their own
   package. Base packages sit directly under the content root, and

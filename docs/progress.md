@@ -3530,3 +3530,34 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   longer lists the join trust prompt as unbuilt; only elevated client code
   is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
   packaging test needs Windows (not run in the cloud).
+
+
+## 2026-09-28 Add-On presentation never blocks a join
+
+- Max could not join a server running the Duplicator: the join reloaded
+  content, the item HUD found 22 weapons against 21 presented items and
+  failed with "Item HUD catalog coverage mismatch", and the player saw only
+  "Loading the server's Add-Ons". c5115c1 fixed the Duplicator; this makes
+  the rule general. `ItemUi::new` builds a row per weapon from the weapon
+  list (letter icon when there is no art). `ItemAssets::load_with` presents
+  every Add-On item, image and projectile: its own presentation if it
+  loads, stock art it names, else no model; broken Add-On textures and
+  models become stand-ins listed in `ItemAssets::faults`. The same fallback
+  now covers Add-On vehicle models and textures, explosion shapes, death
+  icons and brick icons. The base game's packs stay strict so `--check` and
+  the gate still catch importer regressions. A join that still fails to load
+  the server's Add-Ons shows the player the Add-On and file.
+  `bri-addon-check` warns when an Add-On's item presentation is missing or
+  stale.
+- Tests: `crates/client/tests/add_on_fallbacks.rs` (content-free) hosts four
+  broken Add-Ons over loopback, a clean client downloads them and loads the
+  item art and HUD; `add_on_join.rs`
+  `a_guest_joins_a_host_running_every_repository_add_on` (needs content,
+  runs in the gate) hosts every Add-On under `packages/` and joins with a
+  base-only guest. Evidence: `cargo test -p bri-client --lib --test
+  add_on_fallbacks`, `-p bri-package -p bri-package-runtime`, `-p bri-net
+  --lib --test package_sync` green; clippy -D warnings on those crates. The
+  content test was not run in the cloud (no generated content).
+- Seen once in four runs, unrelated: `package_sync`
+  `downloads_reach_only_offered_files` failed its "does not offer package
+  downloads" assertion (line 158); it passed alone and three times in full.

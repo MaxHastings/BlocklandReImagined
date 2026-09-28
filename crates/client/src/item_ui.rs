@@ -1,5 +1,5 @@
 //! Immutable native item names/icons for the HUD. No gameplay authority.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use bri_render::scene::SceneImage;
 use bri_ui::api::{IconRef, ToolInfo};
 use std::collections::BTreeMap;
@@ -11,27 +11,25 @@ pub struct ItemUi {
     uploaded: bool,
 }
 impl ItemUi {
+    /// One HUD row per weapon item in `names`, the game's item list. The
+    /// rows come from that list, never from the presentation, so the two
+    /// cannot disagree: an item without art of its own shows its first
+    /// letter in white, as v20's `handleItemPickup` does.
     pub fn new(
         assets: &crate::items::ItemAssets,
         names: &[(String, String)],
         ui_pack: &bri_ui::pack::Pack,
     ) -> Result<Self> {
-        ensure!(
-            names.len() <= 1024 && names.len() == assets.presentation.items.len(),
-            "Item HUD catalog coverage mismatch"
-        );
+        ensure!(names.len() <= 1024, "Item HUD catalog budget exceeded");
         let mut catalog = BTreeMap::new();
         let mut icons = BTreeMap::new();
         // Native stable-ID ordering makes resource IDs independent of display sorting.
         let ordered: BTreeMap<_, _> = names.iter().cloned().collect();
         ensure!(ordered.len() == names.len(), "Duplicate HUD item ID");
         for (index, (id, name)) in ordered.into_iter().enumerate() {
-            let item = assets
-                .presentation
-                .items
-                .get(&id)
-                .context("Missing native HUD item")?;
-            let icon = if let Some(image) = assets.icon(&id)? {
+            let item = assets.presentation.items.get(&id);
+            let image = item.and_then(|_| assets.icon(&id).ok().flatten());
+            let icon = if let Some(image) = image {
                 let key = ICON_BASE + index as u64;
                 icons.insert(key, image.clone());
                 IconRef::External(key)
@@ -55,7 +53,9 @@ impl ItemUi {
                     IconRef::None
                 }
             };
-            let tint = item.tint.map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
+            let tint = item
+                .map_or([1.; 4], |item| item.tint)
+                .map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
             catalog.insert(
                 id.clone(),
                 ToolInfo {

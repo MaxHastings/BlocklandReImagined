@@ -3389,7 +3389,7 @@ impl App {
         if failed.is_none() && a.worker.events.is_closed() {
             failed = Some("Connection worker stopped".into());
         }
-        if let Some(reason) = failed {
+        if let Some(mut reason) = failed {
             // A joined remote game whose network dropped is rejoined
             // automatically a few times; the host gives the player their
             // owner number, and so their bricks, back.
@@ -3415,7 +3415,11 @@ impl App {
                     .and_then(|()| self.join(id, a.name.clone(), String::new()));
                 match rejoined {
                     Ok(()) => return Ok(()),
-                    Err(error) => bri_console::warn(format!("Joining with the server's Add-Ons: {error:#}")),
+                    // The player reads which Add-On and file stopped it.
+                    Err(error) => {
+                        reason = format!("Could not load the server's Add-Ons: {error:#}");
+                        bri_console::warn(&reason);
+                    }
                 }
             }
             if a.identity_changed.load(std::sync::atomic::Ordering::Relaxed) {

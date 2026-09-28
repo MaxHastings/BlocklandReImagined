@@ -83,8 +83,9 @@ impl WeaponContent {
         let mut total = bytes.len() as u64;
         let mut parts = Vec::new();
         for (dir, abs) in extras {
-            let abs = abs.canonicalize()?;
-            let (manifest, part_bytes, part) = read_weapons(&abs)?;
+            let add_on = || format!("Add-On {}: weapons.json", bri_package::library::add_on_label(abs, dir));
+            let abs = abs.canonicalize().with_context(add_on)?;
+            let (manifest, part_bytes, part) = read_weapons(&abs).with_context(add_on)?;
             let key = format!("{dir}/weapons.json");
             expected.insert(key.clone(), format!("{:x}", Sha256::digest(&part_bytes)));
             files.insert(key, manifest);
@@ -287,13 +288,15 @@ impl ItemPhysicsContent {
                     && physics.schema_version == 1
                     && manifest.weapons_sha256 == format!("{:x}", Sha256::digest(&weapons_bytes))
                     && manifest.item_physics_sha256 == format!("{:x}", Sha256::digest(&physics_bytes)),
-                "{dir}: item physics does not match its weapons pack"
+                "Add-On {}: item-physics.json does not match weapons.json; run the Add-On importer again",
+                bri_package::library::add_on_label(&abs, dir)
             );
             for (id, bounds) in physics.items {
                 bounds.validate()?;
                 ensure!(
                     weapons.pack.items.contains_key(&id) && !content.bounds.contains_key(&id),
-                    "{dir}: item physics for unknown or already bound item {id}"
+                    "Add-On {}: item-physics.json has bounds for unknown or already bound item {id}",
+                    bri_package::library::add_on_label(&abs, dir)
                 );
                 content.bounds.insert(id, bounds);
             }
