@@ -40,8 +40,40 @@ impl BrickBlast {
 
 impl Session {
     /// `killBrick`: remove the brick for good and throw its debris. The
-    /// hammer and Destructo Wand come through here.
+    /// hammer, both wands and undo come through here. Like v20, every brick
+    /// left with no path to the ground dies with it (the chain kill); the
+    /// hammer never gets here with such a brick.
     pub(super) fn kill_brick(
+        &mut self,
+        actor: &Actor,
+        brick: BrickId,
+        blast: BrickBlast,
+    ) -> Result<()> {
+        let stranded = self.simulation.stranded_by(brick)?;
+        self.kill_one_brick(actor, brick, blast)?;
+        // The engine kills these, whoever owns them.
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        for id in stranded {
+            let Some(b) = self.simulation.state().bricks.get(&id) else {
+                continue;
+            };
+            if self.simulation.definitions.get(b)?.indestructible {
+                continue;
+            }
+            let cue = self.brick_kill_cue(id, BrickBlast::pop(Vec3::from(b.position)))?;
+            self.simulation.remove(&engine, id)?;
+            self.dirty.insert(id);
+            self.events.respawns.remove(&id);
+            self.emit_brick_kill(cue);
+        }
+        Ok(())
+    }
+    /// Remove one brick and throw its debris, without the chain kill. Package
+    /// voxel worlds remove their own voxels one at a time and record each.
+    pub(super) fn kill_one_brick(
         &mut self,
         actor: &Actor,
         brick: BrickId,

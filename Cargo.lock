@@ -385,6 +385,7 @@ dependencies = [
  "bri-package",
  "bri-package-runtime",
  "bri-physics",
+ "bri-progress",
  "bri-render",
  "bri-sim",
  "bri-ui",

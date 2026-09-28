@@ -700,11 +700,13 @@ pub enum ConnectionState {
     Idle,
     /// Waiting for the server ("Connecting to Local Host…").
     Connecting { text: String },
-    /// Mission download: phase text as v20 shows it and progress 0..1.
+    /// Loading a mission: what is happening, in v20's upper-case
+    /// `LoadingProgressTxt` style (`bri_progress::Snapshot::status`), and the
+    /// current stage's progress 0..1.
     Loading {
         map: String,
         preview: IconRef,
-        phase: LoadPhase,
+        status: String,
         progress: f32,
     },
     InGame {
@@ -716,14 +718,6 @@ pub enum ConnectionState {
     },
     /// Connection failed or was dropped; shown in a message box.
     Failed { reason: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LoadPhase {
-    WaitingForServer,
-    LoadingObjects,
-    LightingMission,
-    Ghosting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

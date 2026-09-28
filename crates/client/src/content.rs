@@ -1182,3 +1182,49 @@ mod tests {
         .unwrap();
     }
 }
+
+#[cfg(test)]
+mod tutorial_hammer {
+    use super::*;
+    /// The Tutorial's walls must come down with the hammer alone, top first,
+    /// as in v20: every layout brick eventually stops holding others up.
+    #[test]
+    #[ignore = "requires generated native content; CPU only"]
+    fn every_tutorial_brick_can_be_hammered_top_down() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let content = ClientContent::load(&root).unwrap();
+        let map = "v20/add-ons/map_tutorial/tutorial.mis";
+        let tutorial = content.load_map(map, None).unwrap().tutorial.unwrap();
+        for world in [tutorial.part1, tutorial.part2] {
+            let mut sim = content.load_map(map, None).unwrap().simulation;
+            let actor = bri_world::authority::Actor {
+                owner: 1,
+                administrator: true,
+                ..Default::default()
+            };
+            let build = bri_world::build::SavedBuild {
+                schema_version: bri_world::build::BUILD_SCHEMA,
+                world,
+            };
+            let plan =
+                bri_world::build::LoadPlan::prepare(sim.state(), build, 1, false, 2).unwrap();
+            sim.load_build(&actor, plan).unwrap();
+            loop {
+                let ids: Vec<_> = sim.state().bricks.keys().copied().collect();
+                let free = ids
+                    .iter()
+                    .copied()
+                    .find(|&id| !sim.will_cause_chain_kill(id).unwrap());
+                let Some(free) = free else {
+                    let stuck: Vec<_> = ids
+                        .iter()
+                        .map(|id| (*id, sim.state().bricks[id].position))
+                        .collect();
+                    assert!(stuck.is_empty(), "never hammerable: {stuck:?}");
+                    break;
+                };
+                sim.remove(&actor, free).unwrap();
+            }
+        }
+    }
+}

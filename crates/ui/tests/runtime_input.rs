@@ -247,7 +247,7 @@ fn focus_loss_and_loading_cancel_never_leave_held_controls() {
     u.apply(UiUpdate::Connection(ConnectionState::Loading {
         map: "Bedroom".into(),
         preview: IconRef::None,
-        phase: LoadPhase::Ghosting,
+        status: "RECEIVING WORLD".into(),
         progress: 0.5,
     }));
     down(&mut u, Key::Letter('w'));
@@ -537,7 +537,7 @@ fn pending_direct_join_cancel_emits_transport_cancellation() {
         UiUpdate::Connection(ConnectionState::Loading {
             map: "stale".into(),
             preview: IconRef::None,
-            phase: LoadPhase::Ghosting,
+            status: "RECEIVING WORLD".into(),
             progress: 1.0
         })
     ));

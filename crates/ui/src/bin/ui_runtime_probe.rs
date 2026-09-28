@@ -247,7 +247,7 @@ fn main() -> Result<()> {
         ui.apply(UiUpdate::Connection(ConnectionState::Loading {
             map: "Bedroom".into(),
             preview: IconRef::None,
-            phase: LoadPhase::Ghosting,
+            status: "RECEIVING WORLD".into(),
             progress: 0.6,
         }));
         render(&ui, "loading", &mut renderer, &mut report)?;

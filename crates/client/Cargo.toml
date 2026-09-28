@@ -23,6 +23,7 @@ bri-vehicles = { path = "../vehicles" }
 bri-identity = { path = "../identity" }
 bri-net = { path = "../net" }
 bri-crash = { path = "../crash" }
+bri-progress = { path = "../progress" }
 bri-render = { path = "../render" }
 bri-ui = { path = "../ui" }
 bri-console = { path = "../console" }
