@@ -634,6 +634,18 @@ impl Session {
             })
             .collect()
     }
+    /// The one writer of a player's administrator flag: the actor that
+    /// guards bricks and commands and the minigame roster read the same role.
+    pub(crate) fn set_role(&mut self, owner: OwnerId, administrator: bool) -> Result<()> {
+        let peer = self
+            .peers
+            .get_mut(&owner)
+            .context("Administration target is not in the session")?;
+        peer.actor.administrator = administrator;
+        self.minigames
+            .set_admin(peer.combat.player, administrator)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
     pub fn is_administrator(&self, owner: OwnerId) -> bool {
         self.peers
             .get(&owner)

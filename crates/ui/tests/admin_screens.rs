@@ -438,3 +438,45 @@ fn confirming_change_map_closes_the_map_and_admin_menus() {
         assert!(!stack.contains(&id), "{id:?} stays open: {stack:?}");
     }
 }
+
+#[test]
+fn logging_in_or_out_updates_every_admin_check() {
+    use bri_ui::{
+        api::{ConnectionState, Settings, UiUpdate},
+        binds::Platform,
+        pack::Pack,
+        schema::UiPack,
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(UiPack::default(), PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        Settings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: false,
+    }));
+    assert!(!ui.core.is_admin());
+    // Load Bricks and the admin window read the same live role.
+    ui.core
+        .admin
+        .apply(AdminUpdate::State(state(AdminRole::Admin, false)))
+        .unwrap();
+    assert!(ui.core.is_admin());
+    let mut demoted = state(AdminRole::Player, false);
+    demoted.revision = 2;
+    ui.core.admin.apply(AdminUpdate::State(demoted)).unwrap();
+    assert!(!ui.core.is_admin());
+}

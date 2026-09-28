@@ -483,7 +483,12 @@ impl Core {
     pub fn is_local(&self) -> bool {
         matches!(self.conn, ConnectionState::InGame { local: true, .. })
     }
+    /// The live administrator snapshot decides once it has arrived; the flag
+    /// copied at entry only covers the moments before it.
     pub fn is_admin(&self) -> bool {
+        if self.admin.snapshot.is_some() {
+            return self.admin.is_admin();
+        }
         matches!(
             self.conn,
             ConnectionState::InGame { admin: true, .. }

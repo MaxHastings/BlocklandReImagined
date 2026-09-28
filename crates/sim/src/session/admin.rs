@@ -394,12 +394,7 @@ impl AdminRuntime {
                         .connection_to_owner
                         .get(&target)
                         .context("Administration role target is no longer connected")?;
-                    session
-                        .peers
-                        .get_mut(&target_owner)
-                        .context("Administration target is not in the session")?
-                        .actor
-                        .administrator = role.is_admin();
+                    session.set_role(target_owner, role.is_admin())?;
                     changed = true;
                 }
                 Effect::PasswordChange { slot, password } => {

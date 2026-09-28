@@ -438,7 +438,8 @@ join and map change only. The UI's flag is copied on entry
 (`app.rs:2963`, `crates/ui/src/ui.rs:480-486`) while the admin window reads a
 live snapshot (`ui.rs:278`).
 **Player sees:** after logging in as admin, Load Bricks still says it needs
-admin, and admin instant respawn doesn't apply; a de-admined player keeps both.
+admin; a de-admined player keeps it. (The minigame copy only feeds an
+instant-respawn bypass that the session's own 120-tick minimum overrides.)
 **Rule:** one role, every view derived from it.
 
 ### 25. Two hosts, built separately (sev 3, M–L)
