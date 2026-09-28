@@ -7,8 +7,12 @@ linked docs are the evidence. Where sources disagreed, a note says which one
 this page followed.
 
 Main is `f95d273` (protocol 36). Max played a14, built from `84f9ac9`
-(`dist\BlocklandReImagined-alpha-2026-09-28-a14` on his PC). a15 is being
-built from `f95d273`.
+(`dist\BlocklandReImagined-alpha-2026-09-28-a14` on his PC). The current
+build is a15, from `f95d273`:
+`C:\Users\Maxwell\Desktop\Games\BlocklandReImagined\dist\BlocklandReImagined-alpha-2026-09-28-a15`,
+`--version` "2026-09-28-a15 (f95d2736d)". Package verification passed on
+3260 files, `--check` passed, and the full release smoke passed, including
+the loopback join.
 
 ## What this is
 
@@ -24,8 +28,8 @@ in engine crates. One rule per concept, with no opt-in lists for properties
 that should be universal. See
 [architecture/platform-principles.md](architecture/platform-principles.md).
 
-Current phase: feature freeze. Max's playtest of a15 matters most; work until
-then is bugs, first impressions, robustness, and modder docs.
+There is no feature freeze. One was suggested overnight, but Max never agreed
+to it. Max's playtest of a15 matters most.
 
 ## Decisions already made
 
@@ -67,7 +71,7 @@ home until then.
 | 2 | A modder gets from zero to an Add-On with the guide; v20 imports work | Partly. The rewritten guide is on main. Night QA imported a v20 weapon with the button and a brick pack with `bri-import-addon.exe`, and played both in a hosted game. Not covered: a guest joining a host that runs imported Add-Ons. |
 | 3 | Reported bugs fixed; the gate has zero known failures | Partly. `tools/gate-known-failures.toml` lists no failures, only tests the gate can't run. Night-QA findings A to E below are still open. |
 | 4 | A 1 h multi-player soak with save and reload | **Done.** Four players for 3608 s on Slate over LAN: no disconnects, every save and reload exact, 120 Hz held, 694 to 726 MB, zero warnings. The night-QA doc counts 4 of 4 reloads; the coordinator's note says 5. |
-| 5 | A home test, then a small group playtest | Max started on a14; a15 is next. |
+| 5 | A home test, then a small group playtest | Max started on a14; a15 is ready. |
 
 ### First-impressions items
 
@@ -147,7 +151,7 @@ a14 carries all of this (main `84f9ac9`):
 - Draining the stderr tee can no longer hang the exit (`7a3d604`); it held
   the gate lock this morning until Max stopped it.
 
-Not revived yet: `revive/chat-emotes` and `revive/admin-orb` (not on main).
+Coming back for a16: `revive/chat-emotes` and `revive/admin-orb`.
 
 ## Open findings
 
@@ -196,7 +200,7 @@ Connect to IP.
   in [audits/engine-foundations.md](audits/engine-foundations.md).
 - **Stress campaign next steps.** Block faces in the renderer, a saturation
   round, predicted driven entities, animated box models (see
-  [stress-lab/HANDOFF.md](stress-lab/HANDOFF.md)). Held by the freeze.
+  [stress-lab/HANDOFF.md](stress-lab/HANDOFF.md)). Not started.
 - **`revive/visual-compare`.** It drives v20 itself, so only with Max's OK.
 - **`revive/docs-drift`, `revive/creature-notes`.** Not revived.
 - **An easy script tier (for example Rhai) for modders.** Suggested as an
