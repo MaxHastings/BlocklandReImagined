@@ -642,11 +642,10 @@ impl Session {
         self.notify(owner, Notice::Center { text, seconds: 1.0 });
     }
 
-    /// A tool destroying a brick (`killBrick`): debris pops away from the hit.
+    /// A tool destroying a brick (`killBrick`): it falls through the world.
     pub(super) fn tool_kill_brick(&mut self, owner: OwnerId, id: BrickId) -> Result<()> {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
-        let center = Vec3::from(self.simulation.state().bricks[&id].position);
-        self.kill_brick(&actor, id, super::debris::BrickBlast::pop(center))?;
+        self.kill_brick(&actor, id)?;
         self.close_inspections(id);
         Ok(())
     }

@@ -4643,3 +4643,38 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
+
+## 2026-09-28 Hammered and wanded bricks fall through the world (branch `claude/tool-kill-feel`)
+
+Max: tool-broken bricks stayed as colliding debris that took a while to get
+out of the way; in v20 they fell through the ground and faded quickly,
+unlike bricks knocked out in a minigame. `blocklandv20.exe` confirms two
+paths (details and addresses in
+[audits/brick-damage.md](audits/brick-damage.md#how-a-dying-brick-looks-2026-09-28-branch-claudetool-kill-feel)):
+`killBrick` throws the brick up at 8 units/s, spins it, lets it fall with
+no collision (16 t^2) and fades it after 0.5 s at rate 3/s; brick
+explosions are physics bodies. The `BrickKill` cue now carries
+`BrickDeath::{Kill, Blast}`, chosen on the server by cause, and
+`BrickDebris` draws kills as closed-form falling bricks (no Rapier body,
+the same on every client and frame rate, independent of Physics Quality as
+in v20) and blasts as before. Wire change: `CueKind::BrickKill` gained a
+field, so old and new builds must refuse each other (protocol number left
+for Gate). Debris model instance capacity is now `3 * MAX_LIMIT` so bodies,
+ghosts and falling bricks of one look fit.
+
+Measured headless, host and joiner alike: hammer/wand bricks were solid
+4.98 s and within 2 units of their spot 4.88 s; now never solid, clear in
+0.55 s, invisible (alpha 0.05) at 1.48 s. Minigame rocket debris unchanged.
+Evidence: `cargo test -p bri-client --test tool_kill_feel -- --ignored
+--nocapture`, `cargo test -p bri-client --lib -- brick_debris audio
+--include-ignored` (16 passed; new `a_tool_kill_hops_spins_and_falls_through_everything_as_it_fades`,
+`tool_kills_fall_the_same_on_every_client_and_frame_rate_whatever_the_limit`),
+`cargo test -p bri-sim --test tools --test brick_damage -- --include-ignored`,
+`--test blocks --test packages --test hardening_packages --test
+hardening_session --test session --test duplicator`, clippy on bri-sim and
+bri-client all targets. Not seen in a window: Max's playtest.
+
+Left for the entity-perf lane (not changed here): with Physics Quality Off,
+v20 still draws blasted bricks falling ballistically, while ours throws
+nothing; v20 evicts old physics bricks into a ballistic fall that fades
+after 0-0.5 s (0x5338c0) where ours drifts linearly for 0.35 s.
