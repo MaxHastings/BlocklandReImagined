@@ -2,7 +2,7 @@
 
 `bri-net` runs the same `bri-sim::Session` used by local headless tests. Quinn
 provides QUIC with a reliable ordered control stream and unreliable movement/
-pose datagrams. This is implemented backend networking, not a finished join UI.
+pose datagrams.
 The runtime dependency graph contains no Torque readers.
 
 ## Authority and replication
@@ -13,10 +13,11 @@ The runtime dependency graph contains no Torque readers.
   membership, duplicate item IDs and invalid selected slots reject a delta
   before world mutation. It also replicates mounted image/state, projectiles and
   dropped-item views, with reliable sound/effect/animation/shell cues. Native
-  Gun firing and projectile late join are tested through real QUIC. Rendering
-  those item views and full inventory HUD reconciliation remain integration work.
-  Runtime content identity8 includes native weapon definitions/resource bytes;
-  item presentation pack hashing will extend this separately.
+  Gun firing and projectile late join are tested through real QUIC. The client
+  draws held, dropped and projectile items (`crates/client/src/world_items.rs`)
+  and shows tool names/icons in the HUD (`crates/client/src/item_ui.rs`).
+  Runtime content identity 8 includes native weapon definitions/resource bytes;
+  identity 9 adds the item presentation pack.
 - The host assigns owner IDs. Commands cannot supply positions for the player,
   privileges or owner identities. Build transforms remain validated against
   authoritative reach, geometry, support and permissions.
@@ -68,12 +69,15 @@ The runtime dependency graph contains no Torque readers.
   Remote pose history ignores older ticks and interpolates yaw across its seam.
 - Local prediction reuses the player motor, retains at most240 unacknowledged
   inputs, restores an authoritative pose including jump-edge state, then replays
-  pending inputs. It does not advance unrelated dynamic bodies. Wiring this into
-  the windowed client, collision updates and visual correction is still required.
+  pending inputs. It does not advance unrelated dynamic bodies. The windowed
+  client runs it against a mirrored collision world and blends out visual
+  corrections (`crates/client/src/motion.rs`).
 - TLS verifies an explicitly supplied host certificate. Random 256-bit reconnect
   credentials resume an existing owner; old numeric Blockland IDs confer no
-  authority. Server lookup stores credential hashes. Credentials and certificates
-  currently last for one server process; restart persistence remains required.
+  authority. Server lookup stores credential hashes. Resume credentials last for
+  one server process. A host can keep a persistent certificate, and a world's
+  owner table maps each player's durable principal to their owner number, so
+  ownership survives a restart.
 - Limits:64 peers, bounded channels, 64 KiB Hello, 16 MiB compressed frames,
   128 MiB decoded frames and bounded zstd window. These are working limits, not
   proven maximum-load capacity.
@@ -170,8 +174,9 @@ paths on disk do not contribute to the digest. The dedicated host installs the
 same print/light/emitter tool catalog as the client-hosted server, including the
 original Letters/A default. `fingerprint_runtime` adds the avatar rig, customization
 tables and every declared face/decal/surface image in a V3 domain, checking hashes.
-This does not yet include complete tool/UI/audio packages, dependency resolution
-or automatic content delivery. Earlier fingerprints remain for diagnostic probes.
+A joining client downloads the server's missing Add-Ons before it joins, and
+asks the player first when the download is large (`crates/net/src/client.rs`).
+Earlier fingerprints remain for diagnostic probes.
 
 ## Evidence
 
@@ -185,8 +190,9 @@ any movement datagrams; each hits its own target and leaves body aim/input
 acknowledgments unchanged. Simulation tests reject invalid aim and replay while
 preserving ownership checks.
 
-A real QUIC test submits all 4,096 event rows (565,349 bytes), verifies live
-replicas, late join and native save/reload, and rejects a 4,097-row edit atomically.
+A real QUIC test submits a full list of 1,024 event rows (`MAX_EVENTS_PER_BRICK`),
+verifies live replicas, late join and native save/reload, and rejects an
+over-limit edit atomically.
 Oversized local serialization writes no partial frame and the connection remains
 usable. A maximum escaped native event payload fits the larger command bound;
 Hello stays small. Separate transport tests exercise admission/retained permits
@@ -233,11 +239,8 @@ omit map geometry and spawn players away from the build to isolate transport;
 the separate host smoke loads the actual Bedroom map. Timings are single local
 runs, not WAN, frame-rate,64-player or platform-portability evidence.
 
-## Still required for the alpha
+## Known gaps
 
-Windowed client integration; stable host identity and restart-safe ownership;
-LAN discovery and direct-IP certificate onboarding; the UI action dispatcher;
-native content packaging; sustained mixed-player/build workloads and WAN tests.
 Action timeouts currently require client teardown/reconnect because their outcome
 can be unknown. Imported provenance is retained server-side but unsupported rows
 need an explicit UI metadata path. Full multiplayer acceptance remains unchecked.

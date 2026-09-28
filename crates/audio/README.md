@@ -5,8 +5,8 @@ Game-facing audio for Blockland ReImagined. It plays the converted vanilla pack
 Torque parameters: description volume, looping, 2D/3D, reference/max distance
 and vanilla channel. It contains no Torque readers.
 
-Status: standalone crate (own `[workspace]`), not yet wired into the client.
-The root integration patch is in `docs/research/audio/integration.md`.
+Status: a root workspace member. The client plays sounds through it
+(`crates/client/src/audio.rs`) with the `cpal-output` feature on.
 
 ## Backend
 

@@ -229,7 +229,9 @@ Slopes spawn, the centered interpretation gives floor Y=569.4233 and spawn
 Y=571.371; origin zero incorrectly leaves the spawn hundreds of units above ground.
 Native rendering, height queries and Rapier collision share checkerboard triangle
 splits and periodic borders. Height interpolation is triangular, not bilinear.
-Terrain holes/emptySquares and production streaming/LOD remain pending.
+Empty squares (holes, primary block only) apply to rendering, height queries
+and collision (`bri_content::terrain_field`). The renderer draws camera-following
+terrain tiles (`bri_render::terrain_scene`). Terrain LOD is not implemented.
 
 ```powershell
 cargo run -p bri-render --bin terrain_preview -- <native-bundle-dir> <output-dir>

@@ -227,7 +227,7 @@ corrected generic distances: wrench/printer edits use 10 units; hammer uses 5,
 or5.5 looking nearly straight down; brick activation uses 5. Player scale and
 exact muzzle offsets remain work, and spray painting requires a projectile rather
 than this generic edit command. Ordinary wrench properties now use atomic batches
-with inspection/revision checks. Item, sound and vehicle properties remain pending.
+with inspection/revision checks, including a brick's item, music and vehicle.
 Reliable actions may carry validated aim captured at dispatch; this selects the
 ray direction without changing authoritative position, motion or body orientation.
 
@@ -242,7 +242,8 @@ An in-process late join receives exact serialized state. Socket checkpoints,
 dirty-brick deltas and separately sequenced movement/poses now exist in `bri-net`.
 See `networking.md` for bounds, tests and remaining integration. Disconnect destroys
 the player body. Fresh joins get fresh owners; a valid secret can resume ownership
-within the same host process. Restart persistence and LAN discovery remain work.
+within the same host process. After a restart, a world's owner table gives a
+returning player their owner number back from their durable principal.
 Ownership enforcement on LAN deliberately modernizes stock v20's fully trusted LAN.
 
 ## Evidence and remaining acceptance
@@ -268,8 +269,4 @@ of contact. These are scripted headless physics tests, with no visible game or
 mouse/keyboard operation. That milestone passed52 tests; current whole-workspace
 evidence is recorded in `progress.md`.
 
-Still required: full windowed client integration, original animations/customization,
-tool/UI flows, original sounds/effects, terrain streaming and missing environment
-objects, mounted vehicle interaction, network integration and adversarial/load checks,
-packaging, and Maxwell's eventual interactive fidelity assessment. In particular,
-the complete movement and multiplayer acceptance boxes remain unchecked.
+Movement and multiplayer feel are judged in Maxwell's interactive playtests.

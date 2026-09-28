@@ -1,7 +1,7 @@
 # Water and weather integration evidence
 
-Water conversion, basic rendering and host player forces are integrated. Exact
-water fidelity and weather remain alpha work.
+Water conversion, basic rendering, host player forces and rain/snow are
+integrated (see `runtime-weather.md`). Exact water fidelity remains work.
 The source is the designated E: v20 installation; native scene metadata from
 map-bundle-014 preserves all authored fields without executing mission scripts.
 
@@ -49,13 +49,13 @@ the >=0.1 force threshold and >=0.9 underwater speed selection follow the family
 code. Stock speeds are 8.4/7.8/7.8. Full movement acceleration while in liquid is
 a native motor adaptation, not proved exact Torque behavior. Headless checks
 cover rising from the floor, movement/drag, density-based floating equilibrium
-and force removal after leaving water. Client prediction still needs these inputs
-when prediction is integrated. No visible playtest or feel acceptance is claimed.
+and force removal after leaving water. Client prediction uses the same liquid
+regions (`bri_sim::prediction`). No visible playtest or feel acceptance is claimed.
 
 Vehicles expose a host-supplied surface-height callback in native Y-up space;
-the vehicle module does not parse WaterBlock declarations. Root still needs to
-connect vehicle forces, projectile crossings/splashes, gameplay liquid events and
-underwater audio/visual transitions to the shared native environment.
+the vehicle module does not parse WaterBlock declarations. The host session
+passes the simulation's liquid regions to vehicle physics each step. Water
+entry, exit and splash cues play sounds in the client.
 
 Bundle 012 was rejected because Tutorial names a nonexistent reflection texture
 while its reflection intensity is zero. Disabled reflections now need no image;
@@ -82,7 +82,7 @@ Pinned OpenMBU precipitation.cpp at commit
 many matching placement fields, but some properties moved from datablock to
 instance. Treat it as engine-family evidence, not exact Blockland behavior.
 
-Required implementation includes camera-local rain/snow volumes, original textures,
+`bri-weather` implements camera-local rain/snow volumes, original textures,
 bounded drop work, collision/roof occlusion, authored turbulence/speed/size and
 settings. Generic particle emitters alone do not establish weather fidelity.
 

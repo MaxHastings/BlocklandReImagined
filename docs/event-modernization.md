@@ -5,7 +5,7 @@ quality-of-life requirements to the complete vanilla alpha. The reference editor
 and event vocabulary remain recognizable. The native implementation should not
 reproduce restrictions that made elaborate multiplayer creations impractical.
 
-## Required before the alpha handoff
+## Requirements
 
 - Support substantially more than 100 events on a brick through editing,
   validation, transport, execution and save/reload. A larger array alone is not
@@ -43,9 +43,8 @@ Avoid unlimited-performance claims. Parties, progression, quests, boss encounter
 and an open-world RPG are motivating future modes, not an added requirement to
 ship an RPG inside this alpha. Expose stable entity/event interfaces and make
 bottlenecks diagnosable so those modes can be built later without replacing the
-core. Modding support and modding decisions are explicitly outside the alpha;
-Maxwell will revisit them after the vanilla base is satisfactory. Do not select
-a scripting language or build a plugin API as part of this work.
+core. Mod gameplay runs through the package runtime, not through brick events
+(see `architecture/package-runtime.md`).
 
 Support authored fade-out/despawn as an effects capability: visual opacity and
 entity lifetime/collision are separate decisions, replicated consistently. Keep
@@ -55,17 +54,13 @@ to be designed alongside player/bot effects rather than hardcoded into all death
 
 ## Current implementation versus this requirement
 
-The native per-brick admission bound is now 4,096 events. A full 4,096-row list
-passes validation/save/reload and ordered zero-delay execution; an over-limit
-edit rejects atomically. Practical editor/transport/load coverage and configurable
-execution budgets remain required. This is not unlimited event execution.
+The native per-brick admission bound is 1,024 events (`MAX_EVENTS_PER_BRICK` in
+`bri-world`). A full list passes validation, transport, save/reload and ordered
+zero-delay execution; an over-limit edit rejects atomically.
 
-The present event runtime only supports activation/touch and a small set of brick
-property outputs. Relays, bots, cancellation, fair execution budgets and event
-profiling are not yet implemented. It uses stable due-tick/order sorting at
-120 Hz and executes zero-delay simple property writes on the next event phase,
-without an artificial 33 ms delay. That is a foundation, not proof of zero-delay
-relay semantics or scalability. Its whole-world named-target scans and global
-queue bounds must be revisited as the complete vanilla event set is implemented.
-
-This document adds requirements; it does not waive any original fidelity work.
+`bri-events` runs the vanilla catalog (16 inputs, 65 outputs), including relays,
+named targets and `cancelEvents`. It uses a nonrecursive work queue with
+per-origin and global budgets, stable due-tick/order sorting at 120 Hz and loop
+demotion for runaway zero-delay chains, without an artificial 33 ms delay per
+hop. See `crates/events/README.md`. The host session runs it with default
+limits. The event runtime has no profiling yet.

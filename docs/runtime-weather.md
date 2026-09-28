@@ -20,7 +20,7 @@ boundary when their client geometry is integrated.
 Original atlas textures draw through the existing host color/depth pass after
 geometry and before UI. Weather does not own physics or a second GPU device.
 Its definitions, authored values and checksum-validated PNG bytes participate in
-runtime content identity v6 on local host, remote join and the dedicated server.
+runtime content identity on local host, remote join and the dedicated server.
 
 Evidence: release app_flow tests host Storm, Slopes and Bedroom through actual
 App/Worker/QUIC paths, render offscreen, toggle settings and disconnect. With the
