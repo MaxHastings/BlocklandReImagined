@@ -638,6 +638,14 @@ impl WeaponsWorld {
     pub fn contains_item(&self, item: &str) -> bool {
         self.pack.items.contains_key(item) || CORE_TOOLS.contains(&item)
     }
+    /// Every item [`Self::contains_item`] accepts.
+    pub fn item_ids(&self) -> impl Iterator<Item = &str> {
+        let pack = self.pack.items.keys().map(String::as_str);
+        let core = CORE_TOOLS
+            .into_iter()
+            .filter(|id| !self.pack.items.contains_key(*id));
+        pack.chain(core)
+    }
     pub fn equip(&mut self, id: ActorId, slot: Option<usize>) -> Result<()> {
         ensure!(
             self.events.len() < 8192,

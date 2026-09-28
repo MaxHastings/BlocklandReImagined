@@ -4390,6 +4390,43 @@ clippy on the four crates. An offscreen render of Load Bricks shows the
 button fitting beside the ownership box. Not seen in a window: Max's
 playtest of dropping saves in and loading them.
 
+## 2026-09-28 Duplicator chat commands and item bounds for every item (branch `claude/duplicator-cmd`)
+
+Max, on a21: `/duplicator` did not pull the Duplicator out, and setting a
+brick's wrench item to the Duplicator was refused with "Missing authored
+item bounds: duplicator-tool:weapon/duplicator".
+
+- Reference: the archived v20 Duplicator Add-On (`Tool_Duplicator.zip`, by
+  Plornt; not in the v20 reference install) registers `serverCmdDuplorcator`,
+  `serverCmdDup` and (packaged) `serverCmdDuplicator`, with no permission
+  check: each mounts `DuplorcatorImage` on the player without a tool slot.
+  Its "Admin Only" pref (off by default) gates planting, not pulling it out.
+- Our Add-On already declared `/dup` and `/duplicator` (anyone may use).
+  It now declares `/duplorcator` too. What stopped Max: ours lives in a tool
+  slot, and with all five full `give_item` failed ("Inventory full").
+  `Session::give_tool` with equip now puts the tool in hand (else the last)
+  down on the ground to make room, so the command works whatever the player
+  carries, as v20's slotless mount did, without losing an item.
+- Item bounds, the general path: only the base weapons package ships item
+  physics, so an Add-On item without an importer-made `item-physics.json`
+  had none on the host. That refused wrench item spawns, build loads holding
+  the item, drops of it (`Item physics catalog is not installed`), and
+  pickups of a dropped one (no contact box). Two layers now:
+  `ItemPhysicsContent::load_with` gives such an item its stock model's
+  bounds (the Duplicator's `wand.dts`, as its presentation already borrows
+  that model), else `ItemBounds::FALLBACK` (half a unit each way); and
+  `Session::set_item_bounds` gives every item the server has
+  (`WeaponsWorld::item_ids`, core tools included) the fallback when its
+  content gave none. Unknown items are still refused.
+
+Evidence: `cargo test -p bri-sim` (new
+`slash_duplorcator_pulls_the_duplicator_out_with_every_slot_full`);
+`cargo test -p bri-net`; `cargo test -p bri-weapons --lib`;
+`cargo test -p bri-client --test add_on_fallbacks` (every Add-On weapon has
+bounds, a stock model lends its box, an artless item gets the fallback, and
+the wrench's item-spawn edit for it validates); clippy on weapons, sim and
+net. Not seen in a window: Max's playtest of `/duplicator` with full slots
+and a wrench item spawn of the Duplicator.
 ## 2026-09-28 Guests hammer their own spawn bricks (branch `claude/project-thread-7p7umh`)
 
 Playtest a20 (5b476a991): an Internet guest placed a vehicle spawn, set it to
