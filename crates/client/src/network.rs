@@ -45,6 +45,10 @@ pub struct View {
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     pub rtt_ms: u32,
+    /// Entities of the server's packages.
+    pub entities: Arc<BTreeMap<u64, bri_sim::session::EntityInfo>>,
+    /// Public state of the server's packages.
+    pub package_state: Arc<bri_sim::session::PackageStateView>,
 }
 /// Brick ids each replica world revision changed, so consumers can update in
 /// proportion to a change instead of comparing every brick. Bounded: a
@@ -239,6 +243,8 @@ fn publish(
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         rtt_ms: client.rtt().as_millis().min(u128::from(u32::MAX)) as u32,
+        entities: Arc::new(client.replica.entities.clone()),
+        package_state: Arc::new(client.replica.package_state.clone()),
     }));
 }
 async fn run(

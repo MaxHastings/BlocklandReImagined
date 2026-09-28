@@ -14,6 +14,8 @@ bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-events = { path = "../events" }
 bri-weapons = { path = "../weapons" }
+bri-package = { path = "../package" }
+bri-package-runtime = { path = "../package-runtime" }
 bri-sim = { path = "../sim" }
 bri-admin.workspace = true
 bri-minigames = { path = "../minigames" }

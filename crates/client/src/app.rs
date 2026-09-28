@@ -236,6 +236,9 @@ pub struct App {
     /// Killed-brick debris (v20 brick explosions) and its GPU models.
     brick_debris: crate::brick_debris::BrickDebris,
     debris_models: crate::brick_debris::DebrisModels,
+    /// Client-side mod packages (HUD panels, models) from `packages.json`.
+    package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
+    package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
     /// Non-rendering bricks, drawn only while a building tool is out, and
     /// whether the uploaded scene is the shown one (None: stale).
@@ -347,6 +350,23 @@ impl App {
             self.combat.sitting.insert(*actor);
         }
         self.audio.cue(&cue);
+        // The engine explosion operation looks like v20's rocket blast.
+        let cue = match &cue.kind {
+            bri_sim::presentation::CueKind::Explosion { radius, .. } => bri_sim::presentation::Cue {
+                kind: bri_sim::presentation::CueKind::WeaponEffect {
+                    source: bri_weapons::TargetId::Map(0),
+                    definition: "rocketexplosion".into(),
+                    node: String::new(),
+                    seconds: 0.,
+                    image: None,
+                    hand: None,
+                    direction: None,
+                    scale: (radius / 4.).clamp(0.5, 3.),
+                },
+                ..cue
+            },
+            _ => cue,
+        };
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
         if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
@@ -723,6 +743,13 @@ impl App {
         let absolute_state_dir = std::path::absolute(state_dir)?;
         let state_dir = absolute_state_dir.as_path();
         let content = ClientContent::load(content_root)?;
+        let package_catalog = {
+            let (catalog, problems) = crate::packages::load(&content.paths.root);
+            for problem in problems {
+                eprintln!("Package problem: {problem}");
+            }
+            catalog
+        };
         let foliage = crate::foliage::ClientFoliage::load(&content.paths.foliage)?;
         let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
         let effects = crate::effects::WorldEffects::new(effects_pack.clone(), Default::default())?;
@@ -869,6 +896,8 @@ impl App {
             weapon_cue_drops: 0,
             brick_debris: Default::default(),
             debris_models: Default::default(),
+            package_catalog,
+            package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_gpu: None,
             hidden_uploaded: None,
@@ -1001,6 +1030,7 @@ impl App {
         self.weapon_cue_drops = 0;
         self.brick_debris.clear();
         self.debris_models.clear();
+        self.package_models.clear();
         self.brick_kills.clear();
         self.hidden_gpu = None;
         self.hidden_uploaded = None;
@@ -4031,6 +4061,21 @@ impl PlatformApp for App {
                     }
                     result
                 }
+                UiAction::Game(GameAction::Package {
+                    ref package,
+                    ref command,
+                }) => {
+                    let request = Command::Package(bri_sim::session::PackageCommand {
+                        package: package.clone(),
+                        command: command.clone(),
+                        args: Vec::new(),
+                    });
+                    let result = self.command(id, request, action.clone());
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
                 UiAction::Game(GameAction::Emote { ref name }) => {
                     let name = name.to_ascii_lowercase();
                     let result = self.command(id, Command::Emote(name), action.clone());
@@ -4290,6 +4335,7 @@ impl PlatformApp for App {
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
         self.debris_models.clear();
+        self.package_models.clear();
         self.hidden_gpu = None;
         self.hidden_uploaded = None;
         self.depth = None;
@@ -4316,6 +4362,7 @@ impl PlatformApp for App {
         self.ghost_gpu = None;
         self.ghost_uploaded = u64::MAX;
         self.debris_models.clear();
+        self.package_models.clear();
         self.hidden_gpu = None;
         self.hidden_uploaded = None;
         self.depth = None;
@@ -4483,6 +4530,15 @@ impl PlatformApp for App {
                 materials,
                 &view.world.palette,
             )?;
+            self.package_models.upload(
+                self.package_catalog.as_deref(),
+                &view.entities,
+                renderer,
+                frame.device,
+                frame.queue,
+                meshes,
+                materials,
+            )?;
         }
         if self
             .depth
@@ -4646,6 +4702,16 @@ impl PlatformApp for App {
         for terrain in &mut self.gpu_terrain {
             terrain.update(frame.queue, eye, fog_end.max(1.))?;
         }
+        if let Some(catalog) = &self.package_catalog {
+            let binds = &self.ui.core.binds;
+            let (panels, keys) = crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
+                binds
+                    .command_for_key(bri_ui::input::Key::Letter(letter), bri_ui::input::Modifiers::NONE)
+                    .is_some()
+            });
+            self.ui.core.package_panels = panels;
+            self.ui.core.package_keys = keys;
+        }
         self.ui.core.name_tags = name_tags(
             view,
             self.motion.presented(),
@@ -4740,6 +4806,7 @@ impl PlatformApp for App {
             item_draws.push((scene, instances));
         }
         item_draws.extend(self.debris_models.draws());
+        item_draws.extend(self.package_models.draws());
         {
             use bri_render::scene::ShadowCasters;
             // Players, vehicles and items (dropped and held) cast, like v20's
@@ -4768,6 +4835,7 @@ impl PlatformApp for App {
                 models.push((scene, instances));
             }
             models.extend(self.debris_models.draws());
+            models.extend(self.package_models.draws());
             renderer.render_shadows(
                 frame.encoder,
                 ShadowCasters {
