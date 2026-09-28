@@ -120,14 +120,6 @@ fn menu_buttons_are_all_built() {
     let known = [
         "MainMenu: getHelp(\"1. Credits\");",
         "StartMission: canvas.pushDialog(MusicFilesGui);",
-        "JoinServer: JS_sortList(8);",
-        "JoinServer: canvas.pushDialog(\"filtersGui\");",
-        "JoinServer: JS_sortNumList(7, 1);",
-        "JoinServer: JS_sortNumList(3);",
-        "JoinServer: JS_sortNumList(4, 1);",
-        "JoinServer: JS_sortList(0, 1);",
-        "JoinServer: JS_sortList(10);",
-        "JoinServer: JS_sortList(1, 1);",
     ];
     assert_eq!(all, known, "unbuilt buttons changed");
 }

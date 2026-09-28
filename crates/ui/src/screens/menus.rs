@@ -21,6 +21,40 @@ pub struct NativeScreen {
     request: Option<RequestId>,
     /// The game mode the Start Game controls last showed.
     shown_mode: Option<Option<String>>,
+    /// Join Server's sort: v20's `JS_serverList.sortedBy` column and
+    /// `sortedAsc`. None keeps the host's order.
+    server_sort: Option<(usize, bool)>,
+}
+
+/// One Join Server row's text in v20's sort column `col` (`JS_sortList`
+/// and `JS_sortNumList`; 10 is the name without its favourite star).
+enum SortKey {
+    Text(String),
+    Number(u64),
+}
+fn server_sort_key(s: &ServerInfo, col: usize) -> SortKey {
+    let yes = |b: bool| SortKey::Text(if b { "Yes" } else { "" }.into());
+    match col {
+        0 => yes(s.password),
+        1 => yes(s.dedicated),
+        3 => SortKey::Number(s.ping_ms.map_or(u64::MAX, u64::from)),
+        4 => SortKey::Number(u64::from(s.players)),
+        7 => SortKey::Number(u64::from(s.bricks)),
+        8 => SortKey::Text(s.map.to_lowercase()),
+        _ => SortKey::Text(s.name.to_lowercase()),
+    }
+}
+/// `JS_sortList(col, defaultDescending)`: the same column again flips the
+/// order; a new column starts ascending unless it defaults to descending.
+fn next_server_sort(current: Option<(usize, bool)>, command: &str) -> Option<(usize, bool)> {
+    let args = command.split_once('(')?.1.split_once(')')?.0;
+    let mut args = args.split(',').map(str::trim);
+    let col = args.next()?.parse().ok()?;
+    let descending = args.next().is_some_and(|a| a != "0");
+    Some(match current {
+        Some((c, asc)) if c == col => (col, !asc),
+        _ => (col, !descending),
+    })
 }
 
 /// The main menu's corner line: this build, and a newer release if found.
@@ -59,6 +93,7 @@ impl NativeScreen {
             server_addresses: vec![],
             request: None,
             shown_mode: None,
+            server_sort: None,
         };
         // Preferences are data; script strings are never evaluated.
         for n in s.view.walk().collect::<Vec<_>>() {
@@ -102,6 +137,13 @@ impl NativeScreen {
             ScreenId::JoinServer => {
                 s.visible("JSG_demoBanner", false); s.visible("JSG_demoBanner2", false);
                 s.visible("JS_QueryInternetBlocker", false);
+                // Filters narrowed the master server's list, and a LAN query
+                // cannot be cancelled; neither applies to direct IP.
+                for command in ["canvas.pushDialog(\"filtersGui\");", "joinServerGui.cancel();"] {
+                    if let Some(n) = s.view.by_command(command) {
+                        s.view.set_visible(n, false);
+                    }
+                }
                 // There is no master server: Query Internet becomes the star
                 // for servers the player wants to keep in the list.
                 if let Some(n) = s.view.by_command("JoinServerGui.queryWebMaster();") {
@@ -345,10 +387,20 @@ impl NativeScreen {
                     .selected("JS_serverList")
                     .and_then(|i| self.server_addresses.get(i))
                     .cloned();
-                self.server_addresses = core.servers.iter().map(|s| s.address.clone()).collect();
+                let mut servers: Vec<&ServerInfo> = core.servers.iter().collect();
+                if let Some((col, asc)) = self.server_sort {
+                    servers.sort_by(|a, b| {
+                        let order = match (server_sort_key(a, col), server_sort_key(b, col)) {
+                            (SortKey::Number(x), SortKey::Number(y)) => x.cmp(&y),
+                            (SortKey::Text(x), SortKey::Text(y)) => x.cmp(&y),
+                            _ => std::cmp::Ordering::Equal,
+                        };
+                        if asc { order } else { order.reverse() }
+                    });
+                }
+                self.server_addresses = servers.iter().map(|s| s.address.clone()).collect();
                 if let Some(n) = self.view.id("JS_serverList") {
-                    self.view.state(n).items = core
-                        .servers
+                    self.view.state(n).items = servers
                         .iter()
                         .enumerate()
                         .map(|(i, s)| {
@@ -376,9 +428,7 @@ impl NativeScreen {
                             .map(|i| i as i64),
                     );
                 }
-                let selected = self
-                    .selected("JS_serverList")
-                    .and_then(|i| core.servers.get(i));
+                let selected = self.selected("JS_serverList").and_then(|i| servers.get(i));
                 if let Some(n) = self.view.by_command("JoinServerGui.queryWebMaster();") {
                     self.view.set_text(
                         n,
@@ -753,6 +803,10 @@ impl Screen for NativeScreen {
                     core.first_run_welcome();
                 }
             }
+            c if c.starts_with("js_sortlist(") || c.starts_with("js_sortnumlist(") => {
+                self.server_sort = next_server_sort(self.server_sort, c);
+                self.refresh(core);
+            }
             "joinservergui.querylan();" => {
                 core.request(UiAction::QueryLan);
             }
@@ -983,5 +1037,47 @@ impl Screen for MessageScreen {
             let c = command_of(&self.view, ev.node);
             self.answer(!c.contains("noCallback"), core);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_server_headers_sort_like_js_sort_list() {
+        // Players defaults to descending; the same header flips it.
+        let players = next_server_sort(None, "js_sortnumlist(4, 1);");
+        assert_eq!(players, Some((4, false)));
+        assert_eq!(
+            next_server_sort(players, "js_sortnumlist(4, 1);"),
+            Some((4, true))
+        );
+        assert_eq!(
+            next_server_sort(players, "js_sortlist(10);"),
+            Some((10, true))
+        );
+        let server = |name: &str, ping: Option<u32>| ServerInfo {
+            address: name.into(),
+            name: name.into(),
+            password: false,
+            dedicated: false,
+            ping_ms: ping,
+            players: 0,
+            max_players: 8,
+            bricks: 0,
+            map: String::new(),
+            favorite: false,
+        };
+        let (a, b) = (server("b", Some(30)), server("A", None));
+        assert!(matches!(
+            (server_sort_key(&a, 10), server_sort_key(&b, 10)),
+            (SortKey::Text(x), SortKey::Text(y)) if x > y
+        ));
+        // A server that never answered sorts after every ping.
+        assert!(matches!(
+            (server_sort_key(&a, 3), server_sort_key(&b, 3)),
+            (SortKey::Number(x), SortKey::Number(y)) if x < y
+        ));
     }
 }
