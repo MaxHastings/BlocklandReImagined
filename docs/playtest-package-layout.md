@@ -36,9 +36,9 @@ under `logs/`. State and saved host certificates therefore remain beside the
 playtest build.
 
 LAN hosts answer discovery broadcasts (UDP 28050) with their listing and public
-QUIC certificate; the Join Server list shows them. A direct-IP join asks the
-address once for its certificate and saves it in `user-state/trusted-hosts.json`
-(trust on first use). Hosts keep a persistent certificate in `user-state/`
+QUIC certificate; the Join Server list shows them. A direct join needs only the
+game port: it trusts the certificate the host presents the first time and saves
+it in `user-state/trusted-hosts.json` (trust on first use). Hosts keep a persistent certificate in `user-state/`
 (`host-certificate.der`, `host-key.der`), so saved trust survives restarts. Do
 not share `host-key.der`.
 

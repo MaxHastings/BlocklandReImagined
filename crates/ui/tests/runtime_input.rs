@@ -323,9 +323,13 @@ fn direct_join_accepts_text_and_blocks_duplicate_request() {
     }
     down(&mut u, Key::Return);
     down(&mut u, Key::Return);
+    let actions = actions(&mut u);
+    // The typed address is remembered for the next visit, like v20.
+    assert!(matches!(&actions[0], UiAction::SaveSettings(s)
+        if s.prefs.get("$pref::Join::Address").map(String::as_str) == Some("127.0.0.1:28000")));
     assert_eq!(
-        actions(&mut u),
-        vec![UiAction::JoinServer {
+        actions[1..],
+        [UiAction::JoinServer {
             address: "127.0.0.1:28000".into(),
             password: String::new()
         }]

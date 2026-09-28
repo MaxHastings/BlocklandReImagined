@@ -455,6 +455,11 @@ impl NativeScreen {
             core.message_ok("Connect to IP", "Enter a server address.");
             return;
         }
+        if self.id == ScreenId::ManualJoin {
+            // v20 remembers the last typed address for next time.
+            core.prefs.set("$pref::Join::Address", &address);
+            core.save_settings();
+        }
         self.request =
             Some(core.request_pending(UiAction::JoinServer { address, password }, Pending::Other));
     }

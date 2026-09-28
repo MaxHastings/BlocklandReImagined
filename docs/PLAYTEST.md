@@ -46,9 +46,12 @@ under `logs/`. Keep both when reporting a problem. Do not share
 
 1. The host starts a LAN game (Start Game → server type LAN). Allow the game
    through Windows Firewall on private networks when asked.
-2. The other player opens Join Server; LAN games appear in the list. Direct IP
-   join also works (for example `192.168.1.20:28000`): the game asks the host for
-   its certificate the first time and remembers it.
+2. The other player opens Join Server; LAN games appear in the list, and so do
+   servers you joined before. Connect to IP takes an address like
+   `192.168.1.20`, `192.168.1.20:28000` or a host name such as
+   `play.example.com`, and remembers the last one typed. Only UDP port 28000
+   (or the port in the address) needs to be open on the host. The first join
+   trusts the host's identity and remembers it.
 3. Try building together, a minigame deathmatch, riding one jeep together and a
    late join into an existing build.
 

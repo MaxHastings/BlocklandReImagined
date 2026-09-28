@@ -5,6 +5,7 @@ pub mod codec;
 pub mod content_identity;
 pub mod discovery;
 pub mod impair;
+pub mod invite;
 pub mod protocol;
 pub mod replica;
 pub mod server;

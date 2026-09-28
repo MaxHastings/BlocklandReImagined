@@ -1720,24 +1720,13 @@ impl App {
             password.is_empty(),
             "Password authentication is not connected yet"
         );
-        let address = parse_join_address(&address)?;
-        // Certificates come from LAN discovery, then saved pins, then a direct
-        // discovery query to the address (trust on first use, then pinned).
+        let typed = address.trim().to_string();
+        let (host, port) = parse_join_target(&typed)?;
+        // A LAN listing or a saved pin supplies the host's certificate; a
+        // first join trusts the certificate the host presents and pins it.
         let pins_file = self.state_dir.join("trusted-hosts.json");
-        let known = self
-            .lan_hosts
-            .get(&address.to_string())
-            .cloned()
-            .or_else(|| {
-                std::fs::metadata(&pins_file)
-                    .ok()
-                    .filter(|m| m.len() <= 1024 * 1024)
-                    .and_then(|_| std::fs::read(&pins_file).ok())
-                    .and_then(|bytes| {
-                        serde_json::from_slice::<BTreeMap<String, Vec<u8>>>(&bytes).ok()
-                    })
-                    .and_then(|pins| pins.get(&address.to_string()).cloned())
-            });
+        let recent_file = self.state_dir.join("recent-servers.json");
+        let lan_hosts = self.lan_hosts.clone();
         let paths = self.content.paths.clone();
         let player = self.player_name();
         let weapon_snapshot = self.content.weapons.clone();
@@ -1758,30 +1747,28 @@ impl App {
         self.ui.apply_session(
             id,
             UiUpdate::Connection(ConnectionState::Connecting {
-                text: format!("Connecting to {address}…"),
+                text: format!("Connecting to {typed}…"),
             }),
         );
+        let recent = typed.clone();
         let worker = Worker::start(self.runtime.handle(), async move {
-            let certificate = match known {
-                Some(certificate) => certificate,
-                None => bri_net::discovery::query(
-                    &[SocketAddr::new(
-                        address.ip(),
-                        bri_net::discovery::DISCOVERY_PORT,
-                    )],
-                    Duration::from_millis(1500),
-                )
-                .await?
-                .into_iter()
-                .find(|(a, _)| a.port() == address.port())
-                .context("No Blockland ReImagined host answered at that address")?
-                .1
-                .certificate_der()?,
+            let address = tokio::net::lookup_host((host.as_str(), port))
+                .await
+                .ok()
+                .and_then(|mut found| found.next())
+                .with_context(|| {
+                    format!("Could not find a server called {host}. Check the address for typos.")
+                })?;
+            let pins = pins_file.clone();
+            let certificate = match lan_hosts.get(&address.to_string()) {
+                Some(certificate) => certificate.clone(),
+                None => tokio::task::spawn_blocking(move || {
+                    read_small_json::<BTreeMap<String, Vec<u8>>>(&pins)
+                        .and_then(|pins| pins.get(&address.to_string()).cloned())
+                        .unwrap_or_default()
+                })
+                .await?,
             };
-            ensure!(
-                !certificate.is_empty() && certificate.len() <= 16384,
-                "Invalid host certificate"
-            );
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })
@@ -1800,7 +1787,7 @@ impl App {
                 identity_paths.environment()
             })
             .await??;
-            let client = Client::connect_with_identity(
+            let joined = Client::connect_with_identity(
                 address,
                 &certificate,
                 player,
@@ -1809,19 +1796,39 @@ impl App {
                 None,
                 &native_identity,
             )
-            .await?;
-            // Remember the host's certificate for later direct joins.
-            let pin = certificate.clone();
-            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut pins: BTreeMap<String, Vec<u8>> = std::fs::read(&pins_file)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice(&b).ok())
-                    .unwrap_or_default();
-                if pins.len() < 1024 {
-                    pins.insert(address.to_string(), pin);
-                    bri_files::replace(&pins_file, &serde_json::to_vec_pretty(&pins)?)?;
+            .await;
+            let client = match joined {
+                Ok(client) => client,
+                Err(error) => {
+                    // A host that reinstalled has a new identity: forget the
+                    // old pin so joining again (the player's choice) trusts it.
+                    if matches!(
+                        error.downcast_ref::<bri_net::client::JoinError>(),
+                        Some(bri_net::client::JoinError::IdentityChanged(_))
+                    ) {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            update_small_json(&pins_file, |pins: &mut BTreeMap<String, Vec<u8>>| {
+                                pins.remove(&address.to_string());
+                            })
+                        })
+                        .await;
+                    }
+                    return Err(error);
                 }
-                Ok(())
+            };
+            // Remember the host's certificate and the address for later joins.
+            let pin = client.certificate.clone();
+            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                update_small_json(&pins_file, |pins: &mut BTreeMap<String, Vec<u8>>| {
+                    if pins.len() < 1024 || pins.contains_key(&address.to_string()) {
+                        pins.insert(address.to_string(), pin);
+                    }
+                })?;
+                update_small_json(&recent_file, |list: &mut Vec<String>| {
+                    list.retain(|a| !a.eq_ignore_ascii_case(&recent));
+                    list.insert(0, recent);
+                    list.truncate(RECENT_SERVERS);
+                })
             })
             .await;
             let map = client.replica.world.map_id.clone();
@@ -1842,7 +1849,7 @@ impl App {
             id,
             worker,
             scene,
-            name: address.to_string(),
+            name: typed.clone(),
             max_players: 64,
             local: false,
             single: false,
@@ -3465,6 +3472,24 @@ impl PlatformApp for App {
                     });
                 }
             }
+            // Servers joined before are listed too, so they are one click away.
+            let recent: Vec<String> =
+                read_small_json(&self.state_dir.join("recent-servers.json")).unwrap_or_default();
+            for address in recent {
+                if !servers.iter().any(|s| s.address.eq_ignore_ascii_case(&address)) {
+                    servers.push(ServerInfo {
+                        name: format!("{address} (joined before)"),
+                        address,
+                        password: false,
+                        dedicated: false,
+                        ping_ms: None,
+                        players: 0,
+                        max_players: 0,
+                        bricks: 0,
+                        map: String::new(),
+                    });
+                }
+            }
             self.ui.apply(UiUpdate::LanServers {
                 servers,
                 querying: false,
@@ -4958,19 +4983,58 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
-/// Connect to IP input: an IPv4/IPv6 address with an optional port. A bare
-/// address uses the default game port, as Torque's `connect` did.
-fn parse_join_address(text: &str) -> Result<SocketAddr> {
+/// Servers remembered for the join list.
+const RECENT_SERVERS: usize = 10;
+
+/// A typed server address: an IP or a host name, with an optional port
+/// (28000 when left out). `[v6]:port` for IPv6 with a port.
+fn parse_join_target(text: &str) -> Result<(String, u16)> {
+    const HINT: &str =
+        "Enter a server address, like 203.0.113.10, play.example.com or play.example.com:28001";
     let text = text.trim();
-    text.parse::<SocketAddr>()
-        .or_else(|_| {
-            text.trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .map(|ip| SocketAddr::new(ip, 28000))
-        })
+    if let Ok(address) = text.parse::<SocketAddr>() {
+        return Ok((address.ip().to_string(), address.port()));
+    }
+    let bare = text.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        return Ok((ip.to_string(), 28000));
+    }
+    let (host, port) = match text.rsplit_once(':') {
+        Some((host, port)) => (host, port.parse::<u16>().ok().filter(|p| *p > 0).context(HINT)?),
+        None => (text, 28000),
+    };
+    let valid = !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    ensure!(valid, "{HINT}");
+    Ok((host.to_ascii_lowercase(), port))
+}
+
+/// A small JSON file in the client state folder, or None when missing or
+/// unreadable.
+fn read_small_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    std::fs::metadata(path)
         .ok()
-        .context("Enter an IP address and port, for example 203.0.113.10:28000")
+        .filter(|m| m.len() <= 1024 * 1024)
+        .and_then(|_| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+/// Read, change and crash-safely write back a small JSON state file.
+fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default>(
+    path: &Path,
+    change: impl FnOnce(&mut T),
+) -> Result<()> {
+    let mut value: T = read_small_json(path).unwrap_or_default();
+    change(&mut value);
+    bri_files::replace(path, &serde_json::to_vec_pretty(&value)?)?;
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -4984,21 +5048,36 @@ mod tests {
         assert!(fov_y.to_degrees() < 60.0);
     }
     #[test]
-    fn join_address_accepts_public_ips_with_or_without_port() {
-        use super::parse_join_address;
-        assert_eq!(
-            parse_join_address(" 203.0.113.10:28001 ").unwrap().to_string(),
-            "203.0.113.10:28001"
-        );
-        assert_eq!(
-            parse_join_address("100.64.1.2").unwrap().to_string(),
-            "100.64.1.2:28000"
-        );
-        assert_eq!(
-            parse_join_address("[2001:db8::1]").unwrap().to_string(),
-            "[2001:db8::1]:28000"
-        );
-        assert!(parse_join_address("example.com").is_err());
+    fn join_address_accepts_ips_and_host_names_with_or_without_port() {
+        use super::parse_join_target;
+        let parsed = |text| parse_join_target(text).unwrap();
+        assert_eq!(parsed(" 203.0.113.10:28001 "), ("203.0.113.10".into(), 28001));
+        assert_eq!(parsed("100.64.1.2"), ("100.64.1.2".into(), 28000));
+        assert_eq!(parsed("[2001:db8::1]"), ("2001:db8::1".into(), 28000));
+        assert_eq!(parsed("[2001:db8::1]:28005"), ("2001:db8::1".into(), 28005));
+        assert_eq!(parsed("Play.Example.com"), ("play.example.com".into(), 28000));
+        assert_eq!(parsed("play.example.com:28001"), ("play.example.com".into(), 28001));
+        assert_eq!(parsed("localhost"), ("localhost".into(), 28000));
+        for bad in ["", "play example.com", "host:notaport", "host:0", "-bad.com", "a..b"] {
+            let error = parse_join_target(bad).unwrap_err().to_string();
+            assert!(error.contains("play.example.com"), "{bad}: {error}");
+        }
+    }
+    #[test]
+    fn small_state_files_update_in_place() {
+        let dir = std::env::temp_dir().join(format!("bri-recent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("recent-servers.json");
+        for address in ["a.example.com", "b.example.com", "A.example.com"] {
+            super::update_small_json(&file, |list: &mut Vec<String>| {
+                list.retain(|a| !a.eq_ignore_ascii_case(address));
+                list.insert(0, address.to_string());
+            })
+            .unwrap();
+        }
+        let list: Vec<String> = super::read_small_json(&file).unwrap();
+        assert_eq!(list, ["A.example.com", "b.example.com"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
     #[ignore = "requires generated native content; no window, GPU or audio device"]

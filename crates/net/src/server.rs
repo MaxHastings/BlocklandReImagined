@@ -118,6 +118,8 @@ pub struct ServerHandle {
     pub host_token: ResumeToken,
     /// Live connected-player count (LAN listing).
     pub players: Arc<std::sync::atomic::AtomicU32>,
+    /// What probes and the join list see; `players` is filled in live.
+    listing: Arc<std::sync::Mutex<Listing>>,
     discovery: Option<tokio::task::JoinHandle<()>>,
     router: Option<RouterPorts>,
     stop: Option<oneshot::Sender<()>>,
@@ -160,6 +162,11 @@ impl ServerHandle {
         max_players: u32,
         content_id: String,
     ) -> Result<u16> {
+        if let Ok(mut listing) = self.listing.lock() {
+            listing.name = name.clone();
+            listing.map = map.clone();
+            listing.max_players = max_players;
+        }
         let beacon = crate::discovery::Beacon {
             version: VERSION,
             name,
@@ -231,6 +238,15 @@ impl ServerHandle {
         }
         self.task.await?
     }
+}
+/// The listing with the live player count.
+fn current_listing(
+    listing: &std::sync::Mutex<Listing>,
+    players: &std::sync::atomic::AtomicU32,
+) -> Listing {
+    let mut listing = listing.lock().map(|l| l.clone()).unwrap_or_default();
+    listing.players = players.load(std::sync::atomic::Ordering::Relaxed);
+    listing
 }
 /// Router forwards held for a running internet host. Dropping this removes
 /// them on a background thread so the caller never waits on the router.
@@ -415,8 +431,15 @@ fn start_configured(
     let host_token = ResumeToken(bytes);
     let host_key = token_key(&host_token);
     let players = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listing = Arc::new(std::sync::Mutex::new(Listing {
+        name: session.simulation().state().name.clone(),
+        map: session.simulation().state().map_id.clone(),
+        players: 0,
+        max_players: max_players as u32,
+    }));
     let task = tokio::spawn(run(
         players.clone(),
+        listing.clone(),
         endpoint,
         session,
         options,
@@ -432,6 +455,7 @@ fn start_configured(
         certificate,
         host_token,
         players,
+        listing,
         discovery: None,
         router: None,
         stop: Some(stop_tx),
@@ -444,6 +468,7 @@ async fn connection_task(
     request_budget: Arc<Semaphore>,
     server_fingerprint: [u8; 32],
     require_identity: bool,
+    listing: Listing,
 ) -> Result<()> {
     let (mut send, mut receive) =
         tokio::time::timeout(Duration::from_secs(10), connection.accept_bi()).await??;
@@ -453,15 +478,23 @@ async fn connection_task(
     )
     .await??;
     if begin.version != VERSION {
-        codec::write_frame(&mut send, &codec::encode(&Message::Rejected("Incompatible protocol version".into()))?).await?;
+        let reason = format!(
+            "This server runs a {} version of Blockland ReImagined (protocol {VERSION}, yours is {}). {}",
+            if begin.version < VERSION { "newer" } else { "older" },
+            begin.version,
+            if begin.version < VERSION { "Update your game to join." } else { "The host needs to update to the version you have." },
+        );
+        codec::write_frame(&mut send, &codec::encode(&Message::Rejected(reason))?).await?;
         send.finish()?;
+        // Dropping the connection at once could discard the refusal unsent.
+        let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
         return Ok(());
     }
     let mut nonce = [0; 32];
     getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("OS randomness failed: {error}"))?;
     codec::write_frame(
         &mut send,
-        &codec::encode(&Message::Challenge { nonce })?,
+        &codec::encode(&Message::Challenge { nonce, listing })?,
     )
     .await?;
     let hello: Hello = tokio::time::timeout(
@@ -673,6 +706,7 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
 #[allow(clippy::too_many_arguments)]
 async fn run(
     players: Arc<std::sync::atomic::AtomicU32>,
+    listing: Arc<std::sync::Mutex<Listing>>,
     endpoint: Endpoint,
     mut session: Session,
     options: ServerOptions,
@@ -719,7 +753,7 @@ async fn run(
     let outcome:Result<()>=async {loop {tokio::select!{
         _=&mut stop=>break,
         accepted=endpoint.accept()=>{
-            if let Some(accepted)=accepted {if let Ok(permit)=permits.clone().try_acquire_owned(){let events=events.clone();let request_budget=request_budget.clone();tasks.spawn(async move{let _permit=permit;if let Ok(Ok(connection))=tokio::time::timeout(Duration::from_secs(10),accepted).await {let _=connection_task(connection,events,request_budget,server_fingerprint,require_identity).await;}});}else{accepted.refuse();}}
+            if let Some(accepted)=accepted {if let Ok(permit)=permits.clone().try_acquire_owned(){let events=events.clone();let request_budget=request_budget.clone();let listing=current_listing(&listing,&players);tasks.spawn(async move{let _permit=permit;if let Ok(Ok(connection))=tokio::time::timeout(Duration::from_secs(10),accepted).await {let _=connection_task(connection,events,request_budget,server_fingerprint,require_identity,listing).await;}});}else{accepted.refuse();}}
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
         Some((admin,loaded))=map_rx.recv()=>{
@@ -727,6 +761,7 @@ async fn run(
                 Ok(new)=>{
                     let old=std::mem::replace(&mut session,new);
                     session.adopt(old,admin)?;
+                    if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();package_state=session.package_state();

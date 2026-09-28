@@ -41,9 +41,13 @@ Spawn-sphere distribution/orientation and exact FOV feel
 also require fidelity work; the initial Bedroom center faces a nearby wall.
 
 LAN hosts advertise a listing and their public QUIC certificate over UDP
-discovery (port 28050); the Join Server list uses it. Direct-IP joins query the
-address once and pin its certificate in `trusted-hosts.json` (trust on first
-use). LAN hosts keep a persistent certificate/key pair in their state
+discovery (port 28050); the Join Server list uses it, alongside servers joined
+before (`recent-servers.json`). Connect to IP accepts an IP or a host name with
+an optional port and needs only the game port: a first join accepts the
+certificate the host presents during the QUIC handshake (its signature is still
+verified) and pins it in `trusted-hosts.json` (trust on first use). A pin that
+no longer matches is reported as a changed identity and forgotten, so joining
+again trusts the new one. LAN hosts keep a persistent certificate/key pair in their state
 directory so pins stay valid across restarts; single-player hosts use a
 throwaway certificate. There is no insecure certificate fallback.
 
