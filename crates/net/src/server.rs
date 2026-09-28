@@ -141,10 +141,71 @@ pub struct ServerHandle {
     pub players: Arc<std::sync::atomic::AtomicU32>,
     /// What probes and the join list see; `players` is filled in live.
     listing: Arc<std::sync::Mutex<Listing>>,
+    /// The host's own performance, refreshed about once a second.
+    pub perf: Arc<Mutex<ServerPerf>>,
     discovery: Option<tokio::task::JoinHandle<()>>,
     router: Option<RouterPorts>,
     stop: Option<oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<Result<ServerReport>>,
+}
+/// How the host's simulation is keeping up, for the host's performance
+/// overlay. Measured on the host only; never sent to players.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ServerPerf {
+    /// Simulation steps per second over the last window (120 when keeping up).
+    pub ticks_per_second: f32,
+    /// Wall-clock time of one simulation step: mean and worst in the window.
+    pub tick_ms_mean: f32,
+    pub tick_ms_max: f32,
+    /// Script time per Add-On package, averaged per step, busiest first.
+    pub script_ms: Vec<(String, f32)>,
+    pub players: u32,
+}
+/// Collects step times until a window (about a second) closes.
+#[derive(Default)]
+struct PerfWindow {
+    started: Option<std::time::Instant>,
+    steps: u32,
+    total: Duration,
+    max: Duration,
+}
+impl PerfWindow {
+    const LENGTH: Duration = Duration::from_secs(1);
+    fn step(&mut self, took: Duration) {
+        self.steps += 1;
+        self.total += took;
+        self.max = self.max.max(took);
+    }
+    /// The window's summary once it has run its length, then a new window.
+    fn finish(
+        &mut self,
+        now: std::time::Instant,
+        script: BTreeMap<String, Duration>,
+        players: u32,
+    ) -> Option<ServerPerf> {
+        let started = *self.started.get_or_insert(now);
+        let span = now.saturating_duration_since(started);
+        if span < Self::LENGTH {
+            return None;
+        }
+        let steps = self.steps.max(1) as f32;
+        let ms = |d: Duration| d.as_secs_f32() * 1000.0;
+        let mut script_ms: Vec<(String, f32)> =
+            script.into_iter().map(|(id, t)| (id, ms(t) / steps)).collect();
+        script_ms.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let perf = ServerPerf {
+            ticks_per_second: self.steps as f32 / span.as_secs_f32(),
+            tick_ms_mean: ms(self.total) / steps,
+            tick_ms_max: ms(self.max),
+            script_ms,
+            players,
+        };
+        *self = PerfWindow {
+            started: Some(now),
+            ..Default::default()
+        };
+        Some(perf)
+    }
 }
 #[derive(Debug, Serialize)]
 pub struct ServerReport {
@@ -491,8 +552,10 @@ fn start_configured(
         players: 0,
         max_players: max_players as u32,
     }));
+    let perf = Arc::new(Mutex::new(ServerPerf::default()));
     let task = tokio::spawn(run(
         players.clone(),
+        perf.clone(),
         listing.clone(),
         endpoint,
         session,
@@ -510,6 +573,7 @@ fn start_configured(
         host_token,
         players,
         listing,
+        perf,
         discovery: None,
         router: None,
         stop: Some(stop_tx),
@@ -889,6 +953,7 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
 #[allow(clippy::too_many_arguments)]
 async fn run(
     players: Arc<std::sync::atomic::AtomicU32>,
+    perf: Arc<Mutex<ServerPerf>>,
     listing: Arc<std::sync::Mutex<Listing>>,
     endpoint: Endpoint,
     mut session: Session,
@@ -945,6 +1010,7 @@ async fn run(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut clock = crate::tick_clock::TickClock::default();
     let mut previous = std::time::Instant::now();
+    let mut perf_window = PerfWindow::default();
     let outcome:Result<()>=async {loop {tokio::select!{
         _=&mut stop=>break,
         accepted=endpoint.accept()=>{
@@ -1065,8 +1131,11 @@ async fn run(
             let now=std::time::Instant::now();
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             for _ in 0..steps {
+            let started=std::time::Instant::now();
+            let stepped=session.step();
+            perf_window.step(started.elapsed());
             // A failing gameplay adapter must not stop the host for everyone.
-            if let Err(error)=session.step(){step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
+            if let Err(error)=stepped{step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
             let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
                 let datagrams=poses(&session).into_iter().map(Datagram::Pose).chain(session.vehicle_poses().into_iter().map(Datagram::Vehicle)).chain(session.camera_orbs().into_iter().map(|(owner,eye)|Datagram::Orb(Orb{tick,owner,eye})));
@@ -1094,6 +1163,11 @@ async fn run(
                 send_package_views(&session,&peers,&mut package_views);
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(&Message::Notice(notice));}}
             }
+            }
+            if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
+                && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
+            {
+                *perf.lock().unwrap_or_else(|e|e.into_inner())=summary;
             }
         },
     }}Ok(())}.await;
@@ -1170,6 +1244,29 @@ mod tests {
             principal: None,
             issued: 0,
         }
+    }
+    #[test]
+    fn perf_window_summarises_a_second_of_steps() {
+        let t0 = std::time::Instant::now();
+        let mut w = PerfWindow::default();
+        assert!(w.finish(t0, BTreeMap::new(), 0).is_none());
+        for ms in [2, 4, 6, 8] {
+            w.step(Duration::from_millis(ms));
+        }
+        let half = t0 + Duration::from_millis(500);
+        assert!(w.finish(half, BTreeMap::new(), 0).is_none());
+        let script = BTreeMap::from([
+            ("quiet".to_string(), Duration::from_millis(1)),
+            ("busy".to_string(), Duration::from_millis(8)),
+        ]);
+        let p = w.finish(t0 + Duration::from_secs(2), script, 3).unwrap();
+        assert_eq!(p.ticks_per_second, 2.0);
+        assert_eq!(p.tick_ms_mean, 5.0);
+        assert_eq!(p.tick_ms_max, 8.0);
+        assert_eq!(p.players, 3);
+        assert_eq!(p.script_ms, vec![("busy".into(), 2.0), ("quiet".into(), 0.25)]);
+        // The next window starts empty.
+        assert_eq!(w.steps, 0);
     }
     #[test]
     fn full_ticket_table_forgets_the_oldest_disconnected_player() {
