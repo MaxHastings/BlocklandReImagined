@@ -1710,3 +1710,74 @@ fn stress_lab_single_player_build_save_reload() -> Result<()> {
     println!("after reload into the same world: {} bricks (was {count})", bricks(&app));
     Ok(())
 }
+
+/// Probe: plant on a map in single player and print what the player is told.
+/// BRI_QA_PROBE_MAP picks the map (default The Slopes).
+#[test]
+#[ignore = "packaged content and a loopback server; no window"]
+fn plant_probe_single_player() -> Result<()> {
+    let content = PathBuf::from(std::env::var_os("BRI_CONTENT_ROOT").context("BRI_CONTENT_ROOT")?);
+    let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("probe");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out)?;
+    let map = std::env::var("BRI_QA_PROBE_MAP").unwrap_or("v20/add-ons/map_slopes/slopes.mis".into());
+    let mut app = load(&content, &out, "Prober")?;
+    request(
+        &mut app,
+        UiAction::HostGame {
+            map: map.clone(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "Probe".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    let start = Instant::now();
+    while !(in_game(&app) && grounded(&app)) {
+        ensure!(start.elapsed() < Duration::from_secs(180), "never in game");
+        run_for(&mut app, 50)?;
+    }
+    run_for(&mut app, 1000)?;
+    let me = app.presented_local().map(|p| p.feet);
+    println!("player at {me:?}");
+    for quarter in 0..4 {
+        aim(&mut app, quarter as f32 * std::f32::consts::FRAC_PI_2, DOWN)?;
+        run_for(&mut app, 150)?;
+        request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }))?;
+        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
+        let ghost = app.building().and_then(|b| b.ghost()).map(|g| g.position);
+        let before = bricks(&app);
+        bri_console::log::clear();
+        app.ui.core.request(UiAction::Game(GameAction::PlantBrick));
+        let commands = app.pump()?;
+        let _ = commands;
+        let mut seen = Vec::new();
+        for _ in 0..40 {
+            app.tick(Duration::from_millis(16))?;
+            app.ui.update(16);
+            app.pump()?;
+            let line = format!(
+                "plant_error {:?}, stack {:?}, pending {}",
+                app.ui.core.plant_error.map(|p| p.0),
+                app.ui.stack(),
+                app.pending_requests()
+            );
+            if seen.last() != Some(&line) {
+                seen.push(line);
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+        println!(
+            "quarter {quarter}: ghost {ghost:?} bricks {before} -> {}; {seen:?}; console {:?}; chat {:?}",
+            bricks(&app),
+            bri_console::log::lines().iter().map(|l| l.text.clone()).collect::<Vec<_>>(),
+            app.ui.core.chat.lines.iter().rev().take(2).map(|l| l.text.clone()).collect::<Vec<_>>()
+        );
+        request(&mut app, UiAction::Game(GameAction::CancelBrick))?;
+    }
+    Ok(())
+}
