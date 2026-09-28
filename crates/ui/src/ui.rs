@@ -146,6 +146,8 @@ pub enum Callback {
     AddOn { id: String, enabled: bool },
     /// Turn off every add-on outside the base game.
     DefaultAddOns,
+    /// Open a web page (a new release's download page).
+    OpenUrl(String),
 }
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
@@ -213,6 +215,10 @@ pub struct Core {
     pub add_ons: crate::api::AddOnsView,
     /// Differing add-ons behind the last refused join (Can't Join dialog).
     pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
+    /// This build's version (`UiUpdate::Version`).
+    pub version: String,
+    /// A newer release's name and page, once one is found.
+    pub newer_version: Option<(String, String)>,
     // live state
     pub conn: ConnectionState,
     pub hud: HudModel,
@@ -935,6 +941,8 @@ impl Ui {
             save_context: None,
             add_ons: Default::default(),
             add_on_mismatch: None,
+            version: String::new(),
+            newer_version: None,
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
@@ -1444,6 +1452,23 @@ impl Ui {
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
             UiUpdate::AddOns(view) => c.add_ons = view,
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
+            UiUpdate::Version(v) => c.version = v,
+            UiUpdate::NewerVersion { name, url } => {
+                c.message_yes_no(
+                    "New Version Available",
+                    &format!(
+                        "A newer version of Blockland ReImagined, {name}, is available.\n\nOpen the download page?"
+                    ),
+                    Callback::OpenUrl(url.clone()),
+                );
+                c.newer_version = Some((name, url));
+            }
+            UiUpdate::SetPrefs(prefs) => {
+                for (key, value) in prefs {
+                    c.prefs.set(&key, value);
+                }
+                c.save_settings();
+            }
             UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
             UiUpdate::DisplayChanged {
                 resolution,

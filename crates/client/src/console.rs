@@ -103,7 +103,7 @@ fn stats(app: &App, out: &mut Output) {
 fn version(app: &App, out: &mut Output) {
     out.echo(format!(
         "Blockland ReImagined {} ({})",
-        env!("CARGO_PKG_VERSION"),
+        crate::updates::version(),
         if cfg!(debug_assertions) { "debug" } else { "release" }
     ));
     out.echo(format!("Protocol {}", bri_net::protocol::VERSION));

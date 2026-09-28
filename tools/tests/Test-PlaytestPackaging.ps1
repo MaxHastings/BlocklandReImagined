@@ -26,7 +26,7 @@ try {
     [IO.File]::WriteAllBytes($exe, [byte[]](0x4d,0x5a,0x01,0x02))
     $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash
     $dist = Join-Path $temp 'dist'
-    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash
+    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @()
     $package = Join-Path $dist 'BlocklandReImagined-alpha-test-fixture'
     if (-not (Test-Path (Join-Path $package 'Launch.cmd'))) { throw 'Expected package launcher Launch.cmd.' }
     if (Test-Path (Join-Path $package 'Launch-Playtest.cmd')) { throw 'Unexpected old launcher filename.' }

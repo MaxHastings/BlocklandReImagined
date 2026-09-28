@@ -24,6 +24,22 @@ pub fn alert(title: &str, text: &str, logs: Option<&Path>) -> bool {
     }
 }
 
+/// Open a folder in Explorer or a web page in the browser. Returns whether
+/// the desktop accepted it.
+pub fn open(target: &str) -> bool {
+    #[cfg(windows)]
+    {
+        imp::open(std::ffi::OsStr::new(target))
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .is_ok()
+    }
+}
+
 /// Keep dialogs to a readable size; the log holds the rest.
 pub fn summarize(error: &str) -> String {
     const LIMIT: usize = 700;
@@ -36,7 +52,7 @@ pub fn summarize(error: &str) -> String {
 
 #[cfg(windows)]
 mod imp {
-    use std::{os::windows::ffi::OsStrExt, path::Path};
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::Path};
     use windows_sys::Win32::UI::{
         Shell::ShellExecuteW,
         WindowsAndMessaging::{
@@ -70,14 +86,19 @@ mod imp {
             return false;
         }
         let Some(dir) = logs else { return false };
-        let dir: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+        open(dir.as_os_str())
+    }
+
+    pub(super) fn open(target: &OsStr) -> bool {
+        let target: Vec<u16> = target.encode_wide().chain([0]).collect();
         let verb = wide("open");
-        // SAFETY: NUL-terminated strings; opens the folder in Explorer.
+        // SAFETY: NUL-terminated strings; the shell opens a folder in
+        // Explorer and a web address in the default browser.
         let result = unsafe {
             ShellExecuteW(
                 std::ptr::null_mut(),
                 verb.as_ptr(),
-                dir.as_ptr(),
+                target.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
                 SW_SHOWNORMAL,

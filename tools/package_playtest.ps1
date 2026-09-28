@@ -11,7 +11,17 @@ param(
     # content/packages.json; the release folder gets a -stress-lab suffix.
     [switch]$StressLab,
     # Tools the client runs, shipped beside bri-client.exe from the same build.
-    [string[]]$CompanionExecutables = @('bri-import-addon.exe')
+    [string[]]$CompanionExecutables = @('bri-import-addon.exe'),
+    # Code signing, for when there is a certificate: the SHA-1 thumbprint of
+    # a code-signing certificate in the current user's or machine's store.
+    # Every shipped .exe is signed and timestamped, which stops Windows
+    # SmartScreen's "Windows protected your PC" once the certificate has
+    # reputation. Without it the package is unsigned (the README explains
+    # "Run anyway").
+    [string]$SignCertificateThumbprint,
+    [string]$TimestampUrl = 'http://timestamp.digicert.com',
+    # Packaging tests use a stand-in executable that cannot report a version.
+    [switch]$SkipVersionCheck
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -135,6 +145,40 @@ $companions = @(foreach ($name in $CompanionExecutables) {
     if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $info.Length -lt 1) { throw "Companion executable is empty or linked: $path" }
     [pscustomobject]@{ name = $name; path = $path; bytes = $info.Length }
 })
+function Find-SignTool {
+    $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($null -ne $onPath) { return $onPath.Source }
+    $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+    $found = @(Get-ChildItem -LiteralPath $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending)
+    if ($found.Count -eq 0) { throw 'signtool.exe was not found; install the Windows SDK (Signing Tools) or put signtool on PATH.' }
+    return $found[0].FullName
+}
+
+function Invoke-CodeSigning([string]$Folder) {
+    $signtool = Find-SignTool
+    foreach ($exe in @(Get-ChildItem -LiteralPath $Folder -Filter *.exe -File)) {
+        & $signtool sign /sha1 $SignCertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $exe.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Signing failed for $($exe.Name)." }
+        & $signtool verify /pa $exe.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Signature did not verify for $($exe.Name)." }
+    }
+}
+
+# The version the build carries (bri-client --version: "<name> (<hash>)").
+# It must be the package's version, or the main menu, logs and update check
+# would name another build. Build releases with $env:BRI_VERSION set.
+function Get-BuildVersion([string]$Executable) {
+    $out = [IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process -FilePath $Executable -ArgumentList '--version' -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out
+        if ($process.ExitCode -ne 0) { throw "$Executable --version failed." }
+        return ((Get-Content -LiteralPath $out -Raw) -split '\s+')[0]
+    } finally {
+        Remove-Item -LiteralPath $out -ErrorAction SilentlyContinue
+    }
+}
+
 $effective = Get-EffectivePackages $RepoRoot
 $sourceContent = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'content'))
 $selected = @()
@@ -189,6 +233,9 @@ if ($ValidateOnly) {
 if ([string]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'Supply -Version using 1–64 letters, digits, dot, underscore or dash.' }
 if ([string]::IsNullOrWhiteSpace($ExpectedExecutableSha256) -or $ExpectedExecutableSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'Supply the SHA-256 reported for the root-provided release executable using -ExpectedExecutableSha256.' }
 if ($executableSha256 -cne $ExpectedExecutableSha256.ToLowerInvariant()) { throw "Release executable hash differs from root's expected build: $executableSha256" }
+$buildVersion = if ($SkipVersionCheck) { $Version } else { Get-BuildVersion $ExecutablePath }
+if ($buildVersion -cne $Version) { throw "The executable reports version '$buildVersion', not '$Version'. Rebuild with `$env:BRI_VERSION = '$Version' before cargo build --release." }
+if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint) -and $SignCertificateThumbprint -notmatch '^[0-9A-Fa-f]{40}$') { throw 'Supply -SignCertificateThumbprint as the 40-hex-digit SHA-1 thumbprint.' }
 [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
 $suffix = if ($StressLab) { '-stress-lab' } else { '' }
 $releasePath = Join-Path $DestinationRoot "BlocklandReImagined-alpha-$Version$suffix"
@@ -197,6 +244,7 @@ if (Test-Path -LiteralPath $releasePath) { throw "Refusing to overwrite an exist
 try {
     Copy-Item -LiteralPath $ExecutablePath -Destination (Join-Path $releasePath 'bri-client.exe')
     foreach ($companion in $companions) { Copy-Item -LiteralPath $companion.path -Destination (Join-Path $releasePath $companion.name) }
+    if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint)) { Invoke-CodeSigning $releasePath }
     foreach ($packageInput in $docInputs) { Copy-Item -LiteralPath $packageInput.source -Destination (Join-Path $releasePath $packageInput.destination) }
     $packagedContent = Join-Path $releasePath 'content'
     [IO.Directory]::CreateDirectory($packagedContent) | Out-Null

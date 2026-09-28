@@ -570,6 +570,8 @@ pub enum UiAction {
         channel: String,
         value: f32,
     },
+    /// Open a web page in the player's browser (a new release's page).
+    OpenUrl(String),
     // ---- in game
     Chat {
         channel: ChatChannel,
@@ -1093,6 +1095,13 @@ pub enum UiUpdate {
     /// The next connection failure is a refused join over differing
     /// add-ons: show these instead of a plain message box.
     AddOnMismatch(AddOnMismatch),
+    /// This build's version, shown on the main menu.
+    Version(String),
+    /// A newer release exists: say so once and offer its page.
+    NewerVersion { name: String, url: String },
+    /// The host chose preferences for the player (the first run's graphics
+    /// quality); they are saved like the player's own.
+    SetPrefs(Vec<(String, String)>),
 }
 
 // ----------------------------------------------------------------- settings

@@ -15,6 +15,24 @@ Settings, identity, saves and screenshots live under `user-state/`; logs live
 under `logs/`. Keep both when reporting a problem. Do not share
 `client.identity` publicly.
 
+### "Windows protected your PC"
+
+The game is not signed with a paid certificate yet, so Windows SmartScreen
+may stop it the first time. Click **More info**, check the app name is
+`bri-client.exe` or `Launch.cmd`, then click **Run anyway**. Windows remembers
+the choice for this copy. If the download itself is blocked, right-click the
+zip, choose **Properties**, tick **Unblock** and extract it again.
+
+### Version and updates
+
+The main menu's bottom corner shows the version (for example
+`2026-09-28-a13 (1a2b3c4d5)`); include it when reporting a problem. Once per
+start the game asks the project's GitHub Releases page whether a newer version
+exists and, if so, offers to open that page. It never downloads or installs
+anything and says nothing when offline. Turn it off with Options > Advanced >
+"Check for new versions". To update, extract the new version to a new folder;
+copy `user-state/` across to keep settings, saves and identity.
+
 ## Things to try
 
 - **Movement:** walk, jump, crouch, jet (hold right mouse), crouch-jet for the
@@ -52,6 +70,28 @@ under `logs/`. Keep both when reporting a problem. Do not share
 3. Try building together, a minigame deathmatch, riding one jeep together and a
    late join into an existing build.
 
+## If the game runs slowly
+
+The first start picks Low, Medium or High graphics from your GPU (Low for
+software rendering, Medium for graphics built into the processor, High for a
+graphics card). The choice and your GPU's name are in the session log. On a
+weak PC, try these in order:
+
+1. Options > Graphics > Shadow Quality Minimum (turns sun shadows off), and
+   turn Anti-Aliasing and Brick Shadows off. These cost the most.
+2. Pick a smaller resolution, or play windowed at 1280x720.
+3. Turn precipitation off (rain and snow maps).
+4. Laptops: plug in and set Windows to Best performance. On a laptop with two
+   GPUs, choose High performance for `bri-client.exe` in Settings > System >
+   Display > Graphics.
+5. Update the graphics driver from Intel, AMD or NVIDIA.
+6. Start on a small map (Slate, Bedroom) before big builds.
+
+Every minute of play the session log records frame times ("Frame times over
+60 s: ... fps average, median ... ms, 1% slowest ... ms"). Send the session
+log with any "it's slow" report; the console's `stats` command shows the
+current numbers.
+
 ## Default controls reminder
 
 | Action | Standard keyboard / wheel mouse |
@@ -67,8 +107,10 @@ under `logs/`. Keep both when reporting a problem. Do not share
 
 ## Send back
 
-For each issue: map, what you did, what v20 would do, what happened, whether it
-repeats, and the latest file from `logs/` (after a crash, also the
-newest `crash-*.txt` and any `crash-*.dmp`). Screenshots help (they save under
+For each issue: the version from the main menu, map, what you did, what v20
+would do, what happened, whether it repeats, and the latest file from `logs/`.
+After a crash the next start names the crash files (`crash-*.txt` and, for a
+native crash, `crash-*.dmp`) and offers to open the folder; send those too.
+Nothing is uploaded automatically. Screenshots help (they save under
 `user-state/screenshots/`). Separate crashes and blockers from feel and visual
 differences.

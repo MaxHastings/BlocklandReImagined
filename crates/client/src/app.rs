@@ -324,6 +324,12 @@ pub struct App {
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     net_graph: Option<(std::time::Instant, u32)>,
     frame_stats: crate::console::FrameStats,
+    /// Minute-by-minute frame times for the session log (player sessions).
+    frame_log: Option<crate::quality::FrameLog>,
+    /// The start-up release check's answer, until it is shown.
+    update_check: Option<mpsc::Receiver<crate::updates::Newer>>,
+    /// Pick a graphics quality from the GPU if the player never has.
+    auto_quality: bool,
     /// LAN listings from the last discovery query: address -> certificate.
     lan_hosts: BTreeMap<String, Vec<u8>>,
     lan_query: Option<mpsc::Receiver<Vec<(SocketAddr, bri_net::discovery::Beacon)>>>,
@@ -706,6 +712,34 @@ impl App {
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
     }
+    /// First run: choose Low, Medium or High from the GPU and screen, and
+    /// save it as the player's graphics options. Their own later choices win.
+    fn pick_quality(&mut self, adapter: &wgpu::AdapterInfo) {
+        if !crate::quality::first_run(&self.ui.settings().prefs) {
+            return;
+        }
+        let screen = self.ui.core.display_modes.as_ref().map(|m| m.native);
+        let quality = crate::quality::pick(adapter.device_type, screen);
+        bri_console::echo(format!(
+            "First run: {} graphics quality for {} ({:?}) on a {} screen. Options > Graphics changes it.",
+            quality.name(),
+            adapter.name,
+            adapter.device_type,
+            screen.map_or("unknown".into(), |(w, h)| format!("{w}x{h}")),
+        ));
+        self.ui.apply(UiUpdate::SetPrefs(quality.prefs()));
+        // The renderer about to be built uses it; saving follows in `pump`.
+        self.graphics = crate::graphics::Graphics::from_settings(&self.ui.settings());
+    }
+    /// The game a player started (not a test or tool): check for a newer
+    /// release, pick a graphics quality on the first run, and log frame
+    /// times to the session log.
+    pub fn player_session(&mut self) {
+        let settings = self.ui.settings();
+        self.update_check = crate::updates::start(&settings);
+        self.auto_quality = true;
+        self.frame_log = Some(Default::default());
+    }
     pub fn audio_stats(&self) -> bri_audio::AudioStats {
         self.audio.stats()
     }
@@ -921,6 +955,7 @@ impl App {
             .map(IconRef::Pack)
             .collect();
         ui.apply(UiUpdate::MainMenuBackgrounds(backgrounds));
+        ui.apply(UiUpdate::Version(crate::updates::version()));
         Ok(Self {
             item_assets,
             item_ui,
@@ -1017,6 +1052,9 @@ impl App {
             music_world: None,
             net_graph: None,
             frame_stats: Default::default(),
+            frame_log: None,
+            update_check: None,
+            auto_quality: false,
             lan_hosts: BTreeMap::new(),
             lan_query: None,
             macro_recording: None,
@@ -3278,6 +3316,27 @@ impl PlatformApp for App {
     }
     fn tick(&mut self, elapsed: Duration) -> Result<()> {
         self.frame_stats.push(elapsed);
+        if let Some(line) = self.frame_log.as_mut().and_then(|log| log.frame(elapsed)) {
+            // Session log only: players send it, the console stays quiet.
+            eprintln!("{line}");
+        }
+        // Tell the player about a newer release outside a game, not as a
+        // dialog over play.
+        if !self.ui.core.in_game()
+            && let Some(check) = &self.update_check
+        {
+            match check.try_recv() {
+                Ok(newer) => {
+                    self.update_check = None;
+                    self.ui.apply(UiUpdate::NewerVersion {
+                        name: newer.name,
+                        url: newer.url,
+                    });
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.update_check = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let mut listener = bri_audio::Listener::default();
         // `setTimeScale` slows or speeds the whole game, not the interface.
         let scale = self
@@ -4029,6 +4088,13 @@ impl PlatformApp for App {
                     })
                 }
                 UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
+                UiAction::OpenUrl(url) => {
+                    // Only web pages; the UI only ever asks for release pages.
+                    if url.starts_with("https://") && !bri_crash::open(&url) {
+                        bri_console::warn(format!("Could not open {url}"));
+                    }
+                    Ok(())
+                }
                 UiAction::HostGame {
                     map,
                     mode,
@@ -4442,6 +4508,10 @@ impl PlatformApp for App {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Result<()> {
+        if self.auto_quality {
+            self.auto_quality = false;
+            self.pick_quality(&device.adapter_info());
+        }
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
