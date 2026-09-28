@@ -97,6 +97,10 @@ pub trait Screen {
     fn blocks_accelerators(&self) -> bool {
         true
     }
+    /// The bound command that opens this dialog; its key closes it again.
+    fn opening_command(&self) -> Option<&'static str> {
+        None
+    }
     /// Screens that take every key (remap capture).
     fn captures_keyboard(&self) -> bool {
         false

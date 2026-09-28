@@ -1801,6 +1801,22 @@ impl Ui {
             self.dispatch(top, out);
             return;
         }
+        // The key that opens a dialog toggles it, like the console's.
+        if !repeat
+            && let Some(t) = top
+            && let Some(opening) = self.dialogs[t].opening_command()
+            && self
+                .core
+                .binds
+                .command_for_key(key, mods)
+                .is_some_and(|c| c.eq_ignore_ascii_case(opening))
+        {
+            let id = self.dialogs[t].id();
+            self.core.pop(id);
+            self.swallow_char = true;
+            self.flush();
+            return;
+        }
         // 3. The top screen's own key handling (remap capture, text entry).
         if self.with_target(top, |s, c| s.on_key(key, mods, c)) {
             self.flush();

@@ -764,3 +764,36 @@ fn leaving_a_host_with_unsaved_changes_asks_about_them_first() {
     assert!(message.text.contains("autosave"));
     assert_eq!(message.on_yes, bri_ui::ui::Callback::Quit);
 }
+
+#[test]
+fn double_clicking_a_game_mode_chooses_it_like_select() {
+    let mut u = ui();
+    u.apply(UiUpdate::GameModes(vec![GameModeInfo {
+        id: "stresslab-mode:mode/stresslab".into(),
+        name: "Stress Lab".into(),
+        description: String::new(),
+        map: None,
+    }]));
+    click(&mut u, ScreenId::MainMenu, "start");
+    click(&mut u, ScreenId::StartMission, "SM_GameMode");
+    assert_eq!(u.top_id(), ScreenId::GameModes);
+    // Lists report a double-click as Submit, as the Add-Ons list reads it.
+    click(&mut u, ScreenId::GameModes, "GM_List");
+    click(&mut u, ScreenId::GameModes, "GM_List");
+    assert_eq!(u.top_id(), ScreenId::StartMission);
+}
+
+#[test]
+fn the_player_list_key_closes_the_list_it_opened() {
+    let mut u = ui();
+    play(&mut u);
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::F(2))), "showPlayerList");
+    down(&mut u, Key::F(2));
+    u.update(16);
+    assert_eq!(u.top_id(), ScreenId::PlayerList);
+    down(&mut u, Key::F(2));
+    u.update(16);
+    assert_eq!(u.top_id(), ScreenId::Play);
+}

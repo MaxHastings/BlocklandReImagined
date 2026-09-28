@@ -194,7 +194,7 @@ impl Screen for GameModes {
             .unwrap_or_default();
         match (name.as_str(), ev.kind) {
             (_, EventKind::Close) | (CANCEL, EventKind::Click) => core.pop(self.id()),
-            (SELECT, EventKind::Click) | (LIST, EventKind::DoubleClick) => self.choose(core),
+            (SELECT, EventKind::Click) | (LIST, EventKind::Submit) => self.choose(core),
             (LIST, EventKind::Changed) => self.show_details(core),
             _ => {}
         }

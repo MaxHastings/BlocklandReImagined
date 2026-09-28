@@ -175,6 +175,9 @@ impl Screen for Players {
     fn blocks_accelerators(&self) -> bool {
         true
     }
+    fn opening_command(&self) -> Option<&'static str> {
+        Some("showPlayerList")
+    }
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
     }
