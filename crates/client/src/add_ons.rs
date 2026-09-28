@@ -17,12 +17,26 @@ const BASE_CATEGORY: &str = "Base Game";
 /// Group headings by provided kind, first match wins; anything else is
 /// "Other". Kinds are open-ended, so unknown ones still show.
 const CATEGORIES: &[(&str, &[&str])] = &[
-    ("Game Modes & Worlds", &["world", "gamemode", "mode", "map", "minigame"]),
-    ("Weapons & Items", &["weapons", "weapon", "item", "items", "tool"]),
+    (
+        "Game Modes & Worlds",
+        &["world", "gamemode", "mode", "map", "minigame"],
+    ),
+    (
+        "Weapons & Items",
+        &["weapons", "weapon", "item", "items", "tool"],
+    ),
     ("Bricks", &["bricks", "brick", "print", "prints"]),
     ("Vehicles", &["vehicles", "vehicle"]),
-    ("Gameplay", &["behaviour", "script", "entity", "event", "events"]),
-    ("Looks, Sounds & HUD", &["hud", "ui", "model", "sound", "sounds", "texture", "avatar", "effects", "music"]),
+    (
+        "Gameplay",
+        &["behaviour", "script", "entity", "event", "events"],
+    ),
+    (
+        "Looks, Sounds & HUD",
+        &[
+            "hud", "ui", "model", "sound", "sounds", "texture", "avatar", "effects", "music",
+        ],
+    ),
 ];
 
 /// What each capability lets a package do, in a player's words.
@@ -72,7 +86,9 @@ pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<AddOnsView> {
         .iter()
         .map(|i| library.get(i).map_or(i.clone(), |e| e.name().to_string()))
         .collect();
-    let name = library.get(id).map_or(id.to_string(), |e| e.name().to_string());
+    let name = library
+        .get(id)
+        .map_or(id.to_string(), |e| e.name().to_string());
     library.apply(&plan)?;
     let mut out = AddOnsView {
         rows: rows(&library),
@@ -85,7 +101,8 @@ pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<AddOnsView> {
             also.join(", ")
         ));
     }
-    out.notice.push_str(" Changes apply the next time you start a game.");
+    out.notice
+        .push_str(" Changes apply the next time you start a game.");
     Ok(out)
 }
 
@@ -108,7 +125,10 @@ pub fn defaults(root: &Path) -> Result<AddOnsView> {
         rows: rows(&library),
         notice: match count {
             0 => "Only the base game is on.".into(),
-            n => format!("Turned off {n} add-on{}. Changes apply the next time you start a game.", if n == 1 { "" } else { "s" }),
+            n => format!(
+                "Turned off {n} add-on{}. Changes apply the next time you start a game.",
+                if n == 1 { "" } else { "s" }
+            ),
         },
     })
 }
@@ -119,7 +139,11 @@ pub fn rows(library: &Library) -> Vec<AddOnRow> {
     if !base.is_empty() {
         let problems: Vec<String> = base
             .iter()
-            .flat_map(|e| e.problems.iter().map(move |d| format!("{}: {}", e.id(), d.message)))
+            .flat_map(|e| {
+                e.problems
+                    .iter()
+                    .map(move |d| format!("{}: {}", e.id(), d.message))
+            })
             .collect();
         out.push(AddOnRow {
             id: BASE_ROW.into(),
@@ -145,7 +169,10 @@ pub fn rows(library: &Library) -> Vec<AddOnRow> {
         if c == BASE_CATEGORY {
             0
         } else {
-            CATEGORIES.iter().position(|(n, _)| *n == c).map_or(usize::MAX, |i| i + 1)
+            CATEGORIES
+                .iter()
+                .position(|(n, _)| *n == c)
+                .map_or(usize::MAX, |i| i + 1)
         }
     };
     out.sort_by_key(|r| rank(&r.category));
@@ -159,7 +186,11 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
         .iter()
         .find(|(_, members)| kinds.iter().any(|(k, _)| members.contains(&k.as_str())))
         .map_or("Other", |(name, _)| name);
-    let name_of = |id: &str| library.get(id).map_or(id.to_string(), |d| d.name().to_string());
+    let name_of = |id: &str| {
+        library
+            .get(id)
+            .map_or(id.to_string(), |d| d.name().to_string())
+    };
     AddOnRow {
         id: e.id().into(),
         name: e.name().into(),
@@ -182,7 +213,13 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
         },
         provides: kinds
             .iter()
-            .map(|(k, n)| if *n == 1 { format!("1 {k}") } else { format!("{n} {k}s") })
+            .map(|(k, n)| {
+                if *n == 1 {
+                    format!("1 {k}")
+                } else {
+                    format!("{n} {k}s")
+                }
+            })
             .collect(),
         needs: info
             .dependencies
@@ -190,7 +227,11 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
             .map(|(id, requirement)| format!("{} {requirement}", name_of(id)))
             .collect(),
         needed_by: if e.enabled {
-            library.dependents(e.id()).iter().map(|i| name_of(i)).collect()
+            library
+                .dependents(e.id())
+                .iter()
+                .map(|i| name_of(i))
+                .collect()
         } else {
             vec![]
         },
@@ -236,7 +277,13 @@ mod tests {
         .unwrap();
         for (dir, id, deps, kind, caps) in [
             ("mods/world", "lab-world", json!({}), "world", json!([])),
-            ("mods/creeper", "creeper", json!({ "lab-world": "^1.0" }), "entity", json!(["entity", "damage"])),
+            (
+                "mods/creeper",
+                "creeper",
+                json!({ "lab-world": "^1.0" }),
+                "entity",
+                json!(["entity", "damage"]),
+            ),
         ] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
             std::fs::write(
@@ -250,7 +297,11 @@ mod tests {
             .unwrap();
         }
         let v = view(&root);
-        let names: Vec<_> = v.rows.iter().map(|r| (r.category.as_str(), r.name.as_str())).collect();
+        let names: Vec<_> = v
+            .rows
+            .iter()
+            .map(|r| (r.category.as_str(), r.name.as_str()))
+            .collect();
         assert_eq!(
             names,
             [
@@ -260,7 +311,13 @@ mod tests {
             ]
         );
         let creeper = &v.rows[2];
-        assert_eq!(creeper.allowed, ["spawn and move its own creatures and objects", "hurt players and break bricks"]);
+        assert_eq!(
+            creeper.allowed,
+            [
+                "spawn and move its own creatures and objects",
+                "hurt players and break bricks"
+            ]
+        );
         assert_eq!(creeper.needs, ["The lab-world ^1.0"]);
         assert!(creeper.runs.starts_with("Everyone"));
 

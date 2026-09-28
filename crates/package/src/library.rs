@@ -20,7 +20,9 @@
 use crate::API_LEVEL;
 use crate::diag::{Diagnostic, Diagnostics, Severity};
 use crate::id::{self, Requirement, Version};
-use crate::packages::{MAX_PACKAGES, PACKAGES_FILE, PACKAGES_SCHEMA, PackageEntry, PackageSet, Side};
+use crate::packages::{
+    MAX_PACKAGES, PACKAGES_FILE, PACKAGES_SCHEMA, PackageEntry, PackageSet, Side,
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -190,7 +192,10 @@ impl Library {
                 problems.push(
                     Diagnostic::warning(
                         "library.listed_twice",
-                        format!("`{}` is in both {PACKAGES_FILE} and {DISABLED_FILE}", package.id),
+                        format!(
+                            "`{}` is in both {PACKAGES_FILE} and {DISABLED_FILE}",
+                            package.id
+                        ),
                     )
                     .hint("it is treated as enabled; turning it off or on again tidies the lists"),
                 );
@@ -198,15 +203,19 @@ impl Library {
             }
             entries.push(entry(root, package.clone(), on, false));
         }
-        let listed_dirs: BTreeSet<String> =
-            entries.iter().map(|e| e.package.dir.to_ascii_lowercase()).collect();
+        let listed_dirs: BTreeSet<String> = entries
+            .iter()
+            .map(|e| e.package.dir.to_ascii_lowercase())
+            .collect();
         let mut found = Vec::new();
         discover(root, root, 0, &listed_dirs, &mut 0, &mut found);
         for (dir, info) in found {
             if entries.len() >= MAX_PACKAGES {
                 problems.push(Diagnostic::warning(
                     "library.too_many",
-                    format!("more than {MAX_PACKAGES} packages are installed; the rest are not shown"),
+                    format!(
+                        "more than {MAX_PACKAGES} packages are installed; the rest are not shown"
+                    ),
                 ));
                 break;
             }
@@ -242,11 +251,18 @@ impl Library {
                 continue;
             }
             let server_only = !info.provides.is_empty()
-                && info.provides.iter().all(|p| SERVER_KINDS.contains(&p.kind.as_str()));
+                && info
+                    .provides
+                    .iter()
+                    .all(|p| SERVER_KINDS.contains(&p.kind.as_str()));
             let package = PackageEntry {
                 id: info.id.clone(),
                 version: info.version.clone(),
-                side: if server_only { Side::Server } else { Side::Shared },
+                side: if server_only {
+                    Side::Server
+                } else {
+                    Side::Shared
+                },
                 dir,
                 role: None,
             };
@@ -345,9 +361,11 @@ impl Library {
             .collect();
         for e in &turning_on {
             if e.has_errors() {
-                for d in e.problems.iter().filter(|d| {
-                    d.severity == Severity::Error && d.code != "library.dependency"
-                }) {
+                for d in e
+                    .problems
+                    .iter()
+                    .filter(|d| d.severity == Severity::Error && d.code != "library.dependency")
+                {
                     plan.refused.push(d.clone());
                 }
             }
@@ -372,7 +390,8 @@ impl Library {
             }
         }
         plan.also = order.into_iter().filter(|i| i != id).collect();
-        plan.also.retain(|i| self.get(i).is_some_and(|e| !e.enabled));
+        plan.also
+            .retain(|i| self.get(i).is_some_and(|e| !e.enabled));
         plan
     }
 
@@ -396,13 +415,19 @@ impl Library {
                 None => refused.push(
                     Diagnostic::error(
                         "library.dependency_missing",
-                        format!("{} needs `{dep}` {requirement}, which is not installed", e.name()),
+                        format!(
+                            "{} needs `{dep}` {requirement}, which is not installed",
+                            e.name()
+                        ),
                     )
                     .at(e.package.id.clone())
                     .hint(format!("install `{dep}` first")),
                 ),
                 Some(d) => {
-                    let fits = match (Requirement::parse(requirement), Version::parse(&d.package.version)) {
+                    let fits = match (
+                        Requirement::parse(requirement),
+                        Version::parse(&d.package.version),
+                    ) {
                         (Ok(r), Ok(v)) => r.matches(v),
                         _ => false,
                     };
@@ -450,7 +475,7 @@ impl Library {
         let mut on: Vec<PackageEntry> = self
             .entries
             .iter()
-            .filter(|e| e.enabled && !(!plan.enable && changing.contains(e.id())))
+            .filter(|e| e.enabled && (plan.enable || !changing.contains(e.id())))
             .map(|e| e.package.clone())
             .collect();
         if plan.enable {
@@ -505,14 +530,19 @@ impl Library {
                 .collect();
             for (dep, requirement) in needs {
                 let problem = match versions.get(&dep) {
-                    None => Some(format!("needs `{dep}` {requirement}, which is not installed")),
+                    None => Some(format!(
+                        "needs `{dep}` {requirement}, which is not installed"
+                    )),
                     Some((enabled, version)) => {
-                        let fits = match (Requirement::parse(&requirement), Version::parse(version)) {
+                        let fits = match (Requirement::parse(&requirement), Version::parse(version))
+                        {
                             (Ok(r), Ok(v)) => r.matches(v),
                             _ => false,
                         };
                         if !fits {
-                            Some(format!("needs `{dep}` {requirement}; {version} is installed"))
+                            Some(format!(
+                                "needs `{dep}` {requirement}; {version} is installed"
+                            ))
                         } else if e.enabled && !enabled {
                             Some(format!("needs `{dep}`, which is turned off"))
                         } else {
@@ -616,7 +646,8 @@ fn read_info(path: &Path) -> Option<PackageInfo> {
         return None;
     }
     let info: PackageInfo = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    (id::namespace_problem(&info.id).is_none() && Version::parse(&info.version).is_ok()).then_some(info)
+    (id::namespace_problem(&info.id).is_none() && Version::parse(&info.version).is_ok())
+        .then_some(info)
 }
 
 /// Find directories holding a manifest that no list names. A directory with
@@ -675,12 +706,19 @@ fn discover(
 /// One entry per line, like the base list, written to a temporary file and
 /// renamed over the target so a crash never leaves half a list.
 fn write_atomic(path: &Path, set: &PackageSet) -> Result<()> {
-    let mut text = format!("{{\n  \"schema_version\": {},\n  \"packages\": [", set.schema_version);
+    let mut text = format!(
+        "{{\n  \"schema_version\": {},\n  \"packages\": [",
+        set.schema_version
+    );
     for (i, p) in set.packages.iter().enumerate() {
         text.push_str(if i == 0 { "\n    " } else { ",\n    " });
         text.push_str(&serde_json::to_string(p)?);
     }
-    text.push_str(if set.packages.is_empty() { "]\n}\n" } else { "\n  ]\n}\n" });
+    text.push_str(if set.packages.is_empty() {
+        "]\n}\n"
+    } else {
+        "\n  ]\n}\n"
+    });
     let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
     std::fs::write(&tmp, text).with_context(|| format!("Writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("Replacing {}", path.display()))?;
@@ -740,10 +778,34 @@ mod tests {
             &r.0,
             json!([{ "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-003", "role": "ui_pack" }]),
         );
-        manifest(&r.0, "packages/lab/world", "lab-world", json!({}), &["world", "script"]);
-        manifest(&r.0, "packages/lab/economy", "lab-economy", json!({ "lab-world": "^1.0.0" }), &["behaviour"]);
-        manifest(&r.0, "packages/lab/hud", "lab-hud", json!({ "lab-economy": "^1.0" }), &["hud"]);
-        manifest(&r.0, "orphan", "orphan", json!({ "nowhere": "*" }), &["weapons"]);
+        manifest(
+            &r.0,
+            "packages/lab/world",
+            "lab-world",
+            json!({}),
+            &["world", "script"],
+        );
+        manifest(
+            &r.0,
+            "packages/lab/economy",
+            "lab-economy",
+            json!({ "lab-world": "^1.0.0" }),
+            &["behaviour"],
+        );
+        manifest(
+            &r.0,
+            "packages/lab/hud",
+            "lab-hud",
+            json!({ "lab-economy": "^1.0" }),
+            &["hud"],
+        );
+        manifest(
+            &r.0,
+            "orphan",
+            "orphan",
+            json!({ "nowhere": "*" }),
+            &["weapons"],
+        );
         r
     }
 
@@ -786,7 +848,11 @@ mod tests {
         assert_eq!(ids(&on), ["v20-ui"]);
         // The exact entries are kept for next time.
         let off = PackageSet::load(&r.0.join(DISABLED_FILE)).unwrap();
-        assert!(off.packages.iter().any(|p| p.id == "lab-world" && p.side == Side::Server));
+        assert!(
+            off.packages
+                .iter()
+                .any(|p| p.id == "lab-world" && p.side == Side::Server)
+        );
         let lib = Library::scan(&r.0).unwrap();
         let world = lib.get("lab-world").unwrap();
         assert!(!world.enabled && !world.discovered);
@@ -803,9 +869,18 @@ mod tests {
         assert_eq!(plan.refused[0].code, "library.required");
         assert!(lib.plan("ghost", true).refused[0].code == "library.unknown");
         // A version the installed dependency does not satisfy.
-        manifest(&r.0, "packages/lab/hud", "lab-hud", json!({ "lab-economy": "^2.0" }), &["hud"]);
+        manifest(
+            &r.0,
+            "packages/lab/hud",
+            "lab-hud",
+            json!({ "lab-economy": "^2.0" }),
+            &["hud"],
+        );
         let lib = Library::scan(&r.0).unwrap();
-        assert_eq!(lib.plan("lab-hud", true).refused[0].code, "library.dependency_version");
+        assert_eq!(
+            lib.plan("lab-hud", true).refused[0].code,
+            "library.dependency_version"
+        );
         // A refused plan changes nothing on disk.
         let mut lib = lib;
         let before = std::fs::read(r.0.join(PACKAGES_FILE)).unwrap();
@@ -820,7 +895,9 @@ mod tests {
         std::fs::write(r.0.join("junk").join(MANIFEST_FILE), "{ not json").unwrap();
         manifest(&r.0, "future", "future", json!({}), &["weapons"]);
         let path = r.0.join("future").join(MANIFEST_FILE);
-        let text = std::fs::read_to_string(&path).unwrap().replace("\"api\":1", "\"api\":99");
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"api\":1", "\"api\":99");
         std::fs::write(&path, text).unwrap();
         list(
             &r.0,
@@ -830,8 +907,14 @@ mod tests {
             ]),
         );
         let lib = Library::scan(&r.0).unwrap();
-        assert_eq!(lib.get("junk").unwrap().problems[0].code, "library.manifest");
-        assert_eq!(lib.get("gone").unwrap().problems[0].code, "library.missing_dir");
+        assert_eq!(
+            lib.get("junk").unwrap().problems[0].code,
+            "library.manifest"
+        );
+        assert_eq!(
+            lib.get("gone").unwrap().problems[0].code,
+            "library.missing_dir"
+        );
         assert!(lib.get("gone").unwrap().enabled);
         let future = lib.get("future").unwrap();
         assert_eq!(future.problems[0].code, "library.api");
@@ -855,6 +938,9 @@ mod tests {
         )
         .unwrap();
         let lib = Library::scan(&r.0).unwrap();
-        assert_eq!(lib.plan("fancy-ui", true).refused[0].code, "library.role_conflict");
+        assert_eq!(
+            lib.plan("fancy-ui", true).refused[0].code,
+            "library.role_conflict"
+        );
     }
 }

@@ -63,12 +63,20 @@ impl AddOns {
         search_label.name = Some("AO_SearchLabel".into());
         win.children.push(search_label);
         win.children.push(named(
-            ctrl("GuiTextEditCtrl", "BlockTextEditProfile", Rect::new(62, 34, 186, 18)),
+            ctrl(
+                "GuiTextEditCtrl",
+                "BlockTextEditProfile",
+                Rect::new(62, 34, 186, 18),
+            ),
             SEARCH,
         ));
         let mut list_scroll = scroll("AO_Scroll", Rect::new(12, 58, 236, 316));
         let mut list = named(
-            ctrl("GuiTextListCtrl", "GuiTextListProfile", Rect::new(0, 0, 220, 16)),
+            ctrl(
+                "GuiTextListCtrl",
+                "GuiTextListProfile",
+                Rect::new(0, 0, 220, 16),
+            ),
             LIST,
         );
         list.fields.insert("columns".into(), "0 34".into());
@@ -79,18 +87,34 @@ impl AddOns {
         details.class = "GuiMLTextCtrl".into();
         detail_scroll.children.push(named(details, DETAILS));
         win.children.push(detail_scroll);
-        let mut enabled = ctrl("GuiCheckBoxCtrl", "GuiCheckBoxProfile", Rect::new(256, 354, 240, 20));
+        let mut enabled = ctrl(
+            "GuiCheckBoxCtrl",
+            "GuiCheckBoxProfile",
+            Rect::new(256, 354, 240, 20),
+        );
         enabled.text = Some("Enabled".into());
         win.children.push(named(enabled, ENABLED));
         let mut status = text("GuiMLTextProfile", Rect::new(12, 380, 576, 20), "");
         status.class = "GuiMLTextCtrl".into();
         win.children.push(named(status, STATUS));
         win.children.push(named(
-            button("BlockButtonProfile", Rect::new(12, 404, 98, 28), "base/client/ui/button1", "Defaults", DEFAULTS),
+            button(
+                "BlockButtonProfile",
+                Rect::new(12, 404, 98, 28),
+                "base/client/ui/button1",
+                "Defaults",
+                DEFAULTS,
+            ),
             DEFAULTS,
         ));
         win.children.push(named(
-            button("BlockButtonProfile", Rect::new(490, 404, 98, 28), "base/client/ui/button1", "Done", DONE),
+            button(
+                "BlockButtonProfile",
+                Rect::new(490, 404, 98, 28),
+                "base/client/ui/button1",
+                "Done",
+                DONE,
+            ),
             DONE,
         ));
         root.children.push(win);
@@ -152,11 +176,18 @@ impl AddOns {
                 } else {
                     ""
                 };
-                items.push((format!("{mark}\t{}", r.name.replace(['\t', '\n', '\r'], " ")), self.shown.len() as i64));
+                items.push((
+                    format!("{mark}\t{}", r.name.replace(['\t', '\n', '\r'], " ")),
+                    self.shown.len() as i64,
+                ));
                 self.shown.push(i);
             }
         }
-        if self.selected.as_ref().is_some_and(|id| !rows.iter().any(|r| r.id == *id)) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|id| !rows.iter().any(|r| r.id == *id))
+        {
             self.selected = None;
         }
         let selected_item = self.selected.as_ref().and_then(|id| {
@@ -192,8 +223,10 @@ impl AddOns {
             self.view.relayout();
         }
         if let Some(n) = self.view.id(ENABLED) {
-            self.view.set_bool(n, row.as_ref().is_some_and(|r| r.enabled));
-            self.view.set_active(n, row.as_ref().is_some_and(|r| !r.locked));
+            self.view
+                .set_bool(n, row.as_ref().is_some_and(|r| r.enabled));
+            self.view
+                .set_active(n, row.as_ref().is_some_and(|r| !r.locked));
             self.view.set_visible(n, row.is_some());
         }
     }
@@ -203,7 +236,10 @@ impl AddOns {
             return;
         };
         if row.locked {
-            core.message_ok("Add-Ons", &format!("{} is part of the base game and stays on.", row.name));
+            core.message_ok(
+                "Add-Ons",
+                &format!("{} is part of the base game and stays on.", row.name),
+            );
             return;
         }
         let enabled = !row.enabled;
@@ -215,24 +251,37 @@ impl AddOns {
                     row.name,
                     row.needed_by.join(", ")
                 ),
-                Callback::AddOn { id: row.id, enabled },
+                Callback::AddOn {
+                    id: row.id,
+                    enabled,
+                },
             );
             return;
         }
-        let id = core.request(UiAction::SetAddOnEnabled { id: row.id, enabled });
+        let id = core.request(UiAction::SetAddOnEnabled {
+            id: row.id,
+            enabled,
+        });
         self.requests.push(id);
     }
 }
 
 /// The details panel for one package.
 pub fn details(r: &AddOnRow) -> String {
-    let mut out = format!("<font:Impact:18>{}\n<font:Arial:14>Version {}", r.name, r.version);
+    let mut out = format!(
+        "<font:Impact:18>{}\n<font:Arial:14>Version {}",
+        r.name, r.version
+    );
     if r.locked {
         out.push_str(" - part of the base game");
     }
     out.push('\n');
     if !r.problems.is_empty() {
-        out.push_str(if r.broken { "\nWon't load:\n" } else { "\nNote:\n" });
+        out.push_str(if r.broken {
+            "\nWon't load:\n"
+        } else {
+            "\nNote:\n"
+        });
         for p in &r.problems {
             out.push_str(&format!("  - {p}\n"));
         }
@@ -308,7 +357,13 @@ impl Screen for AddOns {
         false
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
-        let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
+        let name = self
+            .view
+            .node(ev.node)
+            .ctrl
+            .name
+            .clone()
+            .unwrap_or_default();
         match (name.as_str(), ev.kind) {
             (_, EventKind::Close) | (DONE, EventKind::Click) => core.pop(self.id()),
             (SEARCH, EventKind::Changed) => self.refresh(core),
@@ -363,7 +418,8 @@ const DL_CANCEL: &str = "PD_Cancel";
 impl PackageDownload {
     pub fn new(core: &Core) -> Self {
         let mut root = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
-        root.children.push(swatch(Rect::new(0, 0, 640, 480), [0, 0, 0, 255]));
+        root.children
+            .push(swatch(Rect::new(0, 0, 640, 480), [0, 0, 0, 255]));
         root.children[0].h_sizing = HSizing::Width;
         root.children[0].v_sizing = VSizing::Height;
         let (_, mut win) = dialog("Joining Server", 440, 300);
@@ -372,14 +428,22 @@ impl PackageDownload {
         win.children.push(named(intro, "PD_Intro"));
         let mut list_scroll = scroll("PD_Scroll", Rect::new(12, 70, 416, 140));
         let mut list = named(
-            ctrl("GuiTextListCtrl", "GuiTextListProfile", Rect::new(0, 0, 400, 16)),
+            ctrl(
+                "GuiTextListCtrl",
+                "GuiTextListProfile",
+                Rect::new(0, 0, 400, 16),
+            ),
             DL_LIST,
         );
         list.fields.insert("columns".into(), "0 230 300".into());
         list_scroll.children.push(list);
         win.children.push(list_scroll);
         win.children.push(named(
-            ctrl("GuiProgressCtrl", "GuiProgressProfile", Rect::new(12, 218, 416, 18)),
+            ctrl(
+                "GuiProgressCtrl",
+                "GuiProgressProfile",
+                Rect::new(12, 218, 416, 18),
+            ),
             DL_PROGRESS,
         ));
         win.children.push(named(
@@ -387,7 +451,13 @@ impl PackageDownload {
             DL_BYTES,
         ));
         win.children.push(named(
-            button("BlockButtonProfile", Rect::new(330, 262, 98, 28), "base/client/ui/button1", "Cancel", DL_CANCEL),
+            button(
+                "BlockButtonProfile",
+                Rect::new(330, 262, 98, 28),
+                "base/client/ui/button1",
+                "Cancel",
+                DL_CANCEL,
+            ),
             DL_CANCEL,
         ));
         root.children.push(win);
@@ -448,7 +518,11 @@ impl PackageDownload {
         if let Some(n) = self.view.id(DL_BYTES) {
             self.view.set_text(
                 n,
-                format!("{} of {}", megabytes(d.done_bytes), megabytes(d.total_bytes)),
+                format!(
+                    "{} of {}",
+                    megabytes(d.done_bytes),
+                    megabytes(d.total_bytes)
+                ),
             );
         }
     }
@@ -490,7 +564,13 @@ impl Screen for PackageDownload {
         false
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
-        let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
+        let name = self
+            .view
+            .node(ev.node)
+            .ctrl
+            .name
+            .clone()
+            .unwrap_or_default();
         if (name == DL_CANCEL && ev.kind == EventKind::Click) || ev.kind == EventKind::Close {
             core.request(UiAction::CancelConnect);
         }
@@ -537,11 +617,19 @@ mod tests {
         base.locked = true;
         let mut world = row("lab-world", "Game Modes", true);
         world.needed_by = vec!["The lab-hud".into()];
-        AddOns_rows(vec![base, world, row("lab-hud", "Looks & HUD", false), row("gun", "Weapons & Items", false)])
+        AddOns_rows(vec![
+            base,
+            world,
+            row("lab-hud", "Looks & HUD", false),
+            row("gun", "Weapons & Items", false),
+        ])
     }
     #[allow(non_snake_case)]
     fn AddOns_rows(rows: Vec<AddOnRow>) -> AddOnsView {
-        AddOnsView { rows, notice: String::new() }
+        AddOnsView {
+            rows,
+            notice: String::new(),
+        }
     }
     fn select(s: &mut AddOns, ui: &mut Ui, name: &str) {
         let list = s.view.id(LIST).unwrap();
@@ -555,7 +643,13 @@ mod tests {
             .map(|(_, i)| *i)
             .unwrap();
         s.view.select(list, Some(item));
-        s.on_event(&ViewEvent { node: list, kind: EventKind::Changed }, &mut ui.core);
+        s.on_event(
+            &ViewEvent {
+                node: list,
+                kind: EventKind::Changed,
+            },
+            &mut ui.core,
+        );
     }
 
     #[test]
@@ -564,7 +658,14 @@ mod tests {
         ui.apply(UiUpdate::AddOns(view()));
         let s = AddOns::new(&ui.core);
         let list = s.view.id(LIST).unwrap();
-        let items: Vec<_> = s.view.node(list).state.items.iter().map(|(t, _)| t.as_str()).collect();
+        let items: Vec<_> = s
+            .view
+            .node(list)
+            .state
+            .items
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .collect();
         assert_eq!(
             items,
             [
@@ -590,12 +691,30 @@ mod tests {
         select(&mut s, &mut ui, "The gun");
         let check = s.view.id(ENABLED).unwrap();
         assert!(!s.view.bool_value(check));
-        s.on_event(&ViewEvent { node: check, kind: EventKind::Click }, &mut ui.core);
+        s.on_event(
+            &ViewEvent {
+                node: check,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
         let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
-        assert_eq!(actions, [UiAction::SetAddOnEnabled { id: "gun".into(), enabled: true }]);
+        assert_eq!(
+            actions,
+            [UiAction::SetAddOnEnabled {
+                id: "gun".into(),
+                enabled: true
+            }]
+        );
         // Turning off something others need asks first.
         select(&mut s, &mut ui, "The lab-world");
-        s.on_event(&ViewEvent { node: check, kind: EventKind::Click }, &mut ui.core);
+        s.on_event(
+            &ViewEvent {
+                node: check,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
         assert!(ui.drain_actions().is_empty());
         assert!(ui.core.cmds.iter().any(|c| matches!(
             c,
@@ -606,7 +725,13 @@ mod tests {
         ui.core.cmds.clear();
         select(&mut s, &mut ui, "The base");
         assert!(!s.view.node(check).state.active);
-        s.on_event(&ViewEvent { node: s.view.id(LIST).unwrap(), kind: EventKind::Submit }, &mut ui.core);
+        s.on_event(
+            &ViewEvent {
+                node: s.view.id(LIST).unwrap(),
+                kind: EventKind::Submit,
+            },
+            &mut ui.core,
+        );
         assert!(ui.drain_actions().is_empty());
     }
 
@@ -621,13 +746,29 @@ mod tests {
         let mut s = AddOns::new(&ui.core);
         let search = s.view.id(SEARCH).unwrap();
         s.view.set_text(search, "hud");
-        s.on_event(&ViewEvent { node: search, kind: EventKind::Changed }, &mut ui.core);
+        s.on_event(
+            &ViewEvent {
+                node: search,
+                kind: EventKind::Changed,
+            },
+            &mut ui.core,
+        );
         let list = s.view.id(LIST).unwrap();
-        let items: Vec<_> = s.view.node(list).state.items.iter().map(|(t, _)| t.clone()).collect();
+        let items: Vec<_> = s
+            .view
+            .node(list)
+            .state
+            .items
+            .iter()
+            .map(|(t, _)| t.clone())
+            .collect();
         assert_eq!(items, ["\tLOOKS & HUD", "!\tThe lab-hud"]);
         select(&mut s, &mut ui, "The lab-hud");
         let text = s.view.text_of(s.view.id(DETAILS).unwrap());
-        assert!(text.contains("Won't load:\n  - needs `lab-economy`"), "{text}");
+        assert!(
+            text.contains("Won't load:\n  - needs `lab-economy`"),
+            "{text}"
+        );
         assert!(text.contains("Allowed to: send chat messages"), "{text}");
     }
 
@@ -635,21 +776,48 @@ mod tests {
     fn the_main_menu_opens_add_ons_and_the_screen_asks_for_rows() {
         let mut data = UiPack::default();
         let mut menu = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
-        for (i, name) in ["MM_StartButton", "MM_OptionsButton", "MM_QuitButton"].into_iter().enumerate() {
-            menu.children.push(named(ctrl("GuiBitmapButtonCtrl", "BlockButtonProfile", Rect::new(20, 20 + i as i32 * 40, 120, 30)), name));
+        for (i, name) in ["MM_StartButton", "MM_OptionsButton", "MM_QuitButton"]
+            .into_iter()
+            .enumerate()
+        {
+            menu.children.push(named(
+                ctrl(
+                    "GuiBitmapButtonCtrl",
+                    "BlockButtonProfile",
+                    Rect::new(20, 20 + i as i32 * 40, 120, 30),
+                ),
+                name,
+            ));
         }
         data.layouts.insert("MainMenuGui".into(), menu);
         let mut ui = Ui::new(
             Rc::new(Pack::from_parts(data, Default::default())),
-            UiConfig { size: (640, 480), scale: Some(1.0), platform: Platform::Windows },
-            Settings { binds: Some(vec![]), ..Default::default() },
+            UiConfig {
+                size: (640, 480),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
         );
         assert_eq!(ui.top_id(), ScreenId::MainMenu);
-        let (x, y) = ui.control_center(ScreenId::MainMenu, "MM_AddOnsButton").unwrap();
+        let (x, y) = ui
+            .control_center(ScreenId::MainMenu, "MM_AddOnsButton")
+            .unwrap();
         assert_eq!((x, y), (80.0, 149.0), "under Quit, in the Options column");
         ui.handle_input(InputEvent::MouseMove { x, y });
-        ui.handle_input(InputEvent::MouseDown { button: crate::input::MouseButton::Left, x, y });
-        ui.handle_input(InputEvent::MouseUp { button: crate::input::MouseButton::Left, x, y });
+        ui.handle_input(InputEvent::MouseDown {
+            button: crate::input::MouseButton::Left,
+            x,
+            y,
+        });
+        ui.handle_input(InputEvent::MouseUp {
+            button: crate::input::MouseButton::Left,
+            x,
+            y,
+        });
         assert_eq!(ui.top_id(), ScreenId::AddOns);
         let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
         assert!(actions.contains(&UiAction::RequestAddOns), "{actions:?}");
@@ -658,15 +826,27 @@ mod tests {
     #[test]
     fn the_join_screen_shows_download_progress_and_cancels() {
         let mut ui = ui();
-        ui.apply(UiUpdate::Connection(ConnectionState::DownloadingPackages(Download {
-            server: "Creeper Hill".into(),
-            packages: vec![
-                DownloadRow { name: "Creeper".into(), version: "1.0.0".into(), bytes: 3 * 1024 * 1024, state: DownloadState::Downloading },
-                DownloadRow { name: "Creeper Model".into(), version: "1.0.0".into(), bytes: 2048, state: DownloadState::Cached },
-            ],
-            done_bytes: 1024 * 1024,
-            total_bytes: 3 * 1024 * 1024,
-        })));
+        ui.apply(UiUpdate::Connection(ConnectionState::DownloadingPackages(
+            Download {
+                server: "Creeper Hill".into(),
+                packages: vec![
+                    DownloadRow {
+                        name: "Creeper".into(),
+                        version: "1.0.0".into(),
+                        bytes: 3 * 1024 * 1024,
+                        state: DownloadState::Downloading,
+                    },
+                    DownloadRow {
+                        name: "Creeper Model".into(),
+                        version: "1.0.0".into(),
+                        bytes: 2048,
+                        state: DownloadState::Cached,
+                    },
+                ],
+                done_bytes: 1024 * 1024,
+                total_bytes: 3 * 1024 * 1024,
+            },
+        )));
         ui.handle_input(InputEvent::MouseMove { x: 1.0, y: 1.0 });
         assert_eq!(ui.top_id(), ScreenId::PackageDownload);
         let mut s = PackageDownload::new(&ui.core);
@@ -674,10 +854,19 @@ mod tests {
         assert_eq!(bytes, "1.0 MB of 3.0 MB");
         assert!((s.view.num(s.view.id(DL_PROGRESS).unwrap()) - 1.0 / 3.0).abs() < 1e-4);
         let intro = s.view.text_of(s.view.id("PD_Intro").unwrap());
-        assert!(intro.starts_with("Creeper Hill uses 1 add-on you don't have yet"), "{intro}");
+        assert!(
+            intro.starts_with("Creeper Hill uses 1 add-on you don't have yet"),
+            "{intro}"
+        );
         ui.drain_actions();
         let cancel = s.view.id(DL_CANCEL).unwrap();
-        s.on_event(&ViewEvent { node: cancel, kind: EventKind::Click }, &mut ui.core);
+        s.on_event(
+            &ViewEvent {
+                node: cancel,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
         let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
         assert_eq!(actions, [UiAction::CancelConnect]);
     }
