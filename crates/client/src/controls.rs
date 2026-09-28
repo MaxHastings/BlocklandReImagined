@@ -77,6 +77,8 @@ const ZOOM_DEGREES_PER_SECOND: f32 = 90.0 / 0.2;
 const CAMERA_SPEED: (f32, f32) = (5.0, 1000.0);
 /// v20's wheel-zoom limits (`toggleZoomFOV`'s 5 and 85).
 const ZOOM_FOV_RANGE: (f32, f32) = (5.0, 85.0);
+/// `$Camera::movementSpeed`, which v20's scripts set to 40 units per second.
+const CAMERA_MOVEMENT_SPEED: f32 = 40.0;
 /// Observer cameras stop just short of straight up or down.
 const OBSERVER_PITCH: f32 = FRAC_PI_2 - 0.01;
 fn wrap(a: f32) -> f32 {
@@ -192,6 +194,9 @@ impl Controls {
         let mode = match control {
             ControlObject::Player => {
                 self.observer = None;
+                // Fire held on the camera was never passed to the body, so
+                // its release may not reach here either.
+                self.held.remove(&HeldControl::Fire);
                 return;
             }
             ControlObject::Camera => match self.observer {
@@ -275,20 +280,36 @@ impl Controls {
             -yaw.cos() * pitch.cos(),
         );
         let right = glam::Vec3::new(yaw.cos(), 0.0, yaw.sin());
-        let up = u8::from(self.held.contains(&HeldControl::Jump)) as f32
-            - u8::from(self.held.contains(&HeldControl::Crouch)) as f32;
-        let speed = if self.held.contains(&HeldControl::Walk) {
-            8.0
+        // v20 binds no `moveup`/`movedown`, so the camera only flies along
+        // its view and strafe axes; each axis is scaled on its own, so a
+        // diagonal is faster, as in Torque.
+        let walk = if self.held(HeldControl::Walk) {
+            0.4
         } else {
-            30.0
+            1.0
         };
-        let direction = forward * self.axis(HeldControl::Forward, HeldControl::Backward)
-            + right * self.axis(HeldControl::Right, HeldControl::Left)
-            + glam::Vec3::Y * up;
-        position += direction.normalize_or_zero() * speed * seconds.clamp(0.0, 0.1);
+        let direction = (forward * self.axis(HeldControl::Forward, HeldControl::Backward)
+            + right * self.axis(HeldControl::Right, HeldControl::Left))
+            * walk;
+        position += direction * self.fly_speed() * seconds.clamp(0.0, 0.1);
         if let Some(observer) = &mut self.observer {
             observer.mode = ObserverMode::Free(position);
         }
+    }
+    /// Free-camera speed in units per second (`Camera::processTick` fly
+    /// mode, blocklandv20.exe 0x588514): `$Camera::movementSpeed` doubled
+    /// while fire (trigger 0) is held, else quartered while crouch
+    /// (trigger 3) is held. Trigger 1 would halve it, but v20 binds
+    /// `altTrigger` to nothing; right click is jet, which the camera ignores.
+    pub fn fly_speed(&self) -> f32 {
+        let scale = if self.held(HeldControl::Fire) {
+            2.0
+        } else if self.held(HeldControl::Crouch) {
+            0.25
+        } else {
+            1.0
+        };
+        CAMERA_MOVEMENT_SPEED * scale
     }
     /// The body's move: the held controls, unless a camera has control, when
     /// the body stands still with the aim it was left with.
@@ -507,7 +528,6 @@ mod tests {
             Some(glam::Vec3::new(0.0, 2.0, 0.0)),
         );
         held(&mut c, HeldControl::Forward, true);
-        held(&mut c, HeldControl::Jump, true);
         c.action(&GameAction::Look {
             yaw: 1.2,
             pitch: -0.5,
@@ -525,13 +545,54 @@ mod tests {
         assert_ne!(c.camera_angles().0, body.yaw);
         c.fly(0.05);
         let flown = c.free_camera().unwrap();
-        assert!(flown.y > 2.0, "jump flies the camera up");
+        assert!(flown.y > 2.0, "looking up flies the camera up");
         // A repeated grant keeps the camera where it was flown.
         c.follow(ControlObject::Camera, 1, Some(glam::Vec3::ZERO));
         assert_eq!(c.free_camera(), Some(flown));
         c.follow(ControlObject::Player, 1, None);
         assert_eq!(c.movement().forward, 1.0);
         assert_eq!(c.movement().yaw, body.yaw);
+    }
+    /// v20's fly mode: 40 units/s, doubled while fire is held, quartered
+    /// while crouching, walk scaling each axis by 0.4, no vertical keys.
+    #[test]
+    fn free_camera_flies_at_v20_speeds() {
+        let flown = |keys: &[HeldControl]| {
+            let mut c = Controls::default();
+            c.follow(ControlObject::Camera, 1, Some(glam::Vec3::ZERO));
+            for &key in keys {
+                held(&mut c, key, true);
+            }
+            c.fly(0.1);
+            c.free_camera().unwrap()
+        };
+        let close = |a: glam::Vec3, b: glam::Vec3| (a - b).length() < 1e-4;
+        let ahead = |d: f32| glam::Vec3::new(0.0, 0.0, -d);
+        use HeldControl::*;
+        assert!(close(flown(&[Forward]), ahead(4.0)));
+        assert!(close(flown(&[Forward, Fire]), ahead(8.0)));
+        assert!(close(flown(&[Forward, Crouch]), ahead(1.0)));
+        // Fire wins over crouch.
+        assert!(close(flown(&[Forward, Fire, Crouch]), ahead(8.0)));
+        assert!(close(flown(&[Forward, Walk]), ahead(1.6)));
+        assert!(close(flown(&[Forward, Walk, Fire]), ahead(3.2)));
+        // Each axis moves at full speed, so a diagonal is faster.
+        assert!(close(
+            flown(&[Forward, Right]),
+            glam::Vec3::new(4.0, 0.0, -4.0)
+        ));
+        // Jump, jet and fire alone do not move it.
+        assert_eq!(flown(&[Jump, Jet, Fire]), glam::Vec3::ZERO);
+    }
+    #[test]
+    fn leaving_the_camera_forgets_a_held_fire() {
+        let mut c = Controls::default();
+        c.follow(ControlObject::Camera, 1, Some(glam::Vec3::ZERO));
+        held(&mut c, HeldControl::Fire, true);
+        assert_eq!(c.fly_speed(), 80.0);
+        c.follow(ControlObject::Player, 1, None);
+        c.follow(ControlObject::Camera, 1, Some(glam::Vec3::ZERO));
+        assert_eq!(c.fly_speed(), 40.0);
     }
     #[test]
     fn spy_orbits_with_the_mouse_and_never_flies() {

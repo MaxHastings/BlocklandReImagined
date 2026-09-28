@@ -3553,3 +3553,22 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   longer lists the join trust prompt as unbuilt; only elevated client code
   is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
   packaging test needs Windows (not run in the cloud).
+
+
+## 2026-09-28 Admin orb flies at v20 speeds
+
+- Max: holding left click in the v20 free camera flies faster; ours did not.
+  v20's scripts set `$Camera::movementSpeed = 40`; its fly-mode tick
+  (blocklandv20.exe 0x588514) doubles that while trigger 0 (left click) is
+  held, else halves it for trigger 1 (`altTrigger`, unbound in v20), else
+  quarters it for trigger 3 (crouch, left shift). Walk (`c`) scales each
+  axis by 0.4, the axes are not normalized (diagonals are faster), and v20
+  binds no `moveup`/`movedown`, so space does nothing and shift slows
+  instead of descending. Right click is jet, which the camera ignores.
+- Ours flew at 30 (8 walking), used space/shift to climb and sink, and
+  swallowed left click on the camera. `Controls::fly_speed` now follows the
+  exe; left click is recorded while a camera has control and forgotten
+  when control returns to the body.
+Evidence: `cargo test -p bri-client --lib controls`
+(`free_camera_flies_at_v20_speeds`, `leaving_the_camera_forgets_a_held_fire`).
+Needs Max's playtest: F8, fly with and without left click and shift.
