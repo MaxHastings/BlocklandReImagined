@@ -3225,14 +3225,22 @@ window is still unchecked (Max's playtest).
 v20's `ServerLoadSaveFile_Tick` plants each loaded brick and deletes it when
 `plant()` fails with an overlap (error 1), stuck (3) or buried (5); the end
 line counts them as not created ("5 / 10 bricks created in ..."). Our load
-now skips loaded bricks that overlap a brick already in the world, using the
-same cell rule as planting (`overlaps_world` in `simulation.rs`), and the
-existing end line reports them the same way. Bricks from the same save are
-not checked against each other: our rule is stricter than v20's for ramps,
-and five stock saves (43 ramp pairs, e.g. Arch of Constantine and Sirrus
-Military Compound) would otherwise lose bricks v20 keeps. That ramp gap also
-affects hand planting and is open work. Stuck and buried skips are not
-copied. Evidence: `cargo test -p bri-sim --test session
-loading_over_a_build` (two overlapping saves), `cargo test -p bri-sim --test
-stock_saves_native -- --include-ignored`, `cargo test -p bri-net --test
-loopback` (its reload test now loads beside the first copy). No wire change.
+now skips loaded bricks that overlap a brick already in the world or earlier
+in the same save, using the same cell rule as planting (`overlaps_world` in
+`simulation.rs`), and the existing end line reports them the same way.
+Stuck and buried skips are not copied.
+
+That check first skipped 43 bricks, all ramp pairs, in five stock saves
+(Arch of Constantine, Jetpuff's Towers, Afghanistan DM, Ice Palace, Sirrus
+Military Compound). The cause was `grid::Bounds::cell` reading a BLB's depth
+slices back to front: the first slice is the BLB's largest y, which the
+converter maps to our smallest z. Symmetric bricks were unaffected. Ramps,
+corners and crests had their empty wedge cells and stud ends at the wrong
+end for overlap and support, so hand planting also refused ramp arrangements
+v20 allows. With the fix, all 37 stock saves load with nothing skipped. Evidence:
+`cargo test -p bri-sim --lib grid` (the slice order against `1x3ramp.blb`'s
+top quad, and two of the stock ramp pairs), `cargo test -p bri-sim --test
+session loading_over_a_build` (two overlapping saves), `cargo test -p bri-sim
+-- --include-ignored` (the stock-save test asserts no brick is skipped),
+`cargo test -p bri-net --test loopback` (its reload test now loads beside
+the first copy). No wire change.

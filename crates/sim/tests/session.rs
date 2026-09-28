@@ -981,11 +981,13 @@ fn loading_over_a_build_skips_overlapping_bricks_like_v20() {
     let first: Vec<f32> = (0..10).map(|i| 0.5 + i as f32).collect();
     let done = load(&mut s, save(&first), 1);
     assert!(done.starts_with("10 / 10 bricks created"), "{done}");
-    // Half of the second save lands on the first. v20 plants each loaded
-    // brick and deletes the ones that overlap, reporting them as not created.
-    let second: Vec<f32> = (5..15).map(|i| 0.5 + i as f32).collect();
+    // Half of the second save lands on the first, and its last brick
+    // repeats one of its own. v20 plants each loaded brick and deletes the
+    // ones that overlap, reporting them as not created.
+    let mut second: Vec<f32> = (5..15).map(|i| 0.5 + i as f32).collect();
+    second.push(14.5);
     let done = load(&mut s, save(&second), 2);
-    assert!(done.starts_with("5 / 10 bricks created"), "{done}");
+    assert!(done.starts_with("5 / 11 bricks created"), "{done}");
     let mut xs: Vec<f32> = s
         .snapshot()
         .world

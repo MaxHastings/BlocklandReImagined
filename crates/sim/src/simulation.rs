@@ -262,35 +262,30 @@ impl Simulation {
     }
     /// v20 `ServerLoadSaveFile_Tick`: each loaded brick is planted, and one
     /// that overlaps a brick already there (plant error 1) is deleted and
-    /// counted as a failure. Returns the bricks to place, in order.
-    ///
-    /// Bricks of the same save (`own`) are not checked against each other.
-    /// v20 does check them, but a save v20 wrote was planted under that rule,
-    /// and our cell rule is stricter than v20's for ramps: five stock saves
-    /// (43 ramp pairs, Sirrus Military Compound and Arch of Constantine
-    /// among them) would lose bricks v20 keeps.
-    pub fn drop_overlapping(
-        &self,
-        bricks: Vec<Brick>,
-        own: &BTreeSet<BrickId>,
-    ) -> Result<Vec<Brick>> {
-        let mut kept = Vec::with_capacity(bricks.len());
+    /// counted as a failure. Returns the bricks to place, in order; a brick
+    /// is also checked against the bricks kept before it, as v20 plants them
+    /// one at a time.
+    pub fn drop_overlapping(&self, bricks: Vec<Brick>) -> Result<Vec<Brick>> {
+        let world = self.state();
+        let mut kept: Vec<(Brick, Bounds)> = Vec::with_capacity(bricks.len());
+        let mut batch = Index::default();
         for brick in bricks {
             let mesh = &self.definitions.get(&brick)?.mesh;
             let bounds = Bounds::new(&brick, mesh)?;
-            if !overlaps_world(
-                self.state(),
-                &self.definitions,
-                &self.index,
-                &brick,
-                mesh,
-                bounds,
-                |id| !own.contains(&id),
-            )? {
-                kept.push(brick);
+            let mut overlap =
+                overlaps_world(world, &self.definitions, &self.index, &brick, mesh, bounds)?;
+            for i in batch.query(bounds) {
+                let (other, ob) = &kept[i as usize];
+                let other_mesh = &self.definitions.get(other)?.mesh;
+                overlap = overlap
+                    || grid::overlaps((&brick, mesh, bounds), (other, other_mesh, *ob));
+            }
+            if !overlap {
+                batch.insert(kept.len() as BrickId, bounds);
+                kept.push((brick, bounds));
             }
         }
-        Ok(kept)
+        Ok(kept.into_iter().map(|(b, _)| b).collect())
     }
     /// Keep bricks without a definition with the world; see
     /// [`bri_world::authority::Authority::keep_unloaded`].
@@ -745,9 +740,8 @@ fn overlaps_world(
     brick: &Brick,
     mesh: &bri_content::brick::Brick,
     bounds: Bounds,
-    counts: impl Fn(BrickId) -> bool,
 ) -> Result<bool> {
-    for id in index.query(bounds).into_iter().filter(|id| counts(*id)) {
+    for id in index.query(bounds) {
         let existing = &world.bricks[&id];
         if grid::overlaps(
             (brick, mesh, bounds),
@@ -779,7 +773,7 @@ fn validate_placement(
     if builder.position.distance(Vec3::from(brick.position)) > builder.reach + radius {
         return Err(PlantFailure::TooFar.into());
     }
-    if overlaps_world(world, defs, index, brick, &definition.mesh, bounds, |_| true)? {
+    if overlaps_world(world, defs, index, brick, &definition.mesh, bounds)? {
         return Err(PlantFailure::Overlap.into());
     }
     let mut supported = false;

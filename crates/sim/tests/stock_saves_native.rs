@@ -101,6 +101,11 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
             loaded.state().unloaded.is_empty(),
             "{source}: unloaded bricks"
         );
+        // A load plants every brick and skips those that overlap one already
+        // placed, as v20 does; no stock save loses any. (With the ramp grid
+        // read back to front, five lost 43 bricks.)
+        let placed = map.drop_overlapping(world.bricks.values().cloned().collect())?;
+        assert_eq!(placed.len(), count, "{source}: bricks skipped as overlapping");
         let gaps = floor_gaps(map, &world, &definitions)?;
         // Placed again by hand, every brick resting on the map floor (within
         // half a plate, as v20 rests them) plants: no Buried or Float refusal.
