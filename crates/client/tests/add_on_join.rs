@@ -452,3 +452,67 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
+
+/// The Stunt Plane, which every release ships turned on
+/// (tools/shipped-addons.json): a host that runs it lists it among its
+/// spawnable vehicles, and a guest without it downloads it, joins and can
+/// pick it too.
+#[test]
+#[ignore = "generated content with the shipped Add-Ons (tools/shipped_addons.py build) and loopback UDP; no window"]
+fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()> {
+    const PLANE: &str = "vehicle_stunt_plane";
+    const VEHICLE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+    let content = std::env::var_os("BRI_CONTENT").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        PathBuf::from,
+    );
+    let dir = format!("shipped-addons/{PLANE}");
+    ensure!(
+        content.join(&dir).join("package.json").is_file(),
+        "{} has no Stunt Plane: run python tools/shipped_addons.py build",
+        content.display()
+    );
+    let base = bri_package::packages::PackageSet::load_root(&content)?;
+    ensure!(
+        !base.packages.iter().any(|p| p.id == PLANE),
+        "the guest's content already lists {PLANE}"
+    );
+    let mut set = base.clone();
+    // As the packager lists it in a release's packages.json.
+    set.packages.push(bri_package::packages::PackageEntry {
+        id: PLANE.into(),
+        version: "1.0.0".into(),
+        side: bri_package::packages::Side::Shared,
+        dir,
+        role: None,
+    });
+    let spawnable = |app: &App| {
+        app.ui
+            .core
+            .datablocks
+            .get("Vehicle")
+            .is_some_and(|list| list.iter().any(|c| c.id == VEHICLE))
+    };
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")?.local_addr()?.port();
+    let mut host_app = app(&content, "PlaneHost")?;
+    host_app
+        .apply_packages(&set)
+        .context("the host loads the Stunt Plane")?;
+    let mut guest = app(&content, "PlaneGuest")?;
+    ensure!(!spawnable(&guest), "the guest has the Stunt Plane before joining");
+    host(&mut host_app, port)?;
+    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    ensure!(spawnable(&host_app), "the host's vehicle list lacks {VEHICLE}");
+    join(&mut guest, port)?;
+    until(&mut [&mut host_app, &mut guest], "guest in game", 300, |a| {
+        in_game(a[1])
+    })?;
+    let cache = guest_cache_ids(&guest);
+    ensure!(
+        cache.iter().any(|id| id == PLANE),
+        "{PLANE} was not downloaded: {cache:?}"
+    );
+    ensure!(spawnable(&guest), "the guest's vehicle list lacks {VEHICLE}");
+    leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}

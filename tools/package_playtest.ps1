@@ -103,6 +103,49 @@ function Get-ManifestEntries([string]$Root) {
     return @($records)
 }
 
+# Imported Add-Ons every release ships turned on (tools/shipped-addons.json:
+# the Stunt Plane). tools/shipped_addons.py generates them into
+# content/shipped-addons/<id>; releases carry them as content/addons/<id>.
+$script:ShippedAddOnList = Join-Path $PSScriptRoot 'shipped-addons.json'
+function Get-ShippedAddOns {
+    $list = Get-Content -LiteralPath $script:ShippedAddOnList -Raw | ConvertFrom-Json
+    if ([int]$list.schema_version -ne 1) { throw "Unsupported schema in $($script:ShippedAddOnList)." }
+    return @($list.addons)
+}
+
+# Why $Directory is not a whole import of the listed Add-On (empty when it is).
+function Get-ShippedAddOnProblems([string]$Directory, $AddOn) {
+    $manifestPath = Join-Path $Directory 'package.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return @("$Directory has no package.json") }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $problems = @()
+    if ([string]$manifest.id -cne [string]$AddOn.id) { $problems += "$manifestPath names '$($manifest.id)', not '$($AddOn.id)'" }
+    $provenance = $manifest.PSObject.Properties['provenance']
+    if ($null -eq $provenance -or -not (ConvertTo-Json $provenance.Value -Compress).Contains([string]$AddOn.archive_sha256)) {
+        $problems += "$manifestPath was not imported from the listed $($AddOn.archive)"
+    }
+    $vehiclesPath = Join-Path $Directory 'assets/vehicles.json'
+    $ids = @()
+    if (Test-Path -LiteralPath $vehiclesPath -PathType Leaf) { $ids = @((Get-Content -LiteralPath $vehiclesPath -Raw | ConvertFrom-Json).definitions | ForEach-Object { [string]$_.id }) }
+    foreach ($vehicle in @($AddOn.vehicles)) { if ($ids -notcontains [string]$vehicle) { $problems += "$Directory lacks vehicle $vehicle" } }
+    return $problems
+}
+
+# A release turns on every shipped Add-On: listed in content/packages.json at
+# addons/<id>, imported from the listed archive, with its vehicles.
+function Verify-ShippedAddOns([string]$Root) {
+    $listPath = Join-Path $Root 'content/packages.json'
+    if (-not (Test-Path -LiteralPath $listPath -PathType Leaf)) { throw 'The release has no content/packages.json.' }
+    $enabled = @((Read-PackageList $listPath).packages)
+    foreach ($addOn in Get-ShippedAddOns) {
+        $entry = @($enabled | Where-Object { [string]$_.id -ceq [string]$addOn.id })
+        if ($entry.Count -ne 1 -or [string]$entry[0].dir -cne "addons/$($addOn.id)") { throw "The release does not turn on the shipped Add-On $($addOn.id) at addons/$($addOn.id)." }
+        $problems = @(Get-ShippedAddOnProblems (Join-Path $Root "content/addons/$($addOn.id)") $addOn)
+        if ($problems.Count -gt 0) { throw "Shipped Add-On $($addOn.id) is incomplete: $($problems -join '; ')" }
+    }
+    Write-Host "Verified shipped Add-Ons: $((Get-ShippedAddOns | ForEach-Object { $_.id }) -join ', ')."
+}
+
 function Verify-PlaytestPackage([string]$Path) {
     $root = (Resolve-Path -LiteralPath $Path).Path
     $manifestPath = Join-Path $root 'MANIFEST.json'
@@ -133,6 +176,7 @@ function Verify-PlaytestPackage([string]$Path) {
     if ($actual.Count -ne $listed.Count) { throw "Package contains unlisted or missing files (listed $($listed.Count), found $($actual.Count))." }
     foreach ($relative in $actual) { if (-not $listed.ContainsKey($relative)) { throw "Unlisted package file: $relative" } }
     Write-Host "Verified $($listed.Count) files for package version $($manifest.version)."
+    Verify-ShippedAddOns $root
 }
 
 # Standalone exe footer (crates/launcher): payload SHA-256, u64 length, magic.
@@ -319,12 +363,20 @@ foreach ($package in @($effective.list.packages)) {
 }
 
 # Add-Ons every build ships, turned on (content/addons/<id>): the
-# Duplicator. The Stress Lab ones join them with -StressLab. The showcase
+# Duplicator and the imported ones in tools/shipped-addons.json (the Stunt
+# Plane), which must be generated first. The Stress Lab ones join them with
+# -StressLab. The showcase
 # Add-Ons (packages/showcase: the Gravity Gun and the Steel Ball) stay out
 # of releases until Max approves them.
 $modSources = @(
     @{ root = (Join-Path $RepoRoot 'packages/duplicator'); dir = 'addons'; required = $false }
 )
+$shippedRoot = Join-Path $sourceContent 'shipped-addons'
+foreach ($addOn in Get-ShippedAddOns) {
+    $problems = @(Get-ShippedAddOnProblems (Join-Path $shippedRoot $addOn.id) $addOn)
+    if ($problems.Count -gt 0) { throw "Shipped Add-On $($addOn.id) is missing or incomplete; run python tools/shipped_addons.py build. $($problems -join '; ')" }
+}
+$modSources += @{ root = $shippedRoot; dir = 'addons'; required = $true; only = @(Get-ShippedAddOns | ForEach-Object { [string]$_.id }) }
 if ($StressLab) { $modSources += @{ root = (Join-Path $RepoRoot 'packages/stresslab'); dir = 'stresslab'; required = $true } }
 $modPackages = @()
 foreach ($source in $modSources) {
@@ -337,6 +389,7 @@ foreach ($source in $modSources) {
         $manifestPath = Join-Path $dir.FullName 'package.json'
         if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        if ($source.ContainsKey('only') -and $source.only -notcontains [string]$manifest.id) { continue }
         $files = @(Get-PackageFiles $dir.FullName)
         # Keep in step with bri_package::library's default side: server
         # kinds only, client kinds (model, hud) only, else shared. An

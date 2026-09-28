@@ -196,6 +196,14 @@ impl Avatar {
                 self.view.set_text(n, value);
             }
         }
+        // v20's label says "LAN Name", but this name is used on every server.
+        let label = self
+            .view
+            .walk()
+            .find(|&n| self.view.text_of(n).trim() == "LAN Name:");
+        if let Some(n) = label {
+            self.view.set_text(n, "Name:");
+        }
         if let Some(n) = self.view.id("Avatar_Preview") {
             self.view.nodes[n].ctrl.class = "GuiBitmapCtrl".into();
             let r = self.view.nodes[n].ctrl.clone();
@@ -233,15 +241,16 @@ impl Avatar {
         }
         self.view.layout(core.logical.0, core.logical.1);
     }
+    /// Typed text lives in the edit value, not the control's label text.
     fn read_fields(&mut self) {
         if let Some(n) = self.view.id("Avatar_Prefix") {
-            self.draft.clan_prefix = self.view.text_of(n);
+            self.draft.clan_prefix = self.view.edit_text(n);
         }
         if let Some(n) = self.view.id("Avatar_Suffix") {
-            self.draft.clan_suffix = self.view.text_of(n);
+            self.draft.clan_suffix = self.view.edit_text(n);
         }
         if let Some(n) = self.view.id("Avatar_Name") {
-            self.draft.lan_name = self.view.text_of(n);
+            self.draft.lan_name = self.view.edit_text(n).trim().to_string();
         }
     }
     fn refresh(&mut self, core: &Core) {
@@ -1108,6 +1117,11 @@ mod tests {
                 name,
             ));
         }
+        window.children.push(text(
+            "GuiTextProfile",
+            Rect::new(20, 432, 60, 18),
+            "LAN Name:",
+        ));
         window.children.push(named(
             ctrl(
                 "GuiCheckBoxCtrl",
@@ -1294,6 +1308,30 @@ mod tests {
                 .filter(|(_, a)| matches!(a, UiAction::SaveSettings(_)))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn typed_name_is_what_done_saves_and_label_says_name() {
+        let mut ui = fixture();
+        let mut s = Avatar::new(&ui.core);
+        s.on_wake(&mut ui.core);
+        assert!(s.view.walk().all(|n| s.view.text_of(n).trim() != "LAN Name:"));
+        let n = s.view.id("Avatar_Name").unwrap();
+        s.view.focus = Some(n);
+        s.view.state(n).cursor = s.view.edit_text(n).chars().count();
+        let mut out = Vec::new();
+        for c in " Typed".chars() {
+            s.view.char(c, &mut out);
+        }
+        s.done(&mut ui.core);
+        let actions = ui.drain_actions();
+        let expected = format!("{} Typed", ui.core.settings.avatar.lan_name.trim());
+        assert!(
+            actions.iter().any(
+                |(_, a)| matches!(a, UiAction::SetAvatar(a) if a.lan_name == expected)
+            ),
+            "{actions:?}"
         );
     }
 

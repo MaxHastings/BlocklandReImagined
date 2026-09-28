@@ -137,6 +137,7 @@ fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
     let mut app = App::load_with_audio(content, state, (1280, 720), bri_audio::OutputKind::Device)
         .context("Loading the game")?;
     app.player_session();
+    app.prompt_for_name();
     for warning in app.audio_warnings() {
         bri_console::warn(warning);
     }

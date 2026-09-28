@@ -284,7 +284,7 @@ impl ItemPhysicsContent {
         weapons: &WeaponContent,
         extras: &[(String, PathBuf)],
     ) -> Result<Self> {
-        let mut content = Self::load(root, weapons)?;
+        let (mut content, models) = Self::load_models(root, weapons)?;
         let mut hash = Sha256::new();
         hash.update(&content.fingerprint);
         for (dir, abs) in extras {
@@ -325,9 +325,31 @@ impl ItemPhysicsContent {
         if !extras.is_empty() {
             content.fingerprint = format!("{:x}", hash.finalize());
         }
+        // A merged item nothing gave bounds (the Duplicator's wand, an
+        // Add-On imported without its item physics) takes its stock model's
+        // box, as its presentation borrows that model, else a stand-in box:
+        // a gap in presentation never refuses the item. Derived only from
+        // content already fingerprinted above.
+        for (id, item) in &weapons.pack.items {
+            if !content.bounds.contains_key(id) {
+                let model = item.model.replace('\\', "/").to_ascii_lowercase();
+                let bounds = models.get(&model).copied();
+                content.bounds.insert(
+                    id.clone(),
+                    bounds.unwrap_or(bri_weapons::ItemBounds::FALLBACK),
+                );
+            }
+        }
         Ok(content)
     }
     pub fn load(root: &Path, weapons: &WeaponContent) -> Result<Self> {
+        Ok(Self::load_models(root, weapons)?.0)
+    }
+    /// [`Self::load`] and the bounds of every stock model it presents.
+    fn load_models(
+        root: &Path,
+        weapons: &WeaponContent,
+    ) -> Result<(Self, BTreeMap<String, bri_weapons::ItemBounds>)> {
         let root = root.canonicalize()?;
         let manifest_path = contained(&root, "presentation.json")?;
         let physics_path = contained(&root, "item-physics.json")?;
@@ -433,10 +455,24 @@ impl ItemPhysicsContent {
             WEAPON_RESOURCE_LIMIT,
             WEAPON_TOTAL_LIMIT,
         )?;
-        Ok(Self {
-            bounds: physics.items,
-            fingerprint,
-        })
+        let models = manifest
+            .models
+            .iter()
+            .map(|(key, model)| {
+                let bounds = bri_weapons::ItemBounds {
+                    min: model.bounds_min,
+                    max: model.bounds_max,
+                };
+                (key.clone(), bounds)
+            })
+            .collect();
+        Ok((
+            Self {
+                bounds: physics.items,
+                fingerprint,
+            },
+            models,
+        ))
     }
     pub fn ensure_same(&self, other: &Self) -> Result<()> {
         ensure!(

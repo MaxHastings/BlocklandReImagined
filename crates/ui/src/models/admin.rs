@@ -22,6 +22,9 @@ pub enum AdminFeature {
     HighlightBricks,
     HostOptions,
     AdminPassword,
+    /// Make players Admin or Super Admin, or take it away (the host and
+    /// Super Admins).
+    Ranks,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminPlayer {
@@ -44,6 +47,15 @@ pub struct AdminBan {
     pub address: Option<String>,
     pub reason: String,
     pub remaining_minutes: Option<u64>,
+}
+/// A saved rank: the player gets it back when they rejoin with this key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminSavedRank {
+    /// The player's verified key, as hex; it names the row.
+    pub key: String,
+    /// The name they had when the rank was given.
+    pub name: String,
+    pub role: AdminRole,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminBrickGroup {
@@ -327,6 +339,16 @@ pub enum AdminAction {
         slot: AdminPasswordSlot,
         password: AdminSecret,
     },
+    SetRole {
+        target: u64,
+        role: AdminRole,
+    },
+    RequestRanks,
+    /// Take a saved rank off the list; anyone online keeps theirs until
+    /// they leave.
+    ForgetRank {
+        key: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AdminUpdate {
@@ -346,6 +368,11 @@ pub enum AdminUpdate {
         revision: u64,
         rows: Vec<AdminMap>,
     },
+    Ranks {
+        request: RequestId,
+        revision: u64,
+        rows: Vec<AdminSavedRank>,
+    },
 }
 #[derive(Debug, Clone)]
 pub struct AdminConfirmation {
@@ -359,7 +386,9 @@ pub struct AdminModel {
     pub bans: Vec<AdminBan>,
     pub groups: Vec<AdminBrickGroup>,
     pub maps: Vec<AdminMap>,
+    pub saved_ranks: Vec<AdminSavedRank>,
     pub selected_player: Option<u64>,
+    pub selected_rank: Option<String>,
     pub selected_ban: Option<u64>,
     pub selected_group: Option<u64>,
     pub selected_map: Option<String>,
@@ -390,7 +419,9 @@ impl AdminModel {
                 && match f {
                     AdminFeature::Login => true,
                     AdminFeature::HostOptions => s.local_host,
-                    AdminFeature::AdminPassword => s.local_host || s.role == AdminRole::SuperAdmin,
+                    AdminFeature::AdminPassword | AdminFeature::Ranks => {
+                        s.local_host || s.role == AdminRole::SuperAdmin
+                    }
                     AdminFeature::Ban | AdminFeature::Unban => self.is_admin() && !s.legacy_lan,
                     _ => self.is_admin(),
                 }
@@ -423,6 +454,10 @@ impl AdminModel {
                 ..
             } => (AdminFeature::AdminPassword, None),
             AdminAction::SetPassword { .. } => (AdminFeature::HostOptions, None),
+            AdminAction::SetRole { target, .. } => (AdminFeature::Ranks, Some(*target)),
+            AdminAction::RequestRanks | AdminAction::ForgetRank { .. } => {
+                (AdminFeature::Ranks, None)
+            }
         };
         if !self.available(f) {
             return false;
@@ -434,6 +469,12 @@ impl AdminModel {
             if matches!(a, AdminAction::Kick { .. })
                 && !p.bot
                 && (p.owner || p.local || p.role == AdminRole::SuperAdmin)
+            {
+                return false;
+            }
+            // The host's rank is fixed, and a rank already held is no change.
+            if let AdminAction::SetRole { role, .. } = a
+                && (p.owner || p.local || p.bot || p.role == *role)
             {
                 return false;
             }
@@ -449,6 +490,7 @@ impl AdminModel {
                 self.groups.iter().any(|g| g.id == *group)
             }
             AdminAction::ChangeMap { map } => self.maps.iter().any(|m| m.id == *map),
+            AdminAction::ForgetRank { key } => self.saved_ranks.iter().any(|r| r.key == *key),
             _ => true,
         }
     }
@@ -568,6 +610,39 @@ impl AdminModel {
                 self.pending.remove(&request);
                 self.status.clear();
             }
+            AdminUpdate::Ranks {
+                request,
+                revision,
+                rows,
+            } => {
+                if revision < self.revision
+                    || !matches!(self.pending.get(&request), Some(AdminAction::RequestRanks))
+                {
+                    return Err("Ignored stale rank list.".into());
+                }
+                let mut seen = BTreeSet::new();
+                if rows.len() > 4096
+                    || rows.iter().any(|r| {
+                        r.key.len() != 64
+                            || !r.key.bytes().all(|b| b.is_ascii_hexdigit())
+                            || !seen.insert(&r.key)
+                            || !text_ok(&r.name, 128)
+                            || r.role == AdminRole::Player
+                    })
+                {
+                    return Err("Invalid rank list.".into());
+                }
+                self.saved_ranks = rows;
+                if self
+                    .selected_rank
+                    .as_ref()
+                    .is_some_and(|key| !self.saved_ranks.iter().any(|r| r.key == *key))
+                {
+                    self.selected_rank = None;
+                }
+                self.pending.remove(&request);
+                self.status.clear();
+            }
         }
         if self
             .confirmation
@@ -595,6 +670,7 @@ impl AdminModel {
                         | AdminAction::RequestBans
                         | AdminAction::RequestBrickGroups
                         | AdminAction::RequestMaps
+                        | AdminAction::RequestRanks
                         | AdminAction::Login { .. }
                 ) =>
             {
@@ -602,6 +678,12 @@ impl AdminModel {
             }
             Ok(()) => {
                 self.pending.remove(&id);
+                if let AdminAction::ForgetRank { key } = &action {
+                    self.saved_ranks.retain(|row| row.key != *key);
+                    if self.selected_rank.as_ref() == Some(key) {
+                        self.selected_rank = None;
+                    }
+                }
                 if let AdminAction::Unban { ban } = action {
                     // Only remove after the host's correlated acknowledgement.
                     self.bans.retain(|row| row.id != ban);

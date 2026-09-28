@@ -43,7 +43,7 @@ copy `user-state/` across to keep settings, saves and identity.
 - **Building:** brick selector (B), ghost moves with the numpad, plant, rotate,
   undo, paint (E), hammer, printer, wrench (names, lights, emitters, items,
   collision/rendering). Blocked placements show the original plant-error icon.
-- **Duplicator** (an Add-On, on by default): type `/dup` for the blue
+- **Duplicator** (an Add-On, on by default): type `/dup` (or `/duplicator`) for the blue
   Duplicator, then click the bottom brick of a build. It copies that brick
   and everything built on it (up to 2000 bricks) and shows the copy as a
   ghost over the original. Move and turn it with the numpad like a brick

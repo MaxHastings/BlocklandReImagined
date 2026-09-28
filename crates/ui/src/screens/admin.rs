@@ -7,10 +7,35 @@ pub struct AdminScreen {
     view: View,
     ids: Vec<u64>,
     map_ids: Vec<String>,
+    /// Saved-rank keys in list order.
+    keys: Vec<String>,
     sort: usize,
     descending: bool,
     options: Option<AdminOptions>,
 }
+/// Native rank buttons under adminGui's player list: name, label, the rank
+/// given, and where.
+const RANK_BUTTONS: [(&str, &str, AdminRole, Rect); 3] = [
+    ("NativeMakeAdmin", "Admin", AdminRole::Admin, Rect::new(14, 425, 92, 19)),
+    (
+        "NativeMakeSuperAdmin",
+        "Super Admin",
+        AdminRole::SuperAdmin,
+        Rect::new(108, 425, 92, 19),
+    ),
+    ("NativeDeAdmin", "De-Admin", AdminRole::Player, Rect::new(14, 446, 92, 19)),
+];
+/// Beside De-Admin: the saved rank list.
+const SAVED_RANKS_BUTTON: Rect = Rect::new(108, 446, 92, 19);
+fn role_label(role: AdminRole) -> &'static str {
+    match role {
+        AdminRole::SuperAdmin => "Super Admin",
+        AdminRole::Admin => "Admin",
+        AdminRole::Player => "-",
+    }
+}
+/// How much the player list gives up for them.
+const RANK_ROWS_HEIGHT: i32 = 46;
 fn set(v: &mut View, name: &str, value: impl Into<String>) {
     if let Some(n) = v.id(name) {
         v.set_text(n, value.into());
@@ -108,6 +133,8 @@ impl AdminScreen {
         };
         let mut view = if id == ScreenId::AdminCredentials {
             native_dialog("Server Passwords")
+        } else if id == ScreenId::AdminRanks {
+            native_dialog("Saved Ranks")
         } else {
             layout_view(core, layout)
         };
@@ -128,10 +155,81 @@ impl AdminScreen {
                 );
                 add_named(&mut view, parent, b, name);
             }
+            // The list (and the swatch behind it) ends above the rank rows.
+            for c in view.nodes[parent].children.clone() {
+                let ctrl = &mut view.nodes[c].ctrl;
+                if ctrl.position == [14, 52]
+                    && (ctrl.class.eq_ignore_ascii_case("GuiScrollCtrl")
+                        || ctrl.class.eq_ignore_ascii_case("GuiSwatchCtrl"))
+                {
+                    ctrl.extent[1] -= RANK_ROWS_HEIGHT;
+                }
+            }
+            for (name, label, _, rect) in RANK_BUTTONS {
+                let b = button(
+                    "BlockButtonProfile",
+                    rect,
+                    "base/client/ui/button1",
+                    label,
+                    name,
+                );
+                add_named(&mut view, parent, b, name);
+            }
+            let b = button(
+                "BlockButtonProfile",
+                SAVED_RANKS_BUTTON,
+                "base/client/ui/button1",
+                "Saved Ranks >>",
+                "NativeSavedRanks",
+            );
+            add_named(&mut view, parent, b, "NativeSavedRanks");
             for n in view.walk().collect::<Vec<_>>() {
                 if view.nodes[n].ctrl.text.as_deref() == Some("BL_ID") {
                     view.set_text(n, "Identity");
                 }
+            }
+        }
+        if id == ScreenId::AdminRanks {
+            view.add(
+                parent,
+                text(
+                    "GuiTextProfile",
+                    Rect::new(15, 30, 390, 22),
+                    "Players get these ranks back when they rejoin.",
+                ),
+            );
+            let mut scroll = ctrl(
+                "GuiScrollCtrl",
+                "BlockScrollProfile",
+                Rect::new(15, 55, 390, 250),
+            );
+            scroll.fields.insert("hScrollBar".into(), "alwaysOff".into());
+            scroll.fields.insert("vScrollBar".into(), "dynamic".into());
+            let mut list = ctrl(
+                "GuiTextListCtrl",
+                "GuiTextListProfile",
+                Rect::new(0, 0, 374, 16),
+            );
+            list.name = Some("AdminRanks_list".into());
+            list.fields.insert("columns".into(), "0 170 270".into());
+            scroll.children.push(list);
+            view.add(parent, scroll);
+            for (name, label, x) in [
+                ("AdminForgetRank", "Remove", 15),
+                ("AdminCloseRanks", "Close", 307),
+            ] {
+                add_named(
+                    &mut view,
+                    parent,
+                    button(
+                        "BlockButtonProfile",
+                        Rect::new(x, 315, 98, 28),
+                        "base/client/ui/button1",
+                        label,
+                        name,
+                    ),
+                    name,
+                );
             }
         }
         if id == ScreenId::AdminCredentials {
@@ -264,6 +362,7 @@ impl AdminScreen {
             view,
             ids: Vec::new(),
             map_ids: Vec::new(),
+            keys: Vec::new(),
             sort: 0,
             descending: false,
             options,
@@ -375,6 +474,20 @@ impl AdminScreen {
             ] {
                 if let Some(n) = self.view.by_command(cmd) {
                     self.view.set_active(n, !busy && m.allowed(&a));
+                }
+            }
+            let ranks = m.available(AdminFeature::Ranks);
+            if let Some(n) = self.view.id("NativeSavedRanks") {
+                self.view.set_visible(n, ranks);
+                self.view.set_active(n, !busy && ranks);
+            }
+            for (name, _, role, _) in RANK_BUTTONS {
+                if let Some(n) = self.view.id(name) {
+                    self.view.set_visible(n, ranks);
+                    self.view.set_active(
+                        n,
+                        !busy && m.allowed(&AdminAction::SetRole { target: t, role }),
+                    );
                 }
             }
             if let Some(n) = self.view.id("NativeHostOptions") {
@@ -610,6 +723,39 @@ impl AdminScreen {
                     !busy && m.available(AdminFeature::HostOptions) && self.options.is_some(),
                 );
             }
+        } else if self.id == ScreenId::AdminRanks {
+            let mut rows = m.saved_ranks.clone();
+            rows.sort_by(|a, b| {
+                a.name
+                    .to_lowercase()
+                    .cmp(&b.name.to_lowercase())
+                    .then(a.key.cmp(&b.key))
+            });
+            self.keys = rows.iter().map(|r| r.key.clone()).collect();
+            if let Some(n) = self.view.id("AdminRanks_list") {
+                self.view.state(n).items = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        (
+                            format!("{}\t{}\t{}", r.name, role_label(r.role), &r.key[..8]),
+                            i as i64,
+                        )
+                    })
+                    .collect();
+                self.view.select(
+                    n,
+                    m.selected_rank
+                        .as_ref()
+                        .and_then(|key| self.keys.iter().position(|k| k == key))
+                        .map(|i| i as i64),
+                );
+            }
+            if let Some(n) = self.view.id("AdminForgetRank") {
+                let key = m.selected_rank.clone().unwrap_or_default();
+                self.view
+                    .set_active(n, !busy && m.allowed(&AdminAction::ForgetRank { key }));
+            }
         } else if self.id == ScreenId::AdminCredentials {
             let host = m.available(AdminFeature::HostOptions);
             for name in ["AdminServerName", "AdminMaxPlayers", "AdminApplyIdentity"] {
@@ -739,6 +885,7 @@ impl Screen for AdminScreen {
             ScreenId::AdminUnban => Some(AdminAction::RequestBans),
             ScreenId::AdminBricks => Some(AdminAction::RequestBrickGroups),
             ScreenId::AdminMaps => Some(AdminAction::RequestMaps),
+            ScreenId::AdminRanks => Some(AdminAction::RequestRanks),
             _ => None,
         };
         if let Some(a) = query {
@@ -764,6 +911,7 @@ impl Screen for AdminScreen {
                 ScreenId::AdminMaps,
                 ScreenId::AdminOptions,
                 ScreenId::AdminCredentials,
+                ScreenId::AdminRanks,
                 ScreenId::AdminConfirm,
             ] {
                 core.pop(id);
@@ -809,6 +957,9 @@ impl Screen for AdminScreen {
                 }
                 Some("BrickMan_list") => {
                     core.admin.selected_group = selected.and_then(|i| self.ids.get(i).copied())
+                }
+                Some("AdminRanks_list") => {
+                    core.admin.selected_rank = selected.and_then(|i| self.keys.get(i).cloned())
                 }
                 Some("changeMapList") => {
                     core.admin.selected_map = selected.and_then(|i| self.map_ids.get(i).cloned())
@@ -951,6 +1102,48 @@ impl Screen for AdminScreen {
                         "Change Map?",
                         format!("Change to {}? The current mission will be cleared.", m.name),
                         AdminAction::ChangeMap { map: m.id.clone() },
+                    );
+                }
+            }
+            "nativemakeadmin" | "nativemakesuperadmin" | "nativedeadmin" => {
+                let role = match cmd.as_str() {
+                    "nativemakeadmin" => AdminRole::Admin,
+                    "nativemakesuperadmin" => AdminRole::SuperAdmin,
+                    _ => AdminRole::Player,
+                };
+                if let Some(p) = core.admin.player(target) {
+                    let (title, text) = match role {
+                        AdminRole::Admin => ("Make Admin?", format!("Make {} an Admin?", p.name)),
+                        AdminRole::SuperAdmin => (
+                            "Make Super Admin?",
+                            format!("Make {} a Super Admin?", p.name),
+                        ),
+                        AdminRole::Player => {
+                            ("De-Admin?", format!("Take {}'s admin away?", p.name))
+                        }
+                    };
+                    self.confirm(core, title, text, AdminAction::SetRole { target, role });
+                }
+            }
+            "nativesavedranks" => core.push(ScreenId::AdminRanks),
+            "admincloseranks" => core.pop(ScreenId::AdminRanks),
+            "adminforgetrank" => {
+                if let Some(r) = core
+                    .admin
+                    .saved_ranks
+                    .iter()
+                    .find(|r| Some(&r.key) == core.admin.selected_rank.as_ref())
+                    .cloned()
+                {
+                    self.confirm(
+                        core,
+                        "Remove Saved Rank?",
+                        format!(
+                            "Stop giving {} {} when they join?",
+                            r.name,
+                            role_label(r.role)
+                        ),
+                        AdminAction::ForgetRank { key: r.key },
                     );
                 }
             }
