@@ -3348,6 +3348,10 @@ impl App {
                             self.abilities = abilities;
                             continue;
                         }
+                        bri_sim::session::Notice::MusicTracks(music) => {
+                            self.tool_ui.offer_music(&music);
+                            continue;
+                        }
                         bri_sim::session::Notice::TempBrickColor(color) => {
                             if let Some(building) = self.building.as_mut() {
                                 building.set_random_color(color);

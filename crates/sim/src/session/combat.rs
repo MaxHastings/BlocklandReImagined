@@ -142,6 +142,8 @@ pub enum Notice {
     },
     /// `secureClientCmd_ClientTrust` for every player, as this viewer sees them.
     PlayerTrust(BTreeMap<OwnerId, super::PlayerTrust>),
+    /// The music loops this host's music bricks offer (its Music Files).
+    MusicTracks(BTreeSet<String>),
     /// `tempBrick.setColor` under Random Brick Color: the colour the
     /// player's next brick takes, shown on their ghost.
     TempBrickColor(u8),
