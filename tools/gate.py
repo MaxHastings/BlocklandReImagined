@@ -46,7 +46,7 @@ UNDO_MIN_LINES = 10
 UNDO_FRACTION = 0.6
 PROTOCOL_FILE = "crates/net/src/protocol.rs"
 PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
-LOCK_STALE_SECONDS = 3 * 3600
+LOCK_STALE_SECONDS = 90 * 60
 LOCK_HELD = False
 
 
@@ -241,7 +241,7 @@ class Lock:
         self.label = label
 
     def __enter__(self):
-        announced = False
+        announced = 0.0
         while True:
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -258,9 +258,9 @@ class Lock:
                     say(f"removing stale gate lock ({holder})")
                     self.path.unlink(missing_ok=True)
                     continue
-                if not announced:
-                    say(f"waiting for the gate lock, held by: {holder}")
-                    announced = True
+                if time.time() - announced >= 300:
+                    say(f"waiting for the gate lock, held for {age / 60:.0f} min by: {holder}")
+                    announced = time.time()
                 time.sleep(5)
 
     def __exit__(self, *exc):
