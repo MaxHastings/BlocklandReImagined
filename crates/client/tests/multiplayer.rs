@@ -293,7 +293,7 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
         &mut [&mut host, &mut guest],
         "trust invitation",
         Duration::from_secs(10),
-        |a| a[1].ui.core.trust_invite.is_some(),
+        |a| !a[1].ui.core.trust_invites.is_empty(),
     )?;
     let frame = capture(&mut guest, &gpu, &mut ui_renderer)?;
     save(&artifact.join("guest-trust-invite.png"), &frame)?;
