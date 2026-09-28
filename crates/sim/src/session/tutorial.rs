@@ -34,6 +34,9 @@ const WAND_IMAGE: &str = "v20.image.wandimage";
 const BRICK_IMAGE: &str = "v20.image.brickimage";
 /// `HorseArmor.brickImage` (Vehicle_Horse): the brick sits on mount3.
 const HORSE_BRICK_IMAGE: &str = "v20.image.horsebrickimage";
+/// The images `hold_brick` mounts for bricks in hand. They only show the
+/// brick; a click still places the client's ghost, not an image trigger.
+pub const BRICK_HAND_IMAGES: [&str; 2] = [BRICK_IMAGE, HORSE_BRICK_IMAGE];
 const HORSE: &str = "v20.vehicle.horsearmor";
 const JEEP: &str = "v20.vehicle.jeepvehicle";
 const REWARD_SOUND: &str = "v20/sound/rewardsound";
@@ -295,7 +298,7 @@ impl Session {
     pub(super) fn holds_brick(&self, owner: OwnerId) -> bool {
         self.weapons
             .image_state(ActorId(owner), 0)
-            .is_some_and(|(image, _)| image.id == BRICK_IMAGE || image.id == HORSE_BRICK_IMAGE)
+            .is_some_and(|(image, _)| BRICK_HAND_IMAGES.contains(&image.id.as_str()))
     }
 
     /// `noBreak` bricks and the vehicle pads' `vehicleLimit`.

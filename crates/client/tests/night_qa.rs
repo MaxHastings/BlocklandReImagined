@@ -24,6 +24,8 @@ use std::{
 
 const SIZE: (u32, u32) = (960, 720);
 const BRICK: &str = "v20/brick/brick2x4data";
+/// How far below the horizon the guest aims to build and hammer.
+const DOWN: f32 = 1.0;
 
 fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     app.tick(elapsed)?;
@@ -258,37 +260,67 @@ fn console_since(report: &mut MapReport) {
     bri_console::log::clear();
 }
 
-/// The guest aims at the floor in front of itself and plants one brick.
-pub fn plant(pair: &mut Pair, yaw: f32) -> Result<()> {
-    let before = bricks(&pair.guest);
-    request(
-        &mut pair.guest,
-        UiAction::Game(GameAction::Look { yaw, pitch: 1.0 }),
-    )?;
-    request(
-        &mut pair.guest,
-        UiAction::InstantUseBrick {
-            brick: BRICK.into(),
-        },
-    )?;
-    request(
-        &mut pair.guest,
-        UiAction::Game(GameAction::Held {
-            control: HeldControl::Fire,
-            down: true,
-        }),
-    )?;
-    request(
-        &mut pair.guest,
-        UiAction::Game(GameAction::Held {
-            control: HeldControl::Fire,
-            down: false,
-        }),
-    )?;
+/// Look is a mouse delta; turn it into an absolute aim (`down` radians
+/// below the horizon).
+fn aim(app: &mut App, yaw: f32, down: f32) -> Result<()> {
+    for _ in 0..3 {
+        let scale = app.controls.fov() / 90.0;
+        let turn = (yaw - app.controls.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        let tilt = down + app.controls.pitch;
+        if turn.abs() < 1e-3 && tilt.abs() < 1e-3 {
+            break;
+        }
+        request(app, UiAction::Game(GameAction::Look { yaw: turn / scale, pitch: tilt / scale }))?;
+    }
     ensure!(
-        pair.guest.building().and_then(|b| b.ghost()).is_some(),
-        "Brick fire did not deploy a ghost"
+        (app.controls.pitch + down).abs() < 0.01,
+        "aim missed: controls yaw {} pitch {}, wanted {yaw} {}",
+        app.controls.yaw,
+        app.controls.pitch,
+        -down
     );
+    Ok(())
+}
+
+/// The guest aims at the floor and plants one brick, trying four headings
+/// until the ghost deploys. Returns the heading used.
+pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
+    let before = bricks(&pair.guest);
+    let mut used = None;
+    for quarter in 0..4 {
+        let yaw = start + quarter as f32 * std::f32::consts::FRAC_PI_2;
+        aim(&mut pair.guest, yaw, DOWN)?;
+        // The predicted player takes the new look on the next ticks.
+        pair.settle(Duration::from_millis(150))?;
+        request(&mut pair.guest, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+        for down in [true, false] {
+            request(
+                &mut pair.guest,
+                UiAction::Game(GameAction::Held { control: HeldControl::Fire, down }),
+            )?;
+            pair.settle(Duration::from_millis(100))?;
+        }
+        if pair.guest.building().and_then(|b| b.ghost()).is_some() {
+            used = Some(yaw);
+            break;
+        }
+    }
+    let yaw = used.with_context(|| {
+        format!(
+            "Brick fire did not deploy a ghost in any direction; images {:?}, equipment {:?}, target {:?}, presented {:?}, controls ({}, {}), stack {:?}, console {:?}",
+            pair.guest.network_view().and_then(|v| v.weapons.images.get(&v.owner).map(|i| i.iter().map(|i| format!("{i:?}")).collect::<Vec<_>>())),
+            pair.guest.building().map(|b| b.equipment().clone()),
+            pair.guest.building().zip(pair.guest.presented_local()).map(|(b, p)| {
+                b.target(b.archetypes().eye(p), p.forward(), 15.0).map(|h| h.map(|h| h.position)).map_err(|e| e.to_string())
+            }),
+            pair.guest.presented_local().map(|p| (p.feet, p.yaw, p.pitch)),
+            pair.guest.controls.yaw,
+            pair.guest.controls.pitch,
+            pair.guest.ui.stack(),
+            bri_console::log::lines().iter().rev().take(5).map(|l| l.text.clone()).collect::<Vec<_>>()
+        )
+    })?;
     request(&mut pair.guest, UiAction::Game(GameAction::PlantBrick))?;
     pair.until("planted brick on both", Duration::from_secs(10), |h, g| {
         bricks(h) == before + 1 && bricks(g) == before + 1 && g.pending_requests() == 0
@@ -308,17 +340,15 @@ pub fn plant(pair: &mut Pair, yaw: f32) -> Result<()> {
         format!("guest chat tail {chat:?}")
     })?;
     request(&mut pair.guest, UiAction::Game(GameAction::CancelBrick))?;
-    Ok(())
+    Ok(yaw)
 }
 
 /// The guest hammers the brick it aims at until one brick is gone.
 pub fn hammer(pair: &mut Pair, yaw: f32) -> Result<()> {
     let before = bricks(&pair.host);
     request(&mut pair.guest, UiAction::UseTool { slot: 0 })?;
-    request(
-        &mut pair.guest,
-        UiAction::Game(GameAction::Look { yaw, pitch: 1.0 }),
-    )?;
+    aim(&mut pair.guest, yaw, DOWN)?;
+    pair.settle(Duration::from_millis(150))?;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(8) {
         request(
@@ -341,10 +371,18 @@ pub fn hammer(pair: &mut Pair, yaw: f32) -> Result<()> {
             return Ok(());
         }
     }
-    bail!("Hammer did not remove the brick ({before} bricks remain)")
+    let view = pair.guest.network_view().context("guest view")?;
+    let pose = view.poses.get(&view.owner).map(|p| (p.player.feet, p.player.yaw, p.player.pitch));
+    let tools = view.tools.get(&view.owner).map(|t| (t.selected, t.slots.clone()));
+    let bricks: Vec<_> = view.world.bricks.values().map(|b| b.position).collect();
+    let chat: Vec<_> = pair.guest.ui.core.chat.lines.iter().rev().take(4).map(|l| l.text.clone()).collect();
+    bail!(
+        "Hammer did not remove the brick ({before} bricks remain); guest pose {pose:?}, tools {tools:?}, bricks at {bricks:?}, ghost {:?}, chat {chat:?}",
+        pair.guest.building().and_then(|b| b.ghost()).map(|g| g.position)
+    )
 }
 
-fn save_and_reload(pair: &mut Pair, name: &str, steps: &mut Vec<String>) -> Result<()> {
+fn save_and_reload(pair: &mut Pair, name: &str, yaw: f32, steps: &mut Vec<String>) -> Result<()> {
     let count = bricks(&pair.host);
     request(
         &mut pair.host,
@@ -371,7 +409,7 @@ fn save_and_reload(pair: &mut Pair, name: &str, steps: &mut Vec<String>) -> Resu
         .context("save row")?;
     steps.push(format!("saved {count} bricks as {map}/{file}"));
     // Clear by hammering, then load back.
-    hammer(pair, std::f32::consts::PI)?;
+    hammer(pair, yaw)?;
     steps.push("hammered".into());
     request(
         &mut pair.host,
@@ -427,10 +465,9 @@ fn visit(
     );
     let frame = capture(&mut pair.guest, gpu, renderer, true)?;
     save_png(&out.join("maps").join(format!("{name}.png")), &frame)?;
-    let yaw = std::f32::consts::PI;
-    plant(pair, yaw)?;
-    report.steps.push("planted".into());
-    save_and_reload(pair, &name, &mut report.steps)?;
+    let yaw = plant(pair, 0.0)?;
+    report.steps.push(format!("planted facing {yaw:.2}"));
+    save_and_reload(pair, &name, yaw, &mut report.steps)?;
     // The guest can still build after the reload.
     hammer(pair, yaw)?;
     plant(pair, yaw)?;
@@ -915,5 +952,61 @@ fn new_player_screens() -> Result<()> {
             .map(|l| format!("{:?} {}\n", l.level, l.text))
             .collect::<String>(),
     )?;
+    Ok(())
+}
+
+/// Regression: once the server shows the grey brick in hand, a click must
+/// still place the ghost (it went to the brick image's trigger instead).
+#[test]
+#[ignore = "packaged or generated content, loopback UDP and an offscreen GPU; no window"]
+fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
+    let content = std::env::var_os("BRI_CONTENT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    let state = std::env::temp_dir().join(format!("bri-brick-hand-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    let mut app = App::load(&content, &state, SIZE)?;
+    app.ui.core.pop(ScreenId::DefaultControls);
+    request(
+        &mut app,
+        UiAction::HostGame {
+            map: "v20/add-ons/map_slate/slate.mis".into(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "Brick hand".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    let start = Instant::now();
+    while !(in_game(&app) && grounded(&app)) {
+        ensure!(start.elapsed() < Duration::from_secs(120), "never in game");
+        run_for(&mut app, 50)?;
+    }
+    aim(&mut app, 0.0, DOWN)?;
+    request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+    let holds = |a: &App| {
+        a.network_view().is_some_and(|v| {
+            v.weapons.images.get(&v.owner).is_some_and(|i| {
+                i.iter().any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
+            })
+        })
+    };
+    let start = Instant::now();
+    while !holds(&app) {
+        ensure!(start.elapsed() < Duration::from_secs(10), "brick never in hand");
+        run_for(&mut app, 16)?;
+    }
+    run_for(&mut app, 100)?;
+    request(
+        &mut app,
+        UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }),
+    )?;
+    let ghost = app.building().and_then(|b| b.ghost()).is_some();
+    let _ = request(&mut app, UiAction::Disconnect);
+    let _ = std::fs::remove_dir_all(&state);
+    ensure!(ghost, "A click with the brick in hand placed no ghost");
     Ok(())
 }

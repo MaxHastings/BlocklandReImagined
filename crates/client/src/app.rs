@@ -2919,7 +2919,13 @@ impl App {
                 view.weapons
                     .images
                     .get(&view.owner)
-                    .is_some_and(|images| images.iter().any(|image| image.hand == 0)),
+                    .is_some_and(|images| {
+                        images.iter().any(|image| {
+                            image.hand == 0
+                                && !bri_sim::session::BRICK_HAND_IMAGES
+                                    .contains(&image.image.as_str())
+                        })
+                    }),
             );
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view)

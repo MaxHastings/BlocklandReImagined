@@ -27,7 +27,7 @@ mod map_change;
 mod inventory;
 mod special;
 mod tutorial;
-pub use tutorial::{Abilities, BrickHand};
+pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{VehicleInfo, VehiclePose};
