@@ -846,15 +846,22 @@ impl MessageScreen {
         if let Some(n) = view.id(&format!("{prefix}Text")) {
             view.set_text(n, &message.text);
         }
+        if let Some([yes, no]) = &message.buttons {
+            for n in view.walk().collect::<Vec<_>>() {
+                let command = view.node(n).ctrl.command.clone().unwrap_or_default();
+                if command.contains("yesCallback") {
+                    view.set_text(n, yes);
+                } else if command.contains("noCallback") {
+                    view.set_text(n, no);
+                }
+            }
+        }
         fit_message(&mut view, &core.pack, prefix);
         Self { view, message }
     }
     fn answer(&self, yes: bool, core: &mut Core) {
         core.pop(ScreenId::MessageBox);
-        if !yes {
-            return;
-        }
-        match &self.message.on_yes {
+        match if yes { &self.message.on_yes } else { &self.message.on_no } {
             Callback::None => {}
             Callback::Quit => {
                 core.request(UiAction::Quit);

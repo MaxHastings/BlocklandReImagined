@@ -872,3 +872,74 @@ fn trust_invites_queue_like_mini_game_invites_and_escape_closes_them() {
             .any(|a| matches!(a, UiAction::AnswerTrustInvite { .. }))
     );
 }
+
+fn start_join(u: &mut Ui) -> bri_ui::api::RequestId {
+    click(u, ScreenId::MainMenu, "join");
+    click(u, ScreenId::JoinServer, "manual");
+    for ch in "10.0.0.5:28000".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    down(u, Key::Return);
+    actions(u);
+    u.session_request().unwrap()
+}
+fn question(on_no: Option<UiAction>) -> Question {
+    Question {
+        title: "Asked".into(),
+        text: "Really?".into(),
+        yes: "Continue".into(),
+        no: "Cancel".into(),
+        on_yes: Box::new(UiAction::TrustNewServerIdentity {
+            address: "10.0.0.5:28000".into(),
+        }),
+        on_no: on_no.map(Box::new),
+    }
+}
+fn message_boxes(u: &Ui) -> usize {
+    u.dialogs
+        .iter()
+        .filter(|d| d.id() == ScreenId::MessageBox)
+        .count()
+}
+
+#[test]
+fn a_changed_server_identity_asks_instead_of_reporting_the_failure() {
+    let mut u = ui();
+    let id = start_join(&mut u);
+    u.apply_session(id, UiUpdate::FailureQuestion(question(None)));
+    u.apply_session(
+        id,
+        UiUpdate::Connection(ConnectionState::Failed {
+            reason: "The server at 10.0.0.5:28000 has a different identity".into(),
+        }),
+    );
+    u.update(0);
+    // One question with its own answers, not a failure box beneath it.
+    assert_eq!(message_boxes(&u), 1);
+    let view = u.screen(ScreenId::MessageBox).unwrap().view();
+    assert_eq!(view.text_of(view.id("yes").unwrap()), "Continue");
+    assert_eq!(view.text_of(view.id("no").unwrap()), "Cancel");
+    click(&mut u, ScreenId::MessageBox, "yes");
+    assert_eq!(
+        actions(&mut u),
+        [UiAction::TrustNewServerIdentity {
+            address: "10.0.0.5:28000".into()
+        }]
+    );
+    // Continuing is a new join attempt the host's updates belong to.
+    assert!(u.session_request().is_some_and(|new| new != id));
+}
+
+#[test]
+fn leaving_a_large_download_question_cancels_the_join() {
+    let mut u = ui();
+    let id = start_join(&mut u);
+    u.apply_session(
+        id,
+        UiUpdate::Question(question(Some(UiAction::CancelConnect))),
+    );
+    u.update(0);
+    assert_eq!(message_boxes(&u), 1);
+    down(&mut u, Key::Escape);
+    assert_eq!(actions(&mut u), [UiAction::CancelConnect]);
+}

@@ -182,6 +182,8 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
                 text: String::new(),
                 yes_no: false,
                 on_yes: crate::ui::Callback::None,
+                on_no: crate::ui::Callback::None,
+                buttons: None,
             },
         ));
     }

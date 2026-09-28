@@ -43,6 +43,15 @@ pub enum ClientEvent {
     /// The replica now holds a new map.
     MapChanged,
 }
+/// The player chose not to download a server's Add-Ons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadDeclined;
+impl std::fmt::Display for DownloadDeclined {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("You chose not to download this server's Add-Ons.")
+    }
+}
+impl std::error::Error for DownloadDeclined {}
 /// A join refused because the client's shared packages differ from the
 /// server's. Downcast a join error to this to offer the download.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,9 +143,11 @@ impl Client {
     /// the server lacks is required), fetches what the server offers into
     /// `cache` and joins once more. `load` receives the fetched packages,
     /// loads them, and returns the package list the client now runs; the
-    /// server checks that list again. Returns what was fetched.
+    /// server checks that list again. A download over `ask_above` bytes
+    /// waits for `approve` with its size; declining ends the join before
+    /// anything downloads. Returns what was fetched.
     #[allow(clippy::too_many_arguments)]
-    pub async fn connect_fetching(
+    pub async fn connect_fetching<Approval: std::future::Future<Output = bool>>(
         address: SocketAddr,
         pin: HostPin,
         name: String,
@@ -146,6 +157,8 @@ impl Client {
         cache: &bri_package::sync::Cache,
         progress: Progress,
         load: impl FnOnce(&[crate::packages::Fetched]) -> Result<Vec<bri_package::environment::PackageRef>>,
+        ask_above: u64,
+        mut approve: impl FnMut(u64) -> Approval,
     ) -> Result<(Self, Vec<crate::packages::Fetched>)> {
         let refused = match Self::connect_pinned(
             address,
@@ -173,9 +186,22 @@ impl Client {
         {
             return Err(refused);
         }
-        let fetched = crate::packages::fetch_missing_pinned(address, &pin, cache, &progress)
-            .await
-            .context("Downloading the server's packages")?;
+        // The download connection closes while the player decides; the
+        // fetch runs again with their answer.
+        let mut approved = ask_above;
+        let fetched = loop {
+            let result =
+                crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, approved)
+                    .await;
+            if let Err(error) = &result
+                && let Some(&crate::packages::NeedsApproval(total)) = error.downcast_ref()
+            {
+                ensure!(approve(total).await, DownloadDeclined);
+                approved = total;
+                continue;
+            }
+            break result.context("Downloading the server's Add-Ons")?;
+        };
         let packages = load(&fetched)?;
         let client = Self::connect_pinned(
             address,

@@ -578,6 +578,8 @@ async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()>
             loaded = fetched.iter().map(|f| f.dir.clone()).collect();
             Ok(fetched.iter().map(|f| f.package.clone()).collect())
         },
+        u64::MAX,
+        |_| -> std::future::Ready<bool> { panic!("a small download does not ask") },
     )
     .await?;
     assert!(client.owner > 0);
@@ -605,11 +607,79 @@ async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()>
         &Cache::open(empty_cache.path())?,
         Progress::default(),
         |_| panic!("nothing downloads for an extra package"),
+        u64::MAX,
+        |_| -> std::future::Ready<bool> { panic!("nothing downloads for an extra package") },
     )
     .await
     .err()
     .unwrap();
     assert!(format!("{error:#}").contains("mymod"), "{error:#}");
+    server.stop().await?;
+    Ok(())
+}
+
+/// A download above the asking size waits for the player. Leaving ends
+/// the join with nothing downloaded; agreeing downloads and joins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_add_on_downloads_ask_the_player_first() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (set, environment) = content(root.path())?;
+    let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment: environment.clone(),
+            packages: Some(Arc::new(shelf)),
+            ..fixture::options()
+        },
+    )?;
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let cache_dir = tempfile::tempdir()?;
+    let cache = Cache::open(cache_dir.path())?;
+    let join = async |approve: bool, asked: &mut Vec<u64>| {
+        bri_net::client::Client::connect_fetching(
+            server.address,
+            bri_net::client::HostPin::from(&server.certificate[..]),
+            "Asked".into(),
+            Vec::new(),
+            None,
+            &identity,
+            &cache,
+            Progress::default(),
+            |fetched| Ok(fetched.iter().map(|f| f.package.clone()).collect()),
+            0,
+            |total| {
+                asked.push(total);
+                std::future::ready(approve)
+            },
+        )
+        .await
+    };
+    let mut asked = Vec::new();
+    let error = join(false, &mut asked).await.err().unwrap();
+    assert!(
+        error
+            .downcast_ref::<bri_net::client::DownloadDeclined>()
+            .is_some(),
+        "{error:#}"
+    );
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0] > 0);
+    assert!(
+        environment
+            .client_packages()
+            .iter()
+            .all(|p| cache.installed(p).is_none()),
+        "leaving downloads nothing"
+    );
+    let (client, fetched) = join(true, &mut asked).await?;
+    assert!(client.owner > 0);
+    assert!(fetched.iter().any(|f| f.downloaded > 0));
+    assert_eq!(asked.len(), 2, "asked once more, with the same size");
+    assert_eq!(asked[0], asked[1]);
+    drop(client);
     server.stop().await?;
     Ok(())
 }

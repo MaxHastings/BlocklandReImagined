@@ -580,6 +580,11 @@ pub enum UiAction {
         address: String,
         password: String,
     },
+    /// Join a saved server whose identity changed, trusting its new one
+    /// (the player chose Continue).
+    TrustNewServerIdentity { address: String },
+    /// Download a server's Add-Ons the player was asked about.
+    ApproveDownload,
     /// Cancel a pending connection attempt or leave the loading screen.
     CancelConnect,
     /// Leave the game (disconnect, or stop hosting).
@@ -750,6 +755,18 @@ pub enum ConnectionState {
     DownloadingPackages(PackageDownload),
     /// Connection failed or was dropped; shown in a message box.
     Failed { reason: String },
+}
+
+/// A question with two named answers (Continue/Cancel, Download/Leave).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Question {
+    pub title: String,
+    pub text: String,
+    pub yes: String,
+    pub no: String,
+    pub on_yes: Box<UiAction>,
+    /// `None`: NO only closes the question.
+    pub on_no: Option<Box<UiAction>>,
 }
 
 /// A join refused because this player's add-ons differ from the server's
@@ -1144,6 +1161,10 @@ pub enum UiUpdate {
     /// The next connection failure is a refused join over differing
     /// add-ons: show these instead of a plain message box.
     AddOnMismatch(AddOnMismatch),
+    /// Ask now; each answer sends its request.
+    Question(Question),
+    /// The next connection failure asks this instead of showing its reason.
+    FailureQuestion(Question),
     /// The hosted world changed since it was last saved under a name (or
     /// loaded); leaving and quitting ask first.
     UnsavedChanges(bool),

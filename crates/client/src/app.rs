@@ -110,6 +110,18 @@ struct Attempt {
     /// Hosts: a load or map change is still rebuilding the world until this
     /// time; its changes are not the player's unsaved work.
     settling: Option<std::time::Instant>,
+    /// Joins: the saved server answered with a different identity, so a
+    /// failure asks whether to trust the new one.
+    identity_changed: Arc<std::sync::atomic::AtomicBool>,
+    /// Joins: a large Add-On download waiting for the player.
+    download: Arc<std::sync::Mutex<DownloadAsk>>,
+}
+/// A large Add-On download the join asks the player about.
+#[derive(Default)]
+struct DownloadAsk {
+    /// Its size, and where the answer goes.
+    pending: Option<(u64, tokio::sync::oneshot::Sender<bool>)>,
+    shown: bool,
 }
 struct PendingAction {
     action: UiAction,
@@ -2072,8 +2084,53 @@ impl App {
             progress_seen: 0,
             saved_revision: None,
             settling: None,
+            identity_changed: Default::default(),
+            download: Default::default(),
         });
         Ok(())
+    }
+    /// Asked when a saved server answers with a different identity.
+    fn identity_question(&self, address: &str) -> bri_ui::api::Question {
+        let saved = crate::servers::SavedServers::load(&self.state_dir.join("servers.json"));
+        let name = saved
+            .find(address)
+            .map(|s| plain_chat(&s.name))
+            .filter(|name| !name.trim().is_empty())
+            .map_or_else(|| address.to_string(), |name| format!("{name} ({address})"));
+        bri_ui::api::Question {
+            title: "Server Identity Changed".into(),
+            text: format!(
+                "{name} has a different identity than when you last joined.\n\nThis happens \
+                 when its host reinstalls the game, but it can also mean someone else is \
+                 answering at that address. Only continue if the host told you they \
+                 reinstalled."
+            ),
+            yes: "Continue".into(),
+            no: "Cancel".into(),
+            on_yes: Box::new(UiAction::TrustNewServerIdentity {
+                address: address.to_string(),
+            }),
+            on_no: None,
+        }
+    }
+    /// Continue after an identity change: drop the saved identity and the
+    /// saved invite's key, so the next join trusts what answers and saves it.
+    fn forget_server_identity(&self, address: &str) -> Result<()> {
+        let key = bri_net::invite::JoinTarget::parse(address)?.address();
+        update_small_json(
+            &self.state_dir.join("trusted-hosts.json"),
+            |pins: &mut BTreeMap<String, Vec<u8>>| {
+                pins.remove(&key);
+            },
+        )?;
+        let path = self.state_dir.join("servers.json");
+        let mut saved = crate::servers::SavedServers::load(&path);
+        for server in &mut saved.servers {
+            if server.address.eq_ignore_ascii_case(&key) {
+                server.invite = None;
+            }
+        }
+        saved.save(&path)
     }
     fn join(&mut self, id: RequestId, address: String, password: String) -> Result<()> {
         ensure!(
@@ -2111,6 +2168,15 @@ impl App {
         let pin_key = typed.clone();
         let progress = bri_progress::Progress::new();
         let reporting = progress.clone();
+        // A saved server's invite carries the key it had when joined.
+        let saved_invite = crate::servers::SavedServers::load(&servers_file)
+            .servers
+            .iter()
+            .any(|s| s.invite.as_deref() == Some(address.trim()));
+        let identity_changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let changed = identity_changed.clone();
+        let download = Arc::new(std::sync::Mutex::new(DownloadAsk::default()));
+        let ask = download.clone();
         let worker = Worker::start(self.runtime.handle(), async move {
             let route = target.resolve().await?;
             let address = route.address;
@@ -2166,27 +2232,33 @@ impl App {
                     mods = Some(catalog);
                     Ok(packages)
                 },
+                bri_net::packages::ASK_ABOVE_BYTES,
+                |total| {
+                    let (answer, answered) = tokio::sync::oneshot::channel();
+                    if let Ok(mut ask) = ask.lock() {
+                        *ask = DownloadAsk {
+                            pending: Some((total, answer)),
+                            shown: false,
+                        };
+                    }
+                    async move { answered.await.unwrap_or(false) }
+                },
             )
             .await;
             let client = match joined {
                 Ok((client, _)) => client,
                 Err(error) => {
-                    // A host that reinstalled has a new identity: forget the
-                    // old pin so joining again (the player's choice) trusts it.
-                    // An invite's key is never forgotten this way: it came
-                    // from the host just now.
-                    if had_pin
+                    // A saved server that answers with a new identity may
+                    // have reinstalled, or may not be the same host: the
+                    // player decides (`TrustNewServerIdentity`). A pasted
+                    // invite's key came from the host just now and stands.
+                    if (had_pin || saved_invite)
                         && matches!(
                             error.downcast_ref::<bri_net::client::JoinError>(),
                             Some(bri_net::client::JoinError::IdentityChanged(_))
                         )
                     {
-                        let _ = tokio::task::spawn_blocking(move || {
-                            update_small_json(&pins_file, |pins: &mut BTreeMap<String, Vec<u8>>| {
-                                pins.remove(&pin_key);
-                            })
-                        })
-                        .await;
+                        changed.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                     return Err(error);
                 }
@@ -2253,6 +2325,8 @@ impl App {
             progress_seen: 0,
             saved_revision: None,
             settling: None,
+            identity_changed,
+            download,
         });
         Ok(())
     }
@@ -2767,6 +2841,13 @@ impl App {
             a.view = a.worker.view.borrow_and_update().clone();
         }
         self.show_progress(&mut a);
+        let asking = a.download.lock().ok().and_then(|mut ask| {
+            let total = ask.pending.as_ref().map(|(total, _)| *total)?;
+            (!std::mem::replace(&mut ask.shown, true)).then_some(total)
+        });
+        if let Some(total) = asking {
+            self.ui.apply_session(a.id, UiUpdate::Question(download_question(total)));
+        }
         let mut failed = None;
         while let Ok(event) = a.worker.events.try_recv() {
             match event {
@@ -2991,6 +3072,10 @@ impl App {
                 }
             }
             self.reconnects = 0;
+            if a.identity_changed.load(std::sync::atomic::Ordering::Relaxed) {
+                let question = self.identity_question(&a.name);
+                self.ui.apply_session(id, UiUpdate::FailureQuestion(question));
+            }
             if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
                 self.ui.apply_session(id, UiUpdate::AddOnMismatch(mismatch));
             }
@@ -3559,6 +3644,20 @@ fn vertical_fov(horizontal: f32, aspect: f32) -> f32 {
         return horizontal;
     }
     2.0 * ((horizontal * 0.5).tan() / aspect).atan()
+}
+/// Asked before an Add-On download over `bri_net::packages::ASK_ABOVE_BYTES`.
+fn download_question(total: u64) -> bri_ui::api::Question {
+    bri_ui::api::Question {
+        title: "Download Add-Ons?".into(),
+        text: format!(
+            "This server's Add-Ons need {} MB. Download?",
+            total.div_ceil(1024 * 1024)
+        ),
+        yes: "Download".into(),
+        no: "Leave".into(),
+        on_yes: Box::new(UiAction::ApproveDownload),
+        on_no: Some(Box::new(UiAction::CancelConnect)),
+    }
 }
 fn plain_chat(text: &str) -> String {
     text.chars()
@@ -4706,6 +4805,27 @@ impl PlatformApp for App {
                         continue;
                     }
                     result
+                }
+                UiAction::TrustNewServerIdentity { address } => {
+                    if self.ui.session_request() != Some(id) {
+                        continue;
+                    }
+                    let result = self
+                        .forget_server_identity(&address)
+                        .and_then(|()| self.join(id, address, String::new()));
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::ApproveDownload => {
+                    if let Some(a) = &self.attempt
+                        && let Ok(mut ask) = a.download.lock()
+                        && let Some((_, answer)) = ask.pending.take()
+                    {
+                        let _ = answer.send(true);
+                    }
+                    Ok(())
                 }
                 UiAction::CancelConnect | UiAction::Disconnect => {
                     if self.attempt.as_ref().is_none_or(|a| a.id <= id) {

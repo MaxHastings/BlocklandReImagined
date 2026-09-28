@@ -22,6 +22,22 @@ use std::{
 /// Most a client downloads for one server before asking its player: a
 /// hostile server must not be able to fill a disk with valid packages.
 pub const MAX_FETCH_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Downloads bigger than this ask the player first.
+pub const ASK_ABOVE_BYTES: u64 = 200 * 1024 * 1024;
+/// The download is bigger than the player has agreed to: its size in bytes.
+/// Nothing was downloaded; ask, then fetch again with that size approved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NeedsApproval(pub u64);
+impl std::fmt::Display for NeedsApproval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "This server's Add-Ons need {} MB",
+            self.0.div_ceil(1024 * 1024)
+        )
+    }
+}
+impl std::error::Error for NeedsApproval {}
 /// A download connection that sends no request for this long is closed.
 pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(15);
 
@@ -169,16 +185,25 @@ pub async fn fetch_missing(
     cache: &Cache,
     progress: &Progress,
 ) -> Result<Vec<Fetched>> {
-    fetch_missing_pinned(address, &HostPin::from(certificate), cache, progress).await
+    fetch_missing_pinned(
+        address,
+        &HostPin::from(certificate),
+        cache,
+        progress,
+        u64::MAX,
+    )
+    .await
 }
 
 /// [`fetch_missing`] from the host `pin` names (a saved certificate, an
-/// invite's key, or trust on first use, as for joining).
+/// invite's key, or trust on first use, as for joining). A download over
+/// `approved` bytes stops before its first byte with [`NeedsApproval`].
 pub async fn fetch_missing_pinned(
     address: std::net::SocketAddr,
     pin: &HostPin,
     cache: &Cache,
     progress: &Progress,
+    approved: u64,
 ) -> Result<Vec<Fetched>> {
     let (endpoint, connection, _) =
         crate::client::connect_quic(address, pin, Duration::from_secs(10)).await?;
@@ -242,10 +267,13 @@ pub async fn fetch_missing_pinned(
             .sum();
         ensure!(
             total <= MAX_FETCH_BYTES,
-            "The server's packages need {} MB of downloads, over the {} MB limit",
+            "This server's Add-Ons need {} MB of downloads, over the {} MB limit",
             total / (1024 * 1024),
             MAX_FETCH_BYTES / (1024 * 1024)
         );
+        if total > approved {
+            return Err(NeedsApproval(total).into());
+        }
         progress.begin(Stage::DownloadingPackages, Unit::Bytes, Some(total));
         let mut done = 0_u64;
         let mut downloaded = BTreeMap::<String, u64>::new();

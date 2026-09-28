@@ -109,7 +109,7 @@ pub enum StackCmd {
     Push(ScreenId),
     Pop(ScreenId),
     /// Show a message box (OK or Yes/No) with a callback.
-    Message(MessageBox),
+    Message(Box<MessageBox>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +118,10 @@ pub struct MessageBox {
     pub text: String,
     pub yes_no: bool,
     pub on_yes: Callback,
+    /// What NO (or Escape) does.
+    pub on_no: Callback,
+    /// Labels for YES and NO, when "Yes" and "No" would not say it.
+    pub buttons: Option<[String; 2]>,
 }
 
 /// What a message box's YES/OK does (v20 passed script strings).
@@ -220,6 +224,8 @@ pub struct Core {
     pub add_ons: crate::api::AddOnsView,
     /// Differing add-ons behind the last refused join (Can't Join dialog).
     pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
+    /// See `UiUpdate::FailureQuestion`.
+    pub failure_question: Option<crate::api::Question>,
     /// See `UiUpdate::UnsavedChanges`.
     pub unsaved_changes: bool,
     /// This build's version (`UiUpdate::Version`).
@@ -296,7 +302,10 @@ impl Core {
         }
         let starts = matches!(
             a,
-            UiAction::HostGame { .. } | UiAction::JoinServer { .. } | UiAction::StartTutorial
+            UiAction::HostGame { .. }
+                | UiAction::JoinServer { .. }
+                | UiAction::TrustNewServerIdentity { .. }
+                | UiAction::StartTutorial
         );
         let stops = matches!(a, UiAction::CancelConnect | UiAction::Disconnect);
         if starts || stops {
@@ -440,12 +449,14 @@ impl Core {
         self.cmds.push(StackCmd::SetContent(s));
     }
     pub fn message_ok(&mut self, title: &str, text: &str) {
-        self.cmds.push(StackCmd::Message(MessageBox {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
             title: title.into(),
             text: text.into(),
             yes_no: false,
             on_yes: Callback::None,
-        }));
+            on_no: Callback::None,
+            buttons: None,
+        })));
     }
     /// Ask before leaving a hosted game whose world changed since it was last
     /// saved. The autosave keeps it either way; this is about a named save.
@@ -458,12 +469,25 @@ impl Core {
         );
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
-        self.cmds.push(StackCmd::Message(MessageBox {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
             title: title.into(),
             text: text.into(),
             yes_no: true,
             on_yes,
-        }));
+            on_no: Callback::None,
+            buttons: None,
+        })));
+    }
+    /// A question with its own button labels; each answer sends its request.
+    pub fn ask(&mut self, q: crate::api::Question) {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: q.title,
+            text: q.text,
+            yes_no: true,
+            on_yes: Callback::Request(q.on_yes),
+            on_no: q.on_no.map_or(Callback::None, Callback::Request),
+            buttons: Some([q.yes, q.no]),
+        })));
     }
     /// `strupr(getWord(moveMap.getBinding(cmd), 1))` as used in HUD tips.
     pub fn key_name(&self, command: &str) -> String {
@@ -997,6 +1021,7 @@ impl Ui {
             save_context: None,
             add_ons: Default::default(),
             add_on_mismatch: None,
+            failure_question: None,
             unsaved_changes: false,
             version: String::new(),
             newer_version: None,
@@ -1229,7 +1254,7 @@ impl Ui {
             }
             StackCmd::Message(m) => {
                 self.core.release_all();
-                let mut s = screens::menus::MessageScreen::new(&self.core, m);
+                let mut s = screens::menus::MessageScreen::new(&self.core, *m);
                 s.layout(w, h, &mut self.core);
                 self.dialogs.push(Box::new(s));
             }
@@ -1349,7 +1374,9 @@ impl Ui {
                 }
                 if let Some(r) = failed {
                     bri_console::warn(format!("Connection failed: {r}"));
-                    if c.add_on_mismatch.is_some() {
+                    if let Some(question) = c.failure_question.take() {
+                        c.ask(question);
+                    } else if c.add_on_mismatch.is_some() {
                         c.push(ScreenId::AddOnMismatch);
                     } else {
                         c.message_ok(
@@ -1530,6 +1557,8 @@ impl Ui {
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
             UiUpdate::AddOns(view) => c.add_ons = view,
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
+            UiUpdate::Question(q) => c.ask(q),
+            UiUpdate::FailureQuestion(q) => c.failure_question = Some(q),
             UiUpdate::UnsavedChanges(unsaved) => c.unsaved_changes = unsaved,
             UiUpdate::Version(v) => c.version = v,
             UiUpdate::NewerVersion { name, url } => {

@@ -97,9 +97,13 @@ Linux (cloud threads). No Windows effect.
 
 Release status (2026-09-28): item 1 is fixed on main (each player draws on
 their own `PEER_REQUEST_BUDGET`; only administrators reach the shared bulk
-budget). Items 2 and 3 need a new Continue/Cancel step in the join flow and
-are left for after the playtest; the join keeps asking the player to join
-again after an identity change, and downloads stay capped at 4 GiB.
+budget). Items 2 and 3 are fixed on `claude/orthogonality-audit-67nx3z`:
+a changed identity on a saved server asks Continue / Cancel and keeps the
+old pin until Continue, and a download over 200 MB asks Download / Leave
+(the 4 GiB cap stays). Tests: `runtime_input.rs`
+(`a_changed_server_identity_asks_instead_of_reporting_the_failure`,
+`leaving_a_large_download_question_cancels_the_join`) and
+`package_sync.rs` (`large_add_on_downloads_ask_the_player_first`).
 
 1. **One joined player can stall everyone's commands for 10 s at a time.**
    `read_budgeted_request` takes the length header's worth (up to 64 MiB)
@@ -115,12 +119,16 @@ again after an identity change, and downloads stay capped at 4 GiB.
    whatever answers. That is one retry for a man-in-the-middle. SSH's
    answer is a screen: "This server's identity changed. Only continue if
    its host told you they reinstalled", with Continue / Cancel, and the
-   pin replaced only on Continue. Small UI change; Max's call on wording.
+   pin replaced only on Continue. **Fixed:** the join now shows "Server
+   Identity Changed" with Continue / Cancel; the pin is kept until Continue.
+   A pasted invite with a new key is not asked about (the key is the pin).
 3. **PR #1: 4 GB of downloads per join with no question.** `MAX_FETCH_BYTES`
    is 4 GiB and the cache 8 GiB, so a hostile server can make every join
    download 4 GiB and evict other servers' packages. Suggest asking the
    player above something like 200 MB ("This server's Add-Ons need 1.3 GB.
-   Download and join?").
+   Download and join?"). **Fixed:** above 200 MB the join stops before the
+   first byte and asks "This server's Add-Ons need N MB. Download?" with
+   Download / Leave; the fetch restarts with that size approved.
 4. **PR #1: the download connection has the same untimed `open_bi`** as
    the join had (`fetch_missing_pinned`). When PR #1 lands on top of this
    branch, its `connect_quic` split needs the same shared wait; expect a
