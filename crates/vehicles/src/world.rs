@@ -1412,7 +1412,6 @@ impl VehiclesWorld {
         ensure!(self.step_pending, "post_step needs pre_step");
         self.step_pending = false;
         self.tick = self.tick.checked_add(1).context("vehicle tick overflow")?;
-        let mut impacts = vec![];
         let mut removed = vec![];
         let mut wrecks = vec![];
         for (id, v) in &self.instances {
@@ -1457,12 +1456,12 @@ impl VehiclesWorld {
             } else {
                 let b = &world.bodies[v.body];
                 let delta = (v.previous_velocity - v.velocity(d, b)).length();
-                let contacting = b.colliders().iter().any(|c| {
-                    world
-                        .contact_pairs_with(*c)
-                        .any(|p| p.has_any_active_contact())
-                });
-                if matches!(d.family, Family::Skis | Family::Tumble) {
+                // Vehicle::updatePos (0x56ecb1): a body collision raises
+                // `onImpact` and the impact sounds. v20 applies no damage
+                // for it: `collDamageThresholdVel`/`collDamageMultiplier`
+                // are only packed for the network (0x56a346), never read.
+                // Player-type mounts are Armor and never get here.
+                if !d.is_actor() {
                     let number = |key: &str, default: f32| {
                         d.authored
                             .get(key)
@@ -1485,21 +1484,25 @@ impl VehiclesWorld {
                     if !collided {
                         continue;
                     }
-                    // `onImpact` past `minImpactSpeed`: the add-on's puff.
-                    if delta > d.impact_threshold {
-                        let projectile = if d.family == Family::Skis {
-                            "v20.projectile.skiimpactaprojectile"
-                        } else {
-                            "v20.projectile.tumbleimpactaprojectile"
-                        };
+                    // `onImpact` past `minImpactSpeed` (default 25, 0x569aac):
+                    // only skiVehicle and deathVehicle script it, with a puff.
+                    let projectile = match d.family {
+                        Family::Skis => Some("v20.projectile.skiimpactaprojectile"),
+                        Family::Tumble => Some("v20.projectile.tumbleimpactaprojectile"),
+                        _ => None,
+                    };
+                    if let Some(projectile) = projectile
+                        && delta > number("minimpactspeed", 25.)
+                    {
                         let mut fire = explosion(v, d, projectile, world, 0.);
                         fire.velocity = [0.; 3];
                         self.intents.push(Intent::Fire(fire));
                     }
-                    // The datablock's hard or soft impact sound by speed.
-                    let sound = if delta >= number("hardimpactspeed", f32::MAX) {
+                    // The datablock's hard or soft impact sound by speed
+                    // (defaults 50 and 25).
+                    let sound = if delta >= number("hardimpactspeed", 50.) {
                         d.authored.get("hardimpactsound")
-                    } else if delta >= number("softimpactspeed", f32::MAX) {
+                    } else if delta >= number("softimpactspeed", 25.) {
                         d.authored.get("softimpactsound")
                     } else {
                         None
@@ -1522,25 +1525,8 @@ impl VehiclesWorld {
                     if d.family == Family::Skis && v.seats[0].is_some() && airborne {
                         wrecks.push(*id);
                     }
-                    continue;
-                }
-                if contacting && delta > d.impact_threshold {
-                    impacts.push((
-                        *id,
-                        (delta - d.impact_threshold) * d.impact_damage,
-                        v.last_damage,
-                    ));
-                    if delta > 15. {
-                        self.intents.push(Intent::Audio {
-                            vehicle: *id,
-                            id: "fastImpactSound".into(),
-                        });
-                    }
                 }
             }
-        }
-        for (id, damage, owner) in impacts {
-            self.damage(world, id, damage, owner)?;
         }
         for id in removed {
             self.remove(world, id)?;
