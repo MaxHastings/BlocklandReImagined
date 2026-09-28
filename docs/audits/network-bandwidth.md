@@ -51,25 +51,35 @@ Classes: **authoritative** (the host decides and every client must agree),
 **derivable** (a client can compute it from what it already has) and
 **cosmetic** (no effect on play).
 
+Max's test for "cosmetic" (14:40Z): cosmetics are easily mistaken for things
+that matter. If two players seeing something differently could change what
+either can do or what happens (collision, blocking, hits, damage, scoring,
+triggers, events, minigame state, anything a script or event reads), it is
+gameplay and stays synced. Only what is purely seen or heard, and read by
+nothing else, may go local. When unsure, it stays synced and only gets
+cheaper (rate, quantizing, packing). Every cosmetic or derivable call below
+says why. No gameplay state moved to the client in this audit: every change
+sends the same host state less often, smaller or only when it changes.
+
 | What | Channel | Class | Before | Now |
 |---|---|---|---|---|
 | Own pose (`Pose`) | datagram | authoritative (prediction reconciles with it) | 40 Hz, named fields, 245 B | 40 Hz while it changes, 10 Hz while still; compact, 91 B |
-| Other players' poses | datagram | authoritative position; the rest derivable | own `Pose` to everyone | `RemotePose`: no jump timers, energy or input ack; velocity in cm/s and look in 1e-4 rad as i16; 52 B. Sent while changing, 3 intervals after settling, then 1 Hz |
+| Other players' poses | datagram | authoritative position, velocity and look (hits, collision and look-driven events read them); jump timers, energy and input ack derivable, since only the owner's prediction reads them | own `Pose` to everyone | `RemotePose`: no jump timers, energy or input ack; velocity in cm/s and look in 1e-4 rad as i16; 52 B. Sent while changing, 3 intervals after settling, then 1 Hz |
 | Vehicle poses | datagram | authoritative | 40 Hz each, parked or not | same settle and keepalive; parked vehicles cost nothing. 129 B a driving four-wheel pose |
-| Admin camera orbs | datagram | cosmetic-ish (shows where an admin looks) | 40 Hz | settle and keepalive |
+| Admin camera orbs | datagram | kept synced: it only shows where an admin looks, but it is cheap and admins act on what others see, so unsure means synced | 40 Hz | settle and keepalive |
 | Datagram packing | datagram | | one pose per packet (about 55 B of IP, UDP and QUIC each) | items packed up to 1100 B; one packet per interval per player |
 | Movement input (client to host) | datagram | authoritative input | named, 6 inputs, every rendered frame (120/s at 144 fps) | compact; at most one datagram per 14 ms; a held frame's inputs ride the next |
 | World update (`Delta`) | reliable, zstd | mixed | 20 Hz even when empty (157 B) | absent fields left out; empty updates at 10 Hz (54 B), which clients' respawn countdowns and item fades read |
 | Bricks planted, changed, removed | update | authoritative | whole brick | unchanged (see below) |
-| Knocked-out and killed bricks | update + `BrickKill` cue | brick state authoritative; debris cosmetic | brick flags + one cue with its look; clients throw debris locally | unchanged: already one event, local debris |
-| Knocked-out brick rigid bodies | none | cosmetic | never synced | stays client-side (Pushable physics bricks thread) |
-| Projectiles | update | spawn and impact authoritative; flight derivable | whole list with positions, 20 Hz, while any flies | `WeaponDelta`: sent when they appear or leave their coasted flight (bounce, stick); clients coast them with `bri_weapons::coast`, the host's own step |
+| Knocked-out and killed bricks | update + `BrickKill` cue | brick state authoritative (it collides, blocks and events read it); debris cosmetic because it can never move, block or slow anyone and nothing reads it (Pushable physics bricks, 66ee059) | brick flags + one cue with its look; clients throw debris locally | unchanged: already one event, local debris |
+| Knocked-out brick rigid bodies | none | cosmetic: client-only, pushed one way by players and never pushing back, so no two views can disagree about play | never synced | stays client-side (Pushable physics bricks thread) |
+| Projectiles | update | authoritative (they hit, damage and knock bricks out); the flight between spawn and impact is derivable because clients run the host's own step (`bri_weapons::coast`) from the host's state, and the host resends any projectile whose real flight leaves that path (bounce, stick, redirect), checked every 50 ms | whole list with positions, 20 Hz, while any flies | `WeaponDelta`: sent when they appear or leave their coasted flight (bounce, stick); clients coast them with `bri_weapons::coast`, the host's own step |
 | Held images, static items, dropped items | update | authoritative | whole weapons view when anything changed | per-owner image changes; static items and drops only when they change |
 | Vitals (incl. ghost bricks), inventories, avatars | update | authoritative | whole map when any player changed | only the players that changed |
 | Add-On package entities | update | authoritative | whole list, 20 Hz, while any moved | new or changed entities in full; moves as id, position, yaw; removals by id |
 | Names, minigames, vehicles list, palette, time scale, broken shapes | update | authoritative | on change | unchanged (rare) |
 | Chat | update | authoritative | new lines only | unchanged |
-| Cues (sounds, effects, animations, debris, pain) | update | cosmetic, one-shot | one event each | unchanged: already one-shot with local presentation |
+| Cues (sounds, effects, animations, debris, pain) | update | cosmetic and one-shot: only seen or heard; the damage, deaths and brick changes behind them travel as authoritative state | one event each | unchanged: already one-shot with local presentation |
 | Notices, replies | reliable | authoritative | per event | unchanged |
 | Package state | reliable, per viewer | authoritative | on change | unchanged |
 | Admin snapshot | reliable, per player | authoritative | to every player on each join, leave or admin change | unchanged (rare; see follow-ups) |
@@ -109,9 +119,13 @@ own input upload, and driving vehicles.
   Projectiles: the host sends a projectile when it appears or leaves its
   flight, `Checkpoint::projectile_falls` gives each falling definition's
   per-tick drop, and `bri_weapons::coast` is the exact step. bri-net's
-  `Replica` coasts projectiles to each update's tick, so today's client
-  still sees them move at 20 Hz; smoothing can coast per frame from the same
-  records. While any projectile flies, updates stay at 20 Hz.
+  `Replica` coasts projectiles to each update's tick and then applies the
+  host's corrections, so its weapon view is the host's state at that
+  update's tick. That fits the smoothing client (2c4aa3f3): each coasted
+  entry reads as a zero-size correction at its update's tick, a bounce
+  arrives as a real one, and a projectile the host drops (`removed`) leaves
+  the view in the same update. While any projectile flies, updates stay at
+  20 Hz, so every update carries its tick.
 - **Ghost bricks and rider look** (protocol 41) are measured in the building
   row: ghost reports ride `Vitals`, now sent only for the builder whose ghost
   moved.
