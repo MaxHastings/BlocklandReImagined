@@ -639,6 +639,22 @@ pub enum ConnectionState {
     Failed { reason: String },
 }
 
+/// A join refused because this player's add-ons differ from the server's
+/// shared ones, as the Can't Join dialog lists them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnMismatch {
+    pub rows: Vec<MismatchRow>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MismatchRow {
+    pub name: String,
+    /// The server's version, or empty when it does not use it.
+    pub server: String,
+    /// This player's version, or empty when they do not have it on.
+    pub yours: String,
+}
+
 /// Join-time package download, as the join screen shows it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageDownload {
@@ -1001,6 +1017,9 @@ pub enum UiUpdate {
     AvatarPreview(IconRef),
     /// The installed packages, for the Add-Ons screen.
     AddOns(AddOnsView),
+    /// The next connection failure is a refused join over differing
+    /// add-ons: show these instead of a plain message box.
+    AddOnMismatch(AddOnMismatch),
 }
 
 // ----------------------------------------------------------------- settings

@@ -528,6 +528,124 @@ impl PackageDownload {
     }
 }
 
+/// A join refused because add-ons differ: which ones, the server's version
+/// beside this player's, and a way to the Add-Ons screen.
+pub struct Mismatch {
+    view: View,
+}
+
+const MM_LIST: &str = "MM_List";
+const MM_OPEN: &str = "MM_OpenAddOns";
+const MM_OK: &str = "MM_Ok";
+
+impl Mismatch {
+    pub fn new(core: &Core) -> Self {
+        let (mut root, mut win) = dialog("Can't Join", 440, 300);
+        let rows = core.add_on_mismatch.clone().unwrap_or_default().rows;
+        let mut intro = text(
+            "GuiMLTextProfile",
+            Rect::new(12, 32, 416, 34),
+            "This server's add-ons don't match yours. Everyone in a game needs the same versions of these:",
+        );
+        intro.class = "GuiMLTextCtrl".into();
+        win.children.push(named(intro, "MM_Intro"));
+        let mut list_scroll = scroll("MM_Scroll", Rect::new(12, 70, 416, 180));
+        let mut list = named(
+            ctrl(
+                "GuiTextListCtrl",
+                "GuiTextListProfile",
+                Rect::new(0, 0, 400, 16),
+            ),
+            MM_LIST,
+        );
+        list.fields.insert("columns".into(), "0 200 300".into());
+        list_scroll.children.push(list);
+        win.children.push(list_scroll);
+        win.children.push(named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(12, 262, 98, 28),
+                "base/client/ui/button1",
+                "Add-Ons",
+                MM_OPEN,
+            ),
+            MM_OPEN,
+        ));
+        win.children.push(named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(330, 262, 98, 28),
+                "base/client/ui/button1",
+                "OK",
+                MM_OK,
+            ),
+            MM_OK,
+        ));
+        root.children.push(win);
+        let mut view = View::new(&root);
+        view.measure(&core.pack);
+        if let Some(n) = view.id(MM_LIST) {
+            let side = |v: &str| {
+                if v.is_empty() {
+                    "not on".to_string()
+                } else {
+                    v.to_string()
+                }
+            };
+            let mut items = vec![("Add-On\tServer\tYou".to_string(), -1)];
+            items.extend(rows.iter().enumerate().map(|(i, r)| {
+                (
+                    format!("{}\t{}\t{}", r.name, side(&r.server), side(&r.yours)),
+                    i as i64,
+                )
+            }));
+            view.state(n).items = items;
+        }
+        Self { view }
+    }
+}
+
+impl Screen for Mismatch {
+    fn id(&self) -> ScreenId {
+        ScreenId::AddOnMismatch
+    }
+    fn view(&self) -> &View {
+        &self.view
+    }
+    fn view_mut(&mut self) -> &mut View {
+        &mut self.view
+    }
+    fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
+        if matches!(key, Key::Escape | Key::Return | Key::NumpadEnter) {
+            core.add_on_mismatch = None;
+            core.pop(self.id());
+            return true;
+        }
+        false
+    }
+    fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
+        let name = self
+            .view
+            .node(ev.node)
+            .ctrl
+            .name
+            .clone()
+            .unwrap_or_default();
+        match (name.as_str(), ev.kind) {
+            (_, EventKind::Close) | (MM_OK, EventKind::Click) => {
+                core.add_on_mismatch = None;
+                core.pop(self.id());
+            }
+            (MM_OPEN, EventKind::Click) => {
+                core.add_on_mismatch = None;
+                core.pop(self.id());
+                core.push(ScreenId::AddOns);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// `12.3 MB`, or KB below a megabyte.
 pub fn megabytes(bytes: u64) -> String {
     if bytes < 1024 * 1024 {
@@ -821,6 +939,65 @@ mod tests {
         assert_eq!(ui.top_id(), ScreenId::AddOns);
         let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
         assert!(actions.contains(&UiAction::RequestAddOns), "{actions:?}");
+    }
+
+    #[test]
+    fn a_refused_join_lists_the_differing_add_ons() {
+        let mut ui = ui();
+        ui.apply(UiUpdate::AddOnMismatch(crate::api::AddOnMismatch {
+            rows: vec![
+                crate::api::MismatchRow {
+                    name: "Creeper".into(),
+                    server: "1.0.0".into(),
+                    yours: String::new(),
+                },
+                crate::api::MismatchRow {
+                    name: "v20-weapons".into(),
+                    server: "9.0.0".into(),
+                    yours: "8.0.0".into(),
+                },
+            ],
+        }));
+        ui.apply(UiUpdate::Connection(ConnectionState::Failed {
+            reason: "Your content does not match the server: ...".into(),
+        }));
+        ui.handle_input(InputEvent::MouseMove { x: 1.0, y: 1.0 });
+        assert_eq!(ui.top_id(), ScreenId::AddOnMismatch);
+        let mut s = Mismatch::new(&ui.core);
+        let list = s.view.id(MM_LIST).unwrap();
+        let items: Vec<_> = s
+            .view
+            .node(list)
+            .state
+            .items
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(
+            items,
+            [
+                "Add-On\tServer\tYou",
+                "Creeper\t1.0.0\tnot on",
+                "v20-weapons\t9.0.0\t8.0.0"
+            ]
+        );
+        let open = s.view.id(MM_OPEN).unwrap();
+        s.on_event(
+            &ViewEvent {
+                node: open,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        assert!(ui.core.add_on_mismatch.is_none());
+        ui.handle_input(InputEvent::MouseMove { x: 2.0, y: 2.0 });
+        assert_eq!(ui.top_id(), ScreenId::AddOns);
+        // Other failures stay a plain message box.
+        ui.apply(UiUpdate::Connection(ConnectionState::Failed {
+            reason: "Timed out".into(),
+        }));
+        ui.handle_input(InputEvent::MouseMove { x: 3.0, y: 3.0 });
+        assert_eq!(ui.top_id(), ScreenId::MessageBox);
     }
 
     #[test]

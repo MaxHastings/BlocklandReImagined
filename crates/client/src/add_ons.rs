@@ -66,6 +66,29 @@ pub fn view(root: &Path) -> AddOnsView {
     }
 }
 
+/// The Can't Join rows for a join refused over differing add-ons, named as
+/// the player's own list names them. `None` for any other failure.
+pub fn mismatch(root: &Path, reason: &str) -> Option<bri_ui::api::AddOnMismatch> {
+    let refused = bri_package::environment::parse_refusal(reason)?;
+    let library = Library::scan(root).ok();
+    let name = |id: &str| {
+        library
+            .as_ref()
+            .and_then(|l| l.get(id))
+            .map_or(id.to_string(), |e| e.name().to_string())
+    };
+    Some(bri_ui::api::AddOnMismatch {
+        rows: refused
+            .into_iter()
+            .map(|r| bri_ui::api::MismatchRow {
+                name: name(&r.id),
+                server: r.server.unwrap_or_default(),
+                yours: r.client.unwrap_or_default(),
+            })
+            .collect(),
+    })
+}
+
 /// Turn one add-on on or off, with what it needs or what needs it.
 pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<AddOnsView> {
     let mut library = Library::scan(root)?;
@@ -331,6 +354,18 @@ mod tests {
         let v = defaults(&root).unwrap();
         assert!(v.rows.iter().all(|r| r.locked || !r.enabled), "{v:?}");
         assert!(v.notice.starts_with("Turned off 2 add-ons"), "{}", v.notice);
+        // A refused join names add-ons as the player's list does.
+        let m = mismatch(
+            &root,
+            "Joining: Your content does not match the server: server has lab-world 1.0.0 (aaaa), you do not",
+        )
+        .unwrap();
+        assert_eq!(m.rows[0].name, "The lab-world");
+        assert_eq!(
+            (m.rows[0].server.as_str(), m.rows[0].yours.as_str()),
+            ("1.0.0", "")
+        );
+        assert!(mismatch(&root, "Timed out").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

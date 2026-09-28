@@ -23,6 +23,7 @@ kind of thing: "Import Add-On" converts it into an Add-On
 | Dependencies handled | `Library::plan`: enabling pulls in dependencies first; disabling takes dependents | Notice "Also turned on: …"; a confirm box before turning off what others need | **built** |
 | Plain-word errors; one broken add-on does not break the rest | `library.*` diagnostics per package (missing folder, unreadable manifest, newer API, missing or wrong-version dependency, role conflict) | `!` in the list, "Won't load:" in details, refusals in a message box | **built** (the loaders' partial load is the Add-On import thread's multi-pack work) |
 | Joining a modded server just works | PR #1: `bri_net::packages::fetch_missing` into the download cache | Join screen: what the server needs, progress, Cancel; never changes your own Add-Ons | **screen built**; wiring waits for PR #1 and door-closers' join |
+| Know why a join was refused | Main's join check (protocol 31) refuses differing `shared` packages with `environment::refusal`; `parse_refusal` reads it back package by package | Can't Join dialog: each add-on with the server's version beside yours, and an Add-Ons button | **built** |
 | Pick a game mode when starting a game | Packages that provide `world` or a mode kind | Start Game offers them beside maps | next |
 | Import an old add-on zip | `bri_addon_import::import` | "Import Add-On…" button, report shown in details | next |
 | Presets / profiles | Named copies of the enabled list | Preset picker on the Add-Ons screen | later |
@@ -88,7 +89,9 @@ satisfied; a warning on disabled ones), `library.dependency_missing`,
   call should drive `ConnectionState::DownloadingPackages` with one row per
   missing package, `Cached` for ones already in the cache, and byte progress
   from `Stage::DownloadingPackages`.
-- No wire format changed in this slice.
+- No wire format changed in this slice. The refusal text is still the wire
+  carrier for differing packages; `refusal` and `parse_refusal` sit side by
+  side in `bri_package::environment` so they cannot drift.
 
 ## Tests (no v20 content needed)
 

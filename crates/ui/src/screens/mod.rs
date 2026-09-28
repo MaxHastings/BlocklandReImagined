@@ -68,6 +68,8 @@ pub enum ScreenId {
     AddOns,
     /// Fetching a server's packages before joining (native).
     PackageDownload,
+    /// A join refused over differing add-ons (native).
+    AddOnMismatch,
 }
 
 pub trait Screen {
@@ -157,6 +159,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::Console => return Box::new(console::Console::new(core)),
         ScreenId::AddOns => return Box::new(addons::AddOns::new(core)),
         ScreenId::PackageDownload => return Box::new(addons::PackageDownload::new(core)),
+        ScreenId::AddOnMismatch => return Box::new(addons::Mismatch::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),

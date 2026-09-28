@@ -2354,6 +2354,9 @@ impl App {
             failed = Some("Connection worker stopped".into());
         }
         if let Some(reason) = failed {
+            if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
+                self.ui.apply_session(a.id, UiUpdate::AddOnMismatch(mismatch));
+            }
             self.ui.apply_session(
                 a.id,
                 UiUpdate::Connection(ConnectionState::Failed { reason }),
