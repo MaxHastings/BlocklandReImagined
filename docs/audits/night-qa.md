@@ -230,7 +230,7 @@ loading, hosting and joining are night QA's and are not covered here.
 | 9 | Closed: the Tutorial no longer refuses joiners, it runs single player (`claude/map-fixes`). |
 | 10 | Host progress is closed on main. The loading screen now names the map instead of showing its content id (this branch). Guest map preview: joins take the host's map from the first world chunk (`show_progress`); not re-captured here. |
 | 11 | Two-player failure closed (`claude/map-fixes`); the KNOWN-ISSUES drift is fixed (this branch). Offering the Tutorial on first launch: open. |
-| 12 | Visible distance setting: open. |
+| 12 | Closed: v20's own Advanced "Max Draw Distance" slider (110 to 1000, `$pref::visibleDistanceMax`) is shown again and caps the map's visible distance and fog, which also shortens terrain streaming (`max_draw_distance_slider_saves_the_cap`). Frame cap and presets were already on main. |
 | 13 | Text size, colourblind and subtitle options: open. |
 | 14 | Join passwords: hidden (release default in `orthogonality.md`). Brick limits: open. |
 | 15 | Duplicate names: closed (this branch): a second "Blockhead" joins as "Blockhead 2" (`players_sharing_a_name_are_numbered`). A name prompt on first run: open. |

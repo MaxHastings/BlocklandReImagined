@@ -5886,10 +5886,19 @@ impl PlatformApp for App {
         let actor_frame = self.actor_effects.world().snapshot(&effects_camera);
         let (effects_frame, deferred_lights) =
             combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
+        // `$pref::visibleDistanceMax` caps the map's visible distance; the
+        // fog start scales with it so the fade keeps its shape.
+        let cap = bri_ui::screens::options::visible_distance_max(&self.ui.core.prefs);
+        if camera.atmosphere[3] > 0. && camera.atmosphere[1] > cap {
+            let scale = cap / camera.atmosphere[1];
+            camera.atmosphere[0] *= scale;
+            camera.atmosphere[1] = cap;
+            renderer.update_camera(frame.queue, &camera);
+        }
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
-            (FAR_PLANE, FAR_PLANE + 1.)
+            (cap, cap + 1.)
         };
         for terrain in &mut self.gpu_terrain {
             terrain.update(frame.queue, eye, fog_end.max(1.))?;

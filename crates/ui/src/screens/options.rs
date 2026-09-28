@@ -44,6 +44,20 @@ const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
 pub const MUTE_IN_BACKGROUND: &str = "$pref::Audio::MuteInBackground";
+/// v20's Advanced "Max Draw Distance" (`SliderGraphicsDistanceMax`): caps a
+/// map's visible distance, 110 to 1000 units, 1000 by default.
+pub const VISIBLE_DISTANCE_MAX: &str = "$pref::visibleDistanceMax";
+const DISTANCE_SLIDER: &str = "SliderGraphicsDistanceMax";
+const VISIBLE_DISTANCE_RANGE: (f32, f32) = (110.0, 1000.0);
+/// The draw distance cap `$pref::visibleDistanceMax` asks for.
+pub fn visible_distance_max(p: &Prefs) -> f32 {
+    let v = p.f32_or(VISIBLE_DISTANCE_MAX, VISIBLE_DISTANCE_RANGE.1);
+    if v.is_finite() {
+        v.clamp(VISIBLE_DISTANCE_RANGE.0, VISIBLE_DISTANCE_RANGE.1)
+    } else {
+        VISIBLE_DISTANCE_RANGE.1
+    }
+}
 /// Not a v20 setting: Crouch toggles instead of holding.
 pub const TOGGLE_CROUCH: &str = "$pref::Input::ToggleCrouch";
 const MUSIC_SLIDER: &str = "OptAudioVolumeMusic";
@@ -168,6 +182,7 @@ const SUPPORTED_CONTROLS: &[&str] = &[
     "Opt_MaxChatLines",
     "OptRemapList",
     "SliderGraphicsAnisotropy",
+    DISTANCE_SLIDER,
     FOV_SLIDER,
 ];
 const CHAT_SIZE_RADIO: &str = "OPT_ChatSize";
@@ -202,13 +217,14 @@ const READOUTS: &[&str] = &[
     "SliderControlsMouseSensitivity",
     "slider_KeyboardTurnSpeed",
     "SliderGraphicsAnisotropy",
+    DISTANCE_SLIDER,
     FOV_SLIDER,
 ];
 
 /// The text a slider's readout shows for `value`.
 fn readout(slider: &str, value: f32) -> String {
     match slider {
-        FOV_SLIDER => format!("{value:.0}"),
+        FOV_SLIDER | DISTANCE_SLIDER => format!("{value:.0}"),
         "SliderGraphicsAnisotropy" => {
             // As `TextureFiltering::from_v20` rounds it.
             let samples = 1.0 + value.clamp(0.0, 1.0) * 15.0;
@@ -686,6 +702,7 @@ impl Options {
             if anisotropy.is_finite() { anisotropy.clamp(0.0, 1.0) } else { 0.0 },
         );
         s.slider(FOV_SLIDER, default_fov(&core.prefs));
+        s.slider(DISTANCE_SLIDER, visible_distance_max(&core.prefs));
         s.set_chat_size(chat_size(&core.prefs));
         s.set_shadow_quality(core.prefs.i64_or(SHADOW_QUALITY, 0));
         let fps = max_fps(&core.prefs).unwrap_or(0);
@@ -1074,6 +1091,12 @@ impl Options {
             ),
             ("slider_KeyboardTurnSpeed", KEYBOARD_TURN_SPEED, 0.02, 1.0),
             ("SliderGraphicsAnisotropy", ANISOTROPY, 0.0, 1.0),
+            (
+                DISTANCE_SLIDER,
+                VISIBLE_DISTANCE_MAX,
+                VISIBLE_DISTANCE_RANGE.0,
+                VISIBLE_DISTANCE_RANGE.1,
+            ),
         ] {
             if let Some(n) = self.view.id(name) {
                 let v = self.view.num(n);
@@ -1683,6 +1706,7 @@ mod tests {
             ("GuiSliderCtrl", "SliderGraphicsAnisotropy", "value", ""),
             ("GuiCheckBoxCtrl", "OptPrecipitation", PRECIPITATION, ""),
             ("GuiCheckBoxCtrl", "OptNoobJet", "$pref::Input::noobjet", ""),
+            ("GuiSliderCtrl", DISTANCE_SLIDER, "value", ""),
             (
                 "GuiRadioCtrl",
                 "OPT_ShadowQuality0",
@@ -1706,6 +1730,9 @@ mod tests {
             }
             if name == "done" {
                 c.accelerator = Some("escape".into());
+            }
+            if name == DISTANCE_SLIDER {
+                c.fields.insert("range".into(), "110 1000".into());
             }
             // Authored radio sets sit in their own sections.
             if name.starts_with(SHADOW_RADIO) {
@@ -2070,6 +2097,24 @@ mod tests {
         assert_eq!(readout(FOV_SLIDER, 90.0), "90");
         assert_eq!(readout("SliderControlsMouseSensitivity", 0.75), "0.75");
         assert_eq!(readout("SliderGraphicsAnisotropy", 0.0), "Off");
+    }
+
+    #[test]
+    fn max_draw_distance_slider_saves_the_cap() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id(DISTANCE_SLIDER).unwrap();
+        assert!(s.view.node(n).state.visible);
+        assert_eq!(s.view.num(n), 1000.0);
+        s.view.set_num(n, 400.0);
+        change(&mut s, &mut ui, n);
+        click(&mut s, "done", &mut ui);
+        let saved = saved_prefs(&mut ui);
+        assert_eq!(visible_distance_max(&saved), 400.0);
+        assert_eq!(readout(DISTANCE_SLIDER, 400.4), "400");
+        let mut p = Prefs::default();
+        p.set(VISIBLE_DISTANCE_MAX, "5");
+        assert_eq!(visible_distance_max(&p), 110.0);
     }
 
     #[test]
