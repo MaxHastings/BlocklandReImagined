@@ -214,15 +214,39 @@ loadable by adding the `packages.json` line its report prints (`side`
 
 ## Per-package manifests (`package.json`)
 
-The mod platform lane defines the manifest a mod package carries inside its
-directory (`package.json`: id, version, api, license, provenance,
-dependencies, capabilities, provides, slots), its archive format and its
-download cache, in `docs/modding/package-format.md`. They build on this crate:
-the same id grammar, versions, diagnostics and `PackageRef`/`Mismatch` shapes.
-Base packages carry no `package.json`; `packages.json` describes them.
+A mod package carries a `package.json` in its directory: `schema_version`,
+`id`, `version`, `api`, `name`, `description`, `authors`, `license`,
+`provenance`, `dependencies`, `capabilities` and `provides`. It is parsed by
+`bri_package_runtime::manifest` with the id grammar, versions and
+diagnostics above. Unknown fields are errors, so a misspelt field is
+reported rather than ignored. Base packages carry no `package.json`;
+`packages.json` describes them. The author-facing walkthrough is
+[docs/modding/README.md](../modding/README.md).
+
+- **Capabilities** are listed once, in `bri_package::capability`, each with
+  the plain words players read ("send chat messages"). The runtime refuses any
+  operation whose capability the manifest lacks (`ops::authorize`).
+- **Sides follow content kinds.** Behaviour, script, world and entity are
+  server content; model and HUD are client content. A package holding only
+  server kinds is `server`, only client kinds `client`, none `shared`. A
+  package mixing both cannot load on either side and must be split.
+- **`bri-addon-check <folder> [--json]`** (`bri_package_runtime::check`)
+  loads one Add-On the way the game does, with the Add-Ons it needs found
+  beside it. It checks the manifest, files, HUD bindings and scripts, and
+  prints the side, what the Add-On provides, what it may do and what it
+  needs. It runs nothing.
+
+The modplatform draft (PR #6) had a luau behaviour host, a single-archive
+package identity, a content-addressed store and exclusive `slots`. Main
+chose Rhai behaviour, directory hashing (`environment::hash_dir`) and the
+file-level download cache of the package sync work, so those parts were not
+carried over. Only its plain-language capabilities, strict manifests and the
+`check` report were kept. An exclusive slot for the server's game mode
+returns with the game mode picker, which is where it is first read.
 
 ## Not built yet
 
-Dependency resolution, downloading missing packages, and archives are the mod
-platform lane's. Renaming the base packs' ids follows the plan under
-"Legacy spellings" above.
+Downloading missing packages at join is the package sync work (the stress
+campaign PR). Content inside the base packages still uses older id
+spellings (`v20/brick/...`, `v20.weapon....`) until those packs are
+regenerated under the grammar above; see the audit.

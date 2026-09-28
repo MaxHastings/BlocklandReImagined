@@ -2652,3 +2652,21 @@ game mode picker once the Stress Lab landed (da5668e).
   `a_host_autosaves_on_its_timer_and_returns_its_final_world`,
   `leaving_a_host_with_unsaved_changes_asks_about_them_first`, and the
   transport test now checks the final world is kept.
+## 2026-09-28 — modplatform package draft folded into main
+
+- Reviewed the uncommitted modplatform `bri-package` draft (PR #6,
+  `wip/modplatform-package/`). Main already covers its id grammar,
+  diagnostics and environment. Its archive, store and luau kinds are
+  superseded by directory hashing, the package sync cache and the Rhai
+  runtime. Kept:
+  - `bri_package::capability`: the one capability list, with the plain
+    words players read. `ops::CAPABILITIES` re-exports it.
+  - Strict manifests: unknown `package.json` fields are errors.
+  - `bri-addon-check <folder> [--json]`: checks an Add-On and its
+    dependencies found beside it the way the game loads them, and prints
+    the side, provides, capabilities and needs.
+- Evidence: `cargo test -p bri-package-runtime --test check` (a HUD
+  checked with its rules; a misspelt field, a missing dependency, a private
+  HUD binding and a script syntax error are each named; sides follow
+  kinds), plus the bri-package, bri-package-runtime and bri-addon-import
+  tests and clippy `-D warnings`.

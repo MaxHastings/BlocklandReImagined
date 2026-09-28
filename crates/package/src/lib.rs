@@ -8,6 +8,7 @@
 //! by [`id::ContentId`] (`namespace:kind/name`).
 //!
 //! Format: `docs/architecture/packages.md`.
+pub mod capability;
 pub mod diag;
 pub mod environment;
 pub mod id;
