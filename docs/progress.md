@@ -3530,3 +3530,28 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   longer lists the join trust prompt as unbuilt; only elevated client code
   is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
   packaging test needs Windows (not run in the cloud).
+
+## 2026-09-28 v20 parity: last missing rows built
+
+- Branch `claude/v20-parity`. Every Part 1 row of `docs/audits/v20-parity.md`
+  that was missing is now built (100 present, 5 partial, 0 missing, 7 other
+  lanes, 8 dropped of 120). This round: v20's schedule, light and emitter,
+  item and projectile quotas per builder (`fbc263ef`; "Too many events at
+  once!" as `ProcessInputEvent`); Load Bricks' colour warning with Nearest
+  Match and Add More Colors (`c3ad84a0`); Random Brick Color's next colour
+  on the ghost and `/clearinventory` (`c72cc900`); a joiner's wrench lists
+  only the host's Music Files (`2ce1ecd2`).
+- Dropped, each with a v20 reason in its audit row: Replace Current Color
+  Set (v20 needed it for a 64-colour set; ours holds 256 and the replicated
+  palette only grows), Render My Player, and the Misc quota (explosions are
+  instantaneous here).
+- Protocol additions for Gate to number: `Notice::TempBrickColor(u8)` and
+  `Notice::MusicTracks(BTreeSet<String>)`.
+- Evidence: `cargo test -p bri-sim -p bri-events -p bri-client -p bri-net
+  -p bri-ui`; `cargo test --release -p bri-sim --test pong --test
+  events_native --test special_bricks --test stock_saves_native --
+  --ignored`; `cargo test --release -p bri-client --test app_flow --test
+  multiplayer -- --include-ignored`; clippy clean on the touched crates.
+  None seen in a visible window yet. Maxwell's checks: load a save made
+  with other colours (the Color Warning should ask); host with Random Brick
+  Color on and watch the ghost change colour after each plant.
