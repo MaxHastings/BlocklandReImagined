@@ -225,8 +225,15 @@ fn modal_open_releases_controls_and_repeat_before_typing() {
     assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
     u.update(500);
     down(&mut u, Key::Letter('w'));
-    u.handle_input(InputEvent::MouseDelta { dx: 8.0, dy: 2.0 });
     assert!(actions(&mut u).is_empty());
+    // With no cursor shown the pointer stays captured, so it keeps driving
+    // the camera: Torque sends cursor-off mouse moves to the action map
+    // while newMessageHud (noCursor) holds the keyboard.
+    u.handle_input(InputEvent::MouseDelta { dx: 8.0, dy: 2.0 });
+    assert!(matches!(
+        actions(&mut u).as_slice(),
+        [UiAction::Game(GameAction::Look { .. })]
+    ));
     for ch in "hello".chars() {
         u.handle_input(InputEvent::Char(ch));
     }

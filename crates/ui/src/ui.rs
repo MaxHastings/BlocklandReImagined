@@ -1638,9 +1638,10 @@ impl Ui {
                 }
             }
             InputEvent::MouseDelta { dx, dy } => {
+                // A captured pointer always drives the camera; any screen
+                // that wants the mouse shows a cursor, which releases it.
                 if !self.cursor_visible()
                     && self.game_input_active()
-                    && self.dialogs.is_empty()
                     && dx.is_finite()
                     && dy.is_finite()
                 {
