@@ -1003,6 +1003,9 @@ pub enum UiUpdate {
     },
     /// Avatar preview texture for the Player Appearance screen.
     AvatarPreview(IconRef),
+    /// The hosted world changed since it was last saved under a name (or
+    /// loaded); leaving and quitting ask first.
+    UnsavedChanges(bool),
 }
 
 // ----------------------------------------------------------------- settings

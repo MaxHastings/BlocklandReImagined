@@ -58,6 +58,7 @@ async fn main() -> Result<()> {
                 spawn_points: vec![Vec3::splat(2000.0), Vec3::splat(2003.0)],
                 certificate: None,
                 map_loader: None,
+                autosave: None,
             },
         )?;
         let mut host = Client::connect_with_host(

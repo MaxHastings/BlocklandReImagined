@@ -46,6 +46,9 @@ fn audio_event_sounds(audio: &std::path::Path) -> Result<Vec<String>> {
         .filter_map(|s| s["id"].as_str().map(str::to_string))
         .collect())
 }
+/// A crash loses at most this much play; the newest autosaves are kept.
+const AUTOSAVE_EVERY: Duration = Duration::from_secs(60);
+const AUTOSAVE_KEEP: usize = 3;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -141,6 +144,15 @@ async fn main() -> Result<()> {
             spawn_points,
             certificate: Some(server::HostCertificate::load_or_create(&state_dir)?),
             map_loader: None,
+            autosave: Some(server::Autosave {
+                every: AUTOSAVE_EVERY,
+                save: {
+                    let dir = state_dir.clone();
+                    std::sync::Arc::new(move |world| {
+                        bri_world::persistence::autosave(&dir, world, AUTOSAVE_KEEP).map(drop)
+                    })
+                },
+            }),
         },
         64,
         state_dir.join("administration.json"),
@@ -157,6 +169,11 @@ async fn main() -> Result<()> {
         "Headless host listening on {}. Public connection metadata: {}",
         server.address,
         state_dir.join("host.json").display()
+    );
+    println!(
+        "Autosaving the world every {} s to {} (autosave-*.world.json; pass the newest as <world.json> to resume after a crash)",
+        AUTOSAVE_EVERY.as_secs(),
+        state_dir.display()
     );
     if let Some(seconds) = seconds {
         tokio::time::sleep(Duration::from_secs(seconds)).await;

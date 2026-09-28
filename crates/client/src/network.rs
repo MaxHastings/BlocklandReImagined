@@ -18,6 +18,8 @@ pub struct Connected {
     pub host: Option<ServerHandle>,
     /// Where a hosted package world saves its state and edits on shutdown.
     pub package_save: Option<std::path::PathBuf>,
+    /// Keeps the host's final world when the game ends (the host's autosave).
+    pub keep_world: Option<bri_net::server::SaveWorld>,
 }
 #[derive(Clone)]
 pub struct View {
@@ -129,6 +131,9 @@ pub struct Worker {
     pub view: watch::Receiver<Option<View>>,
     pub events: mpsc::Receiver<Event>,
     stop: Option<oneshot::Sender<()>>,
+    /// The transport task; it ends after the host (if any) stopped and its
+    /// final world was kept.
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 impl Worker {
     pub fn start<F>(runtime: &tokio::runtime::Handle, connect: F) -> Self
@@ -140,7 +145,7 @@ impl Worker {
         let (view_tx, view) = watch::channel(None);
         let (events_tx, events) = mpsc::channel(128);
         let (stop, mut stopped) = oneshot::channel();
-        runtime.spawn(async move {
+        let task = runtime.spawn(async move {
             let connected=tokio::select! {
                 _=&mut stopped=>return,
                 result=tokio::time::timeout(Duration::from_secs(120),connect)=>result.context("Connection/content preparation timed out").and_then(|r|r),
@@ -153,13 +158,24 @@ impl Worker {
                     };
                     connection.client.close();
                     if let Some(host)=connection.host.take() {
-                        // Stop the host even when dispatch failed or the UI cancelled.
-                        // A host persistence adapter consumes its final world later.
-                        if let Ok(report)=host.stop().await
-                            && let (Some(path),Some(save))=(connection.package_save.take(),report.packages)
-                            && let Err(error)=save.encode().and_then(|bytes|bri_files::replace(&path,&bytes).map_err(Into::into))
-                        {
-                            eprintln!("Could not save the package world: {error:#}");
+                        // Stop the host even when dispatch failed or the UI cancelled,
+                        // and keep the world (and any package world) it ends with.
+                        match host.stop().await {
+                            Ok(report)=>{
+                                if let (Some(path),Some(save))=(connection.package_save.take(),report.packages)
+                                    && let Err(error)=save.encode().and_then(|bytes|bri_files::replace(&path,&bytes).map_err(Into::into))
+                                {
+                                    eprintln!("Could not save the package world: {error:#}");
+                                }
+                                if let Some(keep)=connection.keep_world.take() {
+                                    match tokio::task::spawn_blocking(move||keep(&report.native_world)).await {
+                                        Ok(Ok(()))=>{}
+                                        Ok(Err(error))=>bri_console::warn(format!("Could not keep the final world: {error:#}")),
+                                        Err(error)=>bri_console::warn(format!("Could not keep the final world: {error}")),
+                                    }
+                                }
+                            }
+                            Err(error)=>bri_console::warn(format!("Host stopped with an error: {error:#}")),
                         }
                     }
                     result
@@ -174,6 +190,7 @@ impl Worker {
             view,
             events,
             stop: Some(stop),
+            task: Some(task),
         }
     }
     pub fn request(&self, id: u64, command: Command) -> Result<()> {
@@ -209,6 +226,12 @@ impl Worker {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
+    }
+    /// Cancel, and hand back the task so a quitting game can wait for the
+    /// host to stop and keep its world.
+    pub fn finish(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.cancel();
+        self.task.take()
     }
 }
 impl Drop for Worker {

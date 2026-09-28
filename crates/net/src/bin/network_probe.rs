@@ -72,6 +72,7 @@ async fn main() -> Result<()> {
                 ],
                 certificate: None,
                 map_loader: None,
+                autosave: None,
             },
         )?;
         let start = Instant::now();

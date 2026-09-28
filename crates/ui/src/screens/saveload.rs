@@ -9,7 +9,12 @@ use crate::view::EventKind;
 const EXTENSION: &str = ".world.json";
 
 fn display_name(file: &str) -> &str {
-    file.strip_suffix(EXTENSION).unwrap_or(file)
+    let name = file.strip_suffix(EXTENSION).unwrap_or(file);
+    // Autosaves are `autosave-<unix millis>`; the list's date column says when.
+    match name.strip_prefix("autosave-") {
+        Some(stamp) if !stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()) => "Autosave",
+        _ => name,
+    }
 }
 
 pub struct SaveLoad {

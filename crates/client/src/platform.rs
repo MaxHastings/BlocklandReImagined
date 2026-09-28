@@ -59,6 +59,11 @@ pub trait PlatformApp {
         Ok(())
     }
     fn gpu_stopped(&mut self) {}
+    /// The window's close button (or Alt+F4). Return false to keep running,
+    /// for example while the player is asked about unsaved changes.
+    fn close_requested(&mut self) -> bool {
+        true
+    }
     /// Return true after clearing/rendering a scene; false asks the platform to
     /// clear to its neutral background before compositing UI.
     fn render_scene(&mut self, _frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -1021,7 +1026,11 @@ impl ApplicationHandler for Runner {
             return;
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                if self.config.app.close_requested() {
+                    event_loop.exit();
+                }
+            }
             WindowEvent::Resized(size) => {
                 self.regrab = true;
                 if let Some(w) = &self.window

@@ -27,6 +27,10 @@ pub struct Store {
 /// What the save dialogs say about a save file that cannot be read.
 const DAMAGED: &str =
     "This save is damaged and can't be loaded. Saving over it keeps a copy of the old file.";
+/// How often a client-hosted game autosaves, and how many autosaves each map
+/// keeps (the dedicated server's `bri-server` uses the same numbers).
+pub const AUTOSAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+pub const AUTOSAVE_KEEP: usize = 3;
 pub fn valid_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".world.json") else {
         return false;
@@ -224,6 +228,44 @@ impl Store {
             }
         }
         Ok(files.into_values().collect())
+    }
+    /// Save `world` as the newest autosave of its map, keeping the last
+    /// [`AUTOSAVE_KEEP`]. It is an ordinary build in the map's save folder, so
+    /// the Load dialog lists it.
+    pub fn autosave(&self, world: &bri_world::World) -> Result<PathBuf> {
+        let mut build = SavedBuild::capture(world, true, true)?;
+        build.world.name = "Autosave".into();
+        build.world.description = vec!["Saved automatically while you played.".into()];
+        let bytes = bri_world::build::encode(&build)?;
+        let root = self.root()?;
+        let map = format!("map-{:x}", Sha256::digest(world.map_id.as_bytes()));
+        std::fs::create_dir_all(root.join(&map))?;
+        let directory = root.join(map).canonicalize()?;
+        ensure!(
+            directory.starts_with(&root),
+            "Save directory escapes storage"
+        );
+        bri_world::persistence::autosave_bytes(&directory, &bytes, AUTOSAVE_KEEP)
+    }
+    /// The host's autosave hook: writes only when the world changed since the
+    /// last autosave (or since `start`, the world the host began with), so an
+    /// idle game never pushes older autosaves out.
+    pub fn autosaver(&self, start: &bri_world::World) -> bri_net::server::SaveWorld {
+        let store = self.clone();
+        let last = std::sync::Mutex::new((start.map_id.clone(), start.revision));
+        std::sync::Arc::new(move |world: &bri_world::World| {
+            let key = (world.map_id.clone(), world.revision);
+            {
+                let last = last.lock().unwrap_or_else(|e| e.into_inner());
+                // Unchanged, or a fresh map nobody has built on yet.
+                if *last == key || (last.0 != key.0 && world.bricks.is_empty()) {
+                    return Ok(());
+                }
+            }
+            store.autosave(world)?;
+            *last.lock().unwrap_or_else(|e| e.into_inner()) = key;
+            Ok(())
+        })
     }
     pub fn load(&self, map: &str, name: &str) -> Result<SavedBuild> {
         ensure!(valid_name(name), "Invalid native save filename");
@@ -566,6 +608,57 @@ mod tests {
         let history: Vec<_> = std::fs::read_dir(good.parent().unwrap().join(".history"))?
             .collect::<std::io::Result<_>>()?;
         assert_eq!(std::fs::read(history[0].path())?, b"{\"truncated");
+        Ok(())
+    }
+    #[test]
+    fn hosted_games_autosave_changes_into_the_load_list() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "bri-autosave-client-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let store = Store {
+            directory,
+            map_names: [("map".into(), "Map".into())].into(),
+            templates: Vec::new(),
+        };
+        let mut world = bri_world::World::new("Live".into(), "map".into(), vec![[1.0; 4]]);
+        let save = store.autosaver(&world);
+        // Nothing changed since the host started: nothing is written.
+        save(&world)?;
+        assert!(store.list()?.is_empty());
+        for n in 0..5 {
+            world.bricks.insert(
+                n + 1,
+                bri_world::Brick::new(
+                    bri_world::ContentRef::Resolved("plate".into()),
+                    [n as f32, 0.0, 0.0],
+                    3,
+                ),
+            );
+            world.next_brick_id = n + 2;
+            world.revision += 1;
+            save(&world)?;
+            // The same revision again (an idle interval) writes nothing.
+            save(&world)?;
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let saves = store.list()?;
+        assert_eq!(saves.len(), AUTOSAVE_KEEP);
+        assert!(
+            saves
+                .iter()
+                .all(|e| e.info.map == "Map" && bri_world::persistence::is_autosave(&e.info.name))
+        );
+        let newest = saves.iter().max_by_key(|e| e.info.name.clone()).unwrap();
+        assert_eq!(newest.info.brick_count, Some(5));
+        assert_eq!(store.load("Map", &newest.info.name)?.world.bricks.len(), 5);
+        // A fresh map nobody built on is not autosaved.
+        let empty = bri_world::World::new("Next".into(), "other".into(), vec![[1.0; 4]]);
+        save(&empty)?;
+        assert_eq!(store.list()?.len(), AUTOSAVE_KEEP);
         Ok(())
     }
 }

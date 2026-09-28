@@ -21,6 +21,7 @@ fn options(spawns: Vec<Vec3>) -> ServerOptions {
         spawn_points: spawns,
         certificate: None,
         map_loader: None,
+        autosave: None,
     }
 }
 async fn join(

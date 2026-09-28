@@ -205,6 +205,8 @@ pub struct Core {
     pub save_maps: Vec<String>,
     pub save_files: Vec<SaveFileInfo>,
     pub save_context: Option<(String, IconRef)>,
+    /// See `UiUpdate::UnsavedChanges`.
+    pub unsaved_changes: bool,
     // live state
     pub conn: ConnectionState,
     pub hud: HudModel,
@@ -418,6 +420,16 @@ impl Core {
             yes_no: false,
             on_yes: Callback::None,
         }));
+    }
+    /// Ask before leaving a hosted game whose world changed since it was last
+    /// saved. The autosave keeps it either way; this is about a named save.
+    pub fn confirm_unsaved(&mut self, on_yes: Callback) {
+        self.message_yes_no(
+            "Unsaved Changes",
+            "Your build has changes you haven't saved. It is kept as an autosave you can \
+             load later from Load Bricks, but not under a name of your own.\n\nLeave anyway?",
+            on_yes,
+        );
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
         self.cmds.push(StackCmd::Message(MessageBox {
@@ -925,6 +937,7 @@ impl Ui {
             save_maps: Vec::new(),
             save_files: Vec::new(),
             save_context: None,
+            unsaved_changes: false,
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
@@ -1431,6 +1444,7 @@ impl Ui {
             }
             UiUpdate::SaveContext { map, preview } => c.save_context = Some((map, preview)),
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
+            UiUpdate::UnsavedChanges(unsaved) => c.unsaved_changes = unsaved,
             UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
             UiUpdate::DisplayChanged {
                 resolution,
