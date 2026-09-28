@@ -73,7 +73,7 @@ fn options(data: &AvatarData, draft: &AvatarPrefs, part: &str) -> Vec<String> {
             let hat = data
                 .parts
                 .get("hat")
-                .and_then(|v| v.get(draft.index("Hat")))
+                .and_then(|v| v.iter().find(|n| n.eq_ignore_ascii_case(draft.part("Hat"))))
                 .map(|v| v.to_ascii_lowercase())
                 .unwrap_or_default();
             data.accents_allowed
@@ -96,7 +96,10 @@ fn selected(draft: &AvatarPrefs, part: &str, choices: &[String]) -> usize {
             .position(|p| base_name(p).eq_ignore_ascii_case(base_name(name)))
             .unwrap_or(0)
     } else {
-        draft.index(part).min(choices.len().saturating_sub(1))
+        choices
+            .iter()
+            .position(|p| p.eq_ignore_ascii_case(draft.part(part)))
+            .unwrap_or(0)
     }
 }
 fn icon(pack: &Pack, part: &str, choice: &str) -> String {
@@ -444,15 +447,24 @@ impl Avatar {
             self.draft.set(&format!("{part}Name"), base_name(choice));
             self.draft.set(&format!("{part}Color"), index.to_string());
         } else {
-            self.draft.set(part, index.to_string());
+            // v20 keeps the accent's position in the hat's accent list when
+            // the hat changes, so find it before the hat is replaced.
+            let accents = options(&self.data, &self.draft, "Accent");
+            let accent = selected(&self.draft, "Accent", &accents);
+            self.draft.set(part, choice.to_ascii_lowercase());
             if self.draft.symmetry && matches!(part, "LArm" | "RArm") {
-                self.draft.set(paired(part).unwrap(), index.to_string());
+                let other = paired(part).unwrap();
+                if let Some(name) = options(&self.data, &self.draft, other).get(index) {
+                    self.draft.set(other, name.to_ascii_lowercase());
+                }
             }
             if part == "Hat" {
-                let count = options(&self.data, &self.draft, "Accent").len();
-                if self.draft.index("Accent") >= count {
-                    self.draft.set("Accent", "0");
-                }
+                let accents = options(&self.data, &self.draft, "Accent");
+                let name = accents.get(accent).or(accents.first());
+                self.draft.set(
+                    "Accent",
+                    name.map_or("none".into(), |n| n.to_ascii_lowercase()),
+                );
             }
         }
     }
@@ -512,7 +524,11 @@ impl Avatar {
             let i = self.roll(n);
             self.set_part(part, i);
         }
-        self.draft.set("RArm", self.draft.index("LArm").to_string());
+        let larm = options(&self.data, &self.draft, "LArm");
+        let arm = selected(&self.draft, "LArm", &larm);
+        if let Some(name) = options(&self.data, &self.draft, "RArm").get(arm) {
+            self.draft.set("RArm", name.to_ascii_lowercase());
+        }
         let normal_hands = self.roll(101) < 70;
         let normal_legs = self.roll(101) < 80;
         let normal_hip = self.roll(101) < 70;
@@ -1156,6 +1172,10 @@ mod tests {
             core,
         );
     }
+    /// Position of the drafted choice in the part's current list.
+    fn pos(screen: &Avatar, part: &str) -> usize {
+        selected(&screen.draft, part, &options(&screen.data, &screen.draft, part))
+    }
     fn click_choice(screen: &mut Avatar, index: usize, core: &mut Core) {
         let n = screen.view.id(&format!("Avatar_Choice{index}")).unwrap();
         let r = screen.view.node(n).rect;
@@ -1183,7 +1203,7 @@ mod tests {
             &mut ui.core,
         );
         click_choice(&mut s, 1, &mut ui.core);
-        assert_eq!(s.draft.index("Hat"), 1);
+        assert_eq!(pos(&s, "Hat"), 1);
         event(
             &mut s,
             "Avatar_TogglePartMenu(Avatar_AccentMenu);",
@@ -1191,22 +1211,22 @@ mod tests {
         );
         click_choice(&mut s, 1, &mut ui.core);
         assert_eq!(
-            options(&s.data, &s.draft, "Accent")[s.draft.index("Accent")],
+            options(&s.data, &s.draft, "Accent")[pos(&s, "Accent")],
             "visor"
         );
         s.set_part("Hat", 2);
         assert_eq!(
-            options(&s.data, &s.draft, "Accent")[s.draft.index("Accent")],
+            options(&s.data, &s.draft, "Accent")[pos(&s, "Accent")],
             "plume"
         );
         s.set_part("Hat", 0);
-        assert_eq!(s.draft.index("Accent"), 0);
+        assert_eq!(pos(&s, "Accent"), 0);
         s.set_part("LArm", 1);
-        assert_eq!(s.draft.index("RArm"), 1);
+        assert_eq!(pos(&s, "RArm"), 1);
         s.set_part("LHand", 1);
-        assert_eq!(s.draft.index("RHand"), 0);
+        assert_eq!(pos(&s, "RHand"), 0);
         s.set_part("LLeg", 1);
-        assert_eq!(s.draft.index("RLeg"), 0);
+        assert_eq!(pos(&s, "RLeg"), 0);
         s.set_color("LHand", 2);
         assert_eq!(s.draft.color("RHandColor"), [0.0, 0.0, 1.0, 1.0]);
         s.set_color("LHand", 1);
@@ -1248,7 +1268,7 @@ mod tests {
         let actions = ui.drain_actions();
         assert_eq!(actions.len(), 1);
         assert!(
-            matches!(&actions[0].1,UiAction::SetAvatar(a) if a.lan_name=="Renamed" && a.index("Hat")==1)
+            matches!(&actions[0].1,UiAction::SetAvatar(a) if a.lan_name=="Renamed" && a.part("Hat")=="helmet")
         );
         s.on_key(Key::Escape, Modifiers::NONE, &mut ui.core);
         assert!(ui.core.cmds.is_empty());
@@ -1260,14 +1280,14 @@ mod tests {
             &mut ui.core,
         );
         assert_eq!(ui.core.settings.avatar, original);
-        assert_eq!(s.draft.index("Hat"), 1);
+        assert_eq!(pos(&s, "Hat"), 1);
         ui.core.cmds.clear();
         s.done(&mut ui.core);
         let id = ui.drain_actions()[0].0;
         ui.core.pending.remove(&id);
         s.on_result(id, Some(&Pending::Avatar), &Ok(()), &mut ui.core);
         assert_eq!(ui.core.settings.avatar.lan_name, "Renamed");
-        assert_eq!(ui.core.prefs.get("$pref::Avatar::Hat"), Some("1"));
+        assert_eq!(ui.core.prefs.get("$pref::Avatar::Hat"), Some("helmet"));
         assert_eq!(
             ui.drain_actions()
                 .iter()
@@ -1286,7 +1306,7 @@ mod tests {
         s.setting_favs = true;
         s.favorite(8, &mut ui.core);
         assert_eq!(ui.core.settings.avatar, original);
-        assert_eq!(ui.core.settings.avatar_favorites[&8].index("Hat"), 1);
+        assert_eq!(ui.core.settings.avatar_favorites[&8].part("Hat"), "helmet");
         let favorite = ui.core.settings.avatar_favorites.get_mut(&8).unwrap();
         favorite.set("FaceName", "smileyfemale1");
         favorite.set("FaceColor", "91"); // stale IFL index from another catalog
@@ -1294,9 +1314,9 @@ mod tests {
         s.view
             .set_text(s.view.id("Avatar_Name").unwrap(), "Local name");
         s.favorite(8, &mut ui.core);
-        assert_eq!(s.draft.index("Hat"), 1);
+        assert_eq!(pos(&s, "Hat"), 1);
         assert_eq!(s.draft.lan_name, "Local name");
-        assert_eq!(s.draft.index("FaceColor"), 1);
+        assert_eq!(s.draft.get("FaceColor"), Some("1"));
         assert_eq!(ui.core.settings.avatar, original);
     }
 
@@ -1391,6 +1411,11 @@ mod tests {
         ui.core.settings.avatar = AvatarPrefs::from_prefs(
             &crate::prefs::Prefs::new(&pack.data.data.prefs, &Default::default()),
             &pack.data.data.prefs,
+            &pack.data.data.avatar,
+        );
+        assert!(
+            ui.core.settings.avatar.part("Hat").parse::<usize>().is_err(),
+            "v20 part positions are named"
         );
         let mut s = Avatar::new(&ui.core);
         assert!(s.data.faces.len() >= 27 && s.data.decals.len() >= 28);

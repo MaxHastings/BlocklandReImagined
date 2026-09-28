@@ -29,7 +29,12 @@ that landed it.
   its number back on join, saved builds carry the table instead of an opaque
   session scope, and loads give recorded builders their bricks on any server.
   Trust now also covers offline builders in the table.
-- **Avatar part names (contract 3):** pending.
+- **Avatar part names (contract 3):** fixed. `Appearance.parts` (saved,
+  sent and replicated) and the settings file's avatar prefs name the chosen
+  part (`hat: "helmet"`, `accent: "visor"`). The avatar pack keeps its
+  defaults as v20-style positions in its own lists and names them on load;
+  v20 prefs are named once when imported. A saved part the pack no longer
+  has falls back to the pack default instead of failing the avatar.
 
 ## How to read the priorities
 

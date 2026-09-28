@@ -2458,3 +2458,17 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   replicas agree). Handoff and labels: `docs/stress-lab/HANDOFF.md`.
 - Open: join mismatch naming waits on door-closers' Hello wiring; see the
   handoff's next steps.
+
+- 2026-09-27 Avatars are saved by part name (door-closer P0). `Appearance`
+  stored parts as positions in the avatar pack's lists, and the settings
+  file's `$pref::Avatar::*` values did the same, so adding or reordering a
+  part changed everyone's avatar. Parts are now named (`hat: "helmet"`,
+  `accent: "visor"`) in the wire `Appearance`, replicated avatars and the
+  settings file; the editor maps names to its list positions only for
+  display. v20 keeps an accent's position when the hat changes, and so do we.
+  The avatar pack file is unchanged: its defaults stay positions in its own
+  lists and are named on load. v20 prefs are named once on import. A saved
+  part the pack no longer has falls back to the pack default. Protocol bump.
+  Evidence: `cargo test -p bri-ui --lib avatar -- --include-ignored`,
+  `cargo test -p bri-client --lib avatar -- --include-ignored`,
+  `cargo test -p bri-net --test loopback avatar -- --include-ignored`.

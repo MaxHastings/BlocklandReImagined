@@ -237,11 +237,23 @@ impl AvatarAssets {
     }
     pub fn from_prefs(&self, prefs: &AvatarPrefs) -> Result<Appearance> {
         let mut appearance = self.package.defaults.clone();
+        // A part this pack does not have (removed, renamed, or not a name at
+        // all) keeps the pack default rather than failing the whole avatar.
+        let package = &self.package;
+        let known = |slot: &str, name: &str| {
+            let lists = if slot == "accent" {
+                package.accents_allowed.values().collect::<Vec<_>>()
+            } else {
+                package.parts.get(slot).into_iter().collect()
+            };
+            name == "none" || lists.iter().any(|l| l.iter().any(|n| n.eq_ignore_ascii_case(name)))
+        };
         for slot in appearance.parts.keys().cloned().collect::<Vec<_>>() {
             if let Some(value) = prefs.get(&slot) {
-                appearance
-                    .parts
-                    .insert(slot, value.parse().context("Invalid avatar index")?);
+                let name = value.trim().to_ascii_lowercase();
+                if known(&slot, &name) {
+                    appearance.parts.insert(slot, name);
+                }
             }
         }
         for slot in appearance.colors.keys().cloned().collect::<Vec<_>>() {
@@ -1232,7 +1244,9 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
         let assets = AvatarAssets::load(&root)?;
         let mut appearance = assets.package.defaults.clone();
-        appearance.parts.insert("pack".into(), 1);
+        appearance
+            .parts
+            .insert("pack".into(), assets.package.parts["pack"][1].clone());
         let mut baseline = assets.mesh(appearance.clone())?;
         let mut held = assets.mesh(appearance)?;
         let mut p = player();
@@ -1378,9 +1392,9 @@ mod tests {
             if slot == "accent" {
                 continue;
             }
-            for index in 0..options.len() {
+            for option in options {
                 let mut appearance = package.defaults.clone();
-                appearance.parts.insert(slot.clone(), index);
+                appearance.parts.insert(slot.clone(), option.clone());
                 let mut mesh = assets.mesh(appearance)?;
                 mesh.pose(&assets, &player(), 0.0)?;
                 mesh.data.validate()?;
@@ -1390,37 +1404,33 @@ mod tests {
         }
         let mut skirt = package.defaults.clone();
         for (hat_name, accents) in &package.accents_allowed {
-            let hat_index = package.parts["hat"]
-                .iter()
-                .position(|name| name.eq_ignore_ascii_case(hat_name))
-                .context("Accent list has no hat")?;
-            for accent in 0..accents.len() {
+            for accent in accents {
                 let mut appearance = package.defaults.clone();
-                appearance.parts.insert("hat".into(), hat_index);
-                appearance.parts.insert("accent".into(), accent);
+                appearance.parts.insert("hat".into(), hat_name.clone());
+                appearance.parts.insert("accent".into(), accent.clone());
                 let mut mesh = assets.mesh(appearance)?;
                 mesh.pose(&assets, &player(), 0.0)?;
                 mesh.data.validate()?;
                 cases += 1;
             }
         }
-        skirt.parts.insert("hip".into(), 1);
+        skirt.parts.insert("hip".into(), "skirthip".into());
         skirt.colors.insert("lleg".into(), [0.3, 0.6, 0.9, 0.2]);
         let outfit = package.resolve(&skirt)?;
         assert!(!outfit.nodes.contains_key("lshoe") && !outfit.nodes.contains_key("rshoe"));
         assert_eq!(outfit.nodes["skirttrimleft"], [0.3, 0.6, 0.9, 1.0]);
-        skirt.parts.insert("lleg".into(), 63);
+        skirt.parts.insert("lleg".into(), "nosuchleg".into());
         assert!(package.resolve(&skirt).is_err());
         let mut hat = package.defaults.clone();
-        hat.parts.insert("hat".into(), 1);
-        hat.parts.insert("accent".into(), 1);
+        hat.parts.insert("hat".into(), package.parts["hat"][1].clone());
+        hat.parts.insert("accent".into(), "visor".into());
         let outfit = package.resolve(&hat)?;
         assert!(outfit.nodes.contains_key("visor"));
         assert_eq!(outfit.nodes["visor"][3], 0.7);
-        hat.parts.insert("hat".into(), 2);
+        hat.parts.insert("hat".into(), package.parts["hat"][2].clone());
         assert!(package.resolve(&hat).is_err());
         let mut pack = package.defaults.clone();
-        pack.parts.insert("pack".into(), 1);
+        pack.parts.insert("pack".into(), package.parts["pack"][1].clone());
         assert!(package.resolve(&pack)?.head_up);
         let mut selected = package.defaults.clone();
         for (kind, choices) in [("face", &package.faces), ("decal", &package.decals)] {
