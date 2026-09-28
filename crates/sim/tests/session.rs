@@ -1278,3 +1278,46 @@ fn trust_invites_uploads_demotion_and_lan_follow_v20() {
     s.disconnect(b).unwrap();
     assert!(notices(&mut s).iter().any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob has left the game.".into())));
 }
+
+#[test]
+#[ignore = "uses converted native weapons pack; headless server only"]
+fn native_akimbo_fires_two_bullets_per_click_over_seconds() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content/weapons-pack-009/weapons.json");
+    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let mut s = session();
+    s.set_weapon_pack(pack).unwrap();
+    let actor = s
+        .join("Akimbo".into(), Vec3::new(0., 0.05, 0.), false)
+        .unwrap();
+    let slot = s.give_item(actor, "v20.weapon.akimbogunitem").unwrap();
+    let mut sequence = 1;
+    s.command(actor, sequence, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    let mut moves = 0;
+    let mut held = false;
+    let mut seen = std::collections::BTreeSet::new();
+    // Holds the trigger per `down(tick)` with a live client sending one move per
+    // tick, and counts distinct host bullets.
+    let mut drive = |s: &mut Session, ticks: usize, down: &dyn Fn(usize) -> bool| {
+        for t in 0..ticks {
+            if down(t) != held {
+                held = down(t);
+                sequence += 1;
+                s.command(actor, sequence, Command::WeaponTrigger { down: held })
+                    .unwrap();
+            }
+            moves += 1;
+            s.movement(actor, moves, MoveInput::default()).unwrap();
+            s.step().unwrap();
+            seen.extend(s.weapon_view().projectiles.iter().map(|p| p.id));
+        }
+        seen.len()
+    };
+    assert_eq!(drive(&mut s, 60, &|_| false), 0);
+    // Held for five seconds: one bullet, plus the left gun's on release.
+    assert_eq!(drive(&mut s, 600, &|_| true), 1);
+    assert_eq!(drive(&mut s, 240, &|_| false), 2);
+    // Four clicks a second for five seconds: exactly two bullets per click.
+    assert_eq!(drive(&mut s, 600, &|t| t % 30 < 15), 42);
+}

@@ -5198,7 +5198,8 @@ mod tests {
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(1))
                 && a.pending_requests() == 0
         })?;
-        assert_eq!(app.ui.core.hud.tool_name, "Wrench");
+        // v20 names it "wrench" (wrenchItem uiName), lower case.
+        assert_eq!(app.ui.core.hud.tool_name, "wrench");
         let owner = app.network_view().unwrap().owner;
         assert!(app.world_items.instances().any(|(identity, _)| {
             identity == crate::world_items::ItemIdentity::Mounted(owner, 0)

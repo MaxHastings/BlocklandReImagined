@@ -16,16 +16,6 @@ owner = "Hammer rules and Destructo Wand"
 reason = "Times out waiting for 'authoritative plant undo removes render/query brick' since d8b8bb4."
 
 [[failure]]
-test = "native_weapon_pack_and_core_tools_expose_all_21_item_choices"
-owner = "seats thread (paused)"
-reason = "weapons-pack-009 now carries the four core tools itself (21 items, 'wrench' lower case); the test expects 17 plus appended core tools."
-
-[[failure]]
-test = "native_weapon_catalog_startup_and_headless_host"
-owner = "seats thread (paused)"
-reason = "Same weapons-pack-009 change: expects 17 pack items and tool_name 'Wrench'."
-
-[[failure]]
 test = "vehicle_render.rs::stock_vehicles_render_with_wheels_and_paint"
 owner = "unassigned"
 reason = "v20.vehicle.horsearmor draws 0 pixels."
@@ -49,3 +39,27 @@ reason = "Open finding W14 (docs/stress-lab/weakness-ledger.md): movement profil
 test = "unlike_modes.rs::a_player_drives_a_package_kart"
 owner = "Mod platform stress campaign"
 reason = "Open finding W14 (docs/stress-lab/weakness-ledger.md): what a player controls is the closed ControlObject enum, so a package entity cannot take a player's input."
+
+# Test targets GitHub Actions skips because they load generated v20 content,
+# which the runner cannot have. The local gate still runs them. Prefer
+# #[ignore = "requires generated ... content"] on individual tests; list a
+# whole target here only when all of it needs content. Format:
+# "<package>/<test target>", or "<package>/lib" for unit tests.
+
+[[ci_skip_target]]
+target = "bri-client/brick_fx"
+
+[[ci_skip_target]]
+target = "bri-client/item_rendering"
+
+[[ci_skip_target]]
+target = "bri-sim/tools"
+
+[[ci_skip_target]]
+target = "bri-vehicles/flying_jeep"
+
+[[ci_skip_target]]
+target = "bri-vehicles/native"
+
+[[ci_skip_target]]
+target = "bri-weapons/runtime"

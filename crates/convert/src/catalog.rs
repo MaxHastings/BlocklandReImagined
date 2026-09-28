@@ -236,6 +236,12 @@ pub fn read_stock(source: &str) -> Result<Catalog> {
 }
 /// Relative asset paths resolve against the declaring script's virtual folder.
 pub fn read_at(source: &str, virtual_directory: &str) -> Result<Catalog> {
+    read_with_parents(source, virtual_directory, "")
+}
+/// Like `read_at`, but parents may also come from `parents`: declarations
+/// another package owns (a community Add-On's brick inheriting a base brick).
+/// Only `source`'s bricks are returned.
+pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -> Result<Catalog> {
     let directory = path(virtual_directory.into())?;
     let source_path = |value: String| {
         path(
@@ -253,9 +259,14 @@ pub fn read_at(source: &str, virtual_directory: &str) -> Result<Catalog> {
         order.push(key.clone());
         map.insert(key, declaration);
     }
+    let mut all = map.clone();
+    for declaration in declarations(&lex(parents)?)? {
+        all.entry(declaration.name.to_lowercase())
+            .or_insert(declaration);
+    }
     let mut bricks = Vec::new();
     for key in order {
-        let mut fields = resolve(&key, &map, &mut BTreeSet::new())?;
+        let mut fields = resolve(&key, &all, &mut BTreeSet::new())?;
         let mesh = source_path(take(&mut fields, "brickfile")?.context("Missing brickFile")?)?;
         let display_name = take(&mut fields, "uiname")?.context("Missing uiName")?;
         let category = take(&mut fields, "category")?.unwrap_or_default();
@@ -318,6 +329,22 @@ pub fn read_at(source: &str, virtual_directory: &str) -> Result<Catalog> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parents_from_another_package_are_inherited_but_not_returned() {
+        let parents = r#"datablock fxDTSBrickData(brick2x2DiscData) {brickFile="base/data/bricks/2x2disc.blb";category="Bricks";subCategory="Round";uiName="2x2 Disc";};"#;
+        let catalog = read_with_parents(
+            r#"datablock fxDTSBrickData(Pad : brick2x2DiscData) {uiName="Pad";};"#,
+            "Add-Ons/Brick_Pad",
+            parents,
+        )
+        .unwrap();
+        assert_eq!(catalog.bricks.len(), 1);
+        assert_eq!(
+            catalog.bricks[0].mesh_id,
+            "v20/base/data/bricks/2x2disc.blb"
+        );
+        assert_eq!(catalog.bricks[0].category, "Bricks");
+    }
     #[test]
     fn addon_relative_assets_resolve_at_the_declaring_folder() {
         let catalog=read_at(r#"datablock fxDTSBrickData(Cube) {brickFile="./8x Cube.blb";uiName="8x Cube";iconName="./8x Cube";};"#,"Add-Ons/Brick_Large_Cubes").unwrap();

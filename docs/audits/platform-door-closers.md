@@ -493,6 +493,10 @@ Agent-friendly means: one CLI, JSON output, precise diagnostics, a headless
 "load package and run scenario" check, documented native schemas, and vanilla
 shipped as the reference package.
 
+Spike (c) built this as `bri-import-addon` (`crates/addon-import`) and ran it
+over three community Add-Ons and a bulk archive; the seams it found are in
+[`spike-addon-import.md`](spike-addon-import.md).
+
 ## Agent experience today
 
 | Workflow step | Exists today | Blocker | Cheap now |

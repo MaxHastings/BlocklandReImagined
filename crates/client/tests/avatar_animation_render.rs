@@ -388,3 +388,30 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
     )?;
     Ok(())
 }
+
+/// "Dynamic scene topology changed": a player's posed mesh changes shape
+/// between frames when parts appear or disappear (skis here; held items,
+/// flares and seats do the same). Each upload must follow the new layout.
+#[test]
+#[ignore = "requires original native avatar package and an offscreen GPU"]
+fn uploads_follow_posed_topology_changes() -> Result<()> {
+    let assets = AvatarAssets::load(&content().join("avatar-pack-001"))?;
+    let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+    let offscreen = Offscreen::new()?;
+    let mut tick_state = None;
+    let mut counts = Vec::new();
+    for (frame, skis) in [false, false, true, true, false].into_iter().enumerate() {
+        mesh.set_skis(skis.then_some([1.0, 0.0, 0.0, 1.0]));
+        let (p, _) = player(frame, &mut tick_state, "forward");
+        mesh.pose(&assets, &p, frame as f64 * DT)?;
+        let gpu = &offscreen.gpu;
+        mesh.upload(&offscreen.renderer, &gpu.device, &gpu.queue)
+            .with_context(|| format!("upload at frame {frame} (skis {skis})"))?;
+        counts.push(mesh.data.vertices.len());
+    }
+    ensure!(
+        counts[2] != counts[1],
+        "skis did not change the posed mesh: {counts:?}"
+    );
+    Ok(())
+}

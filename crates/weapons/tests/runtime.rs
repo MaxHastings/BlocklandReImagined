@@ -945,3 +945,40 @@ fn removed_projectiles_vanish_without_exploding() {
     assert!(!w.remove_projectile(id));
     assert!(w.projectiles().next().is_none());
 }
+/// Drives the trigger from `down(tick)` and returns the ticks that spawned a bullet.
+fn shot_ticks(w: &mut WeaponsWorld, ticks: usize, down: impl Fn(usize) -> bool) -> Vec<usize> {
+    let mut q = Scene::default();
+    let mut held = None;
+    let mut out = vec![];
+    for t in 0..ticks {
+        if held != Some(down(t)) {
+            held = Some(down(t));
+            w.trigger(ActorId(1), down(t)).unwrap();
+        }
+        out.extend(std::iter::repeat_n(t, shots(&w.step(&mut q))));
+    }
+    out
+}
+#[test]
+#[ignore = "requires converted vanilla weapons pack"]
+fn akimbo_fire_rate_over_seconds_matches_v20() {
+    const SECOND: usize = 120;
+    // Held: the right gun fires once and waits for release; the left gun fires
+    // once on release (onFireAkimbo), then nothing for the rest of the window.
+    let mut w = world("AkimboGunItem");
+    let held = shot_ticks(&mut w, 10 * SECOND, |t| t < 5 * SECOND);
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert!(held[0] < SECOND && (5 * SECOND..5 * SECOND + 30).contains(&held[1]));
+    // Four clicks a second: two bullets per click, never more.
+    let mut w = world("AkimboGunItem");
+    let clicks = shot_ticks(&mut w, 25 + 5 * SECOND, |t| t >= 25 && (t - 25) % 30 < 15);
+    assert_eq!(clicks.len(), 40, "{clicks:?}");
+    // Mashing faster than the guns cycle: v20's Fire (0.09 s), Smoke and
+    // FireAkimbo (0.09 s) cap it at about ten bullets a second, and the left
+    // trigger is a one-tick pulse, so a busy left gun drops its shot.
+    let mut w = world("AkimboGunItem");
+    let mash = shot_ticks(&mut w, 25 + 3 * SECOND, |t| t >= 25 && (t - 25) % 4 < 2);
+    for window in mash.windows(12) {
+        assert!(window[11] - window[0] >= SECOND, "{mash:?}");
+    }
+}

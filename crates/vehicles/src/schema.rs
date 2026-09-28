@@ -274,7 +274,11 @@ impl Pack {
         let mut ids = std::collections::BTreeSet::new();
         for d in &self.definitions {
             ensure!(
-                ids.insert(&d.id) && d.id.starts_with("v20.vehicle."),
+                ids.insert(&d.id)
+                    && (d.id.starts_with("v20.vehicle.")
+                        || d.id
+                            .split_once(':')
+                            .is_some_and(|(_, rest)| rest.starts_with("vehicle/"))),
                 "duplicate/invalid vehicle identity"
             );
             ensure!(

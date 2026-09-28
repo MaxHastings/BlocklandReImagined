@@ -674,9 +674,6 @@ impl WeaponsWorld {
         if let Some(e) = &mut a.images[0] {
             e.trigger = down;
         }
-        if down && let Some(e) = &mut a.images[1] {
-            e.trigger = false;
-        }
         Ok(())
     }
     /// Sports movement trigger switches dribble/standing presentation to shoot mode.
@@ -872,6 +869,13 @@ impl WeaponsWorld {
         let ids: Vec<_> = self.actors.keys().copied().collect();
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();
+            // v20 `Player::updateMove` sets image slot 1's trigger from move
+            // trigger 1, which Blockland never sends, before the images run.
+            // `AkimboGunImage::onFireAkimbo`'s setImageTrigger(1, 1) is
+            // therefore a pulse the left gun sees only in the tick it is set.
+            if let Some(left) = &mut a.images[1] {
+                left.trigger = false;
+            }
             for hand in 0..2 {
                 if let Some(mut e) = a.images[hand].take() {
                     let keep = self.advance(id, &mut a, &mut e, q);
