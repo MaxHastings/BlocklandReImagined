@@ -1062,6 +1062,7 @@ impl Session {
                 ),
                 "Building is disabled in this mini-game"
             );
+            self.package_policy("build", owner)?;
         }
         if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command {
             ensure!(

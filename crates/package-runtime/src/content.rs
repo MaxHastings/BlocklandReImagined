@@ -88,7 +88,18 @@ pub struct Behaviour {
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
+    /// Engine decisions this package is asked about ([`POLICIES`]). For
+    /// each, the engine calls `allow_<policy>(player)` before acting: `true`
+    /// allows, `false` or a reason string refuses.
+    #[serde(default)]
+    pub policies: Vec<String>,
 }
+/// Decisions the engine owns the mechanism for and asks packages about.
+pub const POLICIES: &[&str] = &[
+    // A dead player asking to come back.
+    "respawn", // Any command that builds (plant, paint, wand, wrench edits).
+    "build",
+];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandDef {
@@ -192,6 +203,17 @@ impl Behaviour {
                 "state key `{key}` must be lowercase a-z, 0-9, _"
             );
             crate::state::check_value(&def.default)?;
+        }
+        for (i, policy) in self.policies.iter().enumerate() {
+            ensure!(
+                POLICIES.contains(&policy.as_str()),
+                "unknown policy `{policy}`; known: {}",
+                POLICIES.join(", ")
+            );
+            ensure!(
+                !self.policies[..i].contains(policy),
+                "policy `{policy}` listed twice"
+            );
         }
         for (key, def) in &self.state.global {
             ensure!(

@@ -771,7 +771,7 @@ impl Session {
         caller: Option<OwnerId>,
         aim: Option<script::Aim>,
         entity: Option<u64>,
-    ) -> std::result::Result<(), Diagnostic> {
+    ) -> std::result::Result<Dynamic, Diagnostic> {
         let shared = self
             .packages
             .as_ref()
@@ -948,6 +948,7 @@ impl Session {
                 e.vars = vars;
             }
         }
+        let returned = outcome.returned;
         for op in outcome.ops {
             if let Err(error) = self.apply_package_op(package, op, caller) {
                 let host = self.packages.as_mut().expect("installed");
@@ -957,7 +958,7 @@ impl Session {
                 );
             }
         }
-        Ok(())
+        Ok(returned)
     }
     /// Apply an authorized operation. `caller` is the player whose command
     /// asked for it: brick changes then need that player's trust, so a
@@ -1523,7 +1524,7 @@ impl Session {
             let used = host.runtime.last_operations() as i64;
             host.shares.commands.spend(&player, tick, used);
         }
-        result.map_err(|d| diagnostics_error(vec![d]))?;
+        let _ = result.map_err(|d| diagnostics_error(vec![d]))?;
         Ok(Reply::Accepted)
     }
 
@@ -1711,6 +1712,61 @@ impl Session {
         Ok(())
     }
 
+    /// Ask every package that declares `policy` whether `owner` may go
+    /// ahead: the engine owns the mechanism, packages the rule. A package
+    /// whose policy call fails is reported and does not block the game.
+    pub(super) fn package_policy(&mut self, policy: &str, owner: OwnerId) -> Result<()> {
+        let Some(host) = self.packages.as_ref() else {
+            return Ok(());
+        };
+        if self.bots.is_bot(owner) {
+            return Ok(());
+        }
+        let asked: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.policies.iter().any(|p| p == policy))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let function = format!("allow_{policy}");
+        for package in asked {
+            let answer = self.run_package(
+                &package,
+                &function,
+                vec![Dynamic::from_int(owner as i64)],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            let Ok(answer) = answer else {
+                continue;
+            };
+            if let Some(allowed) = answer.clone().try_cast::<bool>() {
+                ensure!(allowed, "`{package}` does not allow that now");
+            } else if let Some(reason) = answer
+                .clone()
+                .try_cast::<bri_package_runtime::rhai::ImmutableString>()
+            {
+                anyhow::bail!("{reason}");
+            } else {
+                let host = self.packages.as_mut().expect("checked");
+                note(
+                    host,
+                    Diagnostic::warning(
+                        "policy.answer",
+                        format!(
+                            "{function} must return true, false or a reason, not {}",
+                            answer.type_name()
+                        ),
+                    )
+                    .at(package.clone()),
+                );
+            }
+        }
+        Ok(())
+    }
     /// Charge the last script call to its package's share of server work.
     fn charge_work(&mut self, package: &str) {
         let tick = self.simulation.state().tick;

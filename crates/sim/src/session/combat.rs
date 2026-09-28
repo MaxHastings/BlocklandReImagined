@@ -169,7 +169,9 @@ pub(super) enum DamageKind {
     /// Wrench event output (`kill`, negative `addHealth`).
     Event,
     /// A package operation (explosion, direct damage), named by package.
-    Package { name: String },
+    Package {
+        name: String,
+    },
 }
 impl DamageKind {
     fn direct(&self) -> bool {
@@ -348,7 +350,12 @@ impl Session {
             self.chat.pop_front();
         }
     }
-    pub(super) fn chat_game(&mut self, game: Option<GameId>, except: Option<OwnerId>, text: String) {
+    pub(super) fn chat_game(
+        &mut self,
+        game: Option<GameId>,
+        except: Option<OwnerId>,
+        text: String,
+    ) {
         match game {
             None => self.system_chat(text),
             Some(game) => {
@@ -574,6 +581,8 @@ impl Session {
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(!peer.combat.alive, "You are alive");
         ensure!(tick >= peer.combat.respawn_tick, "Not ready to respawn yet");
+        self.package_policy("respawn", owner)?;
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
         let effects = self
             .minigames
             .execute(mg::Command::Respawn {
@@ -879,7 +888,8 @@ impl Session {
                             self.notices
                                 .push_back(format!("Reset vehicle {brick}: {error:#}"));
                         }
-                        if reveal_items && let Some(item) = self.item_spawners.items.get_mut(&brick) {
+                        if reveal_items && let Some(item) = self.item_spawners.items.get_mut(&brick)
+                        {
                             item.available_at = tick;
                         }
                     }
@@ -989,8 +999,7 @@ impl Session {
         }
         self.give_loadout(owner, equipment.as_ref())?;
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
-        let center = feet
-            + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+        let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
             .weapons
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);

@@ -871,9 +871,9 @@ fn on_join(player) {
 /// move is the mode. Movement is predicted on every client from the
 /// player's datablock, and datablocks are a closed engine enum
 /// (`PlayerType`), so a package can choose among v20's seven but never
-/// describe its own. Open finding W11.
+/// describe its own. Open finding W14.
 #[test]
-#[ignore = "finding W11: movement profiles are a closed engine enum; a package cannot define one"]
+#[ignore = "finding W14: movement profiles are a closed engine enum; a package cannot define one"]
 fn a_low_gravity_mode_changes_how_players_move() {
     let behaviour_manifest = manifest(
         "moon",
@@ -1035,4 +1035,85 @@ fn a_thousand_agents_all_get_to_think() {
         took < std::time::Duration::from_secs(30),
         "120 ticks of a 1000-agent swarm took {took:?}"
     );
+}
+
+const LMS_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "lms.rhai",
+  "on_death": true,
+  "policies": ["respawn", "build"],
+  "state": {
+    "player": { "out": { "default": false, "visible": "everyone" } },
+    "global": { "phase": { "default": "fight", "visible": "everyone" } }
+  }
+}"#;
+
+/// Last player standing: the dead stay out until the round ends, and nobody
+/// builds while the round is fought.
+const LMS_SCRIPT: &str = r#"
+fn on_death(victim, killer) { set_player(victim, "out", true); }
+fn allow_respawn(player) {
+    if get_player(player, "out") { "You are out until the next round." } else { true }
+}
+fn allow_build(player) {
+    if get("phase") == "fight" { "No building during the fight." } else { true }
+}
+"#;
+
+/// E25 (game rules; categories 9, 4). An elimination mode decides whether a
+/// dead player may come back and whether anyone may build. Those are engine
+/// decisions (respawn readiness, build permission), and the mode's rule is
+/// policy the engine must ask for.
+#[test]
+fn an_elimination_mode_decides_who_may_respawn_and_build() {
+    let behaviour_manifest = manifest(
+        "lms",
+        &[],
+        &[
+            ("behaviour", "lms", "behaviour.json"),
+            ("script", "lms", "lms.rhai"),
+        ],
+    );
+    let mut s = mode(
+        "lms",
+        &[Package {
+            id: "lms",
+            side: Side::Server,
+            files: &[
+                ("package.json", &behaviour_manifest),
+                ("behaviour.json", LMS_BEHAVIOUR),
+                ("lms.rhai", LMS_SCRIPT),
+            ],
+        }],
+    );
+    let a = s
+        .join("A".into(), Vec3::new(-2.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = s
+        .join("B".into(), Vec3::new(2.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 320);
+    s.command(a, 1, Command::Suicide).unwrap();
+    steps(&mut s, 400);
+    assert!(!alive(&s, a));
+    let refused = s
+        .command(a, 2, Command::Respawn)
+        .expect_err("an eliminated player came back");
+    assert!(
+        format!("{refused:#}").contains("You are out"),
+        "{refused:#}"
+    );
+    assert!(!alive(&s, a));
+    let plant = Command::Plant {
+        definition: "plate".into(),
+        position: [2.5, 0.1, -1.25],
+        quarter_turns: 0,
+        color: 0,
+    };
+    let refused = s.command(b, 1, plant).expect_err("built during the fight");
+    assert!(
+        format!("{refused:#}").contains("No building"),
+        "{refused:#}"
+    );
+    assert!(s.simulation().state().bricks.is_empty());
 }
