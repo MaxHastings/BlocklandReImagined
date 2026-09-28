@@ -361,11 +361,10 @@ pub struct CollisionList {
     pub hits: Vec<Collision>,
 }
 
-/// `EqualEpsilon` as this motor's tick sees it. Torque compares against moves
-/// of one 32 ms tick; a 120 Hz move is 3.84 times shorter, so the same
-/// absolute distances are a smaller threshold for a face to lead the move and
-/// a larger fraction of the move for two hits to tie. Unscaled, float noise
-/// splits the tie between a slope and a hidden brick end face along its edge.
+/// `EqualEpsilon` for a move of `torque_ticks` 32 ms ticks. The motor runs
+/// whole Torque ticks (1.0); other tick lengths (tests) keep the same absolute
+/// distances, a smaller threshold for a face to lead a shorter move and a
+/// larger fraction of it for two hits to tie.
 #[derive(Debug, Clone, Copy)]
 pub struct Epsilon {
     /// Least distance a box face must travel to lead the move.
@@ -656,9 +655,7 @@ pub struct Mover {
     pub step_reach: f32,
     /// `sNormalElasticity`.
     pub elasticity: f32,
-    /// The 0.01 back-off after each hit, scaled to this motor's tick: every
-    /// hit backs off, so at 120 Hz an unscaled back-off costs 3.84 times the
-    /// distance per second and stalls a player grinding along a lane.
+    /// The 0.01 back-off after each hit, per 32 ms tick.
     pub back_off: f32,
     pub epsilon: Epsilon,
 }
@@ -740,11 +737,11 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
                 soup,
                 &mut start,
                 &mut max_step,
-                // The step probe looks from the contact, not the backed-off
-                // box: at 120 Hz a player pushing off a riser from rest moves
-                // less per tick than the back-off, so probing from behind it
-                // never reaches the tread and v20's stair climb stalls.
-                *velocity * time + backed,
+                // TGE probes the rest of the move from the backed-off box.
+                // Probing further (from the contact) lifts a player walking
+                // onto a slope 0.015 above it, off the 0.013 contact slab, so
+                // it hops up every ramp.
+                *velocity * time,
                 contact_y,
                 m,
             )

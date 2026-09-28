@@ -285,6 +285,12 @@ mod tests {
                 archetype: bri_sim::archetype::ArchetypeId(u16::MAX),
                 scale: f32::MAX,
                 energy: f32::MAX,
+                tick: bri_sim::player::TorqueTick {
+                    feet: [f32::MAX; 3],
+                    from: [f32::MAX; 3],
+                    phase: u8::MAX,
+                    jump: true,
+                },
             },
         });
         let vehicle = Datagram::Vehicle(bri_sim::session::VehiclePose {

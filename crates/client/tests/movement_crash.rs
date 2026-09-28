@@ -22,6 +22,7 @@ fn player() -> PlayerState {
         archetype: Default::default(),
         scale: 1.0,
         energy: 100.0,
+        tick: Default::default(),
     }
 }
 

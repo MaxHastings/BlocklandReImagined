@@ -1,6 +1,7 @@
 # Player and session integration
 
-`bri-sim::player` is a fixed 120 Hz motor used by the server session. Inputs
+`bri-sim::player` is the motor the server session steps at a fixed 120 Hz;
+inside those steps it runs v20's own 32 ms ticks (below). Inputs
 contain bounded movement axes, look angles and jump/crouch/jet intentions. They
 contain no position, velocity, owner, administrator flag or client time step.
 
@@ -109,38 +110,60 @@ slope, and never off terrain: the highest static vertex at the destination
 under the remaining `maxStepHeight` with none of the others within the
 player's own height above it. Only the player's height must be clear, so
 players step onto plates and bricks under ceilings they fit beneath, and
-walk onto low ramps by stepping onto their vertices as in v20. The step
-probe looks ahead from the point of contact rather than the backed-off box:
-at 120 Hz a player pushing off a riser from rest moves less per tick than
-the back-off, so probing from behind it never reached the tread and 1x brick
-stairs stalled. A step must also rise above the contact point, as in TGE (v20 also
+walk onto low ramps by stepping onto their vertices as in v20. As in TGE the
+step probes the rest of the move from the backed-off box; probing from the
+contact instead (a 120 Hz workaround) lifted a player walking onto a slope
+0.015 above it, off the 0.013 contact slab, so it hopped up every ramp. A
+step must also rise above the contact point, as in TGE (v20 also
 accepts a zero step): otherwise the floor a fall reaches counts as a step,
 the move loops to its retry limit and the landing's impact is lost.
 `grounded` means a run surface under the feet and not still closing on it
 faster than 1 u/s, so a fall that stops within the contact slab lands, and
 impacts, on the next sweep.
 
-**120 Hz against Torque's 32 ms tick.** Per-tick epsilons are rescaled so
-behaviour per second matches: the 0.002/0.0021 rest values and the 0.01
-back-off after each hit scale by 120 Hz / 31.25 Hz (unscaled, a rider
-grinding along a lane loses 3.84 times the distance per second and stalls).
-`EqualEpsilon` is kept as the same absolute distance, so it is smaller for a
-face to lead a move and larger as a fraction for two hits to tie. All hits
+**Torque's 32 ms tick inside 120 Hz steps.** Since 2026-09-28 the motor
+runs v20's tick, not a rescaled 120 Hz one. Slides need it: the crease rule
+re-aims a wedged rider's whole speed along the lane once per tick, so the
+speed a lane gives is per tick, not per second. Iterating v20's per-tick
+equations, a rider wedged in a level lane settles at 6.517 u/s; at 120 Hz it
+settled at 3.248, and a ride from the top of "Mr.Block's Slides" stopped 39
+units down instead of 353. Time is counted in 1/3000 s (a step is 25, a tick
+96), so every 3.84 steps on average one whole 32 ms `updateMove`/`updatePos`
+runs, with every v20 constant unscaled. The tick uses that step's input,
+with jump counted if it was held at any step since the last tick (a Move's
+trigger); look turns every step. `PlayerState::feet`, `velocity` and the
+flags are the last tick's, as on v20's server; `PlayerState::tick` carries
+the previous tick's feet and the phase, and `shown_feet()` places the body
+between the two, as v20's client renders it, so the client draws smoothly.
+The phase travels in every pose (protocol 43), so prediction replays the
+same ticks. Consequences that are v20's: players rest 0.01 above floors
+(the back-off), run at 6.978 u/s (drag after the run force), swim at 3.41,
+launch briefly off the top of a 45 degree ramp, and a jump or crouch lands
+on the next tick, up to 32 ms after the key. There is no fall-speed cap:
+v20 has none (the old -80 clamp was ours), so falls reach 199 u/s under
+drag. Players met head-on part along their least-overlap axis when already
+touching; the shape cast's normal is arbitrary there. All hits
 within the tie count (Torque's running comparison made near-ties depend on
 polygon order), and polygons reaching less than 1e-5 into a face's swept
 volume are misses, so float noise cannot turn a brick end face whose edge
 runs under the box corner along a slope into a head-on stop. Elasticity is a
 speed and is unscaled.
 
-**Evidence.** `crates/sim/tests/slides.rs` runs on the v20 Slate save
+**Evidence.** `crates/sim/tests/player.rs`
+`a_wedged_rider_gains_lane_speed_on_v20_ticks` (runs without content) wedges
+a rider in a level lane of two 74.5 degree faces: 120 Hz steps settle at
+6.518 u/s against 6.517 from iterating v20's equations, and 120 Hz ticks at
+3.248. `crates/sim/tests/slides.rs` runs on the v20 Slate save
 "Mr.Block's Slides" (ignored by default; needs converted content):
-`no_72_degree_ramp_face_holds_a_player` drops a player on 524 ramp faces and
-none holds it (before: every one did);
-`slide_lanes_carry_a_player_down_hands_free` pushes a rider gently downhill
-into each of 893 lane segments: 889 reach the end of their leg, the median
-rider falls 46 units at a top speed of 25, and one ride goes from the top
-of the 545-unit tower to the ground. The four remaining stop at one spot
-where riders drop down a shaft at over 20 u/s and land a hair inside the next
+`the_tower_ride_runs_on_v20_ticks` checks that 120 Hz steps visit exactly
+the positions of 32 ms ticks and that the ride from the top of the tower
+falls 366 units in 10 s (top speed 96.7);
+`no_72_degree_ramp_face_holds_a_player` drops a player on 3570 ramp faces
+and none holds it; `slide_lanes_carry_a_player_down_hands_free`
+(`BRI_SLIDES_FULL=1`) pushes a rider gently downhill into each of 893 lane
+segments: 891 reach the end of their leg (889 at 120 Hz), the median rider
+falls 42.5 units at a top speed of 22.5, and the longest ride falls 511.5.
+Two stop where riders drop down a shaft and land a hair inside the next
 lane's first ramp.
 
 ```powershell
