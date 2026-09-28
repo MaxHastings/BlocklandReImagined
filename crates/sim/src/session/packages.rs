@@ -948,7 +948,8 @@ impl Session {
         let (package, def) = (package.id().to_string(), def.clone());
         let tuning = PlayerTuning::default().scaled(def.scale);
         let mut body = None;
-        for lift in 0..8 {
+        // Lift the spawn out of the ground: packages rarely know its height.
+        for lift in 0..32 {
             let feet = position + Vec3::Y * (lift as f32);
             if let Ok(b) = Player::spawn_tagged(
                 &mut self.simulation.physics,
