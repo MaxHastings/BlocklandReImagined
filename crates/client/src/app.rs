@@ -5655,7 +5655,7 @@ impl PlatformApp for App {
                 (Vec::new(), chunks)
             };
             blockers.extend(self.gpu_scene.as_ref());
-            let terrain: Vec<_> = self.gpu_terrain.iter().flat_map(|t| t.draws()).collect();
+            let mut blocking: Vec<_> = self.gpu_terrain.iter().flat_map(|t| t.draws()).collect();
             bodies.extend(
                 self.avatars
                     .iter()
@@ -5672,7 +5672,13 @@ impl PlatformApp for App {
             {
                 models.push((scene, instances));
             }
-            models.extend(self.debris_models.draws());
+            // Debris is bricks, so it follows the same setting as the bricks
+            // it broke from; Add-On models cast like items.
+            if self.graphics.brick_shadows {
+                models.extend(self.debris_models.draws());
+            } else {
+                blocking.extend(self.debris_models.draws());
+            }
             models.extend(self.package_models.draws());
             renderer.render_shadows(
                 frame.encoder,
@@ -5682,7 +5688,7 @@ impl PlatformApp for App {
                 },
                 ShadowCasters {
                     scenes: &blockers,
-                    instances: &terrain,
+                    instances: &blocking,
                 },
             );
         }
