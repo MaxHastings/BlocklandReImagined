@@ -116,9 +116,7 @@ fn menu_buttons_are_all_built() {
             all.push(format!("{screen:?}: {command}"));
         }
     }
-    // Still to build; see docs/audits/v20-parity.md. Shrinks to empty.
-    let known = ["StartMission: canvas.pushDialog(MusicFilesGui);"];
-    assert_eq!(all, known, "unbuilt buttons changed");
+    assert!(all.is_empty(), "unbuilt buttons:\n{}", all.join("\n"));
 }
 
 /// Diagnostic for audits: buttons whose click changes nothing visible and
@@ -475,4 +473,50 @@ fn windows_drag_by_their_title_bar_and_stay_on_screen() {
         (edge.x + 300, edge.bottom() + 100),
     );
     assert_eq!(window(&u), edge);
+}
+
+#[test]
+fn music_files_turns_tracks_off_for_the_next_hosted_game() {
+    use bri_ui::screens::music::music_enabled;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let mut u = ui(&Rc::new(pack));
+    u.core.music_tracks = vec!["Bass 1".into(), "Rock".into()];
+    u.core.push(ScreenId::StartMission);
+    u.update(0);
+    let click = |u: &mut Ui, screen: ScreenId, command: &str| {
+        let node = u
+            .screen(screen)
+            .unwrap()
+            .view()
+            .by_command(command)
+            .unwrap();
+        let i = u.dialogs.iter().rposition(|s| s.id() == screen).unwrap();
+        let (dialogs, core) = (&mut u.dialogs, &mut u.core);
+        dialogs[i].on_event(
+            &ViewEvent {
+                node,
+                kind: EventKind::Click,
+            },
+            core,
+        );
+        u.update(0);
+    };
+    click(
+        &mut u,
+        ScreenId::StartMission,
+        "canvas.pushDialog(MusicFilesGui);",
+    );
+    assert_eq!(u.top_id(), ScreenId::MusicFiles);
+    click(&mut u, ScreenId::MusicFiles, "MusicFilesGui.clickNone();");
+    click(
+        &mut u,
+        ScreenId::MusicFiles,
+        "canvas.popDialog(MusicFilesGui);",
+    );
+    assert!(u.screen(ScreenId::MusicFiles).is_none());
+    assert!(!music_enabled(&u.core.prefs, "Bass 1"));
+    assert_eq!(u.core.prefs.get("$Music__Rock"), Some("-1"));
 }
