@@ -41,6 +41,13 @@ copy `user-state/` across to keep settings, saves and identity.
 - **Building:** brick selector (B), ghost moves with the numpad, plant, rotate,
   undo, paint (E), hammer, printer, wrench (names, lights, emitters, items,
   collision/rendering). Blocked placements show the original plant-error icon.
+- **Duplicator** (an Add-On, on by default): type `/dup` for the blue
+  Duplicator, then click the bottom brick of a build. It copies that brick
+  and everything built on it (up to 2000 bricks) and shows the copy as a
+  ghost over the original. Move and turn it with the numpad like a brick
+  ghost (super shift moves it by its own size), plant it with Numpad Enter,
+  and Ctrl+Z takes the whole copy back. A copy that cannot all be planted
+  (overlap, floating, someone else's bricks, brick limit) plants nothing.
 - **Deathmatch:** Escape → Mini-Games → Create. The default rules give everyone
   a gun and rocket launcher. Shoot, fall, die, watch the respawn countdown and
   click to respawn. Kill messages appear in chat. The player list (F2) shows scores.

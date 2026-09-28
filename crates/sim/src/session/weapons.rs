@@ -313,6 +313,11 @@ impl Session {
                     }
                     self.notices.push_back(format!("Weapon runtime: {message}"));
                 }
+                WeaponEvent::ToolFire {
+                    actor,
+                    command: Some(command),
+                    ..
+                } => self.addon_tool_fire(actor.0, &command),
                 WeaponEvent::ToolFire { actor, image, .. } => self.tool_fire(actor.0, &image)?,
                 // `brickDeployProjectile::onCollision` only moves the ghost
                 // (client side here) and never calls the parent that raises

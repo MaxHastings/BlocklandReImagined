@@ -1256,6 +1256,40 @@ impl Session {
                 self.system_chat(text);
                 Ok(())
             }
+            Op::CopyBuild {
+                player,
+                brick,
+                limit,
+                above_only,
+                tool,
+            } => {
+                // A copy is taken with the trust of the player who asked.
+                ensure!(
+                    caller == Some(player),
+                    "A build is copied only for the player whose command asked"
+                );
+                // The player hears why a copy failed; nothing went wrong
+                // with the Add-On.
+                match self.copy_build(player, brick, limit as usize, above_only, &tool) {
+                    Ok(count) => {
+                        let text = match count {
+                            1 => "Copied 1 brick".to_string(),
+                            n => format!("Copied {n} bricks"),
+                        };
+                        self.notify(player, Notice::Bottom { text, seconds: 2.0 });
+                    }
+                    Err(error) => self.center_print(player, format!("{error:#}")),
+                }
+                Ok(())
+            }
+            Op::GiveItem {
+                player,
+                item,
+                equip,
+            } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.give_tool(player, &item, equip)
+            }
         }
     }
     /// One chat line from `package` on behalf of `caller`, within their share.

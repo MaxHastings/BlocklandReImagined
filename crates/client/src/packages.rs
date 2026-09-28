@@ -66,8 +66,10 @@ pub struct Hosted {
 }
 /// Resolve Start Game's choice of `map` and game `mode` (None: Custom).
 /// Custom on a package world runs every enabled Add-On except those needing
-/// another world; Custom on a base map runs the plain base game. A mode runs
-/// its own Add-Ons, on its own map when it names one.
+/// another world; Custom on a base map runs the enabled Add-Ons that need
+/// no package world and belong to no game mode (the Duplicator, say), as
+/// v20 ran its enabled Add-Ons in every game. A mode runs its own Add-Ons,
+/// on its own map when it names one.
 pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> Result<Hosted> {
     let problems = |p: Vec<bri_package::diag::Diagnostic>| {
         anyhow::anyhow!(p.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))
@@ -95,7 +97,11 @@ pub fn hosted(server: Option<&Arc<Catalog>>, map: &str, mode: Option<&str>) -> R
             (Some(server.for_world(map).map_err(problems)?), map.to_owned(), map.to_owned())
         }
         (Some(_), None) if map.contains(':') => anyhow::bail!("No Add-On that is turned on provides {map}"),
-        (Some(_), None) => (None, map.to_owned(), map.to_owned()),
+        (Some(server), None) => (
+            Some(server.for_base_map().map_err(problems)?),
+            map.to_owned(),
+            map.to_owned(),
+        ),
     };
     // Nothing to run: host the plain base game.
     let catalog = catalog.filter(|c| c.world().is_some() || c.behaviours().next().is_some());
@@ -361,7 +367,7 @@ mod tests {
         // Custom on the package world runs the Add-Ons made for it.
         let world = hosted(Some(&server), strata, None).unwrap();
         assert!(world.catalog.is_some_and(|c| c.packages.contains_key("stresslab-creeper")));
-        // Custom on a base map runs no Add-On rules.
+        // Custom on a base map runs no Add-On a game mode claims.
         let base = hosted(Some(&server), "Slate", None).unwrap();
         assert!(base.catalog.is_none());
         assert_eq!((base.map.as_str(), base.save_key.as_str()), ("Slate", "Slate"));

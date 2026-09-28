@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 38: `bsd` and `hug` emote cues, which older clients reject as invalid.
 /// 39: `VehiclePose::wheel_contact` for the tire emitters.
 /// 40: the host's Server Settings in the admin snapshot.
-pub const VERSION: u32 = 41;
+/// 41: `Command::GhostBrick` and `Vitals::ghost`, so others see a ghost brick.
+/// 42: copied builds (`Notice::Blueprint`, `Command::PlaceBlueprint`) and
+/// Add-On tool images (`Image::command`).
+pub const VERSION: u32 = 42;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

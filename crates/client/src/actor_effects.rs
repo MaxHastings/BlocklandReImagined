@@ -1106,6 +1106,7 @@ fn teleport_image() -> bri_weapons::Image {
                 ..Default::default()
             },
         ],
+        command: None,
     }
 }
 

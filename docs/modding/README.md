@@ -12,6 +12,7 @@ yet.
 | A game rule: points, rounds, commands | [`sample-survival-points`](../../packages/samples/sample-survival-points) | a `behaviour` file and a Rhai script, run by the host |
 | A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
 | A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
+| A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see section 6 |
@@ -135,10 +136,22 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(p, amount)`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`: `player` |
+| | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
+| | | `copy_build(p, brick, limit, above_only, tool)`: `build` |
 
 A value from `players()` is a map with `id`, `name`, `x`, `y`, `z`, `alive`
 and `admin`.
+
+`give_item(p, item, equip)` puts a weapon or tool in the player's tool list
+(unless they carry it already) and, with `equip`, in their hand.
+`copy_build(p, brick, limit, above_only, tool)` copies the build at `brick`
+for the player whose command asked: the brick and every brick joined to it
+through studs that the player may build on, with `above_only` none below
+the brick, refused past `limit` bricks (at most 10000). The player sees the
+copy as a ghost while `tool` is in hand, moves and turns it with the brick
+keys, and plants it with the plant key; planting follows the server's plant
+rules, plants all of it or none, and one Ctrl+Z takes it back. The
+Duplicator is the worked example.
 
 **Capabilities** in `package.json` are the only permission gate. If your
 script calls `tell` without `"chat"` in `capabilities`, the call is refused
@@ -204,6 +217,11 @@ The fields you are most likely to change:
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | item | `ui_name` | the name players see |
+
+A tool rather than a gun: give its image `"command": "your-rule:command"`
+and no projectile. Its `onFire` state then runs that command of your rule
+Add-On for the holder, with `aim()` resolved where they look (declare
+`aim_reach` on the command). The Duplicator's `duplicator-tool` does this.
 
 Keys of `damage_types` and `explosions` are their `name` in lowercase, and
 a projectile names its damage type as `$DamageType::<name>`. Everyone in a

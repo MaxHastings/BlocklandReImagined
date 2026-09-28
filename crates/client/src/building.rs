@@ -9,6 +9,7 @@ use anyhow::{Context, Result, ensure};
 use bri_content::{brick::Brick as Mesh, terrain_field::TerrainField};
 use bri_net::protocol::PublicWorld;
 use bri_sim::{
+    blueprint::Blueprint,
     definitions::Definitions,
     ghost,
     grid::{self, Bounds, Index},
@@ -24,6 +25,21 @@ use std::{collections::BTreeMap, sync::Arc};
 
 const SLOTS: usize = 10;
 const DEPLOY_REACH: f32 = 15.0;
+
+/// A copied build as the player moves it: the pivot's place, the turn, and
+/// the bricks there.
+#[derive(Debug, Clone)]
+struct CopyGhost {
+    blueprint: Blueprint,
+    anchor: [f32; 3],
+    turns: u8,
+    bricks: Vec<Brick>,
+}
+impl CopyGhost {
+    fn place(&mut self) {
+        self.bricks = self.blueprint.placed(self.anchor, self.turns);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Equipment {
@@ -72,6 +88,9 @@ pub struct Building {
     paint: u8,
     palette_len: usize,
     ghost: Option<Brick>,
+    /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
+    /// the brick keys while its tool is in hand.
+    copy: Option<CopyGhost>,
     ghost_generation: u64,
     map: PhysicsWorld,
     broken: bri_sim::prediction::BrokenShapes,
@@ -119,6 +138,7 @@ impl Building {
             paint: 0,
             palette_len: 0,
             ghost: None,
+            copy: None,
             ghost_generation: 0,
             map,
             broken: bri_sim::prediction::BrokenShapes::new(handles, &[]),
@@ -356,18 +376,33 @@ impl Building {
     /// to attach to and no map floor or terrain under it). The server still
     /// decides; this only warns before the click.
     pub fn ghost_blocked(&self) -> bool {
+        if let Some(copy) = self.copy_ghost() {
+            // A copy must clear every brick, and the world must hold up at
+            // least one of it (its bricks hold up each other).
+            let mut supported = false;
+            for brick in copy {
+                match self.placement(brick) {
+                    Some((true, _)) => return true,
+                    Some((false, held)) => supported |= held,
+                    None => {}
+                }
+            }
+            return !supported;
+        }
         let Some(ghost) = &self.ghost else {
             return false;
         };
-        let Some(definition) = self.definitions.entries.get(match &ghost.definition {
+        self.placement(ghost)
+            .is_some_and(|(overlaps, supported)| overlaps || !supported)
+    }
+    /// Whether `ghost` overlaps a replicated brick, and whether a brick or
+    /// the map would hold it up; `None` when the client cannot tell.
+    fn placement(&self, ghost: &Brick) -> Option<(bool, bool)> {
+        let definition = self.definitions.entries.get(match &ghost.definition {
             ContentRef::Resolved(id) => id.as_str(),
-            ContentRef::Unresolved { .. } => return false,
-        }) else {
-            return false;
-        };
-        let Ok(bounds) = Bounds::new(ghost, &definition.mesh) else {
-            return false;
-        };
+            ContentRef::Unresolved { .. } => return None,
+        })?;
+        let bounds = Bounds::new(ghost, &definition.mesh).ok()?;
         let mut supported = false;
         for id in self.index.query(bounds.expanded(1)) {
             let Some(existing) = self.bricks.get(&id) else {
@@ -378,12 +413,12 @@ impl Building {
             };
             let placed = (existing, &other.mesh, self.index.bounds(id));
             if grid::overlaps((ghost, &definition.mesh, bounds), placed) {
-                return true;
+                return Some((true, supported));
             }
             supported |= grid::connected((ghost, &definition.mesh, bounds), placed);
         }
         if supported {
-            return false;
+            return Some((false, true));
         }
         // The server's ground rule: from the top down to 0.1 under the
         // bottom, map floor or terrain under any footprint cell.
@@ -396,7 +431,48 @@ impl Building {
                 self.map_ray(origin, Vec3::NEG_Y, reach).is_some()
             })
         });
-        !grounded
+        Some((false, grounded))
+    }
+
+    /// Take a copied build from the server (`None` takes it away). It
+    /// starts over the original, as v20's Duplicator ghost did.
+    pub fn set_blueprint(&mut self, blueprint: Option<Blueprint>) -> Result<()> {
+        self.copy = match blueprint {
+            Some(blueprint) => {
+                blueprint.validate()?;
+                for brick in &blueprint.bricks {
+                    self.definitions.get(brick)?;
+                }
+                let mut copy = CopyGhost {
+                    anchor: blueprint.origin,
+                    blueprint,
+                    turns: 0,
+                    bricks: Vec::new(),
+                };
+                copy.place();
+                Some(copy)
+            }
+            None => None,
+        };
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+        Ok(())
+    }
+    /// The copied build's ghost bricks while its tool is in hand.
+    pub fn copy_ghost(&self) -> Option<&[Brick]> {
+        self.active_copy().map(|c| c.bricks.as_slice())
+    }
+    /// Where the copy's pivot is and how it is turned, while in hand.
+    pub fn copy_pose(&self) -> Option<([f32; 3], u8)> {
+        self.active_copy().map(|c| (c.anchor, c.turns))
+    }
+    fn active_copy(&self) -> Option<&CopyGhost> {
+        self.copy
+            .as_ref()
+            .filter(|c| matches!(&self.equipment, Equipment::Weapon(id) if *id == c.blueprint.tool))
+    }
+    fn copy_in_hand(&mut self) -> Option<&mut CopyGhost> {
+        self.active_copy()?;
+        self.copy.as_mut()
     }
     pub fn ghost_generation(&self) -> u64 {
         self.ghost_generation
@@ -1040,18 +1116,26 @@ impl Building {
                     (-1..=1).contains(x) && (-1..=1).contains(y) && (-3..=3).contains(z),
                     "Invalid brick shift"
                 );
-                if let Some(brick) = &mut self.ghost {
-                    let mesh = &self.definitions.get(brick)?.mesh;
-                    let body = body_forward(player)?;
-                    ghost::shift(
-                        brick,
-                        mesh,
+                let super_shift =
+                    matches!(action, UiAction::Game(GameAction::SuperShiftBrick { .. }));
+                let body = body_forward(player)?;
+                if let Some(copy) = self.copy_in_hand() {
+                    copy.anchor = bri_sim::blueprint::shift(
+                        copy.anchor,
+                        copy.blueprint.turned_size(copy.turns),
                         body,
                         *x,
                         *y,
                         *z,
-                        matches!(action, UiAction::Game(GameAction::SuperShiftBrick { .. })),
+                        super_shift,
                     );
+                    copy.place();
+                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
+                } else if let Some(brick) = &mut self.ghost {
+                    let mesh = &self.definitions.get(brick)?.mesh;
+                    ghost::shift(brick, mesh, body, *x, *y, *z, super_shift);
                     Bounds::new(brick, mesh)?;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
@@ -1060,7 +1144,13 @@ impl Building {
             }
             UiAction::Game(GameAction::RotateBrick { dir }) => {
                 ensure!((-1..=1).contains(dir), "Invalid brick rotation");
-                if let Some(brick) = &mut self.ghost {
+                if let Some(copy) = self.copy_in_hand() {
+                    copy.turns = (i32::from(copy.turns) + dir.signum()).rem_euclid(4) as u8;
+                    copy.place();
+                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
+                } else if let Some(brick) = &mut self.ghost {
                     let mesh = &self.definitions.get(brick)?.mesh;
                     ghost::rotate(brick, mesh, body_forward(player)?, *dir);
                     Bounds::new(brick, mesh)?;
@@ -1070,9 +1160,20 @@ impl Building {
                 }
             }
             UiAction::Game(GameAction::CancelBrick) => {
-                if self.ghost.take().is_some() {
+                if self.copy_in_hand().is_some() {
+                    // Put the copy away; clicking a build copies again.
+                    self.copy = None;
+                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                } else if self.ghost.take().is_some() {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                 }
+            }
+            UiAction::Game(GameAction::PlantBrick) if self.active_copy().is_some() => {
+                let copy = self.active_copy().expect("checked");
+                out.commands.push(Command::PlaceBlueprint {
+                    position: copy.anchor,
+                    quarter_turns: copy.turns,
+                });
             }
             UiAction::Game(GameAction::PlantBrick) => {
                 let brick = self
@@ -1577,6 +1678,102 @@ mod tests {
             .unwrap();
         assert!(b.ghost().is_none());
         assert!(b.ghost_generation() > generation);
+    }
+
+    #[test]
+    fn a_copied_build_moves_turns_and_plants_whole_while_its_tool_is_in_hand() {
+        const TOOL: &str = "duplicator-tool:weapon/duplicator";
+        let mut b = controller();
+        let mut catalog = b.tool_catalog.clone();
+        catalog.insert(
+            TOOL.to_string(),
+            ToolInfo {
+                id: TOOL.into(),
+                name: "Duplicator".into(),
+                icon: IconRef::None,
+                tint: None,
+            },
+        );
+        b.set_tool_catalog(catalog).unwrap();
+        let plate =
+            |x: f32, y: f32| Brick::new(ContentRef::Resolved("plate".into()), [x, y, 0.25], 1);
+        let copy =
+            Blueprint::capture(TOOL, &[plate(0.5, 0.1), plate(1.0, 0.3)], &b.definitions).unwrap();
+        b.set_blueprint(Some(copy.clone())).unwrap();
+        assert!(b.copy_ghost().is_none(), "shown only with its tool in hand");
+        let mut inventory = ToolInventory {
+            slots: vec![Some(TOOL.into()), None, None, None, None],
+            selected: Some(0),
+        };
+        b.sync_tools(&inventory).unwrap();
+        // It starts over the original, standing on the floor.
+        assert_eq!(b.copy_pose(), Some((copy.origin, 0)));
+        assert_eq!(b.copy_ghost().unwrap()[1].position, [1.0, 0.3, 0.25]);
+        assert!(!b.ghost_blocked());
+        // The brick keys move it: away from the body is -Z here.
+        let generation = b.ghost_generation();
+        let shift = b
+            .ui_action(
+                &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
+                &player(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            shift.commands.as_slice(),
+            [Command::BuildGesture(_)]
+        ));
+        assert!(b.ghost_generation() > generation);
+        let (anchor, _) = b.copy_pose().unwrap();
+        assert_eq!(anchor, [copy.origin[0], 0.0, copy.origin[2] - 0.5]);
+        // A super shift up moves by the copy's height: now it floats.
+        b.ui_action(
+            &UiAction::Game(GameAction::SuperShiftBrick { x: 0, y: 0, z: 1 }),
+            &player(),
+        )
+        .unwrap();
+        assert!((b.copy_pose().unwrap().0[1] - 0.4).abs() < 1e-5);
+        assert!(b.ghost_blocked(), "nothing holds it up");
+        b.ui_action(
+            &UiAction::Game(GameAction::SuperShiftBrick { x: 0, y: 0, z: -1 }),
+            &player(),
+        )
+        .unwrap();
+        // Turning keeps every brick on the grid.
+        b.ui_action(
+            &UiAction::Game(GameAction::RotateBrick { dir: 1 }),
+            &player(),
+        )
+        .unwrap();
+        for brick in b.copy_ghost().unwrap() {
+            assert_eq!(brick.quarter_turns, 1);
+            Bounds::new(brick, &b.definitions.entries["plate"].mesh).unwrap();
+        }
+        // Planting sends the pivot and turn; the server places the bricks.
+        let (anchor, turns) = b.copy_pose().unwrap();
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            plant.commands.as_slice(),
+            [Command::PlaceBlueprint { position, quarter_turns }] if *position == anchor && *quarter_turns == turns
+        ));
+        // Another tool in hand: the keys go back to the brick ghost.
+        inventory.selected = None;
+        b.sync_tools(&inventory).unwrap();
+        assert!(b.copy_ghost().is_none());
+        inventory.selected = Some(0);
+        b.sync_tools(&inventory).unwrap();
+        assert!(b.copy_ghost().is_some(), "and it comes back where it was");
+        // Cancel puts the copy away.
+        b.ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
+            .unwrap();
+        assert!(b.copy_ghost().is_none());
+        // A copy of a brick this client cannot draw is refused.
+        let mut unknown = copy;
+        unknown.bricks[0].definition = ContentRef::Resolved("missing".into());
+        assert!(b.set_blueprint(Some(unknown)).is_err());
     }
 
     #[test]

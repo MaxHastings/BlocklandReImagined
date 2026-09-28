@@ -3313,3 +3313,37 @@ the first copy). No wire change.
   `cargo test -p bri-net --test loopback ghost_bricks look_pitch`,
   `cargo test -p bri-sim --test vehicles -- --ignored riders_keep`,
   `cargo test -p bri-client --test remote_poses --release -- --ignored`.
+- 2026-09-28 Duplicator (first impressions 18, branch `claude/duplicator`).
+  Built as two Add-Ons on new engine seams, modelled on the v20 Duplicator
+  Add-On. `packages/duplicator/duplicator` (host rule): `/dup` or
+  `/duplicator` gives the Duplicator; its swing copies the clicked brick and
+  every brick joined to it through studs that the player may build on,
+  never below the clicked brick (so a click on a build's base takes the
+  build, not the baseplate it stands on), up to 2000 bricks.
+  `packages/duplicator/duplicator-tool` (shared): the tool, the stock wand
+  shape coloured blue. Engine mechanisms, with no Duplicator policy in
+  them: `bri_sim::blueprint` (a copy held about a stud-corner pivot at its
+  bottom, so quarter turns keep it on the grid), `Simulation::build_from`
+  and `plant_group` (every plant rule per brick, the world holding up at
+  least one, all or none), `Command::PlaceBlueprint` (minigame build rule,
+  brick limit, plant rate: a copy needs room in the plant window and uses
+  the rest of it, reach), one undo entry per placed copy, script operations
+  `copy_build` (new capability `build`) and `give_item` (`player`), and
+  Add-On tools: a weapon image with `command` runs that Add-On command on
+  `onFire`. The client draws the copy as one translucent ghost while the
+  tool is in hand; the numpad moves (super shift by the copy's size) and
+  turns it, Numpad Enter places it, Numpad 0 puts it away; the ghost turns
+  red when it would overlap or float. Protocol 41 (`Notice::Blueprint`,
+  `Command::PlaceBlueprint`, `Image::command`). Custom games on base maps
+  now run enabled Add-Ons that need no package world and that no game mode
+  claims (`Catalog::for_base_map`), as v20 ran enabled Add-Ons everywhere;
+  the Stress Lab's are all claimed by its mode, so Slate stays plain for
+  it. Playtest builds ship the Duplicator on (`content/addons/`). Copies
+  keep shape, colour, print and FX; names, events, lights, emitters, items,
+  sounds and vehicles stay with the original. Evidence: `cargo test -p
+  bri-sim --test duplicator` (selection and connectivity, turning on the
+  grid, all-or-none planting, trust refusal, one undo, brick limit, plant
+  rate and reach, `/dup` and a real swing through the weapon state
+  machine, Custom runs it), `cargo test -p bri-sim --lib blueprint`,
+  `cargo test -p bri-client --lib a_copied_build`. Not seen in a window:
+  Max's playtest.

@@ -362,6 +362,102 @@ impl Simulation {
         self.detect_collisions();
         Ok(id)
     }
+    /// Plant bricks as one: each passes every plant rule but reach and
+    /// support against the world as it stands, the world holds up at least
+    /// one of them (they are joined, so it holds up the rest), and either
+    /// all are planted or none is. The caller checks reach, rate and the
+    /// brick limit, as for a single plant.
+    pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
+        ensure!(!bricks.is_empty(), "Nothing to plant");
+        if self.state().bricks.len() + bricks.len() > bri_world::MAX_BRICKS {
+            return Err(PlantFailure::Limit.into());
+        }
+        let mut supported = false;
+        let mut prepared = Vec::with_capacity(bricks.len());
+        for brick in &bricks {
+            let definition = self.definitions.get(brick)?;
+            supported |= check_placement(
+                self.authority.state(),
+                &self.definitions,
+                &self.index,
+                &self.physics,
+                self.terrain.as_ref(),
+                actor,
+                brick,
+            )?;
+            prepared.push(Bounds::new(brick, &definition.mesh)?);
+        }
+        if !supported {
+            return Err(PlantFailure::Float.into());
+        }
+        let mut ids = Vec::with_capacity(bricks.len());
+        for brick in bricks {
+            match self.authority.plant(actor, brick, |_, _| Ok(())) {
+                Ok(id) => ids.push(id),
+                Err(error) => {
+                    // Storage ran out part way: take back what went in.
+                    for id in ids {
+                        self.authority.remove(actor, id)?;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        for (&id, bounds) in ids.iter().zip(prepared) {
+            let brick = &self.authority.state().bricks[&id];
+            let definition = self.definitions.get(brick)?;
+            self.handles.insert(
+                id,
+                self.physics
+                    .insert_collider(brick_collider(brick, definition, id), None),
+            );
+            self.index.insert(id, bounds);
+            if let Some(water) = brick_water(brick, definition) {
+                self.brick_waters.insert(id, water);
+            }
+        }
+        self.detect_collisions();
+        Ok(ids)
+    }
+    /// The build a copy takes from `start`: it and every brick joined to it
+    /// through studs, passing only through bricks `actor` may build on and,
+    /// with `above_only`, never below `start`'s bottom. Nearest first.
+    /// More than `limit` bricks is refused rather than cut short.
+    pub fn build_from(
+        &self,
+        actor: &Actor,
+        start: BrickId,
+        limit: usize,
+        above_only: bool,
+    ) -> Result<Vec<BrickId>> {
+        let world = self.state();
+        let first = world.bricks.get(&start).context("Unknown brick")?;
+        ensure!(
+            may_build_on(actor, first),
+            "The brick's owner does not trust you enough to do that."
+        );
+        let floor = self.index.bounds(start).min[1];
+        let mut seen = BTreeSet::from([start]);
+        let mut order = vec![start];
+        let mut next = 0;
+        while let Some(&id) = order.get(next) {
+            next += 1;
+            for other in self.connected_bricks(id)? {
+                if (above_only && self.index.bounds(other).min[1] < floor)
+                    || !may_build_on(actor, &world.bricks[&other])
+                    || !seen.insert(other)
+                {
+                    continue;
+                }
+                ensure!(
+                    order.len() < limit,
+                    "That build has more than {limit} bricks"
+                );
+                order.push(other);
+            }
+        }
+        Ok(order)
+    }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         self.authority.edit(actor, id, edit)?;
         self.sync_flags(id);
@@ -768,11 +864,30 @@ fn validate_placement(
         "Invalid builder position/reach"
     );
     let definition = defs.get(brick)?;
-    let bounds = Bounds::new(brick, &definition.mesh)?;
     let radius = *definition.mesh.footprint_studs.iter().max().unwrap() as f32 * 0.25;
     if builder.position.distance(Vec3::from(brick.position)) > builder.reach + radius {
         return Err(PlantFailure::TooFar.into());
     }
+    if !check_placement(world, defs, index, physics, terrain, builder.actor, brick)? {
+        return Err(PlantFailure::Float.into());
+    }
+    Ok(())
+}
+/// Every plant rule but reach and support: no overlap, no building onto a
+/// brick the actor may not build on, not buried in the map or stuck in a
+/// body. Returns whether something already there holds the brick up (a
+/// brick it connects to, or the map).
+fn check_placement(
+    world: &World,
+    defs: &Definitions,
+    index: &Index,
+    physics: &PhysicsWorld,
+    terrain: Option<&crate::map::TerrainStream>,
+    actor: &Actor,
+    brick: &Brick,
+) -> Result<bool> {
+    let definition = defs.get(brick)?;
+    let bounds = Bounds::new(brick, &definition.mesh)?;
     if overlaps_world(world, defs, index, brick, &definition.mesh, bounds)? {
         return Err(PlantFailure::Overlap.into());
     }
@@ -785,7 +900,7 @@ fn validate_placement(
             (brick, &definition.mesh, bounds),
             (existing, &other.mesh, ob),
         ) {
-            if !may_build_on(builder.actor, existing) {
+            if !may_build_on(actor, existing) {
                 return Err(PlantFailure::Forbidden.into());
             }
             supported = true;
@@ -839,14 +954,8 @@ fn validate_placement(
     if terrain.is_some_and(|t| buried(t, bounds)) {
         return Err(PlantFailure::Buried.into());
     }
-    if !supported {
-        // The chain-kill root test: a brick the map holds up stays ground.
-        supported = on_ground(physics, terrain, bounds);
-    }
-    if !supported {
-        return Err(PlantFailure::Float.into());
-    }
-    Ok(())
+    // The chain-kill root test: a brick the map holds up stays ground.
+    Ok(supported || on_ground(physics, terrain, bounds))
 }
 /// A brick is buried when the terrain surface stands above its top over its
 /// whole footprint: nothing of it would show. Partly sunk bricks plant, as

@@ -197,11 +197,13 @@ pub enum Event {
         actor: ActorId,
         hand: u8,
     },
-    /// A [`HOST_TOOL_IMAGES`] image entered its `onFire` state.
+    /// A [`HOST_TOOL_IMAGES`] image, or an Add-On tool's image with a
+    /// `command`, entered its `onFire` state.
     ToolFire {
         actor: ActorId,
         image: String,
         hand: u8,
+        command: Option<String>,
     },
     ImageState {
         actor: ActorId,
@@ -1109,11 +1111,12 @@ impl WeaponsWorld {
                 }
             }
             "onfire" => {
-                if HOST_TOOL_IMAGES.contains(&name.as_str()) {
+                if HOST_TOOL_IMAGES.contains(&name.as_str()) || image.command.is_some() {
                     self.events.push(Event::ToolFire {
                         actor: id,
                         image: image.id.clone(),
                         hand: e.hand,
+                        command: image.command.clone(),
                     });
                     return true;
                 }

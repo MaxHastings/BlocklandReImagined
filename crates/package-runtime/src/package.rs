@@ -773,6 +773,27 @@ impl Catalog {
         let roots = m.add_ons.iter().map(String::as_str).chain([owner]);
         self.only(&self.closure(roots))
     }
+    /// What a host runs on a base game map without a game mode: every
+    /// enabled package that needs no package world and leans on no package
+    /// a game mode claims. A mode claims its own package and the Add-Ons it
+    /// names; those run in that mode, not in every game.
+    pub fn for_base_map(&self) -> Result<Catalog, Vec<Diagnostic>> {
+        let claimed: BTreeSet<&str> = self
+            .packages
+            .iter()
+            .flat_map(|(owner, p)| {
+                p.modes
+                    .values()
+                    .flat_map(move |m| m.add_ons.iter().map(String::as_str).chain([owner.as_str()]))
+            })
+            .collect();
+        let keep = self
+            .needing_only("")
+            .into_iter()
+            .filter(|id| self.closure([*id]).is_disjoint(&claimed))
+            .collect();
+        self.only(&keep)
+    }
     /// What a host runs on package world `world` without a game mode: every
     /// enabled package except those that need a different world.
     pub fn for_world(&self, world: &str) -> Result<Catalog, Vec<Diagnostic>> {

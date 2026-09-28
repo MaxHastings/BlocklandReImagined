@@ -448,6 +448,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 casing: field(d, "casing"),
                 min_shot_ticks: ticks(num(d, "minShotTime", 0.0) / 1000.0),
                 states: native,
+                command: None,
             },
         );
     }

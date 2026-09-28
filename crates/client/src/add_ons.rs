@@ -39,15 +39,6 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// What each capability lets a package do, in a player's words.
-const ALLOWED: &[(&str, &str)] = &[
-    ("world.edit", "change the world's bricks"),
-    ("damage", "hurt players and break bricks"),
-    ("entity", "spawn and move its own creatures and objects"),
-    ("chat", "send chat messages"),
-    ("players", "move and respawn players"),
-];
-
 pub fn view(root: &Path) -> AddOnsView {
     match Library::scan(root) {
         Ok(library) => AddOnsView {
@@ -375,12 +366,7 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
         allowed: info
             .capabilities
             .iter()
-            .map(|c| {
-                ALLOWED
-                    .iter()
-                    .find(|(k, _)| k == c)
-                    .map_or(c.clone(), |(_, words)| words.to_string())
-            })
+            .map(|c| bri_package::capability::describe(c).map_or(c.clone(), str::to_string))
             .collect(),
         problems: e
             .problems

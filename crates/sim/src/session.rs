@@ -36,6 +36,7 @@ mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod tools;
 mod undo;
+mod blueprints;
 mod spray;
 mod packages;
 pub use packages::{
@@ -114,6 +115,12 @@ pub enum Command {
         color: u8,
     },
     Tool(ToolAction),
+    /// Place the copied build this player holds (`Session::copy_build`)
+    /// with its pivot at `position`, turned `quarter_turns`.
+    PlaceBlueprint {
+        position: [f32; 3],
+        quarter_turns: u8,
+    },
     /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
     UseSprayCan {
         color: u8,
@@ -224,7 +231,9 @@ impl Command {
     pub fn preconditions(&self) -> Preconditions {
         use bri_minigames::BuildAction;
         let (alive, build) = match self {
-            Command::Plant { .. } => (true, Some(BuildAction::Build)),
+            Command::Plant { .. } | Command::PlaceBlueprint { .. } => {
+                (true, Some(BuildAction::Build))
+            }
             Command::UseSprayCan { .. }
             | Command::UseFxCan { .. }
             | Command::EquipTool { .. }
@@ -524,6 +533,8 @@ pub struct Session {
     notices: VecDeque<String>,
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
+    /// Each player's copied build (`copy_build`), waiting to be placed.
+    blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
     /// lowercase aspect ratio, used for the next brick of that aspect.
     last_prints: BTreeMap<OwnerId, BTreeMap<String, String>>,
@@ -602,6 +613,7 @@ impl Session {
             notices: VecDeque::new(),
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
+            blueprints: BTreeMap::new(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
             bulk_window_tick: 0,
@@ -919,6 +931,7 @@ impl Session {
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
         self.weapon_triggers.remove(&owner);
         self.last_prints.remove(&owner);
+        self.forget_blueprint(owner);
         self.departed.insert(
             owner,
             (
@@ -1617,6 +1630,10 @@ impl Session {
                 Ok(Reply::Activated(hit))
             }
             Command::Tool(action) => self.tool_action(owner, action),
+            Command::PlaceBlueprint {
+                position,
+                quarter_turns,
+            } => self.place_blueprint(owner, position, quarter_turns),
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);

@@ -653,12 +653,16 @@ impl Session {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
         let center = Vec3::from(self.simulation.state().bricks[&id].position);
         self.kill_brick(&actor, id, super::debris::BrickBlast::pop(center))?;
+        self.close_inspections(id);
+        Ok(())
+    }
+    /// Wrench and printer dialogs open on a brick that is gone close.
+    pub(super) fn close_inspections(&mut self, id: BrickId) {
         for peer in self.peers.values_mut() {
             if peer.inspection.as_ref().is_some_and(|i| i.id == id) {
                 peer.inspection = None;
             }
         }
-        Ok(())
     }
 
     /// `hammerImage::onHitObject` for vehicles: flip it with an impulse of

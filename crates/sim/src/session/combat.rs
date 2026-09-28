@@ -137,6 +137,9 @@ pub enum Notice {
     },
     /// `secureClientCmd_ClientTrust` for every player, as this viewer sees them.
     PlayerTrust(BTreeMap<OwnerId, super::PlayerTrust>),
+    /// The build this player copied, to show and place with its tool;
+    /// `None` takes it away.
+    Blueprint(Option<Box<crate::blueprint::Blueprint>>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

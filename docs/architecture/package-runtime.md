@@ -67,7 +67,9 @@ What a host runs (`crates/client/src/packages.rs` `hosted`):
   none. Its state saves under `<mode>-<map>`.
 - **Custom on a package world** runs every enabled Add-On except those that
   need a different world (`Catalog::for_world`), as before modes existed.
-- **Custom on a base map** runs no Add-On rules: the plain base game.
+- **Custom on a base map** runs the enabled Add-Ons that need no package
+  world and that no game mode claims (`Catalog::for_base_map`), such as
+  the Duplicator.
 
 Several world providers may be enabled at once; only a hosted game must
 settle on one (`set.world.conflict`, raised by `for_mode`/`for_world`).
@@ -94,7 +96,11 @@ seed, players, entities, the caller's aim) and a working copy of its own
 state; it returns a list of typed operations (`bri_package_runtime::Op`):
 `remove_brick`, `place_brick`, `explode`, `damage`, `teleport`, `respawn`,
 `set_archetype`, `control`, `set_block_state`, `spawn_entity`,
-`remove_entity`, `steer`, `label`, `tell`, `broadcast`. `set_block_state(brick,
+`remove_entity`, `steer`, `label`, `tell`, `broadcast`, `give_item`
+(capability `player`) and `copy_build` (capability `build`: the engine
+copies the caller's build into a blueprint, `crate::blueprint`, that the
+player places with `Command::PlaceBlueprint` under the plant rules, all or
+none, with one undo entry). `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its
 block's declared states; the state is a field of the brick
 (`Brick::look`), so it replicates and saves with the world. `aim()` reports
@@ -126,6 +132,12 @@ Work the engine runs itself (thinks, `on_tick`, generation) shares 200k
 operations a tick, split evenly between packages with scripts: about 8 ms
 on a desktop. A package whose call ran past its share repays it over later
 ticks, and its waiting thinks run first next tick.
+
+## Add-On tools
+
+A weapon image with `command` (`package:command`) is an Add-On tool: its
+`onFire` runs that package command for the holder, aimed along the swing,
+instead of firing a projectile (`WeaponEvent::ToolFire`).
 
 ## Replication
 

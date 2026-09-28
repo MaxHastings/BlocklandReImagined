@@ -2710,6 +2710,7 @@ impl App {
         player.yaw = self.controls.yaw;
         player.pitch = self.controls.pitch;
         let ghost_before = self.building.as_ref().and_then(|b| b.ghost().cloned());
+        let copy_before = self.building.as_ref().and_then(|b| b.copy_pose());
         let building = self
             .building
             .as_mut()
@@ -2719,7 +2720,16 @@ impl App {
         let Some(response) = response else {
             return Ok(false);
         };
-        if let Some(ghost) = self.building.as_ref().and_then(|b| b.ghost()) {
+        if let Some((anchor, turns)) = self.building.as_ref().and_then(|b| b.copy_pose()) {
+            let cue = match copy_before {
+                Some((_, before)) if before != turns => Some("brick.rotate"),
+                Some((before, _)) if before != anchor => Some("brick.move"),
+                _ => None,
+            };
+            if let Some(cue) = cue {
+                self.audio.trigger(cue, bri_audio::Placement::World(anchor));
+            }
+        } else if let Some(ghost) = self.building.as_ref().and_then(|b| b.ghost()) {
             let cue = if ghost_before
                 .as_ref()
                 .is_none_or(|b| b.definition != ghost.definition)
@@ -3317,6 +3327,14 @@ impl App {
                         }
                         bri_sim::session::Notice::PlayerTrust(rows) => {
                             a.trust = rows;
+                            continue;
+                        }
+                        bri_sim::session::Notice::Blueprint(blueprint) => {
+                            if let Some(building) = self.building.as_mut()
+                                && let Err(error) = building.set_blueprint(blueprint.map(|b| *b))
+                            {
+                                bri_console::echo(format!("Copied build ignored: {error:#}"));
+                            }
                             continue;
                         }
                         bri_sim::session::Notice::Inspected { .. } => unreachable!(),
@@ -4292,6 +4310,8 @@ fn ghost_key(building: &crate::building::Building) -> u64 {
         .ghost_generation()
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ building.query_generation()
+        // Taking the copy's tool in hand or putting it away.
+        ^ u64::from(building.copy_ghost().is_some()) << 63
 }
 
 fn translucent_ghost(scene: &mut SceneData) {
@@ -6089,13 +6109,26 @@ impl PlatformApp for App {
             && self.ghost_uploaded != ghost_key(building)
         {
             self.ghost_gpu = None;
-            if let Some(ghost) = building.ghost() {
+            // A copied build in hand shows instead of the single ghost.
+            let ghosts: Option<bri_world::Bricks> = match building.copy_ghost() {
+                Some(copy) => Some(
+                    copy.iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(i, b)| (i as u64, b))
+                        .collect(),
+                ),
+                None => building
+                    .ghost()
+                    .map(|g| bri_world::Bricks::unit(0, g.clone())),
+            };
+            if let Some(bricks) = ghosts {
                 let palette = view.world.palette.clone();
                 let world = bri_net::protocol::PublicWorld {
                     name: "Local unplanted ghost".into(),
                     map_id: view.world.map_id.clone(),
                     palette,
-                    bricks: bri_world::Bricks::unit(0, ghost.clone()),
+                    bricks,
                 };
                 let mut data = crate::world_scene::build_world_scene_materials(
                     &world,

@@ -1,0 +1,169 @@
+{
+  "schema_version": 3,
+  "id": "duplicator-tool",
+  "items": {
+    "duplicator-tool:weapon/duplicator": {
+      "id": "duplicator-tool:weapon/duplicator",
+      "name": "DuplicatorItem",
+      "ui_name": "Duplicator",
+      "image": "duplicator-tool:image/duplicator",
+      "model": "base/data/shapes/wand.dts",
+      "icon": "base/client/ui/itemIcons/wand",
+      "can_drop": true,
+      "sport": false
+    }
+  },
+  "images": {
+    "duplicator-tool:image/duplicator": {
+      "id": "duplicator-tool:image/duplicator",
+      "name": "DuplicatorImage",
+      "model": "base/data/shapes/wand.dts",
+      "projectile": null,
+      "mount_point": 0,
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "eye_offset": [
+        0.7,
+        -0.25,
+        -1.2
+      ],
+      "source_rotation_degrees": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "correct_muzzle": false,
+      "melee": true,
+      "color": [
+        0.2,
+        0.55,
+        1.0,
+        1.0
+      ],
+      "color_shift": true,
+      "arm_ready": true,
+      "casing": "",
+      "min_shot_ticks": 0,
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Ready",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": 2,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "PreFire",
+          "ticks": 12,
+          "wait": true,
+          "allow_change": false,
+          "timeout": 3,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onPreFire",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Fire",
+          "ticks": 24,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 4,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onFire",
+          "sequence": "Fire",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "CheckFire",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": 3,
+          "up": 5,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "StopFire",
+          "ticks": 24,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onStopFire",
+          "sequence": "StopFire",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        }
+      ],
+      "command": "duplicator:select"
+    }
+  },
+  "projectiles": {},
+  "damage_types": {},
+  "explosions": {},
+  "definitions": [],
+  "resources": [],
+  "diagnostics": []
+}
