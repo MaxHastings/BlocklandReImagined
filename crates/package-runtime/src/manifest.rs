@@ -50,18 +50,29 @@ pub fn location(package: &str, file: impl std::fmt::Display) -> String {
 
 impl Manifest {
     /// Parse and check a manifest. `expected` is the id `packages.json` lists
-    /// it under; the two must agree.
-    pub fn parse(bytes: &[u8], expected: &str) -> Result<Self, Vec<Diagnostic>> {
+    /// it under; the two must agree. The manifest comes back whenever its
+    /// JSON has the right shape, with every problem found, so a loader can
+    /// keep checking the package's content in the same run.
+    pub fn parse(bytes: &[u8], expected: &str) -> (Option<Self>, Vec<Diagnostic>) {
+        match Self::parse_inner(bytes, expected) {
+            Ok(manifest) => (Some(manifest), Vec::new()),
+            Err(rejected) => *rejected,
+        }
+    }
+    fn parse_inner(bytes: &[u8], expected: &str) -> Result<Self, Rejected<Self>> {
         let at = location(expected, MANIFEST_FILE);
         if bytes.len() > MAX_MANIFEST_BYTES {
-            return Err(vec![
-                Diagnostic::error("manifest.too_large", "package.json is over 256 KiB").at(at),
-            ]);
+            return Err(Box::new((
+                None,
+                vec![
+                    Diagnostic::error("manifest.too_large", "package.json is over 256 KiB").at(at),
+                ],
+            )));
         }
         let manifest: Self = serde_json::from_slice(bytes).map_err(|e| {
-            vec![Diagnostic::error("manifest.json", e.to_string())
+            Box::new((None, vec![Diagnostic::error("manifest.json", e.to_string())
                 .at(format!("{at}:{}:{}", e.line(), e.column()))
-                .hint("package.json is one JSON object with schema_version, id, version, api, name, license and provides")]
+                .hint("package.json is one JSON object with schema_version, id, version, api, name, license and provides")]))
         })?;
         let mut out = Vec::new();
         if manifest.schema_version != MANIFEST_SCHEMA {
@@ -214,7 +225,9 @@ impl Manifest {
         if out.is_empty() {
             Ok(manifest)
         } else {
-            Err(out)
+            Err(Box::new((Some(manifest), out)))
         }
     }
 }
+/// What was read despite problems, and the problems.
+pub(crate) type Rejected<T> = Box<(Option<T>, Vec<Diagnostic>)>;

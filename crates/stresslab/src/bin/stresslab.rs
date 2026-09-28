@@ -31,20 +31,18 @@ fn check(args: &[String]) -> Result<bool> {
         None => bri_stresslab::fixture_set(),
     };
     let mut diagnostics: Vec<bri_package::diag::Diagnostic> = set.validate().0;
-    let catalog = match Catalog::load(&root, &set, true) {
-        Ok(catalog) => Some(catalog),
+    // Inspect keeps packages that have problems, so their scripts are
+    // still compiled and every problem shows up in one run.
+    let (catalog, problems) = Catalog::inspect(&root, &set, true);
+    diagnostics.extend(problems);
+    let compiled = match Runtime::compile(&catalog) {
+        Ok(_) => true,
         Err(problems) => {
             diagnostics.extend(problems);
-            None
+            false
         }
     };
-    let mut compiled = false;
-    if let Some(catalog) = &catalog {
-        match Runtime::compile(catalog) {
-            Ok(_) => compiled = true,
-            Err(problems) => diagnostics.extend(problems),
-        }
-    }
+    let catalog = Some(catalog);
     let errors = diagnostics
         .iter()
         .filter(|d| d.severity == bri_package::diag::Severity::Error)
