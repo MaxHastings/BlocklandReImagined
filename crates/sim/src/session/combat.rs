@@ -1091,6 +1091,8 @@ impl Session {
             // `spawnPlayer` hands control back to the new body.
             peer.control = super::ControlObject::Player;
         }
+        // Skiing belongs to the old Player object: a new body starts off skis.
+        let _ = self.weapons.cancel_skis(ActorId(owner));
         self.give_loadout(owner, equipment.as_ref())?;
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
