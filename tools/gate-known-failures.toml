@@ -16,16 +16,6 @@ owner = "Hammer rules and Destructo Wand"
 reason = "Times out waiting for 'authoritative plant undo removes render/query brick' since d8b8bb4."
 
 [[failure]]
-test = "native_weapon_pack_and_core_tools_expose_all_21_item_choices"
-owner = "seats thread (paused)"
-reason = "weapons-pack-009 now carries the four core tools itself (21 items, 'wrench' lower case); the test expects 17 plus appended core tools."
-
-[[failure]]
-test = "native_weapon_catalog_startup_and_headless_host"
-owner = "seats thread (paused)"
-reason = "Same weapons-pack-009 change: expects 17 pack items and tool_name 'Wrench'."
-
-[[failure]]
 test = "vehicle_render.rs::stock_vehicles_render_with_wheels_and_paint"
 owner = "unassigned"
 reason = "v20.vehicle.horsearmor draws 0 pixels."

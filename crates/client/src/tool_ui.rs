@@ -1083,7 +1083,7 @@ mod tests {
         let bytes = std::fs::read(root).unwrap();
         let pack: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(pack["schema_version"], bri_weapons::SCHEMA);
-        let mut rows: Vec<(String, String)> = pack["items"]
+        let rows: Vec<(String, String)> = pack["items"]
             .as_object()
             .unwrap()
             .iter()
@@ -1092,16 +1092,12 @@ mod tests {
                 (id.clone(), item["ui_name"].as_str().unwrap().to_owned())
             })
             .collect();
-        assert_eq!(rows.len(), 17);
-        rows.extend(
-            [
-                ("v20.weapon.hammeritem", "Hammer "),
-                ("v20.weapon.wrenchitem", "Wrench"),
-                ("v20.weapon.printgun", "Printer"),
-                ("v20.weapon.wanditem", "Wand"),
-            ]
-            .map(|(id, name)| (id.into(), name.into())),
-        );
+        // The pack carries the four core tools with their v20 uiNames.
+        assert_eq!(rows.len(), 21);
+        assert!(rows.contains(&("v20.weapon.hammeritem".into(), "Hammer ".into())));
+        assert!(rows.contains(&("v20.weapon.wrenchitem".into(), "wrench".into())));
+        assert!(rows.contains(&("v20.weapon.printgun".into(), "Printer".into())));
+        assert!(rows.contains(&("v20.weapon.wanditem".into(), "Wand".into())));
         let mut ui = fixture();
         ui.install_items(rows.clone()).unwrap();
         assert_eq!(ui.datablocks["ItemData"].len(), 21);
