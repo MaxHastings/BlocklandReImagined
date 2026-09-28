@@ -277,7 +277,14 @@ impl Client {
                 signature: identity.sign(&transcript)?.to_vec(),
             });
         }
-        codec::write_small_request(&mut send, &hello).await?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            codec::write_small_request(&mut send, &hello),
+        )
+        .await
+        .map_err(|_| {
+            JoinError::Connection(address, "the server stopped answering the join".into())
+        })??;
         progress.begin(Stage::WaitingForServer, Unit::Steps, None);
         let welcome: Message = codec::decode(
             &tokio::time::timeout(
@@ -708,11 +715,20 @@ struct Opened {
 
 async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Opened> {
     let (endpoint, connection, certificate) = connect_quic(address, pin, wait).await?;
-    let (mut send, mut receive) = connection.open_bi().await?;
-    codec::write_small_request(&mut send, &JoinBegin::join()).await?;
-    let (nonce, listing) = match codec::decode::<Message>(
-        &tokio::time::timeout(wait, codec::read_frame(&mut receive, codec::MAX_FRAME)).await??,
-    )? {
+    // Every step after the handshake shares the caller's wait: a host that
+    // allows no streams, grants no flow control or never answers would
+    // otherwise hold the join forever.
+    let (send, receive, frame) = tokio::time::timeout(wait, async {
+        let (mut send, mut receive) = connection.open_bi().await?;
+        codec::write_small_request(&mut send, &JoinBegin::join()).await?;
+        let frame = codec::read_frame(&mut receive, codec::MAX_FRAME).await?;
+        anyhow::Ok((send, receive, frame))
+    })
+    .await
+    .map_err(|_| {
+        JoinError::Connection(address, "the server stopped answering the join".into())
+    })??;
+    let (nonce, listing) = match codec::decode::<Message>(&frame)? {
         Message::Challenge { nonce, listing } => (nonce, listing),
         Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
         _ => anyhow::bail!("Expected identity challenge"),
