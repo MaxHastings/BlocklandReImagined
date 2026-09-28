@@ -817,3 +817,96 @@ fn expansion_budget_preserves_finite_branches_across_same_time_phases() {
     assert_eq!(h.calls.len(), 4);
     assert_eq!(w.pending(), 0);
 }
+/// v20 stamps every input with its own millisecond. Two clicks in one host
+/// tick keep their order through everything they schedule: the first
+/// relay's zero-delay rows (which switch the relay brick off) run before
+/// the second click's relay reaches it, as Demo Pong's paddle chain needs.
+#[test]
+fn activations_in_one_tick_keep_their_order_through_relays() {
+    let mut w = world(Limits::default());
+    let mut relay = row("onActivate", "fireRelay", vec![]);
+    relay.target = Target::Named("step".into());
+    relay.delay_ms = 33;
+    w.install_brick(brick(1, vec![relay])).unwrap();
+    let mut step = brick(
+        2,
+        vec![
+            color("onRelay", 5),
+            row(
+                "onRelay",
+                "setEventEnabled",
+                vec![
+                    Value::Rows(RowSelection::Indices(vec![0, 1])),
+                    Value::Bool(false),
+                ],
+            ),
+        ],
+    );
+    step.name = Some("step".into());
+    w.install_brick(step).unwrap();
+    // A third origin's work keeps the old per-origin turn order busy.
+    w.install_brick(brick(3, vec![color("onRelay", 9)]))
+        .unwrap();
+    let mut h = FakeHost::default();
+    w.trigger(Trigger::new(id(1), "onActivate", 4)).unwrap();
+    w.trigger(Trigger::new(id(1), "onActivate", 2)).unwrap();
+    w.set_clock(33_000).unwrap();
+    w.trigger(Trigger::new(id(3), "onRelay", 1)).unwrap();
+    w.advance(33_000, &mut h).unwrap();
+    let colors: Vec<_> = h
+        .calls
+        .iter()
+        .filter(|d| d.intent == Intent::Brick(BrickOp::Color(5)))
+        .collect();
+    assert_eq!(
+        colors.len(),
+        1,
+        "the second relay finds the step switched off"
+    );
+    assert_eq!(colors[0].origin, 4);
+    assert_eq!(w.pending(), 0);
+}
+/// A button that glows, reverts after 100 ms and cancels itself after 100 ms
+/// (Demo Pong's B `+`). A second click inside the 100 ms has its glow and
+/// pending rows killed by the first click's late cancel, but the first
+/// click's revert still runs after the second glow: the button never stays
+/// lit. Rows are scheduled in one queue, earliest due first, whatever
+/// origin they came from.
+#[test]
+fn late_cancel_and_revert_run_in_time_order_across_activations() {
+    let mut w = world(Limits::default());
+    let mut revert = color("onActivate", 0);
+    revert.delay_ms = 100;
+    let mut cancel = row("onActivate", "cancelEvents", vec![]);
+    cancel.delay_ms = 100;
+    w.install_brick(brick(1, vec![color("onActivate", 3), revert, cancel]))
+        .unwrap();
+    let mut h = FakeHost::default();
+    w.trigger(Trigger::new(id(1), "onActivate", 7)).unwrap();
+    w.advance(50_000, &mut h).unwrap();
+    w.trigger(Trigger::new(id(1), "onActivate", 2)).unwrap();
+    let r = w.advance(100_000, &mut h).unwrap();
+    assert_eq!(r.cancelled, 2, "the second click's revert and cancel");
+    assert_eq!(w.pending(), 0);
+    let colors: Vec<_> = h
+        .calls
+        .iter()
+        .map(|d| (d.origin, d.intent.clone()))
+        .collect();
+    assert_eq!(
+        colors,
+        vec![
+            (7, Intent::Brick(BrickOp::Color(3))),
+            (2, Intent::Brick(BrickOp::Color(3))),
+            (7, Intent::Brick(BrickOp::Color(0))),
+        ]
+    );
+    // A click after the late cancel came due is untouched by it.
+    w.trigger(Trigger::new(id(1), "onActivate", 7)).unwrap();
+    w.advance(200_000, &mut h).unwrap();
+    assert_eq!(
+        h.calls.last().unwrap().intent,
+        Intent::Brick(BrickOp::Color(0))
+    );
+    assert_eq!(w.pending(), 0);
+}

@@ -3442,3 +3442,19 @@ cubic unit (2x4 brick = 6) and stays solid 3 s, fading over 2 s (was 1.5 +
 with the player exactly where the game put it every frame, vehicle ram
 scatters 7+ of 9, resting pile stays within 0.05, shots and blasts, 128 bodies
 plus a 64-player crowd capped at 32 pushers: ~1 ms/frame in debug).
+## 2026-09-28 Pong colours come back
+
+- Using Demo Pong's paddle buttons could leave bricks on the wrong colour.
+  Two clicks in one server tick got the same timestamp, and their relays
+  reached the paddle state machine together. Both relays used the rows as
+  they were before either switched them. Round-robin turns between origins
+  could also run a later click's row before an earlier one's. The event
+  engine now runs every job from one time-ordered queue, as v20 does. Each
+  activation is its own instant inside the tick, and everything it
+  schedules inherits that instant. A `cancelEvents` only reaches rows
+  scheduled by its own instant. Details and tests are in
+  `docs/audits/pong-events.md` ("Colours that stayed changed"). Evidence:
+  `cargo test -p bri-events`, `cargo test -p bri-sim --test pong --
+  --ignored` (the new hammer test fails on the old scheduler),
+  `cargo test -p bri-sim --test events_native -- --ignored`. The event
+  checkpoint gained defaulted fields. No wire change.

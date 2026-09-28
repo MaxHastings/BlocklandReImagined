@@ -19,6 +19,7 @@ use bri_sim::{
 };
 use glam::Vec3;
 use rapier3d::prelude::*;
+use serde_json::json;
 use std::path::Path;
 
 const PONG: &str =
@@ -57,6 +58,10 @@ struct Pong {
 
 impl Pong {
     fn load() -> anyhow::Result<Self> {
+        Self::load_with(|_| {})
+    }
+    /// Load the save after `edit` changes it.
+    fn load_with(edit: impl FnOnce(&mut bri_world::World)) -> anyhow::Result<Self> {
         let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let catalog = bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?;
         let brick_catalog =
@@ -69,8 +74,9 @@ impl Pong {
         let weapons = bri_weapons::Pack::from_json(&std::fs::read(
             content.join("weapons-pack-009/weapons.json"),
         )?)?;
-        let world = bri_world::persistence::load(&content.join(PONG))?;
+        let mut world = bri_world::persistence::load(&content.join(PONG))?;
         assert_eq!(world.name, "Demo Pong");
+        edit(&mut world);
         let definitions = Definitions::load(
             &content.join("stock-catalog-004"),
             &content.join("maps-pass-007"),
@@ -448,6 +454,211 @@ fn b_up_swallows_clicks_inside_100_ms() -> anyhow::Result<()> {
                 pong.step()?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Every brick's paint and colour FX, in brick order.
+fn colours(pong: &Pong) -> Vec<(u64, u8, u8)> {
+    let mut all: Vec<_> = pong
+        .s
+        .simulation()
+        .state()
+        .bricks
+        .iter()
+        .map(|(id, b)| (*id, b.color, b.color_effect))
+        .collect();
+    all.sort_unstable();
+    all
+}
+
+/// A paddle cell's colour, glow and rows agree: white glowing cells bounce
+/// the ball (rows 5-6 on), black plain ones score (rows 0-4 on).
+fn assert_cells_agree(pong: &Pong, context: &str) {
+    for side in [Side::A, Side::B] {
+        for (i, cell) in pong.cells[side as usize].iter().enumerate() {
+            let b = pong.brick(*cell);
+            let white = b.color == 15;
+            assert!(
+                b.color_effect == if white { 3 } else { 0 }
+                    && (0..7).all(|row| b.events[row].enabled == (white == (row >= 5))),
+                "{context}: {side:?} cell {} colour {} fx {} rows {:?}",
+                i + 1,
+                b.color,
+                b.color_effect,
+                b.events.iter().map(|r| r.enabled).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+/// Hammering the paddle buttons never leaves a colour behind. Each button
+/// glows (`setColorFX 3`) and un-glows 100 ms later, and each move repaints
+/// two paddle cells through the relay bricks. Clicks here come a tick to
+/// 133 ms apart across all four buttons, and some land two to a tick, as
+/// when a server hitch delivers queued clicks together. So reverts, relays
+/// and B's late `cancelEvents` from different clicks come due together. v20
+/// stamps each click with its own millisecond and runs every scheduled row
+/// from one queue in time order: every glow ends and each paddle stays one
+/// white cell.
+#[test]
+#[ignore = "requires the converted native worlds, event catalog and content packs"]
+fn hammered_paddle_buttons_restore_every_colour() -> anyhow::Result<()> {
+    let mut pong = Pong::load()?;
+    let original = colours(&pong);
+    let buttons = [pong.up[0], pong.up[1], pong.down[0], pong.down[1]];
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut random = move |n: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % n
+    };
+    for round in 0..60 {
+        for _ in 0..=random(12) {
+            pong.click(buttons[random(4) as usize]);
+            if random(4) == 0 {
+                pong.click(buttons[random(4) as usize]);
+            }
+            for _ in 0..=random(16) {
+                pong.step()?;
+                assert_cells_agree(&pong, &format!("round {round} tick {}", pong.tick()));
+            }
+        }
+        for _ in 0..60 {
+            pong.step()?;
+        }
+        for button in buttons {
+            assert_eq!(
+                pong.brick(button).color_effect,
+                0,
+                "round {round}: button glows"
+            );
+        }
+        assert_cells_agree(&pong, &format!("round {round}"));
+        for side in [Side::A, Side::B] {
+            pong.paddle(side);
+        }
+    }
+    // Walk both paddles home: every brick is back on its loaded colour.
+    for side in [Side::A, Side::B] {
+        while pong.paddle(side) != 3 {
+            let i = side as usize;
+            let button = if pong.paddle(side) > 3 {
+                pong.up[i]
+            } else {
+                pong.down[i]
+            };
+            pong.click(button);
+            for _ in 0..15 {
+                pong.step()?;
+            }
+        }
+    }
+    assert_eq!(colours(&pong), original);
+    Ok(())
+}
+
+/// Every brick output with a timed revert, on one plain court brick: each
+/// click switches it now and back 100 ms later, and cancels its own pending
+/// rows 100 ms later like B's `+`. However the clicks overlap, the brick
+/// ends as it started.
+#[test]
+#[ignore = "requires the converted native worlds, event catalog and content packs"]
+fn timed_reverts_of_every_brick_output_always_land() -> anyhow::Result<()> {
+    let mut target = 0;
+    let mut pong = Pong::load_with(|world| {
+        target = world
+            .bricks
+            .iter()
+            .find(|(_, b)| b.events.is_empty() && b.name.is_none() && !b.base_plate)
+            .map(|(id, _)| *id)
+            .unwrap();
+        let brick = world.bricks.get_mut(&target).unwrap();
+        let color = brick.color;
+        let pairs = [
+            (
+                "setColor",
+                json!({ "Color": (color + 1) % 16 }),
+                json!({ "Color": color }),
+            ),
+            ("setColorFX", json!({ "Int": 3 }), json!({ "Int": 0 })),
+            (
+                "setRendering",
+                json!({ "Bool": false }),
+                json!({ "Bool": true }),
+            ),
+            (
+                "setColliding",
+                json!({ "Bool": false }),
+                json!({ "Bool": true }),
+            ),
+            (
+                "setRayCasting",
+                json!({ "Bool": false }),
+                json!({ "Bool": true }),
+            ),
+            (
+                "setLight",
+                json!({ "Datablock": "v20/light/alarmlighta" }),
+                json!({ "Datablock": null }),
+            ),
+            (
+                "setEmitter",
+                json!({ "Datablock": "v20/emitter/burnemittera" }),
+                json!({ "Datablock": null }),
+            ),
+        ];
+        let row = |delay: u32, output: &str, param: Option<&serde_json::Value>| {
+            serde_json::from_value(json!({
+                "enabled": true,
+                "input": "onActivate",
+                "delay_ms": delay,
+                "target": { "Slot": "SelfBrick" },
+                "output": output,
+                "params": param.into_iter().collect::<Vec<_>>(),
+            }))
+            .unwrap()
+        };
+        for (output, on, off) in &pairs {
+            brick.events.push(row(0, output, Some(on)));
+            brick.events.push(row(100, output, Some(off)));
+        }
+        brick.events.push(row(100, "cancelEvents", None));
+    })?;
+    let start = |p: &Pong| {
+        let b = p.brick(target);
+        (
+            b.color,
+            b.color_effect,
+            b.visible,
+            b.colliding,
+            b.raycast,
+            b.light.clone(),
+            b.emitter.clone(),
+        )
+    };
+    let original = start(&pong);
+    let mut seed = 0x51_7cc1_b727_220a_u64;
+    let mut random = move |n: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % n
+    };
+    for round in 0..80 {
+        for _ in 0..=random(8) {
+            for _ in 0..=random(2) {
+                pong.click(target);
+            }
+            for _ in 0..=random(16) {
+                pong.step()?;
+            }
+        }
+        for _ in 0..30 {
+            pong.step()?;
+        }
+        assert_eq!(start(&pong), original, "round {round}");
     }
     Ok(())
 }
