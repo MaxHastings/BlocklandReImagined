@@ -1116,8 +1116,10 @@ impl Session {
             self.save_requests = 0;
         }
         // Loads (administrators) and saves (anyone) have separate budgets, and
-        // one player may take only one of the shared save slots, so players
-        // can neither starve the administrator nor each other.
+        // a player who is not an administrator may take only one of the
+        // shared save slots, so players can neither starve the administrator
+        // nor each other. An administrator saving again at once (save, load,
+        // save over it) is the host's own work.
         if matches!(command, Command::LoadBuild { .. }) {
             ensure!(
                 peer.actor.administrator,
@@ -1130,7 +1132,10 @@ impl Session {
             );
         }
         if matches!(command, Command::SaveBuild { .. }) {
-            ensure!(peer.saves == 0, "Build save rate exceeded; retry shortly");
+            ensure!(
+                peer.actor.administrator || peer.saves == 0,
+                "Build save rate exceeded; retry shortly"
+            );
             ensure!(
                 self.save_requests < 4,
                 "Build save rate exceeded; retry shortly"

@@ -2104,7 +2104,7 @@ fn stale_or_rate_limited_requests_are_refused_before_per_row_work() {
 }
 
 /// Requests: host LoadBuild (control, succeeds); a new window; guest
-/// SaveBuild x4; host LoadBuild.
+/// SaveBuild x4; host LoadBuild; a new window; host SaveBuild x2.
 #[test]
 
 fn player_saves_cannot_starve_the_administrator_build_budget() {
@@ -2140,5 +2140,11 @@ fn player_saves_cannot_starve_the_administrator_build_budget() {
     assert!(
         !format!("{blocked:?}").contains("rate exceeded"),
         "a player's saves blocked the administrator: {blocked:?}"
-    );
+    );    // The host saving twice in a window (save, load, save over it) is its
+    // own work, not a player hogging the slots.
+    g.fresh_window();
+    for _ in 0..2 {
+        let saved = g.cmd(host, save.clone());
+        assert!(!format!("{saved:?}").contains("rate exceeded"), "{saved:?}");
+    }
 }
