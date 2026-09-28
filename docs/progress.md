@@ -3160,3 +3160,17 @@ real integrated GPU; needs a weaker PC.
   join_admin_team_chat_and_emote_lines_use_v20_colors`, `cargo test -p
   bri-client --lib chat_lines_carry_v20_colors`, `cargo test -p bri-client
   --test actor_effects`.
+
+## 2026-09-28 Brick damage matched to v20
+
+Audited weapon, tool and event brick damage against v20's `onExplode`,
+`onCollision`, `miniGameCanDamage`, `fakeKillBrick`, hammer, wand, admin wand
+and undo; see [audits/brick-damage.md](audits/brick-damage.md). Our rules
+already matched: fake kills with respawn for weapons, deletion for tools,
+LAN/single player breaking anyone's bricks outside minigames, internet
+servers limited to the shooter's own, and the Brick Damage setting in
+minigames. One gap fixed: a rocket in flight still broke bricks after its
+shooter's F8 drop in a minigame. v20 ignores brick hits for 3 s after F8, and
+`blow_up_bricks` now does too. Evidence: `cargo test -p bri-sim --test
+brick_damage -- --include-ignored` (8 tests; the F8 test fails without the
+fix). No wire change.

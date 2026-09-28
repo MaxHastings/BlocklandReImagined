@@ -410,6 +410,12 @@ impl Session {
         let Ok(damage) = self.minigames.projectile_source(player) else {
             return Ok(());
         };
+        // `onCollision` and `onExplode` both return early for 3 s after the
+        // shooter's F8 drop inside a minigame, so a rocket already in flight
+        // breaks nothing either.
+        if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
+            return Ok(());
+        }
         let mut hit: Vec<BrickId> = Vec::new();
         if impact.direct
             && let Some(brick) = target

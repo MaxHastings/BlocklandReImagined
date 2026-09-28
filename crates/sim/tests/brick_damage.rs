@@ -1,5 +1,7 @@
-//! Brick damage: rockets knock bricks out in a brick-damage minigame, and
-//! every brick death is announced for client debris.
+//! Brick damage against v20: rockets knock bricks out (fake kills that
+//! respawn) under the LAN, minigame and ownership rules of
+//! `ProjectileData::onExplode`; the hammer deletes them for good; and every
+//! brick death is announced for client debris. See docs/audits/brick-damage.md.
 use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
@@ -7,13 +9,20 @@ use bri_content::{
 use bri_minigames::Settings;
 use bri_sim::{
     definitions::{Definition, Definitions},
+    player::{MoveInput, PlayerState, PlayerTuning},
     presentation::CueKind,
     session::{ActionAim, Command, MiniGameRequest, Reply, Session},
     simulation::Simulation,
 };
-use bri_world::{ContentRef, World};
+use bri_world::{ContentRef, EventRow, EventTarget, EventValue, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
+mod common;
+use common::{move_sequence, swing, weapon_pack};
+
+const HZ: u64 = bri_weapons::TICK_HZ as u64;
+const ROCKET: &str = "v20.weapon.rocketlauncheritem";
+const HAMMER: &str = "v20.weapon.hammeritem";
 
 fn session() -> Session {
     let mesh = Mesh {
@@ -106,55 +115,98 @@ fn kills(s: &mut Session) -> Vec<(u64, [f32; 3], f32)> {
         .collect()
 }
 
-// The hammer now fires through the weapon runtime; rewrite with a weapon trigger.
-#[cfg(any())]
-#[test]
-fn hammer_kills_a_brick_and_throws_it_up_off_its_spot() {
-    let mut s = session();
-    let owner = s
-        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+/// Face `target` from the feet, then pitch from the eye that yaw puts in
+/// place, and refresh the input lease so triggers are not dropped.
+fn aim_at(s: &mut Session, owner: u64, target: Vec3) -> ActionAim {
+    let p = s
+        .snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
         .unwrap();
-    let id = plant(&mut s, owner, 1, [0.5, 0.3, -3.5]);
-    for _ in 0..30 {
-        s.step().unwrap();
-    }
-    s.take_cues();
-    s.equip_tool(owner, Some(0)).unwrap();
-    let eye = s.snapshot().players[0].eye(&Default::default());
-    let d = Vec3::new(0.5, 0.3, -3.5) - eye;
+    let flat = target - Vec3::from(p.feet);
+    let yaw = flat.x.atan2(-flat.z);
+    let facing = PlayerState { yaw, ..p };
+    let d = target - facing.eye(&PlayerTuning::default());
     let aim = ActionAim {
-        yaw: d.x.atan2(-d.z),
+        yaw,
         pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()),
     };
-    s.command_with_aim(
+    s.movement(
         owner,
-        2,
-        Command::Tool(bri_sim::session::ToolAction::Hammer),
-        Some(aim),
+        move_sequence(s),
+        MoveInput {
+            yaw: aim.yaw,
+            pitch: aim.pitch,
+            ..Default::default()
+        },
     )
     .unwrap();
-    assert!(!s.simulation().state().bricks.contains_key(&id));
-    let kills = kills(&mut s);
-    assert_eq!(kills.len(), 1);
-    let (brick, origin, force) = kills[0];
-    assert_eq!(brick, id);
-    assert!(origin[1] < 0.3 && force > 0.0, "{origin:?} {force}");
+    aim
 }
 
-/// A shooter in a brick-damage minigame fires one rocket at two bricks
-/// planted by `builder` (the shooter, or a bystander outside the minigame).
-/// Returns the session and the bricks' ids after the blast.
-fn rocket_at_bricks(lan: bool, bystander_bricks: bool) -> (Session, [u64; 2], Vec<u64>) {
-    let pack = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
+fn with_weapons(lan: bool) -> Session {
     let mut s = session();
     s.set_lan_host(lan);
-    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(pack).unwrap()).unwrap())
-        .unwrap();
+    s.set_weapon_pack(weapon_pack()).unwrap();
+    s
+}
+
+/// One rocket fired at two bricks eight metres away.
+struct Rocket {
+    /// Single player and LAN (`$Server::LAN`), or an internet server.
+    lan: bool,
+    /// The bricks belong to a bystander who never joins a minigame.
+    bystander_bricks: bool,
+    /// The shooter's minigame, if any.
+    game: Option<Settings>,
+    /// The shooter (an admin) presses F8 while the rocket is in flight.
+    drop_in_flight: bool,
+}
+
+struct Blast {
+    s: Session,
+    bricks: [u64; 2],
+    /// Bricks thrown as debris, with the tick they were thrown.
+    thrown: Vec<(u64, u64)>,
+}
+
+impl Blast {
+    fn standing(&self, id: u64) -> bool {
+        let b = &self.s.simulation().state().bricks[&id];
+        b.visible && b.colliding && b.raycast
+    }
+    fn assert_knocked_out(&self) {
+        for id in self.bricks {
+            let b = &self.s.simulation().state().bricks[&id];
+            assert!(
+                !b.visible && !b.colliding && !b.raycast,
+                "brick {id} still standing"
+            );
+            assert!(
+                self.thrown.iter().any(|(t, _)| *t == id),
+                "no debris for {id}"
+            );
+        }
+    }
+    fn assert_untouched(&self) {
+        for id in self.bricks {
+            assert!(self.standing(id), "brick {id} was knocked out");
+        }
+        assert!(self.thrown.is_empty(), "debris thrown: {:?}", self.thrown);
+    }
+}
+
+fn fire(shot: Rocket) -> Blast {
+    let mut s = with_weapons(shot.lan);
     let shooter = s
-        .join("Shooter".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .join(
+            "Shooter".into(),
+            Vec3::new(0.0, 0.05, 0.0),
+            shot.drop_in_flight,
+        )
         .unwrap();
-    let builder = if bystander_bricks {
+    let builder = if shot.bystander_bricks {
         s.join("Bystander".into(), Vec3::new(6.0, 0.05, 0.0), false)
             .unwrap()
     } else {
@@ -164,45 +216,31 @@ fn rocket_at_bricks(lan: bool, bystander_bricks: bool) -> (Session, [u64; 2], Ve
         plant(&mut s, builder, 1, [0.0, 0.3, -8.0]),
         plant(&mut s, builder, 2, [1.0, 0.3, -8.0]),
     ];
-    let settings = Settings {
-        brick_damage: true,
-        ..Settings::default()
-    };
-    s.command(
-        shooter,
-        3,
-        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
-    )
-    .unwrap();
-    // The default minigame loadout carries the rocket launcher.
-    let slot = s.tool_inventories()[&shooter]
+    if let Some(settings) = shot.game {
+        s.command(
+            shooter,
+            3,
+            Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+        )
+        .unwrap();
+    }
+    // The default minigame loadout carries the rocket launcher; outside a
+    // minigame the shooter picks one up.
+    let slot = match s.tool_inventories()[&shooter]
         .slots
         .iter()
-        .position(|s| s.as_deref() == Some("v20.weapon.rocketlauncheritem"))
-        .expect("rocket launcher in the minigame loadout");
+        .position(|s| s.as_deref() == Some(ROCKET))
+    {
+        Some(slot) => slot,
+        None => s.give_item(shooter, ROCKET).unwrap(),
+    };
     s.command(shooter, 4, Command::EquipTool { slot: Some(slot) })
         .unwrap();
     for _ in 0..120 {
         s.step().unwrap();
     }
     s.take_cues();
-    let eye = s.snapshot().players[0].eye(&Default::default());
-    let d = Vec3::new(0.0, 0.3, -8.0) - eye;
-    let aim = ActionAim {
-        yaw: d.x.atan2(-d.z),
-        pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()),
-    };
-    // A live client streams movement; idle shooters have their triggers dropped.
-    s.movement(
-        shooter,
-        1,
-        bri_sim::player::MoveInput {
-            yaw: aim.yaw,
-            pitch: aim.pitch,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let aim = aim_at(&mut s, shooter, Vec3::new(0.0, 0.3, -8.0));
     s.command_with_aim(shooter, 5, Command::WeaponTrigger { down: true }, Some(aim))
         .unwrap();
     s.command_with_aim(
@@ -213,32 +251,57 @@ fn rocket_at_bricks(lan: bool, bystander_bricks: bool) -> (Session, [u64; 2], Ve
     )
     .unwrap();
     let mut thrown = Vec::new();
+    s.step().unwrap();
+    thrown.extend(kills(&mut s).into_iter().map(|(b, _, _)| (b, 1)));
+    if shot.drop_in_flight {
+        assert!(thrown.is_empty(), "the rocket landed before the drop");
+        s.command(shooter, 7, Command::DropPlayerAtCamera(None))
+            .unwrap();
+    }
     for _ in 0..240 {
         s.step().unwrap();
-        thrown.extend(kills(&mut s).into_iter().map(|(brick, _, _)| brick));
+        let tick = s.simulation().state().tick;
+        thrown.extend(kills(&mut s).into_iter().map(|(b, _, _)| (b, tick)));
     }
-    (s, bricks, thrown)
+    Blast { s, bricks, thrown }
+}
+
+fn brick_damage(on: bool) -> Option<Settings> {
+    Some(Settings {
+        brick_damage: on,
+        ..Settings::default()
+    })
+}
+
+/// Step until every brick stands again; the tick they came back.
+fn respawned(blast: &mut Blast, within_ticks: u64) -> Option<u64> {
+    for _ in 0..within_ticks {
+        blast.s.step().unwrap();
+        if blast.bricks.iter().all(|id| blast.standing(*id)) {
+            return Some(blast.s.simulation().state().tick);
+        }
+    }
+    None
 }
 
 #[test]
 #[ignore = "requires the converted native weapons pack"]
 fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn() {
     for lan in [false, true] {
-        let (mut s, bricks, thrown) = rocket_at_bricks(lan, false);
-        for id in bricks {
-            let b = &s.simulation().state().bricks[&id];
-            assert!(
-                !b.visible && !b.colliding && !b.raycast,
-                "brick {id} still standing"
-            );
-            assert!(thrown.contains(&id), "no debris for {id}");
-        }
+        let mut blast = fire(Rocket {
+            lan,
+            bystander_bricks: false,
+            game: brick_damage(true),
+            drop_in_flight: false,
+        });
+        blast.assert_knocked_out();
         // Saving now keeps the fake-dead bricks as they will respawn.
-        let shooter = s.names().into_keys().next().unwrap();
-        let Reply::Saved(build) = s
+        let shooter = blast.s.names().into_keys().next().unwrap();
+        let Reply::Saved(build) = blast
+            .s
             .command(
                 shooter,
-                7,
+                8,
                 Command::SaveBuild {
                     events: true,
                     ownership: true,
@@ -257,44 +320,222 @@ fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn() {
         );
         // Autosaves and the host's final world keep them the same way.
         assert!(
-            s.saved_world()
+            blast
+                .s
+                .saved_world()
                 .bricks
                 .values()
                 .all(|b| b.visible && b.colliding && b.raycast)
         );
-        // The minigame's brick respawn time brings them back.
-        let mut back = false;
-        for _ in 0..(120 * 60) {
-            s.step().unwrap();
-            if bricks
-                .iter()
-                .all(|id| s.simulation().state().bricks[id].visible)
-            {
-                back = true;
-                break;
-            }
+        // The minigame's brick respawn time (30 s by default) brings them back.
+        let thrown_at = blast.thrown[0].1;
+        let back = respawned(&mut blast, 60 * HZ).expect("bricks never respawned");
+        assert!(
+            back - thrown_at >= 30 * HZ,
+            "back after {} ticks",
+            back - thrown_at
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the converted native weapons pack"]
+fn rocket_leaves_bricks_alone_in_a_minigame_with_brick_damage_off() {
+    for lan in [false, true] {
+        for bystander_bricks in [false, true] {
+            fire(Rocket {
+                lan,
+                bystander_bricks,
+                game: brick_damage(false),
+                drop_in_flight: false,
+            })
+            .assert_untouched();
         }
-        assert!(back, "bricks never respawned");
+    }
+}
+
+/// Outside minigames, single player and LAN hosts break anyone's bricks
+/// (`onExplode` checks nothing else under `$Server::LAN`); internet servers
+/// only the shooter's own. They come back after the server's brick respawn
+/// time, 30 s by default (`$Pref::Server::BrickRespawnTime`).
+#[test]
+#[ignore = "requires the converted native weapons pack"]
+fn rocket_outside_a_minigame_follows_v20_lan_and_ownership_rules() {
+    for (lan, bystander_bricks, breaks) in [
+        (true, false, true),
+        (true, true, true),
+        (false, false, true),
+        (false, true, false),
+    ] {
+        let mut blast = fire(Rocket {
+            lan,
+            bystander_bricks,
+            game: None,
+            drop_in_flight: false,
+        });
+        if !breaks {
+            blast.assert_untouched();
+            continue;
+        }
+        blast.assert_knocked_out();
+        let thrown_at = blast.thrown[0].1;
+        let back = respawned(&mut blast, 60 * HZ).expect("bricks never respawned");
+        let after = back - thrown_at;
+        assert!(
+            (30 * HZ..31 * HZ).contains(&after),
+            "lan {lan}, bystander {bystander_bricks}: back after {after} ticks"
+        );
     }
 }
 
 #[test]
 #[ignore = "requires the converted native weapons pack"]
 fn lan_hosts_let_minigame_rockets_break_anyones_bricks_like_v20() {
-    let (s, bricks, thrown) = rocket_at_bricks(true, true);
-    for id in bricks {
+    fire(Rocket {
+        lan: true,
+        bystander_bricks: true,
+        game: brick_damage(true),
+        drop_in_flight: false,
+    })
+    .assert_knocked_out();
+    // Internet servers keep miniGameCanDamage's ownership rule.
+    fire(Rocket {
+        lan: false,
+        bystander_bricks: true,
+        game: brick_damage(true),
+        drop_in_flight: false,
+    })
+    .assert_untouched();
+}
+
+/// `ProjectileData::onExplode` returns for 3 s after the shooter's F8 drop
+/// inside a minigame, so a rocket already in flight breaks nothing.
+#[test]
+#[ignore = "requires the converted native weapons pack"]
+fn a_rocket_in_flight_breaks_nothing_after_its_shooter_drops_in_a_minigame() {
+    fire(Rocket {
+        lan: true,
+        bystander_bricks: false,
+        game: brick_damage(true),
+        drop_in_flight: true,
+    })
+    .assert_untouched();
+}
+
+/// The hammer deletes bricks for real (`killBrick`), inside a minigame
+/// with brick damage off too: it asks trust, never the minigame.
+#[test]
+#[ignore = "requires the converted native weapons pack"]
+fn hammer_deletes_bricks_for_good_whatever_the_minigame_says() {
+    for game in [None, brick_damage(false)] {
+        let mut s = with_weapons(true);
+        let owner = s
+            .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        let id = plant(&mut s, owner, 1, [0.0, 0.3, -2.5]);
+        if let Some(settings) = game.clone() {
+            s.command(
+                owner,
+                2,
+                Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+            )
+            .unwrap();
+        }
+        let hammer = s.tool_inventories()[&owner]
+            .slots
+            .iter()
+            .position(|s| s.as_deref() == Some(HAMMER))
+            .expect("hammer in the loadout");
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+        s.take_cues();
+        aim_at(&mut s, owner, Vec3::new(0.0, 0.3, -2.5));
+        swing(&mut s, owner, 3, hammer).unwrap();
+        assert!(
+            !s.simulation().state().bricks.contains_key(&id),
+            "{game:?}: the hammer left the brick"
+        );
+        let kills = kills(&mut s);
+        assert_eq!(kills.len(), 1);
+        let (brick, origin, force) = kills[0];
+        assert_eq!(brick, id);
+        assert!(origin[1] < 0.3 && force > 0.0, "{origin:?} {force}");
+        // Nothing brings it back.
+        for _ in 0..(40 * HZ) {
+            s.step().unwrap();
+        }
+        assert!(!s.simulation().state().bricks.contains_key(&id));
+    }
+}
+
+/// `fakeKillBrick` is an event output: it needs no minigame and ignores
+/// brick damage, and the brick returns after its own time (0 to 300 s).
+#[test]
+#[ignore = "requires the converted native event catalog"]
+fn fake_kill_brick_ignores_brick_damage_and_respawns_on_its_own_time() {
+    for game in [None, brick_damage(false)] {
+        let mut s = with_weapons(false);
+        let catalog = bri_events::Catalog::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/events-pack-002/catalog.json"),
+        )
+        .unwrap();
+        s.set_event_catalog(catalog, Vec::new()).unwrap();
+        let owner = s
+            .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        let id = plant(&mut s, owner, 1, [0.0, 0.3, -4.0]);
+        if let Some(settings) = game.clone() {
+            s.command(
+                owner,
+                2,
+                Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+            )
+            .unwrap();
+        }
+        s.edit_brick(
+            owner,
+            id,
+            Edit::Events(vec![EventRow {
+                preserved: None,
+                enabled: true,
+                input: "onActivate".into(),
+                delay_ms: 0,
+                target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+                output: "fakeKillBrick".into(),
+                params: vec![
+                    EventValue::Vector(Vec3::new(0.0, 0.0, 10.0)),
+                    EventValue::Int(5),
+                ],
+            }]),
+        )
+        .unwrap();
+        s.take_cues();
+        s.fire_brick_input(id, "onActivate", Some(owner));
+        s.step().unwrap();
+        let thrown = kills(&mut s);
+        assert_eq!(thrown.len(), 1, "{game:?}");
+        let (brick, _, force) = thrown[0];
+        assert_eq!(brick, id);
+        assert_eq!(force, 20.0, "VectorLen(vector) * 2");
+        let b = &s.simulation().state().bricks[&id];
+        assert!(!b.visible && !b.colliding && !b.raycast);
+        for _ in 0..(4 * HZ) {
+            s.step().unwrap();
+        }
         assert!(
             !s.simulation().state().bricks[&id].visible,
-            "brick {id} still standing"
+            "back too early"
         );
-        assert!(thrown.contains(&id));
+        for _ in 0..(2 * HZ) {
+            s.step().unwrap();
+        }
+        assert!(
+            s.simulation().state().bricks[&id].visible,
+            "never came back"
+        );
     }
-    // Internet servers keep miniGameCanDamage's ownership rule.
-    let (s, bricks, thrown) = rocket_at_bricks(false, true);
-    for id in bricks {
-        assert!(s.simulation().state().bricks[&id].visible);
-    }
-    assert!(thrown.is_empty());
 }
 
 /// Planting passes the same build gate as painting and the wand: a mini-game
