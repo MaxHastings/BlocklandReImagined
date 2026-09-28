@@ -95,6 +95,12 @@ Linux (cloud threads). No Windows effect.
 
 ## Not fixed: ranked, with a proposed fix
 
+Release status (2026-09-28): item 1 is fixed on main (each player draws on
+their own `PEER_REQUEST_BUDGET`; only administrators reach the shared bulk
+budget). Items 2 and 3 need a new Continue/Cancel step in the join flow and
+are left for after the playtest; the join keeps asking the player to join
+again after an identity change, and downloads stay capped at 4 GiB.
+
 1. **One joined player can stall everyone's commands for 10 s at a time.**
    `read_budgeted_request` takes the length header's worth (up to 64 MiB)
    from the shared 128 MiB request budget before reading the body, and the

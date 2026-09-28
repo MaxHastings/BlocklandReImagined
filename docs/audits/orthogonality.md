@@ -788,40 +788,31 @@ Lower severity, or smaller instances of a rule above. All confirmed in code.
 - `docs/KNOWN-ISSUES.md:20` says Tutorial triggers aren't implemented; they
   are. Sev 1, S.
 
-## Choices for Max
+## Release defaults (2026-09-28)
 
-These would change something a player notices by design rather than fix a
-bug, so they wait for Max:
+Max asked for everything merged without waiting on these choices, so each
+got the safe default: keep current behaviour where it works, hide a
+control that does nothing. Any of them can be revisited after the playtest.
 
-- Join passwords (14): wire them up, or hide the three fields.
-- Player cap (26): 32 or 64, and whether bots take a slot.
-- Slash commands (31): which v20 commands to add (`/magicwand`, `/spy`, `/ret`).
-- "Fast 1st/3rd person switch" (23): add v20's smooth camera transition, or
-  hide the checkbox.
-- Harmful event outputs: whether SetVelocity, AddVelocity and Dismount from
-  someone else's brick need a minigame, as damage does.
-- Particle and rain fog (35): v20 behaviour not yet checked.
-- The trust rules (6). Each tool's check may copy its own v20 script:
-  explosions use `ProjectileData::onExplode` (LAN uses the mini-game
-  setting; internet play outside mini-games is owner only), pumpkins allow
-  owner, public or admin, and weapon hits on bricks allow owner or public.
-  A single `may_affect(actor, owner, action)` table would let a fully
-  trusted friend carve your pumpkin, open your key door and wand you. Two
-  mismatches are ours whatever the table says: the wand-on-player refusal
-  blames trust when the mini-game rule refused, and the wrench opens its
-  dialog at build trust while Apply needs full trust for events and
-  collision, failing as "Brick edit denied".
-- Packages on Change Map (5): the new map's session starts without the
-  host's Add-On code, so a game mode's HUD, keys and saved progress vanish.
-  Re-running the packages is simple, but whether a mode should survive a
-  map change is a product decision.
-- Add-On blasts on bricks (34): a package `explode` removes bricks for
-  good, while weapon blasts fake-kill bricks that come back. Whether an
-  Add-On's explosion should also be temporary is a design call.
-- Vehicle respawn (29): the game uses the brick owner's mini-game with a 1 s
-  floor. v20's `WheeledVehicleData` uses the damage source's mini-game and
-  waits out the burn first, and the tested rule in the minigames crate does
-  that. Switching changes respawn timing players will notice.
+- Join passwords (14): hidden. Start Game and Connect to IP no longer show
+  the password field, and the admin password list has no Join slot
+  (`f389463`).
+- Player cap (26): kept. Start Game offers 1 to 32 players; bots take a
+  slot as now.
+- Slash commands (31): kept. No new v20 commands.
+- "Fast 1st/3rd person switch" (23): kept. The smooth transition landed on
+  main, so the checkbox works.
+- Harmful event outputs: kept. SetVelocity, AddVelocity and Dismount from
+  someone else's brick follow brick trust, not the mini-game.
+- Particle and rain fog (35): kept.
+- Trust rules (6): kept per tool, as each v20 script does. A refused wrench
+  edit now says it needs full trust instead of "Brick edit denied"
+  (`c5b55f9`). The wand's refusal wording is v20's own.
+- Add-Ons on Change Map (5): kept. The new map starts without the host's
+  Add-On code.
+- Add-On blasts on bricks (34): kept. An Add-On `explode` removes bricks
+  for good.
+- Vehicle respawn (29): kept. The brick owner's mini-game with a 1 s floor.
 
 ## Fixed on this branch
 
