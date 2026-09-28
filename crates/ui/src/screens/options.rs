@@ -194,6 +194,12 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::Input::AutoLight",
     TEMP_BRICK_OUTSIDE_PAINT,
     TEMP_BRICK_INSIDE_PAINT,
+    // v20 authored Render Items outside the Advanced pane, where nobody
+    // could reach it; the game still honours the pref.
+    "$pref::Player::renderMyJets",
+    // Sent to the host (`SteeringPrefsEvent`); final touches builds them.
+    "$pref::Input::UseStrafeSteering",
+    "$pref::Input::UseAutoReturnSteering",
 ];
 /// Advanced's temp brick rows: the ghost's outside and inside colours come
 /// from the paint can unless these are off (`OptionsDlg::UpdateTempBrickBlockers`).

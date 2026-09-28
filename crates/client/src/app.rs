@@ -763,6 +763,7 @@ impl App {
         view: &network::View,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         elapsed: f32,
+        hide_jets_of: Option<bri_world::OwnerId>,
         flare_visible: impl Fn(Vec3) -> Result<bool>,
     ) -> Result<()> {
         let body = |id: u64| {
@@ -774,6 +775,7 @@ impl App {
             .iter()
             .filter(|(owner, player)| {
                 player.jetting
+                    && hide_jets_of != Some(**owner)
                     && view
                         .vitals
                         .get(owner)
@@ -4805,6 +4807,9 @@ impl PlatformApp for App {
             self.actor_effects.set_liquids(liquids);
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
             self.world_items.set_palette(&view.world.palette);
+            self.world_items.set_render_my_items(
+                self.ui.core.prefs.bool_or("$pref::Player::renderMyItems", true),
+            );
             self.weapon_effects.set_palette(&view.world.palette);
             self.world_items.sync(
                 &view.weapons,
@@ -4857,6 +4862,11 @@ impl PlatformApp for App {
                 view,
                 presented,
                 game_elapsed.as_secs_f32(),
+                // Show Jets in First Person (`$pref::Player::renderMyJets`,
+                // off in v20): one's own jets only show in third person.
+                (!third_person
+                    && !self.ui.core.prefs.bool_or("$pref::Player::renderMyJets", false))
+                .then_some(view.owner),
                 // `fxLight::TestLOS` casts from the camera to the flare,
                 // ignoring the player carrying it.
                 |at| {
