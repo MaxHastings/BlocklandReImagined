@@ -3584,3 +3584,18 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   exact set) and the E31 test (an extra shared Add-On sits out);
   `add_on_fallbacks.rs` adds a player with a stale copy and an Add-On of
   their own, through `mods::load_fetched`, `joined_set` and the item art.
+- Gate's content test `a_guest_joins_a_host_running_every_repository_add_on`
+  failed with an empty download. Cause: `App::host()` re-read packages.json
+  unless `enable_packages` had chosen the set, so the set the test applied
+  with `apply_packages` was thrown away. `apply_packages` now marks the set
+  as the player's own; only a join that loaded another server's Add-Ons
+  clears that, so the next hosted game re-reads the player's list.
+- The same run showed the repository's own Add-Ons clashing: the Stress Lab
+  HUD and the Survival Points HUD both used J. The sample Leaderboard key is
+  now N (v20 keys untouched; Stress Lab keeps J). Left-out Add-Ons no longer
+  empty the set: a problem no Add-On owns leaves out the last listed
+  Add-On with a `set.left_out` warning, one at a time. A joiner uses the
+  same rule (`Catalog::load_dirs_skipping` in `mods::load_fetched`): a
+  downloaded Add-On that does not load on that PC is named in the console
+  and left out of what it shows, and the join goes ahead. Test:
+  `samples.rs` `add_ons_that_clash_are_left_out_one_by_one_and_never_empty_the_set`.

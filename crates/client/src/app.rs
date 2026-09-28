@@ -400,8 +400,9 @@ pub struct App {
     client_code: crate::client_code::ClientCode,
     /// Every enabled package including server behaviour, for hosting.
     server_packages: Option<Arc<bri_package_runtime::Catalog>>,
-    /// Tools and tests chose the Add-Ons with `enable_packages`; hosting
-    /// then runs those instead of re-reading packages.json.
+    /// The loaded Add-Ons are this player's own choice (packages.json, the
+    /// Add-Ons screen, `enable_packages` or `apply_packages`), so hosting
+    /// runs them as they are. False after a join loaded another server's.
     packages_from_tools: bool,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
@@ -675,6 +676,7 @@ impl App {
         self.package_catalog = client;
         self.server_packages = server;
         self.client_code = crate::client_code::ClientCode::load(&root, set);
+        self.packages_from_tools = true;
         Ok(())
     }
     /// Package HUD panels and keys from the latest replicated state.
@@ -3386,9 +3388,10 @@ impl App {
             let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
             if let Some(set) = add_ons {
                 self.disconnect();
-                let rejoined = self
-                    .apply_packages(&set)
-                    .and_then(|()| self.join(id, a.name.clone(), String::new()));
+                let applied = self.apply_packages(&set);
+                // The next game this player hosts runs their own list again.
+                self.packages_from_tools = false;
+                let rejoined = applied.and_then(|()| self.join(id, a.name.clone(), String::new()));
                 match rejoined {
                     Ok(()) => return Ok(()),
                     // The player reads which Add-On and file stopped it.

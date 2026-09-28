@@ -182,7 +182,7 @@ Add-On that depends on the rule, as `sample-points-hud` depends on
     { "label": "Awarded to everyone", "bind": "sample-survival-points:global/awarded" }
   ],
   "keys": [
-    { "key": "J", "label": "Leaderboard", "package": "sample-survival-points", "command": "top" }
+    { "key": "N", "label": "Leaderboard", "package": "sample-survival-points", "command": "top" }
   ]
 }
 ```

@@ -88,16 +88,13 @@ pub fn load_fetched(
             },
         ));
     }
-    let catalog = Catalog::load_dirs(&dirs, false).map_err(|problems| {
-        anyhow::anyhow!(
-            "A downloaded package does not load: {}",
-            problems
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ")
-        )
-    })?;
+    // A downloaded Add-On that does not load here (a HUD key clash with one
+    // of this player's, say) is left out of what this client shows, named in
+    // the console; the server still runs it and the join goes ahead.
+    let (catalog, problems) = Catalog::load_dirs_skipping(&dirs, false);
+    for problem in &problems {
+        bri_console::warn(format!("Add-On left out on this PC: {problem}"));
+    }
     let mut packages: Vec<PackageRef> = local
         .iter()
         .filter(|p| !left_out(&p.id))
