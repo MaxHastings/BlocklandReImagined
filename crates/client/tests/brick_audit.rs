@@ -92,6 +92,7 @@ struct Entry {
     print: Option<&'static str>,
     color_fx: u8,
     shape_fx: u8,
+    quarter_turns: u8,
 }
 const fn plain(id: &'static str, x: f32, z: f32, color: u8) -> Entry {
     Entry {
@@ -102,6 +103,13 @@ const fn plain(id: &'static str, x: f32, z: f32, color: u8) -> Entry {
         print: None,
         color_fx: 0,
         shape_fx: 0,
+        quarter_turns: 0,
+    }
+}
+const fn turned(id: &'static str, x: f32, z: f32, color: u8, quarter_turns: u8) -> Entry {
+    Entry {
+        quarter_turns,
+        ..plain(id, x, z, color)
     }
 }
 const fn printed(id: &'static str, x: f32, z: f32, print: &'static str) -> Entry {
@@ -150,7 +158,16 @@ const FX: &[Entry] = &[
     fx(2.0, 4.0, 0, 1, 2),
 ];
 
-fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
+const EYE: [f32; 3] = [1.5, 7.5, 10.5];
+const TARGET: [f32; 3] = [1.5, 0.0, 0.5];
+
+fn audit_scene(
+    name: &str,
+    layout: &[Entry],
+    time: f32,
+    eye: [f32; 3],
+    target: [f32; 3],
+) -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");
     let packages = bri_package::packages::PackageSet::base();
@@ -198,6 +215,7 @@ fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
             1,
         );
         brick.color = entry.color;
+        brick.quarter_turns = entry.quarter_turns;
         brick.color_effect = entry.color_fx;
         brick.shape_effect = entry.shape_fx;
         let print_path = entry.print.map(|alias| {
@@ -207,7 +225,7 @@ fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
         });
         records.push(serde_json::json!({
             "id": entry.id, "blb": catalog_entry.mesh_id, "position": brick.position,
-            "quarter_turns": 0, "paint": palette[entry.color as usize],
+            "quarter_turns": entry.quarter_turns, "paint": palette[entry.color as usize],
             "print": print_path, "color_fx": entry.color_fx, "shape_fx": entry.shape_fx,
             "depth_studs": mesh.footprint_studs[1],
         }));
@@ -217,8 +235,6 @@ fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
     ensure!(!scene.indices.is_empty(), "Empty audit scene");
     let out = root.join("artifacts/brick-audit").join(name);
     std::fs::create_dir_all(&out)?;
-    let eye = [1.5, 7.5, 10.5];
-    let target = [1.5, 0.0, 0.5];
     let fov = 45_f32;
     let mut camera = Camera::perspective(
         eye,
@@ -248,11 +264,38 @@ fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
 #[test]
 #[ignore = "requires local converted original assets; offscreen only"]
 fn brick_family_audit_scene() -> Result<()> {
-    audit_scene("families", FAMILIES, 0.0)
+    audit_scene("families", FAMILIES, 0.0, EYE, TARGET)
 }
 
 #[test]
 #[ignore = "requires local converted original assets; offscreen only"]
 fn brick_fx_audit_scene() -> Result<()> {
-    audit_scene("fx", FX, 0.37)
+    audit_scene("fx", FX, 0.37, EYE, TARGET)
+}
+
+/// Stud tops seen from straight above, the way a builder looks down a well:
+/// 1x1, 1x2 and 2x2 bricks packed together at every quarter turn.
+const TOPS: &[Entry] = &[
+    turned("v20/brick/brick1x1data", -1.25, -1.25, 1, 0),
+    turned("v20/brick/brick1x1data", -0.75, -1.25, 1, 1),
+    turned("v20/brick/brick1x1data", -1.25, -0.75, 1, 2),
+    turned("v20/brick/brick1x1data", -0.75, -0.75, 1, 3),
+    turned("v20/brick/brick2x2data", 0.0, -1.0, 0, 1),
+    turned("v20/brick/brick2x2data", 1.0, -1.0, 0, 2),
+    turned("v20/brick/brick2x2data", 2.0, -1.0, 0, 3),
+    turned("v20/brick/brick2x2data", -1.0, 0.0, 2, 3),
+    turned("v20/brick/brick2x2data", 0.0, 0.0, 2, 0),
+    turned("v20/brick/brick1x2data", 0.75, 0.0, 2, 0),
+    turned("v20/brick/brick1x2data", 1.25, 0.0, 2, 2),
+    turned("v20/brick/brick2x2data", 2.0, 0.0, 2, 2),
+    turned("v20/brick/brick2x2data", -1.0, 1.0, 3, 1),
+    turned("v20/brick/brick2x2data", 0.0, 1.0, 3, 2),
+    turned("v20/brick/brick2x2data", 1.0, 1.0, 3, 0),
+    turned("v20/brick/brick2x2data", 2.0, 1.0, 3, 3),
+];
+
+#[test]
+#[ignore = "requires local converted original assets; offscreen only"]
+fn brick_top_audit_scene() -> Result<()> {
+    audit_scene("tops", TOPS, 0.0, [0.5, 6.0, 1.0], [0.5, 0.0, 0.0])
 }

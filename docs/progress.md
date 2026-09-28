@@ -3966,3 +3966,21 @@ Prerelease keeps a mistakenly published draft out of `releases/latest`.
 `ci_content.py pack` was checked here on a stand-in content folder (zip
 layout, missing-pack error). Not yet run on GitHub: needs Max's upload first.
 The loopback-join smoke stays on the PC (original v20 Add-On archive, GPU).
+
+## 2026-09-28 Brick tops world-aligned like v20
+
+Max saw brick tops forming swastika-like pinwheels. brickTOP is v20's
+bevelled-square overlay (our copy is byte-identical), and its per-brick
+mapping matched the emulated generator. The cause was in the quad emitter:
+v20 turns TOP UVs by each brick's angle ID so every stud's lit bevel faces
+the same world direction; we kept the datablock UVs, so bricks placed at
+different angles disagreed and their corners made pinwheels. The emitter's
+table is now ported (`docs/audits/bricks.md` finding 10). This also turns
+angle-0 tops 90 degrees from before, as v20 does.
+
+Evidence: `cargo test -p bri-client --lib world_scene` (new
+`top_studs_stay_world_aligned_at_every_angle_like_v20`), new ignored
+`brick_top_audit_scene` offscreen render (0.85/255 against
+`tools/brick_reference.py`; families 1.12, fx 1.26), clippy on bri-render and
+bri-client clean. Not seen in a window: Max's playtest.
+

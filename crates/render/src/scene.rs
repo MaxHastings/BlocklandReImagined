@@ -387,6 +387,22 @@ impl SceneData {
         );
         let normals = placement.inverse().transpose();
         let mirrored = placement.determinant() < 0.0;
+        // v20 keeps brickTOP world-aligned: for TOP quads its grid-brick quad
+        // emitter (0x52f7fc..0x52fc0f, texture slot 0 only) turns the datablock
+        // UV by the brick's angle ID, (v,-u), (u,v), (-v,u), (-u,-v) for angles
+        // 0..3. Without it neighbouring bricks at other angles disagree on
+        // which bevel edges are lit. The angle is the placement's quarter turn
+        // about the vertical (clockwise from above, as `quarter_turns`).
+        let x_axis = placement.transform_vector3(Vec3::X);
+        let angle = (x_axis.z.atan2(x_axis.x) / std::f32::consts::FRAC_PI_2)
+            .round()
+            .rem_euclid(4.0) as u8;
+        let top_uv = |[u, v]: [f32; 2]| match angle {
+            0 => [v, -u],
+            1 => [u, v],
+            2 => [-v, u],
+            _ => [-u, -v],
+        };
         let mut groups = std::collections::BTreeMap::<usize, Vec<u32>>::new();
         let mut blend_materials = std::collections::BTreeMap::new();
         let mut provisional_color = false;
@@ -440,7 +456,11 @@ impl SceneData {
                         .transform_vector3(Vec3::from(vertex.normal))
                         .normalize_or_zero()
                         .to_array(),
-                    uv: vertex.uv,
+                    uv: if quad.surface == Surface::Top {
+                        top_uv(vertex.uv)
+                    } else {
+                        vertex.uv
+                    },
                     lightmap_uv: [0.; 2],
                     color,
                     fx: quad_fx.encode(centre, corner, depth_studs)?,

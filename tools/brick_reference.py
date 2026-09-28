@@ -287,6 +287,10 @@ def main():
             chain = print_chain if tex == 5 else textures[tex]
             if chain is None:
                 continue
+            if tex == 0:
+                # Grid-brick emitter 0x52f7fc..0x52fc0f turns TOP UVs by the
+                # angle ID so studs stay world-aligned.
+                uv = [[(v, -u), (u, v), (-v, u), (-u, -v)][turns] for u, v in uv]
             verts, norms, bases = [], [], []
             for k in range(4):
                 p = np.array(pos[k], float)
