@@ -55,13 +55,14 @@ Fixes, each with a test (the other commits on the branch are harness and docs):
    independently in `8f9f418` (PR #12); on rebase this branch dropped its own
    fix and keeps only `imported_v20_add_ons_play` (commit `29505fe`, whose
    title still names the fix), which passes (fence planted, shotgun fired).
-5. **"No weapon image equipped" printed on screen** (`0ed6c75`). A click
+5. **"No weapon image equipped" printed on screen** (`f7a96f7`). A click
    that reached the server just after Change Map or a respawn cleared the
    hands came back as that developer message in the bottom print (seen after
-   every Change Map in the matrix). A click with nothing in hand is now a
-   silent no-op, as a release already was; the session test
-   `release_after_core_switch_is_idempotent_but_cannot_start_a_weapon` now
-   asserts that.
+   every Change Map in the matrix). The server still refuses the trigger
+   (the hardening and tools tests expect that); the client now keeps a
+   refused trigger out of the bottom print and logs the reason, since v20
+   shows nothing for a click that fires nothing. No automated test: the race
+   needs a click in flight across a map change.
 
 ## Map × mode matrix (definition of done, item 1)
 
