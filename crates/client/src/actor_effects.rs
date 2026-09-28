@@ -705,7 +705,8 @@ impl ActorEffects {
     /// the amplitude scales by the speed past 10 over `minImpactSpeed`.
     pub fn ground_impact(&mut self, speed: f32, min_impact_speed: f32, seed: u64) {
         const MIN_SPEED: f32 = 10.0;
-        if !(speed > MIN_SPEED) || min_impact_speed <= 0.0 || self.shakes.len() >= 32 {
+        if speed.is_nan() || speed <= MIN_SPEED || min_impact_speed <= 0.0 || self.shakes.len() >= 32
+        {
             return;
         }
         let scale = (speed - MIN_SPEED) / min_impact_speed;

@@ -9,7 +9,9 @@ use bri_client::weapon_effects::WeaponEffects;
 use std::{path::Path, sync::Arc};
 
 fn content(dir: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content").join(dir)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content")
+        .join(dir)
 }
 
 #[test]
@@ -95,7 +97,10 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
                 .images
                 .contains_key(&bri_weapons::native_id("image", &w.effect))
         {
-            gaps.push(format!("{}: firing image {} is not in the weapons pack", d.id, w.effect));
+            gaps.push(format!(
+                "{}: firing image {} is not in the weapons pack",
+                d.id, w.effect
+            ));
         }
     }
     assert!(gaps.is_empty(), "{} gaps:\n{}", gaps.len(), gaps.join("\n"));

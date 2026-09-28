@@ -170,7 +170,11 @@ impl ExplosionDebris {
     }
     /// Move every piece; `sweep` finds static geometry between two points.
     pub fn advance(&mut self, dt: f32, mut sweep: impl FnMut(Vec3, Vec3) -> Option<DebrisHit>) {
-        let mut left = if dt.is_finite() { dt.clamp(0.0, 0.25) } else { 0.0 };
+        let mut left = if dt.is_finite() {
+            dt.clamp(0.0, 0.25)
+        } else {
+            0.0
+        };
         while left > 0.0 {
             let step = left.min(MAX_STEP);
             left -= step;
@@ -188,8 +192,7 @@ impl ExplosionDebris {
                     * Quat::from_rotation_y(turn.y.to_radians()))
                 .normalize();
                 // `computeNewState`: gravity unless at terminal velocity.
-                if spec.terminal_velocity <= 0.0001
-                    || p.velocity.length() <= spec.terminal_velocity
+                if spec.terminal_velocity <= 0.0001 || p.velocity.length() <= spec.terminal_velocity
                 {
                     p.velocity.y -= GRAVITY * spec.gravity * step;
                 } else {
@@ -218,8 +221,7 @@ impl ExplosionDebris {
                 // Torque moves the unit direction by the ray fraction times
                 // the share of the ray that was motion, then one step on.
                 let move_percent = length / (length + RADIUS);
-                p.position +=
-                    dir * hit.fraction.clamp(0.0, 1.0) * move_percent + p.velocity * step;
+                p.position += dir * hit.fraction.clamp(0.0, 1.0) * move_percent + p.velocity * step;
                 p.spin *= p.elasticity;
                 p.bounces -= 1;
                 if p.bounces <= 0 {
@@ -251,7 +253,11 @@ impl ExplosionDebris {
             if spec.model.is_empty() {
                 return None;
             }
-            let alpha = if spec.fade { p.life.clamp(0.0, 1.0) } else { 1.0 };
+            let alpha = if spec.fade {
+                p.life.clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
             Some((
                 spec.model.as_str(),
                 Mat4::from_rotation_translation(p.rotation, p.position),
@@ -377,7 +383,11 @@ mod tests {
         d.cue(&cue(5, "JeepExplosion", None));
         d.cue(&cue(5, "JeepExplosion", None));
         d.cue(&cue(6, "rocketExplosion", None));
-        assert_eq!(d.live_count(), 4, "once per cue, only for debris explosions");
+        assert_eq!(
+            d.live_count(),
+            4,
+            "once per cue, only for debris explosions"
+        );
         for p in &d.pieces {
             // 40 to 85 degrees off straight up, at 14 +/- 3.
             let angle = p.velocity.normalize().dot(Vec3::Y).acos().to_degrees();
@@ -386,12 +396,19 @@ mod tests {
             assert_eq!(p.position, Vec3::new(0.0, 1.5, 0.0));
         }
         assert_eq!(d.trails().len(), 4);
-        assert_eq!(d.trails()[0].emitter, "v20/emitter/jeeptiredebristrailemitter");
+        assert_eq!(
+            d.trails()[0].emitter,
+            "v20/emitter/jeeptiredebristrailemitter"
+        );
         for _ in 0..90 {
             d.advance(1.0 / 60.0, floor);
         }
         // Bouncing on the floor, never through it.
-        assert!(d.pieces.iter().all(|p| p.bounces < 3 && p.position.y >= -0.01));
+        assert!(
+            d.pieces
+                .iter()
+                .all(|p| p.bounces < 3 && p.position.y >= -0.01)
+        );
         // Half a second left: half faded.
         assert!(d.models().all(|(_, _, tint)| (tint[3] - 0.5).abs() < 0.02));
         d.advance(0.25, floor);

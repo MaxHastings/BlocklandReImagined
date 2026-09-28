@@ -111,9 +111,14 @@ pub fn explosion_debris(pack: &Pack) -> BTreeMap<String, DebrisSpec> {
                 let folder: Vec<&str> = debris.source.path.split('/').take(2).collect();
                 format!("{}/{rest}", folder.join("/"))
             }
-            None => model.strip_prefix("~/").map_or(model.clone(), |r| format!("base/{r}")),
+            None => model
+                .strip_prefix("~/")
+                .map_or(model.clone(), |r| format!("base/{r}")),
         };
-        let spin = [num(debris, "minspinspeed", 0.0), num(debris, "maxspinspeed", 0.0)];
+        let spin = [
+            num(debris, "minspinspeed", 0.0),
+            num(debris, "maxspinspeed", 0.0),
+        ];
         let spec = DebrisSpec {
             name: debris.name.clone(),
             model,

@@ -28,7 +28,7 @@ impl Query for Target {
         }
         let t = (at - start).dot(segment) / segment.length_squared();
         let closest = start + segment * t.clamp(0.0, 1.0);
-        ((0.0..=1.0).contains(&t) && closest.distance(at) < 1.5).then(|| Hit {
+        ((0.0..=1.0).contains(&t) && closest.distance(at) < 1.5).then_some(Hit {
             target: TargetId::Actor(ActorId(2)),
             position: closest,
             normal: Vec3::Z,
@@ -130,7 +130,13 @@ fn every_stock_item_emits_its_v20_datablock_cues() {
         let mut q = Target;
         // Equip, hold, release, repeat: covers semi-auto, charge-and-release
         // (spear) and fire-on-release (akimbo) images.
-        for (down, ticks) in [(None, 60), (Some(true), 180), (Some(false), 240), (Some(true), 180), (Some(false), 360)] {
+        for (down, ticks) in [
+            (None, 60),
+            (Some(true), 180),
+            (Some(false), 240),
+            (Some(true), 180),
+            (Some(false), 360),
+        ] {
             if let Some(down) = down {
                 let _ = w.trigger(ActorId(1), down);
             }
@@ -148,7 +154,9 @@ fn every_stock_item_emits_its_v20_datablock_cues() {
         let mut shells = 0;
         for e in &events {
             match e {
-                Event::ImageState { image: i, state, .. } if *i == image.id => {
+                Event::ImageState {
+                    image: i, state, ..
+                } if *i == image.id => {
                     states.insert(state.clone());
                 }
                 Event::Sound { profile, .. } => {
@@ -216,9 +224,13 @@ fn every_stock_item_emits_its_v20_datablock_cues() {
             let direct = raw.num(name, "directDamage");
             if direct > 0.0
                 && !SCRIPTED_DAMAGE.contains(&name.to_ascii_lowercase().as_str())
-                && !damage.iter().any(|(_, amount)| (amount - direct).abs() < 0.01)
+                && !damage
+                    .iter()
+                    .any(|(_, amount)| (amount - direct).abs() < 0.01)
             {
-                gap(format!("{name} hit did not deal directDamage {direct}: {damage:?}"));
+                gap(format!(
+                    "{name} hit did not deal directDamage {direct}: {damage:?}"
+                ));
             }
             if raw.num(name, "impactImpulse") > 0.0 && impulses == 0 {
                 gap(format!("{name} hit did not push (impactImpulse)"));
@@ -235,8 +247,9 @@ fn every_stock_item_emits_its_v20_datablock_cues() {
                 if raw.num(&explosion, "radiusDamage") > 0.0
                     && raw.num(&explosion, "damageRadius") > 0.0
                     && !damage.iter().any(|(kind, _)| {
-                        raw.get(name, "radiusDamageType")
-                            .is_some_and(|t| t.to_ascii_lowercase().ends_with(&kind.to_ascii_lowercase()))
+                        raw.get(name, "radiusDamageType").is_some_and(|t| {
+                            t.to_ascii_lowercase().ends_with(&kind.to_ascii_lowercase())
+                        })
                     })
                 {
                     gap(format!("{explosion} radiusDamage not dealt: {damage:?}"));
@@ -264,5 +277,11 @@ fn every_stock_item_emits_its_v20_datablock_cues() {
         serde_json::to_vec_pretty(&json!({"items": record, "gaps": gaps})).unwrap(),
     )
     .unwrap();
-    assert!(gaps.is_empty(), "{} gaps (record at {}):\n{}", gaps.len(), out.display(), gaps.join("\n"));
+    assert!(
+        gaps.is_empty(),
+        "{} gaps (record at {}):\n{}",
+        gaps.len(),
+        out.display(),
+        gaps.join("\n")
+    );
 }
