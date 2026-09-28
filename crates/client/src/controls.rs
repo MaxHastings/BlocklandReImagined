@@ -136,9 +136,12 @@ impl Controls {
             self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
             self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
         } else if self.vehicle_view.is_some() {
-            // The vehicle reads an inverted mouse by default; the steering
-            // takes that into account, so only a changed pref flips it.
-            let pitch = if self.mouse_invert != self.vehicle_mouse_plain {
+            // v20's `pitch()`: Vehicle Mouse Invert replaces Invert Mouse
+            // (which the UI already applied). The steering is Torque's
+            // `move->pitch`, positive with the mouse up when inverted (the
+            // default), which dips the nose; so the look is kept as it came
+            // when the two prefs agree with that, and flipped otherwise.
+            let pitch = if self.mouse_invert == self.vehicle_mouse_plain {
                 pitch
             } else {
                 -pitch
@@ -653,7 +656,8 @@ mod tests {
             let mut c = Controls::default();
             c.set_invert_prefs(mouse, vehicle);
             c.set_vehicle_view(Some((0.0, 0.0)));
-            // The UI has already applied Invert Mouse to the raw pitch.
+            // The mouse moves up (OS y shrinks). The UI has already
+            // applied Invert Mouse to the raw pitch.
             let raw = 0.1;
             let input = if mouse { -raw } else { raw };
             c.action(&GameAction::Look {
@@ -662,8 +666,10 @@ mod tests {
             });
             c.pitch
         };
-        // v20 defaults: the vehicle's own inverted reading, whatever Invert
-        // Mouse says.
+        // v20 defaults: mouse up steers positive (`$mvPitch -= ...` with
+        // the invert on), which the vehicle turns nose down, whatever
+        // Invert Mouse says.
+        assert!(steer(false, true) > 0.0);
         assert_eq!(steer(false, true), steer(true, true));
         assert_eq!(steer(false, false), -steer(false, true));
         assert_eq!(steer(true, false), steer(false, false));
