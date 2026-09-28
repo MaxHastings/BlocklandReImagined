@@ -1213,18 +1213,10 @@ impl Session {
                         seconds: 1.0,
                     },
                 ),
-                Intent::Destroyed { vehicle, .. } => {
-                    if let Some(position) = self.vehicle_position(vehicle) {
-                        self.cues.emit(
-                            tick,
-                            crate::presentation::CueKind::VehicleSound {
-                                vehicle: vehicle.0,
-                                sound: "vehicle.explosion".into(),
-                            },
-                            position,
-                        );
-                    }
-                }
+                // The blast is heard from the `initialExplosionProjectile`'s
+                // explosion (`vehicleExplosionSound`), as in v20; horses and
+                // rowboats have no explosion.
+                Intent::Destroyed { .. } => {}
                 Intent::Removed { vehicle } => {
                     // Occupants were dismounted by the rule engine first.
                     let live_spawn = self.vehicles.brick_of.get(&vehicle).copied();
