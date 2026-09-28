@@ -33,7 +33,7 @@ Every claim cites the file:line or test that backs it. Line numbers are from
 |---|---|---|---|
 | 1 | Double-clicking the game opens nothing, and startup errors are invisible | FRAGILE | high |
 | 2 | A crash or fatal error never tells the player what happened or where the logs are | MISSING | high |
-| 3 | Unsaved builds are lost: no autosave, no prompt on leave or close, host world discarded | MISSING | high |
+| 3 | Unsaved builds are lost: no autosave, no prompt on leave or close, host world discarded (fixed in this PR) | MISSING | high |
 | 4 | A damaged or older `settings.json` stops the game from starting, with a misleading hint (fixed in this PR) | FRAGILE | high |
 | 5 | Joining by IP depends on a second port and fails with vague or raw messages | FRAGILE | high |
 | 6 | Rejoining the same session loses edit rights on your own bricks; no reconnect | FRAGILE | high |
@@ -147,6 +147,17 @@ players is:
 - Keeping the host's final world when a client-hosted game stops, and a way to
   load it back (an autosave slot in the Load dialog).
 - Resuming `bri-server` from its newest autosave without typing its path.
+
+**Fixed in this PR.** PR #1's server autosave is ported unchanged
+(`bri_world::persistence::autosave`, `ServerOptions::autosave`, the
+`bri-server` timer), so PR #1 merges over it cleanly. Client-hosted games turn
+it on: every 60 s a changed world is written as "Autosave" into that map's save
+folder, the newest three are kept, and they appear in the Load dialog
+(`Store::autosaver` in `crates/client/src/saves.rs`). When the game stops, the
+host's final world is saved the same way before Quit exits. Leaving, quitting or
+closing the window with changes since the last save asks "Unsaved Changes ...
+Leave anyway?" (`Core::confirm_unsaved`, `App::close_requested`). Still open:
+resuming `bri-server` from its newest autosave without typing its path.
 
 ## 4. Settings file damage stops the game
 
