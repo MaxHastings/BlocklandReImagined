@@ -9,6 +9,7 @@ pub mod console;
 pub mod help;
 pub mod menus;
 pub mod modes;
+pub mod music;
 pub mod minigames;
 pub mod options;
 pub mod perf;
@@ -80,6 +81,8 @@ pub enum ScreenId {
     ServerConfig,
     /// v20 `HelpDlg`: the main menu's Credits button and F1.
     Help,
+    /// Start Game's Music Files: the loops a hosted game offers.
+    MusicFiles,
 }
 
 pub trait Screen {
@@ -177,6 +180,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::GameModes => return Box::new(modes::GameModes::new(core)),
         ScreenId::ServerConfig => return Box::new(admin::ServerConfig::new(core)),
         ScreenId::Help => return Box::new(help::Help::new(core)),
+        ScreenId::MusicFiles => return Box::new(music::MusicFiles::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),

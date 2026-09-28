@@ -253,6 +253,8 @@ pub struct Core {
     pub events: EventCatalog,
     pub datablocks: DatablockMenus,
     pub menu_backgrounds: Vec<IconRef>,
+    /// Music loop names for Start Game's Music Files.
+    pub music_tracks: Vec<String>,
     pub display_modes: Option<crate::api::DisplayModes>,
     pub avatar_preview: IconRef,
     pub save_maps: Vec<String>,
@@ -1137,6 +1139,7 @@ impl Ui {
             events: EventCatalog::default(),
             datablocks: DatablockMenus::new(),
             menu_backgrounds: Vec::new(),
+            music_tracks: Vec::new(),
             display_modes: None,
             avatar_preview: IconRef::None,
             save_maps: Vec::new(),

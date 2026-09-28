@@ -782,6 +782,7 @@ impl Screen for NativeScreen {
             "sm_startmission();" => self.host(core),
             GAME_MODE_COMMAND => core.push(ScreenId::GameModes),
             "canvas.pushdialog(serverconfiggui);" => core.push(ScreenId::ServerConfig),
+            "canvas.pushdialog(musicfilesgui);" => core.push(ScreenId::MusicFiles),
             "sm_missionlist.select();" => self.map_preview(core),
             "startmissiongui.clicklan();" | "startmissiongui.clickinternet();" => {
                 self.server_type(core, true)

@@ -1270,6 +1270,7 @@ impl App {
             });
         }
         ui.apply(UiUpdate::Maps(content.maps.clone()));
+        ui.core.music_tracks = content.music.iter().map(|(_, name)| name.clone()).collect();
         ui.apply(UiUpdate::GameModes(crate::packages::modes(server_packages.as_ref())));
         let backgrounds = content
             .ui_pack
@@ -2013,7 +2014,17 @@ impl App {
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
         let avatar_catalog = self.avatar_assets.package.clone();
-        let catalog = self.tool_ui.server_catalog();
+        let mut catalog = self.tool_ui.server_catalog();
+        // Start Game's Music Files: the loops this game's music bricks offer.
+        let prefs = &self.ui.core.prefs;
+        let off: std::collections::BTreeSet<&str> = self
+            .content
+            .music
+            .iter()
+            .filter(|(_, name)| !bri_ui::screens::music::music_enabled(prefs, name))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        catalog.sounds.retain(|id| !off.contains(id.as_str()));
         let player = self.player_name();
         let local_name = if name.trim().is_empty() {
             "Blockland ReImagined".into()
