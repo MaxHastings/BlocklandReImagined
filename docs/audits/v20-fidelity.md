@@ -1,6 +1,7 @@
 # v20 fidelity audit: weapons, vehicles, explosions and player feel
 
-Date: 2026-09-28. Branch `claude/v20-fidelity`, from main 1932015.
+Date: 2026-09-28. Branch `claude/v20-fidelity`, from main 1932015. Rows 18 to 23
+came from Max's a16 play reports the same day.
 Question: which sounds, effects, numbers and messages that v20's stock
 datablocks and scripts define does the game drop or get wrong? Max's
 report: small, inconsistent integration gaps, such as a weapon or vehicle
@@ -77,6 +78,12 @@ lineage instead of the v20 binary, the row says "inherited".
 | 15 | Cannon gun | Power 1–10 at 200 ms steps, speed 5.5 × power × scale, `CannonSmokeImage`, fuse image while charging | Same | Pass |
 | 16 | Jet ground dust | `jetGroundEmitter` within `jetGroundDistance` 4 of the ground while jetting | Not drawn | **Open**: Blockland-only engine code, not in the TGE lineage; needs the disassembly before it can be matched |
 | 17 | Bottom print bar | `bottomPrint(..., hideBar = 1)` for the cannon meter | Server bottom prints always keep the bar (`Notice::Bottom` has no flag) | **Open**, minor: needs a wire field |
+| 18 | Image `rotation`/`eyeRotation` from `eulerToMatrix` | `MatrixCreateFromEuler` builds `QuatF(EulerF)`, and `TypeMatrixRotation` rebuilds the matrix through it. The result is the transpose of `MatrixF(EulerF)` (TGE lineage, OpenMBG `mathTypes.cc`, `mQuat.cc`) | Stored as `MatrixF(EulerF)`: the skis (−90 90 0 / 90 −90 0) were held sideways, and the bow's tilt, football, horse brick and cannon smoke were mirrored | **Fixed** 5228401: `bri_weapons::rotation`, applied when the client loads item presentation and image emitters |
+| 19 | Deploying a brick | Clicking with bricks in hand fires `brickImage`: the Fire swing, a `brickTrailEmitter` stream and `brickDeployProjectile`'s `brickDeployExplosion` (blue chunks, flash) where the ghost lands. Its `onCollision` never raises `onProjectileHit` | Ghost placed locally only, no image fire | **Fixed** 936ebe6 |
+| 20 | Held melee in first person | `setImageState` restarts the state's sequence on every entry. A held hammer, wand, sword or broom loops Fire, CheckFire (0 ticks), Fire | View model swung once. The replicated state never left "Fire" | **Fixed** 4521d7f: the image-thread `WeaponAnimation` cue restarts the clip |
+| 21 | Gun casing collision | Cosmetic | A ray starting inside a brick returned a zero normal. Casing debris raised an error that closed the game (a16 multiplayer crash) | **Fixed** d08cab4: the casing is dropped, counted and logged once. 40bf926 does the same for every per-frame presentation subsystem (`CosmeticFaults`) |
+| 22 | Brick break sound | `BrickBreak` on `AudioClientClose3d` (3D, 10/60). One `BrickBreakSoundEvent` per brick explosion, which groups up to 100 bricks (`startNewBrickExplosion`/`sendBrickExplosion`; one per blast is inferred) | One full-volume copy per killed brick. A 30-brick blast stacked to the 16-voice cap and sounded like one maximum-volume sound | **Fixed** 41b0dcf: one per blast, at its origin. Harness 3 pins the descriptions |
+| 23 | Looking straight up or down | Look limits exactly ±90° (`minLookAngle`/`maxLookAngle`). The eye is yaw then pitch; `getCameraTransform` composes `cameraTilt` past vertical. m.dts's look sequences never move the Eye node | The render camera switched to a fixed +Z up within 0.8° of vertical, so the view snapped roll, stopped turning with yaw and disagreed with the held tool. The chase camera's pitch was clamped at 89.4°, a 15° dead zone | **Fixed** e308f4b: one yaw-then-pitch basis (`Camera::oriented`) for the camera, effects, weather and listener |
 
 ### Player feel constants
 

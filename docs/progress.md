@@ -3263,3 +3263,25 @@ the first copy). No wire change.
   per-server list, remain (`docs/architecture/client-sandbox.md`). Evidence:
   `cargo test -p bri-client --lib client_code`, `cargo test -p bri-ui --test
   runtime_input`.
+
+- 2026-09-28 v20 fidelity, a16 follow-ups (branch `claude/v20-fidelity`, rows
+  18 to 23 of `docs/audits/v20-fidelity.md`). Skis were held sideways: v20's
+  `eulerToMatrix` goes through `MatrixCreateFromEuler`/`QuatF(EulerF)`, the
+  transpose of the `MatrixF(EulerF)` the packs assume (read in OpenMBG's TGE
+  sources), so every signed or two-axis `eulerToMatrix` image was mirrored
+  (`bri_weapons::rotation`, applied at client load). Deploying a ghost brick
+  now fires the grey brick image (Fire swing, `brickTrailEmitter`, blue
+  `brickDeployExplosion`). Held hammer/wand/sword/broom swing again in first
+  person on every Fire entry. The a16 multiplayer crash ("invalid debris
+  collision result") was a gun casing ray starting inside a brick; casings
+  now drop, and every per-frame presentation subsystem absorbs its errors
+  (`CosmeticFaults`) instead of reaching the fatal dialog. Brick break plays
+  once per blast, not per brick. The camera no longer snaps roll at straight
+  up/down (look-at with a switched up vector); first person clamps at v20's
+  exact +-90 degrees and the chase camera's tilt passes vertical. Evidence:
+  `cargo test -p bri-weapons --lib rotation`, `cargo test -p bri-client --lib
+  looking_straight`, `cargo test -p bri-client --lib building`, `cargo test
+  -p bri-client --test world_items a_held_hammer -- --ignored`, `cargo test
+  -p bri-client --lib weapon_debris -- --include-ignored`, `cargo test -p
+  bri-client --lib audio -- --include-ignored`, `cargo test -p bri-sim --test
+  session deploying_a_brick -- --ignored`.
