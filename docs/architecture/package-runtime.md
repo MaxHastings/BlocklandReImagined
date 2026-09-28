@@ -80,7 +80,7 @@ spamming.
 ## Replication
 
 `Checkpoint` and `Delta` carry `entities: Vec<EntityInfo>` and
-`package_state: PackageStateView` (protocol 26), sent whole when they change
+`package_state: PackageStateView` (protocol 30), sent whole when they change
 at the 20 Hz delta rate. That is fine for tens of entities and small state;
 larger counts need per-entity deltas (see the Stress Lab handoff).
 
