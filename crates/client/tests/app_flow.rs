@@ -889,7 +889,7 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
                     .any(|f| f.name == "Native round trip.world.json")
         },
     )?;
-    let store = bri_client::saves::Store::new(&state, &app.content);
+    let store = bri_client::saves::Store::new(&state, &app.content, None);
     let saved_build = store.load("Bedroom", "Native round trip.world.json")?;
     assert_eq!(
         saved_build.world.bricks.values().next().unwrap(),

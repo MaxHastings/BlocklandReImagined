@@ -521,6 +521,13 @@ pub struct App {
     combat: CombatPresentation,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
+    /// v20 `.bls` saves players brought over; converting starts with the
+    /// first frame, once startup has settled which Add-Ons are on.
+    old_saves: std::sync::Arc<crate::old_saves::OldSaves>,
+    old_saves_started: bool,
+    /// A save list read because converted saves arrived while a save
+    /// dialog was open.
+    save_refresh: Option<std::sync::mpsc::Receiver<Result<Vec<crate::saves::Entry>, String>>>,
     /// A read save waiting on `LoadBricksColorGui`'s choice.
     color_load: Option<(crate::saves::Request, Box<bri_world::build::SavedBuild>)>,
     /// Transport tasks still stopping a host and keeping its world; quitting
@@ -698,7 +705,11 @@ impl App {
             let worlds = crate::packages::world_maps(catalog, &self.content.maps);
             self.content.maps.extend(worlds);
         }
-        self.saves = crate::saves::Store::new(&self.state_dir, &self.content);
+        self.saves =
+            crate::saves::Store::new(&self.state_dir, &self.content, Some(self.old_saves.clone()));
+        if self.old_saves_started {
+            self.start_old_saves();
+        }
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
         self.ui
             .apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
@@ -1256,6 +1267,11 @@ impl App {
         let state_dir = absolute_state_dir.as_path();
         let content = ClientContent::load(content_root)?;
         let mut content = content;
+        let old_saves = crate::old_saves::OldSaves::new(
+            state_dir.join("saves"),
+            state_dir.join("converted-saves"),
+            crate::old_saves::OldSaves::find_old_installs(),
+        );
         let package_catalog = {
             let (catalog, problems) = crate::packages::load(&content.paths.root);
             for problem in problems {
@@ -1355,7 +1371,10 @@ impl App {
             weather_renderer: None,
             audio,
             ui,
-            saves: crate::saves::Store::new(state_dir, &content),
+            saves: crate::saves::Store::new(state_dir, &content, Some(old_saves.clone())),
+            old_saves,
+            old_saves_started: false,
+            save_refresh: None,
             file_jobs: Default::default(),
             color_load: None,
             closing: Vec::new(),
@@ -3106,16 +3125,7 @@ impl App {
                 {
                     a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
                 }
-                let maps = entries
-                    .iter()
-                    .map(|e| e.info.map.clone())
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                self.ui.apply(UiUpdate::SaveFiles {
-                    maps,
-                    files: entries.into_iter().map(|e| e.info).collect(),
-                });
+                self.show_save_files(entries);
                 Ok(())
             }
             Ok(crate::saves::Outcome::Loaded(build)) => {
@@ -3147,6 +3157,60 @@ impl App {
             Err(error) => Err(anyhow::anyhow!(error)),
         };
         self.answer(request.id, result);
+    }
+    fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
+        let maps = entries
+            .iter()
+            .map(|e| e.info.map.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.ui.apply(UiUpdate::SaveFiles {
+            maps,
+            files: entries.into_iter().map(|e| e.info).collect(),
+        });
+    }
+    /// Convert `.bls` saves against the content now loaded.
+    fn start_old_saves(&mut self) {
+        self.old_saves_started = true;
+        match crate::old_saves::Converter::new(&self.content) {
+            Ok(converter) => {
+                self.old_saves.set_converter(converter);
+                self.old_saves.start();
+            }
+            Err(error) => bri_console::warn(format!("Old saves can't be converted: {error:#}")),
+        }
+    }
+    /// Start converting on the first frame, and put newly converted saves in
+    /// an open save dialog as they arrive.
+    fn poll_old_saves(&mut self) {
+        if !self.old_saves_started {
+            self.start_old_saves();
+        }
+        if let Some(rx) = &self.save_refresh {
+            match rx.try_recv() {
+                Ok(Ok(entries)) => {
+                    self.save_refresh = None;
+                    self.show_save_files(entries);
+                }
+                Ok(Err(error)) => {
+                    self.save_refresh = None;
+                    bri_console::warn(format!("Could not list saves: {error}"));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.save_refresh = None,
+            }
+        }
+        let open = self.ui.is_open(ScreenId::LoadBricks) || self.ui.is_open(ScreenId::SaveBricks);
+        // A closed dialog lists afresh when it opens.
+        if self.old_saves.take_changed() && open {
+            let store = self.saves.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.save_refresh = Some(rx);
+            self.runtime.spawn_blocking(move || {
+                let _ = tx.send(store.list().map_err(|e| format!("{e:#}")));
+            });
+        }
     }
     fn send_load(
         &mut self,
@@ -4709,6 +4773,7 @@ impl PlatformApp for App {
         self.animation_time += game_elapsed.as_secs_f64().min(0.25);
         self.poll_network()?;
         self.poll_files();
+        self.poll_old_saves();
         self.update_package_hud();
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
             for text in self.client_code.take_messages() {
@@ -5701,6 +5766,10 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::RequestSaveList { .. } | UiAction::LoadBricks { .. } => {
+                    // Saves dropped in while the game runs convert too.
+                    if matches!(action, UiAction::RequestSaveList { .. }) && self.old_saves_started {
+                        self.old_saves.start();
+                    }
                     let result = (|| {
                         if matches!(action, UiAction::LoadBricks { .. }) {
                             ensure!(
@@ -5774,6 +5843,14 @@ impl PlatformApp for App {
                     })
                 }
                 UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
+                UiAction::OpenSavesFolder => {
+                    let folder = self.old_saves.saves_folder();
+                    std::fs::create_dir_all(folder)?;
+                    if !bri_crash::open(&folder.to_string_lossy()) {
+                        bri_console::warn(format!("Could not open {}", folder.display()));
+                    }
+                    Ok(())
+                }
                 UiAction::OpenUrl(url) => {
                     // Only web pages; the UI only ever asks for release pages.
                     if url.starts_with("https://") && !bri_crash::open(&url) {

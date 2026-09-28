@@ -13,6 +13,7 @@ serde_json.workspace = true
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-events = { path = "../events" }
+bri-bls = { path = "../bls" }
 bri-weapons = { path = "../weapons" }
 bri-package = { path = "../package" }
 bri-package-runtime = { path = "../package-runtime" }

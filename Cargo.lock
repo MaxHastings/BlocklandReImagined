@@ -459,6 +459,7 @@ dependencies = [
  "bri-addon-import",
  "bri-admin",
  "bri-audio",
+ "bri-bls",
  "bri-client-sandbox",
  "bri-console",
  "bri-content",

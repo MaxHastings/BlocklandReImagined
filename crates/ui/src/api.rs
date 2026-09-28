@@ -624,6 +624,9 @@ pub enum UiAction {
     },
     /// Open a web page in the player's browser (a new release's page).
     OpenUrl(String),
+    /// Show the saves folder, where old `.bls` saves can be dropped, in
+    /// the file browser.
+    OpenSavesFolder,
     // ---- in game
     Chat {
         channel: ChatChannel,
