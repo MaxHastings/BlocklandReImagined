@@ -3,17 +3,9 @@
 use bri_package::diag::Diagnostic;
 use serde::{Deserialize, Serialize};
 
-/// Every capability a manifest may declare.
-pub const CAPABILITIES: &[&str] = &[
-    // Remove bricks from the world.
-    "world.edit",
-    // Explosions and direct damage to players and bricks.
-    "damage",
-    // Spawn, steer and remove the package's own entities.
-    "entity",
-    // Send chat lines to players.
-    "chat",
-];
+/// Every capability a manifest may declare (with plain-language words in
+/// `bri_package::capability`).
+pub use bri_package::capability::CAPABILITIES;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Op {

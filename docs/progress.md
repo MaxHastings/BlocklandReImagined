@@ -2440,3 +2440,22 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
   new loopback `join_refusal_names_each_differing_shared_package`,
   `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.
+
+## 2026-09-28 — modplatform package draft folded into main
+
+- Reviewed the uncommitted modplatform `bri-package` draft (PR #6,
+  `wip/modplatform-package/`). Main already covers its id grammar,
+  diagnostics and environment. Its archive, store and luau kinds are
+  superseded by directory hashing, the package sync cache and the Rhai
+  runtime. Kept:
+  - `bri_package::capability`: the one capability list, with the plain
+    words players read. `ops::CAPABILITIES` re-exports it.
+  - Strict manifests: unknown `package.json` fields are errors.
+  - `bri-addon-check <folder> [--json]`: checks an Add-On and its
+    dependencies found beside it the way the game loads them, and prints
+    the side, provides, capabilities and needs.
+- Evidence: `cargo test -p bri-package-runtime --test check` (a HUD
+  checked with its rules; a misspelt field, a missing dependency, a private
+  HUD binding and a script syntax error are each named; sides follow
+  kinds), plus the bri-package, bri-package-runtime and bri-addon-import
+  tests and clippy `-D warnings`.

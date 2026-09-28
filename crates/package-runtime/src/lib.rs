@@ -15,6 +15,7 @@
 //!   ([`ops::authorize`]) before applying them,
 //! - declarative client **HUD panels** and **box models** bound to replicated
 //!   state. Clients never receive or run package code.
+pub mod check;
 pub mod content;
 pub mod manifest;
 pub mod noise;
