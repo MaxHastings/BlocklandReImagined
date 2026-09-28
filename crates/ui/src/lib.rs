@@ -17,6 +17,7 @@
 //! The screen manager and initial menus are integrated; remaining screens are in progress;
 //! see README.md "Status".
 pub mod api;
+pub mod composed;
 pub mod binds;
 pub mod draw;
 pub mod geom;

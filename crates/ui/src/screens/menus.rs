@@ -61,7 +61,7 @@ impl NativeScreen {
                 for name in ["MM_AuthBar", "DemoBanner", "buyNowButton_W", "buyNowButton_B", "mm_Fade"] { s.visible(name, false); }
                 s.set("MM_Version", "ReImagined — development");
                 if core.pack.has_image("screenshots/icepalace") { s.icon("MM_BG", &IconRef::Pack("screenshots/icepalace".into())); }
-                s.add_ons_button();
+                s.add_ons_button(core.pack.has_image(&format!("{}_n", crate::composed::ADD_ONS_BUTTON)));
             }
             ScreenId::DefaultControls => {
                 let mouse = if core.settings.binds.is_none() { DEFAULT_MOUSE } else { core.settings.mouse_type };
@@ -159,7 +159,7 @@ impl NativeScreen {
     /// Native "Add-Ons" entry (no v20 layout has one): a dialog-sized button
     /// directly under Options. Quit shares the column but sits at the bottom
     /// of the screen, so the entry follows Options, not the lowest button.
-    fn add_ons_button(&mut self) {
+    fn add_ons_button(&mut self, art: bool) {
         let Some(options) = self.view.id("MM_OptionsButton") else {
             return;
         };
@@ -184,13 +184,25 @@ impl NativeScreen {
             .map(|c| c.position[1] + c.extent[1])
             .max()
             .unwrap_or(y + h);
-        let mut b = button(
-            "BlockButtonProfile",
-            Rect::new(x, bottom + 6, 160.min(w), 30.min(h)),
-            "base/client/ui/button1",
-            "Add-Ons",
-            ADD_ONS,
-        );
+        let mut b = if art {
+            // Spelled in the menu's own lettering (crate::composed), in the
+            // next slot of the column like v20's buttons.
+            let mut b = self.view.node(options).ctrl.clone();
+            b.position = [x, bottom];
+            b.bitmap = Some(crate::composed::ADD_ONS_BUTTON.into());
+            b.text = None;
+            b.command = Some(ADD_ONS.into());
+            b.variable = None;
+            b
+        } else {
+            button(
+                "BlockButtonProfile",
+                Rect::new(x, bottom + 6, 160.min(w), 30.min(h)),
+                "base/client/ui/button1",
+                "Add-Ons",
+                ADD_ONS,
+            )
+        };
         b.name = Some("MM_AddOnsButton".into());
         b.h_sizing = self.view.node(options).ctrl.h_sizing;
         b.v_sizing = self.view.node(options).ctrl.v_sizing;
