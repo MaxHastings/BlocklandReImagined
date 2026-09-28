@@ -475,17 +475,11 @@ impl Simulation {
         self.detect_collisions();
         Ok(())
     }
-    /// Whether `actor` may destroy this brick at all: indestructible bricks
-    /// fall only to administrators. Tools ask before they act, so a refused
-    /// break never fires the brick's break events.
-    pub fn destructible_by(&self, actor: &Actor, id: BrickId) -> bool {
-        self.state().bricks.get(&id).is_some_and(|brick| {
-            actor.administrator || self.definitions.get(brick).is_ok_and(|d| !d.indestructible)
-        })
-    }
+    /// `killBrick`. v20's `indestructable` (spawn points, vehicle spawns)
+    /// only keeps explosions and chain kills off a brick; those callers skip
+    /// it themselves. The hammer, wands and undo break it like any other.
     pub fn remove(&mut self, actor: &Actor, id: BrickId) -> Result<()> {
         self.state().bricks.get(&id).context("Unknown brick")?;
-        ensure!(self.destructible_by(actor, id), "Brick is indestructible");
         self.authority.remove(actor, id)?;
         self.index.remove(id);
         self.brick_waters.remove(&id);
