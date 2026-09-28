@@ -5,7 +5,7 @@ use bri_sim::{
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-pub const VERSION: u32 = 29;
+pub const VERSION: u32 = 31;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -28,7 +28,9 @@ impl std::fmt::Debug for ResumeToken {
 pub struct Hello {
     pub version: u32,
     pub name: String,
-    pub content_id: String,
+    /// Every shared and client package this client loaded, compared with the
+    /// server's environment package by package.
+    pub packages: Vec<bri_package::environment::PackageRef>,
     pub resume: Option<ResumeToken>,
     pub host: Option<ResumeToken>,
     pub identity: Option<IdentityProof>,
@@ -53,12 +55,8 @@ impl Hello {
                 && !self.name.chars().any(char::is_control),
             "Invalid player name"
         );
-        anyhow::ensure!(
-            !self.content_id.is_empty()
-                && self.content_id.len() <= 128
-                && !self.content_id.chars().any(char::is_control),
-            "Invalid content identity"
-        );
+        bri_package::environment::Environment::validate_refs(&self.packages)
+            .map_err(|e| anyhow::anyhow!("Invalid package list: {e}"))?;
         if let Some(proof) = &self.identity {
             anyhow::ensure!(proof.signature.len() == 64, "Invalid identity signature length");
         }
@@ -78,7 +76,10 @@ pub fn identity_transcript(
     transcript.extend_from_slice(challenge);
     transcript.extend_from_slice(server_fingerprint);
     append_text(&mut transcript, &hello.name)?;
-    append_text(&mut transcript, &hello.content_id)?;
+    // Binds the claimed package set into the signed join context.
+    transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(
+        rmp_serde::to_vec(&hello.packages)?,
+    ));
     append_token(&mut transcript, hello.resume.as_ref());
     append_token(&mut transcript, hello.host.as_ref());
     Ok(transcript)

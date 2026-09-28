@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
@@ -213,7 +213,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Owner".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -221,7 +221,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -244,7 +244,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -284,7 +284,7 @@ async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_own
         server.address,
         &server.certificate,
         "Drop observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -306,7 +306,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         server.address,
         &server.certificate,
         "Event builder".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -314,7 +314,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         server.address,
         &server.certificate,
         "Observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -419,7 +419,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         server.address,
         &server.certificate,
         "Late observer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -464,7 +464,7 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
         server.address,
         &server.certificate,
         "First".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -501,7 +501,7 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -532,7 +532,7 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
 fn options() -> ServerOptions {
     ServerOptions {
         bind: "127.0.0.1:0".parse().unwrap(),
-        content_id: "fixture-v1".into(),
+        environment: bri_package::environment::Environment::empty(),
         spawn_points: vec![
             Vec3::new(0.0, 0.05, 0.0),
             Vec3::new(3.0, 0.05, 0.0),
@@ -544,6 +544,71 @@ fn options() -> ServerOptions {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn join_refusal_names_each_differing_shared_package() -> Result<()> {
+    use bri_package::{
+        environment::{Environment, PackageRef},
+        packages::Side,
+    };
+    let package = |id: &str, side: Side, hash: u8| PackageRef {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side,
+        hash: format!("{hash:02x}").repeat(32),
+        size: 1,
+    };
+    let mut environment = Environment::empty();
+    environment.packages = vec![
+        package("v20-weapons", Side::Shared, 1),
+        package("v20-ui", Side::Client, 2),
+        package("v20-worlds", Side::Server, 3),
+    ];
+    let server = server::start(
+        session(),
+        ServerOptions {
+            environment: environment.clone(),
+            ..options()
+        },
+    )?;
+    let connect = |packages: Vec<PackageRef>| {
+        Client::connect(
+            server.address,
+            &server.certificate,
+            "Joiner".into(),
+            packages,
+            None,
+        )
+    };
+    // Different weapons and a mod the server lacks: refused, both named.
+    let mut theirs = environment.client_packages();
+    theirs[0].hash = "aa".repeat(32);
+    theirs.push(package("creeper", Side::Shared, 9));
+    let error = connect(theirs).await.err().context("Mismatched join accepted")?;
+    let text = format!("{error:#}");
+    assert!(text.contains("server has v20-weapons 1.0.0"), "{text}");
+    assert!(text.contains("you have creeper 1.0.0"), "{text}");
+    assert!(!text.contains("v20-ui") && !text.contains("v20-worlds"), "{text}");
+    // A different presentation package still joins; server-only packages
+    // are never asked for.
+    let mut cosmetic = environment.client_packages();
+    cosmetic[1].hash = "bb".repeat(32);
+    let mut client = connect(cosmetic).await?;
+    let told = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let bri_net::client::ClientEvent::Notice(bri_sim::session::Notice::Chat(text)) =
+                client.receive().await?
+            {
+                return anyhow::Ok(text);
+            }
+        }
+    })
+    .await??;
+    assert!(told.contains("server has v20-ui 1.0.0"), "{told}");
+    client.close();
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> Result<()> {
     use bri_sim::session::ActionAim;
     let server = server::start(session(), options())?;
@@ -551,7 +616,7 @@ async fn reliable_actions_capture_distinct_aim_without_movement_datagrams() -> R
         server.address,
         &server.certificate,
         "Builder".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -622,7 +687,7 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -634,7 +699,7 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         server.address,
         &server.certificate,
         "Guest".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -787,7 +852,7 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         server.address,
         &server.certificate,
         "Target".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -837,7 +902,7 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
         server.address,
         &server.certificate,
         "Guest".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(guest_ticket),
     )
     .await?;
@@ -859,7 +924,7 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -874,7 +939,7 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
         server.address,
         &server.certificate,
         "Guessing client".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -927,7 +992,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         server.address,
         &server.certificate,
         "First local peer".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -940,7 +1005,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
             server.address,
             &server.certificate,
             "Bad host".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None,
             Some(ResumeToken([42; 32]))
         )
@@ -951,7 +1016,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -1024,7 +1089,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1039,7 +1104,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
         server.address,
         &server.certificate,
         "Resume".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(token),
     )
     .await?;
@@ -1061,7 +1126,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -1123,7 +1188,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "A".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1131,7 +1196,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "B".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1155,7 +1220,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1179,7 +1244,7 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         server.address,
         &server.certificate,
         "Ignored".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(token),
     )
     .await?;
@@ -1266,7 +1331,7 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         server.address,
         &server.certificate,
         "Cue builder".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1274,7 +1339,7 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         server.address,
         &server.certificate,
         "Cue listener".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1301,7 +1366,7 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         server.address,
         &server.certificate,
         "Late listener".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1338,7 +1403,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
         server.address,
         &server.certificate,
         "A".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1346,7 +1411,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
         server.address,
         &server.certificate,
         "B".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1387,7 +1452,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
         server.address,
         &server.certificate,
         "Late".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1399,7 +1464,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
             server.address,
             &server.certificate,
             "Forged".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             Some(ResumeToken([0; 32]))
         )
         .await
@@ -1410,7 +1475,13 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
             server.address,
             &server.certificate,
             "Mismatch".into(),
-            "different-content".into(),
+            vec![bri_package::environment::PackageRef {
+                id: "other-content".into(),
+                version: "1.0.0".into(),
+                side: bri_package::packages::Side::Shared,
+                hash: "cd".repeat(32),
+                size: 1,
+            }],
             None
         )
         .await
@@ -1423,7 +1494,7 @@ async fn real_quic_clients_build_late_join_and_resume_owned_bricks() -> Result<(
         server.address,
         &server.certificate,
         "Cannot rename via resume".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(token),
     )
     .await?;
@@ -1453,7 +1524,7 @@ async fn wrong_host_certificate_is_rejected_and_idle_input_stops() -> Result<()>
             server.address,
             unrelated.cert.der(),
             "Untrusted".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None
         )
         .await
@@ -1463,7 +1534,7 @@ async fn wrong_host_certificate_is_rejected_and_idle_input_stops() -> Result<()>
         server.address,
         &server.certificate,
         "Mover".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1539,7 +1610,7 @@ fn hello_for_proof(name: &str) -> Hello {
     Hello {
         version: VERSION,
         name: name.into(),
-        content_id: "fixture-v1".into(),
+        packages: Vec::new(),
         resume: None,
         host: None,
         identity: None,
@@ -1606,7 +1677,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
             server.address,
             &server.certificate,
             "Anonymous".into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None,
         )
         .await
@@ -1616,7 +1687,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
         &host_key,
@@ -1626,7 +1697,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &victim_key,
@@ -1653,7 +1724,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(victim_ticket.clone()),
         None,
         &victim_key,
@@ -1726,7 +1797,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(victim_ticket.clone()),
         None,
         &other_key,
@@ -1737,7 +1808,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Renamed".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         Some(victim_ticket.clone()),
         None,
         &victim_key,
@@ -1750,7 +1821,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Copied Name".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &other_key,
@@ -1766,7 +1837,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
         &host_key,
@@ -1776,7 +1847,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Renamed".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &victim_key,
@@ -1834,7 +1905,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Host".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
         &host_key,
@@ -1851,7 +1922,7 @@ async fn persistent_bans_bind_keys_survive_restart_and_unban() -> Result<()> {
         server.address,
         &server.certificate,
         "Renamed".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &victim_key,
@@ -1886,7 +1957,7 @@ async fn lan_discovery_advertises_listing_and_joinable_certificate() -> Result<(
         address,
         &certificate,
         "Finder".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -1908,7 +1979,7 @@ async fn minigame_listing_replicates_to_other_clients_and_late_joiners() -> Resu
             server.address,
             &server.certificate,
             name.into(),
-            "fixture-v1".into(),
+            Vec::new(),
             None,
         )
     };
@@ -1960,7 +2031,7 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
         server.address,
         &server.certificate,
         "Admin".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         Some(server.host_token.clone()),
     )
@@ -1969,7 +2040,7 @@ async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
         server.address,
         &server.certificate,
         "Guest".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -2031,7 +2102,7 @@ async fn join_reports_the_world_download_in_bricks() -> Result<()> {
         server.address,
         &server.certificate,
         "Joiner".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
         None,
         &key,
@@ -2059,7 +2130,7 @@ async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
         server.address,
         &server.certificate,
         "First".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;
@@ -2067,7 +2138,7 @@ async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
         server.address,
         &server.certificate,
         "Second".into(),
-        "fixture-v1".into(),
+        Vec::new(),
         None,
     )
     .await?;

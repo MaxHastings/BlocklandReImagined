@@ -16,8 +16,11 @@ that landed it.
 
 - **Package manifest (contract 5, 12):** format landed in `crates/package`
   (`packages.json`, environment, per-package mismatch report), documented in
-  [`docs/architecture/packages.md`](../architecture/packages.md). Client and
-  `bri-server` loading through it: pending.
+  [`docs/architecture/packages.md`](../architecture/packages.md). The client
+  and `bri-server` now load through `packages.json` (the 17 positional server
+  arguments are gone), and a refused join names every differing shared
+  package; client-only differences are told to the player instead. The old
+  fingerprint chain in `content_identity.rs` is removed.
 - **One id grammar (contract 4):** `namespace:kind/name` defined in
   `bri_package::id`, shared with the mod platform lane. Moving existing content
   ids onto it: pending.

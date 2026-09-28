@@ -26,49 +26,40 @@ function Get-PackageFiles([string]$Path) {
     return @($all | Where-Object { -not $_.PSIsContainer })
 }
 
-function Get-SourceDefaults([string]$Root) {
-    $sourcePath = Join-Path $Root 'crates/client/src/content.rs'
-    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) { throw "Missing ContentConfig source: $sourcePath" }
-    $source = [IO.File]::ReadAllText($sourcePath)
-    $values = [ordered]@{ schema_version = 1 }
-    foreach ($field in $script:PackFields) {
-        $pattern = '(?m)^\s*' + [regex]::Escape($field) + ':\s*"([^"]+)"\.into\(\),'
-        $match = [regex]::Match($source, $pattern)
-        if (-not $match.Success) { throw "Cannot safely parse ContentConfig::default for '$field'; update packager with the runtime change." }
-        $values[$field] = $match.Groups[1].Value
-    }
-    return $values
+function Read-PackageList([string]$Path) {
+    $info = Get-Item -LiteralPath $Path
+    if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "$Path must not be a symbolic link." }
+    if ($info.Length -gt 1048576) { throw "$Path exceeds 1 MiB." }
+    $list = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if ([int]$list.schema_version -ne 1) { throw "Unsupported package list schema version in $Path." }
+    return $list
 }
 
-function Get-EffectiveContentConfig([string]$Root) {
-    $defaults = Get-SourceDefaults $Root
-    $contentRoot = Join-Path $Root 'content'
-    $configPath = Join-Path $contentRoot 'client-content.json'
-    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-        $info = Get-Item -LiteralPath $configPath
-        if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'content/client-content.json must not be a symbolic link.' }
-        if ($info.Length -gt 1048576) { throw 'content/client-content.json exceeds 1 MiB.' }
-        $override = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-        $allowed = @('schema_version') + $script:PackFields
-        foreach ($property in $override.PSObject.Properties) {
-            if ($property.Name -notin $allowed) { throw "Unknown ContentConfig field '$($property.Name)' would make the client reject the package." }
-        }
-        $schemaProperty = $override.PSObject.Properties['schema_version']
-        if ($null -ne $schemaProperty -and [int]$schemaProperty.Value -ne 1) { throw 'Unsupported ContentConfig schema version.' }
-        foreach ($field in $script:PackFields) {
-            $property = $override.PSObject.Properties[$field]
-            if ($null -ne $property) { $defaults[$field] = [string]$property.Value }
-        }
+# The packages the client loads: content/packages.json when present,
+# otherwise the base game's list (crates/package/base-packages.json).
+function Get-EffectivePackages([string]$Root) {
+    $override = Join-Path (Join-Path $Root 'content') 'packages.json'
+    if (Test-Path -LiteralPath $override -PathType Leaf) {
+        $list = Read-PackageList $override; $source = 'content/packages.json override'
+    } else {
+        $base = Join-Path $Root 'crates/package/base-packages.json'
+        if (-not (Test-Path -LiteralPath $base -PathType Leaf)) { throw "Missing base package list: $base" }
+        $list = Read-PackageList $base; $source = 'crates/package/base-packages.json'
     }
-    foreach ($field in $script:PackFields) {
-        $name = [string]$defaults[$field]
+    $roles = @{}
+    foreach ($package in @($list.packages)) {
+        $name = [string]$package.dir
         if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('\') -or $name.Contains(':') -or
             @($name.Split('/') | Where-Object { $_ -in @('','.', '..') -or $_.EndsWith(' ') -or $_.EndsWith('.') }).Count -gt 0) {
-            throw "Unsafe/empty ContentConfig package path for '$field': $name"
+            throw "Unsafe/empty package directory for '$($package.id)': $name"
         }
-        $defaults[$field] = $name
+        $role = $package.PSObject.Properties['role']
+        if ($null -ne $role) { $roles[[string]$role.Value] = $true }
     }
-    return $defaults
+    foreach ($field in $script:PackFields) {
+        if (-not $roles.ContainsKey($field)) { throw "The package list has no package for the '$field' role." }
+    }
+    return [pscustomobject]@{ list = $list; source = $source }
 }
 
 function Get-RelativePackagePath([string]$Root,[string]$File) {
@@ -131,13 +122,14 @@ if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) { throw "Relea
 $exeInfo = Get-Item -LiteralPath $ExecutablePath
 if (($exeInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $exeInfo.Length -lt 1) { throw 'Release executable is empty or linked.' }
 $executableSha256 = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
-$config = Get-EffectiveContentConfig $RepoRoot
+$effective = Get-EffectivePackages $RepoRoot
 $sourceContent = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'content'))
 $selected = @()
 $contentBytes = 0L
 $contentFiles = 0
-foreach ($field in $script:PackFields) {
-    $name = [string]$config[$field]
+foreach ($package in @($effective.list.packages)) {
+    $field = [string]$package.id
+    $name = [string]$package.dir
     $directory = Join-Path $sourceContent $name
     if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw "Selected $field package is missing: $directory" }
     $directoryInfo = Get-Item -LiteralPath $directory
@@ -160,8 +152,7 @@ $docInputs = @(
 )
 foreach ($input in $docInputs) { if (-not (Test-Path -LiteralPath $input.source -PathType Leaf)) { throw "Required package file is missing: $($input.source)" } }
 if ($ValidateOnly) {
-    $configSource = 'ContentConfig::default parsed from source'
-    if (Test-Path -LiteralPath (Join-Path $sourceContent 'client-content.json')) { $configSource = 'content/client-content.json override' }
+    $configSource = $effective.source
     [pscustomobject]@{ selected_packages = $selected; content_files = $contentFiles; content_bytes = $contentBytes;
         executable_bytes = $exeInfo.Length; estimated_package_bytes = [long]$contentBytes + [long]$exeInfo.Length;
         executable_sha256 = $executableSha256; package_count = $selected.Count; content_config_source = $configSource } | ConvertTo-Json -Depth 6
@@ -186,12 +177,10 @@ try {
             Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
         }
     }
-    $effective = [ordered]@{ schema_version = 1 }
-    foreach ($field in $script:PackFields) { $effective[$field] = $config[$field] }
-    $configJson = ConvertTo-Json -InputObject $effective -Depth 5
-    [IO.File]::WriteAllText((Join-Path $packagedContent 'client-content.json'), $configJson + "`n", [Text.UTF8Encoding]::new($false))
+    $configJson = ConvertTo-Json -InputObject $effective.list -Depth 5
+    [IO.File]::WriteAllText((Join-Path $packagedContent 'packages.json'), $configJson + "`n", [Text.UTF8Encoding]::new($false))
     $entries = Get-ManifestEntries $releasePath
-    $manifest = [ordered]@{ schema_version = 1; version = $Version; executable = 'bri-client.exe'; content_config = 'content/client-content.json'; files = $entries }
+    $manifest = [ordered]@{ schema_version = 1; version = $Version; executable = 'bri-client.exe'; content_config = 'content/packages.json'; files = $entries }
     $manifestJson = ConvertTo-Json -InputObject $manifest -Depth 10
     [IO.File]::WriteAllText((Join-Path $releasePath 'MANIFEST.json'), $manifestJson + "`n", [Text.UTF8Encoding]::new($false))
     Write-Host "Created $releasePath"

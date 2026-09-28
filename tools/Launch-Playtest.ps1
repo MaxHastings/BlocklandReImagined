@@ -11,7 +11,7 @@ $stderr = Join-Path $logDirectory "client-$stamp.stderr.log"
 $executable = Join-Path $packageRoot 'bri-client.exe'
 try {
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Missing packaged client: $executable" }
-    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'content/client-content.json') -PathType Leaf)) { throw 'The package has no normalized content/client-content.json.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'content/packages.json') -PathType Leaf)) { throw 'The package has no content/packages.json.' }
     # Windows PowerShell turns redirected native stderr into ErrorRecords. With
     # Stop that swallowed the client's first error and left an empty error log.
     # Let the OS redirect streams directly and preserve the real process status.

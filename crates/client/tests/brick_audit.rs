@@ -153,16 +153,16 @@ const FX: &[Entry] = &[
 fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");
-    let config = bri_client::content::ContentConfig::default();
-    let materials = BrickMaterials::load(&content.join(&config.brick_materials))?;
+    let packages = bri_package::packages::PackageSet::base();
+    let materials = BrickMaterials::load(&packages.role_dir(&content, "brick_materials")?)?;
     let catalog: Catalog = serde_json::from_slice(&std::fs::read(
-        content
-            .join(&config.brick_catalog)
+        packages
+            .role_dir(&content, "brick_catalog")?
             .join("stock-catalog.json"),
     )?)?;
     let definitions = Definitions::load(
-        &content.join(&config.brick_catalog),
-        &content.join(&config.geometry),
+        &packages.role_dir(&content, "brick_catalog")?,
+        &packages.role_dir(&content, "geometry")?,
     )?;
     let meshes: BTreeMap<String, bri_content::brick::Brick> = definitions
         .entries
@@ -238,7 +238,7 @@ fn audit_scene(name: &str, layout: &[Entry], time: f32) -> Result<()> {
             "fov_y_degrees": fov, "near": 0.1, "far": 200.0, "time_seconds": time,
             "sun_direction": &camera.sun_direction[..3], "sun_color": &camera.sun_color[..3],
             "ambient": &camera.ambient[..3], "background": [0.3, 0.3, 0.3],
-            "materials": content.join(&config.brick_materials),
+            "materials": packages.role_dir(&content, "brick_materials")?,
             "bricks": records,
         }))?,
     )?;
