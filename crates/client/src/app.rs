@@ -136,7 +136,9 @@ fn prepare_map(
 ) -> Result<Prepared> {
     let map = map.to_owned();
     let visual = load_map_bundle(&paths.map_bundle, &map)?;
-    let definitions = Definitions::load(&paths.brick_catalog, &paths.geometry)?;
+    // The same definitions the host's session loads, Add-On bricks included.
+    let definitions =
+        Definitions::load_with(&paths.brick_catalog, &paths.geometry, &paths.brick_extras)?;
     let meshes = Arc::new(
         definitions
             .entries
@@ -1668,14 +1670,7 @@ impl App {
             .collect();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
-        let selected: Vec<_> = self
-            .content
-            .catalog
-            .bricks
-            .iter()
-            .filter(|b| b.selectable())
-            .map(|b| (b.id.clone(), b.orientation_fix))
-            .collect();
+        let selected = self.content.selectable.clone();
         let avatar_catalog = self.avatar_assets.package.clone();
         let catalog = self.tool_ui.server_catalog();
         let player = self.player_name();
@@ -1966,14 +1961,7 @@ impl App {
         let player = self.player_name();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
-        let selected: Vec<_> = self
-            .content
-            .catalog
-            .bricks
-            .iter()
-            .filter(|b| b.selectable())
-            .map(|b| (b.id.clone(), b.orientation_fix))
-            .collect();
+        let selected = self.content.selectable.clone();
         let catalog = self.tool_ui.server_catalog();
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let load_limit = self.load_limit.clone();
@@ -2658,14 +2646,7 @@ impl App {
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
                     let paths = self.content.paths.clone();
-                    let selected: Vec<_> = self
-                        .content
-                        .catalog
-                        .bricks
-                        .iter()
-                        .filter(|b| b.selectable())
-                        .map(|b| (b.id.clone(), b.orientation_fix))
-                        .collect();
+                    let selected = self.content.selectable.clone();
                     let catalog = self.tool_ui.server_catalog();
                     let load_limit = self.load_limit.clone();
                     let (scene_tx, scene) = mpsc::sync_channel(1);

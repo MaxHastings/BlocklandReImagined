@@ -114,6 +114,9 @@ pub struct ClientContent {
     pub maps: Vec<MapInfo>,
     pub bricks: Vec<BrickInfo>,
     pub catalog: Catalog,
+    /// Every brick the brick menu offers, stock then Add-On, with its
+    /// orientation fix: the one list hosting, joining and Change Map use.
+    pub selectable: Vec<(String, u8)>,
     pub paint: Vec<PaintDivision>,
     pub datablocks: DatablockMenus,
     pub worlds: Vec<WorldEntry>,
@@ -496,6 +499,12 @@ impl ClientContent {
         }
         let catalog = validate_catalog(&paths)?;
         let mut bricks = Vec::new();
+        let mut selectable: Vec<_> = catalog
+            .bricks
+            .iter()
+            .filter(|b| b.selectable())
+            .map(|b| (b.id.clone(), b.orientation_fix))
+            .collect();
         for entry in catalog.bricks.iter().filter(|b| b.selectable()) {
             let icon = entry.icon_source.replace('\\', "/").to_ascii_lowercase();
             let icon = icon
@@ -517,7 +526,7 @@ impl ClientContent {
             });
         }
         for (dir, catalog_dir) in &paths.brick_extras {
-            install_package_bricks(&mut schema, &mut bricks, catalog_dir)
+            install_package_bricks(&mut schema, &mut bricks, &mut selectable, catalog_dir)
                 .with_context(|| format!("Loading bricks of {dir}"))?;
         }
         let effects: Library = read_json(
@@ -588,6 +597,7 @@ impl ClientContent {
             maps,
             bricks,
             catalog,
+            selectable,
             paint,
             datablocks,
             worlds,
@@ -876,6 +886,7 @@ fn install_death_icons(
 fn install_package_bricks(
     schema: &mut UiPack,
     bricks: &mut Vec<BrickInfo>,
+    selectable: &mut Vec<(String, u8)>,
     catalog_dir: &Path,
 ) -> Result<()> {
     #[derive(Deserialize)]
@@ -916,6 +927,7 @@ fn install_package_bricks(
             subcategory: entry.subcategory.clone(),
             icon,
         });
+        selectable.push((entry.id.clone(), entry.orientation_fix));
     }
     Ok(())
 }
@@ -1074,6 +1086,39 @@ mod tests {
             );
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn add_on_bricks_join_the_one_selectable_list() {
+        let fixture = Fixture::new();
+        let entry = |id: &str, name: &str, fix: u8| {
+            serde_json::json!({
+                "id": id, "display_name": name, "category": "Bricks",
+                "subcategory": "Odd", "mesh_id": id, "collision_source": null,
+                "icon_source": "", "print_aspect_ratio": null,
+                "orientation_fix": fix, "can_cover": false,
+                "indestructible": false, "special_kind": null,
+                "other_properties": {}
+            })
+        };
+        fs::write(
+            fixture.0.join("stock-catalog.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "bricks": [entry("pkg:odd", "Odd Brick", 3), entry("pkg:hidden", "", 0)],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut schema = UiPack::default();
+        let (mut bricks, mut selectable) = (Vec::new(), vec![("plate".to_string(), 0)]);
+        install_package_bricks(&mut schema, &mut bricks, &mut selectable, &fixture.0).unwrap();
+        // The menu entry and the plantable list agree.
+        assert_eq!(bricks.len(), 1);
+        assert_eq!(
+            selectable,
+            [("plate".to_string(), 0), ("pkg:odd".to_string(), 3)]
+        );
     }
 
     #[test]
