@@ -478,6 +478,49 @@ impl App {
         self.client_code = crate::client_code::ClientCode::load(root, set);
         Ok(())
     }
+    /// The Add-Ons screen changed which Add-Ons are on. HUD panels, rules,
+    /// game modes and worlds are read again now, so the next game uses them;
+    /// bricks, weapons and vehicles are read with the rest of the content at
+    /// startup, so a change to those asks for a restart.
+    fn add_ons_changed(&mut self, mut view: AddOnsView) {
+        let root = self.content.paths.root.clone();
+        let set = match bri_package::packages::PackageSet::load_root(&root) {
+            Ok(set) => set,
+            Err(error) => {
+                bri_console::warn(format!("Add-On list unreadable after a change: {error:#}"));
+                self.ui.apply(UiUpdate::AddOns(view));
+                return;
+            }
+        };
+        let (client, problems) = crate::packages::load_set(&root, &set, false);
+        let (server, more) = crate::packages::load_set(&root, &set, true);
+        for problem in problems.iter().chain(&more) {
+            bri_console::warn(format!("Add-On problem: {problem}"));
+        }
+        self.content.maps.retain(|m| !m.id.contains(':'));
+        if let Some(catalog) = &server {
+            let worlds = crate::packages::world_maps(catalog, &self.content.maps);
+            self.content.maps.extend(worlds);
+        }
+        self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
+        self.ui.apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
+        self.package_catalog = client;
+        self.server_packages = server;
+        self.client_code = crate::client_code::ClientCode::load(&root, &set);
+        let paths = &self.content.paths;
+        let restart = crate::content::ContentPaths::resolve(&root, &set).is_ok_and(|fresh| {
+            fresh.brick_extras != paths.brick_extras
+                || fresh.weapon_extras != paths.weapon_extras
+                || fresh.vehicle_extras != paths.vehicle_extras
+        });
+        if restart {
+            view.notice = view.notice.replace(
+                "Changes apply the next time you start a game.",
+                "Restart the game to use the change: bricks, weapons and vehicles load when it opens.",
+            );
+        }
+        self.ui.apply(UiUpdate::AddOns(view));
+    }
     /// Package HUD panels and keys from the latest replicated state.
     fn update_package_hud(&mut self) {
         let view = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| a.view.as_ref());
@@ -5065,10 +5108,10 @@ impl PlatformApp for App {
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
                     crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
-                        .map(|view| self.ui.apply(UiUpdate::AddOns(view)))
+                        .map(|view| self.add_ons_changed(view))
                 }
                 UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
-                    .map(|view| self.ui.apply(UiUpdate::AddOns(view))),
+                    .map(|view| self.add_ons_changed(view)),
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
                     let started = if self.add_on_import.is_some() {

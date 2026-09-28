@@ -2182,7 +2182,11 @@ impl Session {
         };
         let mut view = PackageStateView::default();
         for (id, behaviour) in host.catalog.behaviours() {
+            // Every running package has a namespace, even before it stores
+            // anything: clients read the keys as "this server runs it" and
+            // show an Add-On's HUD only then.
             let Some(ns) = host.store.namespace(id) else {
+                view.packages.insert(id.clone(), NamespaceView::default());
                 continue;
             };
             let public_global: BTreeMap<_, _> = ns
@@ -2215,15 +2219,13 @@ impl Session {
                     }
                 }
             }
-            if !public_global.is_empty() || !players.is_empty() {
-                view.packages.insert(
-                    id.clone(),
-                    NamespaceView {
-                        global: public_global,
-                        players,
-                    },
-                );
-            }
+            view.packages.insert(
+                id.clone(),
+                NamespaceView {
+                    global: public_global,
+                    players,
+                },
+            );
         }
         view
     }

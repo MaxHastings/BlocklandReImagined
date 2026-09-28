@@ -154,6 +154,15 @@ pub fn panels(catalog: &Catalog, state: &PackageStateView, viewer: OwnerId, take
     let mut panels = Vec::new();
     let mut keys = Vec::new();
     for (_, hud) in catalog.huds() {
+        // A panel shows the state and commands of server packages; a server
+        // not running one of them (another map, the Add-On turned off) has
+        // nothing for it, so the panel stays hidden. The server names every
+        // package it runs in its state, even while empty.
+        let serves = |package: &str| state.packages.contains_key(package);
+        let binds = hud.rows.iter().filter_map(|row| content::Binding::parse(&row.bind));
+        if !binds.map(|b| b.package).all(|p| serves(&p)) || !hud.keys.iter().all(|k| serves(&k.package)) {
+            continue;
+        }
         let text = rgba(hud.text);
         let rows = hud
             .rows
@@ -367,6 +376,7 @@ mod tests {
         let ns = state.packages.entry("stresslab-economy".into()).or_default();
         ns.players.insert(4, [("bits".to_string(), serde_json::json!(125)), ("copper".to_string(), serde_json::json!(3))].into());
         ns.players.insert(5, [("bits".to_string(), serde_json::json!(9))].into());
+        state.packages.entry("stresslab-creeper".into()).or_default();
         let (panels, keys) = panels(&catalog, &state, 4, |c| c == 'g');
         assert_eq!(panels.len(), 1);
         let p = &panels[0];
@@ -377,6 +387,23 @@ mod tests {
         // G is taken by a base-game bind here, so only H and J are offered.
         assert_eq!(keys.iter().map(|k| k.key).collect::<Vec<_>>(), ['h', 'j']);
         assert_eq!(p.keys[0], ('h', "Mine".to_string()));
+    }
+
+    #[test]
+    fn miner_panel_hides_where_the_server_does_not_run_its_packages() {
+        let catalog = catalog();
+        // Slate with the base game: the server runs no package at all.
+        let (panels, keys) = panels(&catalog, &PackageStateView::default(), 4, |_| false);
+        assert!(panels.is_empty() && keys.is_empty());
+        // The economy runs but the creeper Add-On (the J key) is off.
+        let mut state = PackageStateView::default();
+        state.packages.entry("stresslab-economy".into()).or_default();
+        assert!(panels_of(&catalog, &state).is_empty());
+        state.packages.entry("stresslab-creeper".into()).or_default();
+        assert_eq!(panels_of(&catalog, &state).len(), 1);
+    }
+    fn panels_of(catalog: &Catalog, state: &PackageStateView) -> Vec<PackagePanel> {
+        panels(catalog, state, 4, |_| false).0
     }
 
     #[test]

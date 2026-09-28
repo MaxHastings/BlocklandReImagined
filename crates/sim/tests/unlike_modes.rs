@@ -866,8 +866,12 @@ fn a_card_game_shows_each_player_only_their_own_hand() {
     assert_eq!(seen_by_a[&a]["hand"], "AS KD 7H");
     assert_eq!(seen_by_b.keys().collect::<Vec<_>>(), [&b], "{seen_by_b:?}");
     assert_eq!(seen_by_b[&b]["hand"], "2C 2D 9S");
+    // The shared view names the running package but carries no hand.
     assert!(
-        !s.package_state().packages.contains_key("cards"),
+        s.package_state()
+            .packages
+            .get("cards")
+            .is_some_and(|ns| ns.players.is_empty() && ns.global.is_empty()),
         "the shared view carries no hand"
     );
 }
