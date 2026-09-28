@@ -47,6 +47,12 @@ fn fixture() -> Rc<Pack> {
                 ),
                 node("GuiButtonCtrl", "host", 45, "SM_StartMission();"),
                 node("GuiTextEditCtrl", "TxtServerName", 80, ""),
+                node(
+                    "GuiButtonCtrl",
+                    "addons",
+                    115,
+                    "canvas.pushDialog(AddOnsGui);",
+                ),
             ],
         ),
         (
@@ -593,4 +599,13 @@ fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
     u.handle_input(InputEvent::Wheel { delta: -0.5 });
     u.handle_input(InputEvent::Wheel { delta: 1.0 });
     assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
+}
+#[test]
+fn start_games_add_ons_tab_opens_the_add_ons_screen() {
+    let mut u = ui();
+    click(&mut u, ScreenId::MainMenu, "start");
+    u.drain_actions();
+    click(&mut u, ScreenId::StartMission, "addons");
+    assert_eq!(u.top_id(), ScreenId::AddOns);
+    assert!(actions(&mut u).contains(&UiAction::RequestAddOns));
 }
