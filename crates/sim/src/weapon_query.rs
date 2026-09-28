@@ -114,6 +114,15 @@ impl Query for WeaponQuery<'_> {
             if !ray_hits(simulation, collider, target) {
                 return false;
             }
+            // A ray never hits the brick it starts inside, so a projectile
+            // can leave the brick it spawned in (event `spawnProjectile`
+            // starts at the brick's centre).
+            if let TargetId::Brick(_) = target
+                && filter.projectile_age_ticks.is_some()
+                && collider.shape().contains_point(collider.position(), origin)
+            {
+                return false;
+            }
             if let TargetId::Actor(actor) = target {
                 if !filter.players || filter.world_only {
                     return false;

@@ -640,6 +640,13 @@ impl EventWorld {
             report.diagnostics.push(text);
         }
     }
+    /// Move the clock to the current host tick without running anything, so
+    /// inputs triggered during that tick measure their delays from it.
+    pub fn set_clock(&mut self, now_us: u64) -> Result<()> {
+        ensure!(now_us >= self.now, "Event clock cannot run backwards");
+        self.now = now_us;
+        Ok(())
+    }
     pub fn advance(&mut self, now_us: u64, host: &mut impl Host) -> Result<RunReport> {
         ensure!(now_us >= self.now, "Event clock cannot run backwards");
         self.now = now_us;

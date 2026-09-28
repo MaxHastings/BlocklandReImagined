@@ -142,6 +142,8 @@ pub struct ProjectileContact {
 pub enum ContactResponse {
     Continue,
     Delete,
+    /// `Projectile::Explode`: explode at the contact, armed or not.
+    Explode,
     Bounce(f32),
     Redirect { vector: Vec3, normalized: bool },
 }
@@ -1383,6 +1385,10 @@ impl WeaponsWorld {
             match q.on_contact(&contact) {
                 ContactResponse::Continue => {}
                 ContactResponse::Delete => return false,
+                ContactResponse::Explode => {
+                    self.explode(p, &d, q, Some(normal));
+                    return false;
+                }
                 response => match redirected_velocity(&contact, response) {
                     Ok(velocity) => {
                         p.velocity = velocity;

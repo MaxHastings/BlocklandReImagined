@@ -174,39 +174,23 @@ impl Session {
             self.events.projectile_responses.remove(&brick_id);
             return;
         };
-        // `Explode` is the default collision; the others change it.
-        let response = brick.events.iter().find_map(|row| {
-            use bri_weapons::ContactResponse as R;
-            let immediate = row.enabled
-                && row.preserved.is_none()
-                && row.delay_ms == 0
-                && row.input.eq_ignore_ascii_case("onProjectileHit")
-                && row.target == ev::Target::Slot(Slot::Projectile);
-            if !immediate {
-                return None;
+        set_projectile_response(
+            &mut self.events.projectile_responses,
+            brick_id,
+            &brick.events,
+        );
+        // v20 `getPrintCount` starts from the digit the brick shows.
+        let digit = match &brick.print {
+            Some(bri_world::ContentRef::Resolved(print)) => print.strip_prefix(DIGIT_PRINTS),
+            Some(bri_world::ContentRef::Unresolved { namespace, name }) if namespace == "print" => {
+                name.strip_prefix("Letters/")
             }
-            match (row.output.to_ascii_lowercase().as_str(), row.params.as_slice()) {
-                ("delete", _) => Some(R::Delete),
-                ("bounce", [ev::Value::Float(f)]) => Some(R::Bounce(*f)),
-                ("redirect", [ev::Value::Vector(v), ev::Value::Bool(n)]) => Some(R::Redirect {
-                    vector: *v,
-                    normalized: *n,
-                }),
-                _ => None,
-            }
-        });
-        match response {
-            Some(response) => self.events.projectile_responses.insert(brick_id, response),
-            None => self.events.projectile_responses.remove(&brick_id),
+            _ => None,
         };
-        let print_count = match &brick.print {
-            Some(bri_world::ContentRef::Resolved(print)) => print
-                .strip_prefix(DIGIT_PRINTS)
-                .and_then(|d| d.parse::<u8>().ok())
-                .filter(|d| *d < 10)
-                .unwrap_or(0),
-            _ => 0,
-        };
+        let print_count = digit
+            .and_then(|d| d.parse::<u8>().ok())
+            .filter(|d| *d < 10)
+            .unwrap_or(0);
         // A row this server cannot run (for example one naming content it
         // does not have) is kept in the world but disabled in the engine.
         let rows = brick
@@ -334,6 +318,14 @@ impl Session {
             );
         }
     }
+    /// Inputs gameplay fires during `tick` (touches, projectile hits) start
+    /// their delays at that tick, like v20's `schedule` from `getSimTime`.
+    pub(super) fn start_event_tick(&mut self, tick: u64) -> Result<()> {
+        match self.events.world.as_mut() {
+            Some(world) => world.set_clock(ev::migration::world_tick_to_us(tick)?),
+            None => Ok(()),
+        }
+    }
     /// One event phase per tick, after gameplay has fired this tick's inputs.
     pub(super) fn step_events(&mut self, changed: &BTreeSet<BrickId>) -> Result<()> {
         self.sync_event_programs(changed);
@@ -364,6 +356,14 @@ impl Session {
                         }
                     });
                     self.dirty.insert(program.index);
+                    // The next projectile contact already sees the change.
+                    if let Some(brick) = self.simulation.state().bricks.get(&program.index) {
+                        set_projectile_response(
+                            &mut self.events.projectile_responses,
+                            program.index,
+                            &brick.events,
+                        );
+                    }
                 }
             }
             for text in report.diagnostics {
@@ -517,6 +517,44 @@ impl Session {
     }
 }
 
+/// The first enabled zero-delay `onProjectileHit -> Projectile` row decides
+/// what the weapon runtime does at the contact; without one the projectile
+/// collides as usual (bounces, or explodes once armed).
+fn set_projectile_response(
+    responses: &mut BTreeMap<BrickId, bri_weapons::ContactResponse>,
+    brick: BrickId,
+    rows: &[ev::Row],
+) {
+    use bri_weapons::ContactResponse as R;
+    let response = rows.iter().find_map(|row| {
+        let immediate = row.enabled
+            && row.preserved.is_none()
+            && row.delay_ms == 0
+            && row.input.eq_ignore_ascii_case("onProjectileHit")
+            && row.target == ev::Target::Slot(Slot::Projectile);
+        if !immediate {
+            return None;
+        }
+        match (
+            row.output.to_ascii_lowercase().as_str(),
+            row.params.as_slice(),
+        ) {
+            ("explode", _) => Some(R::Explode),
+            ("delete", _) => Some(R::Delete),
+            ("bounce", [ev::Value::Float(f)]) => Some(R::Bounce(*f)),
+            ("redirect", [ev::Value::Vector(v), ev::Value::Bool(n)]) => Some(R::Redirect {
+                vector: *v,
+                normalized: *n,
+            }),
+            _ => None,
+        }
+    });
+    match response {
+        Some(response) => responses.insert(brick, response),
+        None => responses.remove(&brick),
+    };
+}
+
 struct EventHost<'a> {
     session: &'a mut Session,
 }
@@ -587,10 +625,11 @@ impl EventHost<'_> {
         scale: f32,
     ) {
         let source = ActorId(self.instigator(d));
+        let scale = scale.clamp(0.1, 10.0);
         match self
             .session
             .weapons
-            .spawn(projectile, source, at, velocity, scale.clamp(0.1, 10.0))
+            .spawn(projectile, source, at, velocity, scale)
         {
             Ok(id) => {
                 if let Some(owner) = self

@@ -3099,3 +3099,13 @@ real integrated GPU; needs a weaker PC.
 - Evidence: `cargo test -p bri-vehicles` (new `tests/skis.rs`),
   `cargo test -p bri-weapons -- --ignored`,
   `cargo test -p bri-sim --test vehicles -- --ignored`.
+- 2026-09-28 Demo Pong events audit (`docs/audits/pong-events.md`, branch
+  `claude/pong-events`). v20's Bedroom "Demo Pong" (277 rows, 4 inputs, 13
+  outputs) imported fully but did not play: the served ball was deleted
+  inside its serve brick. Fixed: projectile rays ignore the brick they start
+  in; `Projectile Explode` responses; projectile responses refresh when rows
+  toggle; event delays start at the tick an input fires; counters start
+  from an unresolved `Letters/N` print. Evidence: `cargo test -p bri-sim
+  --test pong -- --ignored` (rally, points each side, win, reset, paddle
+  state machine), `--test events_native -- --ignored`, `cargo test -p
+  bri-events -p bri-weapons -p bri-sim`, clippy on those.

@@ -1505,6 +1505,7 @@ impl Session {
                 failures.push(format!("{system}: {error:#}"));
             }
         };
+        contain("events", self.start_event_tick(tick + 1));
         contain("bots", self.step_bots());
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
