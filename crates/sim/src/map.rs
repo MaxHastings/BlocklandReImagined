@@ -41,6 +41,64 @@ pub struct NativeMap {
     pub waters: Vec<bri_content::water::Water>,
     /// Retained scene objects which this adapter does not yet give collision.
     pub pending_objects: Vec<String>,
+    /// Static shapes a fast player smashes (v20 `Glass` class).
+    pub breakables: Vec<Breakable>,
+}
+
+/// A v20 `Glass`-class static shape (`glassA`, `lightBulbA`,
+/// `fluorescentLight`). `Armor::onImpact` calls `StaticShape::explode` on one
+/// unless the mission marks it `indestructable`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Breakable {
+    /// Scene node index: the stable identity clients hide.
+    pub node: u32,
+    pub datablock: String,
+    /// `ExplosionData` that `ShapeBase::blowUp` plays on destruction.
+    pub explosion: Option<String>,
+    /// `explosionSound`, played by `explode` at the shape's origin. Only
+    /// `glassA` has one; the bulb and fluorescent lights break silently.
+    pub sound: Option<String>,
+    pub position: Vec3,
+    /// `blowUp`'s explosion point: the object box center added to the
+    /// position without rotation or scale, as the engine does.
+    pub center: Vec3,
+    pub indestructable: bool,
+    /// Indices into `NativeMap::colliders`.
+    pub colliders: std::ops::Range<usize>,
+}
+
+/// `StaticShapeData` declarations whose `className` is `Glass`, by lowercase
+/// name: (explosion, explosionSound).
+fn glass_datablocks(
+    bundle: &serde_json::Value,
+) -> std::collections::BTreeMap<String, (Option<String>, Option<String>)> {
+    let field = |fields: &serde_json::Value, key: &str| {
+        fields[key]
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+    bundle["static_datablocks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| {
+            d["fields"]["classname"]
+                .as_str()
+                .is_some_and(|c| c.eq_ignore_ascii_case("glass"))
+        })
+        .filter_map(|d| {
+            let fields = &d["fields"];
+            Some((
+                d["name"].as_str()?.to_ascii_lowercase(),
+                (field(fields, "explosion"), field(fields, "explosionsound")),
+            ))
+        })
+        .collect()
+}
+/// TorqueScript truth: a field is true when it reads as a nonzero number.
+fn script_true(value: &str) -> bool {
+    value.trim().parse::<f64>().is_ok_and(|v| v != 0.0)
 }
 fn native_file(root: &Path, name: &str) -> Result<PathBuf> {
     ensure!(
@@ -122,12 +180,14 @@ impl NativeMap {
                 "Native water index disagrees with map"
             );
         }
+        let glass = glass_datablocks(&bundle);
+        let mut breakables = Vec::new();
         let mut pending_objects: Vec<_> = scene
             .pending_scripts
             .iter()
             .map(|p| p.diagnostic())
             .collect();
-        for node in &scene.nodes {
+        for (index, node) in scene.nodes.iter().enumerate() {
             ensure!(
                 node.transform.iter().all(|v| v.is_finite()),
                 "Non-finite map transform"
@@ -159,12 +219,30 @@ impl NativeMap {
                     )?;
                     let shape: bri_content::shape::Shape =
                         serde_json::from_slice(&std::fs::read(path)?)?;
+                    let first = colliders.len();
                     colliders.extend(
                         bri_physics::content::static_shape_colliders(&shape, transform)?
                             .into_iter()
                             .map(|c| c.user_data(MapSurface::Static as u128)),
                     );
-                    if let Some(pending) = node.properties.get("native_behavior_pending") {
+                    let datablock = node.properties.get("datablock");
+                    if let Some((name, (explosion, sound))) = datablock
+                        .and_then(|d| glass.get(&d.to_ascii_lowercase()).map(|g| (d, g)))
+                    {
+                        breakables.push(Breakable {
+                            node: u32::try_from(index)?,
+                            datablock: name.clone(),
+                            explosion: explosion.clone(),
+                            sound: sound.clone(),
+                            position: transform.w_axis.truncate(),
+                            center: transform.w_axis.truncate() + object_box_center(&shape)?,
+                            indestructable: node
+                                .properties
+                                .get("indestructable")
+                                .is_some_and(|v| script_true(v)),
+                            colliders: first..colliders.len(),
+                        });
+                    } else if let Some(pending) = node.properties.get("native_behavior_pending") {
                         pending_objects.push(format!("{}: {pending}", node.name));
                     }
                 }
@@ -204,8 +282,29 @@ impl NativeMap {
             terrain,
             waters,
             pending_objects,
+            breakables,
         })
     }
+}
+
+/// Center of the shape's bounds at its default pose, in object space.
+fn object_box_center(shape: &bri_content::shape::Shape) -> Result<Vec3> {
+    let mut pose = bri_content::animation::sample(shape, None, 0.0)?;
+    pose.visibility.fill(1.0);
+    let (mut min, mut max) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+    for detail in 0..shape.details.len() {
+        for triangle in bri_content::animation::triangles(shape, &pose, detail, |_| true)? {
+            for vertex in triangle.vertices {
+                min = min.min(vertex.position);
+                max = max.max(vertex.position);
+            }
+        }
+    }
+    Ok(if min.cmple(max).all() {
+        (min + max) * 0.5
+    } else {
+        Vec3::ZERO
+    })
 }
 
 /// Terrain collision streamed around every moving body of one physics world

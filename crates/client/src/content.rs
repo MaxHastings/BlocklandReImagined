@@ -171,6 +171,8 @@ pub struct LoadedMap {
     pub terrain: Vec<std::sync::Arc<bri_content::terrain_field::TerrainField>>,
     /// The Tutorial map's lesson zones and brick layouts.
     pub tutorial: Option<bri_sim::tutorial::TutorialMap>,
+    /// Glass shapes a fast player smashes.
+    pub breakables: Vec<bri_sim::map::Breakable>,
 }
 
 pub struct ClientContent {
@@ -452,6 +454,7 @@ impl ContentPaths {
         } else {
             None
         };
+        let breakables = native.breakables;
         let mut pending_objects = native.pending_objects;
         if unresolved_items > 0 {
             pending_objects.push(format!(
@@ -467,6 +470,7 @@ impl ContentPaths {
             query_colliders,
             terrain,
             tutorial,
+            breakables,
         })
     }
 }

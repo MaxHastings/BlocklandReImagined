@@ -70,6 +70,7 @@ pub struct Building {
     ghost: Option<Brick>,
     ghost_generation: u64,
     map: PhysicsWorld,
+    broken: bri_sim::prediction::BrokenShapes,
     terrain: Vec<Arc<TerrainField>>,
     bricks: BTreeMap<BrickId, Brick>,
     index: Index,
@@ -81,9 +82,10 @@ pub struct Building {
 impl Building {
     pub fn new(definitions: Definitions, map_colliders: Vec<ColliderBuilder>) -> Result<Self> {
         let mut map = PhysicsWorld::new();
-        for collider in map_colliders {
-            map.insert_collider(collider, None);
-        }
+        let handles = map_colliders
+            .into_iter()
+            .map(|collider| map.insert_collider(collider, None))
+            .collect();
         map.detect_collisions(&(), &());
         Ok(Self {
             definitions,
@@ -113,6 +115,7 @@ impl Building {
             ghost: None,
             ghost_generation: 0,
             map,
+            broken: bri_sim::prediction::BrokenShapes::new(handles, &[]),
             terrain: Vec::new(),
             bricks: Default::default(),
             index: Index::default(),
@@ -122,6 +125,17 @@ impl Building {
         })
     }
 
+    /// The map's breakable shapes (`NativeMap::breakables`).
+    pub fn set_breakables(&mut self, shapes: &[bri_sim::map::Breakable]) {
+        self.broken.set_shapes(shapes);
+    }
+    /// Smashed shapes no longer stop build rays (`Session::broken_shapes`).
+    pub fn set_broken_shapes(&mut self, broken: &std::collections::BTreeSet<u32>) -> Result<()> {
+        if self.broken.apply(&mut self.map, broken)? {
+            self.query_generation = self.query_generation.wrapping_add(1);
+        }
+        Ok(())
+    }
     /// Exact map terrain for every query; it is never approximated by tiles.
     pub fn attach_terrain(&mut self, terrain: Vec<Arc<TerrainField>>) {
         self.terrain = terrain;

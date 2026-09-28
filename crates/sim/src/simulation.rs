@@ -62,6 +62,8 @@ pub struct Simulation {
     brick_waters: BTreeMap<BrickId, bri_content::water::Water>,
     index: Index,
     handles: BTreeMap<BrickId, ColliderHandle>,
+    /// Map colliders in `NativeMap::colliders` order.
+    map_handles: Vec<ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
 }
 fn pose(brick: &Brick) -> Pose {
@@ -80,6 +82,20 @@ pub fn brick_collider(brick: &Brick, definition: &Definition, id: BrickId) -> Co
         .user_data(u128::from(id))
 }
 /// `$TrustLevel::BuildOn`.
+/// Enable or disable a range of map colliders; shared with client mirrors.
+pub fn set_enabled(
+    physics: &mut PhysicsWorld,
+    handles: &[ColliderHandle],
+    colliders: std::ops::Range<usize>,
+    enabled: bool,
+) -> Result<()> {
+    let handles = handles.get(colliders).context("Unknown map colliders")?;
+    for handle in handles {
+        physics.colliders[*handle].set_enabled(enabled);
+    }
+    physics.detect_collisions(&(), &());
+    Ok(())
+}
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
     actor.trusted(brick.owner, bri_world::authority::trust::BUILD)
 }
@@ -87,9 +103,10 @@ impl Simulation {
     pub fn new(world: World, definitions: Definitions, map: Vec<ColliderBuilder>) -> Result<Self> {
         world.validate()?;
         let mut physics = bri_physics::new_world();
-        for c in map {
-            physics.insert_collider(c.user_data(MAP_TAG), None);
-        }
+        let map_handles = map
+            .into_iter()
+            .map(|c| physics.insert_collider(c.user_data(MAP_TAG), None))
+            .collect();
         let mut index = Index::default();
         let mut handles = BTreeMap::new();
         let mut brick_waters = BTreeMap::new();
@@ -114,8 +131,22 @@ impl Simulation {
             brick_waters,
             index,
             handles,
+            map_handles,
             terrain: None,
         })
+    }
+    /// Position of a map collider in `NativeMap::colliders`.
+    pub fn map_collider_index(&self, handle: ColliderHandle) -> Option<usize> {
+        self.map_handles.iter().position(|h| *h == handle)
+    }
+    /// Make map colliders (a hidden static shape) intangible to every body
+    /// and query, or solid again.
+    pub fn set_map_colliders(
+        &mut self,
+        colliders: std::ops::Range<usize>,
+        enabled: bool,
+    ) -> Result<()> {
+        set_enabled(&mut self.physics, &self.map_handles, colliders, enabled)
     }
     /// Stream the map's terrain collision around moving bodies and `anchors`
     /// (authored spawn regions). Replaces any previously attached terrain.

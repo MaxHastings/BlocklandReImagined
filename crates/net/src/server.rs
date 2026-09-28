@@ -672,6 +672,7 @@ async fn run(
     let mut minigames = Vec::new();
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
+    let mut broken_shapes = session.broken_shapes();
     let mut last_chat = 0;
     let mut step_errors = 0_u64;
     let mut spawn_points = options.spawn_points.clone();
@@ -697,7 +698,7 @@ async fn run(
                     session.adopt(old,admin)?;
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks});
                     for peer in peers.values(){peer.send(transfer.clone());}
@@ -792,10 +793,11 @@ async fn run(
                 let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
+                let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale}));cursor=next;
+                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken}));cursor=next;
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(&Message::Notice(notice));}}
             }
             }

@@ -21,6 +21,9 @@ use std::{
 pub struct MapScene {
     pub scene: SceneData,
     pub terrain: Vec<TerrainScene>,
+    /// Index range of each static shape by scene node, so a smashed shape
+    /// can stop drawing (`GpuScene::hide_indices`).
+    pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
 }
 
 fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -293,10 +296,15 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
             )
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut shape_indices = BTreeMap::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
+        let first = out.indices.len() as u32;
         match node.kind {
             Kind::Interior=>load_interior(&root,&bundle,bindings,&scene,node_index,node,&mut out,&mut cache)?,
-            Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?,
+            Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>{
+                load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?;
+                shape_indices.insert(u32::try_from(node_index)?, first..out.indices.len() as u32);
+            }
             Kind::StaticModel=>anyhow::bail!("Static model {} has no native asset",node.name),
             Kind::Water if water_bound=>{},
             Kind::DatablockModel|Kind::Foliage|Kind::Water|Kind::Precipitation|Kind::Unadapted=>out.omissions.push(format!("Node {node_index} {:?} '{}' is retained in the bundle but not drawn by this static architecture pass",node.kind,node.name)),
@@ -309,6 +317,7 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
     Ok(MapScene {
         scene: out,
         terrain,
+        shape_indices,
     })
 }
 

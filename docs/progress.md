@@ -2375,3 +2375,25 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   from the table. World saves without owners serialize unchanged, so the
   generated packs are unaffected. Evidence: `cargo test -p bri-world -p
   bri-sim -p bri-net` (new `returning_players_get_their_bricks_back_after_a_restart`).
+- 2026-09-27 breakable map glass (protocol 29), re-ported from `breakables`
+  (ab6a16a) onto the streamed world transfer. v20's only breakable map
+  objects are the `Glass`-class StaticShapes: `glassA` (the 4 Bedroom and
+  BedroomDark windows), `lightBulbA` (the Bedroom lamp bulb) and
+  `fluorescentLight` (the 4 Kitchen and KitchenDark ceiling lights). The 7
+  Kitchen windows are `glassA` with `indestructable = "1"` and never break.
+  Rule (`Armor::onImpact`): any player collision whose speed into the surface
+  exceeds `minImpactSpeed` 30 calls `StaticShape::explode` and skips that
+  impact's falling damage (`Player::updatePos` 0x5B18DD gates it, server
+  only). Corpses count; projectiles, explosions, the hammer and vehicles do
+  not. `explode` plays `glassExplosion` at object-box center + position,
+  stops drawing the shape (`renderWhenDestroyed = 0`), plays
+  `explosionSound` (only `glassA` has one) and hides it 100 ms later, which
+  removes its collision. Nothing repairs it until the mission reloads.
+  Implementation: `NativeMap::breakables`, per-collision hits from the motor,
+  `session/breakables.rs`, `Checkpoint.broken_shapes` beside `world_bricks`
+  and `Delta.broken_shapes`, client prediction/build-ray mirrors disable the
+  colliders and `GpuScene::hide_indices` stops drawing it. Evidence:
+  `bri-sim --test breakables`, `--test breakables_native -- --ignored` against
+  map-bundle-016 (every Bedroom window and the bulb take a >30 impact from a
+  thrown player), `bri-net --test replication`. The motor hits still come from
+  Rapier contacts; they move to the Torque contacts when slides lands.

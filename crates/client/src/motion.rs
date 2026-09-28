@@ -162,6 +162,15 @@ impl Motion {
                 view.world_revision,
             ));
         }
+        match (&mut self.predictor, &mut self.mirror) {
+            (Some(predictor), _) => {
+                predictor.set_broken_shapes(&view.broken_shapes)?;
+            }
+            (None, Some(mirror)) => {
+                mirror.set_broken_shapes(&view.broken_shapes)?;
+            }
+            (None, None) => {}
+        }
         for (owner, pose) in &view.poses {
             self.observe_clock(pose.tick);
             if *owner == view.owner {

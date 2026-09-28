@@ -1,7 +1,7 @@
 use crate::protocol::*;
 use anyhow::{Result, ensure};
 use bri_world::OwnerId;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub struct Replica {
     pub weapons: bri_sim::session::WeaponView,
     pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
@@ -21,6 +21,12 @@ pub struct Replica {
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     pub time_scale: f32,
+    /// Scene nodes of smashed map shapes.
+    pub broken_shapes: BTreeSet<u32>,
+}
+fn validate_broken_shapes(shapes: &BTreeSet<u32>) -> Result<()> {
+    ensure!(shapes.len() <= 4096, "Invalid broken map shapes");
+    Ok(())
 }
 fn validate_time_scale(scale: f32) -> Result<()> {
     ensure!((0.2..=2.0).contains(&scale), "Invalid time scale");
@@ -101,6 +107,7 @@ impl Replica {
         validate_minigames(&checkpoint.minigames)?;
         validate_vehicles(&checkpoint.vehicles)?;
         validate_time_scale(checkpoint.time_scale)?;
+        validate_broken_shapes(&checkpoint.broken_shapes)?;
         for pose in &checkpoint.vehicle_poses {
             validate_vehicle_pose(pose)?;
         }
@@ -128,6 +135,7 @@ impl Replica {
                 .map(|p| (p.id, p))
                 .collect(),
             time_scale: checkpoint.time_scale,
+            broken_shapes: checkpoint.broken_shapes,
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -203,6 +211,9 @@ impl Replica {
         if let Some(scale) = delta.time_scale {
             validate_time_scale(scale)?;
         }
+        if let Some(shapes) = &delta.broken_shapes {
+            validate_broken_shapes(shapes)?;
+        }
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -260,6 +271,9 @@ impl Replica {
         }
         if let Some(scale) = delta.time_scale {
             self.time_scale = scale;
+        }
+        if let Some(shapes) = delta.broken_shapes {
+            self.broken_shapes = shapes;
         }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();
