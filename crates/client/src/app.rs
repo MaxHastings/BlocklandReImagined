@@ -2649,6 +2649,9 @@ impl App {
                 network::Event::Ready => a.ready = true,
                 network::Event::MapChanged(map) => {
                     a.saved_revision = None;
+                    // Movement limits belong to the old map's Tutorial; the
+                    // new map sends its own if it has any.
+                    self.abilities = Default::default();
                     a.settling = Some(std::time::Instant::now() + SETTLE);
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
