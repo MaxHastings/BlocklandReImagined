@@ -3,7 +3,7 @@
 //! changes. Players only ever see "Add-Ons"; "package" is the code's word.
 //! The mechanism (lists, dependencies, refusals) is `bri_package::library`;
 //! the words and grouping here are presentation only.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_package::diag::Severity;
 use bri_package::library::{Library, LibraryEntry};
 use bri_package::packages::Side;
@@ -200,7 +200,96 @@ pub fn rows(library: &Library) -> Vec<AddOnRow> {
         }
     };
     out.sort_by_key(|r| rank(&r.category));
+    // Old add-ons waiting to be imported come last.
+    for l in library.legacy.iter().filter(|l| l.imported_as.is_none()) {
+        out.push(AddOnRow {
+            id: format!("{LEGACY}{}", l.name),
+            name: l.name.clone(),
+            category: LEGACY_CATEGORY.into(),
+            description: "An old Blockland add-on from your Add-Ons folder. Import converts it into an add-on this game can load; it starts off. Its scripts are never run: the import report lists anything that needs rewriting.".into(),
+            importable: true,
+            ..Default::default()
+        });
+    }
     out
+}
+
+/// Row ids of old add-ons waiting in the drop folder.
+pub const LEGACY: &str = "legacy:";
+const LEGACY_CATEGORY: &str = "Not Imported Yet";
+
+/// Show `id` as being imported.
+pub fn mark_importing(view: &mut AddOnsView, id: &str) {
+    for r in view.rows.iter_mut().filter(|r| r.id == id) {
+        r.importing = true;
+    }
+}
+
+/// The importer ships next to the game (`bri-import-addon`). It is a
+/// separate program so conversion tooling stays out of the game itself.
+pub fn importer() -> Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    let path = exe.with_file_name(format!("bri-import-addon{}", std::env::consts::EXE_SUFFIX));
+    anyhow::ensure!(
+        path.is_file(),
+        "The add-on importer is not installed next to the game ({}).",
+        path.display()
+    );
+    Ok(path)
+}
+
+/// Start importing the old add-on behind row `id` on a worker thread. The
+/// receiver yields the notice to show when it finishes.
+pub fn start_import(
+    root: &Path,
+    id: &str,
+    importer: &Path,
+) -> Result<std::sync::mpsc::Receiver<Result<String>>> {
+    let library = Library::scan(root)?;
+    let name = id
+        .strip_prefix(LEGACY)
+        .context("That add-on is already imported.")?;
+    let legacy = library
+        .legacy
+        .iter()
+        .find(|l| l.name == name)
+        .with_context(|| format!("{name} is no longer in the Add-Ons folder."))?;
+    anyhow::ensure!(legacy.imported_as.is_none(), "{name} is already imported.");
+    anyhow::ensure!(
+        importer.is_file(),
+        "The add-on importer is not installed ({}).",
+        importer.display()
+    );
+    let dir = library.import_dir(name);
+    let out = root.join(&dir);
+    let input = legacy.path.clone();
+    let importer = importer.to_path_buf();
+    let name = name.to_string();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = std::process::Command::new(&importer)
+            .arg(&input)
+            .arg(&out)
+            .arg("--json")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .with_context(|| format!("Running {}", importer.display()))
+            .and_then(|o| {
+                if o.status.success() {
+                    Ok(format!(
+                        "Imported {name}. It is off until you turn it on. What converted and what needs work is in {dir}/IMPORT-REPORT.md."
+                    ))
+                } else {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    let reason = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no details");
+                    // Leave no half-written package behind.
+                    let _ = std::fs::remove_dir_all(&out);
+                    Err(anyhow::anyhow!("{name} could not be imported: {reason}"))
+                }
+            });
+        let _ = send.send(result);
+    });
+    Ok(receive)
 }
 
 fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
@@ -278,6 +367,8 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
             })
             .collect(),
         broken: e.has_errors(),
+        importable: false,
+        importing: false,
     }
 }
 
@@ -367,6 +458,24 @@ mod tests {
             ("1.0.0", "")
         );
         assert!(mismatch(&root, "Timed out").is_none());
+        // An old add-on dropped in Add-Ons is offered for import, last.
+        std::fs::create_dir_all(root.join("Add-Ons")).unwrap();
+        std::fs::write(root.join("Add-Ons/Weapon_Shotgun.zip"), b"PK").unwrap();
+        let mut v = view(&root);
+        let last = v.rows.last().unwrap();
+        assert_eq!(
+            (last.id.as_str(), last.category.as_str(), last.importable),
+            ("legacy:Weapon_Shotgun", "Not Imported Yet", true)
+        );
+        mark_importing(&mut v, "legacy:Weapon_Shotgun");
+        assert!(v.rows.last().unwrap().importing);
+        let missing =
+            start_import(&root, "legacy:Weapon_Shotgun", &root.join("no-importer")).unwrap_err();
+        assert!(
+            format!("{missing}").contains("importer is not installed"),
+            "{missing}"
+        );
+        assert!(start_import(&root, "creeper", &root.join("x")).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

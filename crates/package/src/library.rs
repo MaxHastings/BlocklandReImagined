@@ -160,8 +160,28 @@ pub struct Library {
     root: PathBuf,
     /// Enabled packages in load order, then disabled ones by name.
     pub entries: Vec<LibraryEntry>,
+    /// Old Blockland add-ons dropped into [`DROP_DIR`], by name.
+    pub legacy: Vec<LegacyAddOn>,
     /// Problems with the lists themselves.
     pub problems: Diagnostics,
+}
+
+/// Where players drop old Blockland add-on zips and folders, as in v20.
+pub const DROP_DIR: &str = "Add-Ons";
+/// Where importing one writes its package.
+pub const IMPORT_DIR: &str = "addons";
+/// Legacy add-ons listed at most.
+pub const MAX_LEGACY: usize = 1024;
+
+/// An old Blockland add-on (zip or folder) waiting in [`DROP_DIR`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyAddOn {
+    /// File stem, as v20 named it (`Weapon_Shotgun`).
+    pub name: String,
+    pub path: PathBuf,
+    /// The installed package imported from it, matched by the provenance
+    /// the importer records (`Blockland Add-On <name> (...)`).
+    pub imported_as: Option<String>,
 }
 
 impl Library {
@@ -292,9 +312,11 @@ impl Library {
             }
             entries.push(found);
         }
+        let legacy = legacy(root, &entries);
         let mut library = Self {
             root: root.to_path_buf(),
             entries,
+            legacy,
             problems,
         };
         library.check_dependencies();
@@ -316,6 +338,32 @@ impl Library {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// A fresh directory under [`IMPORT_DIR`] for importing `name`: its
+    /// lower-case, `_`-joined name, numbered if taken. Content-root relative.
+    pub fn import_dir(&self, name: &str) -> String {
+        let mut stem: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        stem = stem.trim_matches('_').chars().take(64).collect();
+        if stem.is_empty() {
+            stem = "addon".into();
+        }
+        let mut dir = format!("{IMPORT_DIR}/{stem}");
+        let mut n = 2;
+        while self.root.join(&dir).exists() {
+            dir = format!("{IMPORT_DIR}/{stem}-{n}");
+            n += 1;
+        }
+        dir
     }
 
     pub fn get(&self, id: &str) -> Option<&LibraryEntry> {
@@ -704,7 +752,7 @@ fn discover(
         let Some(name) = child.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if name.starts_with('.') {
+        if name.starts_with('.') || (depth == 0 && name.eq_ignore_ascii_case(DROP_DIR)) {
             continue;
         }
         let Ok(rel) = child.strip_prefix(root) else {
@@ -725,6 +773,50 @@ fn discover(
             discover(root, &child, depth + 1, listed, visited, out);
         }
     }
+}
+
+/// Zips and folders in [`DROP_DIR`], each matched to the package imported
+/// from it, if any.
+fn legacy(root: &Path, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
+    let Ok(read) = std::fs::read_dir(root.join(DROP_DIR)) else {
+        return vec![];
+    };
+    let mut out: Vec<LegacyAddOn> = read
+        .flatten()
+        .filter_map(|e| {
+            let kind = e.file_type().ok()?;
+            let path = e.path();
+            let zip = kind.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("zip"));
+            if !(zip || kind.is_dir()) {
+                return None;
+            }
+            let name = path.file_stem()?.to_str()?.to_string();
+            if name.starts_with('.') {
+                return None;
+            }
+            let prefix = format!("Blockland Add-On {name} (");
+            let imported_as = entries
+                .iter()
+                .find(|p| {
+                    p.info
+                        .as_ref()
+                        .and_then(|i| i.source())
+                        .is_some_and(|s| s.starts_with(&prefix))
+                })
+                .map(|p| p.package.id.clone());
+            Some(LegacyAddOn {
+                name,
+                path,
+                imported_as,
+            })
+        })
+        .take(MAX_LEGACY)
+        .collect();
+    out.sort_by_key(|l| l.name.to_ascii_lowercase());
+    out
 }
 
 /// One entry per line, like the base list, written to a temporary file and
@@ -962,6 +1054,44 @@ mod tests {
         let mut lib = lib;
         lib.apply(&lib.plan("gone", false)).unwrap();
         assert!(!lib.get("gone").unwrap().enabled);
+    }
+
+    #[test]
+    fn dropped_add_ons_are_listed_and_matched_to_their_import() {
+        let r = fixture("legacy");
+        let drop = r.0.join(DROP_DIR);
+        std::fs::create_dir_all(drop.join("Vehicle_Jeep")).unwrap();
+        std::fs::write(drop.join("Weapon_Shotgun.zip"), b"PK").unwrap();
+        std::fs::write(drop.join("readme.txt"), b"hi").unwrap();
+        manifest(
+            &r.0,
+            "addons/weapon_shotgun",
+            "weapon_shotgun",
+            json!({}),
+            &["weapons"],
+        );
+        let path = r.0.join("addons/weapon_shotgun").join(MANIFEST_FILE);
+        let mut m: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        m["provenance"]["source"] = json!("Blockland Add-On Weapon_Shotgun (zip), sha256 00");
+        std::fs::write(&path, m.to_string()).unwrap();
+        let lib = Library::scan(&r.0).unwrap();
+        let legacy: Vec<_> = lib
+            .legacy
+            .iter()
+            .map(|l| (l.name.as_str(), l.imported_as.as_deref()))
+            .collect();
+        assert_eq!(
+            legacy,
+            [
+                ("Vehicle_Jeep", None),
+                ("Weapon_Shotgun", Some("weapon_shotgun"))
+            ]
+        );
+        // A dropped v20 folder is never mistaken for a package.
+        assert!(lib.get("vehicle_jeep").is_none());
+        assert_eq!(lib.import_dir("Weapon_Shotgun"), "addons/weapon_shotgun-2");
+        assert_eq!(lib.import_dir("Vehicle Jeep!"), "addons/vehicle_jeep");
     }
 
     #[test]

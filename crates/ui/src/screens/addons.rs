@@ -15,6 +15,7 @@ const SEARCH: &str = "AO_Search";
 const DETAILS: &str = "AO_Details";
 const DETAIL_SCROLL: &str = "AO_DetailScroll";
 const ENABLED: &str = "AO_Enabled";
+const IMPORT: &str = "AO_Import";
 const STATUS: &str = "AO_Status";
 const DEFAULTS: &str = "AO_Defaults";
 const DONE: &str = "AO_Done";
@@ -94,6 +95,16 @@ impl AddOns {
         );
         enabled.text = Some("Enabled".into());
         win.children.push(named(enabled, ENABLED));
+        win.children.push(named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(256, 350, 98, 28),
+                "base/client/ui/button1",
+                "Import",
+                IMPORT,
+            ),
+            IMPORT,
+        ));
         let mut status = text("GuiMLTextProfile", Rect::new(12, 380, 576, 20), "");
         status.class = "GuiMLTextCtrl".into();
         win.children.push(named(status, STATUS));
@@ -165,7 +176,11 @@ impl AddOns {
                 if r.category != category || !matches(r) {
                     continue;
                 }
-                let mark = if r.broken && r.enabled {
+                let mark = if r.importing {
+                    "..."
+                } else if r.importable {
+                    "New"
+                } else if r.broken && r.enabled {
                     "!!"
                 } else if r.locked {
                     "Base"
@@ -227,7 +242,24 @@ impl AddOns {
                 .set_bool(n, row.as_ref().is_some_and(|r| r.enabled));
             self.view
                 .set_active(n, row.as_ref().is_some_and(|r| !r.locked));
-            self.view.set_visible(n, row.is_some());
+            self.view
+                .set_visible(n, row.as_ref().is_some_and(|r| !r.importable));
+        }
+        if let Some(n) = self.view.id(IMPORT) {
+            self.view
+                .set_visible(n, row.as_ref().is_some_and(|r| r.importable));
+            self.view
+                .set_active(n, row.as_ref().is_some_and(|r| !r.importing));
+        }
+    }
+
+    fn import(&mut self, core: &mut Core) {
+        let Some(row) = self.row(core).cloned() else {
+            return;
+        };
+        if row.importable && !row.importing {
+            let id = core.request(UiAction::ImportAddOn { id: row.id });
+            self.requests.push(id);
         }
     }
 
@@ -235,6 +267,10 @@ impl AddOns {
         let Some(row) = self.row(core).cloned() else {
             return;
         };
+        if row.importable {
+            self.import(core);
+            return;
+        }
         if row.locked {
             core.message_ok(
                 "Add-Ons",
@@ -273,6 +309,12 @@ pub fn details(r: &AddOnRow) -> String {
         (true, true) => out.push_str("Part of the base game"),
         (false, true) => out.push_str(&format!("Version {} - part of the base game", r.version)),
         (_, false) => out.push_str(&format!("Version {}", r.version)),
+    }
+    if r.importable {
+        if !r.version.is_empty() || r.locked {
+            out.push_str(" - ");
+        }
+        out.push_str("Old Blockland add-on, not imported yet");
     }
     out.push('\n');
     if !r.problems.is_empty() {
@@ -387,6 +429,7 @@ impl Screen for AddOns {
                     self.toggle(core);
                 }
             }
+            (IMPORT, EventKind::Click) => self.import(core),
             (ENABLED, EventKind::Click) => {
                 self.toggle(core);
                 // The box shows the host's answer, not the click.
@@ -874,6 +917,57 @@ mod tests {
             &mut ui.core,
         );
         assert!(ui.drain_actions().is_empty());
+    }
+
+    #[test]
+    fn old_add_ons_offer_import_instead_of_enabled() {
+        let mut ui = ui();
+        let mut v = view();
+        let mut old = row("legacy:Weapon_Shotgun", "Not Imported Yet", false);
+        old.version = String::new();
+        old.importable = true;
+        v.rows.push(old);
+        ui.apply(UiUpdate::AddOns(v));
+        let mut s = AddOns::new(&ui.core);
+        ui.drain_actions();
+        select(&mut s, &mut ui, "The legacy:Weapon_Shotgun");
+        let import = s.view.id(IMPORT).unwrap();
+        assert!(s.view.node(import).state.visible);
+        assert!(!s.view.node(s.view.id(ENABLED).unwrap()).state.visible);
+        let text = s.view.text_of(s.view.id(DETAILS).unwrap());
+        assert!(
+            text.contains("Old Blockland add-on, not imported yet"),
+            "{text}"
+        );
+        s.on_event(
+            &ViewEvent {
+                node: import,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
+        assert_eq!(
+            actions,
+            [UiAction::ImportAddOn {
+                id: "legacy:Weapon_Shotgun".into()
+            }]
+        );
+        // While it runs, the list says so and Import waits.
+        let mut v = ui.core.add_ons.clone();
+        v.rows.last_mut().unwrap().importing = true;
+        ui.apply(UiUpdate::AddOns(v));
+        s.on_update(&mut ui.core);
+        assert!(!s.view.node(import).state.active);
+        let list = s.view.id(LIST).unwrap();
+        assert!(
+            s.view
+                .node(list)
+                .state
+                .items
+                .iter()
+                .any(|(t, _)| t == "...\tThe legacy:Weapon_Shotgun")
+        );
     }
 
     #[test]

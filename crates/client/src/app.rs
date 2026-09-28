@@ -327,6 +327,8 @@ pub struct App {
     /// LAN listings from the last discovery query: address -> certificate.
     lan_hosts: BTreeMap<String, Vec<u8>>,
     lan_query: Option<mpsc::Receiver<Vec<(SocketAddr, bri_net::discovery::Beacon)>>>,
+    /// Add-On import in progress: request, row id and the worker's answer.
+    add_on_import: Option<(RequestId, String, mpsc::Receiver<Result<String>>)>,
     macro_recording: Option<Vec<UiAction>>,
     build_macro: Vec<UiAction>,
     macro_playback: VecDeque<UiAction>,
@@ -1019,6 +1021,7 @@ impl App {
             frame_stats: Default::default(),
             lan_hosts: BTreeMap::new(),
             lan_query: None,
+            add_on_import: None,
             macro_recording: None,
             build_macro: Vec::new(),
             macro_playback: VecDeque::new(),
@@ -3509,6 +3512,24 @@ impl PlatformApp for App {
         }
         self.update_combat_presentation();
         self.update_net_graph();
+        if let Some((request, _, receiver)) = &self.add_on_import
+            && let Ok(result) = receiver.try_recv()
+        {
+            let request = *request;
+            self.add_on_import = None;
+            let mut view = crate::add_ons::view(&self.content.paths.root);
+            match result {
+                Ok(notice) => {
+                    view.notice = notice;
+                    self.ui.apply(UiUpdate::AddOns(view));
+                    self.answer(request, Ok(()));
+                }
+                Err(error) => {
+                    self.ui.apply(UiUpdate::AddOns(view));
+                    self.answer(request, Err(error));
+                }
+            }
+        }
         if let Some(receiver) = &self.lan_query
             && let Ok(found) = receiver.try_recv()
         {
@@ -4419,6 +4440,26 @@ impl PlatformApp for App {
                 }
                 UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
                     .map(|view| self.ui.apply(UiUpdate::AddOns(view))),
+                UiAction::ImportAddOn { id: ref row } => {
+                    let root = self.content.paths.root.clone();
+                    let started = if self.add_on_import.is_some() {
+                        Err(anyhow::anyhow!("Another add-on is importing; wait for it to finish."))
+                    } else {
+                        crate::add_ons::importer()
+                            .and_then(|importer| crate::add_ons::start_import(&root, row, &importer))
+                    };
+                    match started {
+                        Ok(receiver) => {
+                            let mut view = crate::add_ons::view(&root);
+                            crate::add_ons::mark_importing(&mut view, row);
+                            view.notice = "Importing... the game keeps running meanwhile.".into();
+                            self.ui.apply(UiUpdate::AddOns(view));
+                            self.add_on_import = Some((id, row.clone(), receiver));
+                            continue;
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
                 UiAction::Console { ref line } => {
                     let mut out = bri_console::Output::default();
                     let unknown = crate::console::registry().exec(self, line, &mut out);
