@@ -16,7 +16,7 @@ pub const PACK_SCHEMA_VERSION: u32 = 1;
 pub struct PackManifest {
     pub schema: String,
     pub schema_version: u32,
-    /// Directory name of the pack, e.g. `audio-pack-001`.
+    /// Directory name of the pack, e.g. `audio-pack-002`.
     pub pack_id: String,
     pub generator: Generator,
     pub source: SourceSummary,

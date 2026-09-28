@@ -104,9 +104,9 @@ fn unbuilt(pack: &Rc<Pack>, screen: ScreenId) -> Vec<String> {
 
 #[test]
 fn menu_buttons_are_all_built() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     if !dir.join("ui-pack.json").exists() {
-        eprintln!("skipped: ui-pack-003 is not converted on this machine");
+        eprintln!("skipped: ui-pack-004 is not converted on this machine");
         return;
     }
     let pack = Rc::new(Pack::load(&dir).unwrap());
@@ -125,7 +125,7 @@ fn menu_buttons_are_all_built() {
 #[test]
 #[ignore = "diagnostic listing, not a pass/fail check"]
 fn list_inert_buttons() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else { return };
     let pack = Rc::new(pack);
     for screen in SCREENS {
@@ -173,7 +173,7 @@ fn list_inert_buttons() {
 
 #[test]
 fn advanced_config_saves_the_next_hosts_settings() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else { return };
     let mut u = ui(&Rc::new(pack));
     u.core.push(ScreenId::StartMission);
@@ -222,7 +222,7 @@ fn advanced_config_saves_the_next_hosts_settings() {
 
 #[test]
 fn credits_and_f1_open_the_help_pages() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(mut pack) = Pack::load(&dir) else {
         return;
     };
@@ -274,7 +274,7 @@ fn credits_and_f1_open_the_help_pages() {
 
 #[test]
 fn server_list_rows_are_drawn_without_the_profile_outline() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
@@ -314,7 +314,7 @@ fn server_list_rows_are_drawn_without_the_profile_outline() {
 /// dialog on screen.
 #[test]
 fn options_tabs_fit_short_and_wide_windows() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
@@ -329,12 +329,16 @@ fn options_tabs_fit_short_and_wide_windows() {
         "GuiBitmapButtonCtrl",
     ];
     let mut problems = vec![];
-    for size in [
-        (1999, 800),
-        (800, 450),
-        (640, 480),
-        (1920, 1080),
-        (2560, 1080),
+    // v20 let Options be resized; ours keeps its fitted size, so the last
+    // two try to widen and heighten it and it must not move.
+    for (size, grow) in [
+        ((1999, 800), (0, 0)),
+        ((800, 450), (0, 0)),
+        ((640, 480), (0, 0)),
+        ((1920, 1080), (0, 0)),
+        ((2560, 1080), (0, 0)),
+        ((1920, 1080), (120, 0)),
+        ((2560, 1080), (150, 30)),
     ] {
         let mut u = Ui::new(
             pack.clone(),
@@ -351,6 +355,35 @@ fn options_tabs_fit_short_and_wide_windows() {
         u.core.push(ScreenId::Options);
         u.update(0);
         let (w, h) = u.logical_size();
+        if grow != (0, 0) {
+            use bri_ui::input::{InputEvent, MouseButton};
+            let v = u.screen(ScreenId::Options).unwrap().view();
+            let win = v
+                .walk()
+                .find(|&n| v.node(n).ctrl.class == "GuiWindowCtrl")
+                .unwrap();
+            let r = v.node(win).rect;
+            let s = u.scale();
+            let at = |x: i32, y: i32| (x as f32 * s, y as f32 * s);
+            let (x, y) = at(r.right() - 2, r.bottom() - 2);
+            let (tx, ty) = at(r.right() - 2 + grow.0, r.bottom() - 2 + grow.1);
+            u.handle_input(InputEvent::MouseMove { x, y });
+            u.handle_input(InputEvent::MouseDown {
+                button: MouseButton::Left,
+                x,
+                y,
+            });
+            u.handle_input(InputEvent::MouseMove { x: tx, y: ty });
+            u.handle_input(InputEvent::MouseUp {
+                button: MouseButton::Left,
+                x: tx,
+                y: ty,
+            });
+            u.update(0);
+            let v = u.screen(ScreenId::Options).unwrap().view();
+            let grown = v.node(win).rect;
+            assert_eq!((grown.w, grown.h), (r.w, r.h));
+        }
         for pane in ["Graphics", "Audio", "Controls", "AdvGraphics"] {
             let i = u
                 .dialogs
@@ -425,7 +458,7 @@ fn options_tabs_fit_short_and_wide_windows() {
 #[test]
 fn windows_drag_by_their_title_bar_and_stay_on_screen() {
     use bri_ui::input::{InputEvent, MouseButton};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
@@ -478,7 +511,7 @@ fn windows_drag_by_their_title_bar_and_stay_on_screen() {
 #[test]
 fn music_files_turns_tracks_off_for_the_next_hosted_game() {
     use bri_ui::screens::music::music_enabled;
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
@@ -519,4 +552,184 @@ fn music_files_turns_tracks_off_for_the_next_hosted_game() {
     assert!(u.screen(ScreenId::MusicFiles).is_none());
     assert!(!music_enabled(&u.core.prefs, "Bass 1"));
     assert_eq!(u.core.prefs.get("$Music__Rock"), Some("-1"));
+}
+
+#[test]
+fn press_up_to_repeat_chat_recalls_sent_lines() {
+    use bri_ui::api::ChatChannel;
+    use bri_ui::input::{InputEvent, Key, Modifiers};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let mut u = ui(&Rc::new(pack));
+    u.core.prefs.set("$pref::Chat::ChatRepeat", "1");
+    u.core.chat.remember_sent("hi");
+    u.core.chat.remember_sent("there");
+    u.core.push(ScreenId::MessageInput(ChatChannel::Say));
+    u.update(0);
+    let press = |u: &mut Ui, key: Key| {
+        u.handle_input(InputEvent::KeyDown {
+            key,
+            mods: Modifiers::NONE,
+            repeat: false,
+        });
+        u.handle_input(InputEvent::KeyUp {
+            key,
+            mods: Modifiers::NONE,
+        });
+        let v = u
+            .screen(ScreenId::MessageInput(ChatChannel::Say))
+            .unwrap()
+            .view();
+        v.edit_text(v.id("NMH_Type").unwrap())
+    };
+    assert_eq!(press(&mut u, Key::Up), "there");
+    assert_eq!(press(&mut u, Key::Up), "hi");
+    assert_eq!(press(&mut u, Key::Up), "hi");
+    assert_eq!(press(&mut u, Key::Down), "there");
+    assert_eq!(press(&mut u, Key::Down), "");
+}
+
+#[test]
+fn ml_text_switches_fonts_colours_and_margins_like_the_help_pages() {
+    use bri_ui::text::{MlRun, font_named, layout_ml, ml_rich_runs};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let (Some(small), Some(bold)) = (
+        font_named(&pack, "arial_14"),
+        font_named(&pack, "arial bold_20"),
+    ) else {
+        return;
+    };
+    let lines = layout_ml(
+        &pack,
+        &small,
+        "<font:Arial Bold:20>Title\n<lmargin%:10><font:Arial:14>Press <color:0000FF>B<color:000000> now",
+        300,
+        bri_ui::schema::Justify::Left,
+    );
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].height, bold.line_height());
+    assert_eq!((lines[0].indent, lines[1].indent), (0, 30));
+    // The second line carries the bold font it starts in, then switches.
+    let runs = ml_rich_runs(&lines[1].text);
+    assert_eq!(runs[0], MlRun::Font("arial bold_20"));
+    assert!(runs.contains(&MlRun::Rgb([0, 0, 255, 255])));
+    // A font the pack lacks keeps the current one.
+    let odd = layout_ml(
+        &pack,
+        &small,
+        "<font:Nope:99>x",
+        300,
+        bri_ui::schema::Justify::Left,
+    );
+    assert_eq!(ml_rich_runs(&odd[0].text), vec![MlRun::Text("x")]);
+}
+
+/// v20's resizable windows (Join Server here) grow from their right and
+/// bottom edges, and never shrink below their authored size.
+#[test]
+fn resizable_windows_grow_from_their_edges() {
+    use bri_ui::input::{InputEvent, MouseButton};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let mut u = ui(&Rc::new(pack));
+    u.core.push(ScreenId::JoinServer);
+    u.update(0);
+    let window = |u: &Ui| {
+        let v = u.screen(ScreenId::JoinServer).unwrap().view();
+        let n = v
+            .walk()
+            .find(|&n| v.node(n).ctrl.class == "GuiWindowCtrl")
+            .unwrap();
+        v.node(n).rect
+    };
+    let drag = |u: &mut Ui, from: (i32, i32), to: (i32, i32)| {
+        let (fx, fy, tx, ty) = (from.0 as f32, from.1 as f32, to.0 as f32, to.1 as f32);
+        u.handle_input(InputEvent::MouseMove { x: fx, y: fy });
+        u.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x: fx,
+            y: fy,
+        });
+        u.handle_input(InputEvent::MouseMove { x: tx, y: ty });
+        u.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x: tx,
+            y: ty,
+        });
+    };
+    let start = window(&u);
+    let corner = (start.right() - 2, start.bottom() - 2);
+    drag(&mut u, corner, (corner.0 + 120, corner.1 + 80));
+    let grown = window(&u);
+    assert_eq!((grown.w, grown.h), (start.w + 120, start.h + 80));
+    // The list inside follows its sizing flags.
+    let v = u.screen(ScreenId::JoinServer).unwrap().view();
+    assert!(v.node(v.id("JS_serverList").unwrap()).rect.w > 500);
+    let corner = (grown.right() - 2, grown.bottom() - 2);
+    drag(&mut u, corner, (corner.0 - 900, corner.1 - 900));
+    let back = window(&u);
+    assert_eq!((back.w, back.h), (start.w, start.h));
+}
+
+/// v20's title bar boxes: Join Server maximizes to the screen and back;
+/// Help minimizes to its title bar and back.
+#[test]
+fn maximize_and_minimize_boxes_toggle_the_window() {
+    use bri_ui::input::{InputEvent, MouseButton};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let pack = Rc::new(pack);
+    let window = |u: &Ui, screen: ScreenId| {
+        let v = u.screen(screen).unwrap().view();
+        let n = v
+            .walk()
+            .find(|&n| v.node(n).ctrl.class == "GuiWindowCtrl")
+            .unwrap();
+        v.node(n).rect
+    };
+    let click = |u: &mut Ui, (x, y): (i32, i32)| {
+        let (x, y) = (x as f32, y as f32);
+        u.handle_input(InputEvent::MouseMove { x, y });
+        u.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        u.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+    };
+    // The box `slot` places from the right of the title bar.
+    let boxed = |r: bri_ui::geom::Rect, slot: i32| (r.right() - 20 - slot * 18 + 8, r.y + 11);
+    let mut u = ui(&pack);
+    u.core.push(ScreenId::JoinServer);
+    u.update(0);
+    let start = window(&u, ScreenId::JoinServer);
+    click(&mut u, boxed(start, 1));
+    let (w, h) = u.logical_size();
+    let big = window(&u, ScreenId::JoinServer);
+    assert_eq!((big.x, big.y, big.w, big.h), (0, 0, w, h));
+    click(&mut u, boxed(big, 1));
+    assert_eq!(window(&u, ScreenId::JoinServer), start);
+
+    let mut u = ui(&pack);
+    u.core.get_help(None);
+    u.update(0);
+    let start = window(&u, ScreenId::Help);
+    click(&mut u, boxed(start, 2));
+    let small = window(&u, ScreenId::Help);
+    assert!(small.h < 40, "{small:?}");
+    click(&mut u, boxed(small, 2));
+    assert_eq!(window(&u, ScreenId::Help), start);
 }

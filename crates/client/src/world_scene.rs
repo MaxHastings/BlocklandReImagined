@@ -153,13 +153,65 @@ pub(crate) fn append_world_brick(
         .with_context(|| format!("Building native geometry for brick {id}"))
 }
 
+/// The player's temp brick options (Options > Advanced,
+/// `$pref::HUD::tempBrick*`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TempBrickLook {
+    /// The outside colour, or `None` for the paint colour times 1.5.
+    pub outside: Option<[f32; 3]>,
+    /// The inside colour, or `None` for the paint colour.
+    pub inside: Option<[f32; 3]>,
+    /// Flash period (ms), and the opacity's range and offset.
+    pub flash_ms: f32,
+    pub flash_range: f32,
+    pub flash_offset: f32,
+}
+impl Default for TempBrickLook {
+    /// v20's defaults: paint outside, black inside, 800 ms between 0.3 and 0.6.
+    fn default() -> Self {
+        Self {
+            outside: None,
+            inside: Some([0.0; 3]),
+            flash_ms: 800.0,
+            flash_range: 0.3,
+            flash_offset: 0.3,
+        }
+    }
+}
+impl TempBrickLook {
+    pub fn from_prefs(p: &bri_ui::prefs::Prefs) -> Self {
+        let d = Self::default();
+        let rgb = |side: &str| {
+            ["Red", "Green", "Blue"].map(|c| {
+                p.f32_or(&format!("$pref::HUD::tempBrick{side}{c}"), 0.0)
+                    .clamp(0.0, 1.0)
+            })
+        };
+        Self {
+            outside: (!p.bool_or("$pref::HUD::tempBrickOutsideUsePaintColor", true))
+                .then(|| rgb("Outside")),
+            inside: (!p.bool_or("$pref::HUD::tempBrickInsideUsePaintColor", false))
+                .then(|| rgb("Inside")),
+            flash_ms: p
+                .f32_or("$pref::HUD::tempBrickFlashTime", d.flash_ms)
+                .clamp(100.0, 10_000.0),
+            flash_range: p
+                .f32_or("$pref::HUD::tempBrickFlashRange", d.flash_range)
+                .clamp(0.0, 1.0),
+            flash_offset: p
+                .f32_or("$pref::HUD::tempBrickFlashoffset", d.flash_offset)
+                .clamp(0.0, 1.0),
+        }
+    }
+}
+
 /// v20 temp (ghost) brick look, from `blocklandv20.exe` 0x52e370/0x52e860:
 /// every quad is pushed 0.02 units out along its normals and drawn twice in
 /// the translucent brick pass. The reversed-winding copy shows the far inner
 /// walls in the inside colour (default black); the forward copy is the paint
-/// colour times 1.5. Both flash via `Material::temp_brick_flash` and keep the
-/// normal surface overlays.
-pub fn v20_temp_brick(scene: &mut SceneData) {
+/// colour times 1.5 (or the outside colour). Both flash via
+/// `Material::temp_brick_flash` and keep the normal surface overlays.
+pub fn v20_temp_brick(scene: &mut SceneData, look: &TempBrickLook) {
     const INFLATE: f32 = 0.02;
     for vertex in &mut scene.vertices {
         let n = glam::Vec3::from(vertex.normal).normalize_or_zero();
@@ -170,13 +222,19 @@ pub fn v20_temp_brick(scene: &mut SceneData) {
         .vertices
         .iter()
         .map(|v| bri_render::scene::SceneVertex {
-            color: [0.0, 0.0, 0.0, 1.0],
+            color: match look.inside {
+                Some([r, g, b]) => [r, g, b, 1.0],
+                None => [v.color[0], v.color[1], v.color[2], 1.0],
+            },
             ..*v
         })
         .collect();
     for vertex in &mut scene.vertices {
         let [r, g, b, _] = vertex.color;
-        vertex.color = [r * 1.5, g * 1.5, b * 1.5, 1.0];
+        vertex.color = match look.outside {
+            Some([r, g, b]) => [r, g, b, 1.0],
+            None => [r * 1.5, g * 1.5, b * 1.5, 1.0],
+        };
     }
     scene.vertices.extend(inside);
     let mut indices = Vec::with_capacity(scene.indices.len() * 2);
@@ -194,6 +252,16 @@ pub fn v20_temp_brick(scene: &mut SceneData) {
         material.alpha = bri_render::scene::AlphaMode::Blend;
         material.temp_brick_flash = true;
         material.double_sided = false;
+        material.parameters = Some([
+            [
+                look.flash_ms / 1000.0,
+                look.flash_range,
+                look.flash_offset,
+                0.0,
+            ],
+            [0.0; 4],
+            [0.0; 4],
+        ]);
     }
 }
 

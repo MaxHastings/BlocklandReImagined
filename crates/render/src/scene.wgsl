@@ -340,10 +340,16 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
         alpha=v.color.a;
     }
     if material[0].w==1.0 {
-        // v20 temp brick (0x52e6b4): t = ms mod 800 folded at 400, then
-        // alpha = offset 0.3 + range 0.3 * t/400, ignoring paint alpha.
-        let t=fract(time/0.8)*0.8;
-        alpha=0.3+0.3*min(t,0.8-t)/0.4;
+        // v20 temp brick (0x52e6b4): t = ms mod flashTime folded at half,
+        // then alpha = offset + range * t/half, ignoring paint alpha.
+        // material[1] holds (flashTime s, range, offset); v20's 800 ms,
+        // 0.3 and 0.3 when unset.
+        let f=material[1];
+        let period=select(0.8,f.x,f.x>0.0);
+        let range=select(0.3,f.y,f.x>0.0);
+        let offset=select(0.3,f.z,f.x>0.0);
+        let t=fract(time/period)*period;
+        alpha=offset+range*min(t,period-t)/(period*0.5);
     }
     if alpha<=material[0].y {discard;}
     if material[0].x==7.0 || material[0].x==8.0 {

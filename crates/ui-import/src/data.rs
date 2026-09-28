@@ -729,9 +729,10 @@ fn cp1252(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// A `.hfl` help page in the ML subset the UI draws. Margins, tab stops,
-/// fonts and colours have no equivalent there and are dropped; links keep
-/// their text but not their (long dead) blockland.us targets; tabs indent.
+/// A `.hfl` help page in the ML subset the UI draws: fonts, colours,
+/// margins, justification and breaks are kept; tab stops are dropped and
+/// tabs indent; links keep their text but not their (long dead)
+/// blockland.us targets.
 pub fn help_text(bytes: &[u8]) -> String {
     let src = cp1252(bytes).replace('\r', "");
     let mut out = String::new();
@@ -745,7 +746,8 @@ pub fn help_text(bytes: &[u8]) -> String {
             break;
         };
         let tag = tail[1..end].to_ascii_lowercase();
-        if tag == "br" || tag.starts_with("just:") {
+        let kept = ["just:", "font:", "color:", "lmargin%:", "rmargin%:"];
+        if tag == "br" || kept.iter().any(|k| tag.starts_with(k)) {
             out.push_str(&tail[..=end]);
         }
         rest = &tail[end + 1..];
@@ -769,12 +771,14 @@ mod help_tests {
     use super::*;
 
     #[test]
-    fn help_pages_keep_text_and_drop_unsupported_markup() {
+    fn help_pages_keep_their_look_and_drop_links_and_tab_stops() {
         let src = b"<lmargin%:3><font:Arial Bold:16>1. Select\n<lmargin%:10>Press <color:0000FF>B<color:000000> now.\n\t<a:blockland.us/x>Eric</a> \xe9\x93";
         assert_eq!(
             help_text(src),
-            "1. Select\nPress B now.\n    Eric \u{e9}\u{201c}"
+            "<lmargin%:3><font:Arial Bold:16>1. Select\n<lmargin%:10>Press \
+             <color:0000FF>B<color:000000> now.\n    Eric \u{e9}\u{201c}"
         );
+        assert_eq!(help_text(b"<tab:25,250>a"), "a");
         assert_eq!(help_text(b"<just:center>Hi<br>x"), "<just:center>Hi<br>x");
         let mut names = vec!["7. Loading", "10. Late", "0. Credits"];
         names.sort_by_key(|n| help_order(n));

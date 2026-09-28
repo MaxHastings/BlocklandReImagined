@@ -1583,6 +1583,12 @@ impl Ui {
             }
             UiUpdate::Chat { text } => {
                 let now = c.time_ms;
+                // `newChatHud_AddLine`: Censor Chat (on in v20's defaults).
+                let text = if c.prefs.bool_or("$Pref::Chat::CurseFilter", true) {
+                    crate::models::chat::censor(&text, c.prefs.str_or("$Pref::Chat::CurseList", ""))
+                } else {
+                    text
+                };
                 c.chat.add(&text, now);
             }
             UiUpdate::Talking(names) => c.talking = names,

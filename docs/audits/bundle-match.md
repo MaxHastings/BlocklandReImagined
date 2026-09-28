@@ -75,12 +75,63 @@ No. Hosts serve Add-Ons only, as Night QA decided.
 - A join already refuses clearly and now says why. The fix is the same build
   and the same content on both PCs, which the determinism test protects.
 
+## Every base pack, from scratch (second pass)
+
+The map bundle was not the only pack a fresh bootstrap got wrong. On main,
+`tools/regenerate_content.py` could not even finish: the weapon importers'
+lock files were stale and the avatar step failed (default parts became names
+in `8b0975a`; the importer still stored list positions). Once it ran, 11 of
+18 packs differed from the shipped copies, and several differed between two
+machines:
+
+- Every importer read the whole v20 folder, so the older C: install's extra
+  add-ons (Map_Artic, Map_AvP and others) were in the shipped geometry pass
+  and UI pack. Importers now read a private view holding exactly the files
+  in `docs/vanilla-reference-files.json` (1,035 files of the designated E:
+  reference, SHA-256 each). A missing or changed file stops the import with
+  a list of what to restore. v20 adds a `.ml` lighting cache to a map's zip
+  when the map is first played; removing it restores the shipped archive
+  exactly, so played installs are accepted.
+- Packs recorded absolute paths (audio and brick-material evidence, the
+  weapon-effects base pack and v20 folder, the foliage source bundle).
+- Packs recorded line endings: UI script inputs, the weather atlas
+  adaptation and brick-material evidence hashed whatever git checked out.
+- The shipped worlds, tutorial, avatar, debris and runtime-effects packs
+  were built by older importers or from older upstream packs.
+
+Check: two bootstraps of `claude/bundle-match-clean` with Parity's
+`9ea1b6f6` applied, one from a CRLF checkout at one path with the E:
+reference, one from an LF checkout at a path with spaces with the older C:
+install and its extra add-ons. All 18 packs are byte-identical between them.
+The seven unbumped packs are also byte-identical to the shipped copies.
+
+| Package | Version | Directory | Package hash (first 16) |
+| --- | --- | --- | --- |
+| `v20-map-bundle` | 17.0.0 | `map-bundle-017` | `f1fce74442f68a71` |
+| `v20-bricks` | 4.0.0 | `stock-catalog-004` | `83abdc401c8a4c03` |
+| `v20-brick-geometry` | 8.0.0 | `maps-pass-008` | `c82e75f451ff52ff` |
+| `v20-effects` | 4.0.0 | `effects-pass-004` | `ea81c7cc5fafbe93` |
+| `v20-brick-materials` | 2.0.0 | `brick-materials-002` | `3ccc41b425230aa2` |
+| `v20-avatar` | 2.0.0 | `avatar-pack-002` | `4b738957c5d598c4` |
+| `v20-audio` | 2.0.0 | `audio-pack-002` | `437475015b8ea87b` |
+| `v20-weapons` | 9.0.0 | `weapons-pack-009` | `1f99ef485005127b` |
+| `v20-item-presentation` | 10.0.0 | `item-presentation-pack-010` | `9a1c3fb87a76d467` |
+| `v20-vehicles` | 11.0.0 | `vehicles-pack-011` | `40833e10151a7f71` |
+| `v20-events` | 2.0.0 | `events-pack-002` | `e2632d931e1e0f7e` |
+| `v20-ui` | 4.0.0 | `ui-pack-004` | `0e04e74383980123` |
+| `v20-effects-runtime` | 5.0.0 | `effects-runtime-pack-005` | `a1dfa308954675e0` |
+| `v20-weather` | 2.0.0 | `weather-pack-002` | `ff22989fcc6648f9` |
+| `v20-foliage` | 2.0.0 | `foliage-pack-003` | `1f1b1baab89895de` |
+| `v20-weapon-debris` | 4.0.0 | `weapon-debris-pack-004` | `7578778f63998d9f` |
+| `v20-worlds` | 6.0.0 | `worlds-pass-006` | `d8245c745f96494f` |
+| `v20-tutorial` | 2.0.0 | `tutorial-pack-002` | `849fa1850b5415b4` |
+
+The `v20-ui` hash includes Parity's help-text importer change (`9ea1b6f6`),
+so that change should land before or with this one; landing it later changes
+`ui-pack-004` without a new version.
+
 ## Next
 
-- Rebuild `maps-pass-007` from the current converter (as a new
-  `maps-pass-008` with a version bump) so `tools/bootstrap.py` reproduces
-  the shipped content; until then, install second PCs from the game package
-  rather than bootstrapping.
 - Consider recording each base package's expected hash beside
   `base-packages.json`, so the importer and the client can say which side's
   copy is not the release's.

@@ -128,8 +128,8 @@ def main():
     parser.add_argument('--original', type=pathlib.Path, default=pathlib.Path(r'E:\Downloads\B4v21Launcher\versions\Blockland v20'))
     parser.add_argument('--output', default='content/item-presentation-pack-008')
     parser.add_argument('--weapons', default='content/weapons-pack-007')
-    parser.add_argument('--ui', default='content/ui-pack-003')
-    parser.add_argument('--avatar', default='content/avatar-pack-001')
+    parser.add_argument('--ui', default='content/ui-pack-004')
+    parser.add_argument('--avatar', default='content/avatar-pack-002')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     if args.self_test:

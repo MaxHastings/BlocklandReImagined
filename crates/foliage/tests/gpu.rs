@@ -112,7 +112,7 @@ impl Gpu {
 #[ignore = "requires private converted foliage/map packs; offscreen only"]
 fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Result<()> {
     let p = pack();
-    let images = p.images(root().join("content/foliage-pack-001"))?;
+    let images = p.images(root().join("content/foliage-pack-003"))?;
     let w = original_world();
     let mut fields = vec![];
     for d in &p.definitions {

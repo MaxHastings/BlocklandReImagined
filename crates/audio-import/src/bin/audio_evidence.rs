@@ -5,7 +5,7 @@
 //! to WAV files plus JSON diagnostics. Nothing is played.
 //!
 //! ```text
-//! bri-audio-evidence --pack content/audio-pack-001 --out artifacts/native-audio
+//! bri-audio-evidence --pack content/audio-pack-002 --out artifacts/native-audio
 //! ```
 
 use std::path::{Path, PathBuf};

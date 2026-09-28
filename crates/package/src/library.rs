@@ -898,10 +898,10 @@ mod tests {
     /// with a missing dependency.
     fn fixture(name: &str) -> Root {
         let r = root(name);
-        std::fs::create_dir_all(r.0.join("ui-pack-003")).unwrap();
+        std::fs::create_dir_all(r.0.join("ui-pack-004")).unwrap();
         list(
             &r.0,
-            json!([{ "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-003", "role": "ui_pack" }]),
+            json!([{ "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-004", "role": "ui_pack" }]),
         );
         manifest(
             &r.0,
@@ -1042,7 +1042,7 @@ mod tests {
         list(
             &r.0,
             json!([
-                { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-003", "role": "ui_pack" },
+                { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-004", "role": "ui_pack" },
                 { "id": "gone", "version": "1.0.0", "side": "shared", "dir": "gone" }
             ]),
         );

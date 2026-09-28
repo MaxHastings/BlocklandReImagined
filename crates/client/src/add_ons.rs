@@ -391,11 +391,11 @@ mod tests {
     fn rows_group_explain_and_toggle() {
         let root = std::env::temp_dir().join(format!("bri-add-ons-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("ui-pack-003")).unwrap();
+        std::fs::create_dir_all(root.join("ui-pack-004")).unwrap();
         std::fs::write(
             root.join("packages.json"),
             json!({ "schema_version": 1, "packages": [
-                { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-003", "role": "ui_pack" }
+                { "id": "v20-ui", "version": "3.0.0", "side": "client", "dir": "ui-pack-004", "role": "ui_pack" }
             ]})
             .to_string(),
         )

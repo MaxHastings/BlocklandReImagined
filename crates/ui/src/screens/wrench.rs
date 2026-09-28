@@ -1826,7 +1826,7 @@ mod tests {
     #[ignore = "bounded offscreen rendering requires converted original content and GPU"]
     fn authored_wrench_offscreen() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-003")).unwrap());
+        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
         let mut ui = fixture();
         ui.core.pack = pack.clone();
         let output = root.join("artifacts/ui-native-wrench");
@@ -1921,7 +1921,7 @@ mod tests {
         choose(&mut events, "WrenchEvent_1_param0", "Alpha", &mut ui.core);
         render("Events", &mut events, &mut ui.core);
         std::fs::write(output.join("verification.json"), serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version":1, "pack":"content/ui-pack-003", "viewport":[640,480],
+            "schema_version":1, "pack":"content/ui-pack-004", "viewport":[640,480],
             "screens":["Normal","Sound","VehicleSpawn","Events"], "no_missing_textures":true,
             "scope":"bounded offscreen dialog check; host actions and interactive play remain separate"
         })).unwrap()).unwrap();

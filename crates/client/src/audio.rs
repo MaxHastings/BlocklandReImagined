@@ -414,7 +414,7 @@ mod tests {
     #[test]
     #[ignore = "uses delivered native audio pack; silent offline output only"]
     fn original_audio_defaults_listener_before_culling_preferences_and_teardown() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/audio-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/audio-pack-002");
         let mut settings = Settings::default();
         settings
             .prefs

@@ -49,7 +49,10 @@ fn read_text(p: &Path, sources: &mut Vec<SourceRecord>) -> Result<String> {
         fs::metadata(p)?.len() <= 64 * 1024 * 1024,
         "oversized script input"
     );
-    let b = fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+    let mut b = fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+    // As LF: a git checkout gives these scripts CRLF on Windows and LF
+    // elsewhere, and the pack records their hash and size.
+    b.retain(|&c| c != b'\r');
     sources.push(SourceRecord {
         path: p.to_string_lossy().replace('\\', "/"),
         sha256: sha(&b),

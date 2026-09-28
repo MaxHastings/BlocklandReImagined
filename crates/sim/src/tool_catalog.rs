@@ -106,7 +106,7 @@ mod tests {
             root.join("content/effects-pass-004/effects.json"),
         )?)?;
         let materials: Bundle = serde_json::from_slice(&std::fs::read(
-            root.join("content/brick-materials-001/brick-materials.json"),
+            root.join("content/brick-materials-002/brick-materials.json"),
         )?)?;
         let tools = ToolCatalog::from_native(&catalog, &effects, &materials)?;
         assert_eq!(
@@ -125,7 +125,7 @@ mod tests {
         assert!(ToolCatalog::from_native(&catalog, &effects, &missing).is_err());
         let simulation = Simulation::new(
             World::new("Dedicated test".into(), "fixture".into(), vec![[1.; 4]]),
-            Definitions::load(&catalog_dir, &root.join("content/maps-pass-007"))?,
+            Definitions::load(&catalog_dir, &root.join("content/maps-pass-008"))?,
             vec![ColliderBuilder::cuboid(100., 0.5, 100.).translation(Vector::new(0., -0.5, 0.))],
         )?;
         let mut session = Session::new(simulation);

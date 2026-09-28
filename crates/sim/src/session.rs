@@ -511,6 +511,8 @@ pub struct Session {
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
     private_notices: VecDeque<(OwnerId, Notice)>,
+    /// When each builder no longer here left (for the Public Domain Timeout).
+    abandoned_at: BTreeMap<OwnerId, u64>,
     last_membership: BTreeMap<OwnerId, Option<bri_minigames::GameId>>,
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
@@ -600,6 +602,7 @@ impl Session {
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
+            abandoned_at: BTreeMap::new(),
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
@@ -890,6 +893,7 @@ impl Session {
         );
         // A fresh join replaces the dropped connection it took the number from.
         self.departed.remove(&owner);
+        self.abandoned_at.remove(&owner);
         self.enter_world(owner)?;
         if !is_bot {
             self.greet(owner, &name, role, trusted_host);
@@ -951,6 +955,8 @@ impl Session {
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
         self.weapon_triggers.remove(&owner);
         self.last_prints.remove(&owner);
+        self.abandoned_at
+            .insert(owner, self.simulation.state().tick);
         self.forget_blueprint(owner);
         self.departed.insert(
             owner,
@@ -1073,6 +1079,7 @@ impl Session {
             },
         );
         self.departed.remove(&owner);
+        self.abandoned_at.remove(&owner);
         self.enter_world(owner)?;
         self.announce(owner, "connected.", "ClientJoinSound");
         self.refresh_trust();
@@ -1434,6 +1441,9 @@ impl Session {
                 );
                 peer.talking = false;
                 let name = peer.name.clone();
+                if self.chat_filtered(owner, &text) {
+                    return Ok(Reply::Accepted);
+                }
                 self.start_talking(tick, owner, text.len());
                 self.team_chat(owner, &name, &text)?;
                 Ok(Reply::Accepted)
@@ -1672,16 +1682,20 @@ impl Session {
                     .chars()
                     .take(self.admin.settings.max_chat_length as usize)
                     .collect();
+                peer.talking = false;
+                let name = peer.name.clone();
+                if self.chat_filtered(owner, &text) {
+                    return Ok(Reply::Accepted);
+                }
                 let next = self
                     .next_chat
                     .checked_add(1)
                     .context("Chat IDs exhausted")?;
-                peer.talking = false;
                 let text_len = text.len();
                 self.chat.push_back(ChatLine {
                     id: self.next_chat,
                     owner,
-                    name: peer.name.clone(),
+                    name,
                     text,
                     tick,
                     tag: None,
@@ -1695,8 +1709,39 @@ impl Session {
             }
         }
     }
+    /// `serverCmdMessageSent`'s E-Tard Filter (`$Pref::Server::ETardFilter`,
+    /// on in v20): a line using one of `$Pref::Server::ETardList`'s words
+    /// is not sent, and its sender is told why.
+    fn chat_filtered(&mut self, owner: OwnerId, text: &str) -> bool {
+        if !self.admin.settings.chat_filter || etard_word(text).is_none() {
+            return false;
+        }
+        self.notify(
+            owner,
+            Notice::Chat("\u{E005}This is a civilized game.  Please use full words.".into()),
+        );
+        true
+    }
+    /// `WebCom_PostServer`'s Public Domain Timeout: a builder away that many
+    /// minutes (`$Pref::Server::BrickPublicDomainTimeout`, off at -1) leaves
+    /// their bricks to everyone, as full trust.
+    pub(super) fn public_domain(&self, owner: OwnerId) -> bool {
+        let minutes = self.admin.settings.public_domain_timeout_minutes;
+        if minutes <= 0 || self.peers.contains_key(&owner) {
+            return false;
+        }
+        let since = self.abandoned_at.get(&owner).copied().unwrap_or(0);
+        let tick = self.simulation.state().tick;
+        tick.saturating_sub(since) >= u64::try_from(minutes).unwrap_or(0) * 60 * 120
+    }
     pub fn step(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
+        // Abandoned builds turn public on the minute (v20 checked every
+        // five, with each server post).
+        if self.admin.settings.public_domain_timeout_minutes > 0 && tick.is_multiple_of(60 * 120)
+        {
+            self.refresh_trust();
+        }
         self.stop_talking(tick);
         // Each system contains its own failure: the rest of the tick still
         // runs and every failure is reported together at the end.
@@ -1891,5 +1936,30 @@ impl Session {
                 .collect(),
             chat: self.chat.iter().cloned().collect(),
         }
+    }
+}
+
+/// `chatFilter` with v20's `$Pref::Server::ETardList`: the first listed
+/// word found in the line, spaced and with `.`, `?`, `!` and `/` read as
+/// spaces.
+fn etard_word(text: &str) -> Option<&'static str> {
+    const LIST: [&str; 10] = [
+        " u ", " r ", " ur ", " wat ", " wut ", " wuts ", " wit ", " dat ", " loel ", " y ",
+    ];
+    let lower = format!(" {} ", text.to_ascii_lowercase())
+        .replace(".dat", "")
+        .replace("/u/", "")
+        .replace(['?', '!', '.', '/'], " ");
+    LIST.into_iter().find(|w| lower.contains(w))
+}
+
+#[cfg(test)]
+mod etard_tests {
+    #[test]
+    fn etard_filter_catches_v20s_words_only_as_words() {
+        assert_eq!(super::etard_word("r u there?"), Some(" u "));
+        assert_eq!(super::etard_word("wat."), Some(" wat "));
+        assert_eq!(super::etard_word("you are there"), None);
+        assert_eq!(super::etard_word("the map.dat file"), None);
     }
 }

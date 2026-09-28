@@ -21,6 +21,8 @@ pub struct NativeScreen {
     request: Option<RequestId>,
     /// The game mode the Start Game controls last showed.
     shown_mode: Option<Option<String>>,
+    /// Chat input: the sent line Up and Down have recalled, if any.
+    history: Option<usize>,
     /// Join Server's sort: v20's `JS_serverList.sortedBy` column and
     /// `sortedAsc`. None keeps the host's order.
     server_sort: Option<(usize, bool)>,
@@ -94,6 +96,7 @@ impl NativeScreen {
             request: None,
             shown_mode: None,
             server_sort: None,
+            history: None,
         };
         // Preferences are data; script strings are never evaluated.
         for n in s.view.walk().collect::<Vec<_>>() {
@@ -511,6 +514,7 @@ impl NativeScreen {
         core.pop(self.id);
     }
     fn submit_chat(&mut self, core: &mut Core, ch: ChatChannel) {
+        core.chat.remember_sent(&self.edit("NMH_Type"));
         match chat_send(ch, &self.edit("NMH_Type")) {
             ChatSend::Close => core.pop(self.id),
             ChatSend::Send(a) => {
@@ -708,6 +712,25 @@ impl Screen for NativeScreen {
             self.cancel(core);
             return self.id != ScreenId::Play;
         }
+        // Press Up to Repeat Chat: Up and Down walk the lines sent before.
+        if matches!(self.id, ScreenId::MessageInput(_))
+            && matches!(key, Key::Up | Key::Down)
+            && core.prefs.bool_or("$pref::Chat::ChatRepeat", false)
+        {
+            let sent = &core.chat.sent;
+            let at = match (key, self.history) {
+                (Key::Up, None) => sent.len().checked_sub(1),
+                (Key::Up, Some(i)) => Some(i.saturating_sub(1)),
+                (_, Some(i)) if i + 1 < sent.len() => Some(i + 1),
+                _ => None,
+            };
+            self.history = at;
+            let text = at.and_then(|i| sent.get(i)).cloned().unwrap_or_default();
+            if let Some(n) = self.view.id("NMH_Type") {
+                self.view.set_text(n, text);
+            }
+            return true;
+        }
         if matches!(key, Key::Return | Key::NumpadEnter) {
             if let ScreenId::MessageInput(ch) = self.id {
                 self.submit_chat(core, ch);
@@ -807,6 +830,10 @@ impl Screen for NativeScreen {
                 if first_run {
                     core.first_run_welcome();
                 }
+            }
+            c if c.starts_with("js_sortlist(") || c.starts_with("js_sortnumlist(") => {
+                self.server_sort = next_server_sort(self.server_sort, c);
+                self.refresh(core);
             }
             c if c.starts_with("js_sortlist(") || c.starts_with("js_sortnumlist(") => {
                 self.server_sort = next_server_sort(self.server_sort, c);
