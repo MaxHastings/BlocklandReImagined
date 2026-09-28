@@ -28,6 +28,9 @@ id!(SpawnId);
 pub struct Occupant {
     pub id: OccupantId,
     pub owner: OwnerId,
+    /// The rider's standing box, [width, height]: dismount clearance tests
+    /// exactly the body the rider gets back.
+    pub body: [f32; 2],
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Controls {
@@ -673,7 +676,6 @@ impl VehiclesWorld {
             });
             return Ok(());
         }
-        let capsule = Capsule::new_y(0.55, 0.3);
         let queries = world.query_pipeline_with_filter(
             QueryFilter::default()
                 .exclude_rigid_body(v.body)
@@ -688,20 +690,7 @@ impl VehiclesWorld {
         ];
         let exit = offsets.into_iter().find_map(|offset| {
             let offset = offset * v.spawn.scale;
-            let dst = start + offset;
-            let p = Pose::translation(dst.x, dst.y, dst.z);
-            let clear = queries.intersect_shape(p, &capsule).next().is_none();
-            let sweep = queries.cast_shape(
-                &Pose::translation(start.x, start.y, start.z),
-                offset,
-                &capsule,
-                ShapeCastOptions {
-                    max_time_of_impact: 1.,
-                    stop_at_penetration: false,
-                    ..Default::default()
-                },
-            );
-            (clear && sweep.is_none()).then_some((dst, offset))
+            exit_clear(&queries, start, offset, passenger.body).then_some((start + offset, offset))
         });
         ensure!(exit.is_some() || forced, "all dismount positions blocked");
         let (p, impulse) = exit.unwrap_or((start, Vec3::ZERO));
@@ -1939,6 +1928,31 @@ fn build_controller(
 
     c
 }
+/// Torque `Player::checkDismountPoint`: the rider's own box, feet at the
+/// exit point, must be empty, and the way there from the seat unblocked.
+fn exit_clear(queries: &QueryPipeline, start: Vec3, offset: Vec3, body: [f32; 2]) -> bool {
+    let [width, height] = body;
+    let shape = Cuboid::new(Vec3::new(width * 0.5, height * 0.5, width * 0.5));
+    let centre = start + Vec3::Y * (height * 0.5);
+    let dst = centre + offset;
+    let clear = queries
+        .intersect_shape(Pose::translation(dst.x, dst.y, dst.z), &shape)
+        .next()
+        .is_none();
+    clear
+        && queries
+            .cast_shape(
+                &Pose::translation(centre.x, centre.y, centre.z),
+                offset,
+                &shape,
+                ShapeCastOptions {
+                    max_time_of_impact: 1.,
+                    stop_at_penetration: false,
+                    ..Default::default()
+                },
+            )
+            .is_none()
+}
 #[cfg(test)]
 mod scale_tests {
     use super::*;
@@ -1989,5 +2003,28 @@ mod scale_tests {
             assert_eq!(b.suspension_rest_length, a.suspension_rest_length * 2.);
         }
         assert_eq!(world.bodies[a.body].mass(), world.bodies[b.body].mass());
+    }
+}
+#[cfg(test)]
+mod dismount_tests {
+    use super::*;
+    #[test]
+    fn exit_clearance_tests_the_riders_own_box_at_their_feet() {
+        let mut world = bri_physics::new_world();
+        // A low roof over the exit point: its underside 2 units above the seat.
+        world.insert(
+            RigidBodyBuilder::fixed().translation(Vec3::new(3., 2.5, 0.)),
+            ColliderBuilder::cuboid(1., 0.5, 1.),
+        );
+        world.step();
+        let queries = world.query_pipeline_with_filter(QueryFilter::default());
+        let seat = Vec3::new(0., 0.1, 0.);
+        let exit = Vec3::X * 3.;
+        // A standing player (2.65 tall) would end up inside the roof.
+        assert!(!exit_clear(&queries, seat, exit, [1.25, 2.65]));
+        // A rider short enough to fit under it gets out.
+        assert!(exit_clear(&queries, seat, exit, [1.25, 1.5]));
+        // Open ground elsewhere is clear for the full body.
+        assert!(exit_clear(&queries, seat, -exit, [1.25, 2.65]));
     }
 }

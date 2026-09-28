@@ -45,6 +45,7 @@ fn mount(v: &mut VehiclesWorld, w: &PhysicsWorld, seat: usize) {
         Occupant {
             id: OccupantId(20 + seat as u64),
             owner: OwnerId(10),
+            body: [1.25, 2.65],
         },
         p,
     )
@@ -341,7 +342,8 @@ fn ball_rolls_without_mounts() {
             0,
             Occupant {
                 id: OccupantId(20),
-                owner: OwnerId(10)
+                owner: OwnerId(10),
+                body: [1.25, 2.65]
             },
             [0., 4., 0.]
         )

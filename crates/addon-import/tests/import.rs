@@ -388,6 +388,7 @@ fn drive(package: &Path) {
         Occupant {
             id: OccupantId(20),
             owner: OwnerId(10),
+            body: [1.25, 2.65],
         },
         seat,
     )

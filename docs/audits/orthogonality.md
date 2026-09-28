@@ -349,6 +349,8 @@ are ignored.
 **Player sees:** getting out under a low ceiling or beside a wall can leave you
 stuck inside it.
 **Rule:** clearance uses the occupant's own motor shape at their feet.
+Torque's `Player::checkDismountPoint` does exactly this with the player's
+object box.
 
 ### 20. Chat box open: the view freezes and the cursor stays hidden (sev 3, S)
 Mouse look requires no dialogs open (`crates/ui/src/ui.rs:1590-1611`), the

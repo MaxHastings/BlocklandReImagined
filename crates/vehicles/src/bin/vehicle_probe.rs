@@ -50,6 +50,7 @@ fn main() -> Result<()> {
                 Occupant {
                     id: OccupantId(i as u64 + 1),
                     owner: OwnerId(1),
+                    body: [1.25, 2.65],
                 },
                 s.transform.position,
             )?;

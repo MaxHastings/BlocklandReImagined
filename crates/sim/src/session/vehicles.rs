@@ -92,10 +92,16 @@ fn wrap_half(angle: f32) -> f32 {
     (angle + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::PI)
         - std::f32::consts::FRAC_PI_2
 }
-fn occupant(owner: OwnerId) -> veh::Occupant {
+fn occupant(peers: &BTreeMap<OwnerId, Peer>, owner: OwnerId) -> veh::Occupant {
+    let tuning = peers
+        .get(&owner)
+        .map_or_else(bri_motor::player::PlayerTuning::default, |p| {
+            p.player.tuning().clone()
+        });
     veh::Occupant {
         id: OccupantId(owner),
         owner: veh::OwnerId(owner),
+        body: [tuning.width, tuning.stand_height],
     }
 }
 
@@ -670,7 +676,7 @@ impl Session {
                     &self.simulation.physics,
                     vehicle,
                     seat.index,
-                    occupant(owner),
+                    occupant(&self.peers, owner),
                     seat.transform.position,
                 );
             }
@@ -913,7 +919,13 @@ impl Session {
             .and_then(|v| v.seats.first().map(|s| s.transform.position));
         let mounted = seat.is_some_and(|seat| {
             world
-                .mount(&self.simulation.physics, id, 0, occupant(owner), seat)
+                .mount(
+                    &self.simulation.physics,
+                    id,
+                    0,
+                    occupant(&self.peers, owner),
+                    seat,
+                )
                 .is_ok()
         });
         if !mounted {
@@ -1003,7 +1015,7 @@ impl Session {
                         &self.simulation.physics,
                         vehicle,
                         0,
-                        occupant(owner),
+                        occupant(&self.peers, owner),
                         feet.to_array(),
                     )
                     .is_ok()
@@ -1315,7 +1327,7 @@ impl Session {
                     &self.simulation.physics,
                     mount.vehicle,
                     seat,
-                    occupant(owner),
+                    occupant(&self.peers, owner),
                     position,
                 )
                 .is_ok()
