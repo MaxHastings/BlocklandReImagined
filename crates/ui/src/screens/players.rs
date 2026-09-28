@@ -85,7 +85,7 @@ impl Players {
                             } else if p.admin {
                                 "A"
                             } else {
-                                ""
+                                "-"
                             },
                             p.name.replace(['\t', '\n', '\r'], " "),
                             member.filter(|m| m.in_local_game).map_or(i64::from(p.score), |m| m.score),

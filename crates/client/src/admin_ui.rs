@@ -64,6 +64,11 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 }
                 })
             })
+            // The host and Super Admins hand out ranks.
+            .chain(
+                (snapshot.local_host || snapshot.role == Role::SuperAdmin)
+                    .then_some(ui::AdminFeature::Ranks),
+            )
             .collect(),
         players: snapshot
             .players
@@ -178,6 +183,22 @@ fn settings(o: &ui::AdminOptions, current: &bri_admin::ServerSettings) -> bri_ad
 pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Option<Command>> {
     let (capability, action) = match action {
         ui::AdminAction::Refresh => return Ok(None),
+        ui::AdminAction::SetRole { target, role } => {
+            return set_role(snapshot, ConnectionId(*target), *role).map(Some);
+        }
+        ui::AdminAction::RequestRanks => {
+            return ranks_request(snapshot, Action::RequestAutoRoles).map(Some);
+        }
+        ui::AdminAction::ForgetRank { key } => {
+            return ranks_request(
+                snapshot,
+                Action::HostSetAutoRole {
+                    principal: principal(key)?,
+                    role: Role::Player,
+                },
+            )
+            .map(Some);
+        }
         ui::AdminAction::Login { password } => (
             Capability::Login,
             Action::Login {
@@ -266,6 +287,49 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
     Ok(Some(Command::Admin(request)))
 }
 
+/// Make `target` Admin or Super Admin, or a plain player again. The host
+/// checks the rank again; this only keeps players from asking in vain.
+fn set_role(snapshot: &AdminSnapshot, target: ConnectionId, rank: ui::AdminRole) -> Result<Command> {
+    ensure!(
+        snapshot.local_host || snapshot.role == Role::SuperAdmin,
+        "Only a Super Admin can change ranks"
+    );
+    let request = Request::new(Action::HostSetRole {
+        target,
+        role: match rank {
+            ui::AdminRole::Player => Role::Player,
+            ui::AdminRole::Admin => Role::Admin,
+            ui::AdminRole::SuperAdmin => Role::SuperAdmin,
+        },
+    });
+    request.validate()?;
+    Ok(Command::Admin(request))
+}
+
+/// Read or change the saved rank list (the host and Super Admins).
+fn ranks_request(snapshot: &AdminSnapshot, action: Action) -> Result<Command> {
+    ensure!(
+        snapshot.local_host || snapshot.role == Role::SuperAdmin,
+        "Only a Super Admin can change ranks"
+    );
+    let request = Request::new(action);
+    request.validate()?;
+    Ok(Command::Admin(request))
+}
+
+fn hex(key: &bri_admin::Principal) -> String {
+    key.0.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn principal(key: &str) -> Result<bri_admin::Principal> {
+    ensure!(key.len() == 64 && key.is_ascii(), "Invalid player key");
+    let mut out = [0; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&key[i * 2..i * 2 + 2], 16)?;
+    }
+    Ok(bri_admin::Principal(out))
+}
+
 /// v20 `findClientByName`: the name that contains `partial` earliest.
 fn find_player(snapshot: &AdminSnapshot, partial: &str) -> Result<ConnectionId> {
     let partial = partial.to_lowercase();
@@ -288,6 +352,17 @@ pub fn chat_command(
     snapshot: &AdminSnapshot,
 ) -> Result<Option<Command>> {
     let joined = args.join(" ");
+    // `/admin`, `/superAdmin` and `/deAdmin <name>` change a player's rank.
+    let rank = match name.to_ascii_lowercase().as_str() {
+        "admin" => Some(ui::AdminRole::Admin),
+        "superadmin" => Some(ui::AdminRole::SuperAdmin),
+        "deadmin" => Some(ui::AdminRole::Player),
+        _ => None,
+    };
+    if let Some(rank) = rank {
+        ensure!(!joined.trim().is_empty(), "Usage: /{name} <player name>");
+        return set_role(snapshot, find_player(snapshot, joined.trim())?, rank).map(Some);
+    }
     let (capability, action) = match name.to_ascii_lowercase().as_str() {
         "fetch" => (Capability::Teleport, Action::Fetch { target: find_player(snapshot, &joined)? }),
         "find" => (Capability::Teleport, Action::Find { target: find_player(snapshot, &joined)? }),
@@ -310,6 +385,8 @@ pub fn chat_command(
         "resetvehicles" => (Capability::Vehicles, Action::ResetVehicles),
         "clearvehicles" => (Capability::Vehicles, Action::ClearVehicles),
         "realbrickcount" => (Capability::WorldCommands, Action::RealBrickCount),
+        // `ServerCmdClearAllBricks`; `/clearBricks` (one's own) goes to the host.
+        "clearallbricks" => (Capability::ClearBricks, Action::ClearAllBricks),
         "cancelallevents" => (Capability::WorldCommands, Action::CancelAllEvents),
         "clearbots" => (Capability::WorldCommands, Action::ClearBots),
         _ => return Ok(None),
@@ -335,6 +412,20 @@ pub fn reply_updates(
     match (&reply.data, action) {
         (AdminData::LoginRejected { attempts }, ui::AdminAction::Login { .. }) => {
             bail!("Administrator password rejected (attempt {attempts} of 4)")
+        }
+        (AdminData::AutoRoles(rows), ui::AdminAction::RequestRanks) => {
+            updates.push(UiUpdate::Admin(ui::AdminUpdate::Ranks {
+                request: id,
+                revision: reply.snapshot.revision,
+                rows: rows
+                    .iter()
+                    .map(|row| ui::AdminSavedRank {
+                        key: hex(&row.principal),
+                        name: plain(&row.name),
+                        role: role(row.role),
+                    })
+                    .collect(),
+            }));
         }
         (AdminData::BrickGroups(rows), ui::AdminAction::RequestBrickGroups) => {
             updates.push(UiUpdate::Admin(ui::AdminUpdate::BrickGroups {
@@ -411,7 +502,9 @@ pub fn reply_updates(
             | ui::AdminAction::ClearBrickGroup { .. }
             | ui::AdminAction::ClearAllBricks
             | ui::AdminAction::ChangeMap { .. }
-            | ui::AdminAction::SetPassword { .. },
+            | ui::AdminAction::SetPassword { .. }
+            | ui::AdminAction::SetRole { .. }
+            | ui::AdminAction::ForgetRank { .. },
         ) => {}
         _ => bail!("Host returned an unexpected administration reply"),
     }
@@ -499,6 +592,130 @@ mod tests {
         );
         s.role = Role::Player;
         assert!(chat_command("spy", &["buil".into()], &s).is_err());
+        Ok(())
+    }
+    #[test]
+    fn super_admins_change_ranks_from_chat_and_the_menu() -> Result<()> {
+        let mut s = snapshot(Role::SuperAdmin);
+        s.players.push(bri_sim::session::AdminPlayer {
+            connection: 9,
+            name: "Builder".into(),
+            identity_label: String::new(),
+            role: Role::Player,
+            owner: false,
+            local: false,
+            bot: false,
+            persistent_identity: true,
+        });
+        assert!(state(&s).supported.contains(&ui::AdminFeature::Ranks));
+        for (name, role) in [
+            ("admin", Role::Admin),
+            ("superAdmin", Role::SuperAdmin),
+            ("deAdmin", Role::Player),
+        ] {
+            let Some(Command::Admin(request)) = chat_command(name, &["buil".into()], &s)? else {
+                panic!("missing request")
+            };
+            assert_eq!(
+                request.action,
+                Action::HostSetRole {
+                    target: ConnectionId(9),
+                    role
+                }
+            );
+        }
+        let Some(Command::Admin(request)) = command(
+            &ui::AdminAction::SetRole {
+                target: 9,
+                role: ui::AdminRole::Admin,
+            },
+            &s,
+        )?
+        else {
+            panic!("missing request")
+        };
+        assert_eq!(
+            request.action,
+            Action::HostSetRole {
+                target: ConnectionId(9),
+                role: Role::Admin
+            }
+        );
+        assert!(chat_command("admin", &[], &s).is_err());
+        // An Admin cannot hand out ranks; the host always can.
+        s.role = Role::Admin;
+        assert!(!state(&s).supported.contains(&ui::AdminFeature::Ranks));
+        assert!(chat_command("admin", &["buil".into()], &s).is_err());
+        s.local_host = true;
+        assert!(chat_command("superadmin", &["buil".into()], &s)?.is_some());
+        Ok(())
+    }
+    #[test]
+    fn clear_all_bricks_from_chat_is_for_admins_and_clear_bricks_goes_to_the_host() -> Result<()> {
+        let s = snapshot(Role::Admin);
+        let Some(Command::Admin(request)) = chat_command("clearAllBricks", &[], &s)? else {
+            panic!("missing request")
+        };
+        assert_eq!(request.action, Action::ClearAllBricks);
+        assert!(chat_command("clearallbricks", &[], &snapshot(Role::Player)).is_err());
+        // A player's own `/clearBricks` is the host's typed command.
+        assert!(chat_command("clearBricks", &[], &snapshot(Role::Player))?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn the_saved_rank_list_round_trips_player_keys() -> Result<()> {
+        let s = snapshot(Role::SuperAdmin);
+        let key = bri_admin::Principal([0xa7; 32]);
+        let reply = AdminReply {
+            snapshot: s.clone(),
+            data: AdminData::AutoRoles(vec![bri_admin::AutoRole {
+                principal: key,
+                role: Role::Admin,
+                name: "Builder".into(),
+            }]),
+        };
+        let updates = reply_updates(5, &ui::AdminAction::RequestRanks, &reply)?;
+        let Some(UiUpdate::Admin(ui::AdminUpdate::Ranks { rows, .. })) = updates.last() else {
+            panic!("no rank list: {updates:?}")
+        };
+        assert_eq!(rows[0].name, "Builder");
+        let Some(Command::Admin(request)) = command(
+            &ui::AdminAction::ForgetRank {
+                key: rows[0].key.clone(),
+            },
+            &s,
+        )?
+        else {
+            panic!("missing request")
+        };
+        assert_eq!(
+            request.action,
+            Action::HostSetAutoRole {
+                principal: key,
+                role: Role::Player
+            }
+        );
+        assert!(
+            command(
+                &ui::AdminAction::ForgetRank { key: "zz".into() },
+                &s
+            )
+            .is_err()
+        );
+        assert!(command(&ui::AdminAction::RequestRanks, &snapshot(Role::Admin)).is_err());
+        // A rank change is answered with no data, and that is success.
+        let done = AdminReply {
+            snapshot: s,
+            data: AdminData::None,
+        };
+        reply_updates(
+            6,
+            &ui::AdminAction::SetRole {
+                target: 9,
+                role: ui::AdminRole::Admin,
+            },
+            &done,
+        )?;
         Ok(())
     }
     #[test]

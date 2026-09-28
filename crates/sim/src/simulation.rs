@@ -484,13 +484,27 @@ impl Simulation {
         })
     }
     pub fn remove(&mut self, actor: &Actor, id: BrickId) -> Result<()> {
-        self.state().bricks.get(&id).context("Unknown brick")?;
-        ensure!(self.destructible_by(actor, id), "Brick is indestructible");
-        self.authority.remove(actor, id)?;
-        self.index.remove(id);
-        self.brick_waters.remove(&id);
-        if let Some(handle) = self.handles.remove(&id) {
-            self.physics.remove_collider(handle);
+        self.remove_many(actor, &[id])
+    }
+    /// Remove every brick in `ids`, refreshing collisions once at the end:
+    /// a refresh per brick made clearing a big build take minutes. Missing
+    /// and indestructible bricks are refused before any is removed.
+    pub fn remove_many(&mut self, actor: &Actor, ids: &[BrickId]) -> Result<()> {
+        for &id in ids {
+            self.state().bricks.get(&id).context("Unknown brick")?;
+            ensure!(self.destructible_by(actor, id), "Brick is indestructible");
+        }
+        self.state()
+            .revision
+            .checked_add(ids.len() as u64)
+            .context("Revision exhausted")?;
+        for &id in ids {
+            self.authority.remove(actor, id)?;
+            self.index.remove(id);
+            self.brick_waters.remove(&id);
+            if let Some(handle) = self.handles.remove(&id) {
+                self.physics.remove_collider(handle);
+            }
         }
         self.detect_collisions();
         Ok(())

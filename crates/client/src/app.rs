@@ -2976,6 +2976,7 @@ impl App {
                     reply.data,
                     bri_sim::session::AdminData::BrickGroups(_)
                         | bri_sim::session::AdminData::BanList { .. }
+                        | bri_sim::session::AdminData::AutoRoles(_)
                 ) {
                     ensure!(
                         reply.snapshot.revision >= self.ui.core.admin.revision,
@@ -4083,6 +4084,14 @@ impl App {
                     }
                 }
             }
+            // Everyone's rank, from the host's administration list. Names
+            // are unique on a server, so they pair the two lists.
+            let rank = |name: &str| {
+                view.admin_snapshot
+                    .as_ref()
+                    .and_then(|s| s.players.iter().find(|p| p.name == name))
+                    .map(|p| p.role)
+            };
             self.ui.apply_session(
                 a.id,
                 UiUpdate::Players {
@@ -4095,8 +4104,11 @@ impl App {
                             score: view.vitals.get(&owner).map_or(0, |v| {
                                 v.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32
                             }),
-                            admin: owner == view.owner && view.administrator,
-                            super_admin: false,
+                            admin: rank(name).map_or(
+                                owner == view.owner && view.administrator,
+                                bri_admin::Role::is_admin,
+                            ),
+                            super_admin: rank(name) == Some(bri_admin::Role::SuperAdmin),
                             bl_id: a
                                 .trust
                                 .get(&owner)
