@@ -1292,7 +1292,12 @@ impl Session {
             }
             Command::Emote(name) => {
                 ensure!(EMOTES.contains(&name.as_str()), "Unknown emote");
-                ensure!(peer.combat.alive, "Dead players cannot emote");
+                // Every v20 emote command checks `isObject(%client.player)`
+                // and quietly does nothing without one; the brick selector
+                // sends `/bsd` whenever it opens, dead or alive.
+                if !peer.combat.alive {
+                    return Ok(Reply::Accepted);
+                }
                 if name == "sit" {
                     peer.sitting = true;
                 }
