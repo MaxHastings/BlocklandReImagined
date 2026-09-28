@@ -14,6 +14,21 @@ imported Blocko Car drives in the vehicles runtime, both headless. Neither can
 load in a hosted game yet, because every engine system still reads exactly one
 pack per role (seam 1). No TorqueScript is executed, and there is no VM.
 
+## Recommendations, in order
+
+1. **Let every system read its content kind from every loaded package** (seam
+   1), with cross-package id references (seam 3) and runtime kinds for the
+   imported content (seam 2). Until this lands, no imported Add-On can load in
+   a hosted game, whatever else is fixed.
+2. Give image state scripts, and the other callbacks Add-Ons hook, a declared
+   behaviour hook in the package runtime (seams 5 and 7). Add the capabilities
+   the archive needs most: `schedule`, `entities.animate`, `random.seeded`,
+   `players.inventory` and `projectiles.spawn` (seam 6).
+3. Add a controllable-entity or bot kind that takes data-driven AI settings
+   (seam 8).
+4. Extract the effects, debris and audio lowering into libraries, and move
+   the importers onto `bri_convert::tscript` (seams 14 and 15).
+
 ## The command
 
 ```text
