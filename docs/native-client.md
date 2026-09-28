@@ -41,13 +41,19 @@ Spawn-sphere distribution/orientation and exact FOV feel
 also require fidelity work; the initial Bedroom center faces a nearby wall.
 
 LAN hosts advertise a listing and their public QUIC certificate over UDP
-discovery (port 28050); the Join Server list uses it, alongside servers joined
-before (`recent-servers.json`). Connect to IP accepts an IP or a host name with
-an optional port and needs only the game port: a first join accepts the
-certificate the host presents during the QUIC handshake (its signature is still
-verified) and pins it in `trusted-hosts.json` (trust on first use). A pin that
-no longer matches is reported as a changed identity and forgotten, so joining
-again trusts the new one. LAN hosts keep a persistent certificate/key pair in their state
+discovery (port 28050). Opening Join Server lists those and probes every saved
+server (`servers.json`: favourites, then the last ten joins) over its game
+port for name, map, players and ping; the Favorite button (v20's unused Query
+Internet) stars the selected server. Connect to IP accepts an IP, a host name
+with an optional port, or a `bri://` invite, and needs only the game port: a
+first join accepts the certificate the host presents during the QUIC handshake
+(its signature is still verified) and pins it in `trusted-hosts.json` (trust on
+first use); an invite's key is checked instead. A pin that no longer matches is
+reported as a changed identity and forgotten, so joining again trusts the new
+one. Internet hosts open the game port on the router, check whether friends can
+reach them and put an invite on the clipboard (`/invite` copies it again); LAN
+and Internet hosts on Windows are offered a one-prompt Windows Firewall fix when
+friends would be blocked. Details: `docs/architecture/hosting.md`. LAN hosts keep a persistent certificate/key pair in their state
 directory so pins stay valid across restarts; single-player hosts use a
 throwaway certificate. There is no insecure certificate fallback.
 

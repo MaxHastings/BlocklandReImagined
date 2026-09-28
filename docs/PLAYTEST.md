@@ -44,14 +44,22 @@ under `logs/`. Keep both when reporting a problem. Do not share
 
 ## Playing with a friend (LAN)
 
-1. The host starts a LAN game (Start Game → server type LAN). Allow the game
-   through Windows Firewall on private networks when asked.
+1. The host starts a LAN game (Start Game → server type LAN). If Windows asks
+   about the firewall, choose Allow; if friends would still be blocked, the
+   game offers to fix it (one Windows permission prompt).
 2. The other player opens Join Server; LAN games appear in the list, and so do
-   servers you joined before. Connect to IP takes an address like
-   `192.168.1.20`, `192.168.1.20:28000` or a host name such as
-   `play.example.com`, and remembers the last one typed. Only UDP port 28000
-   (or the port in the address) needs to be open on the host. The first join
-   trusts the host's identity and remembers it.
+   servers you joined before or starred with Favorite. Connect to IP takes an
+   address like `192.168.1.20`, `192.168.1.20:28000`, a host name such as
+   `play.example.com`, or an invite (`bri://…`), and remembers the last one
+   typed. Only UDP port 28000 (or the port in the address) needs to be open on
+   the host. The first join trusts the host's identity and remembers it.
+
+## Playing with a friend over the internet
+
+1. The host starts an Internet game. Within about ten seconds the chat says
+   whether friends can reach you, and what to change if not. When they can,
+   your invite is on the clipboard; type `/invite` to copy it again.
+2. The friend pastes the invite into Join Server → Connect to IP.
 3. Try building together, a minigame deathmatch, riding one jeep together and a
    late join into an existing build.
 

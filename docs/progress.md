@@ -2486,3 +2486,34 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   placeable bricks still refuse the load atomically. No protocol change.
   Evidence: `cargo test -p bri-world -p bri-sim` (updated
   `build_load_keeps_unknown_bricks_aside_and_preserves_existing_players`).
+
+- 2026-09-28 Modern hosting (first-impressions item 5, Max's "make hosting
+  first class"). Joining needs only the game port: door-closers' first-use
+  pinning, host names, typed join errors and remembered address (from
+  859c012, item 5 parts only) plus `bri://host:port/<key>` invites whose key
+  (first 128 bits of the certificate's SHA-256) verifies a first join. One TLS
+  verifier handles every `HostPin`. Protocol 35: `Challenge` carries the
+  server `Listing`, so `client::probe` reads name, map and players over the
+  game port without joining; a client on another version is told which side
+  must update (that refusal was dropped unsent before). Internet hosts and
+  non-loopback dedicated servers run `reach::open_and_check`: UPnP IGD, then
+  NAT-PMP (RFC 6886), public STUN (Cloudflare, Google), a self-probe of the
+  public address, and one plain verdict (reachable, likely, shared address,
+  needs forward, unknown) with the invite put on the clipboard and `/invite`
+  to copy it again. UDP 28050 is no longer forwarded. Windows hosts read the
+  firewall rules for the game (PowerShell NetSecurity, per active profile) and
+  offer a one-prompt fix (`bri-client --allow-firewall`, elevated, replaces the
+  program's inbound rules with one allow rule). Join Server searches the LAN
+  and probes saved servers on open; Query Internet became Favorite
+  (`servers.json`: 64 favourites, 10 recent). Join codes with hole punching
+  and a relay need a hosted service and are written up as an open decision in
+  `docs/architecture/hosting.md`. Evidence: `cargo test -p bri-net --lib`
+  (invite, stun, natpmp against a fake router, reach verdicts), `--test
+  loopback` (`invites_pin_the_host_key_and_probes_read_the_listing`,
+  `a_different_version_is_told_which_side_to_update`,
+  `first_join_needs_only_the_game_port_and_errors_are_plain`), `cargo test -p
+  bri-client --lib` (servers, firewall decisions), `cargo test -p bri-ui`
+  (Favorite button, Confirm dialog, list query on open), clippy `-D warnings`
+  on Linux and `--target x86_64-pc-windows-gnu`. Not yet exercised: a real
+  router, real STUN from a home network, the Windows Firewall helper on
+  Windows, and a remote friend joining.
