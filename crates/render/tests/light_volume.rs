@@ -2,7 +2,7 @@
 //! a lamp that exists only in lightmaps lights players and bricks near it.
 use anyhow::{Context, Result};
 use bri_render::{
-    light_volume::LightVolume,
+    light_volume::{LightVolume, RAYS_PER_CELL},
     scene::{
         Camera, GpuScene, Material, MeshBatch, SceneData, SceneImage, SceneRenderer, SceneVertex,
         create_depth,
@@ -65,6 +65,112 @@ fn room(floor: u8, walls: u8) -> SceneData {
         }
     }
     scene
+}
+
+/// Adds a cube of `half` size at `centre` whose faces point in or out.
+fn add_cube(scene: &mut SceneData, centre: Vec3, half: f32, inward: bool, material: usize) {
+    for axis in 0..3 {
+        for side in [-1.0f32, 1.0] {
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let mut normal = Vec3::ZERO;
+            normal[axis] = if inward { -side } else { side };
+            let base = scene.vertices.len() as u32;
+            for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let mut p = Vec3::ZERO;
+                p[axis] = side;
+                p[u] = a;
+                p[v] = b;
+                scene.vertices.push(SceneVertex {
+                    position: (centre + p * half).to_array(),
+                    normal: normal.to_array(),
+                    uv: [0.0; 2],
+                    lightmap_uv: [0.5; 2],
+                    color: [1.0; 4],
+                    fx: [0.0; 4],
+                });
+            }
+            let start = scene.indices.len() as u32;
+            scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
+            scene.batches.push(MeshBatch {
+                indices: start..start + 6,
+                material,
+                center: centre.to_array(),
+            });
+        }
+    }
+}
+
+/// A dark room 20 units across with a small brightly lit block off centre:
+/// light that changes sharply near the block and slowly across open air.
+fn lamp_room() -> SceneData {
+    let mut scene = SceneData {
+        images: vec![SceneImage::white(), gray(12), gray(250)],
+        ..Default::default()
+    };
+    scene.materials.push(Material::surface("room", 0, 1));
+    scene.materials.push(Material::surface("lamp", 0, 2));
+    add_cube(&mut scene, Vec3::ZERO, 10.0, true, 0);
+    add_cube(&mut scene, Vec3::new(3.0, -2.0, 1.0), 1.0, false, 1);
+    scene
+}
+
+#[test]
+fn interpolated_cells_match_casting_from_every_cell() {
+    let scene = lamp_room();
+    let fast = LightVolume::bake(&scene, 0.5, 100_000).unwrap();
+    let every = bri_render::light_volume::Baker::new(&scene)
+        .unwrap()
+        .bake_every_cell(0.5, 100_000);
+    assert_eq!((fast.dims, fast.origin), (every.dims, every.origin));
+    // The work saved is real, and a work count, not a clock, measures it.
+    assert!(fast.rays * 2 < every.rays, "{} {}", fast.rays, every.rays);
+    let mut worst = 0;
+    let mut total = 0u64;
+    for (a, b) in fast.texels.iter().zip(&every.texels) {
+        for c in 0..4 {
+            let d = a[c].abs_diff(b[c]);
+            worst = worst.max(d);
+            total += u64::from(d);
+        }
+    }
+    let mean = total as f64 / (fast.texels.len() * 4) as f64;
+    // Interpolated blocks agree within the bake's tolerance (12/255) plus
+    // sampling noise between 24 fixed directions; most cells match exactly.
+    assert!(worst <= 24 && mean < 1.0, "worst {worst} mean {mean}");
+}
+
+#[test]
+fn stored_volumes_round_trip_and_keys_follow_the_content() {
+    let scene = lamp_room();
+    let baker = bri_render::light_volume::Baker::new(&scene).unwrap();
+    let key = baker.key(0.5, 100_000);
+    assert_eq!(
+        key,
+        bri_render::light_volume::Baker::new(&scene)
+            .unwrap()
+            .key(0.5, 100_000)
+    );
+    assert_ne!(key, baker.key(1.0, 100_000));
+    let mut relit = lamp_room();
+    relit.images[2].rgba[0] = 200;
+    assert_ne!(
+        key,
+        bri_render::light_volume::Baker::new(&relit)
+            .unwrap()
+            .key(0.5, 100_000)
+    );
+    let volume = baker.bake(0.5, 100_000);
+    let bytes = volume.to_bytes();
+    let stored = LightVolume::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        (stored.origin, stored.cell, stored.dims),
+        (volume.origin, volume.cell, volume.dims)
+    );
+    assert_eq!((stored.texels, stored.rays), (volume.texels, 0));
+    // Truncated, padded or foreign files are refused, so a bake replaces them.
+    assert!(LightVolume::from_bytes(&bytes[..bytes.len() - 1]).is_none());
+    assert!(LightVolume::from_bytes(&[bytes.as_slice(), &[0]].concat()).is_none());
+    assert!(LightVolume::from_bytes(b"not a light volume").is_none());
 }
 
 fn luminance(light: [f32; 3]) -> f32 {
@@ -355,7 +461,11 @@ fn stock_map_lamps_light_their_surroundings() -> Result<()> {
             map.scene.sun_color,
             map.scene.ambient
         );
-        assert!(started.elapsed().as_secs() < 30);
+        // Bounded by work, not time: under two thirds of casting from every
+        // cell (the gate's debug build took 42 s when every cell cast).
+        let every_cell = volume.texels.len() as u64 * RAYS_PER_CELL;
+        eprintln!("  rays {} of {every_cell}", volume.rays);
+        assert!(volume.rays * 3 < every_cell * 2);
         // A player (feet to head, about 2.7 units) around each light source.
         // Around the Bedroom bulb (a player on the shade's bars stands just
         // above it) and under the Kitchen ceiling lights.

@@ -19,12 +19,21 @@ use crate::scene::{AlphaMode, MaterialKind, SceneData, SceneImage};
 use glam::Vec3;
 
 /// Directions per cell. A Fibonacci sphere; enough to find a lamp shade.
-const RAYS: usize = 48;
+const RAYS: usize = 24;
+/// Rays a baked cell casts: every direction and the one down.
+pub const RAYS_PER_CELL: u64 = RAYS as u64 + 1;
 /// A cell whose rays mostly leave through back faces is inside a wall.
 const SOLID_BACKFACES: f32 = 0.3;
 /// How far below a cell the lightmap under it is looked for (the classic
 /// engine's `cRayLength`).
 const FLOOR_RAY: f32 = 100.0;
+/// Names the bake and the stored layout; change it whenever either changes.
+const FORMAT: &[u8; 8] = b"BRILV\0\0\x01";
+/// Cells between the first baked corners on each axis; failing blocks halve
+/// down to 2.
+const BLOCK: u32 = 8;
+/// Largest corner difference, in 1/255, a block may interpolate across.
+const TOLERANCE: u8 = 12;
 
 /// A baked grid of RGBA8 texels: RGB premultiplied by A, A the share of the
 /// cell outside solid geometry, so filtering never pulls light toward black
@@ -35,6 +44,8 @@ pub struct LightVolume {
     pub cell: f32,
     pub dims: [u32; 3],
     pub texels: Vec<[u8; 4]>,
+    /// Rays the bake cast: its work, the same on every machine and build.
+    pub rays: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +66,8 @@ struct Node {
     start: usize,
     count: usize,
     right: usize,
+    /// Split axis; the left child holds the lower triangles on it.
+    axis: usize,
 }
 
 struct Bvh {
@@ -96,6 +109,7 @@ impl Bvh {
             start,
             count: end - start,
             right: 0,
+            axis: 0,
         });
         if end - start <= 4 {
             return index;
@@ -112,13 +126,18 @@ impl Bvh {
         let right = Self::build(triangles, nodes, mid, end);
         nodes[index].count = 0;
         nodes[index].right = right;
+        nodes[index].axis = axis;
         index
     }
     fn cast(&self, origin: Vec3, direction: Vec3, limit: f32) -> Option<Hit> {
         let inverse = direction.recip();
         let mut best: Option<Hit> = None;
-        let mut stack = vec![0usize];
-        while let Some(index) = stack.pop() {
+        // Median splits of up to 2^32 triangles stay far below this depth.
+        let mut stack = [0usize; 64];
+        let mut depth = 1;
+        while depth > 0 {
+            depth -= 1;
+            let index = stack[depth];
             let node = &self.nodes[index];
             let far = best.as_ref().map_or(limit, |h| h.t);
             let t0 = (node.min - origin) * inverse;
@@ -129,8 +148,16 @@ impl Bvh {
                 continue;
             }
             if node.count == 0 {
-                stack.push(index + 1);
-                stack.push(node.right);
+                // Nearer child last, so it is searched first and its hit
+                // prunes the farther one.
+                let (near, far) = if direction[node.axis] < 0.0 {
+                    (node.right, index + 1)
+                } else {
+                    (index + 1, node.right)
+                };
+                stack[depth] = far;
+                stack[depth + 1] = near;
+                depth += 2;
                 continue;
             }
             for i in node.start..node.start + node.count {
@@ -163,6 +190,67 @@ impl Bvh {
         }
         best
     }
+    /// Whether any triangle's bounds overlap the box.
+    fn touches(&self, lo: Vec3, hi: Vec3) -> bool {
+        let mut stack = [0usize; 64];
+        let mut depth = 1;
+        while depth > 0 {
+            depth -= 1;
+            let index = stack[depth];
+            let node = &self.nodes[index];
+            if node.min.cmpgt(hi).any() || node.max.cmplt(lo).any() {
+                continue;
+            }
+            if node.count == 0 {
+                stack[depth] = index + 1;
+                stack[depth + 1] = node.right;
+                depth += 2;
+                continue;
+            }
+            let hit = self.triangles[node.start..node.start + node.count]
+                .iter()
+                .any(|t| {
+                    let (a, b) = Self::bounds(t);
+                    !(a.cmpgt(hi).any() || b.cmplt(lo).any())
+                });
+            if hit {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Runs `f` over `0..count` on every core, handing out small batches so
+/// costly regions (near geometry) do not leave threads idle.
+fn parallel<T: Send>(count: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    const BATCH: usize = 256;
+    let next = AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let mut parts: Vec<(usize, Vec<T>)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let start = next.fetch_add(BATCH, Ordering::Relaxed);
+                        if start >= count {
+                            break done;
+                        }
+                        let end = (start + BATCH).min(count);
+                        done.push((start, (start..end).map(&f).collect::<Vec<_>>()));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().expect("light volume worker panicked"))
+            .collect()
+    });
+    parts.sort_by_key(|(start, _)| *start);
+    parts.into_iter().flat_map(|(_, part)| part).collect()
 }
 
 /// Bilinear, clamped, like the shader's `clamped_exact` lightmap sampler.
@@ -271,8 +359,46 @@ impl Baker {
         })
     }
 
+    /// Names what `bake(min_cell, max_cells)` would produce: the bake
+    /// version, its settings, every lightmapped triangle and its lightmap.
+    /// Equal keys bake equal volumes, so a stored volume can stand in.
+    pub fn key(&self, min_cell: f32, max_cells: usize) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(FORMAT);
+        hash.update(min_cell.to_le_bytes());
+        hash.update((max_cells as u64).to_le_bytes());
+        for t in &self.bvh.triangles {
+            for v in [t.a, t.e1, t.e2, t.front] {
+                for c in v.to_array() {
+                    hash.update(c.to_le_bytes());
+                }
+            }
+            for c in t.uv.as_flattened() {
+                hash.update(c.to_le_bytes());
+            }
+            hash.update((t.image as u64).to_le_bytes());
+        }
+        for image in &self.images {
+            hash.update(image.width.to_le_bytes());
+            hash.update(image.height.to_le_bytes());
+            hash.update(&image.rgba);
+        }
+        hash.finalize().into()
+    }
+
     /// Cells are at least `min_cell` units and at most `max_cells` in total.
     pub fn bake(self, min_cell: f32, max_cells: usize) -> LightVolume {
+        self.bake_blocks(min_cell, max_cells, BLOCK)
+    }
+
+    /// `bake` casting rays from every cell: the reference the interpolated
+    /// cells are measured against.
+    pub fn bake_every_cell(self, min_cell: f32, max_cells: usize) -> LightVolume {
+        self.bake_blocks(min_cell, max_cells, 1)
+    }
+
+    fn bake_blocks(self, min_cell: f32, max_cells: usize, block: u32) -> LightVolume {
         let Self { bvh, images } = self;
         let (min, max) = (bvh.nodes[0].min, bvh.nodes[0].max);
         let extent = (max - min).max(Vec3::splat(min_cell));
@@ -285,7 +411,7 @@ impl Baker {
         let origin = min - Vec3::splat(cell);
         let directions = directions();
         let count = dims.as_u64vec3().element_product() as usize;
-        let mut texels = vec![[0u8; 4]; count];
+        let rays = std::sync::atomic::AtomicU64::new(0);
         let lightmap = |hit: &Hit| {
             let tri = &bvh.triangles[hit.triangle];
             let w = 1.0 - hit.u - hit.v;
@@ -300,6 +426,7 @@ impl Baker {
             let mut sum = Vec3::ZERO;
             let mut backfaces = 0;
             let reach = extent.length() + cell * 2.0;
+            rays.fetch_add(RAYS as u64, std::sync::atomic::Ordering::Relaxed);
             for &direction in &directions {
                 if let Some(hit) = bvh.cast(centre, direction, reach) {
                     if bvh.triangles[hit.triangle].front.dot(direction) > 0.0 {
@@ -313,38 +440,211 @@ impl Baker {
             if open < 1.0 - SOLID_BACKFACES {
                 return [0; 4];
             }
-            let mut light = sum / (RAYS - backfaces) as f32;
-            if let Some(hit) = bvh.cast(centre, Vec3::NEG_Y, FLOOR_RAY)
-                && bvh.triangles[hit.triangle].front.y > 0.5
-            {
-                light = light.max(lightmap(&hit));
-            }
+            let light = sum / (RAYS - backfaces) as f32;
             let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
             let light = light.clamp(Vec3::ZERO, Vec3::ONE);
             [byte(light.x), byte(light.y), byte(light.z), 255]
         };
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-        let chunk = count.div_ceil(threads).max(1);
-        std::thread::scope(|scope| {
-            for (i, slice) in texels.chunks_mut(chunk).enumerate() {
-                let bake_cell = &bake_cell;
-                scope.spawn(move || {
-                    for (j, texel) in slice.iter_mut().enumerate() {
-                        *texel = bake_cell(i * chunk + j);
+        // Bake every `block`-th cell on each axis, then fill the cells between
+        // by interpolation where that is close enough: the block touches no
+        // geometry (light over open air changes smoothly, and every change
+        // in it comes from surfaces the corners also see) and its open
+        // corners agree within TOLERANCE. A block of air inside a wall or
+        // outside the map interpolates to no light. Blocks that fail are
+        // split in half and tried again; what is left is baked cell by cell.
+        let flat = |p: [u32; 3]| ((p[2] * dims.y + p[1]) * dims.x + p[0]) as usize;
+        let mut known: Vec<Option<[u8; 4]>> = vec![None; count];
+        // Blocks still to try at this stride, as their low corner cells.
+        let mut stride = block;
+        let mut pending: Vec<[u32; 3]> = Vec::new();
+        if stride > 1 {
+            for z in (0..dims.z - 1).step_by(stride as usize) {
+                for y in (0..dims.y - 1).step_by(stride as usize) {
+                    for x in (0..dims.x - 1).step_by(stride as usize) {
+                        pending.push([x, y, z]);
                     }
-                });
+                }
             }
+        }
+        let high =
+            |low: [u32; 3], stride: u32| [0, 1, 2].map(|a| (low[a] + stride).min(dims[a] - 1));
+        while stride > 1 && !pending.is_empty() {
+            let corners_of = |low: [u32; 3]| {
+                let hi = high(low, stride);
+                (0..8usize)
+                    .map(move |k| [0, 1, 2].map(|a| if k >> a & 1 == 1 { hi[a] } else { low[a] }))
+            };
+            let mut wanted: Vec<usize> = pending
+                .iter()
+                .flat_map(|&low| corners_of(low))
+                .map(flat)
+                .filter(|&i| known[i].is_none())
+                .collect();
+            wanted.sort_unstable();
+            wanted.dedup();
+            for (index, texel) in wanted
+                .iter()
+                .zip(parallel(wanted.len(), |i| bake_cell(wanted[i])))
+            {
+                known[*index] = Some(texel);
+            }
+            let known_ref = &known;
+            let filled = parallel(pending.len(), |i| {
+                let low = pending[i];
+                let hi = high(low, stride);
+                let values: Vec<[u8; 4]> = corners_of(low)
+                    .map(|p| known_ref[flat(p)].expect("corner baked"))
+                    .collect();
+                // Cells inside walls hold no light; the rest must agree.
+                let open = values.iter().filter(|v| v[3] == 255);
+                for channel in 0..3 {
+                    let lo = open.clone().map(|v| v[channel]).min().unwrap_or(0);
+                    let hi = open.clone().map(|v| v[channel]).max().unwrap_or(0);
+                    if hi - lo > TOLERANCE {
+                        return None;
+                    }
+                }
+                let lo_cell = Vec3::from(low.map(|v| v as f32));
+                let hi_cell = Vec3::from(hi.map(|v| v as f32));
+                // Cell centres, widened by a cell so geometry between this
+                // block's edge cells and the next block is caught too.
+                if bvh.touches(
+                    origin + (lo_cell - 0.5) * cell,
+                    origin + (hi_cell + 1.5) * cell,
+                ) {
+                    return None;
+                }
+                let mut cells = Vec::new();
+                for z in low[2]..=hi[2] {
+                    for y in low[1]..=hi[1] {
+                        for x in low[0]..=hi[0] {
+                            let p = [x, y, z];
+                            let t = [0, 1, 2]
+                                .map(|a| (p[a] - low[a]) as f32 / (hi[a] - low[a]).max(1) as f32);
+                            // Premultiplied, like the GPU's own filtering.
+                            let mut out = [0.0f32; 4];
+                            for (k, v) in values.iter().enumerate() {
+                                let w: f32 = (0..3)
+                                    .map(|a| if k >> a & 1 == 1 { t[a] } else { 1.0 - t[a] })
+                                    .product();
+                                for (o, v) in out.iter_mut().zip(v) {
+                                    *o += w * f32::from(*v);
+                                }
+                            }
+                            cells.push((flat(p), out.map(|v| (v + 0.5) as u8)));
+                        }
+                    }
+                }
+                Some(cells)
+            });
+            let mut next = Vec::new();
+            let half = stride / 2;
+            for (low, cells) in pending.iter().zip(filled) {
+                match cells {
+                    Some(cells) => {
+                        for (index, texel) in cells {
+                            known[index].get_or_insert(texel);
+                        }
+                    }
+                    None if half > 1 => {
+                        let hi = high(*low, stride);
+                        for z in (low[2]..hi[2]).step_by(half as usize) {
+                            for y in (low[1]..hi[1]).step_by(half as usize) {
+                                for x in (low[0]..hi[0]).step_by(half as usize) {
+                                    next.push([x, y, z]);
+                                }
+                            }
+                        }
+                    }
+                    None => {}
+                }
+            }
+            pending = next;
+            stride = half;
+        }
+        // The light under a cell comes from one ray and can change sharply
+        // (a small lit block below open air), so every cell casts it.
+        let texels = parallel(count, |index| {
+            let mut texel = known[index].unwrap_or_else(|| bake_cell(index));
+            if texel[3] == 0 {
+                return texel;
+            }
+            let p = [
+                index as u32 % dims.x,
+                index as u32 / dims.x % dims.y,
+                index as u32 / (dims.x * dims.y),
+            ];
+            let centre = origin + (glam::UVec3::from(p).as_vec3() + 0.5) * cell;
+            rays.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(hit) = bvh.cast(centre, Vec3::NEG_Y, FLOOR_RAY)
+                && bvh.triangles[hit.triangle].front.y > 0.5
+            {
+                let floor = lightmap(&hit).clamp(Vec3::ZERO, Vec3::ONE) * 255.0 + 0.5;
+                // Scaled by the cell's open share, as its light is stored.
+                let open = f32::from(texel[3]) / 255.0;
+                for (c, v) in texel.iter_mut().zip(floor.to_array()) {
+                    *c = (*c).max((v * open) as u8);
+                }
+            }
+            texel
         });
         LightVolume {
             origin: origin.to_array(),
             cell,
             dims: dims.to_array(),
             texels,
+            rays: rays.into_inner(),
         }
     }
 }
 
 impl LightVolume {
+    /// A stored volume: `FORMAT`, origin, cell, dimensions, then texels.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = FORMAT.to_vec();
+        for v in self.origin.iter().chain([&self.cell]) {
+            out.extend(v.to_le_bytes());
+        }
+        for d in self.dims {
+            out.extend(d.to_le_bytes());
+        }
+        out.extend(self.texels.as_flattened());
+        out
+    }
+
+    /// None unless `bytes` is exactly a volume `to_bytes` wrote. Its `rays`
+    /// are 0: loading one casts none.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let rest = bytes.strip_prefix(FORMAT.as_slice())?;
+        let (head, texels) = rest.split_at_checked(28)?;
+        let word = |i: usize| <[u8; 4]>::try_from(&head[i * 4..i * 4 + 4]).ok();
+        let float = |i| word(i).map(f32::from_le_bytes);
+        let origin = [float(0)?, float(1)?, float(2)?];
+        let cell = float(3)?;
+        let dims = [4, 5, 6].map(|i| word(i).map(u32::from_le_bytes));
+        let dims = [dims[0]?, dims[1]?, dims[2]?];
+        let count = dims
+            .iter()
+            .try_fold(1usize, |n, d| n.checked_mul(*d as usize))?;
+        if texels.len() != count.checked_mul(4)?
+            || !(cell.is_finite() && cell > 0.0)
+            || !origin.iter().all(|v| v.is_finite())
+            || dims.contains(&0)
+        {
+            return None;
+        }
+        Some(Self {
+            origin,
+            cell,
+            dims,
+            texels: texels
+                .chunks_exact(4)
+                .map(|t| [t[0], t[1], t[2], t[3]])
+                .collect(),
+            rays: 0,
+        })
+    }
+
     /// The light the shader adds for a surface at `position` facing
     /// `normal`, before combining it with the sun: a CPU mirror of
     /// `baked_surroundings` in scene.wgsl, with trilinear filtering.

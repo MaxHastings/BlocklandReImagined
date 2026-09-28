@@ -3593,3 +3593,25 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   box on the lamp bars goes from black (0,0,0) to (197,197,197).
   `cargo test -p bri-render --release`, `cargo test -p bri-client --lib
   --release`, clippy `-D warnings` on both crates.
+- Follow-up (gate sent 9b37a574 back): the stock-map test's 30 s
+  wall-clock bound failed in the gate's debug build (Bedroom 42 s, every
+  cell casting 49 rays). The bake now casts 24 directions and does it only
+  where needed: it bakes every 8th cell, interpolates blocks that touch no
+  geometry and whose open corners agree within 12/255, halves failing
+  blocks down to 2, and bakes what is left. The one ray down still runs for
+  every cell, because it changes sharply over a small lit block. Casting
+  from every cell remains available (`Baker::bake_every_cell`) as the
+  reference: on a test room with a small lit block, the fast bake casts
+  under half the rays, its mean texel error is under 1/255 and its worst is
+  at most 24/255. Release timings on this PC, one test thread: Bedroom
+  0.39 s (8.0 M rays of 20.6 M), BedroomDark 0.38 s, Kitchen 1.66 s
+  (11.8 M of 19.7 M), Tutorial 0.18 s; before this change they were 2.5 s
+  and 5-6 s. The client starts the bake as soon as the map's scene is read,
+  so it runs alongside the rest of loading. It stores the result under
+  `<state>/light-volumes/<sha256>.lightvolume`, keyed by the bake format,
+  its settings, every lightmapped triangle and lightmap. Later loads read
+  it instead of baking, and bad or foreign files are refused and rebaked.
+  Tests bound work by rays cast, not time: under two thirds of casting from
+  every cell on each stock map. Debug build: `cargo test -p bri-render`
+  passes (69 s including the build); the ignored light-volume map tests
+  pass in 52 s.
