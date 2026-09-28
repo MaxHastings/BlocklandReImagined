@@ -54,6 +54,11 @@ TEST_JOBS = 8
 HEAVY_JOBS = 3
 HEAVY_PREFIXES = ("bri-client/", "bri-render/")
 DOC_SUFFIXES = (".md",)
+# Cargo never deletes superseded artifacts, so the gate's target dir kept
+# every old test binary (953 executables for 149 targets, 296 GB). Past this
+# much in target/debug/deps the gate starts from an empty target dir, which
+# sccache refills quickly.
+TARGET_DEPS_CAP = 40 * 2**30
 
 
 class GateError(Exception):
@@ -404,6 +409,18 @@ def tree_intact(worktree, sha):
     return True
 
 
+def trim_target(target):
+    """Drop incremental state, and the whole target dir once stale builds pile up."""
+    shutil.rmtree(target / "debug" / "incremental", ignore_errors=True)
+    deps = target / "debug" / "deps"
+    if not deps.is_dir():
+        return
+    size = sum(entry.stat().st_size for entry in os.scandir(deps) if entry.is_file())
+    if size > TARGET_DEPS_CAP:
+        say(f"{size / 2**30:.0f} GB of old builds in {deps}; starting from an empty target dir")
+        shutil.rmtree(target, ignore_errors=True)
+
+
 def full_gate(sha, root):
     root.mkdir(parents=True, exist_ok=True)
     passed = root / "passed" / sha
@@ -419,7 +436,11 @@ def full_gate(sha, root):
             say(f"{sha[:9]} already passed the gate")
             return True
         worktree = prepare_worktree(root, sha)
-        env = dict(os.environ, CARGO_TARGET_DIR=str(root / "target"), CARGO_TERM_COLOR="never")
+        trim_target(root / "target")
+        # Every run builds a new commit once, so incremental state only costs
+        # disk writes, and it stops sccache caching the workspace crates.
+        env = dict(os.environ, CARGO_TARGET_DIR=str(root / "target"), CARGO_TERM_COLOR="never",
+                   CARGO_INCREMENTAL="0")
         started = time.time()
         steps = [
             ("build", ["cargo", "build", "--workspace", "--all-targets", "--locked"]),

@@ -2913,3 +2913,16 @@ game mode picker once the Stress Lab landed (da5668e).
   bri-package, bri-package-runtime, bri-world, bri-progress, bri-stresslab,
   bri-sim (content-free targets; `tools` needs generated content) and
   `bri-client --lib --test transport`.
+- 2026-09-28 Build disk writes. Maxwell asked why builds write hundreds of GB.
+  Cause: every dev build carried full debug info, the gate kept incremental
+  state and every superseded test binary (953 executables for 149 targets,
+  296 GB in `../.bri-gate/target`), and each of ~76 worktrees built from cold.
+  - `[profile.dev] debug = "line-tables-only"`, dependencies `debug = false`.
+  - The gate builds with `CARGO_INCREMENTAL=0`, drops `debug/incremental`
+    before each run and empties its target dir once `debug/deps` passes 40 GB.
+  - Worktrees now live under `../BlocklandReImagined-worktrees/` and are
+    reused (AGENTS.md). 46 merged worktrees were removed and 323 GB of idle
+    build output cleared.
+  Evidence: cold `cargo build --workspace --all-targets --locked` of e880717
+  in a fresh worktree: 42.1 GB (329 s) as before, 13.5 GB (253 s) with the
+  profile change, 8.9 GB (200 s) with incremental off as well.

@@ -29,6 +29,13 @@ it is on PATH (`cargo install sccache --locked`). Check with
 every cache key, and a target dir shared between worktrees would make cargo
 queue parallel builds and overwrite each worktree's `target/release/bri-client`.
 
+Create worktrees only under `..\BlocklandReImagined-worktrees\<name>`, never
+as new folders beside the main checkout, and reuse an idle one (clean, its
+branch merged) before adding another; a fresh worktree's first build writes
+about 14 GB. Remove a finished worktree once its branch is on main
+(`git worktree prune` after deleting the folder; this machine's git has no
+`git worktree remove`).
+
 When a thread finishes, delete its worktree's build output (never the main
 checkout's, which packaging uses). `python tools/clean_targets.py` is a dry
 run listing each finished worktree's `target/` and its size; add `--apply` to
