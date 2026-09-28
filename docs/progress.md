@@ -2786,3 +2786,19 @@ game mode picker once the Stress Lab landed (da5668e).
   on Linux and `--target x86_64-pc-windows-gnu`. Not yet exercised: a real
   router, the Windows Firewall helper on
   Windows, and a remote friend joining.
+
+- 2026-09-28 Rejoining keeps your bricks; a dropped connection rejoins
+  (first-impressions item 6). A player who left and joined the same running
+  game again got a new owner number, because the returning check skipped
+  numbers still held by dropped connections, so their own bricks were no
+  longer theirs. A fresh join by the same principal now takes the dropped
+  number back and replaces the stale resume entry. When the network drops
+  (QUIC timeout or reset), the client's close reason is
+  `bri_net::client::CONNECTION_LOST` instead of the server's close frame, and
+  a joined remote game rejoins the same address automatically, up to three
+  times ("Connection lost. Reconnecting to ..."), before the failure dialog
+  shows; kicks, shutdowns and other closes the server chose keep their
+  message and are not rejoined. Evidence: `cargo test -p bri-sim --test
+  session` (`leaving_and_rejoining_keeps_the_same_owner_number`), `cargo test
+  -p bri-net`, clippy on bri-net, bri-client and bri-sim. Not tested against
+  a real network drop.

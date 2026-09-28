@@ -277,9 +277,15 @@ impl Client {
                         // A read fails with a bare "connection lost"; the
                         // server's close frame (a kick's message, a
                         // shutdown) is the reason the player should see.
-                        let reason = reader_connection
-                            .close_reason()
-                            .map_or_else(|| error.to_string(), |r| r.to_string());
+                        // A network drop (timeout, reset) is marked so the
+                        // client can rejoin; a close the server chose is not.
+                        let reason = match reader_connection.close_reason() {
+                            Some(
+                                quinn::ConnectionError::TimedOut | quinn::ConnectionError::Reset,
+                            ) => CONNECTION_LOST.to_string(),
+                            Some(reason) => reason.to_string(),
+                            None => error.to_string(),
+                        };
                         let _ = reliable_events.send(Incoming::Closed(reason)).await;
                         break;
                     }
@@ -725,3 +731,8 @@ impl quinn::rustls::client::danger::ServerCertVerifier for Pinned {
         self.provider.signature_verification_algorithms.supported_schemes()
     }
 }
+
+/// The close reason when the network dropped (no answer, reset), as
+/// opposed to the server ending the connection on purpose. A client may
+/// rejoin after this one.
+pub const CONNECTION_LOST: &str = "Lost the connection to the server";

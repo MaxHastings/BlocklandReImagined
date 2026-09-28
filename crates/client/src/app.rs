@@ -335,6 +335,8 @@ pub struct App {
     frame_stats: crate::console::FrameStats,
     /// LAN listings from the last discovery query: address -> certificate.
     lan_hosts: BTreeMap<String, Vec<u8>>,
+    /// Automatic rejoins tried since the connection last dropped.
+    reconnects: u8,
     lan_query: Option<mpsc::Receiver<JoinList>>,
     /// Add-On import in progress: request, row id and the worker's answer.
     add_on_import: Option<(RequestId, String, mpsc::Receiver<Result<String>>)>,
@@ -1135,6 +1137,7 @@ impl App {
             net_graph: None,
             frame_stats: Default::default(),
             lan_hosts: BTreeMap::new(),
+            reconnects: 0,
             lan_query: None,
             add_on_import: None,
             invite: None,
@@ -1919,7 +1922,11 @@ impl App {
         self.ui.apply_session(
             id,
             UiUpdate::Connection(ConnectionState::Connecting {
-                text: format!("Connecting to {typed}…"),
+                text: if self.reconnects > 0 {
+                    format!("Connection lost. Reconnecting to {typed}…")
+                } else {
+                    format!("Connecting to {typed}…")
+                },
             }),
         );
         let pin_key = typed.clone();
@@ -2712,11 +2719,26 @@ impl App {
             failed = Some("Connection worker stopped".into());
         }
         if let Some(reason) = failed {
+            // A joined remote game whose network dropped is rejoined
+            // automatically a few times; the host gives the player their
+            // owner number, and so their bricks, back.
+            let id = a.id;
+            let rejoin = (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
+                .then(|| a.name.clone());
+            if let Some(address) = rejoin
+                && self.reconnects < MAX_RECONNECTS
+            {
+                self.reconnects += 1;
+                if self.join(id, address, String::new()).is_ok() {
+                    return Ok(());
+                }
+            }
+            self.reconnects = 0;
             if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
-                self.ui.apply_session(a.id, UiUpdate::AddOnMismatch(mismatch));
+                self.ui.apply_session(id, UiUpdate::AddOnMismatch(mismatch));
             }
             self.ui.apply_session(
-                a.id,
+                id,
                 UiUpdate::Connection(ConnectionState::Failed { reason }),
             );
             self.disconnect();
@@ -3041,6 +3063,7 @@ impl App {
                 },
             );
             a.entered = true;
+            self.reconnects = 0;
             // A game this player hosts runs their own Add-Ons' code; someone
             // else's server runs only code the player trusted there.
             self.client_code.start(
@@ -5586,6 +5609,8 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
     bri_files::replace(path, &serde_json::to_vec_pretty(&value)?)?;
     Ok(())
 }
+/// Automatic rejoins after a dropped connection before giving up.
+const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
     #[test]

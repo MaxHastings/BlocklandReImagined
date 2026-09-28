@@ -456,6 +456,29 @@ fn build_load_keeps_unknown_bricks_aside_and_preserves_existing_players() {
     assert_eq!(s.snapshot().players.len(), 3);
 }
 #[test]
+fn leaving_and_rejoining_keeps_the_same_owner_number() {
+    use bri_admin::Principal;
+    let max = Principal([1; 32]);
+    let mut s = session();
+    let first = s
+        .join_verified("Maxwell".into(), Vec3::Y, false, Some(max))
+        .unwrap();
+    s.disconnect(first).unwrap();
+    // A fresh join (not a resume) by the same principal takes the dropped
+    // connection's number back, so its bricks stay editable.
+    let again = s
+        .join_verified("Maxwell".into(), Vec3::Y, false, Some(max))
+        .unwrap();
+    assert_eq!(again, first);
+    assert!(s.resume(first, Vec3::Y).is_err(), "The dropped connection is replaced");
+    // Someone else never gets it.
+    s.disconnect(again).unwrap();
+    let other = s
+        .join_verified("Guest".into(), Vec3::Y, false, Some(Principal([2; 32])))
+        .unwrap();
+    assert_ne!(other, first);
+}
+#[test]
 fn returning_players_get_their_bricks_back_after_a_restart() {
     use bri_admin::Principal;
     use bri_world::{Brick, ContentRef, OwnerRecord, build::SavedBuild};

@@ -594,16 +594,17 @@ impl Session {
             "Invalid player name"
         );
         // A returning player builds under the owner number they had in this
-        // world, so their bricks are theirs again after a restart. A number
-        // still held by a live or resumable connection is not handed out
-        // twice; that connection gets a fresh number instead.
+        // world, so their bricks are theirs again after leaving or a
+        // restart. A number held by a live connection is not handed out
+        // twice; that connection gets a fresh number instead. A number left
+        // by a dropped connection of the same principal is taken over.
         let record = principal
             .filter(|_| !is_bot)
             .map(|p| bri_world::OwnerRecord::new(p.0, name.clone()));
         let returning = record
             .as_ref()
             .and_then(|r| self.simulation.state().owner_of(&r.principal))
-            .filter(|n| !self.peers.contains_key(n) && !self.departed.contains_key(n));
+            .filter(|n| !self.peers.contains_key(n));
         let owner = match returning {
             Some(owner) => owner,
             None => {
@@ -682,6 +683,8 @@ impl Session {
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
+        // A fresh join replaces the dropped connection it took the number from.
+        self.departed.remove(&owner);
         if !is_bot {
             self.announce(owner, "connected.", "ClientJoinSound");
         }
