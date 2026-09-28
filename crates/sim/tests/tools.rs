@@ -267,6 +267,15 @@ fn swinging_at_nothing_or_the_ground_is_not_an_error_and_plays_v20_effects() {
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
+    // Joining plays v20's spawn projectile, as a respawn does; let it burst
+    // before listening for swing effects.
+    for _ in 0..1200 {
+        if s.snapshot().weapons.projectiles.is_empty() {
+            break;
+        }
+        s.step().unwrap();
+    }
+    s.step().unwrap();
     s.take_cues();
     // Midair: the swing animates but nothing is hit.
     aim(&mut s, owner, 1, [0.5, 30.0, -3.25]);
