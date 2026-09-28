@@ -33,6 +33,7 @@ bri-audio = { path = "../audio", features = ["cpal-output"] }
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 glam = "0.33"
 winit = "0.30"
+gilrs = "0.11"
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
 pollster = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -50,7 +51,7 @@ arboard = { version = "3", default-features = false }
 bri-client-sandbox = { path = "../client-sandbox" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_ProcessStatus"] }
 
 
 [dev-dependencies]

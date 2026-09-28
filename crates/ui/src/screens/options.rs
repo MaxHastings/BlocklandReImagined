@@ -39,6 +39,15 @@ pub const MAX_FPS: &str = "$pref::Video::MaxFps";
 /// The Max FPS menu's choices; 0 is Unlimited.
 pub const MAX_FPS_CHOICES: &[u32] = &[30, 60, 75, 120, 144, 165, 240, 0];
 const MAX_FPS_MENU: &str = "OptGraphicsMaxFpsMenu";
+/// Not a v20 setting: colour-vision assistance for the 3D view (0 off,
+/// 1 protanopia, 2 deuteranopia, 3 tritanopia).
+pub const COLOR_VISION: &str = "$pref::Gui::ColorVision";
+const COLOR_VISION_MENU: &str = "OptGraphicsColorVisionMenu";
+const COLOR_VISION_CHOICES: [&str; 4] = ["Off", "Red-weak", "Green-weak", "Blue-weak"];
+/// The colour-vision assistance `$pref::Gui::ColorVision` asks for.
+pub fn color_vision(p: &Prefs) -> u32 {
+    p.i64_or(COLOR_VISION, 0).clamp(0, 3) as u32
+}
 /// The UI Size menu (`$pref::Gui::Scale`, percent; 0 is Auto).
 const UI_SCALE_MENU: &str = "OptGraphicsUiScaleMenu";
 pub const UI_SCALE_CHOICES: &[i64] = &[0, 100, 125, 150, 200, 250, 300];
@@ -47,6 +56,8 @@ const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
 pub const MUTE_IN_BACKGROUND: &str = "$pref::Audio::MuteInBackground";
+/// Not a v20 setting: short captions for game sounds ("[Explosion]").
+pub const CAPTIONS: &str = "$pref::Audio::Captions";
 /// v20's Advanced "Max Draw Distance" (`SliderGraphicsDistanceMax`): caps a
 /// map's visible distance, 110 to 1000 units, 1000 by default.
 pub const VISIBLE_DISTANCE_MAX: &str = "$pref::visibleDistanceMax";
@@ -177,6 +188,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     VEHICLE_MOUSE_INVERT,
     MUTE_IN_BACKGROUND,
     TOGGLE_CROUCH,
+    CAPTIONS,
 ];
 /// Other authored controls with native behaviour.
 const SUPPORTED_CONTROLS: &[&str] = &[
@@ -594,7 +606,13 @@ fn audio_rows(v: &mut View) {
     mute.name = Some("OptAudioMuteInBackground".into());
     mute.variable = Some(MUTE_IN_BACKGROUND.into());
     mute.text = Some("Mute when in background".into());
+    let mut captions = mute.clone();
+    captions.position[1] += step;
+    captions.name = Some("OptAudioCaptions".into());
+    captions.variable = Some(CAPTIONS.into());
+    captions.text = Some("Show captions for sounds".into());
     v.add(parent, mute);
+    v.add(parent, captions);
 }
 
 /// Controls addition: a Toggle Crouch checkbox under v20's own input
@@ -853,6 +871,12 @@ impl Options {
             })
             .collect();
         s.menu(MAX_FPS_MENU, fps_items, i64::from(fps));
+        let vision = COLOR_VISION_CHOICES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        s.menu(COLOR_VISION_MENU, vision, i64::from(color_vision(&core.prefs)));
         let scale = core.prefs.i64_or(crate::ui::UI_SCALE, 0).max(0);
         let scale_items = UI_SCALE_CHOICES
             .iter()
@@ -1008,6 +1032,7 @@ impl Options {
                     (QUALITY_MENU, "Quality:"),
                     (MAX_FPS_MENU, "Max FPS:"),
                     (UI_SCALE_MENU, "UI Size:"),
+                    (COLOR_VISION_MENU, "Colors:"),
                 ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
@@ -1228,7 +1253,7 @@ impl Options {
     fn refresh_binds(&mut self, core: &Core) {
         if let Some(n) = self.view.id("OptRemapList") {
             let mut rows = Vec::new();
-            for (i, r) in core.pack.data.data.remap.iter().enumerate() {
+            for (i, r) in core.remap.iter().enumerate() {
                 if let Some(division) = &r.division {
                     rows.push((format!("   {division}"), -(i as i64) - 1));
                 }
@@ -1291,6 +1316,13 @@ impl Options {
             .and_then(|n| self.view.selected(n))
         {
             self.draft.set(MAX_FPS, fps.clamp(0, 1000).to_string());
+        }
+        if let Some(mode) = self
+            .view
+            .id(COLOR_VISION_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(COLOR_VISION, mode.clamp(0, 3).to_string());
         }
         if let Some(scale) = self
             .view
@@ -1658,7 +1690,7 @@ impl Remap {
     fn prompt(&mut self, core: &Core) {
         let name = self
             .index
-            .and_then(|i| core.pack.data.data.remap.get(i))
+            .and_then(|i| core.remap.get(i))
             .map(|r| r.name.as_str())
             .unwrap_or("No control selected");
         self.set_text(format!("REMAP \"{name}\""));
@@ -1741,9 +1773,6 @@ impl Remap {
             }
             RemapOutcome::Conflict { other } => {
                 let name = core
-                    .pack
-                    .data
-                    .data
                     .remap
                     .iter()
                     .find(|r| r.command.eq_ignore_ascii_case(&other))
@@ -2242,6 +2271,19 @@ mod tests {
     }
 
     #[test]
+    fn color_vision_menu_saves_the_mode() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(COLOR_VISION_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Off"));
+        s.view.select(menu, Some(2));
+        click(&mut s, "done", &mut ui);
+        assert_eq!(color_vision(&saved_prefs(&mut ui)), 2);
+        ui.core.prefs.set(COLOR_VISION, "9");
+        assert_eq!(color_vision(&ui.core.prefs), 3);
+    }
+
+    #[test]
     fn max_fps_defaults_to_unlimited_and_saves_the_chosen_cap() {
         let mut ui = fixture();
         assert_eq!(max_fps(&ui.core.prefs), None);
@@ -2335,6 +2377,17 @@ mod tests {
         assert!(saved_prefs(&mut ui).bool_or(TOGGLE_CROUCH, false));
     }
 
+    #[test]
+    fn captions_are_an_audio_checkbox_saved_on_done() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id("OptAudioCaptions").unwrap();
+        assert!(!s.view.bool_value(n));
+        s.view.set_bool(n, true);
+        change(&mut s, &mut ui, n);
+        click(&mut s, "done", &mut ui);
+        assert!(saved_prefs(&mut ui).bool_or(CAPTIONS, false));
+    }
     #[test]
     fn invert_mouse_in_vehicles_shows_on_by_default_and_saves_on_done() {
         let mut ui = fixture();
@@ -2648,13 +2701,8 @@ mod tests {
         let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
         let mut ui = fixture();
         ui.core.pack = pack.clone();
-        ui.core.remap_commands = pack
-            .data
-            .data
-            .remap
-            .iter()
-            .map(|r| r.command.clone())
-            .collect();
+        ui.core.remap = crate::binds::remap_entries(&pack.data.data);
+        ui.core.remap_commands = ui.core.remap.iter().map(|r| r.command.clone()).collect();
         ui.core.prefs = Prefs::new(&pack.data.data.prefs, &Default::default());
         ui.core.save_context = Some(("Bedroom".into(), crate::api::IconRef::None));
         ui.core.save_maps = vec!["Bedroom".into()];

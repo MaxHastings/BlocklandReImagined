@@ -137,7 +137,15 @@ struct Request {
     command: Command,
     aim: Option<bri_sim::session::ActionAim>,
 }
+/// What the net graph and performance overlay sample, once connected.
+#[derive(Clone)]
+pub struct Probes {
+    pub link: bri_net::client::LinkProbe,
+    /// The in-process server's performance when this game hosts.
+    pub host: Option<Arc<std::sync::Mutex<bri_net::server::ServerPerf>>>,
+}
 pub struct Worker {
+    pub probes: Arc<std::sync::OnceLock<Probes>>,
     requests: mpsc::Sender<Request>,
     movement: mpsc::Sender<(u64, Vec<MoveInput>, Option<CameraView>)>,
     pub view: watch::Receiver<Option<View>>,
@@ -157,6 +165,8 @@ impl Worker {
         let (view_tx, view) = watch::channel(None);
         let (events_tx, events) = mpsc::channel(128);
         let (stop, mut stopped) = oneshot::channel();
+        let probes = Arc::new(std::sync::OnceLock::new());
+        let probes_tx = probes.clone();
         let task = runtime.spawn(async move {
             let connected=tokio::select! {
                 _=&mut stopped=>return,
@@ -164,6 +174,7 @@ impl Worker {
             };
             let result=match connected {
                 Ok(mut connection)=>{
+                    let _=probes_tx.set(Probes{link:connection.client.link_probe(),host:connection.host.as_ref().map(|h|h.perf.clone())});
                     let result=tokio::select! {
                         _=&mut stopped=>Ok(()),
                         result=run(&mut connection.client,connection.mods.clone(),rx,movement_rx,&view_tx,&events_tx)=>result,
@@ -197,6 +208,7 @@ impl Worker {
             if let Err(error)=result { let _=events_tx.try_send(Event::Failed(format!("{error:#}"))); }
         });
         Self {
+            probes,
             requests,
             movement,
             view,

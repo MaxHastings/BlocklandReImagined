@@ -227,3 +227,23 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the converted native vehicle and weapon packs"]
+fn every_explosion_debris_model_is_in_the_vehicle_pack() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-011"))?;
+    let weapons = bri_weapons::Pack::from_json(&std::fs::read(
+        root.join("content/weapons-pack-009/weapons.json"),
+    )?)?;
+    let debris = bri_weapons::debris::explosion_debris(&weapons);
+    ensure!(debris.len() == 6, "stock debris explosions: {}", debris.len());
+    for (explosion, spec) in debris {
+        ensure!(
+            assets.has_source_model(&spec.model),
+            "{explosion} debris model {} is not converted",
+            spec.model
+        );
+    }
+    Ok(())
+}

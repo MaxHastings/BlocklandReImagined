@@ -543,3 +543,24 @@ fn image_emitters_eject_along_the_image_forward_axis() {
     love.source_rotation_degrees = [-90., 0., 0.];
     assert!(axis(&love).abs_diff_eq(Vec3::Y, 1e-5));
 }
+
+#[test]
+fn hard_landings_shake_the_camera_by_speed_past_ten() -> Result<()> {
+    let peak = |speed: f32, min_impact: f32| -> Result<f32> {
+        let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+        fx.ground_impact(speed, min_impact, 7);
+        let mut peak = 0f32;
+        for _ in 0..40 {
+            fx.advance(0.02, head, &[], &[], &[])?;
+            peak = peak.max(fx.camera_shake(Vec3::new(500.0, 0.0, 0.0)).abs().max_element());
+        }
+        Ok(peak)
+    };
+    assert_eq!(peak(9.5, 30.0)?, 0.0, "below groundImpactMinSpeed");
+    let standard = peak(40.0, 30.0)?;
+    assert!(standard > 0.1, "a 40 m/s landing shakes: {standard}");
+    // The horse's minImpactSpeed of 250 makes the same landing a tremor.
+    assert!(peak(40.0, 250.0)? < standard * 0.2);
+    // Not an explosion: the shake follows the camera wherever it is.
+    Ok(())
+}

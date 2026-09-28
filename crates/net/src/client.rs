@@ -86,6 +86,42 @@ pub struct Client {
     /// Where joins and map changes report their world download.
     progress: Progress,
     sequence: u64,
+    /// Replica updates applied (deltas and state datagrams), for the net graph.
+    updates: Arc<std::sync::atomic::AtomicU64>,
+}
+/// Transport counters since the connection opened. Differences between two
+/// samples give the net graph's rates.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LinkSample {
+    pub rtt: Duration,
+    pub sent_packets: u64,
+    pub received_packets: u64,
+    pub sent_bytes: u64,
+    pub received_bytes: u64,
+    /// Sent packets the transport declared lost.
+    pub lost_packets: u64,
+    /// Replica updates applied: world deltas and pose datagrams.
+    pub updates: u64,
+}
+/// A cheap handle another thread samples the connection's counters through.
+#[derive(Clone)]
+pub struct LinkProbe {
+    connection: quinn::Connection,
+    updates: Arc<std::sync::atomic::AtomicU64>,
+}
+impl LinkProbe {
+    pub fn sample(&self) -> LinkSample {
+        let stats = self.connection.stats();
+        LinkSample {
+            rtt: self.connection.rtt(),
+            sent_packets: stats.udp_tx.datagrams,
+            received_packets: stats.udp_rx.datagrams,
+            sent_bytes: stats.udp_tx.bytes,
+            received_bytes: stats.udp_rx.bytes,
+            lost_packets: stats.path.lost_packets,
+            updates: self.updates.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
 }
 impl Client {
     /// The certificate is a trusted host pin. Never disable TLS verification.
@@ -457,6 +493,7 @@ impl Client {
             changing_map: None,
             progress,
             sequence: 0,
+            updates: Arc::default(),
         })
     }
     /// Send the most recent prediction inputs, oldest first, ending at `newest`.
@@ -525,6 +562,14 @@ impl Client {
                     Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
                 }
                 continue;
+            }
+            if matches!(
+                &incoming,
+                Incoming::Pose(_) | Incoming::Vehicle(_) | Incoming::Orb(_)
+            ) || matches!(&incoming, Incoming::Reliable(m) if matches!(**m, Message::Update(_)))
+            {
+                self.updates
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             return match incoming {
                 Incoming::Reliable(message) => match *message {
@@ -659,6 +704,13 @@ impl Client {
     /// Current QUIC round-trip estimate.
     pub fn rtt(&self) -> Duration {
         self.connection.rtt()
+    }
+    /// A handle the net graph samples this connection's counters with.
+    pub fn link_probe(&self) -> LinkProbe {
+        LinkProbe {
+            connection: self.connection.clone(),
+            updates: self.updates.clone(),
+        }
     }
     pub fn close(&self) {
         self.connection.close(0_u32.into(), b"Client disconnect");

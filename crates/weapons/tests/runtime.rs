@@ -982,3 +982,30 @@ fn akimbo_fire_rate_over_seconds_matches_v20() {
         assert!(window[11] - window[0] >= SECOND, "{mash:?}");
     }
 }
+
+#[test]
+fn explosion_debris_lowers_every_stock_debris_explosion() {
+    let debris = bri_weapons::debris::explosion_debris(&load());
+    let names: Vec<&str> = debris.keys().map(String::as_str).collect();
+    assert_eq!(
+        names,
+        [
+            "cannonbaseexplosion",
+            "jeepexplosion",
+            "jeepfinalexplosion",
+            "tankfinalexplosion",
+            "tankshellexplosion",
+            "tankturretexplosion"
+        ]
+    );
+    let tires = &debris["jeepexplosion"];
+    assert_eq!(tires.model, "Add-Ons/Vehicle_Jeep/jeepTire.dts");
+    assert_eq!(tires.emitters, ["JeepTireDebrisTrailEmitter"]);
+    assert_eq!((tires.count, tires.theta, tires.launch_speed), (4, [40., 85.], 14.));
+    assert_eq!((tires.bounces, tires.gravity, tires.lifetime), (3, 2., 2.));
+    let sparks = &debris["tankshellexplosion"];
+    assert_eq!((sparks.count, sparks.count_variance), (30, 10));
+    assert_eq!((sparks.launch_speed, sparks.launch_variance), (140., 50.));
+    assert_eq!(sparks.emitters, ["rocketTrailEmitter"]);
+    assert_eq!((sparks.gravity, sparks.lifetime, sparks.fade), (0., 0.1, false));
+}

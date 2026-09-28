@@ -289,6 +289,9 @@ pub(super) struct PackageHost {
     /// view of the world taken at its start, so a call costs what it does,
     /// not the size of the world (stress campaign W12).
     view: Option<TickView>,
+    /// Wall-clock time each package's script calls took since the host last
+    /// took them (the performance overlay's per-Add-On script time).
+    script_time: BTreeMap<String, std::time::Duration>,
 }
 
 struct TickView {
@@ -519,6 +522,7 @@ impl Session {
             output: VecDeque::new(),
             deaths: VecDeque::new(),
             shares: Shares::new(scripts),
+            script_time: BTreeMap::new(),
             state_bytes,
             hooks_due: BTreeSet::new(),
             hooks_paused: BTreeMap::new(),
@@ -894,7 +898,16 @@ impl Session {
             state,
             entity_vars,
         };
-        let outcome = match host.runtime.call(package, call) {
+        let started = std::time::Instant::now();
+        let result = host.runtime.call(package, call);
+        let took = started.elapsed();
+        match host.script_time.get_mut(package) {
+            Some(total) => *total += took,
+            None => {
+                host.script_time.insert(package.to_string(), took);
+            }
+        }
+        let outcome = match result {
             Ok(outcome) => outcome,
             Err(diagnostic) => {
                 note(host, diagnostic.clone());
@@ -2285,6 +2298,14 @@ impl Session {
             removed_voxels: host.world.as_ref().map_or(0, |w| w.removed.len()),
             diagnostics: host.diagnostics.len(),
         }
+    }
+    /// Script time per package since the last call, then start again. Only
+    /// packages whose scripts ran appear.
+    pub fn take_package_script_time(&mut self) -> BTreeMap<String, std::time::Duration> {
+        self.packages
+            .as_mut()
+            .map(|h| std::mem::take(&mut h.script_time))
+            .unwrap_or_default()
     }
     /// The generated voxel a brick draws, as (voxel, material id).
     pub fn package_voxel(&self, brick: BrickId) -> Option<([i64; 3], String)> {

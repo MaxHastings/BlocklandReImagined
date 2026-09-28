@@ -51,6 +51,8 @@ PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
 LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
 TEST_JOBS = 8
+# A test binary still running after this long is stopped and fails the run.
+BINARY_TIMEOUT = 10 * 60
 HEAVY_JOBS = 3
 HEAVY_PREFIXES = ("bri-client/", "bri-render/")
 DOC_SUFFIXES = (".md",)
@@ -584,7 +586,8 @@ def push_main():
             sha = git("rev-parse", "HEAD").strip()
             if not gate_commit(sha, diff_only=False):
                 return False
-            if subprocess.run(["git", "push", "origin", "HEAD:main"]).returncode == 0:
+            # Push the commit that passed, not whatever HEAD became meanwhile.
+            if subprocess.run(["git", "push", "origin", f"{sha}:refs/heads/main"]).returncode == 0:
                 say(f"pushed {sha[:9]} to main")
                 return True
             say("main moved during the gate (an ungated push?); rebasing and retrying")
@@ -627,6 +630,15 @@ def test_binaries(top, env=None):
     return binaries
 
 
+def stop_tree(process):
+    """End a test binary the gate started, with every process it started."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                       capture_output=True)
+    else:
+        process.kill()
+
+
 def run_binaries(binaries, args, log, jobs, exclusive=()):
     """Run test binaries in parallel, appending each one's output to log in
     listing order. Returns True when every binary passed.
@@ -638,9 +650,23 @@ def run_binaries(binaries, args, log, jobs, exclusive=()):
     def one(entry):
         label, executable, cwd, header = entry
         started = time.time()
-        result = subprocess.run([executable, *args], cwd=cwd, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, errors="replace")
-        return header, result.stdout, result.returncode, time.time() - started, label
+        process = subprocess.Popen([executable, *args], cwd=cwd, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, errors="replace")
+        try:
+            output, _ = process.communicate(timeout=BINARY_TIMEOUT)
+            code = process.returncode
+        except subprocess.TimeoutExpired:
+            # A hung test (a stuck child process) must fail the run, not hold
+            # the gate lock forever. End this test binary and its children.
+            stop_tree(process)
+            try:
+                output, _ = process.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                output = ""
+            output += (f"\n[gate] {label} ran past {BINARY_TIMEOUT}s and was stopped\n"
+                       f"test {label}::gate_timeout ... FAILED\n")
+            code = 1
+        return header, output, code, time.time() - started, label
 
     def is_heavy(label):
         return label.startswith(HEAVY_PREFIXES) and not label.endswith("/lib")

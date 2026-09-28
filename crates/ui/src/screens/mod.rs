@@ -11,6 +11,7 @@ pub mod menus;
 pub mod modes;
 pub mod minigames;
 pub mod options;
+pub mod perf;
 pub mod play;
 pub mod players;
 pub mod saveload;

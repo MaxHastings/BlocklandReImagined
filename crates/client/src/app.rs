@@ -143,6 +143,7 @@ struct ContentParts {
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    explosion_debris: crate::explosion_debris::ExplosionDebris,
     tool_ui: crate::tool_ui::ToolUi,
     item_assets: Arc<crate::items::ItemAssets>,
     item_ui: crate::item_ui::ItemUi,
@@ -154,6 +155,7 @@ impl ContentParts {
         let weapon_pack = Arc::new(content.weapons.pack.clone());
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
+        let explosion_debris = crate::explosion_debris::ExplosionDebris::new(&weapon_pack);
         let actor_effects = crate::actor_effects::ActorEffects::new(
             effects_pack.clone(),
             weapon_pack.clone(),
@@ -231,6 +233,7 @@ impl ContentParts {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            explosion_debris,
             tool_ui,
             item_assets,
             item_ui,
@@ -373,6 +376,8 @@ pub struct App {
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
+    explosion_debris: crate::explosion_debris::ExplosionDebris,
     /// Ejected gun casings (`stateEjectShell`) and their GPU model.
     weapon_shells: crate::weapon_debris::WeaponDebris,
     shell_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
@@ -472,7 +477,11 @@ pub struct App {
     /// The tumble vehicle the local player last started riding.
     tumble: Option<u64>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
-    net_graph: Option<(std::time::Instant, u32)>,
+    /// Connection samples for the net graph and the expanded overlay.
+    net_sampler: crate::perf::NetSampler,
+    /// When the performance overlay's slower figures are next refreshed.
+    perf_stats_due: std::time::Instant,
+    gpu_name: String,
     frame_stats: crate::console::FrameStats,
     /// Minute-by-minute frame times for the session log (player sessions).
     frame_log: Option<crate::quality::FrameLog>,
@@ -630,6 +639,7 @@ impl App {
             self.weapon_effects = parts.weapon_effects;
             self.actor_effects = parts.actor_effects;
             self.explosion_shapes = parts.explosion_shapes;
+            self.explosion_debris = parts.explosion_debris;
             self.tool_ui = parts.tool_ui;
             self.item_assets = parts.item_assets;
             self.item_ui = parts.item_ui;
@@ -701,6 +711,9 @@ impl App {
             self.combat.hugging.insert(*actor, None);
         }
         self.audio.cue(&cue);
+        if let Some(text) = caption(&cue, self.presented_local().map(|p| Vec3::from(p.feet))) {
+            self.ui.apply(UiUpdate::Caption(text.into()));
+        }
         // The engine explosion operation looks like v20's rocket blast.
         let cue = match &cue.kind {
             bri_sim::presentation::CueKind::Explosion { radius, .. } => bri_sim::presentation::Cue {
@@ -720,6 +733,7 @@ impl App {
         };
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
+        self.explosion_debris.cue(&cue);
         if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
             && self.brick_kills.len() < bri_sim::presentation::MAX_CUES
         {
@@ -877,6 +891,7 @@ impl App {
         self.weapon_effects.reset(checkpoint_cursor);
         self.actor_effects.reset(checkpoint_cursor);
         self.explosion_shapes.reset(checkpoint_cursor);
+        self.explosion_debris.reset(checkpoint_cursor);
         self.weapon_shells.reset(checkpoint_cursor);
         self.weapon_cues
             .retain(|(cue, _)| cue.id > checkpoint_cursor);
@@ -1207,6 +1222,7 @@ impl App {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            explosion_debris,
             tool_ui,
             item_assets,
             item_ui,
@@ -1288,6 +1304,7 @@ impl App {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            explosion_debris,
             weapon_shells,
             shell_gpu: None,
             weapon_cues: VecDeque::new(),
@@ -1357,7 +1374,9 @@ impl App {
             observer_eye: None,
             tumble: None,
             music_world: None,
-            net_graph: None,
+            net_sampler: Default::default(),
+            perf_stats_due: std::time::Instant::now(),
+            gpu_name: String::new(),
             frame_stats: Default::default(),
             frame_log: None,
             update_check: None,
@@ -1433,6 +1452,7 @@ impl App {
         self.weapon_effects.reset(0);
         self.actor_effects.reset(0);
         self.explosion_shapes.reset(0);
+        self.explosion_debris.reset(0);
         self.weapon_shells.clear();
         self.weapon_cues.clear();
         self.weapon_animation_cues.clear();
@@ -1686,28 +1706,60 @@ impl App {
         }
         Ok(())
     }
-    fn update_net_graph(&mut self) {
-        let Some((since, frames)) = self.net_graph.as_mut() else {
-            return;
-        };
-        *frames += 1;
-        let elapsed = since.elapsed().as_secs_f32();
-        if elapsed < 0.5 {
+    /// Feed the net graph and performance overlay while they show; nothing
+    /// is sampled while both are hidden.
+    fn update_perf(&mut self) {
+        let wants_net = self.ui.core.net_graph.is_some() || self.ui.core.perf.wants_net();
+        let wants_stats = self.ui.core.perf.visible();
+        if !wants_net && !wants_stats {
+            self.net_sampler.reset();
             return;
         }
-        let fps = *frames as f32 / elapsed;
-        *since = std::time::Instant::now();
-        *frames = 0;
-        let text = match self.network_view() {
-            Some(view) => format!(
-                "FPS {:.0}   Ping {} ms   Players {}",
-                fps,
-                view.rtt_ms,
-                view.names.len()
-            ),
-            None => format!("FPS {fps:.0}"),
+        let now = std::time::Instant::now();
+        let probes = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| a.worker.probes.get())
+            .cloned();
+        let ghosts = self
+            .network_view()
+            .map_or(0, |v| v.poses.len() + v.vehicles.len() + v.entities.len());
+        match probes.as_ref().filter(|_| wants_net) {
+            Some(p) => {
+                if let Some(sample) = self.net_sampler.sample(now, &p.link, ghosts) {
+                    self.ui.apply(UiUpdate::NetSample(sample));
+                }
+            }
+            None => self.net_sampler.reset(),
+        }
+        if !wants_stats || now < self.perf_stats_due {
+            return;
+        }
+        self.perf_stats_due = now + Duration::from_millis(500);
+        let memory = crate::perf::process_memory();
+        let view = self.network_view();
+        let server = probes.as_ref().and_then(|p| p.host.as_ref()).map(|host| {
+            let p = host.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            bri_ui::models::perf::ServerStats {
+                ticks_per_second: p.ticks_per_second,
+                tick_ms_mean: p.tick_ms_mean,
+                tick_ms_max: p.tick_ms_max,
+                script_ms: p.script_ms,
+            }
+        });
+        let stats = bri_ui::models::perf::PerfStats {
+            bricks: view.map(|v| v.world.bricks.len()),
+            players: view.map(|v| v.names.len()),
+            vehicles: view.map(|v| v.vehicles.len()),
+            entities: view.map(|v| v.entities.len()),
+            memory_bytes: memory.map(|m| m.0),
+            private_bytes: memory.map(|m| m.1),
+            remote_server: probes.as_ref().is_some_and(|p| p.host.is_none()),
+            server,
+            gpu: self.gpu_name.clone(),
         };
-        self.ui.apply(UiUpdate::NetGraph(Some(text)));
+        self.ui.apply(UiUpdate::PerfStats(stats));
     }
     /// Seated where v20's `armor::onTrigger` fires the mount's gun instead
     /// of tools: the Tank turret and the pirate cannon.
@@ -4067,6 +4119,27 @@ fn building_action(action: &UiAction) -> bool {
     )
 }
 
+/// The caption for a sound a player would hear from `listener`, if it is
+/// one worth reading: blasts, gunfire, cries, splashes and breaking bricks
+/// within earshot. Footsteps, plants and menu sounds get none.
+fn caption(cue: &bri_sim::presentation::Cue, listener: Option<Vec3>) -> Option<&'static str> {
+    use bri_sim::presentation::CueKind as K;
+    const EARSHOT: f32 = 80.0;
+    if listener.is_some_and(|l| l.distance(Vec3::from(cue.position)) > EARSHOT) {
+        return None;
+    }
+    Some(match &cue.kind {
+        K::Explosion { .. } => "[Explosion]",
+        K::WeaponSound { .. } => "[Weapon fire]",
+        K::Death { .. } => "[Death cry]",
+        K::Pain { cry: true, .. } => "[Cry of pain]",
+        K::Water { entered: true, speed, .. } if *speed > 4.0 => "[Splash]",
+        K::BrickKill { .. } => "[Bricks breaking]",
+        K::Teleport { .. } => "[Teleport]",
+        K::Emote { name, .. } if name == "alarm" => "[Alarm]",
+        _ => return None,
+    })
+}
 /// A ghost the server would refuse, before `v20_temp_brick` brightens it.
 const BLOCKED_GHOST: [f32; 4] = [0.6, 0.05, 0.05, 1.0];
 /// The ghost is redrawn when it moves or the bricks around it change.
@@ -4111,6 +4184,12 @@ impl PlatformApp for App {
     }
     fn focus_changed(&mut self, focused: bool) {
         self.audio.set_focused(focused);
+    }
+    fn wants_frame_timing(&self) -> bool {
+        self.ui.core.perf.visible()
+    }
+    fn frame_timed(&mut self, timing: crate::perf::FrameTiming) {
+        self.ui.apply(UiUpdate::PerfFrame(timing.sample()));
     }
     fn ui_mut(&mut self) -> &mut Ui {
         &mut self.ui
@@ -4188,6 +4267,13 @@ impl PlatformApp for App {
                 bri_net::protocol::MOVEMENT_REDUNDANCY,
             )? {
                 a.worker.movement(newest, inputs, self.camera_view())?;
+            }
+            if let Some((speed, archetype)) = self.motion.take_impact() {
+                let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
+                    .unwrap_or_default()
+                    .min_impact_speed();
+                self.actor_effects
+                    .ground_impact(speed, min, self.animation_time.to_bits());
             }
             if let Some(view) = &a.view {
                 let vitals = view.vitals.get(&view.owner);
@@ -4344,6 +4430,9 @@ impl PlatformApp for App {
                 }
                 self.vehicles
                     .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
+                for (model, transform, tint) in self.explosion_debris.models() {
+                    self.vehicle_assets.push_source_model(model, transform, tint);
+                }
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
                 for (owner, images) in &view.weapons.images {
@@ -4382,7 +4471,7 @@ impl PlatformApp for App {
             }
         }
         self.update_combat_presentation();
-        self.update_net_graph();
+        self.update_perf();
         if let Some((request, _, receiver)) = &self.add_on_import
             && let Ok(result) = receiver.try_recv()
         {
@@ -4746,6 +4835,8 @@ impl PlatformApp for App {
                 &view.weapons,
                 game_elapsed.as_secs_f32(),
             )?;
+            self.actor_effects
+                .update_debris_trails(&self.explosion_debris.trails())?;
             Self::update_actor_effects(
                 &mut self.actor_effects,
                 &self.avatar_assets,
@@ -4763,6 +4854,19 @@ impl PlatformApp for App {
                 },
             )?;
             self.explosion_shapes.advance(game_elapsed.as_secs_f32());
+            self.explosion_debris
+                .advance(game_elapsed.as_secs_f32(), |from, to| {
+                    let delta = to - from;
+                    let length = delta.length();
+                    if length < 1e-5 {
+                        return None;
+                    }
+                    let hit = building.target(from, delta / length, length).ok()??;
+                    Some(crate::weapon_debris::DebrisHit {
+                        fraction: (hit.distance / length).clamp(0., 1.),
+                        normal: hit.normal.normalize(),
+                    })
+                });
             let shells: Vec<_> = self
                 .weapon_effects
                 .take_host_requests()
@@ -5094,14 +5198,24 @@ impl PlatformApp for App {
                     platform.push(PlatformCommand::ToggleFullscreen);
                     continue;
                 }
-                UiAction::Game(GameAction::ToggleNetGraph) => {
-                    self.net_graph = match self.net_graph {
-                        Some(_) => {
-                            self.ui.apply(UiUpdate::NetGraph(None));
-                            None
+                UiAction::Game(GameAction::SavePerfCapture) => {
+                    let dir = self.state_dir.join("captures");
+                    let version = self.ui.core.version.clone();
+                    let text = match crate::perf::save_capture(&dir, &self.ui.core, &version) {
+                        Ok(path) => {
+                            bri_console::echo(format!("Performance capture saved: {}", path.display()));
+                            format!(
+                                "Performance capture saved: {}",
+                                path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into())
+                            )
                         }
-                        None => Some((std::time::Instant::now(), 0)),
+                        Err(error) => format!("Performance capture failed: {error:#}"),
                     };
+                    self.ui.apply(UiUpdate::BottomPrint {
+                        text,
+                        seconds: 3.0,
+                        hide_bar: false,
+                    });
                     Ok(())
                 }
                 UiAction::Game(GameAction::ToggleBuildMacroRecording) => {
@@ -5598,6 +5712,7 @@ impl PlatformApp for App {
             self.auto_quality = false;
             self.pick_quality(&device.adapter_info());
         }
+        self.gpu_name = device.adapter_info().name;
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
@@ -5608,6 +5723,9 @@ impl PlatformApp for App {
         }
         self.avatar_preview = Some(crate::avatar::Preview::new(device));
         self.preview_dirty = self.preview_request.is_some();
+        bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
+            &self.ui.core.prefs,
+        ));
         let samples = self.graphics.samples;
         self.renderer = Some(SceneRenderer::with_settings(
             device,
@@ -5696,7 +5814,10 @@ impl PlatformApp for App {
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
         // Anti-aliasing and shadow quality rebuild world pipelines and maps;
         // a map change needs renderers built for the new map.
+        // Colour-vision assistance is a pipeline constant, too.
+        let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
         if std::mem::take(&mut self.gpu_restart)
+            || bri_render::color::color_vision() != vision
             || self.renderer.as_ref().is_some_and(|r| {
                 r.samples() != self.graphics.samples
                     || r.shadow_settings() != self.graphics.shadows

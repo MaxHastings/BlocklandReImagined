@@ -18,7 +18,22 @@ pub fn shader_source(own: &str) -> String {
     format!("{WGSL}{own}")
 }
 
-/// Pipeline constants telling `output_color` how `format` stores colour.
-pub fn output_constants(format: wgpu::TextureFormat) -> [(&'static str, f64); 1] {
-    [("OUTPUT_ENCODED", if format.is_srgb() { 0.0 } else { 1.0 })]
+/// The colour-vision assistance renderers are built with (`COLOR_VISION`):
+/// 0 off, 1 protanopia, 2 deuteranopia, 3 tritanopia.
+static COLOR_VISION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Choose colour-vision assistance for pipelines built from now on.
+pub fn set_color_vision(mode: u32) {
+    COLOR_VISION.store(mode.min(3), std::sync::atomic::Ordering::Relaxed);
+}
+pub fn color_vision() -> u32 {
+    COLOR_VISION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Pipeline constants telling `output_color` how `format` stores colour
+/// and which colour-vision assistance to apply.
+pub fn output_constants(format: wgpu::TextureFormat) -> [(&'static str, f64); 2] {
+    [
+        ("OUTPUT_ENCODED", if format.is_srgb() { 0.0 } else { 1.0 }),
+        ("COLOR_VISION", f64::from(color_vision())),
+    ]
 }

@@ -3174,3 +3174,49 @@ shooter's F8 drop in a minigame. v20 ignores brick hits for 3 s after F8, and
 `blow_up_bricks` now does too. Evidence: `cargo test -p bri-sim --test
 brick_damage -- --include-ignored` (8 tests; the F8 test fails without the
 fix). No wire change.
+## 2026-09-28 Net graph and performance overlay
+
+The v20 net graph is now its own screen again. Ctrl+N (rebindable as
+"Toggle NetGraph") draws `NetGraphGui`'s six 200-sample plots and labels at
+their authored places in the converted `NetGraph*Profile` styles. It
+replaces the one-line FPS/ping text. The data is QUIC's own counters through
+`bri_net::client::LinkProbe`. There is also a new performance overlay: F3
+cycles compact, expanded and off, and Ctrl+F3 saves a JSON capture to
+`captures/`. It shows FPS, a frame-time graph and the CPU, GPU and wait
+split (GPU from timestamps around the frame's encoder). Hosts also see the
+server's tick time, per-Add-On script time, world counts and memory. There
+is no protocol change, so server figures are host-only. Nothing is drawn or
+sampled while hidden. Details, sources and the tradeoffs are in
+[audits/net-graph.md](audits/net-graph.md). Evidence: `cargo test -p bri-ui
+--test net_graph`, `cargo test -p bri-ui --lib perf`, `cargo test -p
+bri-client --lib perf::`, `cargo test -p bri-net --lib perf_window`, and
+offscreen renders from the ignored `overlays_render_offscreen`. A live game
+window is still unchecked (Max's playtest).
+- 2026-09-28 v20 fidelity audit (`docs/audits/v20-fidelity.md`, branch
+  `claude/v20-fidelity`). Max reported small integration gaps: a missing sound
+  or particle on a weapon or vehicle, feel "not quite right". Three repeatable
+  passes. `tools/audit_v20_fields.py` lists every field the 578 stock gameplay
+  datablocks set and which source reads it; the 99 unread fields are reviewed
+  in the audit. `crates/weapons/tests/v20_fidelity.rs` fires all 21 stock
+  items and checks the emitted cues against the literal datablock fields
+  (state sounds, emitters, sequences, shells, projectile, damage, impulse,
+  explosion effect, sound and radius damage). `crates/client/tests/v20_fidelity.rs`
+  checks every cue resolves in the audio and effects packs. Both pass (the
+  Horse Ray's scripted `HorseRayProjectile::Damage` is the one exception, as
+  in v20). Fixed: explosion debris was never drawn (Jeep tires and wreckage,
+  tank turret and hull, cannon barrel, the tank shell's 30 spark streaks),
+  now per `Explosion::launchDebris` / `Debris::advanceTime`, lowered from the
+  current weapons pack, models from vehicles-pack-011; destroyed vehicles
+  played `vehicleExplosionSound` twice; the pirate cannon's "Fire!" power
+  bottom print was missing; hard landings did not shake the camera
+  (`groundImpactShake*`, inherited TGE code); horses took falling damage
+  (HorseArmor `minImpactSpeed` 250), and falls ignored the height scale and
+  the admin wand rule. Checked and matching: turret/cannon `activate` (no
+  animated nodes in v20), player feel constants, camera, tool slots. Open:
+  `jetGroundEmitter` (Blockland-only engine code, needs the disassembly) and
+  the bottom print `hideBar` flag (wire field). Evidence: `cargo test -p
+  bri-weapons --test v20_fidelity -- --ignored`, `cargo test -p bri-client
+  --test v20_fidelity -- --ignored`, `cargo test -p bri-client --lib
+  explosion_debris`, `cargo test -p bri-sim --test vehicles -- --ignored
+  pirate_cannon`, `cargo test -p bri-sim --test combat horses`,
+  `cargo test -p bri-client --test actor_effects hard_landings`.

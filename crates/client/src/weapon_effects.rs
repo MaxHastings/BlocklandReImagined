@@ -188,6 +188,10 @@ impl WeaponEffects {
             },
         ))
     }
+    /// Whether a cue naming this effect would draw anything.
+    pub fn resolves(&self, definition: &str) -> bool {
+        self.resolve(definition).is_some()
+    }
     pub fn take_host_requests(&mut self) -> impl Iterator<Item = HostRequest> + '_ {
         self.pending.drain(..)
     }

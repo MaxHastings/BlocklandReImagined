@@ -224,6 +224,8 @@ pub struct ActorEffects {
     froth: BTreeMap<u64, Froth>,
     /// Tire emitters by (vehicle, wheel).
     tires: BTreeMap<(u64, usize), EffectHandle>,
+    /// Explosion debris trail emitters by (piece, emitter slot).
+    debris_trails: BTreeMap<(u64, u8), EffectHandle>,
     liquids: Vec<bri_sim::water::TintedWater>,
     orbs: BTreeMap<u64, EffectHandle>,
     /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
@@ -249,6 +251,7 @@ impl ActorEffects {
             lights: BTreeMap::new(),
             froth: BTreeMap::new(),
             tires: BTreeMap::new(),
+            debris_trails: BTreeMap::new(),
             liquids: Vec::new(),
             orbs: BTreeMap::new(),
             orb_eyes: Vec::new(),
@@ -290,6 +293,7 @@ impl ActorEffects {
         self.lights.clear();
         self.froth.clear();
         self.tires.clear();
+        self.debris_trails.clear();
         self.orbs.clear();
         self.orb_eyes.clear();
         self.cursor = checkpoint_cursor;
@@ -432,6 +436,38 @@ impl ActorEffects {
     /// neither mounting nor death here.
     /// Keep one emitter per spraying wheel; wheels that stop let their
     /// particles drain.
+    /// Keep one trail emitter on each explosion debris piece; a piece's
+    /// trail drains when the piece is gone (`deleteWhenEmpty`).
+    pub fn update_debris_trails(
+        &mut self,
+        trails: &[crate::explosion_debris::Trail],
+    ) -> Result<()> {
+        let world = &mut self.world;
+        self.debris_trails.retain(|key, handle| {
+            let keep = trails.iter().any(|t| t.key == *key) && world.is_active(*handle);
+            if !keep {
+                world.stop(*handle, StopMode::Drain);
+            }
+            keep
+        });
+        for t in trails.iter().filter(|t| t.transform.position.is_finite()) {
+            match self.debris_trails.get(&t.key) {
+                Some(&h) => self.world.update_source(h, t.transform)?,
+                None => match self.world.start_emitter(
+                    &t.emitter,
+                    t.transform,
+                    SourceOptions::default(),
+                ) {
+                    Ok(h) => {
+                        self.debris_trails.insert(t.key, h);
+                    }
+                    Err(_) => self.note(format!("Debris trail unavailable: {}", t.emitter)),
+                },
+            }
+        }
+        Ok(())
+    }
+
     pub fn update_tires(&mut self, sprays: &[TireSpray]) -> Result<()> {
         let world = &mut self.world;
         self.tires.retain(|key, handle| {
@@ -661,6 +697,35 @@ impl ActorEffects {
                 }
             },
         }
+    }
+
+    /// `Player::updatePos` shakes the controlling client's camera when its
+    /// player hits a surface faster than `groundImpactMinSpeed` (10). Every
+    /// stock PlayerData sets frequency 4, amplitude 1, 0.8 s and falloff 10;
+    /// the amplitude scales by the speed past 10 over `minImpactSpeed`.
+    pub fn ground_impact(&mut self, speed: f32, min_impact_speed: f32, seed: u64) {
+        const MIN_SPEED: f32 = 10.0;
+        if speed.is_nan() || speed <= MIN_SPEED || min_impact_speed <= 0.0 || self.shakes.len() >= 32
+        {
+            return;
+        }
+        let scale = (speed - MIN_SPEED) / min_impact_speed;
+        let seed = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let unit = |shift: u32| ((seed >> shift) & 0xffff) as f32 / 65536.0;
+        self.shakes.push(Shake {
+            spec: bri_weapons::CameraShake {
+                frequency: [4.0; 3],
+                amplitude: [1.0; 3],
+                seconds: 0.8,
+                radius: f32::INFINITY,
+                falloff: 10.0,
+            },
+            position: Vec3::ZERO,
+            elapsed: 0.0,
+            phase: Vec3::new(0.0, unit(16), unit(32)),
+            // Not an explosion: no distance falloff.
+            amplitude: Some(Vec3::splat(scale)),
+        });
     }
 
     /// The summed explosion shake for a camera at `eye`, in its own frame

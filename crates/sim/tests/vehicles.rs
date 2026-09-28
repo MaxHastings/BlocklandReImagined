@@ -563,6 +563,40 @@ fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun() -> anyho
 
 #[test]
 #[ignore = "requires the converted native vehicle and brick packs"]
+fn pirate_cannon_shows_its_charge_as_a_bottom_print() -> anyhow::Result<()> {
+    use bri_sim::session::Notice;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session_with(&root, "v20.vehicle.cannonturret")?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    s.take_private_notices();
+    s.command(owner, 50, Command::WeaponTrigger { down: true })?;
+    // `CannonStrengthLoop` adds a step at once and every 200 ms up to 10.
+    p.feed(&mut s, MoveInput::default(), 300)?;
+    let prints: Vec<String> = s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(to, n)| match n {
+            Notice::Bottom { text, seconds } if to == owner && seconds == 1.0 => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prints.len(), 10, "{prints:?}");
+    let bar = |lit: usize| {
+        format!(
+            "<just:center><color:FF0000>Fire! <color:FFFFFF>:<color:FFFF00>{}<color:000000>{}",
+            "|".repeat(lit),
+            "|".repeat(20 - lit)
+        )
+    };
+    assert_eq!(prints[0], bar(2));
+    assert_eq!(prints[9], bar(20));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
 fn admin_drop_at_camera_carries_the_ridden_vehicle() -> anyhow::Result<()> {
     use bri_admin::{Action, Request};
     use bri_sim::{

@@ -173,8 +173,21 @@ pub enum Callback {
     Request(Box<crate::api::UiAction>),
     /// Open a web page (a new release's download page).
     OpenUrl(String),
+    /// Open a screen (the first-run name prompt opens Avatar).
+    Push(ScreenId),
+    /// First run: ask for a name once the Tutorial question is answered.
+    NamePrompt,
+    /// First run: play the Tutorial, then ask for a name back at the menu.
+    TutorialThenName,
 }
 
+/// First run's name question: "after_tutorial" while it waits for the
+/// player to come back from the Tutorial, "done" once asked.
+pub const NAME_PROMPT: &str = "$pref::Player::NamePrompt";
+
+/// How long a sound caption stays, and how many show at once.
+const CAPTION_MS: u64 = 3000;
+const MAX_CAPTIONS: usize = 4;
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
 /// follows mouse Y, so positive looks down.
 const KEYBOARD_TURN: [(&str, f32, f32); 4] = [
@@ -218,6 +231,8 @@ pub struct Core {
     pub prefs: Prefs,
     pub binds: BindMap,
     pub globals: BindMap,
+    /// The Options remap list ([`crate::binds::remap_entries`]).
+    pub remap: Vec<crate::schema::RemapEntry>,
     pub remap_commands: Vec<String>,
     pub remap_target: Option<usize>,
     pub remap_all: bool,
@@ -281,6 +296,8 @@ pub struct Core {
     pub center_print: Option<(String, Option<u64>)>,
     pub bottom_print: Option<(String, Option<u64>, bool)>,
     pub plant_error: Option<(PlantError, u64)>,
+    /// Sound captions on screen and when each one goes.
+    pub captions: Vec<(String, u64)>,
     /// Current damage flash opacity (0..=0.75), fading over time.
     pub damage_flash: f32,
     pub energy: Option<f32>,
@@ -288,7 +305,10 @@ pub struct Core {
     pub whiteout: f32,
     /// `GameRenderFilters`' liquid tints for the camera, drawn in order.
     pub underwater: Vec<[f32; 4]>,
-    pub net_graph: Option<String>,
+    /// `NetGraphGui` while it is on the canvas (`toggleNetGraph`).
+    pub net_graph: Option<crate::models::perf::NetGraph>,
+    /// The performance overlay (not in v20).
+    pub perf: crate::models::perf::PerfOverlay,
     pub lagging: bool,
     pub shape_names: bool,
     /// The camera is a player's or vehicle's first-person eye.
@@ -504,6 +524,42 @@ impl Core {
             on_yes,
         );
     }
+    /// First run, after the controls question: offer the Tutorial, then
+    /// the name. v20 had no such welcome; everyone started as "Blockhead".
+    pub fn first_run_welcome(&mut self) {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: "Welcome to Blockland ReImagined".into(),
+            text: "New here? The Tutorial teaches moving, building, tools and driving in a \
+                   few minutes. You can also start it later from the main menu.\n\nPlay the \
+                   Tutorial now?"
+                .into(),
+            yes_no: true,
+            on_yes: Callback::TutorialThenName,
+            on_no: Callback::NamePrompt,
+            buttons: Some(["Play Tutorial".into(), "Not Now".into()]),
+        })));
+    }
+    /// Ask once for a name when the player still has the default one.
+    pub fn name_prompt(&mut self) {
+        if self.prefs.str_or(NAME_PROMPT, "") == "done" {
+            return;
+        }
+        self.prefs.set(NAME_PROMPT, "done");
+        self.save_settings();
+        if self.settings.avatar.lan_name != "Blockhead" {
+            return;
+        }
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: "Your Name".into(),
+            text: "Other players will see you as \"Blockhead\". Choose your name and look \
+                   now? You can change them any time in Avatar."
+                .into(),
+            yes_no: true,
+            on_yes: Callback::Push(ScreenId::Avatar),
+            on_no: Callback::None,
+            buttons: Some(["Choose Name".into(), "Later".into()]),
+        })));
+    }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
         self.cmds.push(StackCmd::Message(Box::new(MessageBox {
             title: title.into(),
@@ -544,6 +600,14 @@ impl Core {
         self.settings.brick_favorites = self.selector.favorites.clone();
         let s = Box::new(self.settings.clone());
         self.request(UiAction::SaveSettings(s));
+    }
+    /// `NetGraph::toggleNetGraph`: add `NetGraphGui` to the canvas, or
+    /// remove it (and its history).
+    pub fn toggle_net_graph(&mut self) {
+        self.net_graph = match self.net_graph {
+            Some(_) => None,
+            None => Some(Default::default()),
+        };
     }
     pub fn in_game(&self) -> bool {
         matches!(self.conn, ConnectionState::InGame { .. })
@@ -807,7 +871,9 @@ impl Core {
             "dodofscreenshot" => self.game(GameAction::Screenshot {
                 kind: ScreenshotKind::DepthOfField,
             }),
-            "togglenetgraph" => self.game(GameAction::ToggleNetGraph),
+            "togglenetgraph" => self.toggle_net_graph(),
+            "toggleperfoverlay" => self.perf.cycle(),
+            "saveperfcapture" => self.game(GameAction::SavePerfCapture),
             "togglefullscreen();" => self.game(GameAction::ToggleFullscreen),
             "togglebuildmacrorecording" => self.game(GameAction::ToggleBuildMacroRecording),
             "playbackbuildmacro" => self.game(GameAction::PlayBackBuildMacro),
@@ -1003,8 +1069,13 @@ impl Ui {
         });
         let prefs = Prefs::new(&defaults, &settings.prefs);
         let platform = cfg.platform;
+        let remap = crate::binds::remap_entries(&pack.data.data);
         let binds = match &settings.binds {
-            Some(b) => BindMap { entries: b.clone() },
+            Some(b) => {
+                let mut binds = BindMap { entries: b.clone() };
+                binds.add_missing_extras(&remap);
+                binds
+            }
             None => BindMap::defaults(
                 &pack.data.data,
                 crate::binds::DEFAULT_MOUSE,
@@ -1030,13 +1101,7 @@ impl Ui {
             crate::screens::options::chat_lines(&prefs),
             prefs.i64_or("$Pref::Chat::LineTime", 6500).clamp(0, 30000),
         );
-        let remap_commands = pack
-            .data
-            .data
-            .remap
-            .iter()
-            .map(|r| r.command.clone())
-            .collect();
+        let remap_commands = remap.iter().map(|r| r.command.clone()).collect();
         let mut settings = settings;
         if settings.binds.is_none() {
             settings.mouse_type = crate::binds::DEFAULT_MOUSE;
@@ -1055,6 +1120,7 @@ impl Ui {
             prefs,
             binds,
             globals,
+            remap,
             remap_commands,
             remap_target: None,
             remap_all: false,
@@ -1100,11 +1166,13 @@ impl Ui {
             center_print: None,
             bottom_print: None,
             plant_error: None,
+            captions: Vec::new(),
             damage_flash: 0.0,
             energy: None,
             whiteout: 0.0,
             underwater: Vec::new(),
             net_graph: None,
+            perf: Default::default(),
             lagging: false,
             shape_names: true,
             first_person: true,
@@ -1524,7 +1592,29 @@ impl Ui {
                 c.bottom_print = None;
             }
             UiUpdate::PlantError(e) => c.plant_error = Some((e, c.time_ms + 800)),
-            UiUpdate::NetGraph(text) => c.net_graph = text,
+            UiUpdate::NetSample(sample) => {
+                if let Some(graph) = &mut c.net_graph {
+                    graph.add(sample);
+                }
+                if c.perf.wants_net() {
+                    c.perf.net = Some(sample);
+                }
+            }
+            UiUpdate::PerfFrame(frame) => c.perf.push_frame(frame),
+            UiUpdate::PerfStats(stats) => {
+                if c.perf.visible() {
+                    c.perf.stats = stats;
+                }
+            }
+            UiUpdate::Caption(text) => {
+                if c.prefs.bool_or(crate::screens::options::CAPTIONS, false) {
+                    // A repeated sound refreshes its line instead of stacking.
+                    c.captions.retain(|(t, _)| *t != text);
+                    c.captions.push((text, c.time_ms + CAPTION_MS));
+                    let extra = c.captions.len().saturating_sub(MAX_CAPTIONS);
+                    c.captions.drain(..extra);
+                }
+            }
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
@@ -2074,6 +2164,7 @@ impl Ui {
         {
             c.plant_error = None;
         }
+        c.captions.retain(|(_, until)| *until > now);
         c.hud.tick(dt_ms);
         self.content.view_mut().tick(dt_ms);
         self.content.tick(dt_ms, &mut self.core);
@@ -2093,6 +2184,7 @@ impl Ui {
         for d in &self.dialogs {
             d.draw(pack, &mut dl, &self.core);
         }
+        crate::screens::perf::draw(pack, &mut dl, &self.core);
         dl
     }
 

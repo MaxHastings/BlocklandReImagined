@@ -501,7 +501,8 @@ pub enum GameAction {
     Screenshot {
         kind: ScreenshotKind,
     },
-    ToggleNetGraph,
+    /// Write the performance overlay's recent history to a file.
+    SavePerfCapture,
     ToggleFullscreen,
     Emote {
         name: String,
@@ -1089,6 +1090,8 @@ pub enum UiUpdate {
     },
     ClearPrints,
     PlantError(PlantError),
+    /// A sound caption ("[Explosion]"), shown while captions are on.
+    Caption(String),
     /// Red damage flash (`Armor::onDamage`: +delta/maxDamage*2, capped 0.75).
     DamageFlash(f32),
     /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it
@@ -1102,8 +1105,12 @@ pub enum UiUpdate {
     /// Whether the camera is a first-person eye; the crosshair shows only
     /// then (`GuiCrossHairHud` checks `isFirstPerson`).
     FirstPerson(bool),
-    /// Net graph text (`toggleNetGraph`); None hides it.
-    NetGraph(Option<String>),
+    /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
+    NetSample(crate::models::perf::NetSample),
+    /// A presented frame's timing; dropped while the overlay is hidden.
+    PerfFrame(crate::models::perf::FrameSample),
+    /// The performance overlay's slower figures.
+    PerfStats(crate::models::perf::PerfStats),
     Players {
         rows: Vec<PlayerRow>,
         server_name: String,
