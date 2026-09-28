@@ -914,6 +914,11 @@ impl Core {
                 self.request(UiAction::OpenAdmin);
             }
             "toggleshapenamehud" => self.shape_names = !self.shape_names,
+            // `openBSD`: with building disabled it only says so, so the
+            // selector (and its "Bricks" cue) never opens.
+            "openbsd" if self.hud.building_disabled => {
+                self.center_print("\u{E005}Building is currently disabled.", 2.0)
+            }
             "openbsd" => self.push(ScreenId::BrickSelector),
             "usebricks" => {
                 let mut o = Outbox::default();

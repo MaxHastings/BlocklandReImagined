@@ -3380,3 +3380,42 @@ the first copy). No wire change.
   No protocol change. Evidence: `cargo test -p bri-client --lib
   server_clock_runs_smoothly_under_jitter` (80 ms + 60 ms jitter, 144 Hz
   frames): rate within 5%; the snapping clock measured 119% off.
+
+## 2026-09-28 Final touches checked against v20's own files
+
+Max asked why final touches keep slipping through. The cause was that our
+tests checked the code against itself, not against v20. This sweep checks
+against v20's datablocks, scripts and `blocklandv20.exe`. It records the
+evidence in `docs/audits/v20-unread-fields.md` and
+`docs/audits/v20-client-scripts.md`.
+
+- The jet ground dust within 4 units of the ground (exe 0x5ad1b0) and a
+  duplicated tire-spray update: de7b9c4.
+- Name tags are white or the mini-game colour, with an 8-way outline, as
+  `GuiShapeNameHud::drawName` draws them. Raycasting bricks hide them
+  (mask 0x200001d), and they fade from the fog distance: 24b32b1.
+- Opening the brick selector sends the "Bricks" BSD emote everyone sees:
+  862b2da. With building disabled, it only prints so. Emotes from a dead
+  player pass quietly: 00a658e3.
+- All 54 stock item poses and weapon state machines match v20. See
+  `tools/audit_v20_poses.py` and `tests/v20_poses.rs`: a46840d.
+- A headless sweep of every dialog at 1999x800, 1280x720 and 2560x1440
+  (`crates/ui/tests/screen_sweep.rs`). Fixed: Change Map and Server
+  Options cut off at 1440p, the Admin Login stray button, the Mini-Games
+  status row and v20's never-shown Create blocker: d2c53d48.
+- AutoLight on dark maps at each spawn, and a respawned body starts dark:
+  2cf3769f. No favorites auto-buy in a local Tutorial: 00a658e3.
+- Vehicle steering behind `$pref::Input::UseStrafeSteering` and
+  `UseAutoReturnSteering`, recovered from the exe. Protocol 43 adds
+  `Command::SteeringPrefs`: ebffe9ce and 85055680.
+
+Evidence:
+
+- `cargo test -p bri-client --test actor_effects --test v20_client_scripts`
+- `cargo test -p bri-client --test v20_poses -- --ignored`
+- `cargo test -p bri-vehicles --test steering_prefs -- --ignored`
+- `cargo test -p bri-ui --test screen_sweep -- --ignored`
+- `cargo test -p bri-ui`
+- `cargo test -p bri-sim`
+
+Max's playtest will be the first time these are seen in a window.
