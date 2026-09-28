@@ -596,7 +596,13 @@ def main():
             install_hook()
             return 0
         if args.history_range:
-            problems = history_check(*args.history_range)
+            base, tip = args.history_range
+            if subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"],
+                              capture_output=True).returncode:
+                # A force push replaced the previous tip; judge against main.
+                base = git("merge-base", "refs/remotes/origin/main", tip).strip()
+                say(f"previous tip is gone; checking from merge base {base[:9]}")
+            problems = history_check(base, tip)
             for problem in problems:
                 print(f"    {problem}")
             say("history check " + ("FAILED" if problems else "ok"))
