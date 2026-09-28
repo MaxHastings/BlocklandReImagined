@@ -3620,3 +3620,9 @@ Needs Max's playtest: F8, fly with and without left click and shift.
   `hand_ports_start_from_stubs_and_check_as_partial`,
   `port_and_check_port_run_from_the_executable`). The shotgun's own
   `checks.json` (3 pellets) runs in `real_community_samples` on Maxwell's PC.
+- Fix: a port that patched `weapons.json` left the item presentation pinning
+  the old bytes, so hosts refused the Add-On ("item physics does not match
+  its weapons pack"; Gate's hosted shotgun test). Ports now re-pin
+  `presentation.json` to the patched `weapons.json` and `item-physics.json`.
+  `check-port` checks the pins the way hosts and players do, and the port
+  tests assert them.

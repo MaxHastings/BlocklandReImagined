@@ -121,6 +121,14 @@ fn shotgun_port_fires_the_spread() {
         md.contains("**Ported** by `weapon_shotgun` (verified)"),
         "{md}"
     );
+    // The presentation still pins the patched weapons pack, or hosts and
+    // players would refuse to load the Add-On.
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    assert!(
+        port.files_changed
+            .iter()
+            .any(|f| f == "assets/presentation.json")
+    );
 
     // The recoil lands first (the pellets inherit it), then five pellets
     // turned by up to ±5π·0.002 rad about each axis, all different.
@@ -214,6 +222,7 @@ fn ports_add_files_and_leave_other_add_ons_alone() {
         serde_json::from_slice(&std::fs::read(out.join("package.json")).unwrap()).unwrap();
     assert_eq!(manifest["description"], "Ported: 3 bolts");
     assert!(report.package.files.iter().any(|f| f == "docs/PORT.md"));
+    bri_addon_import::ports::check_pins(&out).unwrap();
     // `partial`: the other hooks still need behaviour, so gaps remain.
     assert_eq!(report.summary.verdict, "converted_with_gaps");
     assert_eq!(
@@ -344,8 +353,16 @@ fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
     let c = porting::check(&work).unwrap();
     assert!(c.passed(), "{:?} {:?}", c.reason, c.results);
     assert!(c.unported.is_empty());
+    assert!(
+        c.results[0].0.contains("the Add-On loads"),
+        "{:?}",
+        c.results
+    );
     assert_eq!(c.entry.status, "verified");
-    assert_eq!(c.entry.sha256, std::slice::from_ref(&c.report.source.sha256));
+    assert_eq!(
+        c.entry.sha256,
+        std::slice::from_ref(&c.report.source.sha256)
+    );
     assert_eq!(c.entry.tests, ["weapon_shotgun/checks.json"]);
     let submitted: bri_addon_import::ports::Entry =
         serde_json::from_slice(&std::fs::read(work.join("submit.json")).unwrap()).unwrap();

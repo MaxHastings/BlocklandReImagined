@@ -510,7 +510,21 @@ pub fn check(dir: &Path) -> Result<CheckOutcome> {
     let checks: Checks =
         serde_json::from_slice(&read("port/checks.json")?).context("port/checks.json")?;
     let results = if applied {
-        run_checks(&out, &checks)?
+        let mut results = vec![match crate::ports::check_pins(&out) {
+            Ok(()) => (
+                "the Add-On loads: its presentation matches its weapons".to_string(),
+                true,
+            ),
+            Err(e) => (format!("{e:#}"), false),
+        }];
+        if checks.checks.is_empty() {
+            results.push((
+                "port/checks.json states nothing v20 does".to_string(),
+                false,
+            ));
+        }
+        results.extend(run_checks(&out, &checks)?);
+        results
     } else {
         vec![]
     };

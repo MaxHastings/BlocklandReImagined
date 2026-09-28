@@ -338,11 +338,71 @@ fn try_apply(
         );
         writes.push((file, bytes.to_vec()));
     }
+    repin(out, &mut writes)?;
     for (file, bytes) in writes {
         let path = out.join(&file);
         std::fs::create_dir_all(path.parent().context("output path")?)?;
         std::fs::write(path, bytes)?;
         applied.files_changed.push(file);
+    }
+    Ok(())
+}
+
+/// The item presentation the importer writes pins the exact bytes of the
+/// weapons pack and item physics beside it (hosts and players refuse a
+/// mismatch). After a port changes either, pin the new bytes.
+const PRESENTATION: &str = "assets/presentation.json";
+const PINNED: [(&str, &str); 2] = [
+    ("assets/weapons.json", "weapons_sha256"),
+    ("assets/item-physics.json", "item_physics_sha256"),
+];
+
+fn repin(out: &Path, writes: &mut Vec<(String, Vec<u8>)>) -> Result<()> {
+    let changed: Vec<(&str, String)> = PINNED
+        .iter()
+        .filter_map(|(file, field)| {
+            let (_, bytes) = writes.iter().find(|(f, _)| f == file)?;
+            Some((*field, crate::source::hash(bytes)))
+        })
+        .collect();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    let at = writes.iter().position(|(f, _)| f == PRESENTATION);
+    let bytes = match at {
+        Some(i) => writes[i].1.clone(),
+        None => match std::fs::read(out.join(PRESENTATION)) {
+            Ok(b) => b,
+            // No presentation, nothing pinned.
+            Err(_) => return Ok(()),
+        },
+    };
+    let mut doc: Value = serde_json::from_slice(&bytes).context(PRESENTATION)?;
+    for (field, sha) in changed {
+        doc[field] = Value::String(sha);
+    }
+    let bytes = serde_json::to_vec_pretty(&doc)?;
+    match at {
+        Some(i) => writes[i].1 = bytes,
+        None => writes.push((PRESENTATION.into(), bytes)),
+    }
+    Ok(())
+}
+
+/// Checks that the presentation in the package `out` pins the weapons pack
+/// and item physics beside it, as hosts and players do when they load it.
+pub fn check_pins(out: &Path) -> Result<()> {
+    let Ok(bytes) = std::fs::read(out.join(PRESENTATION)) else {
+        return Ok(());
+    };
+    let doc: Value = serde_json::from_slice(&bytes).context(PRESENTATION)?;
+    for (file, field) in PINNED {
+        let sha =
+            crate::source::hash(&std::fs::read(out.join(file)).with_context(|| file.to_owned())?);
+        ensure!(
+            doc[field].as_str() == Some(sha.as_str()),
+            "{PRESENTATION} does not match {file}; the game would refuse to load this Add-On"
+        );
     }
     Ok(())
 }
