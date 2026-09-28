@@ -19,7 +19,7 @@ pack per role (seam 1). No TorqueScript is executed, and there is no VM.
 1. **Let every system read its content kind from every loaded package** (seam
    1), with cross-package id references (seam 3) and runtime kinds for the
    imported content (seam 2). Until this lands, no imported Add-On can load in
-   a hosted game, whatever else is fixed.
+   a hosted game, whatever else is fixed. The design is in the proposal below.
 2. Give image state scripts, and the other callbacks Add-Ons hook, a declared
    behaviour hook in the package runtime (seams 5 and 7). Add the capabilities
    the archive needs most: `schedule`, `entities.animate`, `random.seeded`,
@@ -28,6 +28,76 @@ pack per role (seam 1). No TorqueScript is executed, and there is no VM.
    (seam 8).
 4. Extract the effects, debris and audio lowering into libraries, and move
    the importers onto `bri_convert::tscript` (seams 14 and 15).
+
+## Proposal: load content from every package (seams 1 to 3)
+
+Status: proposed 2026-09-28, for the multi-pack loading phase.
+
+**Today.** `ContentPaths` (`crates/client/src/content.rs`) resolves one directory
+per role, and each system loads one pack from it. For example, the session
+takes exactly one weapons pack (`Session::set_weapon_pack`), and
+`WeaponContent::load` reads one `weapons.json`. `packages.json` can list an
+imported package, and it is hashed and agreed at join, but no system reads it.
+
+**Shape.** Keep one merged pack per kind at runtime, and build it from every
+package that provides that kind. Systems and the session keep their current
+single-pack APIs, so the change is at load time and not in the simulation.
+
+1. **Declare kinds.** A package lists what it provides, by kind and file. The
+   base packages keep their `role`; it now means "this kind's base package"
+   instead of "the only package". Imported packages declare their kinds in
+   `package.json` `provides`, once the runtime's `Kind` gains `weapons`,
+   `vehicles`, `bricks` and `sounds` (today the importer writes
+   `assets/content.json` instead). A kind is one pack file per package, not
+   one entry per id: the pack already carries its ids, and per-id entries
+   would duplicate it.
+2. **Merge per kind, owned by each system crate.** Add
+   `bri_weapons::Pack::merge(parts: Vec<(PackageRef, Pack)>) -> (Pack, Vec<Diagnostic>)`,
+   and the same for `bri_vehicles::schema::Pack` and `bri_content::brick::Catalog`.
+   The engine owns this mechanism and the packages own their content:
+   - Order follows `packages.json`. The base package comes first, then the others.
+   - A duplicate id is a `merge.duplicate_id` error naming both packages. Ids
+     are namespaced, so this only happens when two packages share a namespace,
+     which the package list already refuses.
+   - Maps keyed by bare name (explosions, damage types) become keyed by
+     `namespace:kind/name`. Their lookups (a projectile's `explosion.effect`, a
+     `$DamageType::` name) resolve in the declaring package's namespace first,
+     then in `v20`.
+   - Resource paths gain their package's directory, so `Resource.native_file`
+     and vehicle `Asset.path` are content-root relative after the merge
+     (`weapon_shotgun/assets/models/...`).
+3. **Resolve references after the merge, not per pack.** `Pack::validate` runs
+   on the merged pack. A reference whose target is missing drops the one item
+   that needs it, with a `merge.unresolved` diagnostic (for example, an image
+   whose projectile's package is not enabled). It never refuses the whole
+   set. This matches door-closer P0 "partial load with a report". The
+   importer then stops copying dependency projectiles (seam 3).
+4. **One merged pack per peer.** `ContentPaths` keeps one entry per kind, as a
+   list of package directories, and builds the merged pack once. The host
+   passes it to `set_weapon_pack` or `set_vehicle_pack` as today. Clients
+   build the same merged pack from the same shared packages. The join
+   environment check (`Environment::compare`) already guarantees both sides
+   hold identical `shared` packages, so this needs no protocol change.
+5. **Ids on the wire and in saves.** Merged ids are already strings, so
+   replication and worlds carry `weapon_shotgun:weapon/shotgunitem` unchanged.
+   Vanilla packs still spell `v20.weapon.gunitem` until the deferred rename.
+   The merge accepts both spellings and does not rewrite either.
+
+**Order of work.**
+
+| Step | Scope | Proof |
+|---|---|---|
+| a | `bri_weapons::Pack::merge`, name-keyed maps to ids, content-root resource paths | unit test merging the vanilla pack with the imported shotgun: no duplicate, the shotgun's item and projectile resolve |
+| b | `ContentPaths` builds the merged weapons pack from every package providing `weapons` | headless host with `packages.json` listing `weapon_shotgun`: `give` and fire the shotgun through `Session` |
+| c | same for vehicles and the brick catalog | host spawns the Blocko Car; a world using an imported brick loads |
+| d | runtime `Kind` entries; the importer writes `provides` and stops copying dependency content | `Package::load` accepts an imported package with its kinds |
+| e | client presentation (item and vehicle models, textures, sounds) reads merged packs | Maxwell playtest: pick up and fire the shotgun, drive the car |
+
+Steps a to c need no protocol change, no save migration and no new runtime.
+Each is testable headless with the samples this spike already imports.
+
+**Not in scope.** Behaviour hooks (seams 5 to 8), downloading packages, and
+the vanilla id rename.
 
 ## The command
 
