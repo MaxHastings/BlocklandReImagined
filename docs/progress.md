@@ -3561,3 +3561,26 @@ particles beyond the debris/weapon paths, and `.bls` text import.
 - Seen once in four runs, unrelated: `package_sync`
   `downloads_reach_only_offered_files` failed its "does not offer package
   downloads" assertion (line 158); it passed alone and three times in full.
+- Max, 16:07Z: "should never have an issue joining a server like this ...
+  just download whatever we need and play". A join now downloads every
+  Add-On the server runs that the joiner lacks or has in another version
+  (matched by content hash; a cached copy of another version is never used)
+  with no question, however large: the 200 MB download prompt is gone
+  (`ASK_ABOVE_BYTES`, `NeedsApproval`, `DownloadDeclined`,
+  `UiAction::ApproveDownload`). The 4 GB safety cap stays. Shared Add-Ons
+  only the joiner runs no longer refuse the join: `connect_fetching` leaves
+  them out and returns them, and `mods::load_fetched` / `joined_set` load
+  the server's exact set. The only question a join can ask is the trust
+  prompt for sandboxed Add-On code.
+- The `downloads_reach_only_offered_files` failure was real: a server that
+  refused a connection (no downloads, wrong version, bad identity, full)
+  closed it as soon as the refusal was acknowledged, and QUIC discards
+  stream data the peer has not read yet, so the player could see
+  "connection lost: closed by peer" instead of the reason. The server now
+  lingers until the peer closes (`server::linger`, 3 s cap). Before: 4
+  failures in 40 full runs of `package_sync`; after: 0 in 160.
+- Tests: `package_sync` `a_join_downloads_exactly_the_servers_add_ons_without_asking`
+  (a joiner with no Add-Ons and one with a stale copy both run the server's
+  exact set) and the E31 test (an extra shared Add-On sits out);
+  `add_on_fallbacks.rs` adds a player with a stale copy and an Add-On of
+  their own, through `mods::load_fetched`, `joined_set` and the item art.

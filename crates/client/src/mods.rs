@@ -19,16 +19,21 @@ use bri_package_runtime::{Catalog, manifest::MANIFEST_FILE};
 /// Load downloaded packages and return the catalog with the package list
 /// to join with: this client's own packages (`set` under `root`, whose
 /// references are `local`), with every package the server sent in place of
-/// the local one of the same id.
+/// the local one of the same id, and without the `dropped` ones the server
+/// does not run.
 pub fn load_fetched(
     root: &std::path::Path,
     set: &PackageSet,
     local: &[PackageRef],
     fetched: &[Fetched],
+    dropped: &[PackageRef],
 ) -> Result<(Catalog, Vec<PackageRef>)> {
+    let left_out = |id: &str| {
+        fetched.iter().any(|f| f.package.id == id) || dropped.iter().any(|d| d.id == id)
+    };
     let mut dirs = Vec::new();
     for entry in &set.packages {
-        if entry.role.is_some() || fetched.iter().any(|f| f.package.id == entry.id) {
+        if entry.role.is_some() || left_out(&entry.id) {
             continue;
         }
         dirs.push((bri_package::packages::package_dir(root, entry)?, entry.clone()));
@@ -95,7 +100,7 @@ pub fn load_fetched(
     })?;
     let mut packages: Vec<PackageRef> = local
         .iter()
-        .filter(|p| !fetched.iter().any(|f| f.package.id == p.id))
+        .filter(|p| !left_out(&p.id))
         .cloned()
         .collect();
     packages.extend(fetched.iter().map(|f| f.package.clone()));
@@ -103,15 +108,23 @@ pub fn load_fetched(
 }
 
 /// The package list a joined game runs with: this client's own list with
-/// every package the server sent in place of the local one of the same id.
-/// Downloads must lie under `root` (the cache is `root/.downloads`), so
-/// their bricks, weapons and vehicles load like any other Add-On's.
-pub fn joined_set(root: &std::path::Path, set: &PackageSet, fetched: &[Fetched]) -> Result<PackageSet> {
+/// every package the server sent in place of the local one of the same id,
+/// less the `dropped` ones the server does not run. Downloads must lie
+/// under `root` (the cache is `root/.downloads`), so their bricks, weapons
+/// and vehicles load like any other Add-On's.
+pub fn joined_set(
+    root: &std::path::Path,
+    set: &PackageSet,
+    fetched: &[Fetched],
+    dropped: &[PackageRef],
+) -> Result<PackageSet> {
     let root = root.canonicalize()?;
     let mut packages: Vec<PackageEntry> = set
         .packages
         .iter()
-        .filter(|e| !fetched.iter().any(|f| f.package.id == e.id))
+        .filter(|e| {
+            !fetched.iter().any(|f| f.package.id == e.id) && !dropped.iter().any(|d| d.id == e.id)
+        })
         .cloned()
         .collect();
     for f in fetched {
@@ -202,6 +215,7 @@ mod tests {
             },
             std::slice::from_ref(&base),
             std::slice::from_ref(&blocks),
+            &[],
         )
         .unwrap();
         assert!(catalog.model("blocks:model/cube").is_some());
@@ -216,7 +230,7 @@ mod tests {
             load_fetched(&root, &PackageSet {
                 schema_version: 1,
                 packages: Vec::new(),
-            }, &[], &[other_base]).unwrap_err();
+            }, &[], &[other_base], &[]).unwrap_err();
         assert!(
             format!("{error:#}").contains("base game content"),
             "{error:#}"

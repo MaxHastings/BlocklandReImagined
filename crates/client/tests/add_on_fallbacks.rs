@@ -4,8 +4,10 @@
 //! a clean client downloads them over loopback and loads the item art and
 //! the item HUD the way a join does. Every weapon gets a HUD row, gaps show
 //! stock art, no model or the item's first letter, and each stand-in is
-//! logged naming its Add-On. Content-free: the base game here is a
-//! one-weapon synthetic pack.
+//! logged naming its Add-On. A second player with an older copy of one of
+//! those Add-Ons and one of their own joins too: the server's version
+//! downloads, theirs sits the game out, and nothing asks. Content-free: the
+//! base game here is a one-weapon synthetic pack.
 use anyhow::{Context, Result};
 use bri_client::{item_ui::ItemUi, items::ItemAssets};
 use bri_net::content_identity::{ItemPhysicsContent, WeaponContent, kind_providers};
@@ -103,7 +105,7 @@ struct Base {
     weapons: PathBuf,
     items: PathBuf,
 }
-fn base(root: &Path) -> Result<Base> {
+fn base_game(root: &Path) -> Result<Base> {
     let weapons = root.join("weapons");
     let items = root.join("items");
     let pack = bubble()?;
@@ -328,7 +330,7 @@ fn letters() -> Result<bri_ui::pack::Pack> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn joining_a_server_with_badly_presented_add_ons_loads_with_stand_ins() -> Result<()> {
+async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins() -> Result<()> {
     let server_root = tempfile::tempdir()?;
     let set = server_add_ons(server_root.path())?;
     let environment = bri_package::environment::Environment::load(server_root.path(), &set)?;
@@ -348,7 +350,7 @@ async fn joining_a_server_with_badly_presented_add_ons_loads_with_stand_ins() ->
 
     // A clean client: the base game only, downloads into its `.downloads`.
     let client_root = tempfile::tempdir()?;
-    let base = base(client_root.path())?;
+    let base = base_game(client_root.path())?;
     let identity =
         bri_identity::ClientIdentity::load_or_create(client_root.path().join("client.identity"))?;
     let cache = bri_package::sync::Cache::open(&client_root.path().join(".downloads"))?;
@@ -356,7 +358,7 @@ async fn joining_a_server_with_badly_presented_add_ons_loads_with_stand_ins() ->
         schema_version: 1,
         packages: Vec::new(),
     };
-    let (client, fetched) = bri_net::client::Client::connect_fetching(
+    let (client, fetched, dropped) = bri_net::client::Client::connect_fetching(
         server.address,
         bri_net::client::HostPin::from(&server.certificate[..]),
         "Joiner".into(),
@@ -365,17 +367,18 @@ async fn joining_a_server_with_badly_presented_add_ons_loads_with_stand_ins() ->
         &identity,
         &cache,
         bri_progress::Progress::default(),
-        |fetched| Ok(bri_client::mods::load_fetched(client_root.path(), &own, &[], fetched)?.1),
-        u64::MAX,
-        |_| -> std::future::Ready<bool> { panic!("a small download does not ask") },
+        |fetched, dropped| {
+            Ok(bri_client::mods::load_fetched(client_root.path(), &own, &[], fetched, dropped)?.1)
+        },
     )
     .await?;
     assert!(client.owner > 0, "joined");
     assert_eq!(fetched.len(), 4, "every Add-On downloaded");
+    assert!(dropped.is_empty());
     drop(client);
 
     // What the join then loads: the same extras `ContentPaths` resolves.
-    let joined = bri_client::mods::joined_set(client_root.path(), &own, &fetched)?;
+    let joined = bri_client::mods::joined_set(client_root.path(), &own, &fetched, &[])?;
     let extras = kind_providers(client_root.path(), &joined, "weapons.json")?;
     assert_eq!(extras.len(), 4);
     let weapons = WeaponContent::load_with(&base.weapons, &extras)?;
@@ -418,6 +421,66 @@ async fn joining_a_server_with_badly_presented_add_ons_loads_with_stand_ins() ->
         assert!(faults.contains(&format!("Add-On {add_on}:")), "{add_on} not named in:\n{faults}");
     }
     assert!(!faults.contains("extra-weapon"), "borrowing stock art is no fault:\n{faults}");
+
+    // A player with an older copy of one of the server's Add-Ons, and an
+    // Add-On of their own the server does not run, joins the same way: the
+    // server's version downloads (never the stale copy), their own sits the
+    // game out, and the game runs exactly the server's Add-Ons.
+    let stale_root = tempfile::tempdir()?;
+    let stale_base = base_game(stale_root.path())?;
+    add_on(
+        stale_root.path(),
+        "stock-art",
+        &[("wand", "Stock Wand", "Add-Ons/Weapon_Gun/pistol.dts", "Add-Ons/Weapon_Gun/icon_gun")],
+        None,
+    )?;
+    add_on(
+        stale_root.path(),
+        "mine-only",
+        &[("toy", "Toy Gun", "Add-Ons/Weapon_Gun/pistol.dts", "Add-Ons/Weapon_Gun/icon_gun")],
+        None,
+    )?;
+    let mine = PackageSet::parse(&serde_json::to_vec(&json!({ "schema_version": 1, "packages": [
+        { "id": "stock-art", "version": "1.0.0", "side": "shared", "dir": "addons/stock-art" },
+        { "id": "mine-only", "version": "1.0.0", "side": "shared", "dir": "addons/mine-only" },
+    ] }))?)?;
+    let local = bri_package::environment::Environment::load(stale_root.path(), &mine)?.client_packages();
+    let server_copy = environment.packages.iter().find(|p| p.id == "stock-art").unwrap();
+    assert!(!local.contains(server_copy), "the local copy is stale");
+    let cache = bri_package::sync::Cache::open(&stale_root.path().join(".downloads"))?;
+    let (client, fetched, dropped) = bri_net::client::Client::connect_fetching(
+        server.address,
+        bri_net::client::HostPin::from(&server.certificate[..]),
+        "Stale".into(),
+        local.clone(),
+        None,
+        &identity,
+        &cache,
+        bri_progress::Progress::default(),
+        |fetched, dropped| {
+            Ok(bri_client::mods::load_fetched(stale_root.path(), &mine, &local, fetched, dropped)?.1)
+        },
+    )
+    .await?;
+    assert!(client.owner > 0, "the stale player joined");
+    drop(client);
+    assert_eq!(dropped.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["mine-only"]);
+    let joined = bri_client::mods::joined_set(stale_root.path(), &mine, &fetched, &dropped)?;
+    let mut ids: Vec<_> = joined.packages.iter().map(|p| p.id.clone()).collect();
+    ids.sort();
+    assert_eq!(ids, ["bad-model", "extra-weapon", "missing-icon", "stock-art"]);
+    let stock = joined.packages.iter().find(|p| p.id == "stock-art").unwrap();
+    assert!(stock.dir.starts_with(".downloads/"), "the server's copy: {}", stock.dir);
+    let dir = bri_package::packages::package_dir(stale_root.path(), stock)?;
+    assert_eq!(bri_package::environment::hash_dir(&dir)?.0, server_copy.hash);
+    let extras = kind_providers(stale_root.path(), &joined, "weapons.json")?;
+    let weapons = WeaponContent::load_with(&stale_base.weapons, &extras)?;
+    let names: Vec<_> = weapons.item_choices.iter().map(|(_, n)| n.as_str()).collect();
+    assert!(names.contains(&"Mystery Box"), "the server's version: {names:?}");
+    assert!(!names.contains(&"Toy Gun"), "their own Add-On sits out: {names:?}");
+    let assets = ItemAssets::load_with(&stale_base.items, &stale_base.weapons, &extras)?;
+    let ui = ItemUi::new(&assets, &weapons.item_choices, &letters()?)?;
+    assert_eq!(ui.catalog().len(), weapons.item_choices.len());
     server.stop().await?;
     Ok(())
 }

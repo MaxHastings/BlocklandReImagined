@@ -151,7 +151,8 @@ A guide, samples, and tools that check an Add-On and try its rules
 without opening the game come with the source code.
 
 **Sharing.** Players joining a server download the Add-Ons it runs that
-they don't have. Downloads over 200 MB ask first.
+they don't have, or have in another version, and go straight into the
+game. Their own Add-Ons the server doesn't run sit that game out.
 
 **Add-On code on your PC.** An Add-On can also run its own drawing, sound
 and input code on players' PCs, for things like custom visuals. It runs

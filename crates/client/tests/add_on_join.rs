@@ -418,8 +418,8 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
     host(&mut host_app, port)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
     join(&mut guest, port)?;
-    // The guest agrees to the download and to the samples' client code, as
-    // a player would.
+    // Nothing asks about the download; the guest agrees to the samples'
+    // client code, the one question a join may ask.
     let start = Instant::now();
     while !in_game(&guest) {
         step(&mut host_app)?;
@@ -427,7 +427,6 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
         if let ConnectionState::Failed { reason } = &guest.ui.core.conn {
             bail!("the guest could not join: {reason}");
         }
-        request(&mut guest, UiAction::ApproveDownload)?;
         request(&mut guest, UiAction::TrustAddOnCode)?;
         ensure!(start.elapsed() < Duration::from_secs(300), "the guest never joined");
         thread::sleep(Duration::from_millis(8));
