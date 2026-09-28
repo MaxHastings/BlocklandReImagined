@@ -342,6 +342,9 @@ pub struct App {
     invite: Option<String>,
     /// The elevated firewall helper's outcome.
     firewall_fix: Option<mpsc::Receiver<Result<(), String>>>,
+    /// The frame cap the platform was last given (startup, then saves), so
+    /// a save that leaves it alone sends no window command.
+    frame_limit: Option<u32>,
     macro_recording: Option<Vec<UiAction>>,
     build_macro: Vec<UiAction>,
     macro_playback: VecDeque<UiAction>,
@@ -1031,6 +1034,7 @@ impl App {
             .map(IconRef::Pack)
             .collect();
         ui.apply(UiUpdate::MainMenuBackgrounds(backgrounds));
+        let frame_limit = settings::startup_display(&ui.settings()).max_fps;
         Ok(Self {
             item_assets,
             item_ui,
@@ -1135,6 +1139,7 @@ impl App {
             add_on_import: None,
             invite: None,
             firewall_fix: None,
+            frame_limit,
             macro_recording: None,
             build_macro: Vec::new(),
             macro_playback: VecDeque::new(),
@@ -4359,9 +4364,11 @@ impl PlatformApp for App {
                     continue;
                 }
                 UiAction::SaveSettings(value) => {
-                    platform.push(PlatformCommand::FrameLimit(
-                        settings::startup_display(&value).max_fps,
-                    ));
+                    let max_fps = settings::startup_display(&value).max_fps;
+                    if max_fps != self.frame_limit {
+                        self.frame_limit = max_fps;
+                        platform.push(PlatformCommand::FrameLimit(max_fps));
+                    }
                     settings::save(&self.state_dir.join("settings.json"), &value).and_then(|()| {
                         self.audio.apply_settings(&value);
                         self.graphics = crate::graphics::Graphics::from_settings(&value);
