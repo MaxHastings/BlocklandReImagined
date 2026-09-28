@@ -2225,3 +2225,43 @@ fn host_server_settings_limit_bricks_plant_rate_and_chat() {
     assert!(send(&mut s, guest, Command::Chat("hello there".into())).is_ok());
     assert_eq!(s.chat().last().unwrap().text, "hello");
 }
+
+/// `$Pref::Server::BrickPublicDomainTimeout`: once a builder has been gone
+/// that many minutes, anyone may break their bricks.
+#[test]
+fn abandoned_bricks_turn_public_after_the_hosts_timeout() {
+    let mut g = Game::new(tooled());
+    g.s.set_server_settings(bri_admin::ServerSettings {
+        public_domain_timeout_minutes: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let a = g.s.join("Ann".into(), A_SPAWN, false).unwrap();
+    let b = g.s.join("Bob".into(), B_SPAWN, false).unwrap();
+    g.steps(60);
+    let shared = g.plant(a, SHARED_BRICK);
+    g.s.disconnect(a).unwrap();
+    g.swing(b, Some(HAMMER), SHARED_BRICK);
+    assert!(g.bricks().contains_key(&shared), "still Ann's a moment later");
+    // Trust is looked at on the minute, so by the second one it is public.
+    g.steps(2 * 60 * 120);
+    g.swing(b, Some(HAMMER), SHARED_BRICK);
+    assert!(!g.bricks().contains_key(&shared), "public after a minute");
+}
+
+#[test]
+fn the_etard_filter_holds_back_chat_and_says_why() {
+    let mut g = Game::new(tooled());
+    let a = g.s.join("Ann".into(), A_SPAWN, false).unwrap();
+    g.s.take_private_notices();
+    g.s.command(a, 1, Command::Chat("r u there".into())).unwrap();
+    assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == a
+        && matches!(n, Notice::Chat(t) if t.contains("Please use full words"))));
+    g.s.set_server_settings(bri_admin::ServerSettings {
+        chat_filter: false,
+        ..Default::default()
+    })
+    .unwrap();
+    g.s.command(a, 2, Command::Chat("r u there".into())).unwrap();
+    assert!(g.s.take_private_notices().is_empty());
+}

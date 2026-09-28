@@ -682,3 +682,30 @@ fn the_hosts_physics_vehicle_limit_holds_back_a_spawn() -> anyhow::Result<()> {
     )));
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn an_internet_hosts_per_builder_vehicle_quota_holds_back_a_spawn_but_lan_does_not()
+-> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for lan in [false, true] {
+        let (mut s, owner) = session(&root)?;
+        s.set_lan_host(lan);
+        let mut settings = bri_admin::ServerSettings::default();
+        settings.per_player.vehicles = 0;
+        s.set_server_settings(settings)?;
+        for sequence in 1..=120 {
+            s.movement(owner, sequence, MoveInput::default())?;
+            s.step()?;
+        }
+        assert_eq!(s.vehicle_infos().len(), usize::from(lan), "LAN {lan}");
+        if !lan {
+            assert!(s.take_private_notices().iter().any(|(_, n)| matches!(
+                n,
+                bri_sim::session::Notice::Center { text, .. }
+                    if text.ends_with("You already have 0 physics-vehicles")
+            )));
+        }
+    }
+    Ok(())
+}
