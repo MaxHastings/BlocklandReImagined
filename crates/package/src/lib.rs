@@ -12,6 +12,7 @@ pub mod diag;
 pub mod environment;
 pub mod id;
 pub mod packages;
+pub mod path;
 pub mod sync;
 
 /// The platform API level this build provides. Packages declare the level

@@ -48,9 +48,8 @@ pub const IN_FLIGHT: std::time::Duration = std::time::Duration::from_secs(3600);
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 /// Largest package a server may send.
 pub const MAX_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-/// Longest relative file path, leaving room under Windows' 260-character
-/// limit for the cache directory.
-pub const MAX_PATH: usize = 160;
+/// Longest relative file path: the package path rule's.
+pub const MAX_PATH: usize = crate::path::MAX_PATH;
 /// File types that are native code or that Windows runs when opened. A
 /// package that contains one is refused outright, whatever it is named.
 pub const CODE_EXTENSIONS: &[&str] = &[
@@ -58,13 +57,6 @@ pub const CODE_EXTENSIONS: &[&str] = &[
     "cmd", "ps1", "psm1", "psd1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "lnk", "url",
     "reg", "jar", "sh", "app", "pif", "appx", "msix",
 ];
-/// Device names Windows resolves in any directory, with any extension.
-const WINDOWS_DEVICES: &[&str] = &[
-    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
-    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9", "conin$",
-    "conout$",
-];
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileEntry {
@@ -87,28 +79,11 @@ pub struct Listing {
     pub files: Vec<FileEntry>,
 }
 
-/// Why a path cannot be part of a downloadable package, or None.
+/// Why a path cannot be part of a downloadable package, or None: the
+/// package path rule ([`crate::path::problem`]), and no code.
 pub fn path_problem(path: &str) -> Option<String> {
-    if path.is_empty() || path.len() > MAX_PATH {
-        return Some(format!("path must be 1-{MAX_PATH} bytes"));
-    }
-    if path
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
-    {
-        return Some("path has a character Windows forbids or a control character".into());
-    }
-    for segment in path.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." {
-            return Some("path must be relative, without empty, `.` or `..` parts".into());
-        }
-        if segment.ends_with([' ', '.']) {
-            return Some("a path part may not end in a space or dot".into());
-        }
-        let stem = segment.split('.').next().unwrap_or_default();
-        if WINDOWS_DEVICES.contains(&stem.to_ascii_lowercase().as_str()) {
-            return Some(format!("`{segment}` is a Windows device name"));
-        }
+    if let Some(problem) = crate::path::problem(path) {
+        return Some(problem);
     }
     let name = path.rsplit('/').next().unwrap_or(path);
     if let Some((_, extension)) = name.rsplit_once('.')

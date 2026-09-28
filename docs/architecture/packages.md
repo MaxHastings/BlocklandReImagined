@@ -65,6 +65,20 @@ Unknown fields are errors. Every problem is a diagnostic with a stable code
 (`packages.id`, `packages.duplicate`, `packages.dir`, `packages.role_conflict`,
 ...), as in `docs/modding/package-format.md`.
 
+**One path rule.** Every name a package uses for a file or directory, a
+`dir` here, a `provides` file in `package.json`, or a path in a download
+listing, passes the same check (`bri_package::path::problem`): forward
+slashes, no empty, `.` or `..` parts, no character Windows forbids or gives a
+meaning (`:` would name an alternate data stream), no part ending in a space
+or dot, no device names, at most 160 bytes. Files are then opened through
+`bri_package::path::inside`, which refuses any link or junction on the way,
+so a package reads only its own bytes. Readers do not keep their own copies
+of this rule.
+
+**Conflicts are reported, never last-wins.** A content id provided twice in
+one manifest is `manifest.provide.duplicate`; two HUD panels that bind one
+key to different commands are `set.hud.key.conflict`.
+
 Swapping a pack generation, or adding a mod, is a data change to this file,
 not a Rust change.
 

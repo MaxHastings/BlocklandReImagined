@@ -684,7 +684,6 @@ fn traversal_and_absolute_paths_are_refused() {
 /// follows the link and reads the outside file as the package's script.
 #[cfg(unix)]
 #[test]
-#[ignore = "finding H2-F2: provide files are read through symlinks, escaping the package directory"]
 fn symlinked_files_cannot_escape_the_package() {
     let root = tempfile::tempdir().unwrap();
     let secret = root.path().join("secret.rhai");
@@ -795,7 +794,6 @@ fn packages_cannot_declare_another_packages_content() {
 /// conflict and must be reported at load. Today the second silently replaces
 /// the first.
 #[test]
-#[ignore = "finding H2-F3: duplicate content ids inside one package load silently (last one wins)"]
 fn duplicate_content_ids_are_reported() {
     let model = |c: f32| {
         serde_json::to_vec(&json!({ "schema_version": 1,
@@ -816,7 +814,6 @@ fn duplicate_content_ids_are_reported() {
 /// Two client HUD panels binding the same key letter to different commands
 /// are a composition conflict and must be reported at load.
 #[test]
-#[ignore = "finding H2-F4: two HUD panels may bind the same key to different commands without a load diagnostic"]
 fn conflicting_hud_keys_are_reported() {
     let server = Spec::server("arcade", vec![]).behaviour(
         json!({ "schema_version": 1, "script": "main.rhai",
@@ -853,7 +850,6 @@ fn conflicting_hud_keys_are_reported() {
 /// `main.rhai`, so two provides could alias the same bytes.
 #[cfg(unix)]
 #[test]
-#[ignore = "finding H2-F5: provide file names may contain ':' (Windows alternate data streams), unlike package dirs"]
 fn colons_in_file_names_are_refused() {
     let problems = load_err(&[script_pkg("main.rhai:stream")]);
     assert!(

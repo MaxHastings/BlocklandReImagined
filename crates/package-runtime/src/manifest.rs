@@ -164,8 +164,19 @@ impl Manifest {
                 );
             }
         }
+        let mut seen = std::collections::BTreeSet::new();
         for (i, provide) in manifest.provides.iter().enumerate() {
             let pointer = format!("{at}#/provides/{i}");
+            if !seen.insert(provide.id.as_str()) {
+                out.push(
+                    Diagnostic::error(
+                        "manifest.provide.duplicate",
+                        format!("`{}` is provided more than once", provide.id),
+                    )
+                    .at(pointer.clone())
+                    .hint("each content id names one thing; rename one of them"),
+                );
+            }
             match ContentId::parse(&provide.id) {
                 Err(problem) => {
                     out.push(Diagnostic::error("manifest.provide.id", problem).at(pointer.clone()))

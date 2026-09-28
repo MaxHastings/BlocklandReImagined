@@ -7,7 +7,7 @@ use bri_package::diag::Diagnostic;
 use bri_package::id::{Requirement, Version};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use std::collections::BTreeMap;
-use std::path::{Component, Path};
+use std::path::Path;
 
 /// One provided file with its bytes.
 #[derive(Debug, Clone)]
@@ -33,29 +33,23 @@ pub struct Package {
 
 const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
 
-fn safe_relative(file: &str) -> bool {
-    !file.is_empty()
-        && file.len() <= 256
-        && !file.contains('\\')
-        && Path::new(file)
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)))
-}
-
 impl Package {
     /// Read a mod package directory. Every problem is returned, not just the
     /// first.
     pub fn load(dir: &Path, entry: &PackageEntry) -> Result<Self, Vec<Diagnostic>> {
-        let manifest_bytes = std::fs::read(dir.join(MANIFEST_FILE)).map_err(|e| {
-            vec![
-                Diagnostic::error(
-                    "package.manifest_missing",
-                    format!("cannot read {MANIFEST_FILE}: {e}"),
-                )
-                .at(location(&entry.id, MANIFEST_FILE))
-                .hint("a mod package is a folder containing package.json"),
-            ]
-        })?;
+        let manifest_bytes = bri_package::path::inside(dir, MANIFEST_FILE)
+            .map_err(std::io::Error::other)
+            .and_then(std::fs::read)
+            .map_err(|e| {
+                vec![
+                    Diagnostic::error(
+                        "package.manifest_missing",
+                        format!("cannot read {MANIFEST_FILE}: {e}"),
+                    )
+                    .at(location(&entry.id, MANIFEST_FILE))
+                    .hint("a mod package is a folder containing package.json"),
+                ]
+            })?;
         let manifest = Manifest::parse(&manifest_bytes, &entry.id)?;
         let id = entry.id.clone();
         let mut out = Vec::new();
@@ -76,19 +70,17 @@ impl Package {
         for provide in &manifest.provides {
             let kind = Kind::parse(&provide.kind).expect("checked by the manifest");
             let at = location(&id, &provide.file);
-            if !safe_relative(&provide.file) {
-                out.push(
-                    Diagnostic::error(
-                        "package.file.path",
-                        format!(
-                            "`{}` must be a relative path inside the package",
-                            provide.file
-                        ),
-                    )
-                    .at(at),
-                );
-                continue;
-            }
+            let path = match bri_package::path::inside(dir, &provide.file) {
+                Ok(path) => path,
+                Err(problem) => {
+                    out.push(
+                        Diagnostic::error("package.file.path", problem)
+                            .at(at)
+                            .hint("provide files by plain relative paths inside the package"),
+                    );
+                    continue;
+                }
+            };
             match (kind.side(), entry.side) {
                 (Side::Server, Side::Server) | (Side::Client, Side::Client | Side::Shared) => {}
                 (Side::Server, _) => {
@@ -112,7 +104,7 @@ impl Package {
                     );
                 }
             }
-            let bytes = match std::fs::read(dir.join(&provide.file)) {
+            let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     out.push(
@@ -335,6 +327,37 @@ impl Catalog {
     /// Cross-package checks: dependencies, model and state references.
     fn check(&self, listed: &BTreeMap<&str, &PackageEntry>, server: bool) -> Vec<Diagnostic> {
         let mut out = Vec::new();
+        // One key press sends one command: two panels may share a key only
+        // if they send the same thing.
+        let mut keys: BTreeMap<String, (&str, &str, &str)> = BTreeMap::new();
+        for (id, p) in &self.packages {
+            for (panel, hud) in &p.huds {
+                for key in &hud.keys {
+                    let target = (key.package.as_str(), key.command.as_str(), panel.as_str());
+                    match keys.entry(key.key.to_ascii_uppercase()) {
+                        std::collections::btree_map::Entry::Vacant(v) => {
+                            v.insert(target);
+                        }
+                        std::collections::btree_map::Entry::Occupied(o) => {
+                            let (package, command, first) = *o.get();
+                            if (package, command) != (target.0, target.1) {
+                                out.push(
+                                    Diagnostic::error(
+                                        "set.hud.key.conflict",
+                                        format!(
+                                            "key {} sends `{}:{}` in `{panel}` but `{package}:{command}` in `{first}`",
+                                            key.key, key.package, key.command
+                                        ),
+                                    )
+                                    .at(location(id, MANIFEST_FILE))
+                                    .hint("give one of the panels a different key"),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for (id, p) in &self.packages {
             let at = location(id, MANIFEST_FILE);
             for (dependency, requirement) in &p.manifest.dependencies {
