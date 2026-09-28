@@ -212,6 +212,16 @@ impl AdminRuntime {
         Ok(role)
     }
 
+    pub(super) fn rename(&mut self, owner: OwnerId, name: String) -> Result<()> {
+        let id = *self
+            .owner_to_connection
+            .get(&owner)
+            .context("Unknown administration connection")?;
+        self.authority.rename(id, name)?;
+        self.revision = self.revision.saturating_add(1);
+        Ok(())
+    }
+
     pub(super) fn disconnect(&mut self, owner: OwnerId) {
         if let Some(id) = self.owner_to_connection.remove(&owner) {
             self.connection_to_owner.remove(&id);
