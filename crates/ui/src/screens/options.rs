@@ -644,10 +644,139 @@ fn input_rows(v: &mut View) {
     toggle.variable = Some(TOGGLE_CROUCH.into());
     toggle.command = None;
     toggle.text = Some("Toggle crouch (press once)".into());
-    let needed = toggle.position[1] + toggle.extent[1] + 4;
-    let height = &mut v.nodes[parent].ctrl.extent[1];
-    *height = (*height).max(needed);
     v.add(parent, toggle);
+    // v20's Options section ends where the pane's sections do; its rows
+    // close up to keep Invert Mouse In Vehicles and Toggle Crouch inside.
+    let room = PANE_BOTTOM - v.node(parent).ctrl.position[1];
+    let checks: Vec<NodeId> = v
+        .node(parent)
+        .children
+        .iter()
+        .copied()
+        .filter(|&k| v.node(k).state.visible && v.node(k).ctrl.class == "GuiCheckBoxCtrl")
+        .collect();
+    let mut rows: Vec<i32> = checks.iter().map(|&k| v.node(k).ctrl.position[1]).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    let (Some(&first), Some(&last)) = (rows.first(), rows.last()) else {
+        return;
+    };
+    let height = checks
+        .iter()
+        .map(|&k| v.node(k).ctrl.extent[1])
+        .max()
+        .unwrap_or(23);
+    if last + height + 4 > room && rows.len() > 1 {
+        let step = (room - 4 - height - first) / (rows.len() as i32 - 1);
+        for &k in &checks {
+            let i = rows
+                .iter()
+                .position(|&r| r == v.node(k).ctrl.position[1])
+                .unwrap_or(0);
+            v.nodes[k].ctrl.position[1] = first + step * i as i32;
+        }
+    }
+    let h = &mut v.nodes[parent].ctrl.extent[1];
+    *h = (*h).max(room);
+}
+
+/// Where v20's option panes end: every tab's sections stop above Done.
+const PANE_BOTTOM: i32 = 368;
+
+/// The resolution menu fits "1920 x 1080"; Fullscreen, Vsync and Apply
+/// shift right to make room.
+fn widen_resolution_menu(v: &mut View) {
+    let Some(menu) = v.id("OptGraphicsResolutionMenu") else {
+        return;
+    };
+    let Some(parent) = v.node(menu).parent else {
+        return;
+    };
+    let c = &v.node(menu).ctrl;
+    let (right, grow) = (c.position[0] + c.extent[0], 90 - c.extent[0]);
+    if grow <= 0 {
+        return;
+    }
+    v.nodes[menu].ctrl.extent[0] += grow;
+    for k in v.node(parent).children.clone() {
+        let c = &mut v.nodes[k].ctrl;
+        if c.position[0] >= right && c.position[1] > 3 {
+            c.position[0] += grow;
+            if c.class == "GuiButtonCtrl" {
+                c.extent[0] -= grow;
+            }
+        }
+    }
+}
+
+/// Swatches directly on a pane that frame nothing any more (v20's fillers
+/// between the quality sections, emptied driver panels) are hidden.
+fn hide_empty_fillers(v: &mut View, pane: NodeId) {
+    for k in v.node(pane).children.clone() {
+        let n = v.node(k);
+        if n.ctrl.class == "GuiSwatchCtrl"
+            && n.state.visible
+            && !n.children.iter().any(|&c| v.node(c).state.visible)
+        {
+            v.set_visible(k, false);
+        }
+    }
+}
+
+/// Graphics: Display Settings grows to hold the added menus, Shadow
+/// Quality (the one quality section left) sits under it, and Gui Settings
+/// runs the full height beside them, so nothing is clipped and no empty
+/// band is left where v20's other quality sections were.
+fn graphics_pane(v: &mut View) {
+    let (Some(pane), Some(display), Some(gui), Some(shadow)) = (
+        v.id("OptGraphicsPane"),
+        find_section(v, "Display Settings"),
+        find_section(v, "Gui Settings"),
+        find_section(v, "Shadow Quality"),
+    ) else {
+        return;
+    };
+    hide_empty_fillers(v, pane);
+    let content = v
+        .node(display)
+        .children
+        .iter()
+        .filter(|&&k| v.node(k).state.visible)
+        .map(|&k| v.node(k).ctrl.position[1] + v.node(k).ctrl.extent[1])
+        .max()
+        .unwrap_or(0);
+    let d = v.node(display).ctrl.clone();
+    let height = d.extent[1].max(content + 8);
+    v.nodes[display].ctrl.extent[1] = height;
+    let top = d.position[1] + height + 3;
+    let s = &mut v.nodes[shadow].ctrl;
+    s.position = [d.position[0], top];
+    s.extent = [d.extent[0], (PANE_BOTTOM - top).max(s.extent[1])];
+    let width = s.extent[0];
+    // The title bar spans the widened section.
+    for k in v.node(shadow).children.clone() {
+        let c = &mut v.nodes[k].ctrl;
+        if c.class == "GuiSwatchCtrl" && c.position == [2, 2] {
+            c.extent[0] = width - 4;
+        }
+    }
+    let g = &mut v.nodes[gui].ctrl;
+    g.extent[1] = PANE_BOTTOM - g.position[1];
+}
+
+/// Audio: the driver panel under Volume is gone; Volume and Audio Options
+/// run the full height.
+fn audio_pane(v: &mut View) {
+    let Some(pane) = v.id("OptAudioPane") else {
+        return;
+    };
+    hide_empty_fillers(v, pane);
+    for title in ["Volume", "Audio Options"] {
+        if let Some(n) = find_section(v, title) {
+            let c = &mut v.nodes[n].ctrl;
+            c.extent[1] = PANE_BOTTOM - c.position[1];
+        }
+    }
 }
 
 pub struct Options {
@@ -834,12 +963,31 @@ impl Options {
                 v.set_visible(n, false);
             }
         }
+        // Slider labels, paired while the authored rows still line up.
+        let slider_labels: Vec<(NodeId, NodeId)> = v
+            .walk()
+            .filter(|&n| v.node(n).state.visible && v.node(n).ctrl.class == "GuiSliderCtrl")
+            .filter_map(|slider| {
+                let parent = v.node(slider).parent?;
+                let label = v.node(parent).children.iter().copied().find(|&k| {
+                    v.node(k).ctrl.class == "GuiTextCtrl"
+                        && labels(&v.node(k).ctrl, &v.node(slider).ctrl)
+                })?;
+                Some((label, slider))
+            })
+            .collect();
         let mut bottoms = HashMap::new();
         for &n in &sections {
             if v.node(n).state.visible {
                 bottoms.insert(n, close_rows(v, n));
             }
         }
+        // Closing rows moves a label and its slider by different amounts
+        // when they sit on different authored rows; keep them level.
+        for (label, slider) in slider_labels {
+            v.nodes[label].ctrl.position[1] = v.node(slider).ctrl.position[1];
+        }
+        widen_resolution_menu(v);
         // Anti-aliasing and brick shadows have no v20 control; they join
         // Display Settings.
         let vsync = v.walk().find(|&n| {
@@ -938,6 +1086,8 @@ impl Options {
             }
             v.nodes[page].ctrl.extent[1] = y;
         }
+        graphics_pane(v);
+        audio_pane(v);
         // Tabs close ranks without Network.
         let mut tabs: Vec<NodeId> = v
             .walk()

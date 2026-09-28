@@ -37,7 +37,7 @@ const UNBUILT: &str = "Interface under construction";
 fn visible(v: &View, mut n: usize) -> bool {
     loop {
         let node = v.node(n);
-        if !node.state.visible || !node.ctrl.visible {
+        if !node.state.visible {
             return false;
         }
         match node.parent {
@@ -308,4 +308,116 @@ fn server_list_rows_are_drawn_without_the_profile_outline() {
     // doFontOutline would draw each five times.
     let row = glyphs(1) - glyphs(0);
     assert!(row < 23 * 2, "{row} draws for one row");
+}
+
+/// Max's a16 report: at a short, wide window the Graphics tab clipped its
+/// menus and left an empty band. Every tab, at every window shape, keeps
+/// each control inside its section, every section above Done, and the
+/// dialog on screen.
+#[test]
+fn options_tabs_fit_short_and_wide_windows() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let pack = Rc::new(pack);
+    const CONTROLS: [&str; 7] = [
+        "GuiCheckBoxCtrl",
+        "GuiRadioCtrl",
+        "GuiSliderCtrl",
+        "GuiPopUpMenuCtrl",
+        "GuiTextEditCtrl",
+        "GuiTextCtrl",
+        "GuiBitmapButtonCtrl",
+    ];
+    let mut problems = vec![];
+    for size in [
+        (1999, 800),
+        (800, 450),
+        (640, 480),
+        (1920, 1080),
+        (2560, 1080),
+    ] {
+        let mut u = Ui::new(
+            pack.clone(),
+            UiConfig {
+                size,
+                scale: None,
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        u.core.push(ScreenId::Options);
+        u.update(0);
+        let (w, h) = u.logical_size();
+        for pane in ["Graphics", "Audio", "Controls", "AdvGraphics"] {
+            let i = u
+                .dialogs
+                .iter()
+                .rposition(|s| s.id() == ScreenId::Options)
+                .unwrap();
+            let tab = u.dialogs[i]
+                .view()
+                .by_command(&format!("optionsDlg.setPane({pane});"))
+                .unwrap();
+            let (dialogs, core) = (&mut u.dialogs, &mut u.core);
+            dialogs[i].on_event(
+                &ViewEvent {
+                    node: tab,
+                    kind: EventKind::Click,
+                },
+                core,
+            );
+            u.update(0);
+            let v = u.screen(ScreenId::Options).unwrap().view();
+            let done = v.by_command("Canvas.popDialog(optionsDlg);").unwrap();
+            let done_top = v.node(done).rect.y;
+            let pane_node = v.id(&format!("Opt{pane}Pane")).unwrap();
+            // A scroll clips what it holds (the key list runs long).
+            let scrolled = |mut n: usize| {
+                while let Some(p) = v.node(n).parent {
+                    if v.node(p).ctrl.class == "GuiScrollCtrl" {
+                        return true;
+                    }
+                    n = p;
+                }
+                false
+            };
+            for n in v.walk().filter(|&n| visible(v, n) && !scrolled(n)) {
+                let node = v.node(n);
+                let r = node.rect;
+                if r.x < 0 || r.y < 0 || r.right() > w || r.bottom() > h {
+                    problems.push(format!("{size:?} {pane}: {:?} off screen", node.ctrl.text));
+                }
+                let Some(parent) = node.parent else { continue };
+                let mut up = Some(parent);
+                let in_pane = std::iter::from_fn(|| {
+                    let at = up?;
+                    up = v.node(at).parent;
+                    Some(at)
+                })
+                .any(|a| a == pane_node);
+                if in_pane && r.bottom() > done_top {
+                    problems.push(format!(
+                        "{size:?} {pane}: {:?} runs under Done",
+                        node.ctrl.text
+                    ));
+                }
+                let p = v.node(parent);
+                if CONTROLS.contains(&node.ctrl.class.as_str())
+                    && p.ctrl.class == "GuiSwatchCtrl"
+                    && (r.y < p.rect.y || r.bottom() > p.rect.bottom() + 8)
+                {
+                    problems.push(format!(
+                        "{size:?} {pane}: {} {:?} clipped by its section",
+                        node.ctrl.class, node.ctrl.text
+                    ));
+                }
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
