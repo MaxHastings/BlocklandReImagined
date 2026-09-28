@@ -319,11 +319,11 @@ foreach ($package in @($effective.list.packages)) {
 }
 
 # Add-Ons every build ships, turned on (content/addons/<id>): the
-# Duplicator and the showcase Add-Ons (the Gravity Gun and the Steel
-# Ball). The Stress Lab ones join them with -StressLab.
+# Duplicator. The Stress Lab ones join them with -StressLab. The showcase
+# Add-Ons (packages/showcase: the Gravity Gun and the Steel Ball) stay out
+# of releases until Max approves them.
 $modSources = @(
-    @{ root = (Join-Path $RepoRoot 'packages/duplicator'); dir = 'addons'; required = $false },
-    @{ root = (Join-Path $RepoRoot 'packages/showcase'); dir = 'addons'; required = $true }
+    @{ root = (Join-Path $RepoRoot 'packages/duplicator'); dir = 'addons'; required = $false }
 )
 if ($StressLab) { $modSources += @{ root = (Join-Path $RepoRoot 'packages/stresslab'); dir = 'stresslab'; required = $true } }
 $modPackages = @()

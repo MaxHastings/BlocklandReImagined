@@ -140,7 +140,7 @@ and render modes.
 - generated worlds, creatures and playable bodies
 - tools that act where you click them, like the Duplicator
 - tools that grab, push and throw players and vehicles, and new vehicles
-  and physics objects, like the Gravity Gun and the Steel Ball
+  and physics objects
 
 A guide, samples, and tools that check an Add-On and try its rules
 without opening the game come with the source code.
@@ -148,15 +148,6 @@ without opening the game come with the source code.
 **Sharing.** Players joining a server download the Add-Ons it runs that
 they don't have, or have in another version, and go straight into the
 game. Their own Add-Ons the server doesn't run sit that game out.
-
-**Showcase Add-Ons, on by default.** The Gravity Gun grabs, drags,
-holds, throws and punts players, vehicles and creatures, with a crackling
-energy beam, a force field round what it holds, a charge-up glow and a
-shockwave on every throw; in minigames what you throw hurts what it hits.
-The Steel Ball is a heavy, perfectly round, polished steel ball that rolls
-with real weight, bowls players over, shoves vehicles aside and, in
-minigames, knocks bricks out like a rocket. Both are ordinary Add-Ons
-built only from what any Add-On maker gets.
 
 **Add-On code on your PC.** An Add-On can also run its own drawing, sound
 and input code on players' PCs, for things like custom visuals. It runs
