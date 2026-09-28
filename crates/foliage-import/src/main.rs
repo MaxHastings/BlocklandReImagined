@@ -24,7 +24,11 @@ fn main() -> Result<()> {
         schema_version: 1,
         definitions: vec![],
         textures: vec![],
-        source_bundle: args[2].clone(),
+        // The bundle's directory name, not where this machine keeps it: the
+        // pack is shared, so its bytes cannot depend on a local path.
+        source_bundle: std::path::Path::new(&args[2])
+            .file_name()
+            .map_or_else(|| args[2].clone(), |n| n.to_string_lossy().into_owned()),
     };
     let mut images = vec![];
     let mut scenes: Vec<_> = std::fs::read_dir(bundle)?

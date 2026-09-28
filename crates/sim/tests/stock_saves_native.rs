@@ -38,13 +38,13 @@ fn floor_gaps(
 }
 
 #[test]
-#[ignore = "needs generated content (map-bundle-017, worlds-pass-005); set BRI_CONTENT"]
+#[ignore = "needs generated content (map-bundle-017, worlds-pass-006); set BRI_CONTENT"]
 fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
     let root = content();
     let definitions =
-        Definitions::load(&root.join("stock-catalog-004"), &root.join("maps-pass-007"))?;
+        Definitions::load(&root.join("stock-catalog-004"), &root.join("maps-pass-008"))?;
     let report: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("worlds-pass-005/report.json"))?)?;
+        serde_json::from_slice(&std::fs::read(root.join("worlds-pass-006/report.json"))?)?;
     let mut saves: Vec<(String, String, World)> = vec![];
     for save in report["saves"].as_array().context("saves")? {
         let source = save["source"]
@@ -65,7 +65,7 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
         };
         let world = bri_world::persistence::load(
             &root
-                .join("worlds-pass-005")
+                .join("worlds-pass-006")
                 .join(save["file"].as_str().context("file")?),
         )?;
         assert_eq!(
@@ -76,7 +76,7 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
         saves.push((source, map.into(), world));
     }
     assert_eq!(saves.len(), 35);
-    let (_, part1, part2) = bri_sim::tutorial::load_pack(&root.join("tutorial-pack-001"))?;
+    let (_, part1, part2) = bri_sim::tutorial::load_pack(&root.join("tutorial-pack-002"))?;
     for (name, world) in [("Tutorial part 1", part1), ("Tutorial part 2", part2)] {
         saves.push((name.into(), bri_sim::tutorial::MAP_ID.into(), world));
     }

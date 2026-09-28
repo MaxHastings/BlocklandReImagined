@@ -21,7 +21,7 @@ fn session(root: &Path) -> anyhow::Result<(Session, u64)> {
 fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-007"),
+        &root.join("content/maps-pass-008"),
     )?;
     let mut world = World::new(
         "Vehicles".into(),
@@ -159,7 +159,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-007"),
+        &root.join("content/maps-pass-008"),
     )?;
     let height = definitions.entries[SPAWN].mesh.height_plates as f32 * 0.2;
     let world = World::new("Bots".into(), "test".into(), vec![[1.0, 0.0, 0.0, 1.0]]);

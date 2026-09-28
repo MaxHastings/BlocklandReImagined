@@ -149,10 +149,10 @@ fn problems(pack: &Pack, v: &View, screen: Rect) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires the converted ui-pack-003 and an offscreen GPU adapter"]
+#[ignore = "requires the converted ui-pack-004 and an offscreen GPU adapter"]
 fn every_screen_fits_a_short_wide_window_720p_and_1440p() -> anyhow::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack = Rc::new(Pack::load(&root.join("content/ui-pack-003"))?);
+    let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004"))?);
     let out = std::env::var_os("BRI_SWEEP_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/screen-sweep"));

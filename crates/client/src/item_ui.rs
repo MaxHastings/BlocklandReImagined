@@ -136,7 +136,7 @@ mod tests {
             &root.join("item-presentation-pack-010"),
             &root.join("weapons-pack-009"),
         )?;
-        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;
+        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?;
         let ui = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
         assert_eq!(ui.catalog.len(), 21);
         assert_eq!(ui.icons.len(), 17);
@@ -174,7 +174,7 @@ mod tests {
             &root.join("item-presentation-pack-010"),
             &root.join("weapons-pack-009"),
         )?;
-        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-003"))?;
+        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?;
         let mut icons = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
         let gpu = bri_ui::gpu::Headless::new()?;
         for _ in 0..2 {

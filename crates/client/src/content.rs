@@ -1202,7 +1202,7 @@ mod tests {
         ] {
             assert!(relative_name(p).is_err(), "{p}");
         }
-        assert!(relative_name("ui-pack-003/images/base/client/ui/btn.png").is_ok());
+        assert!(relative_name("ui-pack-004/images/base/client/ui/btn.png").is_ok());
     }
     #[test]
     fn invalid_config_fails_before_filesystem_loading() {

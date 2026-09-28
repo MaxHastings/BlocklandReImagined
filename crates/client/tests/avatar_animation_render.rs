@@ -239,7 +239,7 @@ fn diagonal_walk_keeps_a_continuous_leg_cycle() -> Result<()> {
 
 fn capture(label: &str, case: &str) -> Result<Vec<f32>> {
     let out = out_dir()?;
-    let assets = AvatarAssets::load(&content().join("avatar-pack-001"))?;
+    let assets = AvatarAssets::load(&content().join("avatar-pack-002"))?;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
     let mut offscreen = Offscreen::new()?;
     let rows = (SHOWN as u32).div_ceil(COLUMNS);
@@ -303,7 +303,7 @@ fn capture(label: &str, case: &str) -> Result<Vec<f32>> {
 #[ignore = "requires original native avatar package and an offscreen GPU"]
 fn builder_animations_render_on_the_original_avatar() -> Result<()> {
     const STEPS: u32 = 6;
-    let assets = AvatarAssets::load(&content().join("avatar-pack-001"))?;
+    let assets = AvatarAssets::load(&content().join("avatar-pack-002"))?;
     let mut offscreen = Offscreen::new()?;
     let player = PlayerState {
         owner: 1,
@@ -395,7 +395,7 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
 #[test]
 #[ignore = "requires original native avatar package and an offscreen GPU"]
 fn uploads_follow_posed_topology_changes() -> Result<()> {
-    let assets = AvatarAssets::load(&content().join("avatar-pack-001"))?;
+    let assets = AvatarAssets::load(&content().join("avatar-pack-002"))?;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
     let offscreen = Offscreen::new()?;
     let mut tick_state = None;

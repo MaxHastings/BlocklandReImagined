@@ -20,10 +20,10 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
     let weapons = Arc::new(bri_weapons::Pack::from_json(&std::fs::read(
         content("weapons-pack-009").join("weapons.json"),
     )?)?);
-    let effects = bri_fx_runtime::EffectsPack::load(content("effects-runtime-pack-004"))?;
+    let effects = bri_fx_runtime::EffectsPack::load(content("effects-runtime-pack-005"))?;
     let mut fx = WeaponEffects::new(effects, weapons.clone(), Default::default())?;
     fx.set_palette(&[[1.0, 0.0, 0.0, 1.0]]);
-    let bank = SoundBank::load(content("audio-pack-001"), &BankOptions::default())?;
+    let bank = SoundBank::load(content("audio-pack-002"), &BankOptions::default())?;
     let mut gaps = Vec::new();
     let mut sound = |owner: &str, name: &str| {
         if !name.is_empty() && bank.resolve(name).is_err() {
@@ -113,7 +113,7 @@ fn cue_sounds_keep_their_v20_descriptions() -> Result<()> {
     // Profile, then its AudioDescription: 3D reference and max distance
     // (None is 2D) and volume. The brick sounds are client profiles on
     // AudioClientClose3d (allClientScripts.cs:143).
-    let bank = SoundBank::load(content("audio-pack-001"), &BankOptions::default())?;
+    let bank = SoundBank::load(content("audio-pack-002"), &BankOptions::default())?;
     for (profile, spatial, gain) in [
         ("BrickBreak", Some((10.0, 60.0)), 1.0),
         ("BrickPlant", Some((10.0, 60.0)), 1.0),

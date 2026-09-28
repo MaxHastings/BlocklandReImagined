@@ -1827,7 +1827,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let definitions = Definitions::load(
             &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-007"),
+            &root.join("content/maps-pass-008"),
         )?;
         let mut b = Building::new(definitions, vec![])?;
         let ids: Vec<_> = b.definitions.entries.keys().cloned().collect();

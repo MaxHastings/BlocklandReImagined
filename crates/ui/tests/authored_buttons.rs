@@ -104,9 +104,9 @@ fn unbuilt(pack: &Rc<Pack>, screen: ScreenId) -> Vec<String> {
 
 #[test]
 fn menu_buttons_are_all_built() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     if !dir.join("ui-pack.json").exists() {
-        eprintln!("skipped: ui-pack-003 is not converted on this machine");
+        eprintln!("skipped: ui-pack-004 is not converted on this machine");
         return;
     }
     let pack = Rc::new(Pack::load(&dir).unwrap());
@@ -125,7 +125,7 @@ fn menu_buttons_are_all_built() {
 #[test]
 #[ignore = "diagnostic listing, not a pass/fail check"]
 fn list_inert_buttons() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else { return };
     let pack = Rc::new(pack);
     for screen in SCREENS {
@@ -173,7 +173,7 @@ fn list_inert_buttons() {
 
 #[test]
 fn advanced_config_saves_the_next_hosts_settings() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else { return };
     let mut u = ui(&Rc::new(pack));
     u.core.push(ScreenId::StartMission);
@@ -222,7 +222,7 @@ fn advanced_config_saves_the_next_hosts_settings() {
 
 #[test]
 fn credits_and_f1_open_the_help_pages() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(mut pack) = Pack::load(&dir) else {
         return;
     };
@@ -274,7 +274,7 @@ fn credits_and_f1_open_the_help_pages() {
 
 #[test]
 fn server_list_rows_are_drawn_without_the_profile_outline() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
@@ -314,7 +314,7 @@ fn server_list_rows_are_drawn_without_the_profile_outline() {
 /// dialog on screen.
 #[test]
 fn options_tabs_fit_short_and_wide_windows() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
@@ -458,7 +458,7 @@ fn options_tabs_fit_short_and_wide_windows() {
 #[test]
 fn windows_drag_by_their_title_bar_and_stay_on_screen() {
     use bri_ui::input::{InputEvent, MouseButton};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };
@@ -511,7 +511,7 @@ fn windows_drag_by_their_title_bar_and_stay_on_screen() {
 #[test]
 fn music_files_turns_tracks_off_for_the_next_hosted_game() {
     use bri_ui::screens::music::music_enabled;
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
     let Ok(pack) = Pack::load(&dir) else {
         return;
     };

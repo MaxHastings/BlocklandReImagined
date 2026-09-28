@@ -224,7 +224,7 @@ mod tests {
         )?;
         building.attach_terrain(map.terrain);
         let prepared = PreparedFoliage::load(
-            &root.join("foliage-pack-001"),
+            &root.join("foliage-pack-003"),
             map_id,
             &building,
             &map.waters,

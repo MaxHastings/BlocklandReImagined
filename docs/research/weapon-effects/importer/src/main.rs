@@ -438,9 +438,11 @@ fn main() -> Result<()> {
         output.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest)?,
     )?;
-    let proof = serde_json::json!({"original":original,"weapons_sha256":digest(&weapon_bytes),"sources":sources,
+    // The install's folder name, not where this machine keeps it.
+    let original_name = original.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let proof = serde_json::json!({"original":original_name,"weapons_sha256":digest(&weapon_bytes),"sources":sources,
         "added_particles":added_particles,"added_emitters":added_emitters,"added_composites":added_composites,"added_splashes":added_splashes,
-        "conversion_diagnostics":notes,"base_pack":args[1],"base_library_sha256":pack.manifest.library_sha256});
+        "conversion_diagnostics":notes,"base_pack":args[1].file_name().map_or_else(|| args[1].to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned()),"base_library_sha256":pack.manifest.library_sha256});
     fs::write(
         output.join("weapon-source-proof.json"),
         serde_json::to_vec_pretty(&proof)?,
