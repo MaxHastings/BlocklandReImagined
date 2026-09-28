@@ -1740,6 +1740,7 @@ impl App {
                 archetype: bri_sim::player_types::PlayerType::Horse.archetype(),
                 scale: 1.0,
                 energy: 0.0,
+                tick: Default::default(),
             };
             let input = crate::avatar::AvatarAnimationInput {
                 dead: info.destroyed,

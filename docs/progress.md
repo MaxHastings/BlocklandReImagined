@@ -3767,3 +3767,31 @@ break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
   verified; `release_smoke standalone_exe_unpacks_per_user_and_starts_the_game`
   with `BRI_STANDALONE_EXE` passed (4.4 s first unpack, `--check` passed from
   the install). Not covered: a signed exe, and an interactive start (Max's).
+## 2026-09-28 Slides: players move on v20's 32 ms tick (protocol 43)
+
+- Max: movement is close to v20 except on Mr. Block's slides. Read
+  `updateMove` in the exe (0x5AE2A0) against the motor: slope contact, the
+  0.002/0.0021 rest, run projection, air control (0x5AF4C0: no braking with
+  no input), resistance and drag (0x5AFF70 onward) already matched. The
+  difference is the tick. The crease rule re-aims a wedged rider's whole
+  speed once per tick, so lane speed is per tick: a rider wedged in a level
+  lane settles at 6.517 u/s under v20's per-tick equations, 3.248 at 120 Hz,
+  and the ride from the top of the Slides tower stopped 39 units down
+  instead of 353. The motor now runs whole 32 ms ticks inside the 120 Hz
+  steps (1/3000 s phase counter, exact), `PlayerState::tick` carries the
+  phase and previous feet, and clients draw `shown_feet()` between ticks.
+- Also v20's: the step probe from the backed-off box (the 120 Hz
+  from-contact probe hopped players up 25 degree ramps at 32 ms), no -80
+  fall-speed clamp (not in v20; falls reach 199 u/s under drag), the jump
+  window of 8 Torque ticks (canJump 0x5A2AF8). Players already touching
+  head-on part along the least-overlap axis instead of the shape cast's
+  arbitrary normal, which slid one into the other.
+- Feel changes that are v20's: rest 0.01 above floors, run 6.978 u/s, swim
+  3.41 u/s, jump/crouch take effect on the next tick (up to 32 ms).
+- Evidence: `cargo test --release -p bri-sim --test player`
+  (`a_wedged_rider_gains_lane_speed_on_v20_ticks`: 6.518 vs 6.517),
+  `BRI_SLIDES_FULL=1 cargo test --release -p bri-sim --test slides --
+  --ignored` (120 Hz steps visit exactly the 32 ms tick positions; tower
+  ride falls 366 in 10 s; 891/893 lane rides finish, was 889; 0/3570 faces
+  hold), motor/sim/vehicles/net suites, `bri-client` lib and tests, clippy
+  `-D warnings` on the touched crates. Not seen in a window: Max's playtest.

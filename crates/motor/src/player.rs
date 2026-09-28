@@ -22,10 +22,15 @@ const MAX_JUMP_SPEED: f32 = 30.0;
 pub const MAX_FREELOOK: f32 = 3.0;
 /// `PlayerStandardArmor.jumpDelay`: 3 Torque ticks of jumpable contact
 /// between jumps, so holding jump hops again 96 ms after each landing.
+/// `PlayerTuning::jump_delay_ticks` counts 120 Hz ticks.
 const JUMP_DELAY_TICKS: u8 = 12;
-/// `JumpSkipContactsMax` is 8: a jump stays available for 7 Torque ticks
-/// (224 ms) after leaving a jumpable surface.
-const JUMP_WINDOW_TICKS: u8 = 27;
+/// `JumpSkipContactsMax` (canJump 0x5a2af8): a jump stays available until 8
+/// Torque ticks pass without a jumpable surface.
+const JUMP_WINDOW_TICKS: u8 = 8;
+/// Time is counted in 1/3000 s: a 120 Hz step is 25 and a 32 ms Torque tick
+/// 96, so the motor runs v20's ticks exactly inside the server's steps.
+const STEP_PARTS: u8 = 25;
+const TICK_PARTS: u8 = 96;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveInput {
@@ -88,6 +93,29 @@ pub struct PlayerState {
     /// Jet energy (`mEnergy`), up to the datablock's `maxEnergy`.
     #[serde(default = "full_energy")]
     pub energy: f32,
+    /// Where the motor is between v20's 32 ms ticks.
+    #[serde(default)]
+    pub tick: TorqueTick,
+}
+/// v20 moves a player once per 32 ms tick, and slides depend on it: Torque's
+/// crease rule re-aims a wedged rider's whole speed along a lane once per
+/// tick, and every drop, lip and seam is met with a 32 ms move. Running
+/// `updateMove`/`updatePos` at 120 Hz instead carried a rider from the top of
+/// "Mr.Block's Slides" 39 units down where 32 ms ticks carry it 353. So the
+/// motor runs whole Torque ticks inside the server's 120 Hz steps.
+/// `PlayerState::feet` is where the last tick left the body, as on v20's
+/// server; `shown_feet` places it between the last two ticks, as v20's
+/// client renders it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TorqueTick {
+    /// The feet the last tick wrote; anything else moved the body since.
+    pub feet: [f32; 3],
+    /// Feet after the tick before it.
+    pub from: [f32; 3],
+    /// Time since the last tick, in 1/3000 s (below 96).
+    pub phase: u8,
+    /// Jump was held at some step since the last tick (a Move's trigger).
+    pub jump: bool,
 }
 fn unit() -> f32 {
     1.0
@@ -115,6 +143,20 @@ impl Default for JumpState {
     }
 }
 impl PlayerState {
+    /// Where to draw the body: between the last two Torque ticks, `phase` of
+    /// a tick along, so it moves smoothly at 120 Hz and any frame rate.
+    pub fn shown_feet(&self) -> [f32; 3] {
+        let tick = &self.tick;
+        if tick.feet != self.feet {
+            return self.feet;
+        }
+        Vec3::from(tick.from)
+            .lerp(
+                Vec3::from(self.feet),
+                f32::from(tick.phase) / f32::from(TICK_PARTS),
+            )
+            .to_array()
+    }
     pub fn forward(&self) -> Vec3 {
         Vec3::new(
             self.yaw.sin() * self.pitch.cos(),
@@ -398,6 +440,8 @@ pub struct Player {
     crouch: crate::crouch::CrouchThread,
 }
 pub struct MotionEvents {
+    /// A 32 ms Torque tick ran this step; the other events come only with one.
+    pub ticked: bool,
     pub jumped: bool,
     pub landed: bool,
     pub touched: Vec<BrickId>,
@@ -502,6 +546,7 @@ impl Player {
                 archetype: Default::default(),
                 scale: 1.0,
                 energy: tuning.max_energy,
+                tick: TorqueTick::default(),
             },
             tuning,
             body,
@@ -541,6 +586,7 @@ impl Player {
                 archetype: Default::default(),
                 scale: 1.0,
                 energy: tuning.max_energy,
+                tick: TorqueTick::default(),
             },
             tuning,
             body,
@@ -668,7 +714,14 @@ impl Player {
                     .iter()
                     .all(|v| v.is_finite() && v.abs() <= 1000.0)
                 && state.yaw.is_finite()
-                && state.pitch.is_finite(),
+                && state.pitch.is_finite()
+                && state.tick.phase < TICK_PARTS
+                && state
+                    .tick
+                    .from
+                    .iter()
+                    .chain(&state.tick.feet)
+                    .all(|v| v.is_finite()),
             "Invalid authoritative player correction"
         );
         if tuning != self.tuning {
@@ -780,7 +833,62 @@ impl Player {
         waters: &[bri_content::water::Water],
     ) -> Result<MotionEvents> {
         input.validate()?;
-        let dt = bri_physics::FIXED_DT;
+        let tick = &mut self.state.tick;
+        // Anything that moved the feet (teleports, seats, older states)
+        // starts drawing from there.
+        if tick.feet != self.state.feet {
+            tick.feet = self.state.feet;
+            tick.from = self.state.feet;
+        }
+        tick.jump |= input.jump;
+        tick.phase += STEP_PARTS;
+        // Looking turns the body every step; moving waits for the tick.
+        self.state.pitch = input.pitch;
+        self.state.head_yaw = input.head_yaw;
+        if self.tuning.steering == Steering::Strafe {
+            self.state.yaw = input.yaw;
+        }
+        let events = if tick.phase >= TICK_PARTS {
+            tick.phase -= TICK_PARTS;
+            let input = MoveInput {
+                jump: std::mem::take(&mut tick.jump),
+                ..input
+            };
+            let before = self.state.feet;
+            let events = self.torque_tick(physics, input, waters, TORQUE_TICK)?;
+            let tick = &mut self.state.tick;
+            tick.from = before;
+            tick.feet = self.state.feet;
+            events
+        } else {
+            MotionEvents {
+                ticked: false,
+                jumped: false,
+                landed: false,
+                touched: vec![],
+                impact: Vec3::ZERO,
+                hits: vec![],
+            }
+        };
+        self.crouch.update(
+            self.state.crouched,
+            bri_physics::FIXED_DT,
+            crate::crouch::CROUCH_SECONDS,
+        );
+        self.synchronize_pose(physics);
+        Ok(events)
+    }
+    /// One v20 `updateMove` and `updatePos` of `dt` seconds from the last
+    /// tick's feet. The motor always runs 32 ms ticks; tests may run others.
+    #[doc(hidden)]
+    pub fn torque_tick(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: MoveInput,
+        waters: &[bri_content::water::Water],
+        dt: f32,
+    ) -> Result<MotionEvents> {
+        input.validate()?;
         let t = &self.tuning;
         // `canJet` and `minJetEnergy` gate the jets; jetting drains energy and
         // `rechargeRate` refills it every tick.
@@ -813,8 +921,6 @@ impl Player {
                 self.state.crouched = false;
             }
         }
-        self.crouch
-            .update(self.state.crouched, dt, crate::crouch::CROUCH_SECONDS);
         let steer = if t.steering == Steering::Turn {
             let turned = self.state.yaw + input.right * t.turn_rate * dt;
             // Keep within the input's range, so a turn body's state is
@@ -948,7 +1054,10 @@ impl Player {
                 acc += direction * t.jump_speed * away;
             }
             acc.y += normal.y * t.jump_speed * rise_scale;
-            jump.delay = t.jump_delay_ticks;
+            // `jump_delay_ticks` counts 120 Hz ticks; this counts Torque's.
+            jump.delay = ((u16::from(t.jump_delay_ticks) * u16::from(STEP_PARTS)
+                + u16::from(TICK_PARTS / 2))
+                / u16::from(TICK_PARTS)) as u8;
             jump.since_contact = JUMP_WINDOW_TICKS;
         } else if jump_contact.is_some() {
             jump.delay = jump.delay.saturating_sub(1);
@@ -1026,7 +1135,6 @@ impl Player {
         velocity.x *= horizontal_keep;
         velocity.z *= horizontal_keep;
         velocity.y *= (1.0 - vertical_drag * dt).max(0.0);
-        velocity.y = velocity.y.max(-80.0);
         // Players move one after another against each other's previous pose, so
         // each closes at most half its gap to another player per tick.
         let pose = t.pose(feet, self.state.crouched);
@@ -1035,7 +1143,7 @@ impl Player {
         let is_player = |_: ColliderHandle, collider: &Collider| collider.user_data >> 64 == 1;
         if let Some((direction, distance)) =
             translation.try_normalize().zip(Some(translation.length()))
-            && let Some((_, hit)) = physics
+            && let Some((other, hit)) = physics
                 .query_pipeline_with_filter(filter.predicate(&is_player))
                 .cast_shape(
                     &pose,
@@ -1047,7 +1155,29 @@ impl Player {
                     },
                 )
         {
-            let normal = Vec3::from(hit.normal1.to_array());
+            // Already touching, the cast's normal is arbitrary (it pushed a
+            // player met head-on sideways into the other). Boxes that touch
+            // part along the axis they overlap least on.
+            let normal = if hit.time_of_impact > 0.0 {
+                Vec3::from(hit.normal1.to_array())
+            } else {
+                let (ours, theirs) = (
+                    shape.compute_aabb(&pose),
+                    physics.colliders[other].compute_aabb(),
+                );
+                let (a_min, a_max) = (v3(ours.mins), v3(ours.maxs));
+                let (b_min, b_max) = (v3(theirs.mins), v3(theirs.maxs));
+                let overlap = a_max.min(b_max) - a_min.max(b_min);
+                let away = (a_min + a_max) - (b_min + b_max);
+                let axis = if overlap.x <= overlap.y && overlap.x <= overlap.z {
+                    Vec3::X
+                } else if overlap.z <= overlap.y {
+                    Vec3::Z
+                } else {
+                    Vec3::Y
+                };
+                axis * away.dot(axis).signum()
+            };
             let gap = hit.time_of_impact * -direction.dot(normal);
             let into = -translation.dot(normal);
             if into > gap * 0.5 {
@@ -1116,6 +1246,7 @@ impl Player {
         let touched = contacts.difference(&self.contacts).copied().collect();
         self.contacts = contacts;
         Ok(MotionEvents {
+            ticked: true,
             jumped,
             landed: !was_grounded && self.state.grounded,
             touched,
@@ -1147,6 +1278,9 @@ impl Player {
         );
         eye + backward * hit.map_or(8.0, |(_, h)| (h.time_of_impact - 0.02).max(0.0))
     }
+}
+fn v3(v: Vector) -> Vec3 {
+    Vec3::from_array(v.to_array())
 }
 /// v20 air control direction. Input pushes along the move vector, except that
 /// momentum at or above the requested speed is never braked: steering within

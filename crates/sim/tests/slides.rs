@@ -222,3 +222,50 @@ fn slide_lanes_carry_a_player_down_hands_free() -> anyhow::Result<()> {
     assert!(descents[descents.len() - 1] > 20.0);
     Ok(())
 }
+
+/// The ride from the top of the tower runs on v20's 32 ms ticks: stepping
+/// the server at 120 Hz lands on exactly the positions of 32 ms Torque ticks,
+/// and it carries the rider hundreds of units down. Run at 120 Hz, the same
+/// rules stalled it 39 units down in a lane.
+#[test]
+#[ignore = "requires the converted v20 worlds and stock catalog"]
+fn the_tower_ride_runs_on_v20_ticks() -> anyhow::Result<()> {
+    let (mut sim, ramps) = slides()?;
+    let mut lanes = lanes(&ramps);
+    lanes.sort_by(|a, b| b.feet.y.total_cmp(&a.feet.y));
+    let (lane, down) = lanes
+        .iter()
+        .find_map(|lane| downhill(&lanes, lane).map(|down| (*lane, down)))
+        .unwrap();
+    let physics = &mut sim.physics;
+    let ride = |physics: &mut PhysicsWorld, stepped: bool| {
+        let mut p = Player::spawn(physics, 1, lane.feet, PlayerTuning::default()).unwrap();
+        p.set_motion(down * 2.0, false);
+        let mut ticks = vec![];
+        while ticks.len() < 313 {
+            if stepped {
+                if p.step(physics, MoveInput::default()).unwrap().ticked {
+                    ticks.push((Vec3::from(p.state().feet), Vec3::from(p.state().velocity)));
+                }
+            } else {
+                p.torque_tick(physics, MoveInput::default(), &[], 0.032)
+                    .unwrap();
+                ticks.push((Vec3::from(p.state().feet), Vec3::from(p.state().velocity)));
+            }
+        }
+        p.despawn(physics);
+        ticks
+    };
+    let stepped = ride(physics, true);
+    let ticked = ride(physics, false);
+    assert_eq!(stepped, ticked);
+    let end = stepped.last().unwrap().0;
+    let top = stepped.iter().map(|(_, v)| v.length()).fold(0.0, f32::max);
+    eprintln!(
+        "from {} after 10 s: {end}, {:.1} down, top speed {top:.1}",
+        lane.feet,
+        lane.feet.y - end.y
+    );
+    assert!(lane.feet.y - end.y > 300.0);
+    Ok(())
+}

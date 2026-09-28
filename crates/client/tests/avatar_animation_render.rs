@@ -77,6 +77,7 @@ fn player(
         archetype: Default::default(),
         scale: 1.0,
         energy: 100.0,
+        tick: Default::default(),
     };
     if new_tick {
         *tick_state = Some(state.clone());
@@ -319,6 +320,7 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
         archetype: Default::default(),
         scale: 1.0,
         energy: 100.0,
+        tick: Default::default(),
     };
     let gestures = [
         "shiftAway",
