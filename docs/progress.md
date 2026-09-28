@@ -2967,3 +2967,24 @@ Evidence: `cargo test -p bri-client --lib updates quality`, `cargo test -p
 bri-ui --lib gui_options`, `cargo test -p bri-crash --lib`, clippy -D warnings
 on the three crates, all content-free. Not measured: how the picks feel on a
 real integrated GPU; needs a weaker PC.
+## 2026-09-28 Cold walkthrough of the Add-On guide
+
+- Followed `docs/modding/README.md` as a newcomer and made a rule, a HUD, a
+  weapon and (by importing a hand-written v20 brick Add-On) a brick pack.
+  Stumbles: the README did not link the guide; nothing said where an Add-On
+  folder goes; `bri-addon-check` was not mentioned; trying a rule meant
+  writing a Rust test; many "coming soon" notes had landed (Add-On weapons
+  and bricks in hosted games, HUD drawing, the Import button, game modes);
+  command `args` syntax and the hooks' `player` parameter were undocumented;
+  no route to new bricks was described.
+- Tooling: `bri-addon-check` now shares the Add-Ons screen's side rule
+  (`bri_package::library::side_for_kinds`; weapons and bricks are shared,
+  `archetype` is a server kind on the screen too) and validates
+  `assets/weapons.json`. New `bri-addon-run` (bri-sim) runs an Add-On with
+  what it needs, a Host and a Guest, and `--send`/`--wait` commands.
+- Not fixed: players cannot type Add-On commands in chat (`/gift 1` is
+  "Unknown command"); only HUD keys without arguments reach a script. The
+  packaged game ships only `bri-import-addon.exe`, not the check/run tools.
+- Evidence: `cargo test -p bri-package -p bri-package-runtime`,
+  `-p bri-sim --test addon_run`; clippy `-D warnings` on those targets; every
+  command in the guide run as written against copies of the samples.

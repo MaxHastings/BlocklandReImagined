@@ -3,6 +3,8 @@
 A new native implementation of the Blockland v20 experience. Rust and wgpu
 provide the foundation, with original content migrated through separate tools.
 
+Making an Add-On? Start with [Making Add-Ons](docs/modding/README.md).
+
 ## Setup
 
 You need a Blockland v20 install (the folder with `base/`, `Add-Ons/` and
@@ -72,5 +74,4 @@ For the development client, persistent map renderer and current gameplay binding
 limits, see [native client integration](docs/native-client.md).
 For original brick overlays/prints and color evidence, see [brick materials](docs/brick-materials.md).
 For agreed event quality-of-life work and later scalability considerations, see
-[event modernization](docs/event-modernization.md). Modding support is outside
-the alpha; decisions about it follow the complete vanilla base.
+[event modernization](docs/event-modernization.md).

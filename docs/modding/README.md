@@ -1,110 +1,77 @@
 # Making Add-Ons
 
 This guide is for anyone who wants to make an Add-On for Blockland
-ReImagined: a new weapon, a game rule, a HUD panel, a generated world or a
-creature. It covers what works on `main` today and marks what is still being
-built as **coming soon**, so you never write against an API that does not
-exist yet.
+ReImagined. It covers what works today; anything still being built is in
+the last section, so you never write against something that does not exist
+yet.
 
-Players only ever see the word **Add-On**. Inside the engine and in file
-names an Add-On is a *package* (`package.json`, `packages.json`). They are the
-same thing. Old Blockland v20 Add-Ons (`.zip` files) are brought in with
-**Import Add-On**, described at the end.
+## What you can make
 
-Three working samples live in [`packages/samples/`](../../packages/samples):
-
-| Sample | What it shows | Proven by |
+| You want | Start from | It is |
 |---|---|---|
-| `sample-survival-points` | A server game rule: state, a timer, commands, an admin-only command, chat | `crates/sim/tests/samples.rs` |
-| `sample-points-hud` | A HUD panel bound to the rule's state, with a key | `crates/package-runtime/tests/samples.rs` |
-| `sample-bubble-blaster` | A weapon: item, image states, projectile, damage type | `crates/weapons/tests/sample_addon.rs` |
+| A game rule: points, rounds, commands | [`sample-survival-points`](../../packages/samples/sample-survival-points) | a `behaviour` file and a Rhai script, run by the host |
+| A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
+| A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
+| New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
+| A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
+| Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see section 6 |
 
-Copy one, rename it, and change it. That is the fastest way to start.
+Old Blockland v20 Add-Ons (`.zip` files) also work: see section 7.
 
-## 1. How an Add-On is shaped
+## 1. Make one
 
-An Add-On is one folder with a `package.json` manifest and the files it
-lists:
+1. Copy the sample closest to what you want and give the folder a new name.
+2. Pick an id for your Add-On: lowercase letters, digits, `-` and `_`,
+   starting with a letter, for example `coin-rain`. It never changes once
+   people use your Add-On. Replace the sample's id **everywhere** in the
+   folder: in `package.json` (`id` and every `provides` id), and in any
+   other file that names it (a HUD's `bind` and `package`, the ids inside
+   `weapons.json`).
+3. Change `name`, `description` and `authors`, then make it your own.
 
-```text
-sample-survival-points/
-  package.json      what it is, who made it, what it needs, what it provides
-  behaviour.json    commands, state and hooks the engine calls
-  points.rhai       the script those hooks run
+A weapon only needs a new id. A rule needs its commands and state changed in
+`behaviour.json` and its script rewritten (section 3).
+
+## 2. Check it and try it
+
+You need a checkout of this repository and Rust (see the main
+[README](../../README.md)); neither the game nor v20 content is needed.
+
+**Check** that the game can load it. Put the Add-Ons it depends on in the
+same parent folder as it (for a HUD, next to its rule):
+
+```sh
+cargo run -p bri-package-runtime --bin bri-addon-check -- path/to/coin-rain
 ```
 
-The game's content root has a `packages.json` listing the Add-Ons that are
-on. The in-game **Add-Ons** screen (main menu; landing with the Add-Ons
-screen change now in review) turns them on and off for you:
-it moves entries between `packages.json` and `packages-disabled.json`, turns
-on dependencies first, and shows what each Add-On is allowed to do. See
+It prints who needs the Add-On (the host only, each player, or everyone),
+what it provides and may do, and every mistake with its file, line and a
+hint: a misspelt field, a missing hook function, a script syntax error, a
+HUD row bound to a key players never receive, a broken weapons file.
+
+**Try** a rule without opening the game. `bri-addon-run` runs it with the
+Add-Ons it needs in an empty world with two players, `Host` (an admin) and
+`Guest`, sends the commands you give it one second apart, and prints the
+chat, the state players receive and any script problem:
+
+```sh
+cargo run -p bri-sim --bin bri-addon-run -- path/to/coin-rain \
+  --send coins --wait 20 --send "gift 1" --send "Guest: coins"
+```
+
+`--wait N` waits N more seconds before the next command, `--seconds N` runs
+at least that long (10 by default), `"Guest: ..."` sends as the Guest and
+`other-add-on:command` sends another Add-On's command.
+
+**Play** it: put the folder in the game's `content/addons/` folder, open
+**Start Game > Add-Ons**, and turn it on. The screen turns on what it
+depends on and shows players what it may do. See
 [mod-manager.md](../architecture/mod-manager.md).
 
-Two rules shape everything else:
+## 3. Game rules
 
-- **Servers send data, never code.** Scripts run only on the server. A
-  client gets declarative data: HUD layouts, models, state values. Your
-  script is never downloaded to players.
-- **The engine owns mechanisms; Add-Ons own policy.** The engine offers
-  generic tools (state, timers, commands, entities, chat, brick removal).
-  What they mean (points, money, ore, rounds) is entirely yours.
-
-## 2. The manifest: `package.json`
-
-```json
-{
-  "schema_version": 1,
-  "id": "sample-survival-points",
-  "version": "1.0.0",
-  "api": 1,
-  "name": "Survival Points",
-  "description": "Every living player earns a point every five seconds.",
-  "authors": ["You"],
-  "license": "CC0-1.0",
-  "provenance": { "source": "original" },
-  "dependencies": {},
-  "capabilities": ["chat"],
-  "provides": [
-    { "kind": "behaviour", "id": "sample-survival-points:behaviour/points", "file": "behaviour.json" },
-    { "kind": "script", "id": "sample-survival-points:script/points", "file": "points.rhai" }
-  ]
-}
-```
-
-| Field | Rules |
-|---|---|
-| `id` | 1-64 characters: `a-z`, `0-9`, `-`, `_`; starts with a letter; does not end with `-` or `_`. It never changes once people use your Add-On. `v20` and ids starting `v20-` are reserved for the game. |
-| `version` | Semantic version, `MAJOR.MINOR.PATCH`. |
-| `api` | The engine API level you wrote against. Today `1`. |
-| `name` | 1-64 characters, shown in the Add-Ons screen. |
-| `license` | Required. Say what others may do with your work. |
-| `provenance.source` | `original` for your own work. Imports record where they came from. |
-| `dependencies` | Other Add-On ids and a version requirement such as `"^1.0.0"`. The Add-Ons screen turns them on for the player. |
-| `capabilities` | What your scripts may do to the world (section 4). |
-| `provides` | Every content file, each with a `kind` and a content id `your-id:kind/name`. Content ids are how everything refers to everything else. |
-
-## 3. Sides: server, client, shared
-
-Each entry in `packages.json` has a `side`:
-
-- **server**: behaviour, scripts, worlds and entities. Only the host loads
-  them. Players do not need them installed.
-- **client**: HUD panels and models. Each player loads them.
-- **shared**: both need the same copy, for example a weapon or new bricks.
-  When a player's shared Add-Ons differ from the server's, the join is
-  refused and the **Can't Join** screen lists each Add-On with the server's
-  version and theirs.
-
-The Add-Ons screen picks the side for Add-Ons it discovers: `server` when
-everything provided is behaviour, script, world or entity; `client` when
-everything is a model or HUD panel; otherwise `shared`. An Add-On cannot mix
-server rules with client visuals: split it in two, the visuals depending on
-the rules, as `sample-points-hud` depends on `sample-survival-points`.
-
-## 4. Scripts, commands, state and capabilities
-
-Game rules are a `behaviour` file plus a Rhai `script`. The sample's
-`behaviour.json`:
+A rule is a `behaviour` file and a Rhai `script`, both listed in
+`provides`. The sample's `behaviour.json`:
 
 ```json
 {
@@ -138,14 +105,18 @@ refused. The engine calls:
 | `on_tick()` | every `tick_interval` ticks (120 ticks = 1 second) |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
-Compiling checks that each of these exists with the right number of
-parameters, so a typo fails when the Add-On loads, not mid-game.
+`player` is the player's id: pass it straight to `tell`, `get_player` and
+the rest. Loading checks that each hook exists with the right number of
+parameters, so a typo shows up in `bri-addon-check`, not mid-game.
 
-**Commands** are the only thing a player can ask of your script. Each
-declares its argument types (`int`, `float`, `string`, `bool`), an optional
-`cooldown_ticks` per player, `admin: true` to refuse non-administrators, and
-`aim_reach` to have the engine resolve what the player is aiming at (read it
-with `aim()`).
+**Commands** are the only thing a player can ask of your script. Each has a
+`name`, and optionally `args` (a list of `"int"`, `"float"`, `"string"` or
+`"bool"`, for example `"args": ["int"]` for `cmd_gift(player, amount)`),
+`cooldown_ticks` per player, `admin: true` to refuse non-administrators,
+and `aim_reach` to have the engine resolve what the player is aiming at
+(read it with `aim()`). Players send commands with a HUD panel's keys
+(section 4). Typing them in chat is not wired up yet, so a command with
+arguments can only be tried with `bri-addon-run` for now.
 
 **State** is declared up front with defaults. `player` keys exist for every
 player; `global` keys once per server. `visible` says who receives the
@@ -159,57 +130,28 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | Read | Change state | Act on the world (needs capability) |
 |---|---|---|
 | `tick()`, `seed()`, `caller()` | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
-| `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick(brick)`: `world.edit` |
+| `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(p, amount)`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`: `player` |
-| | | `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 
-A player value from `players()` is a map with `id`, `name`, `x`, `y`, `z`,
-`alive` and `admin`.
+A value from `players()` is a map with `id`, `name`, `x`, `y`, `z`, `alive`
+and `admin`.
 
-**Capabilities** are the only permission gate. If your script calls
-`tell` without `"chat"` in `capabilities`, the call is refused with a
-message telling you what to add. The Add-Ons screen shows players the
-capabilities in plain words ("send chat messages", "change the world's
-bricks"), so ask
-for only what you use. Scripts also run inside budgets: operations per call,
-string, array and map sizes, call depth. A runaway loop stops with a
-diagnostic instead of freezing the server. Scripts cannot read files, open
-sockets or run `eval`.
+**Capabilities** in `package.json` are the only permission gate. If your
+script calls `tell` without `"chat"` in `capabilities`, the call is refused
+with a message saying what to add. The Add-Ons screen shows players the
+capabilities in plain words ("send chat messages"), so ask for only what
+you use. Scripts run inside budgets (operations per call, sizes, call
+depth): a runaway loop stops with a problem report instead of freezing the
+server. Scripts cannot read files, open sockets or run `eval`.
 
-## 5. Content kinds
+## 4. HUD panels
 
-| Kind | Side | File | Example |
-|---|---|---|---|
-| `behaviour` | server | commands, state, hooks | `packages/samples/sample-survival-points` |
-| `script` | server | Rhai functions | same |
-| `world` | server | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
-| `entity` | server | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
-| `model` | client | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
-| `hud` | client | a HUD panel | `packages/samples/sample-points-hud` |
-| `archetype` | server | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` (`players_can_be_bodies_beyond_the_blockhead`) |
-| `texture` | client | a PNG (up to 1024 px a side) for block faces | `crates/sim/tests/blocks.rs` |
-| `block` | client | textures or flipbooks per face, and named states | same |
-
-Entities may spawn only their own Add-On's entity kinds.
-
-### Weapons
-
-A weapon is an `assets/weapons.json` file in the same format **Import
-Add-On** writes for v20 weapons: items, images with their state machine,
-projectiles, damage types and explosions, each keyed by a content id. The
-Bubble Blaster sample is a hand-written one; its `provides` is empty because
-weapons are not a `provides` kind yet. Model paths may point at base game
-models (the sample reuses `Add-Ons/Weapon_Gun/pistol.dts`).
-
-**Coming soon:** loading an Add-On's weapons, bricks and sounds into a hosted
-game arrives with multi-pack loading. Until then a weapons file is
-checked by the weapons runtime in tests, as the sample does.
-
-## 6. HUD panels
-
-A HUD panel is data. The client draws it from state it receives:
+A HUD panel is a JSON file each player's game draws from state it
+receives. A rule's Add-On runs only on the host, so a HUD is always its own
+Add-On that depends on the rule, as `sample-points-hud` depends on
+`sample-survival-points`.
 
 ```json
 {
@@ -230,79 +172,113 @@ A HUD panel is data. The client draws it from state it receives:
 }
 ```
 
-- `bind` is `add-on-id:player/key` (the viewing player's value),
-  `add-on-id:players/key` (every player's value, one line each) or
-  `add-on-id:global/key`. The viewer must receive the key (`owner` or
+- `bind` is `rule-id:player/key` (the viewing player's value),
+  `rule-id:players/key` (every player's value, one line each) or
+  `rule-id:global/key`. The viewer must receive the key (`owner` or
   `everyone` for its own player value, `everyone` otherwise), or the Add-On
-  is refused at load. The sample test checks this for you.
+  is refused at load.
 - `anchor` is `top_left`, `top_right`, `bottom_left` or `bottom_right`.
-- Up to 16 rows and 8 keys. A key is one letter `A`-`Z` that sends a command
-  with no arguments. The client refuses letters the base game already uses.
+- Up to 16 rows and 8 keys. A key is one letter `A`-`Z` that sends the
+  rule's command (`package` is the rule's id) with no arguments. The game
+  refuses letters it already uses.
 - Colors are RGBA from 0 to 1.
 
-**Coming soon:** the client drawing Add-On HUD panels and sending their
-keys lands with the Stress Lab hosting work. On `main` the panel is loaded
-and validated, and the state it binds to is replicated.
+## 5. Weapons
 
-## 7. Testing your Add-On
+A weapon Add-On is an `assets/weapons.json` file, listed in `provides` as
+`{ "kind": "weapons", "id": "your-id:weapons/main", "file":
+"assets/weapons.json" }`. It is the same format **Import Add-On** writes
+for v20 weapons: `items` (what players hold), `images` (the held model and
+its firing states), `projectiles`, `damage_types` and `explosions`. Model
+and icon paths may point at base game files; the sample reuses
+`Add-Ons/Weapon_Gun/pistol.dts`.
 
-Everything is testable without opening the game. The samples show three
-levels; copy whichever fits:
+The fields you are most likely to change:
 
-1. **Loads and compiles**: `Catalog::load(root, &set, server)` then
-   `Runtime::compile(&catalog)`. This catches manifest mistakes, bad content
-   ids, missing hook functions and script syntax errors, each with a file,
-   a code and a hint. See `crates/package-runtime/tests/samples.rs`.
-2. **Runs in a real session**: build a `Session`, call
-   `install_packages`, `join` players, `step` ticks, send
-   `Command::Package(...)`, and read `package_value`, `package_state` and
-   `chat`. See `crates/sim/tests/samples.rs`.
-3. **Weapons**: `Pack::from_json` then `WeaponsWorld` to give, equip and
-   fire. See `crates/weapons/tests/sample_addon.rs`.
+| Where | Field | Meaning |
+|---|---|---|
+| projectile | `speed`, `gravity`, `lifetime_ticks` | how fast, how much it drops, how long it lives (120 ticks = 1 s) |
+| projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
+| projectile | `ballistic`, `elasticity` | bounces, and how much |
+| image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
+| item | `ui_name` | the name players see |
+
+Keys of `damage_types` and `explosions` are their `name` in lowercase, and
+a projectile names its damage type as `$DamageType::<name>`. Everyone in a
+game needs the same weapons, so give the Add-On to the people you play
+with.
+
+## 6. Other content kinds
+
+Each file in `provides` has a `kind`. Which kinds an Add-On provides decides
+who needs it: only host kinds means the host only; only `model` and `hud`
+means each player; anything else (weapons, bricks, blocks) means everyone.
+An Add-On cannot mix host kinds with `model` or `hud`: split it in two, the
+visuals depending on the rules. `bri-addon-check` tells you which it is.
+
+| Kind | Needed by | What it is | Example |
+|---|---|---|---|
+| `behaviour`, `script` | host | a game rule (section 3) | `packages/samples/sample-survival-points` |
+| `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
+| `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
+| `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` |
+| `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map | `packages/stresslab/stresslab-mode` |
+| `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
+| `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
+| `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
+| `bricks`, `vehicles` | everyone | written by Import Add-On (section 7) | |
+| `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
+
+Entities may spawn only their own Add-On's entity kinds.
+
+## 7. Old v20 Add-Ons and new bricks
+
+Put an old Blockland Add-On (a `.zip` or a folder with `server.cs`) in the
+game's `content/Add-Ons/` folder, open **Start Game > Add-Ons**, pick it
+and press **Import**. Its scripts are never run: datablocks for bricks,
+weapons and vehicles become data, and `IMPORT-REPORT.md` in the new Add-On
+lists what came across and what did not. An Add-On without a licence file
+is imported as `proprietary`; for your own work, set `license` in the new
+`package.json`. From a checkout the same importer runs as:
 
 ```sh
-cargo test -p bri-package-runtime --test samples
-cargo test -p bri-sim --test samples
-cargo test -p bri-weapons --test sample_addon
+cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example
 ```
 
-`package_diagnostics()` lists any problem your script hit at run time
-(a refused capability, a budget overrun), so assert it is empty.
+That is also how you make **new bricks** today: write a small v20-style
+brick Add-On and import it. A folder `Brick_Tall` holding:
 
-**Coming soon:** a `stresslab` command-line tool that loads a folder of
-Add-Ons and runs them headless without writing Rust, and hosting an
-Add-On game from the Start Game screen.
-
-## 8. Importing v20 Add-Ons
-
-Old Blockland Add-Ons are `.zip` files or folders with `server.cs` and
-friends. The importer converts one into a native Add-On folder without ever
-running its scripts:
-
-```sh
-cargo run -p bri-addon-import --bin bri-import-addon -- \
-  Weapon_Example.zip out/weapon_example --reference "<v20 folder>"
+```text
+server.cs         datablock fxDTSBrickData(brick3x3x2Data)
+                  {
+                      brickFile = "./3x3x2.blb";
+                      category = "Bricks";
+                      subCategory = "Tall";
+                      uiName = "3x3x2 Block";
+                  };
+3x3x2.blb         3 3 6
+                  BRICK
+description.txt   Title: Tall Bricks
+                  Author: You
 ```
 
-It writes `package.json`, `assets/weapons.json`, converted bricks and
-textures, and `IMPORT-REPORT.md` saying what came across and what did not
-(TorqueScript logic is not run; only datablocks become data).
+imports into an Add-On with one 3x3 brick, two bricks tall. A `.blb`'s
+first line is its size in studs, studs and plates (three plates to a
+brick); `BRICK` gives a plain box with studs. v20's own brick Add-Ons show
+the longer form for other shapes.
 
-**Coming soon:** an **Import Add-On** button on the Add-Ons screen that does
-this for Add-Ons dropped in the game's `Add-Ons` folder.
+## 8. Still being built
 
-## 9. Still being built
+This guide changes in the same change as these land.
 
-These are designed but not on `main` yet. Write against them once they land;
-this guide will be updated in the same change.
-
-- **Multi-pack loading**: an Add-On's weapons, bricks and sounds in a
-  hosted game.
+- **Chat commands**: players typing `/gift 1` to send an Add-On's
+  commands, with arguments.
+- **Brick authoring without v20 files**: a native brick format you write
+  directly.
 - **Drawing blocks**: `block` and `texture` content (per-face textures,
   flipbooks and states a script switches with `set_block_state`) load,
   save and replicate, but the renderer does not draw block faces yet.
-- **Sandboxed client code**: Add-Ons with client-side logic and shaders,
-  run in a sandbox. Joining a server that uses them asks the player to
-  trust that server first, listing what the code may do.
-- **Downloads on join**: fetching a server's missing shared Add-Ons while
-  joining, with progress, instead of refusing.
+- **Sandboxed client code**: Add-Ons that send players WebAssembly and
+  shaders, run in a sandbox, after the player agrees to trust the server.
+  The `spinning-cube` sample and the `client` section in
+  [packages.md](../architecture/packages.md) show the design.
