@@ -776,9 +776,11 @@ dependencies = [
  "bri-weapons",
  "bri-world",
  "glam 0.33.10",
+ "libc",
  "rapier3d",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

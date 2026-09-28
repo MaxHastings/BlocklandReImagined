@@ -3767,3 +3767,15 @@ break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
   verified; `release_smoke standalone_exe_unpacks_per_user_and_starts_the_game`
   with `BRI_STANDALONE_EXE` passed (4.4 s first unpack, `--check` passed from
   the install). Not covered: a signed exe, and an interactive start (Max's).
+- `hardening_packages` `many_heavy_thinks_keep_the_tick_budget` failed once
+  in the gate and passed alone. Not an overrun: the per-tick script work cap
+  counts operations, so the work is the same every run. The test timed the
+  tick by wall clock, which counts time the OS gives other processes. Here
+  the tick measured 12-24 ms alone and up to 37 ms beside CPU-busy
+  processes; with the whole file under 8 busy processes the old
+  wall-clock checks (thinks, chunk generation, player commands) failed 59
+  of 60 runs. `timed()` now reads the test thread's CPU time
+  (`GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` elsewhere), where
+  package scripts run; the 50 ms bound is unchanged. After: 0 failures in
+  60 loaded runs, worst 25 ms. With the per-tick cap switched off the test
+  still fails (1.4 s of CPU in one tick).
