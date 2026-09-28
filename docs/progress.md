@@ -4233,6 +4233,41 @@ console value), clippy on bri-client and bri-ui clean, offscreen
 `ui_runtime_probe` render of the Graphics pane, `cargo run --release -p
 bri-client --bin debris_probe -- <content> <report.json>`. Not seen in a
 window: how blasts look and feel at each preset is Max's playtest.
+## 2026-09-28 Joins no longer refuse over Add-Ons (branch `claude/join-addons`)
+
+lpsroo, on a20, could not join Wilfred's host: "can't join unless I have
+Add-Ons". A join downloaded what the host offered and asked again, and the
+host refused that second join over anything still different. Three things
+reached that refusal: base game content that differs between two installs
+(the host never offers it), an Add-On the host cannot send (a file servers
+never send; the host then could not host at all), and a download or load
+that failed. Max's rule is that a join downloads everything it can and
+never fails over Add-Ons.
+
+Now the join after downloading carries `accept_differences` (protocol 49):
+the host lets the player in with whatever still differs and tells them in
+chat, by package id and version, what they joined without. A package the
+host cannot send is left off its download shelf, not fatal to hosting. A
+download that fails, or a package that is unsafe or fails to install, is
+left out and the join goes ahead; so does a downloaded set that fails to
+load (the join retries with none) or whose bricks, weapons or vehicles fail
+to load in the game (the player joins without them and is told in chat).
+The first join still refuses once, which is what tells the joiner to
+download.
+
+Default picked: let the player in even when base game content differs.
+The host is authoritative; what the joiner lacks may look or behave
+differently, and the chat line says so. The Can't Join dialog now only
+appears against hosts on older builds.
+
+Evidence: `cargo test -p bri-net -p bri-package` (new
+`package_sync::a_join_goes_ahead_without_content_the_host_cannot_send`,
+which first reproduces the a20 refusal after downloading and then joins
+with the downloaded Add-On, the other two named in chat;
+`a_failed_download_joins_without_the_add_ons`), `cargo test -p bri-client
+--test add_on_fallbacks`, and the ignored
+`add_on_join::a_guest_joins_a_host_running_every_repository_add_on`
+(host with every repository Add-On, the showcase ones included).
 ## 2026-09-28 Riding horse players (branch `claude/project-thread-c06rfc`)
 
 Max's a19 playtest: the Horse Ray turned him into a horse and the other

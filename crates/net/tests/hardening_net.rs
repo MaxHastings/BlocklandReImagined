@@ -128,6 +128,7 @@ fn hello(name: &str) -> Hello {
         resume: None,
         host: None,
         identity: None,
+        accept_differences: false,
     }
 }
 

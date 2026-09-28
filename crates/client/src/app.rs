@@ -406,6 +406,12 @@ pub struct App {
     /// Add-Ons screen, `enable_packages` or `apply_packages`), so hosting
     /// runs them as they are. False after a join loaded another server's.
     packages_from_tools: bool,
+    /// The next join keeps the loaded content even when the server's
+    /// Add-Ons bring bricks, weapons or vehicles: loading them failed, so
+    /// the player joins without them rather than not at all.
+    skip_add_on_reload: bool,
+    /// Told to the player in chat once the next game is entered.
+    join_notices: Vec<String>,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
     /// Non-rendering bricks, drawn only while a building tool is out, and
@@ -1414,6 +1420,8 @@ impl App {
             client_code,
             server_packages,
             packages_from_tools: false,
+            skip_add_on_reload: false,
+            join_notices: Vec::new(),
             package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_gpu: None,
@@ -2547,6 +2555,7 @@ impl App {
         );
         let target = bri_net::invite::JoinTarget::parse(&address)?;
         let typed = target.address();
+        let reload_add_ons = !std::mem::take(&mut self.skip_add_on_reload);
         // An invite's key, a LAN listing or a saved pin identifies the host;
         // a first join trusts the certificate the host presents and pins it.
         let pins_file = self.state_dir.join("trusted-hosts.json");
@@ -2651,14 +2660,20 @@ impl App {
             )
             .await;
             let client = match joined {
-                Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
+                Ok((client, fetched, dropped))
+                    if reload_add_ons && (!fetched.is_empty() || !dropped.is_empty()) =>
+                {
                     let set =
                         crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped)?;
-                    let fresh = crate::content::ContentPaths::resolve(&package_root, &set)?;
-                    if fresh.brick_extras != paths.brick_extras
-                        || fresh.weapon_extras != paths.weapon_extras
-                        || fresh.vehicle_extras != paths.vehicle_extras
-                    {
+                    // Content that does not resolve reloads too: applying it
+                    // names the problem and the join goes ahead without it.
+                    let reload = crate::content::ContentPaths::resolve(&package_root, &set)
+                        .map_or(true, |fresh| {
+                            fresh.brick_extras != paths.brick_extras
+                                || fresh.weapon_extras != paths.weapon_extras
+                                || fresh.vehicle_extras != paths.vehicle_extras
+                        });
+                    if reload {
                         client.close();
                         if let Ok(mut slot) = needs_add_ons.lock() {
                             *slot = Some(set);
@@ -3621,12 +3636,21 @@ impl App {
                 let applied = self.apply_packages(&set);
                 // The next game this player hosts runs their own list again.
                 self.packages_from_tools = false;
-                let rejoined = applied.and_then(|()| self.join(id, a.name.clone(), String::new()));
-                match rejoined {
+                // Add-Ons that do not load here are joined without: the
+                // player is told which, in chat, once in the game.
+                if let Err(error) = applied {
+                    let text = format!(
+                        "Some of this server's Add-Ons could not be loaded on this computer, so you joined without them: {error:#}"
+                    );
+                    bri_console::warn(&text);
+                    self.join_notices.push(text);
+                    self.skip_add_on_reload = true;
+                }
+                match self.join(id, a.name.clone(), String::new()) {
                     Ok(()) => return Ok(()),
-                    // The player reads which Add-On and file stopped it.
                     Err(error) => {
-                        reason = format!("Could not load the server's Add-Ons: {error:#}");
+                        self.join_notices.clear();
+                        reason = format!("Could not join again with the server's Add-Ons: {error:#}");
                         bri_console::warn(&reason);
                     }
                 }
@@ -3969,6 +3993,9 @@ impl App {
             }
             a.entered = true;
             self.reconnects = 0;
+            for text in std::mem::take(&mut self.join_notices) {
+                self.ui.apply_session(a.id, UiUpdate::Chat { text });
+            }
             // A game this player hosts runs their own Add-Ons' code; someone
             // else's server runs only code the player trusted for its host
             // key (never its address, which another host can take over).

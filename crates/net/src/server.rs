@@ -50,21 +50,36 @@ pub struct Autosave {
 }
 /// Writes one world snapshot durably; runs on a blocking thread.
 pub type SaveWorld = Arc<dyn Fn(&bri_world::World) -> Result<()> + Send + Sync>;
-/// Refuse a join whose shared packages differ from the server's, naming
-/// every differing package. Presentation-only differences are allowed and
-/// returned, for the joining player to be told about.
+/// What differs between a joiner's packages and the server's, for the
+/// joining player to be told about.
+struct PackageDifferences {
+    /// Presentation only: things may look or sound different.
+    cosmetic: Vec<bri_package::environment::Mismatch>,
+    /// Shared content the joiner could not get from this server (never
+    /// offered, or its download failed) and joined without.
+    unavailable: Vec<bri_package::environment::Mismatch>,
+}
+/// Refuse a first join whose shared packages differ from the server's,
+/// naming every differing package, so the joiner downloads them. A joiner
+/// that already fetched what this server offers (`accept_differences`) is
+/// let in with whatever still differs, and told what it lacks: a join never
+/// fails over Add-Ons. Presentation-only differences are always allowed.
 fn check_packages(
     environment: &bri_package::environment::Environment,
     client: &[bri_package::environment::PackageRef],
-) -> Result<Vec<bri_package::environment::Mismatch>> {
+    accept_differences: bool,
+) -> Result<PackageDifferences> {
     let (blocking, cosmetic): (Vec<_>, Vec<_>) = environment
         .compare(client)
         .into_iter()
         .partition(|m| m.blocks_join());
-    if !blocking.is_empty() {
+    if !blocking.is_empty() && !accept_differences {
         return Err(crate::client::PackagesDiffer(blocking).into());
     }
-    Ok(cosmetic)
+    Ok(PackageDifferences {
+        cosmetic,
+        unavailable: blocking,
+    })
 }
 /// Loads a map for Change Map; runs on a blocking thread.
 pub type MapLoader = Arc<dyn Fn(&str) -> Result<Session> + Send + Sync>;
@@ -1136,7 +1151,7 @@ async fn run(
         Some(event)=incoming.recv()=>{match event {
             Event::Join{hello,principal,connection,out,bulk,answer}=>{
                 let join:Result<OwnerId>= (||{
-                    ensure!(hello.version==VERSION,"Incompatible protocol version");let cosmetic=check_packages(&options.environment,&hello.packages)?;
+                    ensure!(hello.version==VERSION,"Incompatible protocol version");let differences=check_packages(&options.environment,&hello.packages,hello.accept_differences)?;
                     ensure!(peers.len()<max_players,"Server is full");
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
                     let (owner,token)=if let Some(token)=hello.resume {
@@ -1155,7 +1170,8 @@ async fn run(
                         if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
-                    if !cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&cosmetic)));}
+                    if !differences.unavailable.is_empty(){session.private_chat(owner,crate::client::unavailable_notice(&differences.unavailable));}
+                    if !differences.cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&differences.cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
                     let (mut checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
