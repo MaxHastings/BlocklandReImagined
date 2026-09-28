@@ -40,6 +40,11 @@ const REMOTE_HISTORY: usize = 32;
 const SNAP_DISTANCE: f32 = 4.0;
 /// Visual correction decay rate per second.
 const CORRECTION_RATE: f32 = 14.0;
+/// The presented server clock follows its estimate by running up to this
+/// much faster or slower, so an early pose never jumps remotes along.
+const CLOCK_SLEW: f64 = 0.05;
+/// Clock disagreements beyond this many ticks snap (a stall, a map change).
+const CLOCK_SNAP: f64 = 60.0;
 
 #[derive(Default)]
 pub struct Motion {
@@ -58,6 +63,8 @@ pub struct Motion {
     remotes: BTreeMap<OwnerId, VecDeque<bri_net::protocol::Pose>>,
     /// Estimated `server_tick - local_seconds * TICK_RATE`.
     clock_offset: Option<f64>,
+    /// The offset presented, slewing toward `clock_offset`.
+    shown_offset: Option<f64>,
     local_seconds: f64,
     newest_local_tick: u64,
     presented: BTreeMap<OwnerId, PlayerState>,
@@ -101,7 +108,8 @@ impl Motion {
     }
     /// Estimated current server tick (for interpolating other entities).
     pub fn server_tick(&self) -> Option<f64> {
-        self.clock_offset
+        self.shown_offset
+            .or(self.clock_offset)
             .map(|offset| self.local_seconds * TICK_RATE + offset)
     }
     /// Replace a presented state (riders follow their rendered vehicle seat).
@@ -269,6 +277,16 @@ impl Motion {
             0.0
         };
         self.local_seconds += f64::from(seconds);
+        if let Some(offset) = self.clock_offset {
+            let shown = self.shown_offset.unwrap_or(offset);
+            let error = offset - shown;
+            let step = CLOCK_SLEW * f64::from(seconds) * TICK_RATE;
+            self.shown_offset = Some(if error.abs() > CLOCK_SNAP {
+                offset
+            } else {
+                shown + error.clamp(-step, step)
+            });
+        }
         self.correction *= (-CORRECTION_RATE * seconds).exp();
         if self.correction.length_squared() < 1e-8 {
             self.correction = Vec3::ZERO;
@@ -342,9 +360,7 @@ impl Motion {
         } else if let Some(pose) = view.poses.get(&view.owner) {
             self.presented.insert(view.owner, pose.player.clone());
         }
-        let render_tick = self
-            .clock_offset
-            .map(|offset| self.local_seconds * TICK_RATE + offset - INTERPOLATION_TICKS);
+        let render_tick = self.server_tick().map(|tick| tick - INTERPOLATION_TICKS);
         for (owner, pose) in &view.poses {
             if *owner == view.owner {
                 continue;
@@ -448,6 +464,51 @@ mod tests {
             acknowledged_input: 0,
             player: state(x, yaw),
         }
+    }
+    /// Poses every 3 ticks with 80 ms latency plus up to 60 ms jitter,
+    /// frames at 144 Hz: the presented server clock never jumps or stalls.
+    #[test]
+    fn server_clock_runs_smoothly_under_jitter() {
+        let frame = 1.0 / 144.0;
+        let mut motion = Motion::default();
+        let mut rng = 7u64;
+        let mut arrivals = VecDeque::new();
+        let (mut time, mut sent) = (0.0f64, 0u64);
+        let mut previous: Option<f64> = None;
+        let mut worst: f64 = 0.0;
+        while time < 6.0 {
+            time += f64::from(frame);
+            while (sent + POSE_INTERVAL) as f64 / TICK_RATE <= time {
+                sent += POSE_INTERVAL;
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let jitter = (rng >> 40) as f64 / (1u64 << 24) as f64 * 0.06;
+                arrivals.push_back((sent as f64 / TICK_RATE + 0.08 + jitter, sent));
+            }
+            motion.advance(frame, MoveInput::default(), 1).unwrap();
+            let due: Vec<_> = arrivals.iter().filter(|(at, _)| *at <= time).copied().collect();
+            arrivals.retain(|(at, _)| *at > time);
+            for (_, tick) in due {
+                motion.observe_clock(tick);
+            }
+            let Some(now) = motion.server_tick() else {
+                continue;
+            };
+            if time > 1.0
+                && let Some(previous) = previous
+            {
+                let step = (now - previous) / (f64::from(frame) * TICK_RATE);
+                worst = worst.max((step - 1.0).abs());
+            }
+            previous = Some(now);
+            // It stays within the latency and jitter of the host's clock.
+            if time > 1.0 {
+                let behind = time * TICK_RATE - now;
+                assert!((0.0..=0.16 * TICK_RATE).contains(&behind), "{behind}");
+            }
+        }
+        assert!(worst <= CLOCK_SLEW + 1e-6, "clock rate off by {worst}");
     }
     #[test]
     fn remote_samples_interpolate_extrapolate_and_wrap_yaw() {

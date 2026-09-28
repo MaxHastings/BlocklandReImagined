@@ -3373,3 +3373,10 @@ the first copy). No wire change.
   8.45x step and 435 of 506 frames stalled. `cargo test -p bri-client --lib
   -- ghosts vehicles`. Remote players' clock (`Motion::observe_clock`) still
   jumps forward on an early pose; that belongs to the remote-animation lane.
+- 2026-09-28 Pose clock slewing (branch `claude/smoothing`). `Motion`'s
+  server clock snapped forward on every earlier-than-ever pose, hitching
+  remote players and non-driven vehicles under jitter. It now slews at most
+  5% toward its estimate and snaps only past 60 ticks, like `ghosts::Clock`.
+  No protocol change. Evidence: `cargo test -p bri-client --lib
+  server_clock_runs_smoothly_under_jitter` (80 ms + 60 ms jitter, 144 Hz
+  frames): rate within 5%; the snapping clock measured 119% off.
