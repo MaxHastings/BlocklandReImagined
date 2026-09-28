@@ -602,6 +602,18 @@ fn start_configured(
         task,
     })
 }
+/// Keep a connection open after its last reply (a refusal, or a finished
+/// download) until the peer has read it and closed, up to a few seconds.
+/// Closing sooner races the peer's read: QUIC discards stream data the
+/// application has not read yet, so the player saw "connection lost"
+/// instead of the refusal.
+async fn linger(send: &mut quinn::SendStream, connection: &Connection) {
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        let _ = send.stopped().await;
+        connection.closed().await;
+    })
+    .await;
+}
 #[allow(clippy::too_many_arguments)]
 async fn connection_task(
     connection: Connection,
@@ -628,8 +640,7 @@ async fn connection_task(
         );
         codec::write_frame(&mut send, &codec::encode(&Message::Rejected(reason))?).await?;
         send.finish()?;
-        // Dropping the connection at once could discard the refusal unsent.
-        let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+        linger(&mut send, &connection).await;
         return Ok(());
     }
     if begin.purpose == Purpose::Download {
@@ -642,13 +653,13 @@ async fn connection_task(
                 drop(handshake);
                 let _slot = slot;
                 crate::packages::serve(shelf, &mut send, &mut receive).await?;
-                let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+                linger(&mut send, &connection).await;
                 return Ok(());
             }
         };
         codec::write_frame(&mut send, &codec::encode(&Message::Rejected(refusal.into()))?).await?;
         send.finish()?;
-        let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+        linger(&mut send, &connection).await;
         return Ok(());
     }
     let mut nonce = [0; 32];
@@ -666,7 +677,7 @@ async fn connection_task(
             let bytes = codec::encode(&Message::Rejected(error.to_string()))?;
             let _ = codec::write_frame(&mut send, &bytes).await;
             let _ = send.finish();
-            let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+            linger(&mut send, &connection).await;
             return Ok(());
         }
     };
@@ -688,7 +699,7 @@ async fn connection_task(
         Err(refusal) => {
             codec::write_frame(&mut send, &codec::encode(&refusal)?).await?;
             send.finish()?;
-            let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+            linger(&mut send, &connection).await;
             return Ok(());
         }
     };

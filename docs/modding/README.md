@@ -5,6 +5,10 @@ ReImagined. It covers what works today; anything still being built is in
 the last section, so you never write against something that does not exist
 yet.
 
+Read it in order: make an Add-On (sections 1 to 6), bring in an old v20
+Add-On and port what its scripts did (section 7), then what players are
+asked to trust when your Add-On runs code on their PC (section 8).
+
 ## What you can make
 
 | You want | Start from | It is |
@@ -182,7 +186,7 @@ Add-On that depends on the rule, as `sample-points-hud` depends on
     { "label": "Awarded to everyone", "bind": "sample-survival-points:global/awarded" }
   ],
   "keys": [
-    { "key": "J", "label": "Leaderboard", "package": "sample-survival-points", "command": "top" }
+    { "key": "N", "label": "Leaderboard", "package": "sample-survival-points", "command": "top" }
   ]
 }
 ```
@@ -216,6 +220,7 @@ The fields you are most likely to change:
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
+| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
 | item | `ui_name` | the name players see |
 
 A tool rather than a gun: give its image `"command": "your-rule:command"`
@@ -277,6 +282,13 @@ is imported as `proprietary`; for your own work, set `license` in the new
 cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example
 ```
 
+Many v20 Add-Ons keep part of what they do in scripts: a shotgun's spread,
+a slash command. The report lists each such function under **Needs
+behaviour**. When someone has made a native **port** of that Add-On, the
+importer applies it and the report says **Ported**. The ports so far, and the
+recipe for making one (or having your agent make one), are in
+[porting.md](porting.md).
+
 That is also how you make **new bricks** today: write a small v20-style
 brick Add-On and import it. A folder `Brick_Tall` holding:
 
@@ -299,7 +311,24 @@ first line is its size in studs, studs and plates (three plates to a
 brick); `BRICK` gives a plain box with studs. v20's own brick Add-Ons show
 the longer form for other shapes.
 
-## 8. Still being built
+## 8. What players are asked to trust
+
+Players download a server's Add-Ons when they join. What they are asked
+depends on the most powerful thing an Add-On does:
+
+| Tier | What the Add-On has | What the player sees |
+|---|---|---|
+| Data | rules, HUD panels, weapons, bricks, models, sounds | nothing: it downloads and runs |
+| Sandboxed code | a `client` section: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes |
+| Elevated code | `net.http` or `files.addon_folder` | a separate, stronger prompt per Add-On (not offered to joiners yet, see section 9) |
+
+Rules always run on the host, never on players' PCs, so they need no
+trust. Players can take any trust back with **Forget Trust** on the
+Add-Ons screen. Ask for the smallest tier that does the job: most Add-Ons
+are data only. The details are in
+[client-sandbox.md](../architecture/client-sandbox.md).
+
+## 9. Still being built
 
 This guide changes in the same change as these land.
 
@@ -309,5 +338,5 @@ This guide changes in the same change as these land.
   flipbooks and states a script switches with `set_block_state`) load,
   save and replicate, but the renderer does not draw block faces yet.
 - **Elevated client code**: joining asks "Trust and join" before a
-  server's sandboxed client code runs (section 6), but code asking for
+  server's sandboxed client code runs (section 8), but code asking for
   `net.http` or `files.addon_folder` is not offered to joiners yet.

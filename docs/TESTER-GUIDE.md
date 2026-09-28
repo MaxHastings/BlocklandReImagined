@@ -15,6 +15,11 @@ keys are in `PLAYTEST.md`.
 3. Run `Launch.cmd`. A console window opens next to the game; leave it
    open while you play. Nothing else needs installing, and you don't need
    the original Blockland.
+   Or use `BlocklandReImagined.exe` on its own: put it anywhere and run
+   it. It unpacks the game into your user folder
+   (`%LOCALAPPDATA%\BlocklandReImagined`) on first start, which takes a
+   few seconds, and keeps your settings, saves and Add-Ons there. A newer
+   exe updates the game and keeps them.
 4. **"Windows protected your PC"**: the game isn't signed yet. Click **More
    info**, check the name is `Launch.cmd` or `bri-client.exe`, then **Run
    anyway**. If Windows blocked the download itself, right-click the zip,
@@ -68,8 +73,10 @@ customers, forwarding won't help; a virtual LAN tool is the way around it.
 The first time you join a host, the game remembers who they are. If that
 host's identity later changes, the game asks before letting you continue.
 
-**Add-Ons on a server.** Joining a server that runs Add-Ons you don't have
-downloads them. Downloads over 200 MB ask first. If an Add-On wants to run
+**Add-Ons on a server.** Joining a server that runs Add-Ons you don't have,
+or have in a different version, downloads the server's copies and puts you
+in the game. Your own Add-Ons the server doesn't run are left off for that
+game. If an Add-On wants to run
 its own code on your PC, the game asks "Trust and join" or "Leave" before
 it runs. That code is kept in a sandbox, and you can take the trust back
 with Forget Trust on the Add-Ons screen.
@@ -116,9 +123,8 @@ they're your identity and your server's.
 - **Vehicle handling** is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
 - **Bots** steer simply and can get stuck on complex builds.
-- **Some v20 settings aren't there yet**: Censor Chat, Press Up to Repeat
-  Chat, the ghost brick colour options, and Render My Player, Items and
-  Jets. `FEATURES.md` lists everything still missing.
+- **A few v20 settings aren't there yet**, such as Render My Player.
+  `FEATURES.md` lists everything still missing.
 - **Old Add-On scripts don't run.** Imported v20 Add-Ons bring their
   bricks, weapons and vehicles, but not their custom behaviour (see
   `FEATURES.md`).

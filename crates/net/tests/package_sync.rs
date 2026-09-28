@@ -565,7 +565,7 @@ async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()>
     assert!(missing.iter().all(|m| m.starts_with("server has")));
 
     let mut loaded = Vec::new();
-    let (client, fetched) = bri_net::client::Client::connect_fetching(
+    let (client, fetched, _) = bri_net::client::Client::connect_fetching(
         server.address,
         bri_net::client::HostPin::from(&server.certificate[..]),
         "Fetcher".into(),
@@ -574,12 +574,11 @@ async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()>
         &identity,
         &cache,
         Progress::default(),
-        |fetched| {
+        |fetched, dropped| {
+            assert!(dropped.is_empty());
             loaded = fetched.iter().map(|f| f.dir.clone()).collect();
             Ok(fetched.iter().map(|f| f.package.clone()).collect())
         },
-        u64::MAX,
-        |_| -> std::future::Ready<bool> { panic!("a small download does not ask") },
     )
     .await?;
     assert!(client.owner > 0);
@@ -587,41 +586,65 @@ async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()>
     assert!(loaded.iter().all(|dir| dir.is_dir()));
     drop(client);
 
-    // A shared package only the client runs cannot be downloaded away.
+    // A shared package only the client runs sits the game out: the join
+    // leaves it out rather than refusing.
     let mut extra = environment.client_packages();
-    extra.push(bri_package::environment::PackageRef {
+    let mymod = bri_package::environment::PackageRef {
         id: "mymod".into(),
         version: "1.0.0".into(),
         side: bri_package::packages::Side::Shared,
         hash: "ab".repeat(32),
         size: 1,
-    });
-    let empty_cache = tempfile::tempdir()?;
-    let error = bri_net::client::Client::connect_fetching(
+    };
+    extra.push(mymod.clone());
+    let (client, _, dropped) = bri_net::client::Client::connect_fetching(
         server.address,
         bri_net::client::HostPin::from(&server.certificate[..]),
         "Extra".into(),
-        extra,
+        extra.clone(),
         None,
         &identity,
-        &Cache::open(empty_cache.path())?,
+        &cache,
         Progress::default(),
-        |_| panic!("nothing downloads for an extra package"),
-        u64::MAX,
-        |_| -> std::future::Ready<bool> { panic!("nothing downloads for an extra package") },
+        |fetched, dropped| {
+            Ok(extra
+                .iter()
+                .filter(|p| !dropped.contains(p) && !fetched.iter().any(|f| f.package.id == p.id))
+                .cloned()
+                .chain(fetched.iter().map(|f| f.package.clone()))
+                .collect())
+        },
     )
-    .await
-    .err()
-    .unwrap();
-    assert!(format!("{error:#}").contains("mymod"), "{error:#}");
+    .await?;
+    assert!(client.owner > 0);
+    assert_eq!(dropped, [mymod]);
+    drop(client);
     server.stop().await?;
     Ok(())
 }
 
-/// A download above the asking size waits for the player. Leaving ends
-/// the join with nothing downloaded; agreeing downloads and joins.
+/// What a join runs with: the packages the client loaded, with every one
+/// the server sent in place of the client's copy of the same id and the
+/// left-out ones removed (`bri_client::mods::load_fetched` does this).
+fn joined(
+    have: &[bri_package::environment::PackageRef],
+    fetched: &[bri_net::packages::Fetched],
+    dropped: &[bri_package::environment::PackageRef],
+) -> Vec<bri_package::environment::PackageRef> {
+    have.iter()
+        .filter(|p| !dropped.contains(p) && !fetched.iter().any(|f| f.package.id == p.id))
+        .cloned()
+        .chain(fetched.iter().map(|f| f.package.clone()))
+        .collect()
+}
+
+/// Joining downloads whatever the server runs and plays, with no question
+/// however large: a client with no Add-Ons at all, and one with an older
+/// copy of the server's Add-On, both end up in the game running exactly
+/// the server's Add-Ons, matched by content hash (a cached copy of another
+/// version is never used).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn large_add_on_downloads_ask_the_player_first() -> Result<()> {
+async fn a_join_downloads_exactly_the_servers_add_ons_without_asking() -> Result<()> {
     let root = tempfile::tempdir()?;
     let (set, environment) = content(root.path())?;
     let shelf = PackageShelf::new(root.path(), &set, &environment)?;
@@ -636,50 +659,62 @@ async fn large_add_on_downloads_ask_the_player_first() -> Result<()> {
     let identity_dir = tempfile::tempdir()?;
     let identity =
         bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
-    let cache_dir = tempfile::tempdir()?;
-    let cache = Cache::open(cache_dir.path())?;
-    let join = async |approve: bool, asked: &mut Vec<u64>| {
-        bri_net::client::Client::connect_fetching(
+    let expected = environment.client_packages();
+    let join = async |have: Vec<bri_package::environment::PackageRef>, cache: &Cache| {
+        let mut ran = Vec::new();
+        let (client, fetched, dropped) = bri_net::client::Client::connect_fetching(
             server.address,
             bri_net::client::HostPin::from(&server.certificate[..]),
-            "Asked".into(),
-            Vec::new(),
+            "Joiner".into(),
+            have.clone(),
             None,
             &identity,
-            &cache,
+            cache,
             Progress::default(),
-            |fetched| Ok(fetched.iter().map(|f| f.package.clone()).collect()),
-            0,
-            |total| {
-                asked.push(total);
-                std::future::ready(approve)
+            |fetched, dropped| {
+                ran = joined(&have, fetched, dropped);
+                Ok(ran.clone())
             },
         )
-        .await
+        .await?;
+        anyhow::ensure!(client.owner > 0, "not in the game");
+        drop(client);
+        anyhow::Ok((ran, fetched, dropped))
     };
-    let mut asked = Vec::new();
-    let error = join(false, &mut asked).await.err().unwrap();
-    assert!(
-        error
-            .downcast_ref::<bri_net::client::DownloadDeclined>()
-            .is_some(),
-        "{error:#}"
-    );
-    assert_eq!(asked.len(), 1);
-    assert!(asked[0] > 0);
-    assert!(
-        environment
-            .client_packages()
-            .iter()
-            .all(|p| cache.installed(p).is_none()),
-        "leaving downloads nothing"
-    );
-    let (client, fetched) = join(true, &mut asked).await?;
-    assert!(client.owner > 0);
+
+    // No Add-Ons at all.
+    let clean = tempfile::tempdir()?;
+    let (ran, fetched, dropped) = join(Vec::new(), &Cache::open(clean.path())?).await?;
+    assert!(dropped.is_empty());
     assert!(fetched.iter().any(|f| f.downloaded > 0));
-    assert_eq!(asked.len(), 2, "asked once more, with the same size");
-    assert_eq!(asked[0], asked[1]);
-    drop(client);
+    let mut ran_sorted = ran.clone();
+    ran_sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut want = expected.clone();
+    want.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(ran_sorted, want, "the server's exact Add-Ons");
+
+    // An older copy of `creeper`, already in this client's cache too.
+    let stale_root = tempfile::tempdir()?;
+    std::fs::create_dir_all(stale_root.path().join("creeper"))?;
+    std::fs::write(stale_root.path().join("creeper/package.json"), br#"{"id":"creeper"}"#)?;
+    std::fs::write(stale_root.path().join("creeper/old.glb"), [1; 64])?;
+    let (hash, size) = hash_dir(&stale_root.path().join("creeper"))?;
+    let creeper = expected.iter().find(|p| p.id == "creeper").unwrap();
+    let stale = bri_package::environment::PackageRef {
+        hash,
+        size,
+        version: "0.9.0".into(),
+        ..creeper.clone()
+    };
+    assert_ne!(stale.hash, creeper.hash);
+    let (ran, fetched, _) = join(vec![stale.clone()], &Cache::open(clean.path())?).await?;
+    assert!(!ran.contains(&stale), "the stale copy is not run");
+    let got = fetched.iter().find(|f| f.package.id == "creeper").unwrap();
+    assert_eq!(got.package, *creeper);
+    assert_eq!(hash_dir(&got.dir)?.0, creeper.hash, "the server's bytes");
+    let mut ran_sorted = ran;
+    ran_sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(ran_sorted, want, "the server's exact Add-Ons");
     server.stop().await?;
     Ok(())
 }

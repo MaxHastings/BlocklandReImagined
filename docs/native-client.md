@@ -1,7 +1,6 @@
 # Native client integration
 
-This is a development client, not the complete vanilla alpha handoff. The
-previous UI milestone is now connected to native content, an authoritative
+The native UI is connected to native content, an authoritative
 loopback/LAN host, QUIC client state and a persistent world renderer.
 
 ## Application and transport
@@ -14,9 +13,8 @@ running the executable without `--run`.
 Hosting from the typed UI action loads any of the 14 reference map architectures on a
 background worker and starts the existing 120 Hz authoritative server. Solo
 binds loopback with one player; LAN binds port 28000 and enforces the selected
-player limit. Password fields are rejected explicitly until authentication is
-implemented. Host/admin privileges, discovery, durable identity and reconnect
-are still required. Current local hosting does not silently grant administrator
+player limit. Join password fields are rejected explicitly because no server checks a join
+password yet. Current local hosting does not silently grant administrator
 status to a network peer.
 
 Movement intentions travel at 60 Hz while reliable requests and replies remain
@@ -31,8 +29,9 @@ are connected. Free look does not rotate the player's movement frame. Chat
 round-trips through the real server; UI markup/control markers in names and chat
 are treated as plain text. Original Blockheads now render from authoritative
 poses, with native outfit/material selection and initial movement/look layers.
-Client prediction, remote interpolation and animation transitions/tool/emote
-selection remain work. The camera uses authoritative pose updates;
+The client predicts local movement by replaying unacknowledged inputs through
+the server's motor (`bri_sim::prediction`) and draws remote players slightly in
+the past, interpolating buffered poses (`crates/client/src/motion.rs`). The camera uses authoritative pose updates;
 third person sweeps a sphere up to eight units behind the eye against native map
 geometry and replicated brick collision shapes. Collision respects the brick's
 collision flag independently of visibility and targeting. Dynamic actors,
@@ -87,17 +86,19 @@ sun term.
 The renderer now draws original sky faces and moving cloud layers with distance
 fog for all 14 reference maps. Sky orientation/depth/translation and cloud
 motion have offscreen tests; full environment fidelity is not accepted yet.
-The renderer records remaining omissions: fog volumes/storm transitions,
-water/snow, decorations, material detail, terrain holes/streaming and several
+Water, rain/snow and foliage draw in their own passes, and terrain draws as
+camera-following tiles with its holes. The renderer records remaining
+omissions: fog volumes/storm transitions, material detail and several
 map-specific objects. Secondary lighting-cache provenance and the complete map
 set are recorded in `vanilla-reference.md`.
-The current terrain patch is `[-64, -64, 384, 384]` cells. Brick meshes bind the
+Brick meshes bind the
 five original top/side/bottom/ramp overlays and all 77 converted stock prints,
 including original BLS print-name aliases. Texture alpha controls pigment
 coverage separately from brick opacity. Signed paint-offset colors are adapted;
 transparent-paint interaction and pumpkin literal RGB remain explicit fidelity
-questions. Color/shape FX, lights and particles still need rendering. These
-omissions remain mandatory alpha work.
+questions. The scene shader draws v20 color FX (Pearl, Chrome, Glow, Blink, Swirl,
+Rainbow) and shape FX (Undulo, Water); `bri-fx-runtime` draws lights and
+particles.
 
 The client content index validates package paths and reads the 35-world report
 without reading all save payloads at startup. Map/simulation loading is lazy.
@@ -132,16 +133,15 @@ subset use server inspections and reject stale edits. Catalog IDs, print aspects
 target reach and ownership are checked by the server. Opaque imported records
 remain read-only and server-owned. Ctrl+Z follows v20's per-client undo queue
 (511 entries): plants break like hammered bricks, and spray paint, FX paint and
-prints revert. Sound/vehicle/item wrench behaviors, additional events and other
-unfinished adapters still report explicit errors.
+prints revert. The wrench also sets a brick's item, music loop and vehicle, and
+respawns a vehicle spawn's vehicle.
 
 Remaining building fidelity includes exact ghost re-centering/snapping, the
 terrain-only placement offset, projectile tool-flight timing,
-held tools/animations/audio and complete trust/minigame/equipment rules. Reliable
+and held tool animations. Reliable
 actions capture body aim when dispatched, independently of movement datagrams.
 The server validates this aim and still owns position, reach and permissions;
 an action neither rewinds movement nor overwrites the current body orientation.
-Minigames, vehicles, weapons, audio and the full vanilla contract remain required.
 
 Save/Load now connects the native dialogs to authoritative snapshots and local
 files under `<state-dir>/saves/map-<map-id-sha256>/`. Converted original saves are
@@ -177,7 +177,7 @@ limits are 63 MiB per build, eight local file operations, four server save/load
 requests per 120 ticks, and a listing scan of 1,000 local saves/512 MiB. A corrupt
 save currently produces an explicit listing error. Large loads still perform
 planning/collision publication/replication on the authority loop; asynchronous
-chunked loading, smooth large-world rendering and persistent identity remain work.
+chunked loading and smooth large-world rendering remain work.
 
 Current client and dedicated host use a matching full native content identity
 covering geometry/map bindings, materials/prints, effects and the avatar rig,
@@ -233,7 +233,7 @@ When the state directory is omitted, it uses the current user's application data
 on Linux. An explicit directory still overrides this, including for isolated
 headless tests. Existing development `client-state/` directories are not moved;
 pass that directory explicitly to retain those settings/saves.
-It has deliberately not been launched visibly during this work. Native settings
+Native settings
 are versioned, atomically replaced and corruption is reported without erasing
 the existing file. Alt+Enter is currently transient; Options display changes
 use acknowledgment before committing preferences.
@@ -268,4 +268,4 @@ Verified on 2026-09-27 from Windows: the client compiles for
 `x86_64-unknown-linux-gnu` without warnings, links against an Ubuntu 24.04
 sysroot, and the linked binary passes `--check` under WSL Ubuntu against the
 full content folder. Not yet verified: opening a window, input, audio output,
-and GPU rendering on a real Linux desktop; a CachyOS tester is the next step.
+and GPU rendering on a real Linux desktop.

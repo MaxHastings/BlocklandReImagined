@@ -1107,6 +1107,7 @@ fn teleport_image() -> bri_weapons::Image {
             },
         ],
         command: None,
+        shot: None,
     }
 }
 

@@ -282,11 +282,27 @@ fn real_community_samples() {
             .contains(&"projectiles.spawn".to_string())
     );
     assert_eq!(shotgun.summary.assets_failed, 0);
-    // Data alone fires one pellet; the three-pellet spread is the listed behaviour.
+    // The listed port (crates/addon-import/ports) turns the onFire burst
+    // into the image's shot data, read from this copy's script: three pellets.
+    let port = &shotgun.ports[0];
+    eprintln!(
+        "Weapon_Shotgun sha256 {} port {:?} values {:?}",
+        shotgun.source.sha256, port.reason, port.values
+    );
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.values["projectiles"], "3");
+    assert!(on_fire.port.as_ref().is_some_and(|p| p.applied));
     assert_eq!(
         fire(&out, "weapon_shotgun:weapon/shotgunitem"),
-        ["weapon_shotgun:projectile/shotgunprojectile"]
+        ["weapon_shotgun:projectile/shotgunprojectile"; 3]
     );
+    let checks: bri_addon_import::porting::Checks = serde_json::from_slice(include_bytes!(
+        "../ports/weapon_shotgun/checks.json"
+    ))
+    .unwrap();
+    for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+        assert!(ok, "{line}");
+    }
     // Merged with the base game's pack, when this checkout has generated content.
     let vanilla =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009/weapons.json");

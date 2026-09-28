@@ -1,23 +1,25 @@
-# Alpha playtest — known issues
+# Known issues
 
-Crashes, missing content, unusable controls, disappearing saves or broken core
-flows are blockers: please report them. The items below are known gaps.
+Crashes, missing content, controls that don't work, lost saves or broken
+core flows are blockers: please report them (see `TESTER-GUIDE.md` for what
+to send). The items below are known. Everything v20 had that is still
+missing is listed in `FEATURES.md`.
 
-- **Wrench events:** all vanilla inputs and outputs are listed. Not yet
-  applied: projectile outputs on delayed rows (immediate `Delete`, `Bounce` and
-  `Redirect` work). Rows using them are kept and shown read-only.
-- **Terrain:** terrain streams without bounds; distance LOD and detail/bump
-  texturing are still missing.
-- **Vehicles:** physics is a native adaptation, not Torque-exact; driving feel
-  needs your judgment.
-- **Bots:** simple steering without path finding; they can get stuck on
-  complex builds. They only fight inside the brick owner's minigame.
-- **Special map behavior:** some map-specific objects are not implemented.
-  The Tutorial's triggers and lessons work; it runs single player only.
-- **Admin:** the Admin menu (kick, ban, unban, clear bricks, change map,
-  server settings), the wand, the F7/F8 camera and v20's admin chat commands
-  work. Every v20 feature still missing, from menus to chat commands, is
-  listed in `FEATURES.md`.
-- **Visuals:** lighting, shadows, some materials, water and sky effects are not
-  final.
-- **Platform:** Windows only.
+- **Windows only**, and unsigned: SmartScreen warns on the first start.
+- **Wrench events:** projectile outputs on delayed event rows aren't applied
+  yet. Immediate `Delete`, `Bounce` and `Redirect` work. Rows using them are
+  kept and shown read-only.
+- **Vehicles:** handling is rebuilt, not copied from v20's engine. Tell us
+  where driving feels off.
+- **Bots** steer simply, without path finding, and can get stuck on complex
+  builds. They only fight inside the brick owner's mini-game.
+- **Gamepads** work while playing; menus and building need a keyboard and
+  mouse.
+- **Old Add-On scripts don't run.** Imported v20 Add-Ons bring their bricks,
+  weapons and vehicles, not their custom behaviour.
+- **Block faces** from Add-Ons that generate worlds aren't drawn yet.
+- **The Kitchen's main floor** sits slightly off the brick grid.
+- **The Tutorial** runs in single player only.
+- **Lighting, shadows, water and sky** aren't final.
+- **Knocked-out bricks** tumble differently on each player's screen. That's
+  on purpose: they're only for show and never affect play.

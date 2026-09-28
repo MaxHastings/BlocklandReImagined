@@ -2,7 +2,8 @@
 
 `bri-minigames` is a deterministic, host-driven authoritative rules module. It
 contains no renderer, socket, physics owner, legacy reader or script interpreter.
-It compiles independently until root adds it to the shared workspace. Rust 1.93+.
+It is a root workspace member. The host session in `crates/sim/src/session.rs`
+owns a `MinigamesWorld` and replicates `MiniGameView`s to clients.
 
 ## Integration
 
@@ -21,7 +22,7 @@ let effects = world.execute(Command::Create {
 ```
 
 Keep `PlayerId { account, session }` separate from `ActorId`, vehicle IDs, brick
-IDs and connection addresses. Root should maintain explicit adapter maps. A
+IDs and connection addresses. The host maintains explicit adapter maps. A
 reconnect receives a new session even when its authenticated account is unchanged.
 Never accept an account, actor, `EventAuthority::System`, owner-brick identity,
 moderation authority or captured projectile provenance from an unvalidated packet.
@@ -138,7 +139,7 @@ are validated in milliseconds against original server bounds. UI adapters should
 clamp legacy seconds (RT 1–30, VRT 0–300, BRT 2–300); the rules never silently replace
 unknown content or an invalid setting with another item/player type.
 
-## Verification and remaining integration
+## Verification
 
 ```powershell
 cargo test --manifest-path crates/minigames/Cargo.toml
@@ -154,10 +155,7 @@ player types and 21 items, then runs eight simulated players/two games for 12,00
 ticks and 671,200 policy checks with native save/restore. It is a pure rules test,
 not a networking, physics, rendering or gameplay-feel test.
 
-Root must add workspace/dependency entries, instantiate the world in Simulation,
-bind every effect/query to existing player/weapons/vehicles/bricks/events, add
-network commands/late-join replication and familiar minigame UI. Native playable
-implementations of every player type, held tool and sports behavior remain those
-subsystems' responsibilities. This isolated crate does not establish their visual
-or movement fidelity. Maxwell performs interactive testing after those bindings.
+Native playable implementations of every player type, held tool and sports
+behavior belong to those subsystems. This crate does not establish their visual
+or movement fidelity.
 See `docs/research/minigames/README.md` for precise source evidence and decisions.

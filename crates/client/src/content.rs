@@ -526,7 +526,7 @@ impl ClientContent {
             });
         }
         for (dir, catalog_dir) in &paths.brick_extras {
-            install_package_bricks(&mut schema, &mut bricks, &mut selectable, catalog_dir)
+            install_package_bricks(&mut schema, &mut bricks, &mut selectable, dir, catalog_dir)
                 .with_context(|| format!("Loading bricks of {dir}"))?;
         }
         let effects: Library = read_json(
@@ -843,40 +843,61 @@ fn install_death_icons(
     weapons: &bri_weapons::Pack,
     root: &Path,
 ) -> Result<()> {
-    for id in weapons.damage_types.values().flat_map(|t| t.icons()) {
+    for (key, id) in weapons
+        .damage_types
+        .iter()
+        .flat_map(|(key, t)| t.icons().map(move |id| (key, id)))
+    {
         if schema.images.contains_key(&id) {
             continue;
         }
         let source = format!("{id}.png");
-        let (resource, native) = weapons
+        let resource = weapons
             .resources
             .iter()
-            .find(|r| r.path.eq_ignore_ascii_case(&source))
-            .and_then(|r| Some((r, r.native_file.as_deref()?)))
-            .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
-        let path = file(&bri_weapons::resource_root(root, resource), native, INDEX_LIMIT)?;
-        let bytes = fs::read(&path)?;
-        ensure!(
-            format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
-            "Death icon checksum mismatch: {id}"
-        );
-        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
-            .with_guessed_format()?
-            .into_dimensions()?;
-        ensure!(
-            width > 0 && height > 0 && width <= 256 && height <= 256,
-            "Invalid death icon size: {id}"
-        );
-        schema.images.insert(
-            id,
-            bri_ui::schema::ImageEntry {
+            .find(|r| r.path.eq_ignore_ascii_case(&source));
+        let entry = (|| -> Result<bri_ui::schema::ImageEntry> {
+            let (resource, native) = resource
+                .and_then(|r| Some((r, r.native_file.as_deref()?)))
+                .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
+            let path = file(&bri_weapons::resource_root(root, resource), native, INDEX_LIMIT)?;
+            let bytes = fs::read(&path)?;
+            ensure!(
+                format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
+                "Death icon checksum mismatch: {id}"
+            );
+            let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+                .with_guessed_format()?
+                .into_dimensions()?;
+            ensure!(
+                width > 0 && height > 0 && width <= 256 && height <= 256,
+                "Invalid death icon size: {id}"
+            );
+            Ok(bri_ui::schema::ImageEntry {
                 file: path.to_string_lossy().into_owned(),
                 width,
                 height,
                 sha256: resource.sha256.clone(),
                 source: resource.path.clone(),
-            },
-        );
+            })
+        })();
+        // An Add-On's death icon that does not load leaves the kill message
+        // as text (`crate::cosmetic`).
+        let owner = resource
+            .and_then(|r| {
+                let dir = r.package.as_ref()?;
+                Some(bri_package::library::add_on_label(&bri_weapons::resource_root(root, r), dir))
+            })
+            .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
+        match (entry, owner) {
+            (Ok(entry), _) => {
+                schema.images.insert(id, entry);
+            }
+            (Err(error), Some(dir)) => {
+                crate::cosmetic::add_on_fault(&dir, &source, format!("{error:#}"));
+            }
+            (Err(error), None) => return Err(error),
+        }
     }
     Ok(())
 }
@@ -887,6 +908,7 @@ fn install_package_bricks(
     schema: &mut UiPack,
     bricks: &mut Vec<BrickInfo>,
     selectable: &mut Vec<(String, u8)>,
+    dir: &str,
     catalog_dir: &Path,
 ) -> Result<()> {
     #[derive(Deserialize)]
@@ -900,23 +922,33 @@ fn install_package_bricks(
         BTreeMap::new()
     };
     for entry in catalog.bricks.iter().filter(|b| b.selectable()) {
-        let icon = match icons.get(&entry.icon_source) {
-            Some(image) => {
-                let path = file(catalog_dir, &image.file, INDEX_LIMIT)?;
-                let bytes = fs::read(&path)?;
-                ensure!(
-                    format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
-                    "Brick icon checksum mismatch: {}",
-                    entry.id
-                );
-                schema.images.insert(
-                    entry.icon_source.clone(),
-                    bri_ui::schema::ImageEntry {
-                        file: path.to_string_lossy().into_owned(),
-                        ..image.clone()
-                    },
-                );
+        let loaded = icons.get(&entry.icon_source).map(|image| -> Result<_> {
+            let path = file(catalog_dir, &image.file, INDEX_LIMIT)?;
+            let bytes = fs::read(&path)?;
+            ensure!(
+                format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
+                "Brick icon checksum mismatch: {}",
+                entry.id
+            );
+            Ok(bri_ui::schema::ImageEntry {
+                file: path.to_string_lossy().into_owned(),
+                ..image.clone()
+            })
+        });
+        // A brick icon that does not load leaves the brick without one
+        // (`crate::cosmetic`), as a brick with no icon already shows.
+        let icon = match loaded {
+            Some(Ok(image)) => {
+                schema.images.insert(entry.icon_source.clone(), image);
                 IconRef::Pack(entry.icon_source.clone())
+            }
+            Some(Err(error)) => {
+                let label = bri_package::library::add_on_label(
+                    catalog_dir.parent().unwrap_or(catalog_dir),
+                    dir,
+                );
+                crate::cosmetic::add_on_fault(&label, &entry.icon_source, format!("{error:#}"));
+                IconRef::None
             }
             None => IconRef::None,
         };
@@ -1112,7 +1144,7 @@ mod tests {
         .unwrap();
         let mut schema = UiPack::default();
         let (mut bricks, mut selectable) = (Vec::new(), vec![("plate".to_string(), 0)]);
-        install_package_bricks(&mut schema, &mut bricks, &mut selectable, &fixture.0).unwrap();
+        install_package_bricks(&mut schema, &mut bricks, &mut selectable, "fixture", &fixture.0).unwrap();
         // The menu entry and the plantable list agree.
         assert_eq!(bricks.len(), 1);
         assert_eq!(

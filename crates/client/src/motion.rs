@@ -411,7 +411,9 @@ impl Motion {
 fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState {
     let first = history.front().unwrap();
     if tick <= first.tick as f64 {
-        return first.player.clone();
+        let mut state = first.player.clone();
+        state.feet = state.shown_feet();
+        return state;
     }
     for pair in history.iter().collect::<Vec<_>>().windows(2) {
         let (a, b) = (pair[0], pair[1]);
@@ -423,7 +425,7 @@ fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState
     let last = history.back().unwrap();
     let ahead = ((tick - last.tick as f64).min(EXTRAPOLATION_TICKS) / TICK_RATE) as f32;
     let mut state = last.player.clone();
-    let feet = Vec3::from(state.feet) + Vec3::from(state.velocity) * ahead;
+    let feet = Vec3::from(state.shown_feet()) + Vec3::from(state.velocity) * ahead;
     state.feet = feet.to_array();
     state
 }
@@ -431,7 +433,10 @@ fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState
 fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
     let t = t.clamp(0.0, 1.0);
     let mut out = if t < 0.5 { a.clone() } else { b.clone() };
-    out.feet = Vec3::from(a.feet).lerp(Vec3::from(b.feet), t).to_array();
+    // Bodies move on v20's 32 ms ticks; draw them between ticks.
+    out.feet = Vec3::from(a.shown_feet())
+        .lerp(Vec3::from(b.shown_feet()), t)
+        .to_array();
     out.velocity = Vec3::from(a.velocity)
         .lerp(Vec3::from(b.velocity), t)
         .to_array();
@@ -460,6 +465,7 @@ mod tests {
             archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
+            tick: Default::default(),
         }
     }
     fn pose(tick: u64, x: f32, yaw: f32) -> bri_net::protocol::Pose {

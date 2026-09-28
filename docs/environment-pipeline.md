@@ -77,9 +77,10 @@ leaves and burners without authored collision do not become solid obstacles.
 A nonuniform placement/raycast test distinguishes visual geometry from authored
 collision. The 14-map loader/render checks cover all static placements without
 omitted StaticModel/DatablockModel diagnostics. Kitchen visual inspection confirms
-the fixtures in their map context. These checks do not yet prove interactive
-glass destruction, clock ticking/blinking/explosions, repair, distance LOD or
-replicated grass. Those remain explicit diagnostics and alpha work. Translucent
+the fixtures in their map context. Glass shapes (Bedroom windows and bulb,
+Kitchen lights) break on hard player impact and stay broken until the mission
+reloads (`crates/sim/src/session/breakables.rs`). These checks do not prove
+clock ticking/blinking or distance LOD. Translucent
 glass still uses mesh-batch-center sorting, with intersecting-surface limits.
 
 Water rendering/host coverage now use the versioned native records in bundle 014;

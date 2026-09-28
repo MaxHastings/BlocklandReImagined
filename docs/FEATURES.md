@@ -52,19 +52,23 @@ kill messages and respawn.
 brick and fight inside the owner's mini-game.
 
 **Save and load.** Builds save with their description, events and
-ownership, load per map, and sort by name or date.
+ownership, load per map, and sort by name or date. Loading a save made
+with a different colour set asks how to load its colours, as v20 did.
 
 **Avatar.** Every part, face, decal, pack, hat and accent, part colours,
 the colour picker, and ten favourites.
 
 **Hosting and admin.** Single player, LAN and Internet games. Server name,
-player limit, admin and super admin passwords, Advanced Config and Music
-Files. The Admin menu: kick, ban, unban, clear a player's bricks, change
+player limit, admin and super admin passwords, Advanced Config (quotas,
+the public domain timeout and the chat filter apply) and Music Files. The
+Admin menu: kick, ban, unban, clear a player's bricks, change
 map, and server settings (brick limit, bricks per second, chat length,
-build distance, random brick colour, falling damage, vehicle limits). The
+build distance, random brick colour with the next colour on the ghost,
+falling damage, vehicle limits). The
 wand, the F7/F8 admin camera, and `/fetch`, `/find`, `/warp`,
 `/timescale`, `/spy`, `/ret`, `/realbrickcount`, `/cancelallevents`,
-`/clearbots` and the vehicle resets. `/brickcount` for everyone.
+`/clearbots` and the vehicle resets. `/brickcount` and `/clearinventory`
+for everyone.
 
 **Chat and players.** Say and team chat, the talking indicator, name tags,
 centre and bottom prints, the player list with trust and ignore, and the
@@ -73,8 +77,11 @@ console (`~`).
 **Options and keys.** Resolution, fullscreen, VSync, shadows, draw
 distance, texture filtering, precipitation, chat settings, HUD toggles,
 volumes, music and sound toggles, mouse and keyboard settings, invert
-mouse in vehicles, and all 81 of v20's remappable actions with its
-default keys.
+mouse in vehicles, Censor Chat, Press Up to Repeat Chat, the ghost brick
+colour and flash settings, Auto Light, the two steering settings, Render
+Items and Jets in first person, and all 81 of v20's remappable actions
+with its default keys. Windows move, resize, minimize and maximize where
+v20's did, and the F1 help pages keep v20's headings and coloured keys.
 
 ## v20: partly done
 
@@ -82,29 +89,15 @@ default keys.
   physics and brick FX radios are replaced by Low, Medium and High presets.
 - **Event outputs.** Projectile outputs on delayed event rows aren't
   applied yet. The immediate ones work.
-- **Random Brick Colour.** Planted bricks get a random colour, but the
-  ghost still shows your paint colour.
 - **Music Files.** The host's choice limits music bricks, but a player
   joining still sees every track listed in the wrench.
-- **Help pages.** The text is all there, without v20's bold headings and
-  coloured key names.
 - **Saving on someone else's server.** Guests can't save the host's
   world. v20's warning text for this isn't shown.
 - **Screenshots** are always PNG.
 
 ## v20: still missing
 
-- **Options:** Censor Chat, Press Up to Repeat Chat, the ghost brick
-  colour and flash settings, and Render My Player, Items and Jets. Auto
-  Light and the two steering settings already work with v20's defaults,
-  but have no checkbox yet.
-- **Advanced Config:** per-player and LAN quotas, the public-domain timeout
-  and the chat filter are saved but not applied yet.
-- **Load Bricks:** the screen for a save with a different colour set
-  (append, replace or match colours).
-- **Chat commands:** `/clearinventory`, and the `/magicwand` spelling
-  (`/wand` works).
-- **Windows** can be moved but not resized.
+- **Options:** Render My Player.
 - **Join passwords** are hidden for now.
 
 Left out on purpose: Blockland account keys and BL_IDs (players are known
@@ -151,7 +144,8 @@ A guide, samples, and tools that check an Add-On and try its rules
 without opening the game come with the source code.
 
 **Sharing.** Players joining a server download the Add-Ons it runs that
-they don't have. Downloads over 200 MB ask first.
+they don't have, or have in another version, and go straight into the
+game. Their own Add-Ons the server doesn't run sit that game out.
 
 **Add-On code on your PC.** An Add-On can also run its own drawing, sound
 and input code on players' PCs, for things like custom visuals. It runs

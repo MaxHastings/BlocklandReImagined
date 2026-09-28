@@ -799,8 +799,12 @@ async fn stalled_oversized_request_bodies_do_not_starve_other_players() -> Resul
     {
         let (mut raw, answer) = raw_join(&server, |_| hello(&format!("Staller {n}"))).await?;
         assert!(matches!(answer, Message::Welcome { .. }));
-        raw.send.write_all(&(length as u32).to_le_bytes()).await?;
-        raw.send.write_all(&[0x92; 16]).await?;
+        // One write: the host closes a player that announces a bulk-sized
+        // request as soon as it reads the prefix, so a second write could
+        // race that close and fail.
+        let mut stall = (length as u32).to_le_bytes().to_vec();
+        stall.extend([0x92; 16]);
+        raw.send.write_all(&stall).await?;
         attackers.push(raw);
     }
     tokio::time::sleep(Duration::from_millis(200)).await;

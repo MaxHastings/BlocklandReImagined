@@ -136,6 +136,11 @@ tests `>= 1`, so a swimmer rising from Slate Sea's floor flipped between the
 crouch and root poses every tick: the glitchy rise. Torque's `waterFind`
 gives exactly 1 when the water's top is above the body's; ours now does too.
 
+On v20's 32 ms ticks a swimmer gains buoyancy `(1 / 0.7 - 1) x 20` and then
+loses `0.1 x 40` of its speed each tick, so it rises at
+`8.571 x (1 - 4 x 0.032) / 4` = 1.869 units a second (Slate Sea's 9 units in
+about five seconds). 120 Hz steps had given 2.07.
+
 ## Items and vehicles
 
 - **Items.** Every stock `ItemData` (tools, weapons, keys, skis, balls) has

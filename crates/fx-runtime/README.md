@@ -111,7 +111,7 @@ query and `first_person_owner` appropriately. Leaving visibility at its default
 `FrameEffects::lights` contains world position, brightness-scaled RGB and radius.
 `GpuLight::from(snapshot)` is a 32-byte POD storage-buffer record. A concrete
 SceneRenderer helper is in `examples/scene_lights.wgsl`; a GPU test compiles that
-layout. Root must bind its buffer, active range/count and call the helper in the
+layout. The host binds its buffer, active range/count and call the helper in the
 scene material shader. The sample attenuation is explicitly native and
 unshadowed; original falloff and light occlusion remain integration acceptance.
 
@@ -143,11 +143,12 @@ cargo clippy --manifest-path crates/fx-runtime/Cargo.toml --all-targets -- -D wa
 cargo run --release --manifest-path crates/fx-runtime/Cargo.toml --example offscreen_gallery -- content/effects-runtime-pack-001 artifacts/native-effects-runtime/release
 ```
 
-The runtime and importer are now root workspace members using its shared lockfile.
+The runtime and importer are root workspace members.
 The native client reconciles replicated brick lights/emitters, draws particles and
 occluded flares, and feeds animated point lights to the shared scene renderer.
-Source budgets select nearby attachments and expose deferred counts. Player,
-weapon, vehicle and transient event dispatch still need integration. Point lights
+Source budgets select nearby attachments and expose deferred counts. Player and
+vehicle effects run from `crates/client/src/actor_effects.rs`, weapon effects
+from `crates/client/src/weapon_effects.rs`. Point lights
 are currently unshadowed with a native smooth falloff; this is not final fidelity.
 
 See `docs/research/effects-runtime/coverage.md` for evidence and remaining fidelity

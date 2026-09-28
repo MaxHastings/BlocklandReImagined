@@ -145,7 +145,10 @@ pub enum ContactResponse {
     /// `Projectile::Explode`: explode at the contact, armed or not.
     Explode,
     Bounce(f32),
-    Redirect { vector: Vec3, normalized: bool },
+    Redirect {
+        vector: Vec3,
+        normalized: bool,
+    },
 }
 /// The liquid holding a box: how much of the box it covers and the
 /// liquid's density and viscosity.
@@ -222,6 +225,11 @@ pub enum Event {
         image: String,
         hand: u8,
         command: Option<String>,
+    },
+    /// A shot's recoil: add `velocity` to the shooter's own velocity.
+    Recoil {
+        actor: ActorId,
+        velocity: Vec3,
     },
     ImageState {
         actor: ActorId,
@@ -1353,22 +1361,47 @@ impl WeaponsWorld {
                         }
                     }
                 }
-                if let Err(error) = self.spawn(
-                    projectile,
-                    id,
-                    origin,
-                    velocity * a.frame.scale,
-                    a.frame.scale,
-                ) {
-                    self.events.push(Event::Diagnostic {
-                        actor: Some(id),
-                        message: error.to_string(),
+                let shot = image.shot.unwrap_or(Shot {
+                    projectiles: 1,
+                    spread: 0.0,
+                    recoil: 0.0,
+                });
+                if shot.recoil > 0.0 {
+                    // Recoil lands before the projectiles, which inherit it.
+                    let kick = -direction * shot.recoil;
+                    velocity += kick * p.inherit;
+                    self.events.push(Event::Recoil {
+                        actor: id,
+                        velocity: kick,
                     });
-                    return true;
                 }
-                if let Some(p) = self.projectiles.get_mut(&(self.next_id - 1)) {
-                    p.was_thrown = name.contains("football");
-                    p.paint = e.paint;
+                for n in 0..shot.projectiles {
+                    let turn = if shot.spread > 0.0 {
+                        let angle = |axis: u64| {
+                            let r = unit_random(self.tick, id.0, u64::from(n) * 3 + axis);
+                            (r - 0.5) * 10.0 * std::f32::consts::PI * shot.spread
+                        };
+                        Quat::from_euler(glam::EulerRot::XYZ, angle(0), angle(1), angle(2))
+                    } else {
+                        Quat::IDENTITY
+                    };
+                    if let Err(error) = self.spawn(
+                        projectile,
+                        id,
+                        origin,
+                        turn * velocity * a.frame.scale,
+                        a.frame.scale,
+                    ) {
+                        self.events.push(Event::Diagnostic {
+                            actor: Some(id),
+                            message: error.to_string(),
+                        });
+                        return true;
+                    }
+                    if let Some(p) = self.projectiles.get_mut(&(self.next_id - 1)) {
+                        p.was_thrown = name.contains("football");
+                        p.paint = e.paint;
+                    }
                 }
                 if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearThrow");
@@ -1843,4 +1876,16 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
         _ => return Err(anyhow::anyhow!("Response does not redirect")),
     };
     Ok(velocity.clamp_length_max(200.0))
+}
+/// A number in [0, 1) that host and players compute alike for one shot, so
+/// spread needs no random state and nothing on the wire.
+fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
+    let mut z = tick
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(actor.wrapping_mul(0xBF58_476D_1CE4_E5B9))
+        .wrapping_add(n.wrapping_mul(0x94D0_49BB_1331_11EB));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 40) as f32 / (1u64 << 24) as f32
 }

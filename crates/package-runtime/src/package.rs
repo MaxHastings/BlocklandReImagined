@@ -363,28 +363,66 @@ impl Catalog {
     /// does not turn off the others. Deterministic, so a host and its
     /// clients leave out the same packages from the same files.
     pub fn load_skipping(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
-        let mut set = set.clone();
+        Self::skipping(set.packages.clone(), |e| e, |packages| {
+            let set = PackageSet {
+                schema_version: set.schema_version,
+                packages: packages.to_vec(),
+            };
+            Self::inspect(root, &set, server)
+        })
+    }
+    /// [`Self::load_skipping`] for packages loaded from where they are, as
+    /// [`Self::load_dirs`] does (a joining client's downloads).
+    pub fn load_dirs_skipping(
+        packages: &[(std::path::PathBuf, PackageEntry)],
+        server: bool,
+    ) -> (Self, Vec<Diagnostic>) {
+        Self::skipping(packages.to_vec(), |(_, e)| e, |packages| {
+            let listed: BTreeMap<&str, &PackageEntry> =
+                packages.iter().map(|(_, p)| (p.id.as_str(), p)).collect();
+            Self::inspect_dirs(packages, &listed, server)
+        })
+    }
+    /// Inspect `items`, leave out the packages the problems name and try
+    /// again until what is left loads cleanly. Problems no package owns
+    /// leave out the last listed Add-On, one at a time, so they never
+    /// empty the whole set at once.
+    fn skipping<T: Clone>(
+        mut items: Vec<T>,
+        entry: impl Fn(&T) -> &PackageEntry,
+        inspect: impl Fn(&[T]) -> (Self, Vec<Diagnostic>),
+    ) -> (Self, Vec<Diagnostic>) {
         let mut skipped = Vec::new();
         loop {
-            let (catalog, problems) = Self::inspect(root, &set, server);
+            let (catalog, problems) = inspect(&items);
             if problems.is_empty() {
                 return (catalog, skipped);
             }
             let owner = |d: &Diagnostic| {
                 let at = d.location.as_deref()?;
-                set.packages
+                items
                     .iter()
+                    .map(&entry)
                     .filter(|e| at.starts_with(&format!("{}/", e.id)))
                     .max_by_key(|e| e.id.len())
                     .map(|e| e.id.clone())
             };
-            let bad: BTreeSet<String> = problems.iter().filter_map(owner).collect();
+            let mut bad: BTreeSet<String> = problems.iter().filter_map(owner).collect();
             skipped.extend(problems);
             if bad.is_empty() {
-                // Problems no package owns: run nothing rather than guess.
-                return (Self::default(), skipped);
+                let Some(last) = items.iter().map(&entry).rev().find(|e| e.role.is_none()) else {
+                    return (Self::default(), skipped);
+                };
+                skipped.push(
+                    Diagnostic::warning(
+                        "set.left_out",
+                        format!("`{}` was left out so the other Add-Ons load", last.id),
+                    )
+                    .at(location(&last.id, MANIFEST_FILE)),
+                );
+                bad.insert(last.id.clone());
             }
-            set.packages.retain(|e| !bad.contains(&e.id));
+            items.retain(|t| !bad.contains(&entry(t).id));
         }
     }
     /// Load for reporting: every package that could be read, even with

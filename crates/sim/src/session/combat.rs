@@ -23,7 +23,7 @@ const PAIN_TICKS: u64 = 36;
 /// `speedDamageScale` (every stock player type sets 3.8).
 const SPEED_DAMAGE_SCALE: f32 = 3.8;
 /// `mass` of the standard player: impulses divide by it.
-const PLAYER_MASS: f32 = 90.0;
+pub(super) const PLAYER_MASS: f32 = 90.0;
 /// Minimum respawn delay outside minigames (`$Game::MinRespawnTime`).
 const MIN_RESPAWN_TICKS: u64 = 120;
 const SPAWN_BRICK: &str = "v20/brick/brickspawnpointdata";
@@ -142,6 +142,8 @@ pub enum Notice {
     },
     /// `secureClientCmd_ClientTrust` for every player, as this viewer sees them.
     PlayerTrust(BTreeMap<OwnerId, super::PlayerTrust>),
+    /// The music loops this host's music bricks offer (its Music Files).
+    MusicTracks(BTreeSet<String>),
     /// `tempBrick.setColor` under Random Brick Color: the colour the
     /// player's next brick takes, shown on their ghost.
     TempBrickColor(u8),

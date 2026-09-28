@@ -1651,3 +1651,79 @@ fn a_full_environment_quota_leaves_a_new_light_and_emitter_off() {
     .unwrap();
     assert!(s.simulation().state().bricks[&id].light.is_some());
 }
+
+/// The sounds and effects of one brick-breaking hit, in order: v20's hammer
+/// plays `hammerHitSound`, the Destructo Wand its explosion's `wandHitSound`,
+/// and each `killBrick` one brick death (the client's break sound).
+fn hit_cues(s: &mut Session) -> Vec<String> {
+    use bri_sim::presentation::CueKind;
+    s.take_cues()
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            CueKind::WeaponSound { profile } => Some(format!("sound {profile}")),
+            CueKind::WeaponEffect { definition, image: None, .. } => {
+                Some(format!("explosion {definition}"))
+            }
+            CueKind::BrickKill { brick, .. } => Some(format!("kill {brick}")),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound() {
+    use bri_admin::{Action, Request};
+    let mut s = session(vec![], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.5, 0.05, 0.0), true)
+        .unwrap();
+    // Let the spawn burst finish first.
+    while !s.snapshot().weapons.projectiles.is_empty() {
+        s.step().unwrap();
+    }
+    let first = plant(&mut s, admin, 1, [0.5, 0.1, -3.25]);
+    aim(&mut s, admin, 2, [0.5, 0.1, -3.01]);
+    s.take_cues();
+    swing(&mut s, admin, 3, 0).unwrap();
+    assert_eq!(
+        hit_cues(&mut s),
+        [
+            "explosion hammerExplosion".to_string(),
+            "sound hammerHitSound".into(),
+            format!("kill {first}"),
+        ]
+    );
+    let second = plant(&mut s, admin, 4, [0.5, 0.1, -3.25]);
+    aim(&mut s, admin, 5, [0.5, 0.1, -3.25]);
+    s.command(admin, 6, Command::Admin(Request::new(Action::DestructoWand)))
+        .unwrap();
+    hold_still(&mut s, admin);
+    s.take_cues();
+    s.command(admin, 7, Command::WeaponTrigger { down: true })
+        .unwrap();
+    for _ in 0..20 {
+        s.step().unwrap();
+    }
+    assert_eq!(
+        hit_cues(&mut s),
+        [
+            "explosion AdminWandExplosion".to_string(),
+            "sound wandHitSound".into(),
+            format!("kill {second}"),
+        ]
+    );
+}
+
+#[test]
+fn a_joining_player_learns_the_music_the_host_offers() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(to, n)| *to == owner && matches!(n, bri_sim::session::Notice::MusicTracks(_)))
+    );
+}

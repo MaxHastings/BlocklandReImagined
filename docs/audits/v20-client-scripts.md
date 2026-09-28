@@ -36,11 +36,14 @@ default our code passes where it reads that pref.
   `setZoomSpeed` clamps both to 200 ms, so the zoom ramp is unchanged.
 - **Named nowhere in our code, but player-facing.** Some are handled under
   other names: the avatar prefs live in our settings file, and ChatSize
-  drives the chat font. Others are still left for parity's Options rows:
-  the `tempBrickFlash*` ghost-brick flash, the
-  `tempBrickInside/Outside*` colours, `renderMyPlayer`, `renderMyItems`,
-  `renderMyJets`, `Chat::CurseFilter` and `ChatRepeat`. The rest are
-  Torque renderer and network tuning with no counterpart.
+  drives the chat font. The Options rows parity built read the rest by
+  their v20 names: the `tempBrickFlash*` ghost-brick flash, the
+  `tempBrickInside/Outside*` colours, `renderMyItems`, `renderMyJets`,
+  `Chat::CurseFilter` and `ChatRepeat` (`7caf41e4`, `14601a6b`).
+  `renderMyItems` has no checkbox, as in v20, which authored it outside
+  the Advanced pane. `renderMyPlayer` is dropped: it only hides the body in
+  first person, where v20's player datablock never draws it. The rest are Torque renderer and
+  network tuning with no counterpart.
 
 ## Binds
 
@@ -70,8 +73,9 @@ have none, and nothing player-visible depends on them:
 
 ## Handed to other lanes
 
-- **Parity.** Wire the Options checkboxes for Auto Light
-  (`$pref::Input::AutoLight`), Strafe Steering and Steering Auto-Return
-  (the two prefs above), Censor Chat, Up to repeat chat, the temp brick
-  colours and flash, and Render My Player, Items and Jets. The behaviour
-  for Auto Light and steering is in place and reads those names.
+- **Parity.** Done: Options shows Auto Light
+  (`$pref::Input::AutoLight`), Strafe Steering and Steering Auto-Return,
+  Censor Chat, Up to repeat chat, the temp brick colours and flash, and
+  Show Jets in First Person, each honoured in game, and Render Items is
+  honoured from its pref (`7caf41e4`, `14601a6b`). Render My Player stays
+  dropped, as above.

@@ -41,7 +41,7 @@ branch changed.
 | | Present | Partial | Missing | Lane | Dropped |
 |---|---|---|---|---|---|
 | Part 1 on `1932015` (120 rows) | 74 | 5 | 27 | 7 | 7 |
-| Part 1 now (120 rows) | 89 | 5 | 11 | 7 | 8 |
+| Part 1 now (120 rows) | 100 | 5 | 0 | 7 | 8 |
 
 At the audit, the misses a player noticed first were, most noticeable first:
 
@@ -114,7 +114,7 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | Max draw distance | Present | `options.rs` (`VISIBLE_DISTANCE_MAX`) |
 | Anisotropy, trilinear, sharp filter | Present | `options.rs` (`ANISOTROPY`), `client/src/graphics.rs` |
 | Precipitation | Present | `options.rs` (`PRECIPITATION`) |
-| Render My Player / Render Items / Jets in first person | Missing | hidden; no reader in `crates/` |
+| Render My Player / Render Items / Jets in first person | Present | `14601a6b`: Show Jets in First Person in Options; Render Items honoured from its pref (v20 authored its checkbox off the pane); Render My Player dropped, as v20's datablock never draws the body in first person |
 | Sky, clouds, decals, environment maps, dynamic lights, VBO, particle falloff | Dropped | renderer-internal Torque switches |
 | Audio: master, shell, sim volume | Present | `options.rs` (`VOLUMES`) |
 | Play music, menu sounds, plant/move/error sounds | Present | `options.rs` (`CHECKBOX_PREFS`), `client/src/audio.rs` |
@@ -124,11 +124,11 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | Fast 1st/3rd switch, super-shift toggle and smart toggle | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs` |
 | Queue brick buying, reverse brick scroll, jump/jet combo | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs`, `screens/selector.rs` |
 | Recolour brick icons, show brick slot numbers, coloured escape menu | Present | `options.rs` (`CHECKBOX_PREFS`), `models/hud.rs` |
-| Censor Chat (`$Pref::Chat::CurseFilter`) | Missing | hidden; no reader |
-| Press Up to Repeat Chat (`$pref::Chat::ChatRepeat`) | Missing | hidden; no reader |
-| Temp brick inside/outside uses paint colour | Missing | hidden; no reader |
-| Auto Light (`$pref::Input::AutoLight`) | Missing | hidden; no reader |
-| Steering auto-return, strafe steering | Missing | hidden; no reader |
+| Censor Chat (`$Pref::Chat::CurseFilter`) | Present | fixed in `7caf41e4` |
+| Press Up to Repeat Chat (`$pref::Chat::ChatRepeat`) | Present | fixed in `7caf41e4` |
+| Temp brick inside/outside uses paint colour | Present | fixed in `7caf41e4`, with the flash time and colours |
+| Auto Light (`$pref::Input::AutoLight`) | Present | checkbox in `7caf41e4`; behaviour from final touches |
+| Steering auto-return, strafe steering | Present | checkboxes in `14601a6b`; behaviour in `cdd40260` (final touches) |
 | Show BL_IDs in player list | Dropped | no BL_IDs; identities are keys |
 | Screenshot format | Partial | hidden; screenshots always PNG |
 
@@ -143,7 +143,7 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | Join password | Lane | first impressions #14; hidden in `ac00991` |
 | Add-Ons | Present | `menus.rs:713` |
 | Advanced Config (`serverConfigGui`) | Present | fixed in `6a3e230`: saved `$Pref::Server::*`, applied when hosting |
-| Music Files (`MusicFilesGui`) | Present | fixed in `49214a2`: tracks left off are not offered to music bricks |
+| Music Files (`MusicFilesGui`) | Present | fixed in `49214a2`: tracks left off are not offered to music bricks; joiners' wrenches list only the offered ones since `2ce1ecd2` |
 | Launch Game | Present | `menus.rs:473` |
 
 ### Join (`JoinServerGui`, `ManualJoin`, `JoinServerPassGui`)
@@ -172,12 +172,12 @@ opened Start Game's Advanced Config and applied the rows marked fixed.
 | Brick limit | Lane | first impressions #14 |
 | Max bricks per second | Present | `d22e5d6` (first-impressions thread) |
 | Max chat length | Present | `d22e5d6` (first-impressions thread) |
-| Random brick colour | Present | fixed in `b3409a9`; the ghost still shows the builder's paint |
-| E-Tard (chat) filter | Missing | no reader |
+| Random brick colour | Present | fixed in `b3409a9`; the ghost shows the next colour since `c72cc900` |
+| E-Tard (chat) filter | Present | fixed in `e9fd8ed8` |
 | Falling damage (outside mini-games) | Present | fixed in `74b8efa`; on by default as in v20 |
-| Public domain timeout | Missing | no reader |
+| Public domain timeout | Present | fixed in `e9fd8ed8` |
 | Physics / player vehicle limits | Present | fixed in `74b8efa` |
-| Per-player and LAN quotas | Missing | no reader |
+| Per-player and LAN quotas | Present | vehicles in `e9fd8ed8`; schedules, lights and emitters, items and projectiles in `fbc263ef`. Misc counts explosions, which are instantaneous here |
 | Too-far distance | Present | `d22e5d6` (first-impressions thread) |
 
 ### Administration
@@ -205,7 +205,7 @@ opened Start Game's Advanced Config and applied the rows marked fixed.
 | Emotes (`/sit`, `/love`, `/hate`, `/alarm`, `/confusion`, `/bsd`, `/hug`, `/wtf`, `/zombie`) | Present | `client/src/app.rs:5190-5196` |
 | `/suicide`, `/light`, `/wand` | Present | `app.rs:5186-5189` |
 | `/brickcount` | Present | fixed in `71b548f` |
-| `/clearinventory` | Missing | not handled |
+| `/clearinventory` | Present | fixed in `c72cc900`: empties the brick cart |
 | Player list (F2), trust invite/demote, ignore | Present | `crates/ui/src/screens/players.rs:227-265` |
 | Console (`~`) | Present | `crates/ui/src/screens/console.rs` |
 | Center print, bottom print | Present | event outputs; `docs/audits/pong-events.md` |
@@ -254,7 +254,7 @@ opened Start Game's Advanced Config and applied the rows marked fixed.
 | Load, per map, with ownership | Present | `saveload.rs:378` |
 | Sort by name or date | Present | `saveload.rs:458` |
 | Fast load | Dropped | hidden, `saveload.rs:80`; no Torque ghosting |
-| Colour-set mismatch prompt (`LoadBricksColorGui`) | Missing | no screen |
+| Colour-set mismatch prompt (`LoadBricksColorGui`) | Present | fixed in `c3ad84a0`: Nearest Match, Add More Colors, Cancel. Replace is hidden: v20 needed it for a 64-colour set, ours holds 256, and the replicated palette only grows |
 | Remote save warning (`saveBricksWarningGui`) | Partial | guests cannot save a host's world; no v20 warning text |
 
 ### Player appearance (`AvatarGui`, `ColorSetGui`)
@@ -303,7 +303,7 @@ are the v20-fidelity thread's lane and are not rated here.
 | Add-On download on join, mismatch screen | Lane | night QA, now landing |
 | Server rules in Rhai, HUD panels, weapons as data | Solid | `packages/samples/*`, `crates/package-runtime` |
 | Chat commands from Add-Ons, with arguments | Solid | `9d501b7`, `crates/sim/src/session/packages.rs:1626-1680` |
-| Sandboxed client code (wasm, WGSL) behind trust tiers | Solid in code, rough for players | built in PR #11 (`319ffbe`), red-teamed (`d662c73`); the join-screen trust prompt is not built, so on others' servers only already-trusted code runs |
+| Sandboxed client code (wasm, WGSL) behind trust tiers | Solid | built in PR #11 (`319ffbe`), red-teamed (`d662c73`); joining asks "Trust and join" since `8b009925`. Elevated code is not offered to joiners yet (guide section 8) |
 | v20 Add-On import (bricks, weapons, vehicles) | Solid | guide section 7; night QA |
 | New bricks without v20 files | Missing | guide section 8: no native brick format |
 | Block faces for `block` content | Missing | guide section 8: loads, not drawn |
@@ -336,37 +336,32 @@ Hashes are this branch's; Gate lands each under a new hash on main.
 | `b3409a9` | Random Brick Color colours planted bricks from v20's six. |
 | `a7e161f` | Create Mini-Game's ten favourite slots and Set Favs. |
 | `49214a2` | Start Game's Music Files; a hosted game offers only the tracks left on. |
+| `7caf41e4` | Options shows Censor Chat, Press Up to Repeat Chat, the temp brick paint colours and flash, and Auto Light, each honoured in game. |
+| `14601a6b` | Show Jets in First Person and Render Items are honoured; Options shows Strafe Steering and Steering Auto-Return. |
+| `9ea1b6f6` | Help pages draw their fonts, colours and margins (the UI's ML text). |
+| `2497a46d` | Windows v20 authored resizable, maximizable or minimizable (Join Server and others) resize from their edges and use their title bar boxes. Options stays fixed, as its tabs are laid out for one size. |
+| `e9fd8ed8` | The E-Tard filter, the public domain timeout and the per-builder vehicle quotas apply. |
+| `fbc263ef` | Schedule, light and emitter, item and projectile quotas apply per builder, LAN or Internet, clamped as v20's `verifyQuotaNumber`. |
+| `c3ad84a0` | Load Bricks asks how to load a save's differing colours (`LoadBricksColorGui`). |
+| `c72cc900` | Random Brick Color shows the next colour on the ghost; `/clearinventory` empties the brick cart. |
+| `2ce1ecd2` | A joiner's wrench lists only the music the host's Music Files offer. |
 
 `crates/ui/tests/authored_buttons.rs` now asserts that no visible button on
 the 19 menu screens answers "Interface under construction".
 
 ## Still open
 
-Most noticeable first. None is started on this branch.
+Every Part 1 row that was missing is built. What remains is partial or
+dropped, each for the reason in its row:
 
-1. **Options settings v20 had that are still hidden**: Censor Chat,
-   Press Up to Repeat Chat, Temp Brick paint-colour toggles (and flash
-   time and colours), Auto Light, Steering Auto-Return and Strafe
-   Steering, Render My Player / Items / Jets. Each needs its behaviour
-   built, then its checkbox added to `CHECKBOX_PREFS` in
-   `crates/ui/src/screens/options.rs`.
-2. **Help page formatting**: the pages keep their text but not their
-   bold headings, blue key names or margins, which the UI's ML subset
-   (`crates/ui/src/text.rs`, `layout_ml`) does not draw.
-3. **Window resize, minimize and maximize** (`resizeWidth`,
-   `resizeHeight`, `canMinimize`, `canMaximize`): only moving is built.
-   Few v20 windows allow them; resizing Options would need its tab layout
-   to reflow.
-4. **Per-player and LAN quotas, public domain timeout, E-Tard filter**
-   in Advanced Config are saved but not applied. Quotas need the host to
-   know whether it is a LAN game.
-5. **Load Bricks colour-set mismatch** (`LoadBricksColorGui`: append,
-   replace or match colours) has no screen.
-6. **`/clearinventory`** is an unknown command.
-7. **Random Brick Color's ghost**: the ghost shows the builder's paint;
-   v20 showed the random colour before planting.
-8. **Music Files for joiners**: a joiner's wrench still lists every track,
-   and the host refuses the ones it turned off.
+- **Partial**: the lighting/particle/texture quality radios (replaced by
+  Graphics Quality presets), the screenshot format (always PNG),
+  `/magicwand` (v20's admin wand, which destroys anyone's bricks, is not
+  built; `/wand` works), delayed projectile outputs
+  (`docs/KNOWN-ISSUES.md`) and the remote save warning text.
+- **Dropped this round**: Load Bricks' Replace Current Color Set (hidden;
+  see its row), Render My Player (see its row) and the Misc quota (it
+  counts explosions, which are instantaneous here).
 
 Other lanes' items (join password, name prompt, net graph, weapon feel,
 brick damage, Add-On downloads) stay with those threads.
