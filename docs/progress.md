@@ -4224,3 +4224,56 @@ refusal); with content, `cargo test -p bri-sim --test vehicles --
 ridden and steered east). Also `cargo test` for bri-sim, bri-motor,
 bri-package-runtime, bri-net, bri-client; clippy clean. Not seen in a
 window: how mounting and riding feel needs Max's playtest.
+## 2026-09-28 Old v20 saves convert themselves (branch `claude/project-thread-3otez8`)
+
+Players can't have their own v20 `.bls` saves converted ahead of time, and
+the game could not read a `.bls` at all: Load Bricks listed only the stock
+saves converted offline and saves made in this game. Now any `.bls` in the
+saves folder (`<state>/saves`: `user-state` beside `Launch.cmd`, or
+`%LOCALAPPDATA%\BlocklandReImagined` for the standalone exe) converts on a
+background thread on the first frame, and again whenever Load Bricks opens,
+so a file dropped in mid-game shows up too. Wilfred's suggestion via Max:
+automatic at startup, nothing for the player to do.
+
+- Layout: v20's `saves/<Map>/<name>.bls` copied in whole, or loose files.
+  A folder names its map the way v20's `saveName` did (Bedroom, Kitchen,
+  Slate, Slopes, Tutorial; every Slate variant saves as Slate). An unknown
+  folder is listed under its own name; loose files under "Other". The
+  game's own `map-<sha>` folders are skipped. v20 names ending in a space or
+  dot ("Afghanistan DM ") are listed trimmed; that also makes the stock
+  "Afghanistan DM" save visible in Load Bricks, which it wasn't before.
+- Conversion is the offline stock-save pipeline (bricks by UI name, then
+  lights/emitters, wrench events and spawn bricks, then items), against the
+  loaded content including Add-On bricks (stock names win). Originals are
+  only read. Native copies go to `<state>/converted-saves` with an index
+  keyed by path, size, modified time and a fingerprint of the converter and
+  content, so each save converts once and again only when it or the content
+  changes; unreferenced copies are pruned. A save that fails is skipped and
+  logged once. Load Bricks gets new saves as they finish.
+- Order in the list: stock saves < converted `.bls` < saves made in this
+  game, so saving under the same name keeps the original `.bls` and lists
+  the new save. Colours go through the existing Color Warning path
+  (`LoadBricks_GetColorDifference`), ownership stays v20-metadata as for the
+  stock saves, and the Load Brick Ownership box applies as before.
+- Load Bricks gets a **Saves Folder** button beside Load Brick Ownership that
+  opens the folder in Explorer. An old Blockland install's `saves` in the
+  usual places (Program Files, Program Files (x86), Steam, `C:\Blockland`)
+  is listed read-only; nothing is ever written there.
+- Pivot: `bls.rs`, `events.rs` and `effect_bindings.rs` moved from
+  `bri-convert` into a new `bri-bls` crate (content, world and events only),
+  so the game depends on it without pulling the Torque asset readers into
+  the runtime graph. `bri-convert` re-exports them; the offline tools are
+  unchanged.
+
+Evidence: `cargo test -p bri-bls -p bri-convert --lib`;
+`cargo test -p bri-client --lib saves` (folder layout, loose/unknown/old
+install listing, skip on broken, convert-once, reconvert on change and on
+new content, pruning, originals byte-identical, game save shadowing);
+`cargo test -p bri-ui --lib saveload` (the button requests
+`OpenSavesFolder`); with `BRI_CONTENT`, `cargo test -p bri-client --test
+old_saves -- --include-ignored`: the game's conversion equals the offline
+pack for all 35 stock saves, and dropped real saves list, load with every
+brick and colour, keep Demo Pong's events and stay unchanged on disk;
+clippy on the four crates. An offscreen render of Load Bricks shows the
+button fitting beside the ownership box. Not seen in a window: Max's
+playtest of dropping saves in and loading them.

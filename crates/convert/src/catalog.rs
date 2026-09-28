@@ -389,4 +389,32 @@ mod tests {
             assert!(read_stock(source).is_err());
         }
     }
+    fn bls_fixture() -> String {
+        format!(
+            "This is a Blockland save file.\n1\nDescription\n{}Linecount 1\nMissing Brick\" 1 2 3 1 0 2  0 0 1 0 1\n",
+            "1 0.5 0 1\n".repeat(64)
+        )
+    }
+    #[test]
+    fn hidden_state_variants_keep_identity_but_last_name_loads_from_bls() {
+        let catalog = read_at(r#"
+            datablock fxDTSBrickData(Open) {brickFile="./open.blb";uiName="Chest";iconName="";};
+            datablock fxDTSBrickData(Closed) {brickFile="./closed.blb";uiName="Chest";category="Special";subCategory="Interactive";};
+        "#, "Add-Ons/Chest").unwrap();
+        assert!(!catalog.bricks[0].selectable());
+        assert!(catalog.bricks[1].selectable());
+        assert_eq!(catalog.bricks[0].icon_source, "");
+        let world = bri_bls::bls::read(
+            bls_fixture().replace("Missing Brick", "Chest").as_bytes(),
+            &catalog,
+            "test",
+            "map/test",
+        )
+        .unwrap();
+        assert_eq!(
+            world.bricks[&1].definition,
+            bri_world::ContentRef::Resolved("v20/brick/closed".into())
+        );
+        assert_eq!(catalog.bricks[0].mesh_id, "v20/add-ons/chest/open.blb");
+    }
 }

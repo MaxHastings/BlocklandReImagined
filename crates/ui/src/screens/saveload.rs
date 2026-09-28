@@ -7,6 +7,8 @@ use crate::view::EventKind;
 /// Native saves are `<name>.world.json`; the dialogs show and take the bare
 /// name like v20 did with `.bls`.
 const EXTENSION: &str = ".world.json";
+/// Load Bricks' button showing where old `.bls` saves go.
+const OPEN_FOLDER: &str = "LoadBricks_OpenFolder";
 
 fn display_name(file: &str) -> &str {
     let name = file.strip_suffix(EXTENSION).unwrap_or(file);
@@ -82,6 +84,24 @@ impl SaveLoad {
                 if var.eq_ignore_ascii_case("$pref::FastLoad") {
                     s.view.set_visible(n, false);
                 }
+            }
+        }
+        if !save {
+            // Beside Load Brick Ownership, whose box keeps its text's width.
+            if let Some(n) = s.view.id("LoadBricks_DoOwnership") {
+                s.view.nodes[n].ctrl.extent[0] = 175;
+            }
+            if let Some(window) = s.view.id("LoadBricks_Window") {
+                let mut open = button(
+                    "BlockButtonProfile",
+                    Rect::new(520, 259, 106, 28),
+                    "base/client/ui/button1",
+                    "Saves Folder",
+                    OPEN_FOLDER,
+                );
+                open.name = Some(OPEN_FOLDER.into());
+                s.view.add(window, open);
+                s.view.measure(&core.pack);
             }
         }
         if save {
@@ -471,6 +491,9 @@ impl Screen for SaveLoad {
             "canvas.popdialog(\"savebricksgui\");" | "canvas.popdialog(\"loadbricksgui\");" => {
                 self.cancel(core)
             }
+            c if c.eq_ignore_ascii_case(OPEN_FOLDER) => {
+                core.request(UiAction::OpenSavesFolder);
+            }
             "savebricks_description.settext(\"\");" => {
                 self.set("SaveBricks_Description", "");
             }
@@ -536,6 +559,7 @@ mod tests {
                     ("GuiPopUpMenuCtrl", "LoadBricks_MapMenu"),
                     ("GuiCheckBoxCtrl", "LoadBricks_DoOwnership"),
                     ("GuiMLTextCtrl", "LoadBricks_Description"),
+                    ("GuiWindowCtrl", "LoadBricks_Window"),
                 ],
             ),
         ] {
@@ -588,6 +612,25 @@ mod tests {
         ];
         ui.drain_actions();
         ui
+    }
+    #[test]
+    fn load_bricks_opens_the_saves_folder_old_saves_go_in() {
+        let mut ui = fixture();
+        let mut s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        let node = s.view.id(OPEN_FOLDER).expect("Saves Folder button");
+        assert_eq!(s.view.node(node).ctrl.text.as_deref(), Some("Saves Folder"));
+        s.on_event(
+            &ViewEvent {
+                node,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        let actions = ui.drain_actions();
+        assert!(matches!(actions[..], [(_, UiAction::OpenSavesFolder)]), "{actions:?}");
+        // Save Bricks has no such button.
+        let s = SaveLoad::new(ScreenId::SaveBricks, &ui.core);
+        assert!(s.view.id(OPEN_FOLDER).is_none());
     }
     #[test]
     fn filenames_are_explicit_native_leaf_names() {

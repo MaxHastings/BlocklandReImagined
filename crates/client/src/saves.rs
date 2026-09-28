@@ -23,6 +23,8 @@ pub struct Store {
     directory: PathBuf,
     templates: Vec<Entry>,
     map_names: BTreeMap<String, String>,
+    /// v20 `.bls` saves players brought over, converted in the background.
+    old: Option<std::sync::Arc<crate::old_saves::OldSaves>>,
 }
 /// What the save dialogs say about a save file that cannot be read.
 const DAMAGED: &str =
@@ -49,6 +51,13 @@ pub fn valid_name(name: &str) -> bool {
         ]
         .contains(&reserved.as_str())
 }
+/// The save name Load Bricks lists a v20 save under. v20 allowed names
+/// ending in a space or dot ("Afghanistan DM "), which a native save cannot
+/// have, so those are trimmed.
+pub fn v20_save_name(stem: &str) -> Option<String> {
+    let name = format!("{}.world.json", stem.trim_end_matches([' ', '.']));
+    valid_name(&name).then_some(name)
+}
 fn modified_date(seconds: u64) -> String {
     // Gregorian calendar in March-based 400-year eras. Fixed-width UTC text
     // keeps the existing UI's lexicographic date sort chronological.
@@ -74,7 +83,11 @@ fn modified_date(seconds: u64) -> String {
     )
 }
 impl Store {
-    pub fn new(state: &Path, content: &crate::content::ClientContent) -> Self {
+    pub fn new(
+        state: &Path,
+        content: &crate::content::ClientContent,
+        old: Option<std::sync::Arc<crate::old_saves::OldSaves>>,
+    ) -> Self {
         let map_names = content
             .maps
             .iter()
@@ -84,12 +97,12 @@ impl Store {
             directory: state.join("saves"),
             templates: vec![],
             map_names,
+            old,
         };
         for world in &content.worlds {
-            let name = format!("{}.world.json", world.name);
-            if !valid_name(&name) {
+            let Some(name) = v20_save_name(&world.name) else {
                 continue;
-            }
+            };
             store.templates.push(Entry {
                 info: SaveFileInfo {
                     name,
@@ -105,6 +118,19 @@ impl Store {
             });
         }
         store
+    }
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        directory: PathBuf,
+        map_names: BTreeMap<String, String>,
+        old: Option<std::sync::Arc<crate::old_saves::OldSaves>>,
+    ) -> Self {
+        Self {
+            directory,
+            templates: vec![],
+            map_names,
+            old,
+        }
     }
     pub fn map_name(&self, id: &str) -> String {
         self.map_names.get(id).cloned().unwrap_or_else(|| {
@@ -149,6 +175,40 @@ impl Store {
                 )
             })
             .collect();
+        // Converted `.bls` saves shadow the stock ones and give way to saves
+        // made in this game, as a newer file of the same name would.
+        for save in self.old.iter().flat_map(|o| o.list()) {
+            let Some(name) = v20_save_name(&save.name) else {
+                continue;
+            };
+            let map = if crate::content::map_for_save_folder(&save.folder).is_some() {
+                self.map_name(&save.map_id)
+            } else {
+                // v20's Load Bricks capitalized the folder's first letter.
+                let mut chars = save.folder.chars();
+                chars.next().map_or_else(String::new, |first| {
+                    first.to_uppercase().collect::<String>() + chars.as_str()
+                })
+            };
+            let Some(old) = &self.old else { break };
+            files.insert(
+                (map.to_ascii_lowercase(), name.to_ascii_lowercase()),
+                Entry {
+                    info: SaveFileInfo {
+                        name,
+                        map,
+                        modified: modified_date(save.modified_s),
+                        description: save.description.join("
+"),
+                        brick_count: Some(save.bricks),
+                        damaged: false,
+                    },
+                    map_id: save.map_id,
+                    path: save.path,
+                    root: old.cache().to_path_buf(),
+                },
+            );
+        }
         let mut count = 0;
         let mut bytes = 0_u64;
         for directory in std::fs::read_dir(&root)? {
@@ -536,6 +596,14 @@ mod tests {
         assert_eq!(color_difference(&world, &build), None);
     }
     #[test]
+    fn v20_names_ending_in_a_space_or_dot_are_listed_trimmed() {
+        assert_eq!(v20_save_name("Afghanistan DM ").as_deref(), Some("Afghanistan DM.world.json"));
+        assert_eq!(v20_save_name("A.T.C. Fort").as_deref(), Some("A.T.C. Fort.world.json"));
+        assert_eq!(v20_save_name("Wow..."), Some("Wow.world.json".into()));
+        assert_eq!(v20_save_name(" . "), None);
+        assert_eq!(v20_save_name("CON"), None);
+    }
+    #[test]
     fn utc_save_dates_are_sortable_across_leap_year_boundaries() {
         assert_eq!(modified_date(0), "1970-01-01 00:00Z");
         assert_eq!(modified_date(951782400), "2000-02-29 00:00Z");
@@ -563,6 +631,7 @@ mod tests {
         let path = directory.join("original/source.json");
         std::fs::write(&path, &original)?;
         let store = Store {
+            old: None,
             directory: directory.join("user"),
             map_names: [("map".into(), "Map".into())].into(),
             templates: vec![Entry {
@@ -655,6 +724,7 @@ mod tests {
             directory: directory.clone(),
             map_names: [("map".into(), "Map".into())].into(),
             templates: Vec::new(),
+            old: None,
         };
         let world = bri_world::World::new("Good".into(), "map".into(), vec![[1.0; 4]]);
         let build = SavedBuild::capture(&world, true, true)?;
@@ -701,6 +771,7 @@ mod tests {
             directory,
             map_names: [("map".into(), "Map".into())].into(),
             templates: Vec::new(),
+            old: None,
         };
         let mut world = bri_world::World::new("Live".into(), "map".into(), vec![[1.0; 4]]);
         let save = store.autosaver(&world);

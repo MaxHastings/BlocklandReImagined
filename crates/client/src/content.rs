@@ -1037,6 +1037,20 @@ fn palette(pack: &UiPack) -> Result<Vec<PaintDivision>> {
     Ok(paint)
 }
 
+/// The map a v20 `saves/<folder>/` belongs to. v20 names the folder after the
+/// mission's `saveName`, which every Slate variant shares with Slate and the
+/// dark rooms share with their lit ones, so the base map stands for them.
+pub fn map_for_save_folder(folder: &str) -> Option<&'static str> {
+    Some(match folder.to_ascii_lowercase().as_str() {
+        "bedroom" => LOADABLE_MAPS[0],
+        "kitchen" => LOADABLE_MAPS[1],
+        "slopes" => LOADABLE_MAPS[2],
+        "slate" => LOADABLE_MAPS[3],
+        "tutorial" => bri_sim::tutorial::MAP_ID,
+        _ => return None,
+    })
+}
+
 fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
     let report: WorldReport = read_json(&file(root, "report.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
     ensure!(
@@ -1059,15 +1073,7 @@ fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
         let name = name
             .strip_suffix(".bls")
             .context("Reference-world source lacks BLS provenance suffix")?;
-        let map_id = match folder.to_ascii_lowercase().as_str() {
-            "bedroom" => LOADABLE_MAPS[0],
-            "kitchen" => LOADABLE_MAPS[1],
-            "slopes" => LOADABLE_MAPS[2],
-            "slate" => LOADABLE_MAPS[3],
-            "tutorial" => bri_sim::tutorial::MAP_ID,
-            _ => "",
-        }
-        .to_string();
+        let map_id = map_for_save_folder(folder).unwrap_or("").to_string();
         let id = format!(
             "v20/world/{}/{}",
             folder.to_ascii_lowercase(),

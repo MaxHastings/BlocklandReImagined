@@ -29,6 +29,7 @@ pub mod ghosts;
 pub mod mods;
 pub mod motion;
 pub mod network;
+pub mod old_saves;
 pub mod packages;
 pub mod perf;
 pub mod platform;

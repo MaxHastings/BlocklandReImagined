@@ -1,4 +1,4 @@
-//! Offline BLS import. Original extension text is preserved, never executed.
+//! BLS import. Original extension text is preserved, never executed.
 use anyhow::{Context, Result, bail, ensure};
 use bri_content::brick::Catalog;
 use bri_world::*;
@@ -333,28 +333,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-    #[test]
-    fn hidden_state_variants_keep_identity_but_last_name_loads_from_bls() {
-        let catalog = crate::catalog::read_at(r#"
-            datablock fxDTSBrickData(Open) {brickFile="./open.blb";uiName="Chest";iconName="";};
-            datablock fxDTSBrickData(Closed) {brickFile="./closed.blb";uiName="Chest";category="Special";subCategory="Interactive";};
-        "#, "Add-Ons/Chest").unwrap();
-        assert!(!catalog.bricks[0].selectable());
-        assert!(catalog.bricks[1].selectable());
-        assert_eq!(catalog.bricks[0].icon_source, "");
-        let world = read(
-            fixture().replace("Missing Brick", "Chest").as_bytes(),
-            &catalog,
-            "test",
-            "map/test",
-        )
-        .unwrap();
-        assert_eq!(
-            world.bricks[&1].definition,
-            ContentRef::Resolved("v20/brick/closed".into())
-        );
-        assert_eq!(catalog.bricks[0].mesh_id, "v20/add-ons/chest/open.blb");
     }
     #[test]
     fn single_byte_degree_names_are_not_replaced_or_lost() {

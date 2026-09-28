@@ -40,6 +40,15 @@ Your settings, saves, screenshots and identity are kept in the `user-state`
 folder beside the game. To move to a newer build, extract it to a new
 folder and copy `user-state` across.
 
+**Bringing your old Blockland saves.** Open Load Bricks in a game and press
+**Saves Folder**. Copy your old `.bls` saves into that folder, either whole
+map folders from the old game's `saves` folder (such as `Slate`) or single
+files. The game converts them in the background the next time it starts,
+or when you next open Load Bricks, and lists them under their map; loose
+files are under **Other**. Your original files are never changed. Saves in
+an old Blockland install under Program Files are listed too. A save that
+can't be converted is skipped and noted in the log.
+
 ## Playing together
 
 Everything is a direct connection between players. There are no accounts
