@@ -3833,3 +3833,15 @@ break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
   package scripts run; the 50 ms bound is unchanged. After: 0 failures in
   60 loaded runs, worst 25 ms. With the per-tick cap switched off the test
   still fails (1.4 s of CPU in one tick).
+
+## 2026-09-28 Live sun from azimuth and elevation
+
+- The live renderer lit every map from the mission's `direction` field, a
+  stale dynamic field Torque never reads: twelve stock maps carry the same
+  0.577 0.577 -0.577, Bedroom Dark's points straight up and Slopes and
+  Tutorial have none. v20's Sun uses `azimuth`/`elevation`, as our bake
+  already did (it reproduces the reference caches only that way). Both now
+  share `bri_content::scene::sun_direction`; the bake keeps libm sines.
+- Shading, cascaded sun shadows and the water highlight move on every map.
+- Evidence: `cargo test -p bri-render -p bri-content -p bri-convert`, the
+  content-gated `map_sun` test over all 14 stock maps, clippy clean.
