@@ -1,11 +1,19 @@
 use anyhow::{Context, Result, bail};
-use bri_addon_import::{Options, import};
+use bri_addon_import::{Options, import, porting};
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: bri-import-addon ADDON(.zip|folder) FRESH_OUTPUT_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--version 1.0.0] [--json]
+const USAGE: &str = "Usage:
+  bri-import-addon ADDON(.zip|folder) FRESH_OUTPUT_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--version 1.0.0] [--json]
+  bri-import-addon port ADDON(.zip|folder) FRESH_WORK_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]...
+  bri-import-addon check-port WORK_DIR
 
 Converts one legacy Blockland Add-On into a native package directory and writes
-import-report.json and IMPORT-REPORT.md into it. Never executes scripts.";
+import-report.json and IMPORT-REPORT.md into it. Never executes scripts.
+
+`port` sets up a folder for porting the Add-On's scripts natively: the import,
+the original scripts, a drafted port, checks of what v20 does, stubs and an
+AGENT.md with instructions. `check-port` imports the Add-On again with that
+port, runs the checks and prints the entry for the ports list.";
 
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
@@ -28,6 +36,60 @@ fn main() -> Result<()> {
             }
             _ => positional.push(PathBuf::from(a)),
         }
+    }
+    match positional.first().and_then(|p| p.to_str()) {
+        Some("port") if positional.len() == 3 => {
+            let s = porting::scaffold(&positional[1], &positional[2], reference, core)?;
+            println!(
+                "Port folder for {} set up in {}.",
+                s.report.source.name,
+                s.dir.display()
+            );
+            if let Some(l) = &s.listed {
+                println!("The game already lists a port of it: {l}.");
+            }
+            for f in &s.drafted {
+                println!("  drafted: {f}");
+            }
+            for f in &s.to_port {
+                println!("  to port by hand: {f}");
+            }
+            println!(
+                "\nRead AGENT.md there (or hand it to your agent), then run:\n  bri-import-addon check-port \"{}\"",
+                s.dir.display()
+            );
+            return Ok(());
+        }
+        Some("check-port") if positional.len() == 2 => {
+            let c = porting::check(&positional[1])?;
+            if !c.applied {
+                println!(
+                    "The port was not applied: {}.",
+                    c.reason.as_deref().unwrap_or("unknown")
+                );
+            }
+            for (line, ok) in &c.results {
+                println!("  {} {line}", if *ok { "PASS" } else { "FAIL" });
+            }
+            for f in &c.unported {
+                println!("  still unported: {f}");
+            }
+            if !c.passed() {
+                bail!("check-port failed; fix the port and run it again");
+            }
+            println!(
+                "\nChecks pass. Entry for crates/addon-import/ports/ports.json ({}), also written to submit.json:\n{}",
+                c.entry.status,
+                serde_json::to_string_pretty(&c.entry)?
+            );
+            println!(
+                "Submit it with the port/ folder as crates/addon-import/ports/{}/.",
+                c.entry.port
+            );
+            return Ok(());
+        }
+        Some("port" | "check-port") => bail!("{USAGE}"),
+        _ => {}
     }
     let [input, out] = <[PathBuf; 2]>::try_from(positional).map_err(|_| anyhow::anyhow!(USAGE))?;
     if bri_package::id::Version::parse(&version).is_err() {

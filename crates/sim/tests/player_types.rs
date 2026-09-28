@@ -214,28 +214,32 @@ fn the_host_eye_follows_the_crouch_thread_like_the_camera() {
         crouch: true,
         ..Default::default()
     };
-    // The client's view runs the same thread over the same ticks.
+    // The client's view runs the same thread over the same steps, from the
+    // crouch the motor reports (it changes on v20's 32 ms ticks).
     let mut view = CrouchThread::default();
     view.update(false, 0.0, CROUCH_SECONDS);
-    for tick in 0..10 {
-        let (input, crouched) = if tick < 3 {
-            (crouch, true)
+    let mut dipped = false;
+    for tick in 0..16 {
+        let input = if tick < 8 {
+            crouch
         } else {
-            (MoveInput::default(), false)
+            MoveInput::default()
         };
         step(&mut p, &mut w, input, 1);
-        view.update(crouched, bri_physics::FIXED_DT, CROUCH_SECONDS);
+        view.update(p.state().crouched, bri_physics::FIXED_DT, CROUCH_SECONDS);
         let camera = tuning.eye_height(view.eye_fraction(CROUCH_SECONDS));
         let eye = p.eye().y - p.state().feet[1];
         assert!(
             (eye - camera).abs() < 1e-4,
             "tick {tick}: {eye} vs {camera}"
         );
-        if tick == 0 {
+        if p.state().crouched && !dipped {
+            dipped = true;
             assert!(
                 eye < tuning.stand_eye && eye > tuning.crouch_eye,
                 "the eye dips rather than snapping: {eye}"
             );
         }
     }
+    assert!(dipped);
 }

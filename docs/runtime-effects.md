@@ -3,7 +3,7 @@
 The client loads effects-runtime-pack-001 through the configurable native
 `effects_runtime` package path. No runtime reads the original installation.
 Its complete manifest/library/texture bytes participate in runtime content
-identity v4; texture and library checksums are verified before peer admission.
+identity; texture and library checksums are verified before peer admission.
 The dedicated server uses the same identity without a renderer dependency.
 
 WorldEffects reconciles light/emitter attachments from authoritative PublicWorld
@@ -37,7 +37,6 @@ point lights without scene upload. No visible window or input automation.
 Remaining fidelity work: exact light falloff/color-space behavior and shadows;
 transparency-aware occlusion/sorting (particles currently follow the geometry
 pass); material-aware glass occlusion; point lighting on water; map wind;
-cross-client phase/seed alignment; fake-kill state; player/weapon/vehicle/transient
-effect dispatch; and stress measurements. These remain alpha requirements where
-applicable. The isolated runtime handles more effects than normal gameplay yet
-dispatches; build compatibility is not complete integration.
+cross-client phase/seed alignment; fake-kill state; and stress measurements.
+Player and vehicle effects are driven from `crates/client/src/actor_effects.rs`
+and weapon effects from `crates/client/src/weapon_effects.rs`.

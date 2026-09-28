@@ -177,6 +177,8 @@ fn the_sample_weapon_checks_and_a_broken_one_is_named() {
     let report = check(&sample);
     assert!(report.ok, "{report}");
     assert_eq!(report.add_ons[0].side, Side::Shared);
+    // It borrows the stock pistol's art: a warning, never a failure.
+    assert_eq!(codes(&report), ["check.weapons.presentation"], "{report}");
 
     let dir = tempfile::tempdir().unwrap();
     let broken = dir.path().join("broken");
@@ -190,4 +192,28 @@ fn the_sample_weapon_checks_and_a_broken_one_is_named() {
     let report = check(&broken);
     assert!(!report.ok);
     assert_eq!(codes(&report), ["check.weapons"], "{report}");
+}
+
+#[test]
+fn stale_or_missing_item_presentation_warns_without_failing() {
+    let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/samples/sample-bubble-blaster/assets/weapons.json");
+    let weapons = std::fs::read(sample).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let add_on = dir.path().join("stale");
+    write(&add_on, "package.json", manifest("stale", json!({})));
+    std::fs::create_dir_all(add_on.join("assets")).unwrap();
+    std::fs::write(add_on.join("assets/weapons.json"), &weapons).unwrap();
+    write(
+        &add_on.join("assets"),
+        "presentation.json",
+        json!({ "schema_version": 2, "weapons_sha256": "0".repeat(64) }),
+    );
+    let report = check(&add_on);
+    assert!(report.ok, "{report}");
+    assert_eq!(codes(&report), ["check.weapons.presentation"], "{report}");
+    assert!(
+        report.diagnostics[0].message.contains("different weapons.json"),
+        "{report}"
+    );
 }

@@ -67,6 +67,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         casing: String::new(),
         min_shot_ticks: 0,
         command: Default::default(),
+        shot: None,
         states,
     };
     let item = bri_weapons::Item {

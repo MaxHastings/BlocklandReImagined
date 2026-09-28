@@ -25,7 +25,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `RemotePose`; still items sent only to settle and keep alive; empty world
 /// updates at 10 Hz with absent fields left out; per-player vitals, tools and
 /// avatars; `WeaponDelta` with coasted projectiles; `EntityDelta`.
-pub const VERSION: u32 = 46;
+/// 47: `Notice::MusicTracks`, the host's Music Files for a joiner's wrench.
+/// 48: `PlayerState::tick`: players move on v20's 32 ms ticks.
+pub const VERSION: u32 = 48;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -354,6 +356,7 @@ impl RemotePose {
                 archetype: self.archetype,
                 scale: self.scale,
                 energy: bri_sim::player::PlayerTuning::default().max_energy,
+                tick: Default::default(),
             },
         }
     }

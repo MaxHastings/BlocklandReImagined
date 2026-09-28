@@ -3580,3 +3580,256 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   bri-weapons -p bri-vehicles -p bri-client`; offscreen `scene_snapshot`
   renders of Sea, Storm, Desert and Slopes compared with the map previews.
   No wire protocol change. Needs a visible check by Max (see the thread).
+## 2026-09-28 Destructo Wand sound and admin menu (a17 report)
+
+- Max heard the Destructo Wand play a loud brick-break sound where the
+  hammer's break is quiet. v20's scripts give both tools the same path:
+  the hammer plays `hammerHitSound`, the wand its explosion's
+  `wandHitSound` (both `AudioClosest3d`, 5/30), and each `killBrick`
+  plays `BrickBreak` (`AudioClientClose3d`, 10/60) on the client. Our
+  server cues already match (new `tools.rs` test pins both). The
+  difference was the chain kill, which only the wand reaches (the hammer
+  refuses bricks that would strand others): we played one break sound
+  per popped brick, since each has its own origin. `blocklandv20.exe`
+  schedules the client's `BrickBreakSoundEvent` only when a ghost's death
+  is at least 80 ms from the last one scheduled for any brick
+  (0x539c10-0x539c57, last time at 0x81ac44) and plays it at that brick
+  (0x53a130, culled past `maxDistance`). `ClientAudio` now does the same.
+  `wandHitSound` stays: it is v20's own wand sound.
+- v20's `AdminGui_Wand` pops adminGui and escapeMenu after asking for the
+  wand; our admin screen now does too, as Max asked.
+Evidence: `cargo test -p bri-sim --test tools`, `cargo test -p bri-ui
+--test admin_screens` (the new test fails without the fix), `cargo test
+-p bri-client --lib audio -- --include-ignored`, clippy clean on the three
+crates. Not run: the gate; Max's interactive check.
+
+## 2026-09-28 Admin orb flies at v20 speeds
+
+- Max: holding left click in the v20 free camera flies faster; ours did not.
+  v20's scripts set `$Camera::movementSpeed = 40`; its fly-mode tick
+  (blocklandv20.exe 0x588514) doubles that while trigger 0 (left click) is
+  held, else halves it for trigger 1 (`altTrigger`, unbound in v20), else
+  quarters it for trigger 3 (crouch, left shift). Walk (`c`) scales each
+  axis by 0.4, the axes are not normalized (diagonals are faster), and v20
+  binds no `moveup`/`movedown`, so space does nothing and shift slows
+  instead of descending. Right click is jet, which the camera ignores.
+- Ours flew at 30 (8 walking), used space/shift to climb and sink, and
+  swallowed left click on the camera. `Controls::fly_speed` now follows the
+  exe; left click is recorded while a camera has control and forgotten
+  when control returns to the body.
+Evidence: `cargo test -p bri-client --lib controls`
+(`free_camera_flies_at_v20_speeds`, `leaving_the_camera_forgets_a_held_fire`).
+Needs Max's playtest: F8, fly with and without left click and shift.
+## 2026-09-28 v20 parity: last missing rows built
+
+- Branch `claude/v20-parity`. Every Part 1 row of `docs/audits/v20-parity.md`
+  that was missing is now built (100 present, 5 partial, 0 missing, 7 other
+  lanes, 8 dropped of 120). This round: v20's schedule, light and emitter,
+  item and projectile quotas per builder (`fbc263ef`; "Too many events at
+  once!" as `ProcessInputEvent`); Load Bricks' colour warning with Nearest
+  Match and Add More Colors (`c3ad84a0`); Random Brick Color's next colour
+  on the ghost and `/clearinventory` (`c72cc900`); a joiner's wrench lists
+  only the host's Music Files (`2ce1ecd2`).
+- Dropped, each with a v20 reason in its audit row: Replace Current Color
+  Set (v20 needed it for a 64-colour set; ours holds 256 and the replicated
+  palette only grows), Render My Player, and the Misc quota (explosions are
+  instantaneous here).
+- Protocol additions for Gate to number: `Notice::TempBrickColor(u8)` and
+  `Notice::MusicTracks(BTreeSet<String>)`.
+- Evidence: `cargo test -p bri-sim -p bri-events -p bri-client -p bri-net
+  -p bri-ui`; `cargo test --release -p bri-sim --test pong --test
+  events_native --test special_bricks --test stock_saves_native --
+  --ignored`; `cargo test --release -p bri-client --test app_flow --test
+  multiplayer -- --include-ignored`; clippy clean on the touched crates.
+  None seen in a visible window yet. Maxwell's checks: load a save made
+  with other colours (the Color Warning should ask); host with Random Brick
+  Color on and watch the ghost change colour after each plant.
+## 2026-09-28 Native ports of v20 Add-On scripts
+
+- Imported Add-Ons keep what their scripts did as `needs_behaviour`. There is
+  now a list of native ports, `crates/addon-import/ports/ports.json`: one entry
+  per v20 Add-On (folder name, checked source hashes, `verified` or
+  `partial`, the functions covered and the tests that prove it). A port is
+  JSON merge patches for the files the importer writes, plus files it adds.
+  It carries only the rewrite, never the original Add-On's files, so the list
+  is built into `bri-import-addon` and the in-game Import applies it with
+  nothing downloaded. A port applies when the Add-On's name matches and every
+  covered function matches the port's patterns; the patterns also read the
+  numbers the port uses from that copy's script. A copy that does not match
+  is left as imported, and the report names the port and what did not match.
+  The report (schema 2) gains `ports`, `port` on each covered entry and
+  `needs_behaviour_ported`. IMPORT-REPORT.md marks ported functions and
+  points at the recipe for the rest.
+- Engine mechanism: an image may carry `shot` (projectiles per shot, v20
+  `%spread`, recoil). It is v20's widespread spread `onFire`: recoil first,
+  then each projectile's velocity turned by random Euler angles of up to
+  ±5π·spread about each axis. The random angles are a hash of the tick,
+  shooter and pellet number, so host and players agree with nothing on the
+  wire. Recoil is a new weapons event, `Recoil`, that the session applies to
+  the shooter's velocity. No protocol change; packs without `shot` serialize
+  as before.
+- First port: `Weapon_Shotgun` (Sawn-off Shotgun) now fires its pellets with
+  spread and recoil instead of one pellet. Recipe for people and agents:
+  `docs/modding/porting.md`.
+- Evidence (cloud, no archive): `cargo test -p bri-addon-import` with the new
+  `tests/ports.rs` (a CC0 stand-in with the shotgun's folder name and
+  onFire shape: 5 pellets inside the v20 spread cone, each inheriting the
+  recoil; a mismatching copy left at one pellet; a port adding files and
+  patching `package.json`; a hosted `Session` where the recoil moves the
+  shooter). Still owed on Maxwell's PC: `real_community_samples` and
+  `community_shotgun_and_car_work_in_a_hosted_game` now expect the real
+  shotgun to be ported (three pellets); they print its sha256 for the list.
+- Porting in two commands, from the release folder: `bri-import-addon port
+  ADDON DIR` sets up a work folder (plain import and report, the original
+  scripts to read, a drafted `port/`, `port/checks.json` stating what v20
+  does, `entry.json`, `stubs.rhai` quoting each function still to port, and
+  an `AGENT.md` with a prompt filled in for the Add-On). v20's spread-code
+  weapons are drafted completely. `bri-import-addon check-port DIR` imports
+  again with the port, fires each checked weapon, lists what is still
+  unported and prints the ports-list entry (`verified` or `partial`, with the
+  copy's hash) to `submit.json`. Evidence: `tests/ports.rs`
+  (`port_command_drafts_a_spread_weapon_and_check_port_verifies_it`,
+  `hand_ports_start_from_stubs_and_check_as_partial`,
+  `port_and_check_port_run_from_the_executable`). The shotgun's own
+  `checks.json` (3 pellets) runs in `real_community_samples` on Maxwell's PC.
+- Fix: a port that patched `weapons.json` left the item presentation pinning
+  the old bytes, so hosts refused the Add-On ("item physics does not match
+  its weapons pack"; Gate's hosted shotgun test). Ports now re-pin
+  `presentation.json` to the patched `weapons.json` and `item-physics.json`.
+  `check-port` checks the pins the way hosts and players do, and the port
+  tests assert them.
+## 2026-09-28 Add-On presentation never blocks a join
+
+- Max could not join a server running the Duplicator: the join reloaded
+  content, the item HUD found 22 weapons against 21 presented items and
+  failed with "Item HUD catalog coverage mismatch", and the player saw only
+  "Loading the server's Add-Ons". c5115c1 fixed the Duplicator; this makes
+  the rule general. `ItemUi::new` builds a row per weapon from the weapon
+  list (letter icon when there is no art). `ItemAssets::load_with` presents
+  every Add-On item, image and projectile: its own presentation if it
+  loads, stock art it names, else no model; broken Add-On textures and
+  models become stand-ins listed in `ItemAssets::faults`. The same fallback
+  now covers Add-On vehicle models and textures, explosion shapes, death
+  icons and brick icons. The base game's packs stay strict so `--check` and
+  the gate still catch importer regressions. A join that still fails to load
+  the server's Add-Ons shows the player the Add-On and file.
+  `bri-addon-check` warns when an Add-On's item presentation is missing or
+  stale.
+- Tests: `crates/client/tests/add_on_fallbacks.rs` (content-free) hosts four
+  broken Add-Ons over loopback, a clean client downloads them and loads the
+  item art and HUD; `add_on_join.rs`
+  `a_guest_joins_a_host_running_every_repository_add_on` (needs content,
+  runs in the gate) hosts every Add-On under `packages/` and joins with a
+  base-only guest. Evidence: `cargo test -p bri-client --lib --test
+  add_on_fallbacks`, `-p bri-package -p bri-package-runtime`, `-p bri-net
+  --lib --test package_sync` green; clippy -D warnings on those crates. The
+  content test was not run in the cloud (no generated content).
+- Seen once in four runs, unrelated: `package_sync`
+  `downloads_reach_only_offered_files` failed its "does not offer package
+  downloads" assertion (line 158); it passed alone and three times in full.
+- Max, 16:07Z: "should never have an issue joining a server like this ...
+  just download whatever we need and play". A join now downloads every
+  Add-On the server runs that the joiner lacks or has in another version
+  (matched by content hash; a cached copy of another version is never used)
+  with no question, however large: the 200 MB download prompt is gone
+  (`ASK_ABOVE_BYTES`, `NeedsApproval`, `DownloadDeclined`,
+  `UiAction::ApproveDownload`). The 4 GB safety cap stays. Shared Add-Ons
+  only the joiner runs no longer refuse the join: `connect_fetching` leaves
+  them out and returns them, and `mods::load_fetched` / `joined_set` load
+  the server's exact set. The only question a join can ask is the trust
+  prompt for sandboxed Add-On code.
+- The `downloads_reach_only_offered_files` failure was real: a server that
+  refused a connection (no downloads, wrong version, bad identity, full)
+  closed it as soon as the refusal was acknowledged, and QUIC discards
+  stream data the peer has not read yet, so the player could see
+  "connection lost: closed by peer" instead of the reason. The server now
+  lingers until the peer closes (`server::linger`, 3 s cap). Before: 4
+  failures in 40 full runs of `package_sync`; after: 0 in 160.
+- Tests: `package_sync` `a_join_downloads_exactly_the_servers_add_ons_without_asking`
+  (a joiner with no Add-Ons and one with a stale copy both run the server's
+  exact set) and the E31 test (an extra shared Add-On sits out);
+  `add_on_fallbacks.rs` adds a player with a stale copy and an Add-On of
+  their own, through `mods::load_fetched`, `joined_set` and the item art.
+- Gate's content test `a_guest_joins_a_host_running_every_repository_add_on`
+  failed with an empty download. Cause: `App::host()` re-read packages.json
+  unless `enable_packages` had chosen the set, so the set the test applied
+  with `apply_packages` was thrown away. `apply_packages` now marks the set
+  as the player's own; only a join that loaded another server's Add-Ons
+  clears that, so the next hosted game re-reads the player's list.
+- The same run showed the repository's own Add-Ons clashing: the Stress Lab
+  HUD and the Survival Points HUD both used J. The sample Leaderboard key is
+  now N (v20 keys untouched; Stress Lab keeps J). Left-out Add-Ons no longer
+  empty the set: a problem no Add-On owns leaves out the last listed
+  Add-On with a `set.left_out` warning, one at a time. A joiner uses the
+  same rule (`Catalog::load_dirs_skipping` in `mods::load_fetched`): a
+  downloaded Add-On that does not load on that PC is named in the console
+  and left out of what it shows, and the join goes ahead. Test:
+  `samples.rs` `add_ons_that_clash_are_left_out_one_by_one_and_never_empty_the_set`.
+Merge with main 1286fc3f6: the exe's 80 ms client gate replaces the
+bandwidth lane's one-sound-per-100-bricks grouping (300b1530) as the only
+break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
+-p bri-client --lib audio -- --include-ignored`, `cargo test -p bri-sim
+--test tools --test brick_damage -- --include-ignored` green.
+## 2026-09-28 Standalone BlocklandReImagined.exe
+
+- Max asked for one exe he can drop anywhere and run. New crate
+  `crates/launcher` builds `BlocklandReImagined.exe`: the packager appends
+  the release zip to it; on start it checks the zip's SHA-256, unpacks it
+  into `%LOCALAPPDATA%\BlocklandReImagined\Game` and runs the game there with
+  that per-user folder as its state folder. Settings, saves and Add-Ons stay
+  per user, never beside the exe. Same exe again: reuses the install. New
+  version: base files replaced, player files and package choices carried
+  across, old game still running: asks the player to close it.
+- `package_playtest.ps1` now also writes `<release>.zip` (forward-slash
+  entries; Windows PowerShell's `CreateFromDirectory` writes backslashes)
+  and `<release>-standalone\BlocklandReImagined.exe`, and verifies the exe
+  (`-VerifyStandalone`). `-NoStandalone` skips it. The launcher must be built
+  beside bri-client: `cargo build --release -p bri-launcher`.
+  `package_playtest.sh` (Linux) is unchanged.
+- Evidence: `cargo test -p bri-launcher` (first run, reuse, upgrade keeping
+  Add-Ons and choices, damaged payload); clippy -D warnings;
+  `Test-PlaytestPackaging.ps1` (zip, exe, damaged exe refused); the real
+  packager on a16's exe and content: 3261 files, 86 MB zip, 87 MB exe,
+  verified; `release_smoke standalone_exe_unpacks_per_user_and_starts_the_game`
+  with `BRI_STANDALONE_EXE` passed (4.4 s first unpack, `--check` passed from
+  the install). Not covered: a signed exe, and an interactive start (Max's).
+## 2026-09-28 Slides: players move on v20's 32 ms tick (protocol 43)
+
+- Max: movement is close to v20 except on Mr. Block's slides. Read
+  `updateMove` in the exe (0x5AE2A0) against the motor: slope contact, the
+  0.002/0.0021 rest, run projection, air control (0x5AF4C0: no braking with
+  no input), resistance and drag (0x5AFF70 onward) already matched. The
+  difference is the tick. The crease rule re-aims a wedged rider's whole
+  speed once per tick, so lane speed is per tick: a rider wedged in a level
+  lane settles at 6.517 u/s under v20's per-tick equations, 3.248 at 120 Hz,
+  and the ride from the top of the Slides tower stopped 39 units down
+  instead of 353. The motor now runs whole 32 ms ticks inside the 120 Hz
+  steps (1/3000 s phase counter, exact), `PlayerState::tick` carries the
+  phase and previous feet, and clients draw `shown_feet()` between ticks.
+- Also v20's: the step probe from the backed-off box (the 120 Hz
+  from-contact probe hopped players up 25 degree ramps at 32 ms), no -80
+  fall-speed clamp (not in v20; falls reach 199 u/s under drag), the jump
+  window of 8 Torque ticks (canJump 0x5A2AF8). Players already touching
+  head-on part along the least-overlap axis instead of the shape cast's
+  arbitrary normal, which slid one into the other.
+- Feel changes that are v20's: rest 0.01 above floors, run 6.978 u/s, swim
+  3.41 u/s, jump/crouch take effect on the next tick (up to 32 ms).
+- Evidence: `cargo test --release -p bri-sim --test player`
+  (`a_wedged_rider_gains_lane_speed_on_v20_ticks`: 6.518 vs 6.517),
+  `BRI_SLIDES_FULL=1 cargo test --release -p bri-sim --test slides --
+  --ignored` (120 Hz steps visit exactly the 32 ms tick positions; tower
+  ride falls 366 in 10 s; 891/893 lane rides finish, was 889; 0/3570 faces
+  hold), motor/sim/vehicles/net suites, `bri-client` lib and tests, clippy
+  `-D warnings` on the touched crates. Not seen in a window: Max's playtest.
+- `hardening_packages` `many_heavy_thinks_keep_the_tick_budget` failed once
+  in the gate and passed alone. Not an overrun: the per-tick script work cap
+  counts operations, so the work is the same every run. The test timed the
+  tick by wall clock, which counts time the OS gives other processes. Here
+  the tick measured 12-24 ms alone and up to 37 ms beside CPU-busy
+  processes; with the whole file under 8 busy processes the old
+  wall-clock checks (thinks, chunk generation, player commands) failed 59
+  of 60 runs. `timed()` now reads the test thread's CPU time
+  (`GetThreadTimes` on Windows, `CLOCK_THREAD_CPUTIME_ID` elsewhere), where
+  package scripts run; the 50 ms bound is unchanged. After: 0 failures in
+  60 loaded runs, worst 25 ms. With the per-tick cap switched off the test
+  still fails (1.4 s of CPU in one tick).

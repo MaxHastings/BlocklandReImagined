@@ -81,18 +81,43 @@ impl VehicleAssets {
         let root = root.canonicalize()?;
         let mut parts = Vec::new();
         for (dir, abs) in extras {
-            parts.push((dir.clone(), Pack::load(abs.join("vehicles.json"))?));
+            let part = Pack::load(abs.join("vehicles.json")).with_context(|| {
+                format!("Add-On {}: vehicles.json", bri_package::library::add_on_label(abs, dir))
+            })?;
+            parts.push((dir.clone(), part));
         }
         let (pack, _) = Pack::load(root.join("vehicles.json"))?.merge(parts);
+        // An Add-On's texture or model that does not load is a cosmetic
+        // fault (`crate::cosmetic`): blank paint, or the vehicle undrawn.
+        let fault = |asset: &bri_vehicles::schema::Asset, error: anyhow::Error| -> Result<()> {
+            match &asset.package {
+                Some(dir) => {
+                    let label = bri_package::library::add_on_label(
+                        &bri_vehicles::asset_root(&root, asset),
+                        dir,
+                    );
+                    crate::cosmetic::add_on_fault(&label, &asset.path, format!("{error:#}"));
+                    Ok(())
+                }
+                None => Err(error),
+            }
+        };
         let mut textures: BTreeMap<String, SceneImage> = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "texture") {
-            let bytes = crate::items::checked_read(
+            let image = crate::items::checked_read(
                 &bri_vehicles::asset_root(&root, asset),
                 &asset.path,
                 &asset.sha256,
                 16 << 20,
-            )?;
-            let image = image::load_from_memory(&bytes)?.to_rgba8();
+            )
+            .and_then(|bytes| Ok(image::load_from_memory(&bytes)?.to_rgba8()));
+            let image = match image {
+                Ok(image) => image,
+                Err(error) => {
+                    fault(asset, error)?;
+                    continue;
+                }
+            };
             textures.insert(
                 asset.virtual_path.to_ascii_lowercase(),
                 SceneImage {
@@ -121,14 +146,24 @@ impl VehicleAssets {
         let mut models = BTreeMap::new();
         let mut looks = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
-            let bytes = crate::items::checked_read(
+            let shape = crate::items::checked_read(
                 &bri_vehicles::asset_root(&root, asset),
                 &asset.path,
                 &asset.sha256,
                 32 << 20,
-            )?;
-            let shape: Shape = serde_json::from_slice(&bytes)?;
-            shape.validate()?;
+            )
+            .and_then(|bytes| {
+                let shape: Shape = serde_json::from_slice(&bytes)?;
+                shape.validate()?;
+                Ok(shape)
+            });
+            let shape = match shape {
+                Ok(shape) => shape,
+                Err(error) => {
+                    fault(asset, error)?;
+                    continue;
+                }
+            };
             let folder = asset
                 .virtual_path
                 .rsplit_once('/')
@@ -233,12 +268,18 @@ impl VehicleAssets {
                 },
             );
         }
-        for d in &pack.definitions {
-            ensure!(
-                models.contains_key(&d.model),
-                "Vehicle {} model is missing",
-                d.id
-            );
+        for d in pack.definitions.iter().filter(|d| !models.contains_key(&d.model)) {
+            let asset = pack.assets.iter().find(|a| a.path == d.model);
+            // An Add-On model that failed to load is already logged.
+            if asset.and_then(|a| a.package.as_ref()).is_some() {
+                continue;
+            }
+            match d.id.split_once(':') {
+                Some((add_on, _)) => {
+                    crate::cosmetic::add_on_fault(add_on, &d.model, "the vehicle's model is missing");
+                }
+                None => anyhow::bail!("Vehicle {} model is missing", d.id),
+            }
         }
         let sources = pack
             .assets

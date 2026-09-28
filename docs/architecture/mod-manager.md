@@ -1,6 +1,6 @@
 # Add-Ons: in-game mod management
 
-Status: first slice built 2026-09-28 (branch `claude/mod-manager-n90clz`).
+Status: built 2026-09-28.
 Player research: [`docs/research/mod-manager-expectations.md`](../research/mod-manager-expectations.md).
 Package format: [`packages.md`](packages.md).
 
@@ -22,7 +22,7 @@ kind of thing: "Import Add-On" converts it into an Add-On
 | Know what it may do | Manifest `capabilities` (checked by the package runtime) | "Allowed to: change the world's bricks, send chat messages" | **built** |
 | Dependencies handled | `Library::plan`: enabling pulls in dependencies first; disabling takes dependents | Notice "Also turned on: …"; a confirm box before turning off what others need | **built** |
 | Plain-word errors; one broken add-on does not break the rest | `library.*` diagnostics per package (missing folder, unreadable manifest, newer API, missing or wrong-version dependency, role conflict) | `!` in the list, "Won't load:" in details, refusals in a message box | **built** (the loaders' partial load is the Add-On import thread's multi-pack work) |
-| Joining a modded server just works | PR #1: `bri_net::packages::fetch_missing` into the download cache | Join screen: what the server needs, progress, Cancel; never changes your own Add-Ons | **screen built**; wiring waits for PR #1 and door-closers' join |
+| Joining a modded server just works | PR #1: `bri_net::packages::fetch_missing` into the download cache | Join screen: what the server needs, progress, Cancel; never changes your own Add-Ons | **built**: the client fetches missing Add-Ons on join and asks first above `ASK_ABOVE_BYTES` ("Download Add-Ons?") |
 | Know why a join was refused | Main's join check (protocol 31) refuses differing `shared` packages with `environment::refusal`; `parse_refusal` reads it back package by package | Can't Join dialog: each add-on with the server's version beside yours, and an Add-Ons button | **built** |
 | Pick a game mode when starting a game | Packages that provide `world` or a mode kind | Start Game offers them beside maps | next |
 | Import an old add-on zip | Drop folder `content/Add-Ons/` (v20's name); `Library::legacy` lists zips and folders there and matches each to the package imported from it by provenance; the client runs `bri-import-addon` as a separate program into `content/addons/<name>` | "Not Imported Yet" group, Import button, progress mark, notice pointing at the report | **built** |
@@ -81,12 +81,11 @@ thread, so conversion tooling stays out of the game's dependency graph and the
 game keeps running. A failed import removes its half-written folder. The
 imported package is then discovered, starts off, and turns on like any other.
 
-Open: the packaged build must ship `bri-import-addon.exe` next to
-`bri-client.exe` (`tools/package_playtest.ps1` copies only the client today);
-without it Import says the importer is missing. Imports run without a v20
+The packaged build ships `bri-import-addon.exe` next to `bri-client.exe`
+(`tools/package_playtest.ps1`); without it Import says the importer is missing. Imports run without a v20
 reference install, so references to base datablocks are reported rather than
-resolved. Imported packages group under "Other" until the importer writes
-`provides` (multi-pack step d).
+resolved. The importer writes `provides`, so imported packages group by what
+they add.
 
 ## Presentation
 
@@ -103,26 +102,17 @@ resolved. Imported packages group under "Other" until the importer writes
   `ConnectionState::DownloadingPackages(PackageDownload)`.
 - Changes apply the next time a game starts; the screen says so.
 
-## What is not wired yet
+## Join wiring
 
-- On main nothing reads `packages.json` yet, so toggles take effect when the
-  Add-On import thread's multi-pack loading and door-closers' join wiring land
-  (both load through `packages.json`).
-- The client does not yet call PR #1's `fetch_missing` on a join mismatch; that
-  call should drive `ConnectionState::DownloadingPackages` with one row per
-  missing package, `Cached` for ones already in the cache, and byte progress
-  from `Stage::DownloadingPackages`.
-- **Trust prompt (planned, with sandboxed client code).** When a server's
-  Add-Ons include client code (WebAssembly or shaders), the join stops
-  before any download with a prompt that names the server, lists what the
-  code may do in plain words, and offers Trust or Leave, remembered per
-  server. The hook is a connection state between the package comparison and
-  `DownloadingPackages`: `ConnectionState::TrustServer { server, add_ons,
-  permissions }`, answered by a `UiAction` carrying the choice (Leave is the
-  existing `CancelConnect`). Servers whose Add-Ons are data only never see
-  it. The Add-Ons screen's details would also say when an Add-On carries
-  client code. The sandbox design thread owns the permission list and the
-  wire signal; this screen only presents it.
+- The host and client load `packages.json`. A join fetches missing Add-Ons
+  through `bri_net::packages::fetch_missing_pinned`
+  (`crates/net/src/client.rs`), but the client does not yet drive
+  `ConnectionState::DownloadingPackages` from it.
+- **Trust prompt.** When a server's Add-Ons include sandboxed client code the
+  player has not trusted, the client asks before that code runs. Accepting
+  remembers exactly what the question showed (`crates/client/src/client_code.rs`);
+  the Add-Ons screen can forget every server's trust. The question comes
+  after the join, not as a separate connection state before the download.
 - No wire format changed in this slice. The refusal text is still the wire
   carrier for differing packages; `refusal` and `parse_refusal` sit side by
   side in `bri_package::environment` so they cannot drift.

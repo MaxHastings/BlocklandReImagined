@@ -39,17 +39,14 @@ and returns in its replicated inventory.
 - Actual release App/QUIC/UI/offscreen integration and weather tests pass; no
   visible window, input automation or audio playback.
 
-## Still required before alpha
+## Current state
 
-This is an integration checkpoint, not completed weapon gameplay. Normal host,
-join and dedicated startup now load/hash native weapon definitions/resources
-(content identity8) and expose all21 catalog items. Native presentation pack
-loading/hashing still needs connection. Dynamic item metadata,
-authoritative HUD reconciliation/rejection handling, core tool-use equipment
-gates, world item spawning/collision pickups/respawn, drop commands and presentation
-remain to connect. The existing client tool mapping still assumes initial stock
-slots. Weapon fixed-tick queries and projectile replication now work (see
-runtime-weapons-host.md); minigame damage policy, remaining runtime event handling,
-mounts/animations, projectiles and audio/FX must be wired into Session/client/net.
-Dedicated world saves do not yet include weapon runtime state. The existing
-runtime's isolated drop/weapon tests do not establish any of those host behaviors.
+Normal host, join and dedicated startup load and hash native weapon
+definitions/resources and the item presentation pack, and expose all 21 catalog
+items. The client shows tool names and icons in the HUD
+(`crates/client/src/item_ui.rs`) and draws held, dropped and projectile items
+(`crates/client/src/world_items.rs`). Brick item spawns, contact pickups,
+respawn and drops are in `crates/sim/src/session/items.rs` (see
+`runtime-world-items.md`). Health, damage, death and minigame rules are in
+`crates/sim/src/session/combat.rs`. Dedicated world saves do not include weapon
+runtime state.

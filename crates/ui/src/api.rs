@@ -600,8 +600,6 @@ pub enum UiAction {
     /// Join a saved server whose identity changed, trusting its new one
     /// (the player chose Continue).
     TrustNewServerIdentity { address: String },
-    /// Download a server's Add-Ons the player was asked about.
-    ApproveDownload,
     /// Run the Add-On code the join's trust question showed ("Trust and
     /// join").
     TrustAddOnCode,

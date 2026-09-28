@@ -480,3 +480,87 @@ fn logging_in_or_out_updates_every_admin_check() {
     ui.core.admin.apply(AdminUpdate::State(demoted)).unwrap();
     assert!(!ui.core.is_admin());
 }
+
+#[test]
+fn picking_the_destructo_wand_closes_the_admin_and_escape_menus() {
+    use bri_ui::{
+        api::{ConnectionState, Settings, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        input::{InputEvent, MouseButton},
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl},
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in ["MainMenuGui", "PlayGui", "LoadingGui", "escapeMenu"] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut admin = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
+    let mut wand = ctrl("GuiButtonCtrl", "GuiButtonProfile", Rect::new(100, 100, 140, 30));
+    wand.text = Some("Destructo Wand".into());
+    wand.command = Some("AdminGui_Wand();".into());
+    admin.children.push(wand);
+    pack.layouts.insert("adminGui".into(), admin);
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        Settings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: true,
+        single_player: true,
+        admin: true,
+    }));
+    ui.core
+        .admin
+        .apply(AdminUpdate::State(state(AdminRole::Admin, false)))
+        .unwrap();
+    ui.core.push(ScreenId::EscapeMenu);
+    ui.core.push(ScreenId::Admin);
+    ui.update(0);
+    ui.drain_actions();
+    ui.core.admin.pending.clear();
+    assert_eq!(ui.top_id(), ScreenId::Admin);
+    let (x, y) = ui
+        .control_center(ScreenId::Admin, "AdminGui_Wand();")
+        .unwrap();
+    ui.handle_input(InputEvent::MouseMove { x, y });
+    ui.handle_input(InputEvent::MouseDown {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    ui.handle_input(InputEvent::MouseUp {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    assert!(
+        ui.core
+            .admin
+            .pending
+            .values()
+            .any(|a| matches!(a, AdminAction::Wand)),
+        "the wand is requested"
+    );
+    ui.update(16);
+    let stack = ui.stack();
+    for id in [ScreenId::Admin, ScreenId::EscapeMenu] {
+        assert!(!stack.contains(&id), "{id:?} stays open: {stack:?}");
+    }
+}

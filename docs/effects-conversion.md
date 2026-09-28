@@ -42,10 +42,10 @@ bytes remain exact, and all18 packaged texture hashes match. Its report is
 
 ## Remaining limits
 
-No native particle simulation, dynamic-light render adapter, flare renderer or
-weapon/vehicle/player attachments are complete yet. Script-generated paint
-variants, explosion/projectile relationships and callbacks need native adapters.
-Three conditional declarations in Projectile_GravityRocket are diagnosed and
+`bri-fx-runtime` simulates particles and draws lights and flares; the client
+attaches effects to bricks, players, weapons and vehicles (see
+`runtime-effects.md` and `crates/fx-runtime/README.md`). `bri-fx-import` adds
+explosion groups and source relationships to the runtime pack. Three conditional declarations in Projectile_GravityRocket are diagnosed and
 skipped. The later stock Rocket Launcher provides the referenced rocket trail;
 exact conditional fallback ordering still needs behavior coverage.
 
@@ -61,6 +61,3 @@ OpenMBU `3d6516e1c9cb43e61aead3369d1f7210d08b83ef`,
 `9c5673f9a1c26348da445bb1dbfd88bf1ed3c3b7`, `fxLight.cc`.
 These related engine versions support interpretation, not proof of Blockland's
 modified engine. Files are in ignored `.research/openmbu-reference/`.
-
-Parsing and binding are conversion evidence only. Full vanilla acceptance still
-requires renderer/simulation integration and Maxwell's eventual playtest.

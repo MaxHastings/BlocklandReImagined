@@ -1,8 +1,7 @@
 # Authoritative world items
 
 Implemented in `crates/sim/src/item_spawners.rs` and `session/items.rs`, with
-offline authored bounds from item-presentation-pack-003. This is host integration
-progress, not completion of the full item/weapon alpha experience.
+offline authored bounds from item-presentation-pack-003.
 
 ## Native data and startup
 
@@ -60,7 +59,7 @@ ticks, dropped-item rotation/scale, image states and inventory. Bricks and
 runtime entities have separate ID namespaces. Replica validation rejects
 duplicate item identities and invalid rotations/scales.
 
-## Evidence and remaining work
+## Evidence and known gaps
 
 Five headless item tests cover all six placement selectors/four item directions,
 asymmetric pivots and rotated bricks, respawn/duplicate/trust behavior, immediate
@@ -69,12 +68,11 @@ capacity checks. A weapon test covers body orientation/scale, exact58-tick
 exclusion and checked schema1/2 migration. Real QUIC verifies dropped inventory
 and item state reach another peer and a late join.
 
-Not yet complete: normal client inventory/HUD/input reconciliation (parallel work),
-normal world/mounted/projectile model rendering and original muzzle poses,
-minigame pickup permissions/death/F8 rules, full inventory persistence across
-host restart/reconnect, item fake-kill coupling, source-derived drop collision
+The client draws static, dropped, mounted and projectile items
+(`crates/client/src/world_items.rs`). Not yet complete: original muzzle poses,
+full inventory persistence across host restart, item fake-kill coupling, source-derived drop collision
 shape/gravity/friction/elasticity, and item fade/spin presentation. Current drop
 motion still uses the earlier provisional point sweep and damping. Static
 respawn's exact v20 visual fade is explicitly unresolved: the script sets node
 alpha0.25 but also requests immediate fade-out; a permanent25% ghost is not
-justified by the available evidence. None of these gaps is an alpha scope waiver.
+justified by the available evidence.

@@ -931,7 +931,7 @@ fn a_changed_server_identity_asks_instead_of_reporting_the_failure() {
 }
 
 #[test]
-fn leaving_a_large_download_question_cancels_the_join() {
+fn leaving_a_join_question_cancels_the_join() {
     let mut u = ui();
     let id = start_join(&mut u);
     u.apply_session(

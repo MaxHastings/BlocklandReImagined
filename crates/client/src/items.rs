@@ -86,6 +86,9 @@ pub struct Presentation {
 pub struct ItemAssets {
     pub presentation: Presentation,
     pub item_physics: ItemPhysicsCatalog,
+    /// Add-On presentation replaced by a stand-in while loading
+    /// (`crate::cosmetic::add_on_fault`).
+    pub faults: Vec<String>,
     shapes: BTreeMap<String, Shape>,
     textures: BTreeMap<String, SceneImage>,
 }
@@ -330,7 +333,9 @@ impl ItemAssets {
     /// [`Self::load`] plus the presentation other weapon packages provide in
     /// `assets/presentation.json` (see `content_identity::kind_providers`).
     /// Their models and textures are read from their own directories; a
-    /// model key another package already provides is shared.
+    /// model key another package already provides is shared. Every item,
+    /// image and projectile of their weapons packs is presented: a gap or a
+    /// broken file becomes a stand-in listed in `faults`, never an error.
     pub fn load_with(
         root: &Path,
         weapons_root: &Path,
@@ -427,48 +432,6 @@ impl ItemAssets {
         );
         let mut manifest = manifest;
         euler_to_matrix_images(&mut manifest.images, &pack);
-        // Where each model and texture file lives: the base presentation
-        // directory unless an extra package provided it.
-        let mut origin: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
-        for (dir, abs) in extras {
-            let abs = abs.canonicalize()?;
-            if !abs.join("presentation.json").is_file() {
-                present_from_stock(dir, &abs, &mut manifest, &mut item_physics)?;
-                continue;
-            }
-            let bytes = crate::materials::read_resource(&abs, "presentation.json", 8 * 1024 * 1024)?;
-            let part: Presentation = serde_json::from_slice(&bytes)?;
-            ensure!(part.schema_version == 2, "{dir}: unknown item presentation schema");
-            let weapons =
-                checked_read(&abs, "weapons.json", &part.weapons_sha256, 32 * 1024 * 1024)
-                    .with_context(|| {
-                        format!("{dir}: presentation does not match its weapons pack")
-                    })?;
-            let mut part = part;
-            euler_to_matrix_images(&mut part.images, &bri_weapons::Pack::from_json(&weapons)?);
-            let physics = checked_read(&abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
-            let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
-            for (key, model) in part.models {
-                if let std::collections::btree_map::Entry::Vacant(e) = manifest.models.entry(key) {
-                    origin.insert(format!("model:{}", e.key()), abs.clone());
-                    e.insert(model);
-                }
-            }
-            for (key, texture) in part.textures {
-                if let std::collections::btree_map::Entry::Vacant(e) = manifest.textures.entry(key) {
-                    origin.insert(format!("texture:{}", e.key()), abs.clone());
-                    e.insert(texture);
-                }
-            }
-            for (id, item) in part.items {
-                ensure!(!manifest.items.contains_key(&id), "{dir}: item {id} is already presented");
-                manifest.items.insert(id, item);
-            }
-            manifest.images.extend(part.images);
-            manifest.projectiles.extend(part.projectiles);
-            item_physics.items.extend(physics.items);
-        }
-        let file_root = |kind: &str, id: &str| origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
         ensure!(
             item_physics.items.len() == manifest.items.len()
                 && item_physics.items.keys().eq(manifest.items.keys()),
@@ -486,74 +449,206 @@ impl ItemAssets {
                 "Item physics bounds disagree with authored model: {id}"
             );
         }
-        let pixels = manifest.textures.values().try_fold(0u64, |total, t| {
-            ensure!(
-                t.width > 0 && t.height > 0 && t.width <= 4096 && t.height <= 4096,
-                "Invalid item image dimensions"
+        // Add-Ons merge after the base game. Their presentation never stops
+        // the load (`crate::cosmetic`): what is missing or broken falls back
+        // to the stock art it names, then to no model and a letter icon.
+        let mut added = Added::default();
+        let mut faults = Vec::new();
+        for (dir, abs) in extras {
+            // Faults name the Add-On as players do, not its folder.
+            let label = bri_package::library::add_on_label(abs, dir);
+            let dir = &label;
+            let abs = abs
+                .canonicalize()
+                .with_context(|| format!("Add-On {dir}: missing folder"))?;
+            let weapons = crate::materials::read_resource(&abs, "weapons.json", 32 * 1024 * 1024)
+                .with_context(|| format!("Add-On {dir}: weapons.json"))?;
+            let part_pack = bri_weapons::Pack::from_json(&weapons)
+                .with_context(|| format!("Add-On {dir}: weapons.json"))?;
+            if abs.join("presentation.json").is_file() {
+                match read_part(&abs, &weapons, &part_pack) {
+                    Ok((part, physics)) => merge_part(
+                        dir,
+                        &abs,
+                        part,
+                        physics,
+                        &mut manifest,
+                        &mut item_physics,
+                        &mut added,
+                        &mut faults,
+                    ),
+                    Err(error) => faults.push(crate::cosmetic::add_on_fault(
+                        dir,
+                        "presentation.json",
+                        format!("{error:#}"),
+                    )),
+                }
+            }
+            present_gaps(
+                dir,
+                &weapons,
+                &part_pack,
+                &mut manifest,
+                &mut item_physics,
+                &mut added,
+                &mut faults,
             );
-            let total = total + u64::from(t.width) * u64::from(t.height) * 4;
-            ensure!(
-                total <= 256 * 1024 * 1024,
-                "Item aggregate image budget exceeded"
-            );
-            Ok(total)
-        })?;
-        let _ = pixels;
+        }
+        let file_root = |kind: &str, id: &str| added.origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
         let mut textures = BTreeMap::new();
+        // Add-On textures replaced by a blank: models keep drawing, icons
+        // fall back to the item's letter.
+        let mut blanks = std::collections::BTreeSet::new();
+        let mut pixels = 0u64;
         let mut input_bytes = 0usize;
         for (id, t) in &manifest.textures {
-            let bytes = checked_read(&file_root("texture", id), &t.file, &t.sha256, 16 * 1024 * 1024)?;
-            input_bytes += bytes.len();
-            ensure!(
-                input_bytes <= 256 * 1024 * 1024,
-                "Item aggregate input budget exceeded"
-            );
-            let reader =
-                image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
-            ensure!(
-                reader.into_dimensions()? == (t.width, t.height),
-                "Item image dimensions changed: {id}"
-            );
-            let rgba = image::load_from_memory(&bytes)?.to_rgba8().into_raw();
-            textures.insert(
-                id.clone(),
-                SceneImage {
+            let mut load = || -> Result<SceneImage> {
+                ensure!(
+                    t.width > 0 && t.height > 0 && t.width <= 4096 && t.height <= 4096,
+                    "Invalid item image dimensions"
+                );
+                ensure!(
+                    pixels + u64::from(t.width) * u64::from(t.height) * 4 <= 256 * 1024 * 1024,
+                    "Item aggregate image budget exceeded"
+                );
+                let bytes = checked_read(&file_root("texture", id), &t.file, &t.sha256, 16 * 1024 * 1024)?;
+                ensure!(
+                    input_bytes + bytes.len() <= 256 * 1024 * 1024,
+                    "Item aggregate input budget exceeded"
+                );
+                let reader =
+                    image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
+                ensure!(
+                    reader.into_dimensions()? == (t.width, t.height),
+                    "Item image dimensions changed: {id}"
+                );
+                let rgba = image::load_from_memory(&bytes)?.to_rgba8().into_raw();
+                pixels += u64::from(t.width) * u64::from(t.height) * 4;
+                input_bytes += bytes.len();
+                Ok(SceneImage {
                     label: id.clone(),
                     width: t.width,
                     height: t.height,
                     rgba,
                     srgb: false,
-                },
-            );
+                })
+            };
+            let image = match load() {
+                Ok(image) => image,
+                Err(error) if added.textures.contains(id) => {
+                    faults.push(crate::cosmetic::add_on_fault(
+                        &added.owner(&format!("texture:{id}")),
+                        &t.file,
+                        format!("{error:#}"),
+                    ));
+                    blanks.insert(id.clone());
+                    blank_texture(id)
+                }
+                Err(error) => return Err(error),
+            };
+            textures.insert(id.clone(), image);
         }
         let mut shapes = BTreeMap::new();
         let mut vertex_budget = 0usize;
         for (id, m) in &manifest.models {
-            let bytes = checked_read(&file_root("model", id), &m.file, &m.sha256, 32 * 1024 * 1024)?;
-            input_bytes += bytes.len();
-            ensure!(
-                input_bytes <= 256 * 1024 * 1024,
-                "Item aggregate input budget exceeded"
-            );
-            let shape: Shape = serde_json::from_slice(&bytes)?;
-            shape.validate()?;
-            vertex_budget += shape
-                .meshes
-                .iter()
-                .flatten()
-                .map(|m| m.positions.len())
-                .sum::<usize>();
-            ensure!(vertex_budget <= 2_000_000, "Item geometry budget exceeded");
-            ensure!(
-                m.textures.len() == shape.materials.len()
-                    && m.textures.iter().all(|id| textures.contains_key(id)),
-                "Unbound item material: {id}"
-            );
-            shapes.insert(id.clone(), shape);
+            let mut load = || -> Result<Shape> {
+                let bytes = checked_read(&file_root("model", id), &m.file, &m.sha256, 32 * 1024 * 1024)?;
+                ensure!(
+                    input_bytes + bytes.len() <= 256 * 1024 * 1024,
+                    "Item aggregate input budget exceeded"
+                );
+                let shape: Shape = serde_json::from_slice(&bytes)?;
+                shape.validate()?;
+                let vertices = shape
+                    .meshes
+                    .iter()
+                    .flatten()
+                    .map(|m| m.positions.len())
+                    .sum::<usize>();
+                ensure!(vertex_budget + vertices <= 2_000_000, "Item geometry budget exceeded");
+                ensure!(
+                    m.textures.len() == shape.materials.len()
+                        && m.textures.iter().all(|id| textures.contains_key(id)),
+                    "Unbound item material: {id}"
+                );
+                input_bytes += bytes.len();
+                vertex_budget += vertices;
+                Ok(shape)
+            };
+            match load() {
+                Ok(shape) => {
+                    shapes.insert(id.clone(), shape);
+                }
+                Err(error) if added.models.contains(id) => faults.push(crate::cosmetic::add_on_fault(
+                    &added.owner(&format!("model:{id}")),
+                    &m.file,
+                    format!("{error:#}"),
+                )),
+                Err(error) => return Err(error),
+            }
+        }
+        manifest.models.retain(|id, _| shapes.contains_key(id));
+        // What Add-Ons present is repaired rather than refused: an unknown
+        // model draws nothing, an invalid colour draws white, a missing icon
+        // shows the item's letter (`crate::item_ui`).
+        for (id, item) in manifest.items.iter_mut().filter(|(id, _)| added.items.contains(*id)) {
+            let owner = added.owner(&format!("item:{id}"));
+            if !item.model.is_empty() && !shapes.contains_key(&item.model) {
+                if !added.models.contains(&item.model) {
+                    faults.push(crate::cosmetic::add_on_fault(
+                        &owner,
+                        "presentation.json",
+                        format!("item {id} names model {}, which it does not list", item.model),
+                    ));
+                }
+                item.model.clear();
+                item_physics.items.remove(id);
+            }
+            if !valid_tint(item.tint) {
+                item.tint = [1.; 4];
+            }
+            if let Some(icon) = item.icon.clone().filter(|i| !textures.contains_key(i) || blanks.contains(i)) {
+                if !blanks.contains(&icon) {
+                    faults.push(crate::cosmetic::add_on_fault(
+                        &owner,
+                        "presentation.json",
+                        format!("item {id} names icon {icon}, which it does not list"),
+                    ));
+                }
+                item.icon = None;
+            }
+        }
+        for (_, image) in manifest.images.iter_mut().filter(|(id, _)| added.images.contains(*id)) {
+            if !shapes.contains_key(&image.model) {
+                image.model.clear();
+            }
+            if !valid_tint(image.tint) {
+                image.tint = [1.; 4];
+            }
+            image.mount_point = image.mount_point.min(31);
+            for v in image
+                .offset
+                .iter_mut()
+                .chain(&mut image.eye_offset)
+                .chain(&mut image.source_rotation_degrees)
+                .chain(&mut image.eye_rotation_degrees)
+            {
+                if !v.is_finite() || v.abs() > 10000. {
+                    *v = 0.;
+                }
+            }
+        }
+        for (_, p) in manifest.projectiles.iter_mut().filter(|(id, _)| added.projectiles.contains(*id)) {
+            if p.model.as_ref().is_some_and(|m| !shapes.contains_key(m)) {
+                p.model = None;
+            }
+            if !valid_tint(p.tint) {
+                p.tint = [1.; 4];
+            }
         }
         for (id, item) in &manifest.items {
             ensure!(
-                shapes.contains_key(&item.model)
+                (item.model.is_empty() || shapes.contains_key(&item.model))
                     && manifest.images.contains_key(&item.image)
                     && valid_tint(item.tint)
                     && item.icon.as_ref().is_none_or(|i| textures.contains_key(i)),
@@ -584,6 +679,7 @@ impl ItemAssets {
         Ok(Self {
             presentation: manifest,
             item_physics,
+            faults,
             shapes,
             textures,
         })
@@ -594,7 +690,7 @@ impl ItemAssets {
             .items
             .get(item)
             .context("Unknown item icon identity")?;
-        Ok(item.icon.as_ref().map(|id| &self.textures[id]))
+        Ok(item.icon.as_ref().and_then(|id| self.textures.get(id)))
     }
     pub fn shape(&self, model: &str) -> Result<&Shape> {
         self.shapes.get(model).context("Unknown native item model")
@@ -638,6 +734,14 @@ impl ItemAssets {
             .items
             .get(id)
             .context("Unknown dropped item")?;
+        if item.model.is_empty() {
+            validate_transform(transform)?;
+            return Ok(SceneData {
+                id: id.into(),
+                name: "Add-On item without a model".into(),
+                ..Default::default()
+            });
+        }
         self.model_scene(&item.model, item.tint, transform, None, 0.)
     }
     pub fn image_scene(
@@ -748,36 +852,160 @@ impl ItemAssets {
         Ok(result)
     }
 }
-/// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
-/// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
-/// An Add-On weapons pack with no presentation of its own (the Duplicator's
-/// wand) reuses stock models and icons: present its items and images from
-/// the models and textures already loaded.
-fn present_from_stock(
+/// What Add-Ons contributed to the merged presentation, so their faults are
+/// repaired while the base game's stay errors, and where their files live.
+#[derive(Default)]
+struct Added {
+    items: std::collections::BTreeSet<String>,
+    images: std::collections::BTreeSet<String>,
+    projectiles: std::collections::BTreeSet<String>,
+    models: std::collections::BTreeSet<String>,
+    textures: std::collections::BTreeSet<String>,
+    /// `model:<id>` / `texture:<id>` to the Add-On folder holding the file.
+    origin: BTreeMap<String, std::path::PathBuf>,
+    /// The same keys to the Add-On's content directory, for fault lines.
+    owners: BTreeMap<String, String>,
+}
+impl Added {
+    fn owner(&self, key: &str) -> String {
+        self.owners.get(key).cloned().unwrap_or_default()
+    }
+}
+/// A 1x1 white stand-in for an Add-On texture that does not load.
+fn blank_texture(id: &str) -> SceneImage {
+    SceneImage {
+        label: id.into(),
+        width: 1,
+        height: 1,
+        rgba: vec![255; 4],
+        srgb: false,
+    }
+}
+/// An Add-On's own `presentation.json` and `item-physics.json`, bound to
+/// the `weapons.json` beside them.
+fn read_part(
+    abs: &Path,
+    weapons: &[u8],
+    pack: &bri_weapons::Pack,
+) -> Result<(Presentation, ItemPhysicsCatalog)> {
+    let bytes = crate::materials::read_resource(abs, "presentation.json", 8 * 1024 * 1024)?;
+    let mut part: Presentation = serde_json::from_slice(&bytes)?;
+    ensure!(part.schema_version == 2, "unknown item presentation schema");
+    ensure!(
+        part.weapons_sha256 == hash(weapons),
+        "presentation.json does not match weapons.json; rerun the importer"
+    );
+    euler_to_matrix_images(&mut part.images, pack);
+    let physics = checked_read(abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
+    let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
+    ensure!(physics.schema_version == 1, "unknown item physics schema");
+    Ok((part, physics))
+}
+/// Add one Add-On's presentation to the merged one. A model or texture key
+/// already provided is shared; an item, image or projectile already
+/// presented keeps its first presentation, as the weapons merge keeps the
+/// first definition.
+#[allow(clippy::too_many_arguments)]
+fn merge_part(
     dir: &str,
     abs: &Path,
+    part: Presentation,
+    physics: ItemPhysicsCatalog,
     manifest: &mut Presentation,
     item_physics: &mut ItemPhysicsCatalog,
-) -> Result<()> {
-    let bytes = crate::materials::read_resource(abs, "weapons.json", 32 * 1024 * 1024)?;
-    let pack = bri_weapons::Pack::from_json(&bytes)?;
-    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) {
+    for (key, model) in part.models {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.models.entry(key) {
+            added.origin.insert(format!("model:{}", e.key()), abs.to_path_buf());
+            added.owners.insert(format!("model:{}", e.key()), dir.to_string());
+            added.models.insert(e.key().clone());
+            e.insert(model);
+        }
+    }
+    for (key, texture) in part.textures {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.textures.entry(key) {
+            added.origin.insert(format!("texture:{}", e.key()), abs.to_path_buf());
+            added.owners.insert(format!("texture:{}", e.key()), dir.to_string());
+            added.textures.insert(e.key().clone());
+            e.insert(texture);
+        }
+    }
+    for (id, item) in part.items {
+        if manifest.items.contains_key(&id) {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "presentation.json",
+                format!("item {id} is already presented by another Add-On"),
+            ));
+            continue;
+        }
+        match physics.items.get(&id) {
+            Some(bounds) if bounds.validate().is_ok() => {
+                item_physics.items.insert(id.clone(), *bounds);
+            }
+            _ => {}
+        }
+        added.items.insert(id.clone());
+        added.owners.insert(format!("item:{id}"), dir.to_string());
+        manifest.items.insert(id, item);
+    }
+    for (id, image) in part.images {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.images.entry(id) {
+            added.images.insert(e.key().clone());
+            e.insert(image);
+        }
+    }
+    for (id, projectile) in part.projectiles {
+        if let std::collections::btree_map::Entry::Vacant(e) = manifest.projectiles.entry(id) {
+            added.projectiles.insert(e.key().clone());
+            e.insert(projectile);
+        }
+    }
+}
+/// Present whatever an Add-On's weapons pack defines and its own
+/// presentation does not (all of it when it has none, as the Duplicator's
+/// wand): from the stock models and icons it names, else with no model.
+/// Only a model or icon nothing provides is logged; borrowing stock art is
+/// how an Add-On reuses it.
+fn present_gaps(
+    dir: &str,
+    weapons: &[u8],
+    pack: &bri_weapons::Pack,
+    manifest: &mut Presentation,
+    item_physics: &mut ItemPhysicsCatalog,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) {
+    let sha256 = hash(weapons);
     let evidence = || bri_weapons::Evidence {
         path: format!("{dir}/weapons.json"),
         sha256: sha256.clone(),
         line: 0,
     };
+    // The model key `name` presents, or none (logged once per model).
+    let mut missing = std::collections::BTreeSet::new();
+    let mut model = |manifest: &Presentation, faults: &mut Vec<String>, name: &str| -> String {
+        let model = name.replace('\\', "/").to_ascii_lowercase();
+        if model.is_empty() || manifest.models.contains_key(&model) {
+            return model;
+        }
+        if missing.insert(model.clone()) {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "weapons.json",
+                format!("model {name} is in neither this Add-On's presentation nor the base game"),
+            ));
+        }
+        String::new()
+    };
     let mut images = BTreeMap::new();
-    for (id, image) in &pack.images {
-        let model = image.model.to_ascii_lowercase();
-        ensure!(
-            manifest.models.contains_key(&model),
-            "{dir}: image {id} needs its own presentation for {model}"
-        );
+    for (id, image) in pack.images.iter().filter(|(id, _)| !manifest.images.contains_key(*id)) {
         images.insert(
             id.clone(),
             ImagePresentation {
-                model,
+                model: model(manifest, faults, &image.model),
                 mount_point: image.mount_point,
                 offset: image.offset,
                 eye_offset: image.eye_offset,
@@ -788,34 +1016,15 @@ fn present_from_stock(
             },
         );
     }
-    euler_to_matrix_images(&mut images, &pack);
-    for (id, item) in &pack.items {
-        ensure!(!manifest.items.contains_key(id), "{dir}: item {id} is already presented");
-        let model = item.model.to_ascii_lowercase();
-        let bounds = manifest
-            .models
-            .get(&model)
-            .with_context(|| format!("{dir}: item {id} needs its own presentation for {model}"))?
-            .bounds();
-        let icon = format!("{}.png", item.icon.to_ascii_lowercase());
-        manifest.items.insert(
-            id.clone(),
-            ItemPresentation {
-                model,
-                image: item.image.clone(),
-                tint: [1.0; 4],
-                icon: manifest.textures.contains_key(&icon).then_some(icon),
-                evidence: evidence(),
-            },
-        );
-        item_physics.items.insert(id.clone(), bounds);
-    }
+    euler_to_matrix_images(&mut images, pack);
+    added.images.extend(images.keys().cloned());
+    manifest.images.extend(images);
     for (id, projectile) in &pack.projectiles {
-        let model = projectile.model.to_ascii_lowercase();
-        ensure!(
-            model.is_empty() || manifest.models.contains_key(&model),
-            "{dir}: projectile {id} needs its own presentation for {model}"
-        );
+        if manifest.projectiles.contains_key(id) {
+            continue;
+        }
+        let model = model(manifest, faults, &projectile.model);
+        added.projectiles.insert(id.clone());
         manifest.projectiles.insert(
             id.clone(),
             ProjectilePresentation {
@@ -824,9 +1033,38 @@ fn present_from_stock(
             },
         );
     }
-    manifest.images.extend(images);
-    Ok(())
+    for (id, item) in &pack.items {
+        if manifest.items.contains_key(id) {
+            continue;
+        }
+        let model = model(manifest, faults, &item.model);
+        if let Some(stock) = manifest.models.get(&model) {
+            item_physics.items.insert(id.clone(), stock.bounds());
+        }
+        let icon = format!("{}.png", item.icon.replace('\\', "/").to_ascii_lowercase());
+        let icon = manifest.textures.contains_key(&icon).then_some(icon);
+        if icon.is_none() && !item.icon.is_empty() {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "weapons.json",
+                format!("icon {} of {} is not provided, so it shows its first letter", item.icon, item.ui_name.trim()),
+            ));
+        }
+        added.items.insert(id.clone());
+        manifest.items.insert(
+            id.clone(),
+            ItemPresentation {
+                model,
+                image: item.image.clone(),
+                tint: [1.0; 4],
+                icon,
+                evidence: evidence(),
+            },
+        );
+    }
 }
+/// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
+/// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
 fn euler_to_matrix_images(
     images: &mut BTreeMap<String, ImagePresentation>,
     pack: &bri_weapons::Pack,

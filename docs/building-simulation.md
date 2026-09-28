@@ -1,8 +1,7 @@
 # Building simulation integration
 
 `bri-sim` combines native content, world authority and Rapier. It contains no
-Torque reader and is intended to serve both local and network sessions. This
-is a backend integration milestone; there is still no playable client.
+Torque reader and serves both local and network sessions.
 
 ## Rules implemented
 
@@ -13,8 +12,9 @@ is a backend integration milestone; there is still no playable client.
   expanding every placed brick into a separate voxel collection.
 - The authority validates placement before changing IDs, revisions or world state.
   It rejects off-grid, out-of-reach, overlapping and unsupported placement, and
-  attachment to another owner's bricks. World-owned support and administrator
-  support are allowed. More granular trust sharing remains pending.
+  attachment to bricks whose owner does not give the builder build trust
+  (v20 `$TrustLevel::BuildOn`). World-owned support and administrator support
+  are allowed.
 - Map collision uses native interiors and terrain. Ground support tolerates a
   grid-snapped gap of up to one plate; this remains a fidelity assumption for
   Maxwell to assess. Moving/kinematic entities prevent penetrating placement.
@@ -98,20 +98,19 @@ brick solver-contact check passes (`artifacts/native-collision/stock-defaults.js
 
 - Player motor, server-created interaction context, socket commands and native
   client input routing exist; see `player-simulation.md`, `networking.md` and
-  `native-client.md`. Actual window/input behavior awaits Maxwell's playtest.
-- Rooted-build connectivity and original removal behavior, build trust sharing,
-  complete tool behavior and permission sharing. Physical player touch-entry now
-  feeds the event scheduler. Tool rays use the audit's distances; spray still
-  needs its actual projectile adapter. Atomic ordinary wrench properties,
-  inspection races, print compatibility and planting undo are implemented.
-- Water-brick behaviors, static-model/datablock collision, and environment adapters.
+  `native-client.md`.
+- Rooted-build connectivity and original removal behavior. Physical player
+  touch-entry feeds the event scheduler. Tool rays use the audit's distances.
+  Atomic ordinary wrench properties, inspection races, print compatibility,
+  planting undo and trust levels are implemented.
+- Water bricks are liquid volumes in the simulation. Checkpoint, Teledoor,
+  treasure chest and Pumpkin behavior is in `crates/sim/src/session/special.rs`.
   Native map loading reports pending scene objects: 16 Bedroom, 25 Kitchen,
   one Slopes entry in the current bundles. These are not complete maps yet.
-- Terrain collision currently loads an explicit region of cells (-64,-64) through
-  (384,384). Periodic terrain streaming beyond that region is still required.
+- Terrain collision streams tiles around every moving body plus authored spawn
+  anchors (`TerrainStream` in `crates/sim/src/map.rs`).
 - Native client ghost placement is connected, including non-grid map-floor
   placement. Exact original anchoring/rotation and terrain-only bias remain open.
 - Client building/tool integration is verified through typed UI actions, real
-  QUIC authority and offscreen rendering. Complete held-tool visuals/audio,
-  prediction, normal multiplayer UX and exact feel remain required. The complete
-  alpha contract stays unchecked; this is not the user playtest handoff.
+  QUIC authority and offscreen rendering. Exact feel remains to be judged in
+  playtests.

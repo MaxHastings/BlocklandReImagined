@@ -115,18 +115,9 @@ struct Attempt {
     /// Joins: the saved server answered with a different identity, so a
     /// failure asks whether to trust the new one.
     identity_changed: Arc<std::sync::atomic::AtomicBool>,
-    /// Joins: a large Add-On download waiting for the player.
-    download: Arc<std::sync::Mutex<DownloadAsk>>,
     /// Joins: the server's Add-Ons bring bricks, weapons or vehicles, so
     /// the game loads this package list and joins again.
     add_ons: Arc<std::sync::Mutex<Option<bri_package::packages::PackageSet>>>,
-}
-/// A large Add-On download the join asks the player about.
-#[derive(Default)]
-struct DownloadAsk {
-    /// Its size, and where the answer goes.
-    pending: Option<(u64, tokio::sync::oneshot::Sender<bool>)>,
-    shown: bool,
 }
 struct PendingAction {
     action: UiAction,
@@ -409,8 +400,9 @@ pub struct App {
     client_code: crate::client_code::ClientCode,
     /// Every enabled package including server behaviour, for hosting.
     server_packages: Option<Arc<bri_package_runtime::Catalog>>,
-    /// Tools and tests chose the Add-Ons with `enable_packages`; hosting
-    /// then runs those instead of re-reading packages.json.
+    /// The loaded Add-Ons are this player's own choice (packages.json, the
+    /// Add-Ons screen, `enable_packages` or `apply_packages`), so hosting
+    /// runs them as they are. False after a join loaded another server's.
     packages_from_tools: bool,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
@@ -686,6 +678,7 @@ impl App {
         self.package_catalog = client;
         self.server_packages = server;
         self.client_code = crate::client_code::ClientCode::load(&root, set);
+        self.packages_from_tools = true;
         Ok(())
     }
     /// Package HUD panels and keys from the latest replicated state.
@@ -1747,6 +1740,7 @@ impl App {
                 archetype: bri_sim::player_types::PlayerType::Horse.archetype(),
                 scale: 1.0,
                 energy: 0.0,
+                tick: Default::default(),
             };
             let input = crate::avatar::AvatarAnimationInput {
                 dead: info.destroyed,
@@ -2378,7 +2372,6 @@ impl App {
             saved_revision: None,
             settling: None,
             identity_changed: Default::default(),
-            download: Default::default(),
             add_ons: Default::default(),
         });
         Ok(())
@@ -2473,8 +2466,6 @@ impl App {
             .any(|s| s.invite.as_deref() == Some(address.trim()));
         let identity_changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let changed = identity_changed.clone();
-        let download = Arc::new(std::sync::Mutex::new(DownloadAsk::default()));
-        let ask = download.clone();
         let worker = Worker::start(self.runtime.handle(), async move {
             let route = target.resolve().await?;
             let address = route.address;
@@ -2509,9 +2500,10 @@ impl App {
                 identity_paths.environment()
             })
             .await??;
-            // A server running Add-Ons this client lacks refuses the join
-            // naming them; download them into the package cache, load them
-            // and join again with the server's package list.
+            // A server running Add-Ons this client lacks, or has in another
+            // version, refuses the join naming them; download them into the
+            // package cache, load the server's set and join again. Nothing
+            // asks the player (only sandboxed Add-On code does, after).
             let cache = bri_package::sync::Cache::open(&package_cache)?;
             let local = identity.client_packages();
             let mut mods = None;
@@ -2524,28 +2516,23 @@ impl App {
                 &native_identity,
                 &cache,
                 reporting.clone(),
-                |fetched| {
-                    let (catalog, packages) =
-                        crate::mods::load_fetched(&package_root, &package_set, &local, fetched)?;
+                |fetched, dropped| {
+                    let (catalog, packages) = crate::mods::load_fetched(
+                        &package_root,
+                        &package_set,
+                        &local,
+                        fetched,
+                        dropped,
+                    )?;
                     mods = Some(catalog);
                     Ok(packages)
-                },
-                bri_net::packages::ASK_ABOVE_BYTES,
-                |total| {
-                    let (answer, answered) = tokio::sync::oneshot::channel();
-                    if let Ok(mut ask) = ask.lock() {
-                        *ask = DownloadAsk {
-                            pending: Some((total, answer)),
-                            shown: false,
-                        };
-                    }
-                    async move { answered.await.unwrap_or(false) }
                 },
             )
             .await;
             let client = match joined {
-                Ok((client, fetched)) if !fetched.is_empty() => {
-                    let set = crate::mods::joined_set(&package_root, &package_set, &fetched)?;
+                Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
+                    let set =
+                        crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped)?;
                     let fresh = crate::content::ContentPaths::resolve(&package_root, &set)?;
                     if fresh.brick_extras != paths.brick_extras
                         || fresh.weapon_extras != paths.weapon_extras
@@ -2559,7 +2546,7 @@ impl App {
                     }
                     client
                 }
-                Ok((client, _)) => client,
+                Ok((client, _, _)) => client,
                 Err(error) => {
                     // A saved server that answers with a new identity may
                     // have reinstalled, or may not be the same host: the
@@ -2639,7 +2626,6 @@ impl App {
             saved_revision: None,
             settling: None,
             identity_changed,
-            download,
             add_ons,
         });
         Ok(())
@@ -3203,13 +3189,6 @@ impl App {
             a.view = a.worker.view.borrow_and_update().clone();
         }
         self.show_progress(&mut a);
-        let asking = a.download.lock().ok().and_then(|mut ask| {
-            let total = ask.pending.as_ref().map(|(total, _)| *total)?;
-            (!std::mem::replace(&mut ask.shown, true)).then_some(total)
-        });
-        if let Some(total) = asking {
-            self.ui.apply_session(a.id, UiUpdate::Question(download_question(total)));
-        }
         let mut failed = None;
         while let Ok(event) = a.worker.events.try_recv() {
             match event {
@@ -3348,6 +3327,10 @@ impl App {
                             self.abilities = abilities;
                             continue;
                         }
+                        bri_sim::session::Notice::MusicTracks(music) => {
+                            self.tool_ui.offer_music(&music);
+                            continue;
+                        }
                         bri_sim::session::Notice::TempBrickColor(color) => {
                             if let Some(building) = self.building.as_mut() {
                                 building.set_random_color(color);
@@ -3436,7 +3419,7 @@ impl App {
         if failed.is_none() && a.worker.events.is_closed() {
             failed = Some("Connection worker stopped".into());
         }
-        if let Some(reason) = failed {
+        if let Some(mut reason) = failed {
             // A joined remote game whose network dropped is rejoined
             // automatically a few times; the host gives the player their
             // owner number, and so their bricks, back.
@@ -3457,12 +3440,17 @@ impl App {
             let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
             if let Some(set) = add_ons {
                 self.disconnect();
-                let rejoined = self
-                    .apply_packages(&set)
-                    .and_then(|()| self.join(id, a.name.clone(), String::new()));
+                let applied = self.apply_packages(&set);
+                // The next game this player hosts runs their own list again.
+                self.packages_from_tools = false;
+                let rejoined = applied.and_then(|()| self.join(id, a.name.clone(), String::new()));
                 match rejoined {
                     Ok(()) => return Ok(()),
-                    Err(error) => bri_console::warn(format!("Joining with the server's Add-Ons: {error:#}")),
+                    // The player reads which Add-On and file stopped it.
+                    Err(error) => {
+                        reason = format!("Could not load the server's Add-Ons: {error:#}");
+                        bri_console::warn(&reason);
+                    }
                 }
             }
             if a.identity_changed.load(std::sync::atomic::Ordering::Relaxed) {
@@ -4134,20 +4122,6 @@ fn vertical_fov(horizontal: f32, aspect: f32) -> f32 {
         return horizontal;
     }
     2.0 * ((horizontal * 0.5).tan() / aspect).atan()
-}
-/// Asked before an Add-On download over `bri_net::packages::ASK_ABOVE_BYTES`.
-fn download_question(total: u64) -> bri_ui::api::Question {
-    bri_ui::api::Question {
-        title: "Download Add-Ons?".into(),
-        text: format!(
-            "This server's Add-Ons need {} MB. Download?",
-            total.div_ceil(1024 * 1024)
-        ),
-        yes: "Download".into(),
-        no: "Leave".into(),
-        on_yes: Box::new(UiAction::ApproveDownload),
-        on_no: Some(Box::new(UiAction::CancelConnect)),
-    }
 }
 /// The join's trust question for a server's sandboxed Add-On code, as
 /// `bri_client_sandbox::trust` words it.
@@ -5392,13 +5366,17 @@ impl PlatformApp for App {
             }
             // Clicking out of the spy orbit returns to the body
             // (`Observer::onTrigger` in `Corpse` mode); the free camera
-            // ignores triggers. The dead click to respawn above.
+            // uses it only to fly faster. The dead click to respawn above.
             if let Some(observer) = self.controls.observer()
                 && let UiAction::Game(GameAction::Held {
                     control: HeldControl::Fire,
                     down,
                 }) = action
             {
+                self.controls.action(&GameAction::Held {
+                    control: HeldControl::Fire,
+                    down,
+                });
                 if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
                     if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
                         self.answer(id, Err(error));
@@ -5604,15 +5582,6 @@ impl PlatformApp for App {
                 UiAction::TrustAddOnCode => self.client_code.accept_trust(&self.state_dir),
                 UiAction::ForgetAddOnTrust => {
                     crate::client_code::ClientCode::forget_trust(&self.state_dir)
-                }
-                UiAction::ApproveDownload => {
-                    if let Some(a) = &self.attempt
-                        && let Ok(mut ask) = a.download.lock()
-                        && let Some((_, answer)) = ask.pending.take()
-                    {
-                        let _ = answer.send(true);
-                    }
-                    Ok(())
                 }
                 UiAction::CancelConnect | UiAction::Disconnect => {
                     if self.attempt.as_ref().is_none_or(|a| a.id <= id) {

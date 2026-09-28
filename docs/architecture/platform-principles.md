@@ -2,8 +2,8 @@
 
 Status: proposed 2026-09-27, awaiting Maxwell's approval. These are the
 constraints we keep while building the game so that the modding platform stays
-possible later. They are not a request to build the mod runtime now. The alpha
-and the first building playtest come first; nothing here blocks them.
+possible later. The alpha and the first building playtest come first; nothing
+here blocks them.
 
 The evidence for each principle, what the code does today, and what to fix first
 are in [`docs/audits/platform-door-closers.md`](../audits/platform-door-closers.md).
@@ -157,6 +157,11 @@ Principles 1 to 4, 7 to 9 and 11 are things we enforce in code now; 10's
 client sandbox has a working prototype (`crates/client-sandbox`). The rest
 (5, 6, 10, 12 to 15) are shapes we preserve now so they can be built later; see
 the scope table below.
+
+Some "Do later" items in that table now exist as prototypes: Rhai server
+scripts and chunked world providers (`package-runtime.md`), dependency
+ordering when an Add-On is turned on (`mod-manager.md`) and fetching a
+server's missing Add-Ons on join (`packages.md`).
 
 ## Scope: what we build now
 

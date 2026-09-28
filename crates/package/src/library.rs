@@ -850,6 +850,35 @@ fn write_atomic(path: &Path, set: &PackageSet) -> Result<()> {
     Ok(())
 }
 
+/// What players call the Add-On whose content directory is `dir` (its
+/// folder, or `<folder>/assets`): the `name` in its manifest, else its id,
+/// else `fallback` (the content-root-relative directory). A downloaded
+/// Add-On lives under a hash in the download cache, so messages name it
+/// this way rather than by folder.
+pub fn add_on_label(dir: &Path, fallback: &str) -> String {
+    let folder = if dir.ends_with("assets") {
+        dir.parent().unwrap_or(dir)
+    } else {
+        dir
+    };
+    let manifest = std::fs::File::open(folder.join(MANIFEST_FILE)).ok().and_then(|file| {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_MANIFEST_BYTES), &mut bytes).ok()?;
+        serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+    });
+    let field = |key: &str| {
+        manifest
+            .as_ref()
+            .and_then(|m| m.get(key)?.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && !s.chars().any(char::is_control))
+            .map(str::to_owned)
+    };
+    field("name")
+        .or_else(|| field("id"))
+        .unwrap_or_else(|| fallback.strip_suffix("/assets").unwrap_or(fallback).to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1122,3 +1151,4 @@ mod tests {
         );
     }
 }
+

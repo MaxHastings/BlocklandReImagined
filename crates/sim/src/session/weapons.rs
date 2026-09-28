@@ -436,6 +436,9 @@ impl Session {
                     impulse,
                     ..
                 } => self.push_player(target.0, impulse),
+                WeaponEvent::Recoil { actor, velocity } => {
+                    self.push_player(actor.0, velocity * combat::PLAYER_MASS)
+                }
                 WeaponEvent::Damage {
                     source,
                     target: TargetId::Vehicle(vehicle),

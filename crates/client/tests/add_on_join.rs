@@ -309,3 +309,133 @@ fn walk(dir: &Path) -> Vec<String> {
     }
     out
 }
+
+/// Every Add-On in the repository (`packages/`: the Duplicator, the samples
+/// and the Stress Lab), copied into a hidden folder of the content root
+/// for the test's length, in dependency order.
+struct RepoAddOns {
+    dir: PathBuf,
+    entries: Vec<bri_package::packages::PackageEntry>,
+}
+impl RepoAddOns {
+    fn install(content: &Path) -> Result<Self> {
+        let folder = format!(".repo-add-ons-{}", std::process::id());
+        let dir = content.join(&folder);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut found = Vec::new();
+        for source in manifests(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages")) {
+            let info: bri_package::library::PackageInfo =
+                serde_json::from_slice(&std::fs::read(source.join("package.json"))?)?;
+            copy_dir(&source, &dir.join(&info.id))?;
+            found.push(info);
+        }
+        ensure!(found.len() >= 10, "the repository's Add-Ons: {}", found.len());
+        // Dependencies load first, as the Add-Ons screen orders them.
+        let mut entries: Vec<bri_package::packages::PackageEntry> = Vec::new();
+        while entries.len() < found.len() {
+            let before = entries.len();
+            for info in &found {
+                let listed = |id: &String| entries.iter().any(|e| &e.id == id);
+                if listed(&info.id)
+                    || !info.dependencies.keys().all(|d| listed(d) || !found.iter().any(|f| &f.id == d))
+                {
+                    continue;
+                }
+                entries.push(bri_package::packages::PackageEntry {
+                    id: info.id.clone(),
+                    version: info.version.clone(),
+                    side: bri_package::library::side_for_kinds(
+                        info.provides.iter().map(|p| p.kind.as_str()),
+                    )
+                    .unwrap_or(bri_package::packages::Side::Shared),
+                    dir: format!("{folder}/{}", info.id),
+                    role: None,
+                });
+            }
+            ensure!(entries.len() > before, "a dependency cycle among the repository's Add-Ons");
+        }
+        Ok(Self { dir, entries })
+    }
+}
+impl Drop for RepoAddOns {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+fn manifests(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries.into_iter().filter(|p| p.is_dir()) {
+        if path.join("package.json").is_file() {
+            out.push(path);
+        } else {
+            out.extend(manifests(&path));
+        }
+    }
+    out
+}
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// The a17 join failure: a host with the Duplicator on, a guest who has it
+/// too, and the guest's item HUD refusing the Duplicator's wand ("Item HUD
+/// catalog coverage mismatch"). The gate never enabled an Add-On, so it
+/// never saw that. Here a host turns on every Add-On in the repository and
+/// a guest with only the base game downloads them, loads them and joins.
+#[test]
+#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
+fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
+    let content = std::env::var_os("BRI_CONTENT").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        PathBuf::from,
+    );
+    let add_ons = RepoAddOns::install(&content)?;
+    let mut set = bri_package::packages::PackageSet::load_root(&content)?;
+    set.packages.extend(add_ons.entries.iter().cloned());
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")?.local_addr()?.port();
+    let mut host_app = app(&content, "RepoHost")?;
+    // What turning them on in the Add-Ons screen loads, without writing the
+    // content root's lists.
+    host_app
+        .apply_packages(&set)
+        .context("the host loads every repository Add-On")?;
+    let mut guest = app(&content, "RepoGuest")?;
+    host(&mut host_app, port)?;
+    until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    join(&mut guest, port)?;
+    // Nothing asks about the download; the guest agrees to the samples'
+    // client code, the one question a join may ask.
+    let start = Instant::now();
+    while !in_game(&guest) {
+        step(&mut host_app)?;
+        step(&mut guest)?;
+        if let ConnectionState::Failed { reason } = &guest.ui.core.conn {
+            bail!("the guest could not join: {reason}");
+        }
+        request(&mut guest, UiAction::TrustAddOnCode)?;
+        ensure!(start.elapsed() < Duration::from_secs(300), "the guest never joined");
+        thread::sleep(Duration::from_millis(8));
+    }
+    let cache = guest_cache_ids(&guest);
+    ensure!(
+        cache.iter().any(|id| id == "duplicator-tool"),
+        "the Duplicator was not downloaded: {cache:?}"
+    );
+    leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}

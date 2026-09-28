@@ -45,15 +45,6 @@ pub enum ClientEvent {
     /// The replica now holds a new map.
     MapChanged,
 }
-/// The player chose not to download a server's Add-Ons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DownloadDeclined;
-impl std::fmt::Display for DownloadDeclined {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("You chose not to download this server's Add-Ons.")
-    }
-}
-impl std::error::Error for DownloadDeclined {}
 /// A join refused because the client's shared packages differ from the
 /// server's. Downcast a join error to this to offer the download.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,18 +167,19 @@ impl Client {
         )
         .await
     }
-    /// Joins like [`Client::connect_reporting`], then fetches the
-    /// client-only packages the server offers that this client lacks (HUD
-    /// panels, models) and hands them to `load`. When the server refuses
-    /// because shared packages differ and downloading can fix it (nothing
-    /// the server lacks is required), fetches what the server offers into
-    /// `cache` and joins once more. `load` receives the fetched packages,
-    /// loads them, and returns the package list the client now runs; the
-    /// server checks that list again. A download over `ask_above` bytes
-    /// waits for `approve` with its size; declining ends the join before
-    /// anything downloads. Returns what was fetched.
+    /// Joins like [`Client::connect_reporting`], downloading whatever the
+    /// server runs that this client does not, exactly (by content hash):
+    /// client-only packages after joining (HUD panels, models), and when
+    /// the server refuses because shared packages differ, every package it
+    /// offers that the client lacks or has in another version, into
+    /// `cache`, then joins once more. Shared packages the client runs and
+    /// the server does not are left out of that join. `load` receives the
+    /// fetched packages and the left-out ones, loads the server's set, and
+    /// returns the package list the client now runs; the server checks
+    /// that list again. Nothing asks the player: a join downloads what it
+    /// needs, as v20 did. Returns what was fetched and what was left out.
     #[allow(clippy::too_many_arguments)]
-    pub async fn connect_fetching<Approval: std::future::Future<Output = bool>>(
+    pub async fn connect_fetching(
         address: SocketAddr,
         pin: HostPin,
         name: String,
@@ -196,10 +188,15 @@ impl Client {
         identity: &ClientIdentity,
         cache: &bri_package::sync::Cache,
         progress: Progress,
-        load: impl FnOnce(&[crate::packages::Fetched]) -> Result<Vec<bri_package::environment::PackageRef>>,
-        ask_above: u64,
-        mut approve: impl FnMut(u64) -> Approval,
-    ) -> Result<(Self, Vec<crate::packages::Fetched>)> {
+        load: impl FnOnce(
+            &[crate::packages::Fetched],
+            &[bri_package::environment::PackageRef],
+        ) -> Result<Vec<bri_package::environment::PackageRef>>,
+    ) -> Result<(
+        Self,
+        Vec<crate::packages::Fetched>,
+        Vec<bri_package::environment::PackageRef>,
+    )> {
         let have = packages.clone();
         let refused = match Self::connect_pinned(
             address,
@@ -217,56 +214,34 @@ impl Client {
                 // Joined: every shared package matches. Client-only Add-Ons
                 // the server runs (HUD panels, models) come down now; a host
                 // that offers nothing leaves the join as it is.
-                let mut approved = ask_above;
-                let fetched = loop {
-                    let result = crate::packages::fetch_missing_pinned(
-                        address, &pin, cache, &progress, approved, &have,
-                    )
-                    .await;
-                    if let Err(error) = &result
-                        && let Some(&crate::packages::NeedsApproval(total)) = error.downcast_ref()
-                    {
-                        ensure!(approve(total).await, DownloadDeclined);
-                        approved = total;
-                        continue;
-                    }
-                    break result.unwrap_or_default();
-                };
+                let fetched =
+                    crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)
+                        .await
+                        .unwrap_or_default();
                 if !fetched.is_empty() {
-                    load(&fetched)?;
+                    load(&fetched, &[])?;
                 }
-                return Ok((client, fetched));
+                return Ok((client, fetched, Vec::new()));
             }
             Err(error) => error,
         };
         let Some(differ) = refused.downcast_ref::<PackagesDiffer>() else {
             return Err(refused);
         };
-        // A shared package only the client runs cannot be downloaded away.
-        if differ
+        // Shared Add-Ons only this client runs sit this game out.
+        let dropped: Vec<_> = differ
             .0
             .iter()
-            .any(|m| matches!(m, bri_package::environment::Mismatch::Extra(_)))
-        {
-            return Err(refused);
-        }
-        // The download connection closes while the player decides; the
-        // fetch runs again with their answer.
-        let mut approved = ask_above;
-        let fetched = loop {
-            let result =
-                crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, approved, &have)
-                    .await;
-            if let Err(error) = &result
-                && let Some(&crate::packages::NeedsApproval(total)) = error.downcast_ref()
-            {
-                ensure!(approve(total).await, DownloadDeclined);
-                approved = total;
-                continue;
-            }
-            break result.context("Downloading the server's Add-Ons")?;
-        };
-        let packages = load(&fetched)?;
+            .filter_map(|m| match m {
+                bri_package::environment::Mismatch::Extra(p) if m.blocks_join() => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        let fetched =
+            crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)
+                .await
+                .context("Downloading the server's Add-Ons")?;
+        let packages = load(&fetched, &dropped)?;
         let client = Self::connect_pinned(
             address,
             pin,
@@ -278,7 +253,7 @@ impl Client {
             progress,
         )
         .await?;
-        Ok((client, fetched))
+        Ok((client, fetched, dropped))
     }
     /// Connects like [`Client::connect_with_identity`], reporting the
     /// handshake and the world download into `progress`.

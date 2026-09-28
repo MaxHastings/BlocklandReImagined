@@ -630,6 +630,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-launcher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-crash",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip 6.0.0",
+]
+
+[[package]]
 name = "bri-minigames"
 version = "0.1.0"
 dependencies = [
@@ -711,6 +723,7 @@ dependencies = [
  "rhai",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
@@ -763,9 +776,11 @@ dependencies = [
  "bri-weapons",
  "bri-world",
  "glam 0.33.10",
+ "libc",
  "rapier3d",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

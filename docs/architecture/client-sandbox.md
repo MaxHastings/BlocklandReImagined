@@ -70,10 +70,8 @@ never starts (`Sandbox::start` takes the granted level).
 
 ### The prompts
 
-Shown on the join screen after the environment check and before any code
-downloads (code lives in `shared` or `client` packages, so this sits
-alongside PR #4's download progress and Can't Join dialog; see
-"Distribution"). Text comes from `trust::TrustPrompt`; the UI draws it.
+Shown as a question when the player enters the game, before any of the code
+runs (see "In the game"). Text comes from `trust::TrustPrompt`; the UI draws it.
 
 **Tier 2**, when a server has sandboxed code the player has not trusted:
 
@@ -333,10 +331,9 @@ Order on join:
 2. For packages the client lacks, fetch their `package.json` first (small).
    From each `client` section and listing, build the `CodeSummary` list:
    id, name, code hash, capabilities.
-3. `TrustStore::decide`: `Join`, or a prompt. PR #4's join screen gains a
-   state for it next to `DownloadingPackages` (proposed
-   `ConnectionState::TrustAddOnCode(TrustPrompt)`, rendered with the Can't
-   Join dialog's style). Leave cancels the join before any code downloads.
+3. `TrustStore::decide`: `Join`, or a prompt. Today the prompt is a question
+   shown as the game is entered, after the download (see "In the game");
+   asking before the download is not built yet.
 4. Download the rest, as today.
 5. `AddOnCode::load` re-checks everything from the verified bytes (hash,
    imports, shaders) and compiles modules on a worker thread, so a large
@@ -421,10 +418,6 @@ Open, to close before this ships in a playtest build:
   mitigations are on; Add-Ons get no clock finer than the frame time and
   share nothing with each other, which limits what they could learn and
   from whom.
-- **Server identity.** Trust is keyed by address until servers have a host
-  key; a different server at the same address would inherit the trust. The
-  code hash still has to match, so it could only run code the player
-  already trusted.
 
 ## In the game
 
@@ -435,7 +428,7 @@ loaded and checked (`ClientCode::load`). When the player enters a game:
 - in a game they host, their own enabled Add-Ons' code starts (enabling an
   Add-On is their trust decision);
 - on someone else's server, only code `addon-trust.json` grants for that
-  server's address and exactly that code hash starts; the rest is named in
+  server's host key and exactly that code hash starts; the rest is named in
   chat as off. When some of it is sandboxed code not trusted yet, the game
   asks as it is entered, before any of it runs: the prompt's title, words,
   one line per Add-On with what it can do, and "Trust and join" / "Leave".

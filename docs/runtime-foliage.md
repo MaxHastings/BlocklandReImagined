@@ -23,7 +23,7 @@ GPU resources upload once, then culling updates visible indices. Foliage draws
 after map/build geometry with existing depth and before particles/weather/UI.
 GPU recreation retains CPU placement; disconnect/map replacement clear fields,
 GPU resources and local animation time. Plants are cosmetic and not networked
-individually; all placement parameters/textures join content identity v7.
+individually; all placement parameters/textures join runtime content identity.
 
 Long sessions use f64 elapsed time. Every ten minutes, original per-plant sway and
 light phases are rebased using each plant's own authored rate, avoiding a 24-hour

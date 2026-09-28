@@ -537,6 +537,10 @@ impl WorldItems {
             self.missing(format!("Missing item presentation {id}"));
             return None;
         };
+        if item.model.is_empty() {
+            self.diagnostics.model_less += 1;
+            return None;
+        }
         // Core onAdd applies image color when enabled; schedulePop restores the
         // ItemData color/white separately before applying the final node alpha.
         let mut tint = item.tint;
