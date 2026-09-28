@@ -4161,8 +4161,8 @@ fn ghost_key(building: &crate::building::Building) -> u64 {
         ^ building.query_generation()
 }
 
-fn translucent_ghost(scene: &mut SceneData) {
-    crate::world_scene::v20_temp_brick(scene);
+fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrickLook) {
+    crate::world_scene::v20_temp_brick(scene, look);
 }
 
 fn combine_effect_frames(
@@ -5917,6 +5917,8 @@ impl PlatformApp for App {
                 }
             }
         }
+        // Options > Advanced's temp brick colours and flash.
+        let ghost_look = crate::world_scene::TempBrickLook::from_prefs(&self.ui.core.prefs);
         if let Some(building) = &self.building
             && self.ghost_uploaded != ghost_key(building)
         {
@@ -5946,7 +5948,7 @@ impl PlatformApp for App {
                         vertex.color = BLOCKED_GHOST;
                     }
                 }
-                translucent_ghost(&mut data);
+                translucent_ghost(&mut data, &ghost_look);
                 if !data.indices.is_empty() {
                     self.ghost_gpu = Some(renderer.upload(frame.device, frame.queue, &data)?);
                 }
@@ -5992,7 +5994,7 @@ impl PlatformApp for App {
                             1_000_000,
                             Some(materials),
                         )?;
-                        translucent_ghost(&mut data);
+                        translucent_ghost(&mut data, &ghost_look);
                         if !data.indices.is_empty() {
                             self.hidden_gpu =
                                 Some(renderer.upload(frame.device, frame.queue, &data)?);
@@ -6901,7 +6903,7 @@ image: "v20.image.gunimage".into(),
             material: 0,
             center: [0.0; 3],
         });
-        super::translucent_ghost(&mut scene);
+        super::translucent_ghost(&mut scene, &Default::default());
         // Outside: paint x1.5, pushed 0.02 along the normal, forward winding.
         assert_eq!(scene.vertices[0].position, [0.0, 0.02, -1.0]);
         assert!((scene.vertices[0].color[0] - 0.6).abs() < 1e-6);
@@ -6913,6 +6915,26 @@ image: "v20.image.gunimage".into(),
         let material = &scene.materials[0];
         assert_eq!(material.alpha, bri_render::scene::AlphaMode::Blend);
         assert!(material.temp_brick_flash);
+        assert_eq!(
+            material.parameters.map(|p| p[0]),
+            Some([0.8, 0.3, 0.3, 0.0])
+        );
+    }
+    #[test]
+    fn temp_brick_options_colour_and_flash_the_ghost() {
+        let mut prefs = bri_ui::prefs::Prefs::default();
+        prefs.set("$pref::HUD::tempBrickOutsideUsePaintColor", "0");
+        prefs.set("$pref::HUD::tempBrickOutsideGreen", "1");
+        prefs.set("$pref::HUD::tempBrickInsideUsePaintColor", "1");
+        prefs.set("$pref::HUD::tempBrickFlashTime", "2000");
+        let look = crate::world_scene::TempBrickLook::from_prefs(&prefs);
+        assert_eq!(look.outside, Some([0.0, 1.0, 0.0]));
+        assert_eq!(look.inside, None);
+        assert_eq!(look.flash_ms, 2000.0);
+        assert_eq!(
+            crate::world_scene::TempBrickLook::from_prefs(&Default::default()),
+            Default::default()
+        );
     }
     #[test]
     fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {

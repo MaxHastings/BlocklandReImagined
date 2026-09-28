@@ -189,6 +189,82 @@ const CHECKBOX_PREFS: &[&str] = &[
     MUTE_IN_BACKGROUND,
     TOGGLE_CROUCH,
     CAPTIONS,
+    "$Pref::Chat::CurseFilter",
+    "$pref::Chat::ChatRepeat",
+    "$pref::Input::AutoLight",
+    TEMP_BRICK_OUTSIDE_PAINT,
+    TEMP_BRICK_INSIDE_PAINT,
+];
+/// Advanced's temp brick rows: the ghost's outside and inside colours come
+/// from the paint can unless these are off (`OptionsDlg::UpdateTempBrickBlockers`).
+pub const TEMP_BRICK_OUTSIDE_PAINT: &str = "$pref::HUD::tempBrickOutsideUsePaintColor";
+pub const TEMP_BRICK_INSIDE_PAINT: &str = "$pref::HUD::tempBrickInsideUsePaintColor";
+/// The temp brick's number fields: (control, label, pref, min, max), clamped
+/// as `optionsDlg::apply` did.
+const TEMP_BRICK_FIELDS: &[(&str, &str, &str, f32, f32)] = &[
+    (
+        "Opt_TempBrickFlashTime",
+        "Temp Brick Flash Time",
+        "$pref::HUD::tempBrickFlashTime",
+        100.0,
+        10000.0,
+    ),
+    (
+        "Opt_TempBrickFlashRange",
+        "Temp Brick Flash Range",
+        "$pref::HUD::tempBrickFlashRange",
+        0.0,
+        1.0,
+    ),
+    (
+        "Opt_TempBrickFlashOffset",
+        "Temp Brick Flash Offset",
+        "$pref::HUD::tempBrickFlashoffset",
+        0.0,
+        1.0,
+    ),
+    (
+        "Opt_TempBrickOutsideRed",
+        "Temp Brick Outside Color",
+        "$pref::HUD::tempBrickOutsideRed",
+        0.0,
+        1.0,
+    ),
+    (
+        "Opt_TempBrickOutsideGreen",
+        "Temp Brick Outside Color",
+        "$pref::HUD::tempBrickOutsideGreen",
+        0.0,
+        1.0,
+    ),
+    (
+        "Opt_TempBrickOutsideBlue",
+        "Temp Brick Outside Color",
+        "$pref::HUD::tempBrickOutsideBlue",
+        0.0,
+        1.0,
+    ),
+    (
+        "Opt_TempBrickInsideRed",
+        "Temp Brick Inside Color",
+        "$pref::HUD::tempBrickInsideRed",
+        0.0,
+        1.0,
+    ),
+    (
+        "Opt_TempBrickInsideGreen",
+        "Temp Brick Inside Color",
+        "$pref::HUD::tempBrickInsideGreen",
+        0.0,
+        1.0,
+    ),
+    (
+        "Opt_TempBrickInsideBlue",
+        "Temp Brick Inside Color",
+        "$pref::HUD::tempBrickInsideBlue",
+        0.0,
+        1.0,
+    ),
 ];
 /// Other authored controls with native behaviour.
 const SUPPORTED_CONTROLS: &[&str] = &[
@@ -200,6 +276,15 @@ const SUPPORTED_CONTROLS: &[&str] = &[
     "slider_KeyboardTurnSpeed",
     "Opt_ChatLineTime",
     "Opt_MaxChatLines",
+    "Opt_TempBrickFlashTime",
+    "Opt_TempBrickFlashRange",
+    "Opt_TempBrickFlashOffset",
+    "Opt_TempBrickOutsideRed",
+    "Opt_TempBrickOutsideGreen",
+    "Opt_TempBrickOutsideBlue",
+    "Opt_TempBrickInsideRed",
+    "Opt_TempBrickInsideGreen",
+    "Opt_TempBrickInsideBlue",
     "OptRemapList",
     "SliderGraphicsAnisotropy",
     DISTANCE_SLIDER,
@@ -859,6 +944,13 @@ impl Options {
                     .set_text(n, core.prefs.i64_or(pref, fallback).to_string());
             }
         }
+        for &(name, _, pref, min, max) in TEMP_BRICK_FIELDS {
+            if let Some(n) = s.view.id(name) {
+                let v = core.prefs.f32_or(pref, min).clamp(min, max);
+                s.view.set_text(n, v.to_string());
+            }
+        }
+        s.temp_brick_blockers();
         // The renderer ignores the stock default; show what it draws.
         let anisotropy = if core.prefs.is_set(ANISOTROPY) {
             core.prefs.f32_or(ANISOTROPY, 0.0)
@@ -1254,6 +1346,19 @@ impl Options {
         self.view.close_popup();
         self.view.focus = None;
     }
+    /// `OptionsDlg::UpdateTempBrickBlockers`: a colour taken from the paint
+    /// can greys its red, green and blue fields out.
+    fn temp_brick_blockers(&mut self) {
+        for (blocker, pref) in [
+            ("Opt_TempBrickOutsideColorBlocker", TEMP_BRICK_OUTSIDE_PAINT),
+            ("Opt_TempBrickInsideColorBlocker", TEMP_BRICK_INSIDE_PAINT),
+        ] {
+            if let Some(n) = self.view.id(blocker) {
+                let on = self.draft.bool_or(pref, false);
+                self.view.set_visible(n, on);
+            }
+        }
+    }
     fn smart_toggle(&mut self) {
         if let Some(n) = self.view.id("Opt_SSSmartToggle") {
             self.view.set_visible(
@@ -1377,6 +1482,21 @@ impl Options {
                     .trim()
                     .parse::<i64>()
                     .map_err(|_| format!("{label} must be a whole number."))?
+                    .clamp(min, max);
+                self.draft.set(pref, v.to_string());
+                self.view.set_text(n, v.to_string());
+            }
+        }
+        for &(name, label, pref, min, max) in TEMP_BRICK_FIELDS {
+            if let Some(n) = self.view.id(name) {
+                let v = self
+                    .view
+                    .edit_text(n)
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| format!("{label} must be a number."))?
                     .clamp(min, max);
                 self.draft.set(pref, v.to_string());
                 self.view.set_text(n, v.to_string());
@@ -1552,6 +1672,7 @@ impl Screen for Options {
             {
                 self.draft.set_bool(&var, self.view.bool_value(ev.node));
                 self.smart_toggle();
+                self.temp_brick_blockers();
                 if var.eq_ignore_ascii_case(FULLSCREEN) {
                     // OptGraphicsFullscreenToggle::onAction rebuilds the list.
                     let keep = self.selected_display().resolution;

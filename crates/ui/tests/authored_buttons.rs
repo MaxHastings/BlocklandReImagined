@@ -520,3 +520,40 @@ fn music_files_turns_tracks_off_for_the_next_hosted_game() {
     assert!(!music_enabled(&u.core.prefs, "Bass 1"));
     assert_eq!(u.core.prefs.get("$Music__Rock"), Some("-1"));
 }
+
+#[test]
+fn press_up_to_repeat_chat_recalls_sent_lines() {
+    use bri_ui::api::ChatChannel;
+    use bri_ui::input::{InputEvent, Key, Modifiers};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let mut u = ui(&Rc::new(pack));
+    u.core.prefs.set("$pref::Chat::ChatRepeat", "1");
+    u.core.chat.remember_sent("hi");
+    u.core.chat.remember_sent("there");
+    u.core.push(ScreenId::MessageInput(ChatChannel::Say));
+    u.update(0);
+    let press = |u: &mut Ui, key: Key| {
+        u.handle_input(InputEvent::KeyDown {
+            key,
+            mods: Modifiers::NONE,
+            repeat: false,
+        });
+        u.handle_input(InputEvent::KeyUp {
+            key,
+            mods: Modifiers::NONE,
+        });
+        let v = u
+            .screen(ScreenId::MessageInput(ChatChannel::Say))
+            .unwrap()
+            .view();
+        v.edit_text(v.id("NMH_Type").unwrap())
+    };
+    assert_eq!(press(&mut u, Key::Up), "there");
+    assert_eq!(press(&mut u, Key::Up), "hi");
+    assert_eq!(press(&mut u, Key::Up), "hi");
+    assert_eq!(press(&mut u, Key::Down), "there");
+    assert_eq!(press(&mut u, Key::Down), "");
+}
