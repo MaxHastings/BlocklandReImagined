@@ -701,13 +701,22 @@ impl Session {
             return Ok(());
         };
         let horse = d.family == veh::Family::Horse;
+        let skis = d.family == veh::Family::Skis;
         if input.jet && !was_held {
-            let _ = world.dismount(
-                &self.simulation.physics,
-                veh::OwnerId(owner),
-                OccupantId(owner),
-                false,
-            );
+            let left = world
+                .dismount(
+                    &self.simulation.physics,
+                    veh::OwnerId(owner),
+                    OccupantId(owner),
+                    false,
+                )
+                .is_ok();
+            // The empty skis are deleted before this dismount is applied,
+            // which then no longer knows they were skis: stop skiing now,
+            // or the ski item stays "in use" and never fires again.
+            if left && skis {
+                let _ = self.weapons.cancel_skis(ActorId(owner));
+            }
             return Ok(());
         }
         let fire = self
