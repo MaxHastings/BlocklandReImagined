@@ -89,6 +89,17 @@ satisfied; a warning on disabled ones), `library.dependency_missing`,
   call should drive `ConnectionState::DownloadingPackages` with one row per
   missing package, `Cached` for ones already in the cache, and byte progress
   from `Stage::DownloadingPackages`.
+- **Trust prompt (planned, with sandboxed client code).** When a server's
+  Add-Ons include client code (WebAssembly or shaders), the join stops
+  before any download with a prompt that names the server, lists what the
+  code may do in plain words, and offers Trust or Leave, remembered per
+  server. The hook is a connection state between the package comparison and
+  `DownloadingPackages`: `ConnectionState::TrustServer { server, add_ons,
+  permissions }`, answered by a `UiAction` carrying the choice (Leave is the
+  existing `CancelConnect`). Servers whose Add-Ons are data only never see
+  it. The Add-Ons screen's details would also say when an Add-On carries
+  client code. The sandbox design thread owns the permission list and the
+  wire signal; this screen only presents it.
 - No wire format changed in this slice. The refusal text is still the wire
   carrier for differing packages; `refusal` and `parse_refusal` sit side by
   side in `bri_package::environment` so they cannot drift.
