@@ -529,6 +529,8 @@ pub struct Session {
     private_notices: VecDeque<(OwnerId, Notice)>,
     /// When each builder no longer here left (for the Public Domain Timeout).
     abandoned_at: BTreeMap<OwnerId, u64>,
+    /// When each player last ran `/clearBricks` (the tick).
+    cleared_bricks_at: BTreeMap<OwnerId, u64>,
     last_membership: BTreeMap<OwnerId, Option<bri_minigames::GameId>>,
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
@@ -623,6 +625,7 @@ impl Session {
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
             abandoned_at: BTreeMap::new(),
+            cleared_bricks_at: BTreeMap::new(),
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),

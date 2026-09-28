@@ -58,6 +58,8 @@ pub enum ScreenId {
     AdminMaps,
     AdminOptions,
     AdminCredentials,
+    /// The saved ranks (v20's auto-admin lists).
+    AdminRanks,
     AdminConfirm,
     BrickSelector,
     PrintSelector,
@@ -174,6 +176,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         | ScreenId::AdminMaps
         | ScreenId::AdminOptions
         | ScreenId::AdminCredentials
+        | ScreenId::AdminRanks
         | ScreenId::AdminConfirm => return Box::new(admin::AdminScreen::new(id, core)),
         ScreenId::Wrench(variant) => return Box::new(wrench::Wrench::new(core, variant)),
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),

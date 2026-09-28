@@ -4427,6 +4427,70 @@ bounds, a stock model lends its box, an artless item gets the fallback, and
 the wrench's item-spawn edit for it validates); clippy on weapons, sim and
 net. Not seen in a window: Max's playtest of `/duplicator` with full slots
 and a wrench item spawn of the Duplicator.
+## 2026-09-28 Admin ranks and clearing bricks (branch `claude/admin-ranks`)
+
+What a20 already had (checked first): Admin/Super Admin roles, the host as
+Super Admin ("has become Super Admin (Host)"), Admin and Super Admin
+passwords from Start Game, the Player List password login with v20's four
+tries, kick/ban/clear bricks/admin menu gated on rank, a per-host
+`administration.json` with bans and an auto-rank list. Missing: any way to
+give or take a rank, a reachable auto-rank list, and other players' ranks in
+the Player List (only your own showed; everyone else read as a player).
+
+- v20 had no stock command to promote someone: ranks came from passwords or
+  `$Pref::Server::AutoAdminList`/`AutoSuperAdminList` edited by hand. Native
+  adaptation: the host and Super Admins make a player Admin or Super Admin,
+  or take it away, from three buttons under the Admin menu's player list and
+  with `/admin`, `/superAdmin` and `/deAdmin <name>`. Admins cannot. The host
+  can never be demoted; bots can't be ranked. Everyone sees "X made Y Admin".
+- A given rank is saved in the host's list and returns on rejoin, like v20's
+  auto-admin lists. **Pivot from the brief's "keyed by name"**: the list is
+  keyed by the player's verified key (the principal every client proves on
+  join, a20's BL_ID), with the name kept for display. Matching on name over
+  the Internet would let anyone type an admin's name and get Super Admin.
+  Duplicate-name suffixes and renamed players are therefore handled
+  naturally. A player without a key (none in practice) keeps a rank for the
+  visit only. Old list files without names still load.
+- **Saved Ranks >>** (Admin menu, host and Super Admins) lists the saved
+  ranks with name, rank and key prefix; Remove takes one off after a
+  confirmation (an online player keeps theirs until they leave).
+- Player List shows everyone's rank as v20 did: `S`, `A` or `-`.
+- Server Settings stay host-only: v20's serverConfigGui was a host-local
+  prefs dialog, not a remote admin screen. Super Admins set the Admin
+  password as v20's `serverCmdSADSetPassword` allowed.
+- Clear All Bricks hang (Max, single player): every removed brick ran a full
+  physics refresh, so clearing was quadratic (40,000 bricks: 16 s in a debug
+  sim test, the host frozen and the menu on "Waiting for host" meanwhile).
+  `Simulation::remove_many` removes a batch and refreshes once (0.6 s);
+  Clear All Bricks and Clear Brick Group use it.
+- v20 chat commands: `/clearBricks` clears your own bricks (anyone, once per
+  five seconds, "X cleared X's bricks", `ServerCmdClearBricks`), and
+  `/clearAllBricks` is admin-only (`ServerCmdClearAllBricks`), the same
+  server path as the menu.
+- Wire changes for Gate: new `Action::RequestAutoRoles`,
+  `AdminData::AutoRoles`, `HostSetRole`/`HostSetAutoRole` now allowed to
+  Super Admins, `AutoRole.name`. Protocol version left at main's 50 (Gate
+  owns numbering; this needs the next one).
+
+Evidence: `cargo test -p bri-admin` (grant/revoke/rejoin by key, imposter by
+name gets nothing, host protected, keyless visit-only, saved list reads,
+old files load); `cargo test -p bri-ui --test admin_screens` and `--lib`
+(rank buttons confirm before sending, only SA/host, saved list validation
+and removal); `cargo test -p bri-sim --test clear_bricks --test
+hardening_session` (40k clear under 5 s, `/clearBricks` own-only with the
+cooldown, Clear All admin-only); `cargo test -p bri-client --lib admin_ui`
+(chat commands, key round trip, rank replies); `cargo test -p bri-net --test
+loopback` (over QUIC: host makes a player Super Admin, who makes another
+Admin; an Admin cannot; the file names both; a fresh rejoin with the same
+key is Super Admin again, a stranger using the name is not). Release, real app, headless:
+`cargo test -p bri-client --test clear_bricks_flow --release -- --ignored`
+hosts Kitchen in single player, loads 20,000 bricks, opens Admin > Clear
+Bricks and clears all in 0.09 s ("Action accepted by the host"). Offscreen
+renders of the Admin menu and Saved Ranks (`artifacts/native-admin-ui`)
+show the new buttons fitting under the list. Not seen in a window: Max's
+playtest over the Internet with a second player.
+Follow-up outside this lane: the brick chain kill (`debris.rs`) still
+removes stranded bricks one at a time with a physics refresh each.
 ## 2026-09-28 Guests hammer their own spawn bricks (branch `claude/project-thread-7p7umh`)
 
 Playtest a20 (5b476a991): an Internet guest placed a vehicle spawn, set it to

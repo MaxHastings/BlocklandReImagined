@@ -2793,3 +2793,105 @@ async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<(
     assert!(report.final_world.bricks.is_empty());
     Ok(())
 }
+
+/// A rank given over the network is saved under the player's key: the same
+/// key gets it back on a fresh join, a copied name does not, and a Super
+/// Admin (not only the host) can give and take ranks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
+    use bri_admin::{Action, ConnectionId, DurableState, Request, Role};
+
+    let state_dir = tempfile::tempdir()?;
+    let admin_file = state_dir.path().join("admin.json");
+    let key = |name: &str| ClientIdentity::load_or_create(state_dir.path().join(name));
+    let (host_key, friend_key, other_key) = (key("host")?, key("friend")?, key("other")?);
+    let server = server::start_with_admin_store_and_limit(session(), options(), 8, &admin_file)?;
+    macro_rules! join {
+        ($name:expr, $identity:expr, $host:expr) => {
+            Client::connect_with_identity(
+                server.address,
+                &server.certificate,
+                $name.into(),
+                Vec::new(),
+                None,
+                $host.then(|| server.host_token.clone()),
+                $identity,
+            )
+        };
+    }
+    let connection = |c: &Client, name: &str| {
+        c.admin_snapshot
+            .as_ref()
+            .and_then(|s| s.players.iter().find(|p| p.name == name))
+            .map(|p| ConnectionId(p.connection))
+    };
+    let mut host = join!("Host", &host_key, true).await?;
+    let mut friend = join!("Friend", &friend_key, false).await?;
+    let mut other = join!("Other", &other_key, false).await?;
+    wait(&mut host, |c| {
+        connection(c, "Friend").is_some() && connection(c, "Other").is_some()
+    })
+    .await?;
+    let target = connection(&host, "Friend").unwrap();
+    host.command(Command::Admin(Request::new(Action::HostSetRole {
+        target,
+        role: Role::SuperAdmin,
+    })))
+    .await?;
+    wait(&mut friend, |c| {
+        c.admin_snapshot
+            .as_ref()
+            .is_some_and(|s| s.role == Role::SuperAdmin)
+    })
+    .await?;
+    // The new Super Admin hands out a rank of their own.
+    wait(&mut friend, |c| connection(c, "Other").is_some()).await?;
+    let other_connection = connection(&friend, "Other").unwrap();
+    friend
+        .command(Command::Admin(Request::new(Action::HostSetRole {
+            target: other_connection,
+            role: Role::Admin,
+        })))
+        .await?;
+    wait(&mut other, |c| {
+        c.admin_snapshot.as_ref().is_some_and(|s| s.role == Role::Admin)
+    })
+    .await?;
+    // A plain Admin cannot.
+    assert!(
+        other
+            .command(Command::Admin(Request::new(Action::HostSetRole {
+                target: other_connection,
+                role: Role::SuperAdmin,
+            })))
+            .await
+            .is_err()
+    );
+    let saved = DurableState::read(std::fs::File::open(&admin_file)?)?;
+    let names: Vec<_> = saved
+        .auto_roles
+        .iter()
+        .map(|a| (a.name.as_str(), a.role))
+        .collect();
+    assert_eq!(names, [("Friend", Role::SuperAdmin), ("Other", Role::Admin)]);
+
+    // Leave and join again fresh: the key brings the rank back.
+    friend.close();
+    wait(&mut host, |c| connection(c, "Friend").is_none()).await?;
+    let mut back = join!("Friend", &friend_key, false).await?;
+    wait(&mut back, |c| c.admin_snapshot.is_some()).await?;
+    assert_eq!(back.admin_snapshot.as_ref().unwrap().role, Role::SuperAdmin);
+    // Someone else calling themselves "Friend" gets nothing (Other leaves
+    // to free a spawn point).
+    other.close();
+    wait(&mut host, |c| connection(c, "Other").is_none()).await?;
+    let stranger_key = key("stranger")?;
+    let mut stranger = join!("Friend", &stranger_key, false).await?;
+    wait(&mut stranger, |c| c.admin_snapshot.is_some()).await?;
+    assert_eq!(stranger.admin_snapshot.as_ref().unwrap().role, Role::Player);
+    for client in [host, back, stranger] {
+        client.close();
+    }
+    server.stop().await?;
+    Ok(())
+}

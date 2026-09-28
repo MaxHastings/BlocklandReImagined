@@ -87,6 +87,46 @@ impl Session {
         };
         self.notify(asker, Notice::Chat(text));
     }
+    /// `/clearBricks` (`ServerCmdClearBricks`): a player deletes all of
+    /// their own bricks, indestructible ones too, at most once every five
+    /// seconds. Nothing happens when they have none.
+    pub(super) fn clear_own_bricks(&mut self, owner: OwnerId) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let name = self.peers.get(&owner).context("Unknown connection")?.name.clone();
+        if self
+            .cleared_bricks_at
+            .get(&owner)
+            .is_some_and(|at| tick.saturating_sub(*at) < 5 * bri_world::TICKS_PER_SECOND)
+        {
+            return Ok(());
+        }
+        let ids: Vec<_> = self
+            .simulation
+            .state()
+            .bricks
+            .iter()
+            .filter_map(|(&id, b)| (b.owner == owner).then_some(id))
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.cleared_bricks_at.insert(owner, tick);
+        // The brick group is theirs, so the engine deletes all of it.
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        self.simulation.remove_many(&engine, &ids)?;
+        for id in &ids {
+            self.events.respawns.remove(id);
+        }
+        self.dirty.extend(ids);
+        self.system_message(
+            Some(MessageTag::ClearBricks),
+            format!("\u{E003}{name}\u{E002} cleared \u{E003}{name}\u{E002}'s bricks"),
+        );
+        Ok(())
+    }
     /// `/cancelAllEvents`: drop every scheduled event row.
     pub(super) fn admin_cancel_all_events(&mut self, admin: OwnerId) {
         let name = self.peers.get(&admin).map_or_else(String::new, |p| p.name.clone());

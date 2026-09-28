@@ -70,6 +70,8 @@ pub enum AdminData {
     },
     /// `serverCmdGetMapList`.
     Maps(Vec<MapListing>),
+    /// The saved ranks players get back when they rejoin.
+    AutoRoles(Vec<bri_admin::AutoRole>),
 }
 
 /// A map the host can change to.
@@ -353,6 +355,8 @@ impl AdminRuntime {
                 | Action::ChangeMap { .. }
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
+                | Action::HostSetAutoRole { .. }
+                | Action::RequestAutoRoles
                 | Action::HostConfigure { .. }
                 | Action::HostSetPassword {
                     slot: PasswordSlot::Admin | PasswordSlot::SuperAdmin,
@@ -381,6 +385,10 @@ impl AdminRuntime {
             .map(|p| p.name.clone())
             .unwrap_or_default();
         let prior_role = self.authority.role(id);
+        let prior_target_role = match &request.action {
+            Action::HostSetRole { target, .. } => self.authority.role(*target),
+            _ => None,
+        };
         let ban_line = match &request.action {
             Action::Ban {
                 target,
@@ -462,7 +470,25 @@ impl AdminRuntime {
                         .get(&target)
                         .context("Administration role target is no longer connected")?;
                     // `serverCmdSAD`: announced only when the level rises.
-                    if target == id && prior_role != Some(role) {
+                    if target != id && prior_target_role != Some(role) {
+                        // Ranks given from the Admin menu or `/admin`.
+                        let name = session
+                            .peers
+                            .get(&target_owner)
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default();
+                        session.admin_announce(match role {
+                            Role::SuperAdmin => format!(
+                                "\u{E003}{actor_name}\u{E002} made \u{E003}{name}\u{E002} Super Admin"
+                            ),
+                            Role::Admin => format!(
+                                "\u{E003}{actor_name}\u{E002} made \u{E003}{name}\u{E002} Admin"
+                            ),
+                            Role::Player => format!(
+                                "\u{E003}{actor_name}\u{E002} removed \u{E003}{name}\u{E002}'s admin"
+                            ),
+                        });
+                    } else if target == id && prior_role != Some(role) {
                         let how = match role {
                             bri_admin::Role::SuperAdmin => Some("Super Admin (Password)"),
                             bri_admin::Role::Admin => Some("Admin (Password)"),
@@ -524,10 +550,8 @@ impl AdminRuntime {
                                     format!("\u{E003}{name}\u{E000} cleared all bricks."),
                                 );
                             }
-                            for brick in ids {
-                                session.simulation.remove(&session_actor, brick)?;
-                                session.dirty.insert(brick);
-                            }
+                            session.simulation.remove_many(&session_actor, &ids)?;
+                            session.dirty.extend(ids);
                             changed = true;
                         }
                         GameplayCommand::ClearBrickGroup(group) => {
@@ -556,10 +580,8 @@ impl AdminRuntime {
                                 )
                             };
                             session.system_message(Some(super::MessageTag::ClearBricks), text);
-                            for brick in ids {
-                                session.simulation.remove(&session_actor, brick)?;
-                                session.dirty.insert(brick);
-                            }
+                            session.simulation.remove_many(&session_actor, &ids)?;
+                            session.dirty.extend(ids);
                             changed = true;
                         }
                         GameplayCommand::HighlightBrickGroup(group) => {
@@ -620,6 +642,7 @@ impl AdminRuntime {
                     }
                 }
                 Effect::BansChanged | Effect::AutoRolesChanged => changed = true,
+                Effect::AutoRoleList(rows) => data = AdminData::AutoRoles(rows),
                 Effect::Configure(settings) => {
                     // Applied: brick limit and plant rate (planting), max
                     // chat length and TooFarDistance. The rest are kept and
