@@ -22,9 +22,21 @@ pub enum Kind {
     Model,
     /// A declarative HUD panel (JSON).
     Hud,
+    /// A player archetype: movement, collision body, health and look
+    /// (JSON). Server side: clients receive the host's archetype table with
+    /// the checkpoint and predict from it.
+    Archetype,
 }
 impl Kind {
-    pub const NAMES: [&str; 6] = ["behaviour", "script", "world", "entity", "model", "hud"];
+    pub const NAMES: [&str; 7] = [
+        "behaviour",
+        "script",
+        "world",
+        "entity",
+        "model",
+        "hud",
+        "archetype",
+    ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
             "behaviour" => Self::Behaviour,
@@ -33,12 +45,15 @@ impl Kind {
             "entity" => Self::Entity,
             "model" => Self::Model,
             "hud" => Self::Hud,
+            "archetype" => Self::Archetype,
             _ => return None,
         })
     }
     pub fn side(self) -> Side {
         match self {
-            Self::Behaviour | Self::Script | Self::World | Self::Entity => Side::Server,
+            Self::Behaviour | Self::Script | Self::World | Self::Entity | Self::Archetype => {
+                Side::Server
+            }
             Self::Model | Self::Hud => Side::Client,
         }
     }
@@ -372,6 +387,58 @@ impl EntityKind {
         ensure!(
             (1..=256).contains(&self.max_alive),
             "max_alive must be 1 to 256"
+        );
+        Ok(())
+    }
+}
+
+/// A player archetype: what a player is. It starts from `base` (an
+/// archetype id; v20's standard player by default) and overrides only what
+/// it names. `movement` takes any motor constant by name (`gravity`,
+/// `forward`, `body`: `box` or `ball`, ...); the engine checks the result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchetypeDef {
+    pub schema_version: u32,
+    /// Shown in menus; empty when players cannot pick it.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub movement: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub max_health: Option<f32>,
+    #[serde(default)]
+    pub energy_bar: Option<bool>,
+    #[serde(default)]
+    pub rideable: Option<bool>,
+    #[serde(default)]
+    pub can_ride: Option<bool>,
+    /// Model id the clients draw: a package model (`namespace:model/name`)
+    /// or one of v20's shapes (`v20.shape.m` is the Blockhead).
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub camera_distance: Option<f32>,
+}
+impl ArchetypeDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == 1,
+            "archetype schema_version must be 1"
+        );
+        ensure!(
+            self.name.is_empty() || text(&self.name, 64),
+            "archetype name must be at most 64 printable characters"
+        );
+        ensure!(
+            self.movement.len() <= 64 && self.movement.keys().all(|k| identifier(k)),
+            "movement names motor constants"
+        );
+        ensure!(
+            self.model.as_ref().is_none_or(|m| text(m, 160)),
+            "model must be a model id"
         );
         Ok(())
     }

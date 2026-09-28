@@ -34,6 +34,7 @@ fn checkpoint() -> Checkpoint {
         time_scale: 1.0,
         world_bricks: 0,
         broken_shapes: Default::default(),
+        archetypes: Default::default(),
     }
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
@@ -51,7 +52,7 @@ fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
             crouched: false,
             jetting: false,
             jump: Default::default(),
-            datablock: Default::default(),
+            archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
         },

@@ -245,6 +245,9 @@ pub struct Checkpoint {
     pub world_bricks: u64,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: BTreeSet<u32>,
+    /// v20's player datablocks, then the enabled packages' archetypes.
+    /// Poses name a player's archetype by its index here.
+    pub archetypes: bri_sim::archetype::Archetypes,
 }
 impl Checkpoint {
     /// Everything but the bricks, plus an O(1) snapshot of the authoritative
@@ -275,6 +278,7 @@ impl Checkpoint {
             vehicle_poses: session.vehicle_poses(),
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
+            archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
         };
         (checkpoint, world.bricks.clone())

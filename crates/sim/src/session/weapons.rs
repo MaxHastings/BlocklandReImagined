@@ -190,8 +190,8 @@ impl Session {
                         Some(_) => bri_weapons::Mount::Other,
                     },
                     scale: state.scale,
-                    can_jet: state.tuning().can_jet,
-                    horse: state.datablock == crate::player_types::PlayerType::Horse,
+                    can_jet: peer.player.tuning().can_jet,
+                    horse: state.archetype == crate::player_types::PlayerType::Horse.archetype(),
                     ..Frame::default()
                 },
             )?;
@@ -462,9 +462,9 @@ impl Session {
                 // until respawn and is thrown off any mount.
                 WeaponEvent::HorseTransform { target, .. } => {
                     if self.is_alive(target.0) {
-                        self.set_player_datablock(
+                        self.set_player_archetype(
                             target.0,
-                            crate::player_types::PlayerType::Horse,
+                            crate::player_types::PlayerType::Horse.archetype(),
                         )?;
                     }
                 }
@@ -518,18 +518,20 @@ impl Session {
         let Some(peer) = self.peers.get_mut(&owner) else {
             return Ok(());
         };
-        let current = peer.player.state().datablock;
+        let current = peer.player.state().archetype;
+        let ball_shoot = PlayerType::BallShoot.archetype();
         if locked {
-            if !matches!(current, PlayerType::Horse | PlayerType::BallShoot)
+            if current != PlayerType::Horse.archetype()
+                && current != ball_shoot
                 && peer.sport_datablock.is_none()
             {
                 peer.sport_datablock = Some(current);
-                self.set_player_datablock(owner, PlayerType::BallShoot)?;
+                self.set_player_archetype(owner, ball_shoot)?;
             }
         } else if let Some(previous) = peer.sport_datablock.take()
-            && current == PlayerType::BallShoot
+            && current == ball_shoot
         {
-            self.set_player_datablock(owner, previous)?;
+            self.set_player_archetype(owner, previous)?;
         }
         Ok(())
     }

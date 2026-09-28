@@ -525,6 +525,7 @@ dependencies = [
  "glam 0.33.10",
  "rapier3d",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -15,6 +15,10 @@
 //!   caused (the engine decides deaths; packages must not have to poll),
 //! - **entities** whose behaviour is a package `think` function,
 //! - a **chunk provider** that generates world chunks on demand,
+//! - player **archetypes**: what a player is (movement, collision body,
+//!   health, mounting rules, model and camera) as data, assigned per player
+//!   with `set_archetype`; the host sends its archetype table to clients,
+//!   which predict every archetype with the same motor,
 //! - typed **operations** (place or remove a world brick, explode, spawn entity, move or
 //!   respawn a player, ...) that the engine checks against the package's
 //!   declared capabilities in one place ([`ops::authorize`]) before applying

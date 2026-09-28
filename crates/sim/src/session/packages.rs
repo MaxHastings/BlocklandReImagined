@@ -395,6 +395,57 @@ fn diagnostics_error(problems: Vec<Diagnostic>) -> anyhow::Error {
     )))
 }
 
+/// A package archetype: its base with the declared overrides. Movement
+/// constants merge by name, so a package names only what it changes and the
+/// motor's own check decides what is valid.
+fn archetype(
+    table: &crate::archetype::Archetypes,
+    id: &str,
+    def: &bri_package_runtime::content::ArchetypeDef,
+) -> Result<crate::archetype::Archetype> {
+    let base = match &def.base {
+        Some(base) => table
+            .find(base)
+            .with_context(|| format!("base {base} is not a known archetype"))?,
+        None => Default::default(),
+    };
+    let mut archetype = table.resolve(base).clone();
+    let mut movement = serde_json::to_value(&archetype.movement)?;
+    let fields = movement
+        .as_object_mut()
+        .context("motor constants are an object")?;
+    for (name, value) in &def.movement {
+        ensure!(
+            fields.contains_key(name),
+            "movement has no constant `{name}`"
+        );
+        fields.insert(name.clone(), value.clone());
+    }
+    archetype.movement = serde_json::from_value(movement).context("movement")?;
+    archetype.id = id.into();
+    archetype.name = def.name.clone();
+    if let Some(v) = def.max_health {
+        archetype.max_health = v;
+    }
+    if let Some(v) = def.energy_bar {
+        archetype.energy_bar = v;
+    }
+    if let Some(v) = def.rideable {
+        archetype.rideable = v;
+    }
+    if let Some(v) = def.can_ride {
+        archetype.can_ride = v;
+    }
+    if let Some(v) = &def.model {
+        archetype.look.model = v.clone();
+    }
+    if let Some(v) = def.camera_distance {
+        archetype.look.camera_distance = v;
+    }
+    archetype.validate()?;
+    Ok(archetype)
+}
+
 impl Session {
     /// Enable a set of mod packages before any player joins: compile their
     /// scripts, set up defaults, restore a save, and generate the world
@@ -410,6 +461,14 @@ impl Session {
             "Packages are enabled before players join"
         );
         let runtime = Runtime::compile(&catalog).map_err(diagnostics_error)?;
+        let mut archetypes = crate::archetype::Archetypes::default();
+        for (id, def) in catalog.archetypes() {
+            let archetype =
+                archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
+            archetypes.add(archetype)?;
+        }
+        self.archetypes = archetypes;
+        self.minigames = combat::new_world(self.minigames.catalog().clone(), &self.archetypes);
         let save = save.unwrap_or_default();
         let mut store = save.store;
         for (id, behaviour) in catalog.behaviours() {
@@ -1018,6 +1077,25 @@ impl Session {
                 peer.player
                     .teleport(&mut self.simulation.physics, Vec3::from(position), yaw)?;
                 peer.inputs.clear();
+                Ok(())
+            }
+            Op::SetArchetype { player, archetype } => {
+                let chosen = if archetype.is_empty() {
+                    None
+                } else {
+                    Some(
+                        self.archetypes
+                            .find(&archetype)
+                            .with_context(|| format!("No archetype {archetype}"))?,
+                    )
+                };
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.package_archetype = chosen;
+                if let Some(chosen) = chosen
+                    && peer.combat.alive
+                {
+                    self.set_player_archetype(player, chosen)?;
+                }
                 Ok(())
             }
             Op::Respawn { player } => {

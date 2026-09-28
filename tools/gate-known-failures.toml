@@ -31,14 +31,9 @@ test = "world_checkpoint_wire_cost"
 reason = "Benchmark; needs BRI_BENCH_WORLD."
 
 [[failure]]
-test = "unlike_modes.rs::a_low_gravity_mode_changes_how_players_move"
-owner = "Mod platform stress campaign"
-reason = "Open finding W14 (docs/stress-lab/weakness-ledger.md): movement profiles are the closed PlayerType enum, so a package cannot define low gravity. Kept as the replayable evidence until datablocks become data."
-
-[[failure]]
 test = "unlike_modes.rs::a_player_drives_a_package_kart"
 owner = "Mod platform stress campaign"
-reason = "Open finding W14 (docs/stress-lab/weakness-ledger.md): what a player controls is the closed ControlObject enum, so a package entity cannot take a player's input."
+reason = "Open rest of finding W14 (docs/stress-lab/weakness-ledger.md): what a player controls is the closed ControlObject enum, so a package entity cannot take a player's input. A player can be a kart (archetypes, E30); driving a second body cannot be expressed yet."
 
 # Test targets GitHub Actions skips because they load generated v20 content,
 # which the runner cannot have. The local gate still runs them. Prefer

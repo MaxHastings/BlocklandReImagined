@@ -71,11 +71,18 @@ impl Catalog {
         Ok(())
     }
 }
+/// v20's `v20.<kind>.<name>` ids, or a package's `namespace:kind/name`.
 fn valid_content_id(s: &str) -> bool {
-    s.starts_with("v20.")
+    let package = s.split_once(':').is_some_and(|(ns, rest)| {
+        !ns.is_empty()
+            && rest
+                .split_once('/')
+                .is_some_and(|(k, n)| !k.is_empty() && !n.is_empty())
+    });
+    (s.starts_with("v20.") || package)
         && s.len() <= 160
         && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() || b"._-:/".contains(&b))
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

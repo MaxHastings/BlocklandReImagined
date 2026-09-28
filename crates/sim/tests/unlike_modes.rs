@@ -78,6 +78,15 @@ fn mode_with(
     packages: &[Package],
     save: Option<bri_sim::session::PackageSave>,
 ) -> Session {
+    try_mode(name, packages, save).unwrap_or_else(|e| panic!("{e:#}"))
+}
+
+/// As [`mode_with`], returning why the host refused the packages.
+fn try_mode(
+    name: &str,
+    packages: &[Package],
+    save: Option<bri_sim::session::PackageSave>,
+) -> anyhow::Result<Session> {
     let root = std::env::temp_dir().join(format!("bri-unlike-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let mut entries = Vec::new();
@@ -115,9 +124,9 @@ fn mode_with(
         )
         .unwrap(),
     );
-    session.install_packages(Arc::new(catalog), save).unwrap();
+    let installed = session.install_packages(Arc::new(catalog), save);
     let _ = std::fs::remove_dir_all(&root);
-    session
+    installed.map(|_| session)
 }
 
 fn manifest(id: &str, capabilities: &[&str], provides: &[(&str, &str, &str)]) -> String {
@@ -869,20 +878,22 @@ const MOON_BEHAVIOUR: &str = r#"{
   "on_join": true
 }"#;
 
-/// Every player on this server moves under a sixth of normal gravity.
+/// A standard player under a sixth of normal gravity.
+const MOON_ARCHETYPE: &str = r#"{ "schema_version": 1, "name": "Moonwalker", "movement": { "gravity": 3.4 } }"#;
+
+/// Every player on this server is a moonwalker.
 const MOON_SCRIPT: &str = r#"
 fn on_join(player) {
-    set_movement(player, #{ gravity: 0.17 });
+    set_archetype(player, "moon:archetype/moon");
 }
 "#;
 
 /// E22 (player/control model; category 9). A low-gravity mode: how players
-/// move is the mode. Movement is predicted on every client from the
-/// player's datablock, and datablocks are a closed engine enum
-/// (`PlayerType`), so a package can choose among v20's seven but never
-/// describe its own. Open finding W14.
+/// move is the mode. Movement was predicted on every client from the
+/// player's datablock, a closed engine enum (`PlayerType`), so a package
+/// could choose among v20's seven but never describe its own (W14). Now a
+/// package declares an archetype and assigns it.
 #[test]
-#[ignore = "finding W14: movement profiles are a closed engine enum; a package cannot define one"]
 fn a_low_gravity_mode_changes_how_players_move() {
     let behaviour_manifest = manifest(
         "moon",
@@ -890,6 +901,7 @@ fn a_low_gravity_mode_changes_how_players_move() {
         &[
             ("behaviour", "moon", "behaviour.json"),
             ("script", "moon", "moon.rhai"),
+            ("archetype", "moon", "archetype.json"),
         ],
     );
     let mut s = mode(
@@ -901,6 +913,7 @@ fn a_low_gravity_mode_changes_how_players_move() {
                 ("package.json", &behaviour_manifest),
                 ("behaviour.json", MOON_BEHAVIOUR),
                 ("moon.rhai", MOON_SCRIPT),
+                ("archetype.json", MOON_ARCHETYPE),
             ],
         }],
     );
@@ -1322,9 +1335,11 @@ const KART_ENTITY: &str = r#"{ "schema_version": 1, "name": "Kart", "model": "ka
 /// not their avatar: a package's kart takes the player's movement input.
 /// What a player controls is the closed `ControlObject` enum (player,
 /// camera, spy, corpse) and movement input reaches only those, so this is
-/// the open class W14 again.
+/// the open class W14 again. A player can now *be* a kart (E30: an
+/// archetype with turn steering); what stays closed is driving a second
+/// body while the avatar stays behind.
 #[test]
-#[ignore = "finding W14: what a player controls is a closed engine enum; a package entity cannot take a player's input"]
+#[ignore = "finding W14 (rest): what a player controls is a closed engine enum; a package entity cannot take a player's input"]
 fn a_player_drives_a_package_kart() {
     let behaviour_manifest = manifest(
         "kart",
@@ -1475,4 +1490,343 @@ fn a_zombie_wave_chases_and_bites_players() {
         "{:#?}",
         s.package_diagnostics()
     );
+}
+
+const BODIES_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "bodies.rhai",
+  "commands": [
+    { "name": "become", "args": ["string"], "while_dead": true },
+    { "name": "fall" }
+  ]
+}"#;
+
+/// Players pick a body; `fall` kills them so the next life shows the body
+/// is kept.
+const BODIES_SCRIPT: &str = r#"
+fn cmd_become(player, body) { set_archetype(player, body); }
+fn cmd_fall(player) { damage(player, 1000.0, ()); }
+"#;
+
+/// A non-humanoid body: a fast ball with almost no air control.
+const BALL_ARCHETYPE: &str = r#"{
+  "schema_version": 1,
+  "name": "Rolling Ball",
+  "movement": {
+    "body": "ball", "width": 1.5, "stand_height": 1.5, "crouch_height": 1.5,
+    "stand_eye": 1.4, "crouch_eye": 1.4,
+    "forward": 14.0, "backward": 14.0, "sideways": 14.0,
+    "crouch_forward": 14.0, "crouch_backward": 14.0, "crouch_sideways": 14.0,
+    "acceleration": 30.0, "air_control": 0.02, "jump_speed": 6.0, "can_jet": false
+  },
+  "max_health": 60.0,
+  "can_ride": false,
+  "model": "bodies-look:model/ball",
+  "camera_distance": 6.0
+}"#;
+
+/// A kart: wide and low, steered like a vehicle (left and right turn it),
+/// fast forward, no jump.
+const KART_ARCHETYPE: &str = r#"{
+  "schema_version": 1,
+  "name": "Kart",
+  "movement": {
+    "steering": "turn", "turn_rate": 2.0,
+    "width": 2.0, "stand_height": 1.0, "crouch_height": 1.0,
+    "stand_eye": 0.9, "crouch_eye": 0.9,
+    "forward": 20.0, "backward": 5.0, "sideways": 0.0,
+    "crouch_forward": 20.0, "crouch_backward": 5.0, "crouch_sideways": 0.0,
+    "jump_speed": 0.0, "can_jet": false
+  },
+  "can_ride": false,
+  "model": "bodies-look:model/kart"
+}"#;
+
+fn bodies() -> [String; 2] {
+    [
+        manifest(
+            "bodies",
+            &["player", "damage"],
+            &[
+                ("behaviour", "bodies", "behaviour.json"),
+                ("script", "bodies", "bodies.rhai"),
+                ("archetype", "ball", "ball.json"),
+                ("archetype", "kart", "kart.json"),
+            ],
+        ),
+        manifest(
+            "bodies-look",
+            &[],
+            &[("model", "ball", "ball.json"), ("model", "kart", "kart.json")],
+        ),
+    ]
+}
+
+fn bodies_mode(name: &str, ball: &str) -> anyhow::Result<Session> {
+    let [behaviour, look] = bodies();
+    try_mode(
+        name,
+        &[
+            Package {
+                id: "bodies",
+                side: Side::Server,
+                files: &[
+                    ("package.json", &behaviour),
+                    ("behaviour.json", BODIES_BEHAVIOUR),
+                    ("bodies.rhai", BODIES_SCRIPT),
+                    ("ball.json", ball),
+                    ("kart.json", KART_ARCHETYPE),
+                ],
+            },
+            Package {
+                id: "bodies-look",
+                side: Side::Client,
+                files: &[
+                    ("package.json", &look),
+                    ("ball.json", RTS_MODEL),
+                    ("kart.json", RTS_MODEL),
+                ],
+            },
+        ],
+        None,
+    )
+}
+
+fn heading(s: &Session, owner: u64) -> f32 {
+    s.snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
+        .unwrap()
+        .yaw
+}
+
+fn archetype_of(s: &Session, owner: u64) -> &bri_sim::archetype::Archetype {
+    let state = s
+        .snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
+        .unwrap();
+    s.archetypes().resolve(state.archetype)
+}
+
+/// E30 (player and control; Max's "custom player controllers and models
+/// beyond just everyone being a Blockhead"). Four players, four bodies on
+/// one server: the Blockhead, v20's horse, a package's rolling ball and a
+/// package's kart. Each moves by its own constants, the server keeps a
+/// package's choice across death, and a client predicting from the
+/// checkpoint's archetype table moves the ball exactly as the server does.
+#[test]
+fn players_can_be_bodies_beyond_the_blockhead() {
+    let mut s = bodies_mode("bodies", BALL_ARCHETYPE).unwrap();
+    let names = ["Blockhead", "Horse", "Ball", "Kart"];
+    let players: Vec<u64> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            s.join(
+                (*name).into(),
+                Vec3::new(i as f32 * 12.0 - 18.0, 0.05, 0.0),
+                false,
+            )
+            .unwrap()
+        })
+        .collect();
+    steps(&mut s, 10);
+    let bodies = [
+        "",
+        "v20.player.horsearmor",
+        "bodies:archetype/ball",
+        "bodies:archetype/kart",
+    ];
+    let mut sequence = [0_u64; 4];
+    for (i, body) in bodies.iter().enumerate().skip(1) {
+        sequence[i] += 1;
+        s.command(
+            players[i],
+            sequence[i],
+            command("bodies", "become", vec![PackageArg::String((*body).into())]),
+        )
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    steps(&mut s, 2);
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:#?}",
+        s.package_diagnostics()
+    );
+    assert_eq!(archetype_of(&s, players[0]).id, "v20.player.playerstandardarmor");
+    assert_eq!(archetype_of(&s, players[1]).id, "v20.player.horsearmor");
+    let ball = archetype_of(&s, players[2]);
+    assert_eq!(ball.movement.body, bri_sim::player::Body::Ball);
+    assert_eq!(ball.look.model, "bodies-look:model/ball");
+    assert_eq!(s.vitals()[&players[2]].health, 60.0);
+    assert_eq!(archetype_of(&s, players[3]).name, "Kart");
+
+    // Everyone holds forward and right for a second.
+    let start: Vec<Vec3> = players.iter().map(|p| position(&s, *p)).collect();
+    let mut ticks = 0;
+    for _ in 0..120 {
+        for (i, p) in players.iter().enumerate() {
+            sequence[i] += 1;
+            s.movement(
+                *p,
+                sequence[i],
+                MoveInput {
+                    forward: 1.0,
+                    right: 1.0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        s.step().unwrap();
+        ticks += 1;
+    }
+    assert_eq!(ticks, 120);
+    let moved: Vec<Vec3> = players
+        .iter()
+        .zip(&start)
+        .map(|(p, a)| position(&s, *p) - *a)
+        .collect();
+    let run = |v: Vec3| v.with_y(0.0).length();
+    assert!(
+        run(moved[2]) > run(moved[1]) && run(moved[1]) > run(moved[0]),
+        "the ball outruns the horse, which outruns the Blockhead: {moved:?}"
+    );
+    // The Blockhead ran diagonally and still faces where it looks; the kart
+    // turned right as it drove.
+    assert!(moved[0].x > 1.0, "the Blockhead strafes: {moved:?}");
+    assert_eq!(heading(&s, players[0]), 0.0);
+    assert!(
+        (heading(&s, players[3]) - 2.0).abs() < 0.1,
+        "the kart turned at its turn rate: {}",
+        heading(&s, players[3])
+    );
+    assert!(run(moved[3]) > 10.0, "the kart drives: {moved:?}");
+    // Right alone turns a stopped kart on the spot; it never slides
+    // sideways.
+    steps(&mut s, 120);
+    let before = position(&s, players[3]);
+    let facing = heading(&s, players[3]);
+    for _ in 0..60 {
+        sequence[3] += 1;
+        s.movement(
+            players[3],
+            sequence[3],
+            MoveInput {
+                right: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    assert!(
+        run(position(&s, players[3]) - before) < 0.01,
+        "a kart does not strafe"
+    );
+    assert!(heading(&s, players[3]) != facing, "it turned in place");
+
+    // A package's choice outlives the body: the ball falls and comes back
+    // as a ball.
+    sequence[2] += 1;
+    s.command(players[2], sequence[2], command("bodies", "fall", vec![]))
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    steps(&mut s, 2);
+    assert!(!alive(&s, players[2]));
+    for _ in 0..40 {
+        steps(&mut s, 30);
+        sequence[2] += 1;
+        if s.command(players[2], sequence[2], Command::Respawn).is_ok() {
+            break;
+        }
+    }
+    steps(&mut s, 2);
+    assert!(alive(&s, players[2]));
+    assert_eq!(archetype_of(&s, players[2]).id, "bodies:archetype/ball");
+    assert_eq!(s.vitals()[&players[2]].health, 60.0);
+
+    // A client predicting the ball from the host's table agrees with it.
+    let (state, _) = s
+        .motion_states()
+        .into_iter()
+        .find(|(p, _)| p.owner == players[2])
+        .unwrap();
+    let mirror = bri_sim::prediction::CollisionMirror::new(
+        definitions(),
+        vec![ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0))],
+        vec![],
+    );
+    let mut predictor =
+        bri_sim::prediction::Predictor::new(mirror, state, s.archetypes().clone()).unwrap();
+    for tick in 0..90 {
+        let input = MoveInput {
+            forward: 1.0,
+            jump: tick == 30,
+            ..Default::default()
+        };
+        sequence[2] += 1;
+        s.movement(players[2], sequence[2], input).unwrap();
+        s.step().unwrap();
+        predictor.step(input).unwrap();
+    }
+    steps(&mut s, 5);
+    let server = position(&s, players[2]);
+    let client = Vec3::from(predictor.state().feet);
+    assert!(
+        server.distance(client) < 0.01,
+        "prediction matches the server: {server} vs {client}"
+    );
+
+    // A named package archetype is a mini-game player type like v20's.
+    let settings = bri_minigames::Settings {
+        player_type: "bodies:archetype/ball".into(),
+        ..Default::default()
+    };
+    sequence[0] += 1;
+    s.command(
+        players[0],
+        sequence[0],
+        Command::MiniGame(bri_sim::session::MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap_or_else(|e| panic!("{e:#}"));
+    steps(&mut s, 2);
+    assert_eq!(archetype_of(&s, players[0]).id, "bodies:archetype/ball");
+}
+
+/// Hostile archetypes are refused at load with the reason, never half
+/// applied: unknown constants, impossible bodies, bad numbers.
+#[test]
+fn a_broken_archetype_is_refused_with_its_reason() {
+    for (ball, reason) in [
+        (
+            r#"{ "schema_version": 1, "movement": { "warp_drive": 9.0 } }"#,
+            "warp_drive",
+        ),
+        (
+            r#"{ "schema_version": 1, "movement": { "gravity": -20.0 } }"#,
+            "Invalid player tuning",
+        ),
+        (
+            r#"{ "schema_version": 1, "movement": { "body": "ball" } }"#,
+            "Invalid player tuning",
+        ),
+        (
+            r#"{ "schema_version": 1, "movement": { "forward": "fast" } }"#,
+            "movement",
+        ),
+        (
+            r#"{ "schema_version": 1, "max_health": 1e30 }"#,
+            "Invalid archetype",
+        ),
+        (
+            r#"{ "schema_version": 1, "base": "bodies:archetype/nowhere" }"#,
+            "not a known archetype",
+        ),
+    ] {
+        let error = format!("{:#}", bodies_mode("broken-body", ball).err().unwrap());
+        assert!(error.contains(reason), "{reason}: {error}");
+    }
 }

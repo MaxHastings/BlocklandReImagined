@@ -56,8 +56,11 @@ pub use undo::UNDO_QUEUE_SIZE;
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 
 /// The surface height of water covering any part of this player's body.
-fn water_surface(waters: &[bri_content::water::Water], state: &crate::player::PlayerState) -> Option<f32> {
-    let tuning = state.tuning();
+fn water_surface(
+    waters: &[bri_content::water::Water],
+    state: &crate::player::PlayerState,
+    tuning: &PlayerTuning,
+) -> Option<f32> {
     let height = if state.crouched {
         tuning.crouch_height
     } else {
@@ -413,7 +416,10 @@ struct Peer {
     last_move_sequence: u64,
     last_input_tick: u64,
     /// The datablock a basketball shot swapped for `BallShootPlayer`.
-    sport_datablock: Option<crate::player_types::PlayerType>,
+    sport_datablock: Option<crate::archetype::ArchetypeId>,
+    /// A package's choice of archetype, kept across respawns; otherwise
+    /// the mini-game's player type decides.
+    package_archetype: Option<crate::archetype::ArchetypeId>,
     window_tick: u64,
     actions: u32,
     chats: u32,
@@ -500,6 +506,9 @@ pub struct Session {
     map_change: Option<(OwnerId, String)>,
     /// Enabled mod packages and the gameplay they define.
     packages: Option<Box<packages::PackageHost>>,
+    /// v20's player datablocks, then every enabled package's archetypes.
+    /// Clients receive the table with the checkpoint.
+    archetypes: crate::archetype::Archetypes,
     breakables: breakables::Breakables,
 }
 impl Session {
@@ -519,13 +528,17 @@ impl Session {
         weapons.tick = simulation.state().tick;
         Self {
             events: Default::default(),
+            archetypes: Default::default(),
             breakables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
-            minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
+            minigames: combat::new_world(
+                bri_minigames::Catalog::minimal_vanilla(),
+                &Default::default(),
+            ),
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
@@ -730,6 +743,7 @@ impl Session {
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
+                package_archetype: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
@@ -878,6 +892,7 @@ impl Session {
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
+                package_archetype: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
@@ -1489,14 +1504,15 @@ impl Session {
                         ..Default::default()
                     }
                 };
-                let wet_before = water_surface(&liquids, peer.player.state());
+                let wet_before =
+                    water_surface(&liquids, peer.player.state(), peer.player.tuning());
                 let motion = peer.player.step_in_water(
                     &mut self.simulation.physics,
                     input,
                     &liquids,
                 )?;
                 let state = peer.player.state();
-                let wet = water_surface(&liquids, state);
+                let wet = water_surface(&liquids, state, peer.player.tuning());
                 if let Some(surface) = wet.or(wet_before).filter(|_| wet.is_some() != wet_before.is_some()) {
                     let speed = Vec3::from(state.velocity).length();
                     self.cues.emit(

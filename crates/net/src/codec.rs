@@ -277,8 +277,7 @@ mod tests {
                 crouched: true,
                 jetting: true,
                 jump: Default::default(),
-                // The longest datablock name.
-                datablock: bri_sim::player_types::PlayerType::BallShoot,
+                archetype: bri_sim::archetype::ArchetypeId(u16::MAX),
                 scale: f32::MAX,
                 energy: f32::MAX,
             },

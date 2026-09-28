@@ -1953,6 +1953,20 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   `cargo test -p bri-net`, clippy clean on Linux; Windows CI on PR #1.
 - Not saturated yet: the last round (E26 to E29) found no new class, but
   W14 is open and package state does not replicate to clients yet.
+- E30, player archetypes (Max: "custom player controller models beyond
+  just everyone being a Blockhead"). `PlayerState.datablock` (the closed
+  `PlayerType` enum) became `archetype`, an index into an `Archetypes`
+  table the checkpoint carries: v20's eight datablocks first, then
+  packages' `archetype` files (a base plus the constants they change). An
+  archetype is movement constants, collision body (`box`, `ball`), steering
+  model (`strafe`, `turn`), health, riding rules, model and camera distance.
+  Packages assign one with `set_archetype(player, id)` (kept across
+  respawns); mini-games may pick named ones. The client predicts from the
+  host's table. W14 is fixed for archetypes (E22 now passes); control
+  targets (E27) stay open. Architecture: `docs/player-simulation.md`
+  "Player archetypes". Evidence: `cargo test -p bri-motor`, `cargo test -p
+  bri-sim` (all content-free targets), `cargo test -p bri-net`, `cargo
+  test -p bri-client --lib`, clippy `-D warnings` clean.
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.

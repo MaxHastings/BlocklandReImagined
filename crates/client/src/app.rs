@@ -1068,7 +1068,7 @@ impl App {
     ) -> Option<(f32, Vec3, f32)> {
         // A `HorseArmor` player uses its datablock's camera fields
         // (cameraMaxDist, cameraVerticalOffset above the feet, cameraTilt).
-        if local.datablock == bri_sim::player_types::PlayerType::Horse
+        if local.archetype == bri_sim::player_types::PlayerType::Horse.archetype()
             && view.vitals.get(&view.owner).is_none_or(|v| v.mounted.is_none())
         {
             let camera = &assets.definition("v20.vehicle.horsearmor")?.camera;
@@ -1139,7 +1139,7 @@ impl App {
                 crouched: false,
                 jetting: false,
                 jump: Default::default(),
-                datablock: bri_sim::player_types::PlayerType::Horse,
+                archetype: bri_sim::player_types::PlayerType::Horse.archetype(),
                 scale: 1.0,
                 energy: 0.0,
             };
@@ -1204,7 +1204,7 @@ impl App {
         let eye = self.motion.local_eye().or_else(|| {
             view.poses
                 .get(&view.owner)
-                .map(|p| p.player.eye(&p.player.tuning()))
+                .map(|p| view.archetypes.eye(&p.player))
         });
         self.controls.follow(control, view.owner, eye);
     }
@@ -1229,8 +1229,8 @@ impl App {
             .motion
             .presented()
             .get(&view.owner)
-            .filter(|p| p.datablock.shows_energy())
-            .map(|p| p.energy / p.tuning().max_energy);
+            .filter(|p| view.archetypes.resolve(p.archetype).energy_bar)
+            .map(|p| p.energy / view.archetypes.tuning(p.archetype, p.scale).max_energy);
         let shown = energy.map(|e| (e.clamp(0.0, 1.0) * 100.0).round() as u8);
         if shown != c.energy {
             c.energy = shown;
@@ -1277,7 +1277,7 @@ impl App {
                         .poses
                         .get(&view.owner)
                         .map_or(bri_sim::session::MAX_HEALTH, |p| {
-                            p.player.datablock.max_health()
+                            view.archetypes.resolve(p.player.archetype).max_health
                         });
                     updates.push(UiUpdate::DamageFlash((c.health - local.health) / max * 2.0));
                 }
@@ -1309,6 +1309,7 @@ impl App {
             &view.vitals,
             &view.names,
             &self.content.weapons.item_choices,
+            &view.archetypes,
             c.minigame_revision,
         );
         let changed = c.minigame_state.as_ref().is_none_or(|old| {
@@ -1879,6 +1880,7 @@ impl App {
             return Ok(true);
         }
         let view = self.network_view().context("No active network view")?;
+        let archetypes = view.archetypes.clone();
         let mut player = self
             .motion
             .presented()
@@ -1891,11 +1893,12 @@ impl App {
         player.yaw = self.controls.yaw;
         player.pitch = self.controls.pitch;
         let ghost_before = self.building.as_ref().and_then(|b| b.ghost().cloned());
-        let response = self
+        let building = self
             .building
             .as_mut()
-            .context("Building controller not ready")?
-            .ui_action(action, &player)?;
+            .context("Building controller not ready")?;
+        building.set_archetypes(archetypes);
+        let response = building.ui_action(action, &player)?;
         let Some(response) = response else {
             return Ok(false);
         };
@@ -2870,7 +2873,7 @@ fn name_tags(
         let Some(state) = presented.get(owner) else {
             continue;
         };
-        let target = state.eye(&state.tuning());
+        let target = view.archetypes.eye(state);
         let distance = target.distance(camera);
         if distance <= 0.0 || distance > visible_distance {
             continue;
@@ -2913,7 +2916,9 @@ fn camera_eye(
         Some(ObserverMode::Free(position)) => Ok(position),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
         Some(ObserverMode::Orbit(_)) => building.camera_position(
-            controls.orbit_focus(presented).unwrap_or(own_eye),
+            controls
+                .orbit_focus(presented, building.archetypes())
+                .unwrap_or(own_eye),
             forward,
             8.0,
         ),
@@ -3357,7 +3362,8 @@ impl PlatformApp for App {
                             .filter(|sound| !sound.is_empty() && self.audio.is_looping(sound));
                         if let Some(sound) = sound {
                             let eye = Vec3::from(player.feet)
-                                + Vec3::Y * player.tuning().stand_eye;
+                                + Vec3::Y
+                                    * view.archetypes.tuning(player.archetype, player.scale).stand_eye;
                             loops.insert((*owner, mounted.hand), (sound.to_string(), eye.to_array()));
                         }
                     }
@@ -3447,7 +3453,7 @@ impl PlatformApp for App {
                     .get(owner)
                     .unwrap_or(&self.avatar_assets.package.defaults);
                 // `HorseArmor` players draw horse.dts.
-                let horse = player.datablock == bri_sim::player_types::PlayerType::Horse;
+                let horse = player.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
                 if self
                     .avatars
                     .get(owner)
@@ -3568,7 +3574,7 @@ impl PlatformApp for App {
             let eye = self
                 .motion
                 .local_eye()
-                .unwrap_or_else(|| local.eye(&local.tuning()));
+                .unwrap_or_else(|| view.archetypes.eye(local));
             let chase = third_person
             .then(|| {
                 Self::chase_camera(
@@ -4610,7 +4616,7 @@ impl PlatformApp for App {
         let eye = self
             .motion
             .local_eye()
-            .unwrap_or_else(|| local.eye(&local.tuning()));
+            .unwrap_or_else(|| view.archetypes.eye(local));
         let chase = third_person
             .then(|| {
                 Self::chase_camera(

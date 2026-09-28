@@ -12,3 +12,6 @@ bri-content = { path = "../content" }
 bri-physics = { path = "../physics" }
 glam = { version = "0.33", features = ["serde"] }
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+
+[dev-dependencies]
+serde_json.workspace = true

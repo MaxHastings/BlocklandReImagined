@@ -74,7 +74,7 @@ fn player(
         crouched: false,
         jetting: false,
         jump: Default::default(),
-        datablock: Default::default(),
+        archetype: Default::default(),
         scale: 1.0,
         energy: 100.0,
     };
@@ -316,7 +316,7 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
         crouched: false,
         jetting: false,
         jump: Default::default(),
-        datablock: Default::default(),
+        archetype: Default::default(),
         scale: 1.0,
         energy: 100.0,
     };

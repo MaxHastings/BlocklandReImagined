@@ -847,7 +847,8 @@ impl EventHost<'_> {
                     .as_deref()
                     .and_then(crate::player_types::PlayerType::from_datablock_name)
                 {
-                    self.session.set_player_datablock(owner, datablock)?;
+                    self.session
+                        .set_player_archetype(owner, datablock.archetype())?;
                 }
             }
             // `Player::BurnPlayer`/`clearBurn`: PlayerBurnImage flames for the

@@ -23,7 +23,8 @@ fn step(p: &mut Player, w: &mut PhysicsWorld, input: MoveInput, n: usize) {
 }
 fn spawn(w: &mut PhysicsWorld, datablock: PlayerType) -> Player {
     let mut p = Player::spawn(w, 1, Vec3::new(0.0, 0.05, 0.0), PlayerTuning::default()).unwrap();
-    p.set_datablock(w, datablock, 1.0).unwrap();
+    p.set_archetype(w, datablock.archetype(), datablock.tuning(), 1.0)
+        .unwrap();
     p.refill_energy();
     step(&mut p, w, MoveInput::default(), 60);
     assert!(p.state().grounded);
@@ -96,7 +97,13 @@ fn quake_and_horse_run_at_their_own_speeds_in_their_own_boxes() {
 fn scale_grows_the_box_and_eye_but_not_the_speed() {
     let mut w = scene();
     let mut p = spawn(&mut w, PlayerType::Standard);
-    p.set_datablock(&mut w, PlayerType::Standard, 2.0).unwrap();
+    p.set_archetype(
+        &mut w,
+        PlayerType::Standard.archetype(),
+        PlayerType::Standard.tuning(),
+        2.0,
+    )
+    .unwrap();
     step(
         &mut p,
         &mut w,
@@ -147,12 +154,14 @@ fn session() -> bri_sim::session::Session {
     s
 }
 fn datablock(s: &bri_sim::session::Session, owner: u64) -> PlayerType {
-    s.snapshot()
+    let archetype = s
+        .snapshot()
         .players
         .into_iter()
         .find(|p| p.owner == owner)
         .unwrap()
-        .datablock
+        .archetype;
+    PlayerType::EVERY[usize::from(archetype.0)]
 }
 
 #[test]

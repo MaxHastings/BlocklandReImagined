@@ -441,6 +441,12 @@ fn register_api(engine: &mut Engine) {
             player: id(&player)?,
         })
     });
+    engine.register_fn("set_archetype", |player: Dynamic, archetype: &str| {
+        push(Op::SetArchetype {
+            player: id(&player)?,
+            archetype: archetype.into(),
+        })
+    });
     engine.register_fn(
         "spawn_entity",
         |kind: &str, x: Dynamic, y: Dynamic, z: Dynamic| {

@@ -80,9 +80,10 @@ pub struct PlayerState {
     pub jetting: bool,
     #[serde(default)]
     pub jump: JumpState,
-    /// The player's datablock (`setDataBlock`).
+    /// What the player is (`setDataBlock`): an index into the session's
+    /// archetype table, which both sides hold.
     #[serde(default)]
-    pub datablock: crate::player_types::PlayerType,
+    pub archetype: crate::archetype::ArchetypeId,
     /// Uniform `setScale` (`setPlayerScale`).
     #[serde(default = "unit")]
     pub scale: f32,
@@ -123,10 +124,6 @@ impl PlayerState {
             -self.yaw.cos() * self.pitch.cos(),
         )
     }
-    /// The motor constants of this player's datablock at its scale.
-    pub fn tuning(&self) -> PlayerTuning {
-        self.datablock.tuning().scaled(self.scale)
-    }
     pub fn eye(&self, tuning: &PlayerTuning) -> Vec3 {
         Vec3::from(self.feet)
             + Vec3::Y
@@ -137,8 +134,36 @@ impl PlayerState {
                 }
     }
 }
-#[derive(Clone, Debug)]
+/// The collision body's shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Body {
+    /// v20's upright box, `width` wide and `stand_height` tall.
+    #[default]
+    Box,
+    /// A sphere `width` across; both heights must equal the width.
+    Ball,
+}
+/// How move input steers the body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Steering {
+    /// v20: the body faces where the player looks and strafes sideways.
+    #[default]
+    Strafe,
+    /// A vehicle: left and right turn the body at `turn_rate`, the look
+    /// direction is ignored and there is no sideways movement.
+    Turn,
+}
+/// Motor constants (a `PlayerData` datablock). Every field has the standard
+/// player's value by default, so data may name only what it changes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PlayerTuning {
+    pub body: Body,
+    pub steering: Steering,
+    /// Radians a second a `turn` body turns at full left or right.
+    pub turn_rate: f32,
     pub width: f32,
     pub stand_height: f32,
     pub crouch_height: f32,
@@ -199,6 +224,9 @@ impl Default for PlayerTuning {
         // ground snap remain adaptation assumptions; see
         // docs/player-simulation.md.
         Self {
+            body: Body::Box,
+            steering: Steering::Strafe,
+            turn_rate: 3.0,
             width: 1.25,
             stand_height: 2.65,
             crouch_height: 1.0,
@@ -268,16 +296,19 @@ impl PlayerTuning {
         }
     }
     fn shape(&self, crouched: bool) -> SharedShape {
-        SharedShape::cuboid(
-            self.width * 0.5,
-            self.height(crouched) * 0.5,
-            self.width * 0.5,
-        )
+        match self.body {
+            Body::Box => SharedShape::cuboid(
+                self.width * 0.5,
+                self.height(crouched) * 0.5,
+                self.width * 0.5,
+            ),
+            Body::Ball => SharedShape::ball(self.width * 0.5),
+        }
     }
     fn pose(&self, feet: Vec3, crouched: bool) -> Pose {
         Pose::translation(feet.x, feet.y + self.height(crouched) * 0.5, feet.z)
     }
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         let values = [
             self.width,
             self.stand_height,
@@ -331,7 +362,11 @@ impl PlayerTuning {
                 && self.slope_degrees < 90.0
                 && self.jump_surface_degrees < 90.0
                 && self.horizontal_resist_speed < self.horizontal_max_speed
-                && self.up_resist_speed < self.up_max_speed,
+                && self.up_resist_speed < self.up_max_speed
+                && self.turn_rate.is_finite()
+                && (0.0..=20.0).contains(&self.turn_rate)
+                && (self.body == Body::Box
+                    || (self.stand_height == self.width && self.crouch_height == self.width)),
             "Invalid player tuning"
         );
         Ok(())
@@ -412,7 +447,7 @@ impl Player {
                 crouched: false,
                 jetting: false,
                 jump: Default::default(),
-                datablock: Default::default(),
+                archetype: Default::default(),
                 scale: 1.0,
                 energy: tuning.max_energy,
             },
@@ -450,7 +485,7 @@ impl Player {
                 crouched: false,
                 jetting: false,
                 jump: Default::default(),
-                datablock: Default::default(),
+                archetype: Default::default(),
                 scale: 1.0,
                 energy: tuning.max_energy,
             },
@@ -488,8 +523,12 @@ impl Player {
     }
     /// Mirror an existing authoritative player (client prediction). Unlike
     /// `spawn`, the server already validated this position.
-    pub fn attach(physics: &mut PhysicsWorld, state: PlayerState) -> Result<Self> {
-        let tuning = state.tuning();
+    /// `tuning` is the state's archetype at its scale.
+    pub fn attach(
+        physics: &mut PhysicsWorld,
+        state: PlayerState,
+        tuning: PlayerTuning,
+    ) -> Result<Self> {
         tuning.validate()?;
         ensure!(state.owner > 0, "Invalid player owner");
         let pose = tuning.pose(Vec3::from(state.feet), state.crouched);
@@ -502,13 +541,13 @@ impl Player {
         );
         let mut player = Self {
             state: state.clone(),
-            tuning,
+            tuning: tuning.clone(),
             body,
             collider,
             contacts: BTreeSet::new(),
             mount: false,
         };
-        player.restore(physics, state)?;
+        player.restore(physics, state, tuning)?;
         requeue_new_body(physics, body);
         Ok(player)
     }
@@ -522,21 +561,23 @@ impl Player {
     pub fn refill_energy(&mut self) {
         self.state.energy = self.tuning.max_energy;
     }
-    /// `setDataBlock`/`setScale`: new motor constants and box. Growing the box
-    /// may overlap geometry; like Torque, the motor resolves it by moving.
-    pub fn set_datablock(
+    /// `setDataBlock`/`setScale`: new motor constants and body. Growing the
+    /// body may overlap geometry; like Torque, the motor resolves it by moving.
+    /// `tuning` is the archetype's, at scale 1.
+    pub fn set_archetype(
         &mut self,
         physics: &mut PhysicsWorld,
-        datablock: crate::player_types::PlayerType,
+        archetype: crate::archetype::ArchetypeId,
+        tuning: PlayerTuning,
         scale: f32,
     ) -> Result<()> {
         ensure!(
             scale.is_finite() && (0.1..=10.0).contains(&scale),
             "Invalid player scale"
         );
-        let tuning = datablock.tuning().scaled(scale);
+        let tuning = tuning.scaled(scale);
         tuning.validate()?;
-        self.state.datablock = datablock;
+        self.state.archetype = archetype;
         self.state.scale = scale;
         self.state.energy = self.state.energy.min(tuning.max_energy);
         self.tuning = tuning;
@@ -555,7 +596,13 @@ impl Player {
         )
     }
     /// Restore a trusted authoritative correction, including jump-edge state.
-    pub fn restore(&mut self, physics: &mut PhysicsWorld, state: PlayerState) -> Result<()> {
+    /// `tuning` is the state's archetype at its scale.
+    pub fn restore(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        state: PlayerState,
+        tuning: PlayerTuning,
+    ) -> Result<()> {
         ensure!(
             state.owner == self.state.owner
                 && state
@@ -570,8 +617,7 @@ impl Player {
                 && state.pitch.is_finite(),
             "Invalid authoritative player correction"
         );
-        if state.datablock != self.state.datablock || state.scale != self.state.scale {
-            let tuning = state.tuning();
+        if tuning != self.tuning {
             tuning.validate()?;
             self.tuning = tuning;
         }
@@ -609,7 +655,7 @@ impl Player {
         state.grounded = false;
         state.crouched = false;
         state.jetting = false;
-        self.restore(physics, state)
+        self.restore(physics, state, self.tuning.clone())
     }
     /// Ride a vehicle seat: position and facing come from the seat node.
     pub fn place(&mut self, physics: &mut PhysicsWorld, feet: Vec3, yaw: f32, velocity: Vec3) {
@@ -688,6 +734,21 @@ impl Player {
                 self.state.crouched = false;
             }
         }
+        let steer = if t.steering == Steering::Turn {
+            let turned = self.state.yaw + input.right * t.turn_rate * dt;
+            // Keep within the input's range, so a turn body's state is
+            // always a valid look direction.
+            let yaw = (turned + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI;
+            MoveInput {
+                yaw,
+                right: 0.0,
+                ..input
+            }
+        } else {
+            input
+        };
+        let input = steer;
         self.state.yaw = input.yaw;
         self.state.pitch = input.pitch;
         self.state.head_yaw = input.head_yaw;

@@ -56,6 +56,13 @@ pub enum Op {
     Respawn {
         player: u64,
     },
+    /// Make a player this archetype (a package's `archetype` id or v20's
+    /// `v20.player.<datablock>`), now and at every respawn. An empty id
+    /// hands the choice back to the mini-game's player type.
+    SetArchetype {
+        player: u64,
+        archetype: String,
+    },
     /// `vars` are the entity's first package-local variables, so what a
     /// package creates is addressable from its first think (an owner, a
     /// team, a home).
@@ -96,7 +103,7 @@ impl Op {
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } => "chat",
-            Self::Teleport { .. } | Self::Respawn { .. } => "player",
+            Self::Teleport { .. } | Self::Respawn { .. } | Self::SetArchetype { .. } => "player",
         }
     }
     /// Shape limits, independent of who asks.
@@ -107,6 +114,9 @@ impl Op {
         let ok = match self {
             Self::RemoveBrick { .. } | Self::RemoveEntity { .. } | Self::Respawn { .. } => true,
             Self::Teleport { position, .. } => finite(position),
+            Self::SetArchetype { archetype, .. } => {
+                archetype.len() <= 160 && !archetype.chars().any(char::is_control)
+            }
             Self::PlaceBrick {
                 shape,
                 position,
@@ -193,6 +203,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Tell { .. } => "tell",
         Op::Teleport { .. } => "teleport",
         Op::Respawn { .. } => "respawn",
+        Op::SetArchetype { .. } => "set_archetype",
         Op::Broadcast { .. } => "broadcast",
     }
 }

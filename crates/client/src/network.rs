@@ -44,6 +44,8 @@ pub struct View {
     pub broken_shapes: std::collections::BTreeSet<u32>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
+    /// The host's player archetypes; poses name them by index.
+    pub archetypes: Arc<bri_sim::archetype::Archetypes>,
     pub rtt_ms: u32,
 }
 /// Brick ids each replica world revision changed, so consumers can update in
@@ -238,6 +240,7 @@ fn publish(
         broken_shapes: client.replica.broken_shapes.clone(),
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
+        archetypes: client.replica.archetypes.clone(),
         rtt_ms: client.rtt().as_millis().min(u128::from(u32::MAX)) as u32,
     }));
 }

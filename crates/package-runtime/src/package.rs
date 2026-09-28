@@ -29,6 +29,7 @@ pub struct Package {
     pub entities: BTreeMap<String, content::EntityKind>,
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
+    pub archetypes: BTreeMap<String, content::ArchetypeDef>,
 }
 
 const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -149,6 +150,7 @@ impl Package {
             entities: BTreeMap::new(),
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
+            archetypes: BTreeMap::new(),
             manifest,
             assets,
         };
@@ -251,6 +253,13 @@ impl Package {
                 Kind::Hud => {
                     if let Some(h) = parse::<content::HudPanel>(asset, &id, |h| h.validate(), out) {
                         self.huds.insert(asset.id.clone(), h);
+                    }
+                }
+                Kind::Archetype => {
+                    if let Some(a) =
+                        parse::<content::ArchetypeDef>(asset, &id, |a| a.validate(), out)
+                    {
+                        self.archetypes.insert(asset.id.clone(), a);
                     }
                 }
             }
@@ -502,6 +511,10 @@ impl Catalog {
     }
     pub fn model(&self, id: &str) -> Option<&content::BoxModel> {
         self.packages.get(id.split(':').next()?)?.models.get(id)
+    }
+    /// Every package's archetypes, in package then id order.
+    pub fn archetypes(&self) -> impl Iterator<Item = (&String, &content::ArchetypeDef)> {
+        self.packages.values().flat_map(|p| p.archetypes.iter())
     }
     pub fn huds(&self) -> impl Iterator<Item = (&String, &content::HudPanel)> {
         self.packages.values().flat_map(|p| p.huds.iter())

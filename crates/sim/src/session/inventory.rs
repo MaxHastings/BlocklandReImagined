@@ -117,7 +117,7 @@ impl Session {
         );
         weapons.tick = self.simulation.state().tick;
         self.weapons = weapons;
-        self.minigames = super::combat::new_world(catalog);
+        self.minigames = super::combat::new_world(catalog, &self.archetypes);
         self.refresh_event_bindings()
     }
 

@@ -222,11 +222,13 @@ impl Controls {
         }
     }
     /// The orbited player's presented eye, which the orbit camera circles.
-    pub fn orbit_focus(&self, presented: &BTreeMap<OwnerId, PlayerState>) -> Option<glam::Vec3> {
+    pub fn orbit_focus(
+        &self,
+        presented: &BTreeMap<OwnerId, PlayerState>,
+        archetypes: &bri_sim::archetype::Archetypes,
+    ) -> Option<glam::Vec3> {
         match self.observer?.mode {
-            ObserverMode::Orbit(target) => presented
-                .get(&target)
-                .map(|p| p.eye(&p.tuning())),
+            ObserverMode::Orbit(target) => presented.get(&target).map(|p| archetypes.eye(p)),
             ObserverMode::Free(_) => None,
         }
     }
@@ -507,17 +509,17 @@ mod tests {
             crouched: false,
             jetting: false,
             jump: Default::default(),
-            datablock: Default::default(),
+            archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
-        assert_eq!(c.orbit_focus(&presented), None);
+        assert_eq!(c.orbit_focus(&presented, &Default::default()), None);
         c.follow(ControlObject::Spy(7), 1, None);
-        let first = c.orbit_focus(&presented).unwrap();
+        let first = c.orbit_focus(&presented, &Default::default()).unwrap();
         assert_eq!(first.x, 5.0);
         presented.insert(7, body(7, 12.0));
-        assert_eq!(c.orbit_focus(&presented).unwrap().x, 12.0);
+        assert_eq!(c.orbit_focus(&presented, &Default::default()).unwrap().x, 12.0);
         assert!(first.y > 1.0, "orbits the eye, not the feet");
     }
     #[test]

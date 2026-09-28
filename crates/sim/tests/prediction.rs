@@ -48,7 +48,7 @@ fn prediction_matches_server_under_delay_loss_and_redundancy() {
     let owner = session.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
     let (initial, _) = session.motion_states().remove(0);
     let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
-    let mut prediction = Predictor::new(mirror, initial).unwrap();
+    let mut prediction = Predictor::new(mirror, initial, Default::default()).unwrap();
     let mut to_server: VecDeque<(u64, u64, Vec<MoveInput>)> = VecDeque::new();
     let mut to_client = VecDeque::new();
     let mut worst = 0.0_f32;
@@ -128,7 +128,7 @@ fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
     };
     let (initial, _) = session.motion_states().remove(0);
     let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
-    let mut prediction = Predictor::new(mirror, initial.clone()).unwrap();
+    let mut prediction = Predictor::new(mirror, initial.clone(), Default::default()).unwrap();
     for _ in 0..INPUT_HISTORY + 20 {
         prediction.step(MoveInput::default()).unwrap();
     }

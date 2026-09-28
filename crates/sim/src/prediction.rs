@@ -3,6 +3,7 @@
 //! world. Authoritative poses acknowledge the last input the server consumed;
 //! the predictor restores that state and replays the inputs still in flight.
 use crate::{
+    archetype::Archetypes,
     definitions::{Definitions, brick_water},
     player::{MotionEvents, MoveInput, Player, PlayerState},
     simulation::{MAP_TAG, brick_collider},
@@ -217,6 +218,8 @@ impl CollisionMirror {
 pub struct Predictor {
     world: CollisionMirror,
     player: Player,
+    /// The host's archetype table, from its checkpoint.
+    archetypes: Archetypes,
     pending: VecDeque<(u64, MoveInput)>,
     sequence: u64,
     acknowledged: u64,
@@ -224,12 +227,18 @@ pub struct Predictor {
 }
 impl Predictor {
     /// Begin predicting from an authoritative state (normally the join pose).
-    pub fn new(mut world: CollisionMirror, state: PlayerState) -> Result<Self> {
-        let player = Player::attach(&mut world.physics, state)?;
+    pub fn new(
+        mut world: CollisionMirror,
+        state: PlayerState,
+        archetypes: Archetypes,
+    ) -> Result<Self> {
+        let tuning = archetypes.tuning(state.archetype, state.scale);
+        let player = Player::attach(&mut world.physics, state, tuning)?;
         world.stream_terrain();
         Ok(Self {
             world,
             player,
+            archetypes,
             pending: VecDeque::new(),
             sequence: 0,
             acknowledged: 0,
@@ -238,6 +247,10 @@ impl Predictor {
     }
     pub fn state(&self) -> &PlayerState {
         self.player.state()
+    }
+    /// The predicted body's motor constants (its archetype at its scale).
+    pub fn tuning(&self) -> &crate::player::PlayerTuning {
+        self.player.tuning()
     }
     pub fn pending_len(&self) -> usize {
         self.pending.len()
@@ -325,7 +338,9 @@ impl Predictor {
             return Ok(None);
         }
         let predicted = self.player.state().clone();
-        self.player.restore(&mut self.world.physics, state)?;
+        let tuning = self.archetypes.tuning(state.archetype, state.scale);
+        self.player
+            .restore(&mut self.world.physics, state, tuning)?;
         self.world.stream_terrain();
         while self
             .pending
@@ -349,11 +364,13 @@ impl Predictor {
                 < NOISE * 10.0
             && predicted.grounded == corrected.grounded
             && predicted.crouched == corrected.crouched
-            // A new datablock or scale always takes the authoritative body.
-            && predicted.datablock == corrected.datablock
+            // A new archetype or scale always takes the authoritative body.
+            && predicted.archetype == corrected.archetype
             && predicted.scale == corrected.scale
         {
-            self.player.restore(&mut self.world.physics, predicted)?;
+            let tuning = self.player.tuning().clone();
+            self.player
+                .restore(&mut self.world.physics, predicted, tuning)?;
             return Ok(Some(Vec3::ZERO));
         }
         Ok(Some(
@@ -362,7 +379,9 @@ impl Predictor {
     }
     /// Server-initiated relocation (respawn, teleport): discard in-flight inputs.
     pub fn teleport(&mut self, tick: u64, ack: u64, state: PlayerState) -> Result<()> {
-        self.player.restore(&mut self.world.physics, state)?;
+        let tuning = self.archetypes.tuning(state.archetype, state.scale);
+        self.player
+            .restore(&mut self.world.physics, state, tuning)?;
         self.world.stream_terrain();
         self.pending.clear();
         self.server_tick = Some(tick);
