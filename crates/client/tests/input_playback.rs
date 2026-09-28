@@ -68,6 +68,18 @@ fn a_player_starts_single_player_and_walks_using_only_clicks_and_keys() -> Resul
         play(&mut app, &script.frames)?;
         recorded.extend(script.frames);
     }
+    // Then it offers the Tutorial and a name, as a new player sees them:
+    // decline both by clicking their buttons.
+    for button in ["Not Now", "Later"] {
+        if app.ui.top_id() == ScreenId::MessageBox {
+            let mut script = Script::default();
+            script
+                .click(control(&app, ScreenId::MessageBox, button)?)
+                .wait(Duration::from_millis(200));
+            play(&mut app, &script.frames)?;
+            recorded.extend(script.frames);
+        }
+    }
     ensure!(
         app.ui.top_id() == ScreenId::MainMenu,
         "Something covers the main menu: {:?}",

@@ -981,3 +981,29 @@ fn side_mouse_buttons_bind_by_torque_name() {
         assert_eq!(button.torque_name(), name);
     }
 }
+#[test]
+fn first_run_offers_the_tutorial_then_asks_for_a_name_once() {
+    // Declining the Tutorial asks for the name straight away.
+    let mut u = ui();
+    u.core.first_run_welcome();
+    u.update(0);
+    assert_eq!(u.top_id(), ScreenId::MessageBox);
+    down(&mut u, Key::Escape);
+    u.update(0);
+    assert_eq!(u.top_id(), ScreenId::MessageBox, "the name question");
+    assert_eq!(u.core.prefs.str_or(bri_ui::ui::NAME_PROMPT, ""), "done");
+    down(&mut u, Key::Escape);
+    u.update(0);
+    assert_ne!(u.top_id(), ScreenId::MessageBox);
+    u.core.name_prompt();
+    u.update(0);
+    assert_ne!(u.top_id(), ScreenId::MessageBox, "asked only once");
+    // Playing it starts the Tutorial and keeps the name for later.
+    let mut u = ui();
+    u.core.first_run_welcome();
+    u.update(0);
+    actions(&mut u);
+    down(&mut u, Key::Return);
+    assert_eq!(actions(&mut u).last(), Some(&UiAction::StartTutorial));
+    assert_eq!(u.core.prefs.str_or(bri_ui::ui::NAME_PROMPT, ""), "after_tutorial");
+}

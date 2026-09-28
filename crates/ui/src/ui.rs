@@ -168,7 +168,17 @@ pub enum Callback {
     Request(Box<crate::api::UiAction>),
     /// Open a web page (a new release's download page).
     OpenUrl(String),
+    /// Open a screen (the first-run name prompt opens Avatar).
+    Push(ScreenId),
+    /// First run: ask for a name once the Tutorial question is answered.
+    NamePrompt,
+    /// First run: play the Tutorial, then ask for a name back at the menu.
+    TutorialThenName,
 }
+
+/// First run's name question: "after_tutorial" while it waits for the
+/// player to come back from the Tutorial, "done" once asked.
+pub const NAME_PROMPT: &str = "$pref::Player::NamePrompt";
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
 /// follows mouse Y, so positive looks down.
@@ -486,6 +496,42 @@ impl Core {
              load later from Load Bricks, but not under a name of your own.\n\nLeave anyway?",
             on_yes,
         );
+    }
+    /// First run, after the controls question: offer the Tutorial, then
+    /// the name. v20 had no such welcome; everyone started as "Blockhead".
+    pub fn first_run_welcome(&mut self) {
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: "Welcome to Blockland ReImagined".into(),
+            text: "New here? The Tutorial teaches moving, building, tools and driving in a \
+                   few minutes. You can also start it later from the main menu.\n\nPlay the \
+                   Tutorial now?"
+                .into(),
+            yes_no: true,
+            on_yes: Callback::TutorialThenName,
+            on_no: Callback::NamePrompt,
+            buttons: Some(["Play Tutorial".into(), "Not Now".into()]),
+        })));
+    }
+    /// Ask once for a name when the player still has the default one.
+    pub fn name_prompt(&mut self) {
+        if self.prefs.str_or(NAME_PROMPT, "") == "done" {
+            return;
+        }
+        self.prefs.set(NAME_PROMPT, "done");
+        self.save_settings();
+        if self.settings.avatar.lan_name != "Blockhead" {
+            return;
+        }
+        self.cmds.push(StackCmd::Message(Box::new(MessageBox {
+            title: "Your Name".into(),
+            text: "Other players will see you as \"Blockhead\". Choose your name and look \
+                   now? You can change them any time in Avatar."
+                .into(),
+            yes_no: true,
+            on_yes: Callback::Push(ScreenId::Avatar),
+            on_no: Callback::None,
+            buttons: Some(["Choose Name".into(), "Later".into()]),
+        })));
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
         self.cmds.push(StackCmd::Message(Box::new(MessageBox {

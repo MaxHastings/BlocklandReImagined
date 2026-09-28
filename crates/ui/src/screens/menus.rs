@@ -599,6 +599,12 @@ impl Screen for NativeScreen {
         self.id != ScreenId::Play
     }
     fn on_wake(&mut self, core: &mut Core) {
+        // Back at the main menu from a first-run Tutorial: the name question.
+        if self.id == ScreenId::MainMenu
+            && core.prefs.str_or(crate::ui::NAME_PROMPT, "") == "after_tutorial"
+        {
+            core.name_prompt();
+        }
         // LAN games and saved servers are listed as soon as the list opens.
         if self.id == ScreenId::JoinServer && !core.lan_querying {
             core.request(UiAction::QueryLan);
@@ -727,6 +733,7 @@ impl Screen for NativeScreen {
             }
             "startmissiongui.clicksingleplayer();" => self.server_type(core, false),
             "defaultcontrolsgui.apply();" => {
+                let first_run = core.settings.binds.is_none();
                 let mouse = (0..=3)
                     .find(|i| self.checked(&format!("OPT_Mouse{i}")))
                     .unwrap_or(DEFAULT_MOUSE);
@@ -741,6 +748,9 @@ impl Screen for NativeScreen {
                     core.save_settings();
                 }
                 core.pop(self.id);
+                if first_run {
+                    core.first_run_welcome();
+                }
             }
             "joinservergui.querylan();" => {
                 core.request(UiAction::QueryLan);
@@ -912,6 +922,13 @@ impl MessageScreen {
             }
             Callback::OpenUrl(url) => {
                 core.request(UiAction::OpenUrl(url.clone()));
+            }
+            Callback::Push(screen) => core.push(*screen),
+            Callback::NamePrompt => core.name_prompt(),
+            Callback::TutorialThenName => {
+                core.prefs.set(crate::ui::NAME_PROMPT, "after_tutorial");
+                core.save_settings();
+                core.request(UiAction::StartTutorial);
             }
             Callback::MiniGame { game, operation } => {
                 let valid = match operation {
