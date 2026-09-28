@@ -1034,6 +1034,35 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
 }
 /// Let go the players the session asked to disconnect (kicks, bans, a map
 /// that could not place them), telling each why.
+/// The event runtime's notes (loop warnings, budgets reached, rows it had
+/// to retain or reject) for the host's log: the first few of every ten
+/// seconds, then a count, so a looping build cannot flood it.
+#[derive(Default)]
+struct EventNotes {
+    window: Option<std::time::Instant>,
+    logged: u32,
+    suppressed: u64,
+}
+impl EventNotes {
+    const PER_WINDOW: u32 = 8;
+    const WINDOW: Duration = Duration::from_secs(10);
+    fn log(&mut self, now: std::time::Instant, notes: Vec<String>) {
+        if self.window.is_none_or(|at| now.duration_since(at) >= Self::WINDOW) {
+            if self.suppressed > 0 {
+                eprintln!("Events: {} more notes in the last 10 s were not logged", self.suppressed);
+            }
+            *self = Self { window: Some(now), ..Self::default() };
+        }
+        for note in notes {
+            if self.logged < Self::PER_WINDOW {
+                eprintln!("Events: {note}");
+                self.logged += 1;
+            } else {
+                self.suppressed += 1;
+            }
+        }
+    }
+}
 fn close_admin_disconnects(session: &mut Session, peers: &mut BTreeMap<OwnerId, Peer>) {
     for target in session.take_admin_disconnects() {
         let message = session.take_admin_disconnect_message(target);
@@ -1150,6 +1179,7 @@ async fn run(
     // Event explosions/projectiles refused over the per-tick limits, logged
     // at most every ten seconds so a runaway loop cannot flood the log.
     let mut event_overload = (0_u64, None::<std::time::Instant>);
+    let mut event_notes = EventNotes::default();
     let mut spawn_points = options.spawn_points.clone();
     let (map_tx, mut map_rx) = mpsc::channel::<(OwnerId, Result<Session>)>(1);
     let mut joins = 0;
@@ -1332,6 +1362,7 @@ async fn run(
                 eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
                 event_overload=(0,Some(now));
             }
+            event_notes.log(now,session.take_event_diagnostics());
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {

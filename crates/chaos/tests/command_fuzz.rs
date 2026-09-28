@@ -65,10 +65,11 @@ fn variant(command: &Command) -> &'static str {
         Command::SteeringPrefs { .. } => "steering_prefs",
         Command::BuildGesture(_) => "build_gesture",
         Command::Package(_) => "package",
+        Command::SetName(_) => "set_name",
     }
 }
 
-const VARIANTS: usize = 39;
+const VARIANTS: usize = 40;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;
@@ -236,6 +237,7 @@ fn examples() -> Vec<Command> {
             command: "spawn".into(),
             args: vec![PackageArg::Float(1e19), PackageArg::String("x".into())],
         }),
+        Command::SetName("Blockhead \u{202e}".into()),
     ]
 }
 
