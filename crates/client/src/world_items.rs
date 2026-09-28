@@ -329,7 +329,7 @@ impl WorldItems {
         self.headings
             .retain(|id, _| view.projectiles.iter().any(|p| p.id == *id));
         for projectile in &view.projectiles {
-            let velocity = Vec3::from(projectile.velocity);
+            let velocity = projectile.velocity;
             let heading = if velocity.length_squared() > 1e-6 && velocity.is_finite() {
                 *self.headings.entry(projectile.id).or_default() = velocity;
                 velocity
