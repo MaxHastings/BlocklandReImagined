@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
 import tomllib
 
 ZERO = "0" * 40
@@ -46,7 +47,7 @@ UNDO_MIN_LINES = 10
 UNDO_FRACTION = 0.6
 PROTOCOL_FILE = "crates/net/src/protocol.rs"
 PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
-LOCK_STALE_SECONDS = 90 * 60
+LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
 
 
@@ -218,53 +219,93 @@ def history_check(base, tip):
 # ---------------------------------------------------------------- build/test
 
 
-def process_alive(pid):
-    """Query only; never signals the process."""
+def process_dead(pid):
+    """True only when the OS positively reports no such process. Query only."""
     if not pid.isdigit():
         return False
     if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                             capture_output=True, text=True, errors="replace").stdout
-        return f'"{pid}"' in out
+        result = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                                capture_output=True, text=True, errors="replace")
+        return result.returncode == 0 and "No tasks" in result.stdout
     try:
         os.kill(int(pid), 0)
     except ProcessLookupError:
-        return False
-    except PermissionError:
+        return True
+    except OSError:
         pass
-    return True
+    return False
 
 
 class Lock:
+    """An exclusive file lock. The holder refreshes the file's mtime every
+    30 s; a lock whose heartbeat stopped for LOCK_STALE_SECONDS, or whose
+    holder the OS reports gone, is reclaimed. Only the owner removes it."""
+
     def __init__(self, path, label):
         self.path = path
         self.label = label
+        self.token = f"{os.getpid()} {time.time():.0f} {label}"
+        self.stop = threading.Event()
+
+    def owned(self):
+        try:
+            return self.path.read_text(encoding="utf-8") == self.token
+        except OSError:
+            return False
+
+    def heartbeat(self):
+        while not self.stop.wait(30):
+            if self.owned():
+                os.utime(self.path)
 
     def __enter__(self):
         announced = 0.0
         while True:
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, f"{os.getpid()} {time.time():.0f} {self.label}".encode())
+                os.write(fd, self.token.encode("utf-8"))
                 os.close(fd)
+                threading.Thread(target=self.heartbeat, daemon=True).start()
                 return self
             except FileExistsError:
+                pass
+            try:
+                holder = self.path.read_text(encoding="utf-8")
+                idle = time.time() - self.path.stat().st_mtime
+            except OSError:
+                time.sleep(1)
+                continue
+            parts = holder.split(" ", 2)
+            started = float(parts[1]) if len(parts) > 1 and parts[1].isdigit() else time.time()
+            if idle > LOCK_STALE_SECONDS or (idle > 60 and process_dead(parts[0])):
+                say(f"reclaiming stale gate lock ({holder}; no heartbeat for {idle:.0f}s)")
                 try:
-                    holder = self.path.read_text()
-                    age = time.time() - self.path.stat().st_mtime
+                    if self.path.read_text(encoding="utf-8") == holder:
+                        remove(self.path)
                 except OSError:
-                    continue
-                if age > LOCK_STALE_SECONDS or not process_alive(holder.split(" ", 1)[0]):
-                    say(f"removing stale gate lock ({holder})")
-                    self.path.unlink(missing_ok=True)
-                    continue
-                if time.time() - announced >= 300:
-                    say(f"waiting for the gate lock, held for {age / 60:.0f} min by: {holder}")
-                    announced = time.time()
-                time.sleep(5)
+                    pass
+                continue
+            if time.time() - announced >= 300:
+                say(f"waiting for the gate lock, held for {(time.time() - started) / 60:.0f} min "
+                    f"by: {holder}")
+                announced = time.time()
+            time.sleep(5)
 
     def __exit__(self, *exc):
-        self.path.unlink(missing_ok=True)
+        self.stop.set()
+        if self.owned():
+            remove(self.path)
+
+
+def remove(path):
+    """Delete a file, retrying while a waiter briefly has it open (Windows)."""
+    for _ in range(100):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(0.1)
+    path.unlink(missing_ok=True)
 
 
 def run_step(name, command, cwd, log, env=None):
@@ -342,6 +383,17 @@ def prepare_worktree(root, sha):
     return worktree
 
 
+def tree_intact(worktree, sha):
+    """The gate worktree still holds exactly sha, with no tracked changes."""
+    head = git("rev-parse", "HEAD", cwd=worktree).strip()
+    dirty = git("status", "--porcelain", "--untracked-files=no", cwd=worktree).strip()
+    if head != sha or dirty:
+        say(f"the gate worktree changed during this run (HEAD {head[:9]}, "
+            f"{'dirty' if dirty else 'clean'}); another process touched it. Rerun the gate.")
+        return False
+    return True
+
+
 def full_gate(sha, root):
     root.mkdir(parents=True, exist_ok=True)
     passed = root / "passed" / sha
@@ -365,6 +417,8 @@ def full_gate(sha, root):
                         "--", "-D", "warnings"]),
         ]
         for name, command in steps:
+            if not tree_intact(worktree, sha):
+                return False
             if not run_step(name, command, worktree, log, env):
                 print(tail(log, f"===== {name} ====="))
                 say(f"full log: {log}")
@@ -379,6 +433,8 @@ def full_gate(sha, root):
         skip_args = [arg for name in skips for arg in ("--skip", name)]
         run_step("test", ["cargo", "test", "--workspace", "--locked", "--no-fail-fast",
                           "--", "--include-ignored", *skip_args], worktree, log, env)
+        if not tree_intact(worktree, sha):
+            return False
         failed, compile_error = parse_failures(log)
         if compile_error:
             print(tail(log, "===== test ====="))
@@ -412,6 +468,8 @@ def full_gate(sha, root):
             for key in unexpected:
                 print(f"    {key}")
             say(f"full log: {log}")
+            return False
+        if not tree_intact(worktree, sha):
             return False
         passed.parent.mkdir(exist_ok=True)
         passed.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
