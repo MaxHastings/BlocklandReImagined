@@ -300,10 +300,10 @@ fn render_uploaded(
 #[test]
 fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let materials = BrickMaterials::load(&root.join("content/brick-materials-001"))?;
+    let materials = BrickMaterials::load(&root.join("content/brick-materials-002"))?;
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-007"),
+        &root.join("content/maps-pass-008"),
     )?;
     let meshes: BTreeMap<_, _> = definitions
         .entries
@@ -383,10 +383,10 @@ fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
 #[test]
 fn native_original_brick_fx_prints_phase_and_paint_offscreen() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let materials = BrickMaterials::load(&root.join("content/brick-materials-001"))?;
+    let materials = BrickMaterials::load(&root.join("content/brick-materials-002"))?;
     let definitions = Definitions::load(
         &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-007"),
+        &root.join("content/maps-pass-008"),
     )?;
     let meshes: BTreeMap<_, _> = definitions
         .entries

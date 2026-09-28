@@ -344,7 +344,7 @@ fn density_caps_stalls_and_map_teardown_are_bounded() {
 #[ignore = "requires converted original weather pack"]
 fn actual_original_weather_preserves_counts_atlases_and_alpha() {
     let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weather-pack-001");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weather-pack-002");
     let pack = WeatherPack::load(path).unwrap();
     assert_eq!(pack.manifest.placements.len(), 2);
     assert_eq!(pack.textures.len(), 3);

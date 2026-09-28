@@ -19,7 +19,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");
     let catalog = bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?;
-    let audio = json(&content.join("audio-pack-001/manifest.json"))?;
+    let audio = json(&content.join("audio-pack-002/manifest.json"))?;
     let sounds: Vec<String> = audio["sounds"]
         .as_array()
         .unwrap()
@@ -46,7 +46,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         serde_json::from_value(json(&content.join("stock-catalog-004/stock-catalog.json"))?)?;
     let effects = serde_json::from_value(json(&content.join("effects-pass-004/effects.json"))?)?;
     let materials = serde_json::from_value(json(
-        &content.join("brick-materials-001/brick-materials.json"),
+        &content.join("brick-materials-002/brick-materials.json"),
     )?)?;
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(
         content.join("weapons-pack-009/weapons.json"),
@@ -54,7 +54,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
     let vehicles = bri_vehicles::Pack::load(content.join("vehicles-pack-011/vehicles.json"))?;
     let mut totals = BTreeMap::<String, usize>::new();
     let mut worlds = 0;
-    for entry in std::fs::read_dir(content.join("worlds-pass-005"))? {
+    for entry in std::fs::read_dir(content.join("worlds-pass-006"))? {
         let path = entry?.path();
         if !path.to_string_lossy().ends_with(".world.json") {
             continue;
@@ -67,7 +67,7 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         let name = world.name.clone();
         let definitions = Definitions::load(
             &content.join("stock-catalog-004"),
-            &content.join("maps-pass-007"),
+            &content.join("maps-pass-008"),
         )?;
         let mut s = Session::new(Simulation::new(
             world,

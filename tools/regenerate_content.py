@@ -22,6 +22,7 @@ import os
 import pathlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -57,6 +58,13 @@ DAMAGE_TYPES = DECOMPILED / 'server/scripts/DamageTypes.cs'
 BL_DECOMPILED = RESEARCH / 'bl-decompiled'
 DECOMPILE_STAMP = RESEARCH / 'v20-dso.pin'
 
+# The designated v20 reference's add-on archives (docs/vanilla-reference.md).
+# The geometry pass converts only these, so extra add-ons in someone's v20
+# folder never change the shared base packs.
+REFERENCE_INVENTORY = 'docs/vanilla-reference-inventory.json'
+# Every file of the designated reference an importer may read, with its hash.
+REFERENCE_FILES = 'docs/vanilla-reference-files.json'
+
 WEAPON_EFFECTS = 'docs/research/weapon-effects/importer/Cargo.toml'
 WEAPON_DEBRIS = 'docs/research/weapon-debris/importer/Cargo.toml'
 
@@ -65,7 +73,7 @@ WEAPON_DEBRIS = 'docs/research/weapon-debris/importer/Cargo.toml'
 # ('files', path). Bump a recipe number when a step's command line changes.
 CONVERT = [('cargo', 'bri-convert')]
 STEP_INPUTS = {
-    'geometry': ([], CONVERT, [], 1),
+    'geometry': ([], CONVERT, [REFERENCE_INVENTORY], 2),
     'brick_catalog': (['geometry'], CONVERT, [], 1),
     'map_bundle': (['geometry'], CONVERT, [], 1),
     'ui_pack': (['brick_catalog'], [('cargo', 'bri-ui-import')], [], 1),
@@ -110,8 +118,21 @@ def fail(message):
     sys.exit(f'\nerror: {message}')
 
 
+def portable(part):
+    """An argument as importers should see it: repository paths relative to the
+    repository, so packs that record where their evidence came from read the
+    same on every machine (the command itself stays absolute)."""
+    if isinstance(part, pathlib.Path):
+        try:
+            return part.resolve().relative_to(REPO).as_posix()
+        except ValueError:
+            pass
+    return str(part)
+
+
 def run(*command, cwd=REPO, stdin=None):
-    command = [str(part) for part in command]
+    command = [str(command[0])] + [portable(part) for part in command[1:]] if cwd == REPO \
+        else [str(part) for part in command]
     print('  $ ' + ' '.join(f'"{c}"' if ' ' in c else c for c in command), flush=True)
     try:
         subprocess.run(command, cwd=cwd, check=True, input=stdin)
@@ -162,6 +183,84 @@ def v20_identity(v20):
             if path.is_file() and path.suffix.lower() != '.ml':
                 entries.append(f'{path.relative_to(v20).as_posix()}:{path.stat().st_size}')
     return sha256(*entries)
+
+
+def without_lighting_caches(data):
+    """A zip without its `.ml` members, every other byte kept, or None when it
+    is not a readable zip. v20 adds a mission-lighting cache to a map's zip the
+    first time the map is played; removing it restores the shipped archive."""
+    end = data.rfind(b'PK\x05\x06')
+    if end < 0 or end + 22 > len(data):
+        return None
+    try:
+        disk, cd_disk, _, count, _, cd_offset, comment_len = struct.unpack_from('<HHHHIIH', data, end + 4)
+        entries, at = [], cd_offset
+        for _ in range(count):
+            if data[at:at + 4] != b'PK\x01\x02':
+                return None
+            name_len, extra_len, note_len = struct.unpack_from('<HHH', data, at + 28)
+            offset, = struct.unpack_from('<I', data, at + 42)
+            size = 46 + name_len + extra_len + note_len
+            entries.append((data[at + 46:at + 46 + name_len], offset, data[at:at + size]))
+            at += size
+    except struct.error:
+        return None
+    kept = [e for e in entries if not e[0].lower().endswith(b'.ml')]
+    if len(kept) == len(entries):
+        return data
+    starts = sorted(e[1] for e in entries) + [cd_offset]
+    out, central = bytearray(), bytearray()
+    for _, offset, record in kept:
+        following = starts[starts.index(offset) + 1]
+        central += record[:42] + struct.pack('<I', len(out)) + record[46:]
+        out += data[offset:following]
+    cd_start = len(out)
+    out += central
+    out += struct.pack('<IHHHHIIH', 0x06054b50, disk, cd_disk, len(kept), len(kept), len(central),
+                       cd_start, comment_len)
+    out += data[end + 22:end + 22 + comment_len]
+    return bytes(out)
+
+
+def reference_view(v20, view):
+    """Copy the designated reference's files from `v20` into `view`, checking
+    each against its SHA-256, and return `view`. Every importer reads the view,
+    so the base packs are the same on every machine whatever else a v20 folder
+    holds: extra add-ons, saves, caches or a changed file never reach them.
+    Lookups ignore case, as Windows and Torque do."""
+    listing = json.loads((REPO / REFERENCE_FILES).read_text(encoding='utf-8'))['files']
+    present = {}
+    for top in ('base', 'Add-Ons', 'saves'):
+        for path in (v20 / top).rglob('*'):
+            if path.is_file():
+                present.setdefault(path.relative_to(v20).as_posix().lower(), path)
+    missing, changed, contents = [], [], {}
+    for entry in listing:
+        source = present.get(entry['path'].lower())
+        if source is None:
+            missing.append(entry['path'])
+            continue
+        data = source.read_bytes()
+        if hashlib.sha256(data).hexdigest() != entry['sha256'] and entry['path'].lower().endswith('.zip'):
+            data = without_lighting_caches(data) or data
+        if len(data) != entry['bytes'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
+            changed.append(entry['path'])
+        contents[entry['path']] = data
+    if missing or changed:
+        lines = [f'  missing: {p}' for p in missing[:10]] + [f'  changed: {p}' for p in changed[:10]]
+        more = len(missing) + len(changed) - len(lines)
+        fail(f'{v20} is not an unmodified Blockland v20: {len(missing)} file(s) are missing and '
+             f'{len(changed)} differ from the reference (docs/vanilla-reference.md). Every player\'s '
+             'base content must match, so restore these from an unmodified v20 install:\n'
+             + '\n'.join(lines) + (f'\n  ...and {more} more' if more > 0 else ''))
+    if view.exists():
+        shutil.rmtree(view)
+    for entry in listing:
+        destination = view / entry['path']
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(contents[entry['path']])
+    print(f'  {len(listing)} reference files from {v20}')
+    return view
 
 
 class Sources:
@@ -261,7 +360,7 @@ class Pipeline:
         inputs include the stamps of the packs it reads, so rebuilding one makes
         everything built from it stale too."""
         sources = Sources()
-        v20 = v20_identity(self.v20)
+        v20 = sha256(v20_identity(self.v20), sources.files(REPO / REFERENCE_FILES))
         tokens = {}
         for key in PACK_STEPS:
             upstream, tools, files, recipe = STEP_INPUTS[key]
@@ -420,7 +519,8 @@ class Pipeline:
         # The converter exits 1 whenever any source fails, after writing its
         # manifest. Two stock files are known, documented non-assets; failures
         # in add-ons that v20 does not ship are reported and skipped.
-        result = subprocess.run([str(self.bin('bri-convert')), str(self.v20), str(out)], cwd=REPO)
+        result = subprocess.run([str(self.bin('bri-convert')), str(self.v20), str(out),
+                                 '--reference', str(REPO / REFERENCE_INVENTORY)], cwd=REPO)
         manifest_path = out / 'manifest.json'
         if not manifest_path.exists():
             fail(f'bri-convert exited with status {result.returncode} and wrote no manifest')
@@ -596,6 +696,8 @@ def regenerate(v20, content, steps, rebuild_decompiled=False, keep_stale=False, 
         override.replace(aside)
         print(f'  moved {override.name} (an older pack selection) to {aside.name}; '
               'the client now loads the current default packs')
+    log('Check the v20 folder against the reference')
+    v20 = reference_view(v20, content / '_regeneration' / 'v20-reference')
     pipeline = Pipeline(v20, content, rebuild_decompiled, keep_stale, force)
     missing = set(PACK_STEPS) - set(pipeline.packs)
     if missing or set(pipeline.packs) - set(PACK_STEPS):
@@ -652,7 +754,8 @@ def main():
     else:
         steps = STEPS
     if args.plan:
-        pipeline = Pipeline(v20, args.content.resolve(), keep_stale=args.keep_stale, force=args.rebuild)
+        view = reference_view(v20, args.content.resolve() / '_regeneration' / 'v20-reference')
+        pipeline = Pipeline(view, args.content.resolve(), keep_stale=args.keep_stale, force=args.rebuild)
         pipeline.make_plan(set(steps))
         pipeline.print_plan()
         return

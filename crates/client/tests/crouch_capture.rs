@@ -115,7 +115,7 @@ fn render(gpu: &Headless, renderer: &mut SceneRenderer, mesh: &AvatarMesh) -> Re
 #[test]
 #[ignore = "requires original native avatar pack and offscreen GPU; no window"]
 fn recrouching_while_rising_snaps_the_original_rig_to_standing() -> Result<()> {
-    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
     let assets = AvatarAssets::load(&content)?;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
     let gpu = Headless::new()?;

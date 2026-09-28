@@ -114,13 +114,13 @@ fn render(gpu: &Headless, scene: &SceneData, path: &Path) -> Result<()> {
 fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");
-    let materials = BrickMaterials::load(&content.join("brick-materials-001"))?;
+    let materials = BrickMaterials::load(&content.join("brick-materials-002"))?;
     let catalog: Catalog = serde_json::from_slice(&std::fs::read(
         content.join("stock-catalog-004/stock-catalog.json"),
     )?)?;
     let definitions = Definitions::load(
         &content.join("stock-catalog-004"),
-        &content.join("maps-pass-007"),
+        &content.join("maps-pass-008"),
     )?;
     let meshes = definitions
         .entries

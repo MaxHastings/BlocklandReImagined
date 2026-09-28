@@ -37,7 +37,7 @@ fn content() -> PathBuf {
 fn definitions() -> Result<Definitions> {
     Definitions::load(
         &content().join("stock-catalog-004"),
-        &content().join("maps-pass-007"),
+        &content().join("maps-pass-008"),
     )
 }
 fn ground() -> Vec<ColliderBuilder> {

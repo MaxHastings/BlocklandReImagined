@@ -22,7 +22,7 @@ use rapier3d::prelude::*;
 use std::path::Path;
 
 const PONG: &str =
-    "worlds-pass-005/8a3130ab3cd542e8cac5dbabdee87e80f6eec7f7ba041d995610aee47156d50c.world.json";
+    "worlds-pass-006/8a3130ab3cd542e8cac5dbabdee87e80f6eec7f7ba041d995610aee47156d50c.world.json";
 const DIGITS: &str = "print/print_letters_default/";
 /// The paddle columns' court-facing faces.
 const FACE_A: f32 = 134.5;
@@ -64,7 +64,7 @@ impl Pong {
         let effects =
             serde_json::from_value(json(&content.join("effects-pass-004/effects.json"))?)?;
         let materials = serde_json::from_value(json(
-            &content.join("brick-materials-001/brick-materials.json"),
+            &content.join("brick-materials-002/brick-materials.json"),
         )?)?;
         let weapons = bri_weapons::Pack::from_json(&std::fs::read(
             content.join("weapons-pack-009/weapons.json"),
@@ -73,7 +73,7 @@ impl Pong {
         assert_eq!(world.name, "Demo Pong");
         let definitions = Definitions::load(
             &content.join("stock-catalog-004"),
-            &content.join("maps-pass-007"),
+            &content.join("maps-pass-008"),
         )?;
         let mut s = Session::new(Simulation::new(
             world,

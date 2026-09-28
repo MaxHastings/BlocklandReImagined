@@ -15,7 +15,7 @@ use rapier3d::prelude::*;
 use std::path::Path;
 
 const SLIDES: &str =
-    "worlds-pass-005/0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c.world.json";
+    "worlds-pass-006/0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c.world.json";
 /// Every `stride`th case, a spread over the whole tower that runs in a few
 /// seconds; `BRI_SLIDES_FULL=1` runs every case (a minute in release).
 fn sample(stride: usize) -> usize {
@@ -46,7 +46,7 @@ fn slides() -> anyhow::Result<(Simulation, Vec<Ramp>)> {
         .map(|b| (b.position, b.quarter_turns))
         .collect();
     let definitions =
-        Definitions::load(&root.join("stock-catalog-004"), &root.join("maps-pass-007"))?;
+        Definitions::load(&root.join("stock-catalog-004"), &root.join("maps-pass-008"))?;
     let sim = Simulation::new(
         world,
         definitions,

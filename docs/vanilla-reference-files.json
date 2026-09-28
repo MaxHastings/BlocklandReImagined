@@ -1,0 +1,5183 @@
+{
+ "schema_version": 1,
+ "designated_by": "Maxwell, 2026-09-26",
+ "reference_root": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20",
+ "note": "Every file the content importers may read from a v20 install, with its SHA-256. tools/regenerate_content.py copies exactly these files from a player's v20 folder into a private view and imports from that, so extra add-ons, saves, caches or changed files never change the shared base packs. Lighting caches (.ml) and the launcher's Client_v20Discord module are excluded.",
+ "files": [
+  {
+   "path": "base/client/actionMap.cs.dso",
+   "bytes": 1159,
+   "sha256": "8d26301463fbebb26cab60d6c6ee149e1999c568f995998085bd461ae60ee74d"
+  },
+  {
+   "path": "base/client/audio.cs.dso",
+   "bytes": 1073,
+   "sha256": "f52b249f872b688d6b4c4d7336957a340c718e1affa3c511544ce75fa1b03796"
+  },
+  {
+   "path": "base/client/canvas.cs.dso",
+   "bytes": 1823,
+   "sha256": "133f02628371a9e0abb7dca64162db749560d965f1cb597f3f59b2433c6738fe"
+  },
+  {
+   "path": "base/client/defaults.cs",
+   "bytes": 12501,
+   "sha256": "f5ff98ebf75f52ad1515358a66bd2088f47330b8bb2d0a9678032f2a6822a0d9"
+  },
+  {
+   "path": "base/client/editor/CUR_3darrow.png",
+   "bytes": 604,
+   "sha256": "94001a7422c1898882b1ade36e675dce959fd6501cf00d83ec94735d7d4acf64"
+  },
+  {
+   "path": "base/client/editor/CUR_3ddiagleft.png",
+   "bytes": 842,
+   "sha256": "5824243ab07b84d537774c96089385ea347b940b6db9399d7b05051e8418a54d"
+  },
+  {
+   "path": "base/client/editor/CUR_3ddiagright.png",
+   "bytes": 847,
+   "sha256": "70f4802cd3a63fb6ed14017039d0d56c2b41436cf74ac8281c710521c4fa1bd4"
+  },
+  {
+   "path": "base/client/editor/CUR_3dleftright.png",
+   "bytes": 607,
+   "sha256": "d6fc003f798c20d9c57a4f53ea8fc581a0d9fa481d659d6364f224e393b1c212"
+  },
+  {
+   "path": "base/client/editor/CUR_3dupdown.png",
+   "bytes": 630,
+   "sha256": "e500b22ebcd6b1c8898f33a7dd2469a61cfdf13d5a4c039910bb0e7d52b1d290"
+  },
+  {
+   "path": "base/client/editor/CUR_grab.png",
+   "bytes": 769,
+   "sha256": "a78d2d83d0b34e5db1c2026d8b51ec8063eae6c81e0156695889f47568485d0a"
+  },
+  {
+   "path": "base/client/editor/CUR_hand.png",
+   "bytes": 884,
+   "sha256": "977e722368e6d0dcbdcd3cd2f26ef69b26326a11e7310da80844941a091afd9c"
+  },
+  {
+   "path": "base/client/editor/CUR_rotate.png",
+   "bytes": 1145,
+   "sha256": "3e6479f51f17d2430464d1b85d5fe047f7016f57a525fe06155f71f0a5aa1bbe"
+  },
+  {
+   "path": "base/client/editor/DefaultHandle.png",
+   "bytes": 179,
+   "sha256": "556235f2b6e4455551a8682643026113a7e9533a5856d311fb6767d969f68d11"
+  },
+  {
+   "path": "base/client/editor/EditorGui.cs",
+   "bytes": 88295,
+   "sha256": "37b3fe713be269d51293781329bbca6d9c05e02b443066131a2c4e7be5906296"
+  },
+  {
+   "path": "base/client/editor/EditorGui.gui",
+   "bytes": 118355,
+   "sha256": "38d6c4aca216ee476b90044eea8b7b5983a013c2db9f7f19345ee1d836720252"
+  },
+  {
+   "path": "base/client/editor/GuiEditorGui.gui",
+   "bytes": 18226,
+   "sha256": "bcea3a001e7a10a264f658d999011454804c9eed1c2220f3ea4a73b00e03ec99"
+  },
+  {
+   "path": "base/client/editor/LockedHandle.png",
+   "bytes": 243,
+   "sha256": "0bd527feb96d390d3fb10ab1e2c33994f3b6ad24adfcd6e16555450df4c457e6"
+  },
+  {
+   "path": "base/client/editor/ParticleEditor.gui",
+   "bytes": 37350,
+   "sha256": "1a57a0ffe0544a4c3b5d032493cd81c034d6b0be818a1078b4dbe728f33a89a6"
+  },
+  {
+   "path": "base/client/editor/SelectHandle.png",
+   "bytes": 179,
+   "sha256": "2c8f58822998856e44b8689f88dd3d9b5cacfa2156587e13507b8b88fffa488c"
+  },
+  {
+   "path": "base/client/editor/TerrainEditorVSettingsGui.gui",
+   "bytes": 8093,
+   "sha256": "1ab67c2810824f51da5b15ce2bb8c2e9bb5cbb714a3d6839103a0e5853030b28"
+  },
+  {
+   "path": "base/client/editor/WorldEditorSettingsDlg.gui",
+   "bytes": 20369,
+   "sha256": "9cec6ad2b1af356bd308eee10eebe258201eb3e04af892611d9368a388832f3e"
+  },
+  {
+   "path": "base/client/editor/cursors.cs",
+   "bytes": 1306,
+   "sha256": "e76be0c5c20f177d06d93b3dddfb2228cde62d9b72283293689b61cb0b4e0f89"
+  },
+  {
+   "path": "base/client/editor/editor.bind.cs",
+   "bytes": 7076,
+   "sha256": "cf95a06bb7693c14a322c01e6333dcd75153e80d1ba1c172f8e6147a727a6596"
+  },
+  {
+   "path": "base/client/editor/editor.cs",
+   "bytes": 3313,
+   "sha256": "bc1d91d4e0548a69c1a62d55aa211b69d811afab9bb4eea4f0c8f0ea5c453b65"
+  },
+  {
+   "path": "base/client/editor/editorRender.cs",
+   "bytes": 1561,
+   "sha256": "1c125772df2a19281d302136adf652053b74880692dad5dc9495e7634d031373"
+  },
+  {
+   "path": "base/client/editor/newMission.mis",
+   "bytes": 2715,
+   "sha256": "bb527609831f774d14d2985fa971602768201129f63ebaa3cda9e17d077a4527"
+  },
+  {
+   "path": "base/client/editor/newMission.ter",
+   "bytes": 393436,
+   "sha256": "1545184f538148270c274e8e5ef35ee6684ba26050217f271ebc7808874003e8"
+  },
+  {
+   "path": "base/client/editor/objectBuilderGui.gui",
+   "bytes": 19640,
+   "sha256": "e909fb8badf70c60d4b8c67327bb5a53557a4ade05d6e2823cda090abce765b8"
+  },
+  {
+   "path": "base/client/editor/particleEditor.cs",
+   "bytes": 16012,
+   "sha256": "70b3ebd162ece04542d7dc0ba7327a3cb8879dbb751685264a7b28f3e5cbc484"
+  },
+  {
+   "path": "base/client/init.cs.dso",
+   "bytes": 7076,
+   "sha256": "a76b74559d86f687c6343e8ab1e10d9fe12c04263843a3071f492adad8f23345"
+  },
+  {
+   "path": "base/client/message.cs.dso",
+   "bytes": 1612,
+   "sha256": "128a7b77bacfe43eef633e1fdbd2c106ec4e268e983c3f4493d57f2615c0b2b4"
+  },
+  {
+   "path": "base/client/mission.cs.dso",
+   "bytes": 322,
+   "sha256": "1abebd69a461da82c7a1012c9e9abc64ce537c1e9a55488fe2d5818b177ca419"
+  },
+  {
+   "path": "base/client/missionDownload.cs.dso",
+   "bytes": 4065,
+   "sha256": "95b7782228303c137ad21ac6745e152f8d4345152820fce2283f83528f3916c2"
+  },
+  {
+   "path": "base/client/scripts/allClientScripts-Vanilla.cs.dso",
+   "bytes": 524404,
+   "sha256": "ae260b7f898cd070934c3efccb732a0f6b7c7b9525aad15f2c3151daee1aeea8"
+  },
+  {
+   "path": "base/client/scripts/allClientScripts.cs",
+   "bytes": 73077,
+   "sha256": "b7c178b47705f1a2a5ca3966d6fe0f29c43ac1302d87817dbc6820fb86a12aeb"
+  },
+  {
+   "path": "base/client/ui/ArrowLeft_d.png",
+   "bytes": 3433,
+   "sha256": "003548d63d267915bffe895cadc422a5a698f113dcba54d0a029b0028e875950"
+  },
+  {
+   "path": "base/client/ui/ArrowLeft_h.png",
+   "bytes": 3203,
+   "sha256": "3cfbeb1abb68dd0aeb4f7d0482f162fff6b6f83a6b0947464a8985c958178b2e"
+  },
+  {
+   "path": "base/client/ui/ArrowLeft_i.png",
+   "bytes": 3206,
+   "sha256": "4eaceaef3215de95edf787742657c18ea9bd95c99ab976161eaa28b02c3c2bc5"
+  },
+  {
+   "path": "base/client/ui/ArrowLeft_n.png",
+   "bytes": 3387,
+   "sha256": "9d36d88b50ccf4c136437c862f4ee4736f2b7f59a98b8640ae80b902ca3fda66"
+  },
+  {
+   "path": "base/client/ui/ArrowRight_d.png",
+   "bytes": 3457,
+   "sha256": "a0b6fa802ed6ee51c0cef31d30f0073138d23bdc2b3f3cc3ed8f5caa920dbe41"
+  },
+  {
+   "path": "base/client/ui/ArrowRight_h.png",
+   "bytes": 3215,
+   "sha256": "40e31b8e9f8927e54bd39da64007318cc048f04f2003899e4c532c9d85c09a8f"
+  },
+  {
+   "path": "base/client/ui/ArrowRight_i.png",
+   "bytes": 3208,
+   "sha256": "61fe1917555e69d26241d6d7f4b62ff6a00a82b81e06747d1533b20dea17dd7a"
+  },
+  {
+   "path": "base/client/ui/ArrowRight_n.png",
+   "bytes": 3387,
+   "sha256": "f604eced5696cdd866fc839639abc74ad720bdf85bfb47b1215b1e9461c2601a"
+  },
+  {
+   "path": "base/client/ui/AvatarBG.png",
+   "bytes": 36616,
+   "sha256": "5b414757a21d47c65ec27431a3ab4d3402254154c76dc20833bcaacaf0c241de"
+  },
+  {
+   "path": "base/client/ui/BlockWindow.png",
+   "bytes": 3255,
+   "sha256": "30e41122c952506e250e17be398e16c62fcc7aad320dd13b0cbc44758b795ce9"
+  },
+  {
+   "path": "base/client/ui/BlueHudLeftCorner.png",
+   "bytes": 150,
+   "sha256": "79e40902aa0db221729de04ddf29b24805ef7e99234b68def04077d7fcb6262a"
+  },
+  {
+   "path": "base/client/ui/BlueHudRightCorner.png",
+   "bytes": 165,
+   "sha256": "a25b09dd4598217f40aeda1565bc80b51fa9e7a583094deb32e33907ffe1fafb"
+  },
+  {
+   "path": "base/client/ui/Button2_d.png",
+   "bytes": 2991,
+   "sha256": "6700a4bccbd2f9855e3898d023a5bfc262ffb4226253971b6658ed20fe806f47"
+  },
+  {
+   "path": "base/client/ui/Button2_h.png",
+   "bytes": 5184,
+   "sha256": "960851492c3af19fa9f7d5744ba349894cf56ceb691e9f0bb42ffc663d9e07e2"
+  },
+  {
+   "path": "base/client/ui/Button2_i.png",
+   "bytes": 5186,
+   "sha256": "ab8ccd71f10ee9aeca7f0842f63c90731da4dc0a6709d8992d1fef5d39dafd39"
+  },
+  {
+   "path": "base/client/ui/Button2_n.png",
+   "bytes": 2749,
+   "sha256": "d5b8e5224d052bcb5a10280bdb7fce6f3422170576a01af568317eace7c4a05a"
+  },
+  {
+   "path": "base/client/ui/CI/blueRibbon.png",
+   "bytes": 660,
+   "sha256": "43d818d6d4db30997686cfe6da20c374a275ea6a2167f00bb5c6478e0c01981c"
+  },
+  {
+   "path": "base/client/ui/CI/bomb.png",
+   "bytes": 457,
+   "sha256": "e1efdafa1f08c4664862df25050b3072c33ab18c606b05a4d339e1676b616078"
+  },
+  {
+   "path": "base/client/ui/CI/car.png",
+   "bytes": 362,
+   "sha256": "1399f2247925a7323af6ef73fbabebef469214acdc186ab94944c911ec186dae"
+  },
+  {
+   "path": "base/client/ui/CI/carExplosion.png",
+   "bytes": 743,
+   "sha256": "f15994ea45dac9c1ba7a9c65c08dacc8e309d7dc4335160dc9f819c51aaf0233"
+  },
+  {
+   "path": "base/client/ui/CI/crater.png",
+   "bytes": 380,
+   "sha256": "db0fae80fd920f16638e10f1acea50efeff28bb6cf14636d70dcf00094d6ade3"
+  },
+  {
+   "path": "base/client/ui/CI/generic.png",
+   "bytes": 222,
+   "sha256": "e9aac67a293388795ae0fe91935ec76a467c32078b8fe8153fdaa6dd5b98da24"
+  },
+  {
+   "path": "base/client/ui/CI/hammer.png",
+   "bytes": 803,
+   "sha256": "744a97311971400c943de36e22d17f941e524858c0f8b70cceb109849b98670d"
+  },
+  {
+   "path": "base/client/ui/CI/skull.png",
+   "bytes": 362,
+   "sha256": "7327327cb1ac47b7de3c0c62f984f746a9234203d0677409513be4784de88afc"
+  },
+  {
+   "path": "base/client/ui/CI/splat.png",
+   "bytes": 364,
+   "sha256": "84bd9c581426501a1adb59bfa7cee01dd8e272561958dd0990a83cfc939805bb"
+  },
+  {
+   "path": "base/client/ui/CI/star.png",
+   "bytes": 550,
+   "sha256": "e82d01cbc90c8b055410e125897d07ddb67ec5802f422a1a8f8d4aa8eaa83a1f"
+  },
+  {
+   "path": "base/client/ui/CI/trophy.png",
+   "bytes": 756,
+   "sha256": "864bf56e4f910df663c1e3fe512cebd8fa0b533325038391211f44c9359330e1"
+  },
+  {
+   "path": "base/client/ui/CUR_3darrow.png",
+   "bytes": 615,
+   "sha256": "19b42e72b7556deeddbd69d0d37b861b45e13539a6ac0a516da9ecf3704e46c0"
+  },
+  {
+   "path": "base/client/ui/DemoBanner.png",
+   "bytes": 16398,
+   "sha256": "f1ce8ca4315601c7f9c6367d1778f0ee199ed170baebdab3ad14366e5e4798c9"
+  },
+  {
+   "path": "base/client/ui/FXblink.png",
+   "bytes": 3159,
+   "sha256": "4bf470a1a606ae7493ab53cb48ccef52602c092021b4352df45640ac8d0c48b8"
+  },
+  {
+   "path": "base/client/ui/FXchrome.png",
+   "bytes": 3462,
+   "sha256": "bde1771285c91693ebd45f9d5e4f68e5cc154f98668571f32103e6adca629d50"
+  },
+  {
+   "path": "base/client/ui/FXglow.png",
+   "bytes": 3275,
+   "sha256": "e2b837d66afe304e35328d871bab34ddc68348946172f3165f06fd8636b3dd6f"
+  },
+  {
+   "path": "base/client/ui/FXjello.png",
+   "bytes": 3139,
+   "sha256": "395de2bef7cd8dafd22ec9e884a40ef72f43d49433af9c585cde50922f01b60f"
+  },
+  {
+   "path": "base/client/ui/FXpearl.png",
+   "bytes": 3295,
+   "sha256": "d47a9bc94a7d99e5ab3ee4a202d949289be3499ceb12ed23c4477daf6e8a670e"
+  },
+  {
+   "path": "base/client/ui/FXrainbow.png",
+   "bytes": 3167,
+   "sha256": "c30be1b8bf653ffb663be74de7d52e67028643f3b3f3eefcb4947534bea7c613"
+  },
+  {
+   "path": "base/client/ui/FXstable.png",
+   "bytes": 3011,
+   "sha256": "5693856221dbe54a52824bf5e13a27a6d9fe0518a6b23721a944e98dbe7b019b"
+  },
+  {
+   "path": "base/client/ui/FXswirl.png",
+   "bytes": 3269,
+   "sha256": "7d81a06845468c7de97c431b5874595733f2063ebadb6d7cf2b98f4394b9a43e"
+  },
+  {
+   "path": "base/client/ui/Ghosting_00.png",
+   "bytes": 1643,
+   "sha256": "4f0c38ad44c8a34d7954bc38e4d57f23c3d9a02afc0210098aec690aa9692f74"
+  },
+  {
+   "path": "base/client/ui/Ghosting_01.png",
+   "bytes": 1635,
+   "sha256": "cce135de66a5383ee6e02c1b6b61b3e563ebe70462a4f350df5edc5b171738a2"
+  },
+  {
+   "path": "base/client/ui/Ghosting_02.png",
+   "bytes": 1650,
+   "sha256": "426608dec9ac10b0140138e3764dd1a496b4f1994f268c3e822ec69cc68be91a"
+  },
+  {
+   "path": "base/client/ui/Ghosting_03.png",
+   "bytes": 1641,
+   "sha256": "97a15a374d5168b86b417c6772ece9872200f3a837601666c21540bb9f86a8a7"
+  },
+  {
+   "path": "base/client/ui/Ghosting_04.png",
+   "bytes": 1641,
+   "sha256": "c6303d37794db1deea4ec57b574852f6472a3bc8ba2455fbb621368a87817cba"
+  },
+  {
+   "path": "base/client/ui/Ghosting_05.png",
+   "bytes": 1640,
+   "sha256": "a3cc3bd8b8e8bb4b513ddd96bfc6b67ebde22ae0b1d6456ed46ada08eb44e2dd"
+  },
+  {
+   "path": "base/client/ui/Ghosting_06.png",
+   "bytes": 1640,
+   "sha256": "d16864116daa33e33b56bba25c3219d3c98c9c1e6a16e173c7928bc537166f96"
+  },
+  {
+   "path": "base/client/ui/Ghosting_07.png",
+   "bytes": 1640,
+   "sha256": "783f19040f5ab1a34d21e2a3f9d562e2176d3bdc75ab4003d223ed57519eb130"
+  },
+  {
+   "path": "base/client/ui/Ghosting_08.png",
+   "bytes": 1641,
+   "sha256": "9aaf27a52e5e5b17a4a3bf3432e84a8dc438892b137d2764410b1061a7d622a8"
+  },
+  {
+   "path": "base/client/ui/Ghosting_09.png",
+   "bytes": 1641,
+   "sha256": "448a9310b4de7c9a97d454eb108a2fea438b9212be2cc0a12661d20a16aaa400"
+  },
+  {
+   "path": "base/client/ui/Ghosting_10.png",
+   "bytes": 1639,
+   "sha256": "8f18ed0a0e33b76417bda633ab7966af59c8f447f42a60ddc72442bbe05b7f5a"
+  },
+  {
+   "path": "base/client/ui/Ghosting_11.png",
+   "bytes": 1633,
+   "sha256": "279a9433e370606a9c6becca1d6577c9108db1330637ef558abcc7f3e851522a"
+  },
+  {
+   "path": "base/client/ui/Ghosting_12.png",
+   "bytes": 1640,
+   "sha256": "5d52fcacf6c0206bebcf508ad801463627f98c88ac1547d50ce00640266adec7"
+  },
+  {
+   "path": "base/client/ui/PaintLabel.png",
+   "bytes": 9160,
+   "sha256": "57375c5397aafe51fbc9df62c1f4fb49f67cfa5e65b4f1631e5d291c95988810"
+  },
+  {
+   "path": "base/client/ui/PaintLabelBG.png",
+   "bytes": 3804,
+   "sha256": "dd2aefff92dc3f4fdb8050b51bcf435d72b17a5f15524f7945bbfe134c99b0ee"
+  },
+  {
+   "path": "base/client/ui/PaintLabelBGLoop.png",
+   "bytes": 3023,
+   "sha256": "92c437bdb32fe01202f0d5fab0fc47ac74ee766a5a28a8d0bb0b522b0f2ff383"
+  },
+  {
+   "path": "base/client/ui/PaintLabelTop.png",
+   "bytes": 8735,
+   "sha256": "33af06f303382c780380dafbe4fbc758488e599479c4cd35f5f45229d324016d"
+  },
+  {
+   "path": "base/client/ui/Tab1_d.png",
+   "bytes": 8280,
+   "sha256": "c0e6b0bae8463074fdb02f543eff7232bfcc2ab479b25678932ecae3dd7bfbf1"
+  },
+  {
+   "path": "base/client/ui/Tab1_h.png",
+   "bytes": 7616,
+   "sha256": "3339f5369df27f022fabcf1a06d8ba07826676fe5f919a8c975fe449dd018d08"
+  },
+  {
+   "path": "base/client/ui/Tab1_i.png",
+   "bytes": 7831,
+   "sha256": "8c4a300f70256c393d4274f215777b7ba041256485238c1d8f0ca26cc0554b13"
+  },
+  {
+   "path": "base/client/ui/Tab1_n.png",
+   "bytes": 8098,
+   "sha256": "fb57d3d9247e503012d54610fe5723c3678fa5157d58ffb05a5970ccdbfc9e8d"
+  },
+  {
+   "path": "base/client/ui/Tab1use_d.png",
+   "bytes": 8930,
+   "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356"
+  },
+  {
+   "path": "base/client/ui/Tab1use_h.png",
+   "bytes": 8930,
+   "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356"
+  },
+  {
+   "path": "base/client/ui/Tab1use_i.png",
+   "bytes": 8930,
+   "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356"
+  },
+  {
+   "path": "base/client/ui/Tab1use_n.png",
+   "bytes": 8930,
+   "sha256": "d73985bfd730a04403ac730d36ec3d409fa6c007e7a26ef37add4c2adc756356"
+  },
+  {
+   "path": "base/client/ui/Title.png",
+   "bytes": 71097,
+   "sha256": "12c86a60e9b2643865b1bdb05c880de2f3439a1080b89def2002a37dc2ad52ad"
+  },
+  {
+   "path": "base/client/ui/allClientGuis-Vanilla.gui.dso",
+   "bytes": 426033,
+   "sha256": "1de4dd501ce89515fac4d8f32a8d9859da03b963d0c98caad64995d201ac9a41"
+  },
+  {
+   "path": "base/client/ui/allClientGuis.gui",
+   "bytes": 137569,
+   "sha256": "5f7b30b0c6657ff3db5fa88b95770fee399078ff35fc65eef652ce6e07cd5483"
+  },
+  {
+   "path": "base/client/ui/authBar.png",
+   "bytes": 775,
+   "sha256": "3eed098109025dd4cfd67d8547d7a8c3c5af94b3968883a9e30bd5df809b2b45"
+  },
+  {
+   "path": "base/client/ui/authBarFail.png",
+   "bytes": 699,
+   "sha256": "17e1c0db6356469d10a7711ffeaf70050065535269855e0a2091c9272e5cec41"
+  },
+  {
+   "path": "base/client/ui/authBarWin.png",
+   "bytes": 701,
+   "sha256": "06a545f84d4da1bc7fda8531c85fb3e5d4a666d314e21bdc1be981291f64ee79"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/accent/plume.png",
+   "bytes": 3741,
+   "sha256": "81bc5f32ca87ba82e09121528b36694a72b38bf5eb39c20d25bca72675ea10d9"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/accent/septplume.png",
+   "bytes": 5975,
+   "sha256": "abe156ff953c832b5193cf43d7d89645ee933a722ce56d6059139f361c89ef70"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/accent/triplume.png",
+   "bytes": 5136,
+   "sha256": "06120deed64e44f7cddba27be549333963e582b6946572e9bc8091a1ff260e06"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/accent/visor.png",
+   "bytes": 4155,
+   "sha256": "7d35a7e8cccc0ea30417409800af76261f8085560201489a7ad377024c18a673"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/chest/chest.png",
+   "bytes": 4136,
+   "sha256": "cb3ec7d6b0f7b667ead0999b227814c470e917741e0b9a1fb80dbc53da84e80c"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/chest/femchest.png",
+   "bytes": 4732,
+   "sha256": "8fc715fbd58e9a39df0b39f3b8d95220b0e756544af3a6e5f54f747874af3884"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hat/bicorn.png",
+   "bytes": 4826,
+   "sha256": "d856a06c7d2f98f05415138e1432abcd444f07a5958f8bf22ec6d84f2ca40f07"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hat/copHat.png",
+   "bytes": 4307,
+   "sha256": "08296f4ab0d4317f8d7c378a4b42e277b1a3a14d9e15bf8469f3060935f19091"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hat/flareHelmet.png",
+   "bytes": 4747,
+   "sha256": "6961bfea934399af9fc6a8ea355eece3b591abc7839dba654d65b5b745b8bdef"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hat/helmet.png",
+   "bytes": 4470,
+   "sha256": "6a15d87be9e6f51b090f2f0fc6ecdd5c1515c207e5970e3e9c10e4696eaa03e5"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hat/knitHat.png",
+   "bytes": 4930,
+   "sha256": "69e8cc8388beeefb6c7c42cce4e1cbe77ad882d5946e98ebba4e4c58d929c380"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hat/pointyhelmet.png",
+   "bytes": 4896,
+   "sha256": "cdee05b09726640de8668473b092b0943a519a9bc12a62d41df698134ce596de"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hat/scouthat.png",
+   "bytes": 4259,
+   "sha256": "0ff3bc456dccfa1dd3a742c8bc9320cfe3df293d06383c548eaf33628a959f01"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hip/pants.png",
+   "bytes": 4373,
+   "sha256": "bcf17c3238de83fc53cf962391d15095a550aef974e9d6a5ebc996c4174f69e6"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/hip/skirtHip.png",
+   "bytes": 4440,
+   "sha256": "5ec14fb34f5de3156b06cd484a8de59c2028a5c37efd3a0a9b878d49acbd1403"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/larm/LArm.png",
+   "bytes": 4130,
+   "sha256": "e30b0847c021c1a016db44f69b8c04b051b72bb75eeb433522675d17826d979f"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/larm/LArmSlim.png",
+   "bytes": 4072,
+   "sha256": "17187d5ebf79fe63b7e119a995128954361ba8b6ec36f338f63f1c6fd0cd3b93"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/lhand/LHand.png",
+   "bytes": 5162,
+   "sha256": "6140c481ee7e0781bf8652a141e46171d517ccf22577776f64ca703545851fa8"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/lhand/LHook.png",
+   "bytes": 4646,
+   "sha256": "9476480790fa1320735a8cc962480574515c8df1f657737cfa3f68efaa3ff74a"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/lleg/LPeg.png",
+   "bytes": 3945,
+   "sha256": "dfbb759161a6c2e0c20da043dc02d9c653aadbf43f47519b3b86e909c51eb865"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/lleg/LShoe.png",
+   "bytes": 5276,
+   "sha256": "99325714534b156384ec5b98377fff520c48c7b124dca1034e8d6b72dd3123fe"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/none.png",
+   "bytes": 3840,
+   "sha256": "bae1620da08a137b2e5428915129c57e073983f860ac17a5787ba89fac46de8d"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/pack/armor.png",
+   "bytes": 5716,
+   "sha256": "e800cf18dcdb329baf8e98468c816cc9d6a49794039b891fea217661b5420829"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/pack/bucket.png",
+   "bytes": 4793,
+   "sha256": "1969e52f8681cdfd5e1bf2b99d53fad76303b347c9ed79618591e2eba00e7371"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/pack/cape.png",
+   "bytes": 4748,
+   "sha256": "6fd21017f223e718a30626da52829436270a644524c6c34ba207084e41461702"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/pack/pack.png",
+   "bytes": 6036,
+   "sha256": "61eb3764de0ad616776b930c39ae2558964a6c3030a679402ff974d8b55e18ea"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/pack/quiver.png",
+   "bytes": 5354,
+   "sha256": "677f8755259ad5a054c60b59d01896d137bd907dc1ae548dc6c36e7188a23988"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/pack/tank.png",
+   "bytes": 4932,
+   "sha256": "59020a92e89555ba5254d7cd66f731de196c06f54550f0c4a81ab7ee07b19cdb"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/rarm/RArm.png",
+   "bytes": 4482,
+   "sha256": "4515408a3994c2436dbd67f43268a52c6487b751f330143b2e0577f9601cca17"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/rarm/RArmSlim.png",
+   "bytes": 4597,
+   "sha256": "78d0f3291c6f3eb47a2b9409b65d4db209396f6960313801d7526887b3b78ec2"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/rhand/RHand.png",
+   "bytes": 4744,
+   "sha256": "d305ff5c4710f72366e5ccd2974351d1f7985407cc2897c573ff26e59875229a"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/rhand/RHook.png",
+   "bytes": 4502,
+   "sha256": "b0a699202907deb798804cdf6c88bea3eb346ec4174f08ba10d6e4e3a6d7fc1f"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/rleg/RPeg.png",
+   "bytes": 4007,
+   "sha256": "bd51b3c17e1c932895bcc16099552a02b9e6999981ac7314a14db9aa0a9337ba"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/rleg/RShoe.png",
+   "bytes": 5262,
+   "sha256": "1f5cc833005c20062d6ff23bd1c237f5ca453ec3cdff3235c53f5fc31e36ccf0"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/secondPack/ShoulderPads.png",
+   "bytes": 4362,
+   "sha256": "968145e96bf55c705568c60df01e97323b330930808de017b91784b8bd13d30b"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/secondPack/epaulets.png",
+   "bytes": 4421,
+   "sha256": "451ae7818b76eca2ae58bdf2aebd1f25a519002a987cead24a225602ff6791a1"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/secondPack/epauletsRankA.png",
+   "bytes": 3697,
+   "sha256": "d7ad2d498e7cb691761170b9053d07002bd1da1f6036a6594d1be54e705debb1"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/secondPack/epauletsRankB.png",
+   "bytes": 4208,
+   "sha256": "2dc3383548cc1cdd94dcf45ff2356a081c80b3d86b7831c17ea6e9c1412da67a"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/secondPack/epauletsRankC.png",
+   "bytes": 3983,
+   "sha256": "ae8b5fa2d408ef8d20ea46374f9971c59ab35578165d430f34484e4de31bfbff"
+  },
+  {
+   "path": "base/client/ui/avatarIcons/secondPack/epauletsRankD.png",
+   "bytes": 3842,
+   "sha256": "f9e6775ba48a8d758bb0a6fc0c6a37c0287d6ef4f392ac7ad44fcdf4401a547e"
+  },
+  {
+   "path": "base/client/ui/bar1.png",
+   "bytes": 79,
+   "sha256": "a121253f9a33c3e6bb3cd5ea619dde55aa86d243ca250a12aeb77e28b29c1610"
+  },
+  {
+   "path": "base/client/ui/blockScroll.png",
+   "bytes": 2232,
+   "sha256": "470e81948ea3591f46b1af92199c11a500b3b96cac7423b0a0b26027ef50353e"
+  },
+  {
+   "path": "base/client/ui/brickActive.png",
+   "bytes": 229,
+   "sha256": "6c2eb2e6157db28f34d5e14e93fe423279418355d19a94d6835fa75eb8503285"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-25 Ramp 1x.png",
+   "bytes": 1742,
+   "sha256": "d148c09bcf0f04836041f37543ceca65d65b0e831a568b55a04f5ef0f458ff73"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-25 Ramp 2x.png",
+   "bytes": 4012,
+   "sha256": "6cfe421ce1d539a61ac5a622c1277795d235af87a1b8099f7a84de92e2cd384f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-25 Ramp Corner.png",
+   "bytes": 4165,
+   "sha256": "71d5c266b61cbc8c6612a7db4330eaea499543bb130d101db6b47fc359991f1e"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-45 Ramp 1x.png",
+   "bytes": 1527,
+   "sha256": "a033c350d1ef371f65eaba10655ba53db9f6faf4aff27a48df19bb83468d0657"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-45 Ramp 2x Print.png",
+   "bytes": 2289,
+   "sha256": "81566241b1590b60396a679130a4d33ae701e8857eff5c2c2c0a48cba4bf85e2"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-45 Ramp 2x.png",
+   "bytes": 2052,
+   "sha256": "41235cdcc88d28b4a845998ed733342bfbcb66e7d5f712671fc7161cbc41e907"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-45 Ramp Corner.png",
+   "bytes": 2065,
+   "sha256": "9d136fbb67ce428e666b99c758f98522621dfdca8ca8100982fdcf300ae1a632"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-72 Ramp 1x.png",
+   "bytes": 3385,
+   "sha256": "6d496d9898886c01556f982ad19abb552abb5cc15249a43377e4e7fc2830c45e"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-72 Ramp 2x.png",
+   "bytes": 4418,
+   "sha256": "8eba426dd98fb70b39d5d08023a28f73e55cdc01b307477ad0f76e6634489815"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-72 Ramp Corner.png",
+   "bytes": 4207,
+   "sha256": "008ec2d2f080ebb17266622a12a26c418ff5cf638ed5ba97ae31b67005c2b016"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-80 Ramp 1x.png",
+   "bytes": 2544,
+   "sha256": "dd7e351d64a4b9aef97df9b620b22e07bcd82ce9614550f17f41f4b287531363"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-80 Ramp 2x.png",
+   "bytes": 3256,
+   "sha256": "df0aee341fe9884a1bde8b5b377b280e4727d061fc4a645a1ff583536cf2df61"
+  },
+  {
+   "path": "base/client/ui/brickIcons/-80 Ramp Corner.png",
+   "bytes": 3164,
+   "sha256": "6ae7edbdcf12e14de51c929ba7c6b4f91853925f00fef7293d80d290b96d20cf"
+  },
+  {
+   "path": "base/client/ui/brickIcons/10x10.png",
+   "bytes": 5160,
+   "sha256": "e719151183b3b74d4b304d6fce216b135cac702479c58471ff2042a138e964a7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/10x20.png",
+   "bytes": 5024,
+   "sha256": "f4fbf198895addcf75bb86f0c33bf0229db535d3579887b5dacb6cbcb46db56f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/12x24.png",
+   "bytes": 5121,
+   "sha256": "9be0130884caea278f6deca2be6f0296cb7329f97c8fe1ae44b8e043c15d9386"
+  },
+  {
+   "path": "base/client/ui/brickIcons/16x16 Base.png",
+   "bytes": 5150,
+   "sha256": "5516e788da7ac331e576cd3615ae5906bbdad43aa8314fe145ff88868c5d5885"
+  },
+  {
+   "path": "base/client/ui/brickIcons/16x32 Base.png",
+   "bytes": 5490,
+   "sha256": "49e4511cfc3dd7a3c19c59afbc21452b91eeb16d43e8803446a554f09360e555"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1 Cone.png",
+   "bytes": 1124,
+   "sha256": "f709c6b5155de38efed83f06201eacd6c1f45a1a045a512f664c080a58d7f0b9"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1 Print.png",
+   "bytes": 1777,
+   "sha256": "08103b17b2abeaa9bb425526eebfa2f03f00464075bb3bc6fe14747f5ebb0e5b"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1 Round.png",
+   "bytes": 1180,
+   "sha256": "a169ba66e898643f12e222f1c1e92ff15c029a87aea120f2d8b680e7acb9a8e7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1.png",
+   "bytes": 1097,
+   "sha256": "89f78a24fec14984ee93121d13f39a17e26c1cdc9041d47222879234b8a8eb91"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x10.png",
+   "bytes": 3096,
+   "sha256": "0d5be6069dcd87a4fc04b97ec5ec751ad7f1f99c1fb9f6f590410cfe324cf955"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x10F.png",
+   "bytes": 2881,
+   "sha256": "1fb27b075b66bcaf22222779d5a881f6c9dc665ed323595404bc6d614a74b18a"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x12.png",
+   "bytes": 3042,
+   "sha256": "1dbc11fea520f526df5f0ede4d5fb435dbea473a37929e9c16e78abd8381835f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x12F.png",
+   "bytes": 2874,
+   "sha256": "3751c531ddb59291e0cb2cbe0dfdb9b4aee10d65e5334c0b907b94011ea359e5"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x12x5.png",
+   "bytes": 3616,
+   "sha256": "489dbc690c2dd81deac3fb64d1ccb36815a1366c037340950972a48e25ba7e93"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x16.png",
+   "bytes": 2916,
+   "sha256": "68cf2f35c80fb1057df22bad6f203c89041dbd3a582dc7dac200a73cf2c72f96"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x16F.png",
+   "bytes": 2701,
+   "sha256": "7c4d935c958edba22853fd553f3e246aecec7a76b93b815f88dcecef51508914"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1F Print.png",
+   "bytes": 1519,
+   "sha256": "37252136c5bb10f02f6fa19fc67c9e07d4c97d2ab92d9f2348cebb793b82c122"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1F Round.png",
+   "bytes": 1040,
+   "sha256": "c73cb227e3250bf1f2a781a66d5e7eec0ac2bfbf93396120453794963e981085"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1F.png",
+   "bytes": 1080,
+   "sha256": "54eeb53d6dfa0debe9c86ddf31e31d0daee444fa41c189ee6b1f47da7235d0f7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x1x5.png",
+   "bytes": 1425,
+   "sha256": "5c3de8e7d47808b96fc35614893267a67e80c6a1f02b24e4ed974156dfc33468"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x2.png",
+   "bytes": 1502,
+   "sha256": "89879978dcb98e372be8c29e26cc8526bdba567775b76e0bbd6326e82087d653"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x2F Print.png",
+   "bytes": 2230,
+   "sha256": "13eb1199b4c616fc4a1145d4f5d6f391fd68d8871112022d729482ba883353ea"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x2F.png",
+   "bytes": 1457,
+   "sha256": "7d10b1a06199fb38a2811ab244cd6ca8bd9c8f44b79c5d134937dcf5684ba377"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x2x5.png",
+   "bytes": 1846,
+   "sha256": "c151ba3fe75e9de3070265f075d289a7eb41dca70866e1a05b4fe5a28bf41390"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x3.png",
+   "bytes": 1880,
+   "sha256": "3217b363137333fbc59dad1323c50d7c44ca22f3471f84465316bd1c8efca6d7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x3F.png",
+   "bytes": 1707,
+   "sha256": "786bb4511c62a693e85af7ef1534e922ef0b78d65c4fff125555caa95a706d60"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x3x5.png",
+   "bytes": 2130,
+   "sha256": "5ecc1cfb250d805c0df39ea3ac86cd694e747652156a0ad700cb36e4577dd70c"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x4.png",
+   "bytes": 3857,
+   "sha256": "eac1f078c770212cc77a93b391b91827044903207bf4c584e58694034fea0668"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x4F.png",
+   "bytes": 3700,
+   "sha256": "c54e7027547429431b2f5553ac68832c2bf5b16a505fa6ea1bc1121178267da8"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x4x2 Fence.png",
+   "bytes": 6036,
+   "sha256": "1715f1bd04b9e4963bf92aae6ef0a3c65fe46eb87bf0c2aa38d3fea150ffae51"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x4x4 Print.png",
+   "bytes": 4631,
+   "sha256": "0a623425b0cca982fab520451d58b9e3453956ffa1260ab7ca6394f4fbae6928"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x4x5 Window.png",
+   "bytes": 3728,
+   "sha256": "6b7198c8302ab02a5b858dccf5e50850c7fd205d1998a2cae23d20759eaf41e0"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x4x5.png",
+   "bytes": 2390,
+   "sha256": "6035bc94b991ba2c28b40771c4e344aae27750702e50fb030529c7c470e476d0"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x6.png",
+   "bytes": 3535,
+   "sha256": "8ccefbc417f8819d1133abd2186acf48f942477c08c52ee1304607fa32754a9f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x6F.png",
+   "bytes": 3324,
+   "sha256": "29b9eabcfdf1bfd25773dcfc0aa2818aa2e1a8d70e81e3ec1bfbe1bfa2069934"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x6x5.png",
+   "bytes": 2963,
+   "sha256": "1c7c8bfeed6d4e12b8ce505f855714646a5628c3df62e3a798b993c3841f014e"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x8.png",
+   "bytes": 2853,
+   "sha256": "2cbb0be68d46ae5f26781a6f098900f271ae0ae6c5bb9e42bcc8639d90a1b1e0"
+  },
+  {
+   "path": "base/client/ui/brickIcons/1x8F.png",
+   "bytes": 2946,
+   "sha256": "ed36f26744796c330a1862dcf353464a960678291f61df2d65af7366c4c87867"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Crest 1x.png",
+   "bytes": 1532,
+   "sha256": "5572027a231bfbfb1bf286b1ff9c8b34a601483b5a9d9fe34da192e32ef79ceb"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Crest 2x.png",
+   "bytes": 2207,
+   "sha256": "1d10ad136df86627010d788e52379d1690879d8d94603ddb8c5139b25bfdc26f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Crest 4x.png",
+   "bytes": 4272,
+   "sha256": "ebd9c32ca867ca06bbc2e0d3c2bf95529f9e15e6a1245bc284fe6da0fca6d514"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Crest Corner.png",
+   "bytes": 2641,
+   "sha256": "ee7e29c361b05dccd48eb377caca615dd235a18283c1d3face6c6d16223f20b1"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Crest End.png",
+   "bytes": 1359,
+   "sha256": "0415ac4b95ad86f0f97f396f63c2f0c62171dc0b2a9add8e55f5ff746f52456b"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Ramp 1x.png",
+   "bytes": 2479,
+   "sha256": "e5c670fb4b05998618fe89b6a1d1956aff59daeb8444ffa2e9bcafe7d465878d"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Ramp 2x.png",
+   "bytes": 5068,
+   "sha256": "40bd5006c39b243fc8c9c41b557ea3947290b55354f067f2eaaac43f90d8e374"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Ramp 4x.png",
+   "bytes": 4838,
+   "sha256": "ab9b1c1b5f4900840044ea20af7b72093ed913fdf049242438c88da0ac6c8817"
+  },
+  {
+   "path": "base/client/ui/brickIcons/25 Ramp Corner.png",
+   "bytes": 4173,
+   "sha256": "f99db4ad9c5f7201a5fac700ea77a6bcf09676c9de0a4aff8da7c2e951f4e918"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x10.png",
+   "bytes": 3795,
+   "sha256": "69b038f55e9eadec7b2825c6f05ddfdefa2da3e8b85dcb0ec4979fc143667d48"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x10F.png",
+   "bytes": 3679,
+   "sha256": "67de3db5898267a2361d04b202905df22e6e49dc02ceac93f2b129df8a29c66f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x12x5.png",
+   "bytes": 4098,
+   "sha256": "e81c683c7989ec673d2b3416b16c55b4b5f1609dd19f4b9d8ba634aba5dcf700"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2 Disc.png",
+   "bytes": 1401,
+   "sha256": "b05c82ced3ad0c5917a74fa94c620ab2168a988bb10365c6bb8eaaa762015168"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2 Round.png",
+   "bytes": 1923,
+   "sha256": "c89caf6052120ac4b0d186c27b18cf8a02e27e94946144af2689a74fbb5175cd"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2.png",
+   "bytes": 2072,
+   "sha256": "4f0e08282f4115c1b0a83ebec537ff6039ae3f9e04416c06d352544f507b3cf6"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2F Print.png",
+   "bytes": 3400,
+   "sha256": "15ecd96d295dda826062a25c2648cf45258cee2f772a5e23de98c0fe4aea7816"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2F Round.png",
+   "bytes": 1846,
+   "sha256": "0d3e8f5562c72286a86726e0f6420f9df35dacc6064a05471af2431a975c7c9a"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2F.png",
+   "bytes": 1914,
+   "sha256": "2bb5834fee2a8994828507ed927fde9c3b8a3d90d14d4756aaf742cab3509f12"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2x2 Cone.png",
+   "bytes": 1881,
+   "sha256": "709defbd7c91e3d54da82a15921c19925008ad07af07a573b6ce87c42eee4d54"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2x3.png",
+   "bytes": 2966,
+   "sha256": "4477b35ebe02da52b433a4db5bbe29dda79d8a7bda82a75d4ba2425821a962e9"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2x5 Lattice.png",
+   "bytes": 5213,
+   "sha256": "a97a61a8d27dbda05746a4fc06bf1eaba71df0de4fbc51305e3bf652240beba3"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x2x5.png",
+   "bytes": 2260,
+   "sha256": "99760e672a235fa8a8fec573710a112fdb46c5adfee2e306ef62e5f910474953"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x3.png",
+   "bytes": 4406,
+   "sha256": "3de65dc09a8428691441803a0b832f30c6980cf4b9af5538179d03b108fc43ea"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x3F.png",
+   "bytes": 4332,
+   "sha256": "adb9daf4a346470114622d24edb5f7f5147d47feb091f052d7e380833eed5c79"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x3x5.png",
+   "bytes": 2549,
+   "sha256": "a60a3e79901bb2a9eeb272a52eebee4fec1ec504423fba469c14b02080bb446c"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x4.png",
+   "bytes": 4284,
+   "sha256": "dd17b0c979524dad10dc11ae0e4651b518c39aff22110f24ee5a96aa525bf742"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x4F.png",
+   "bytes": 4309,
+   "sha256": "9dd53d7c7dcf49e091dc66be4c27dd10f5f1458f393e093d5d1ea03e84e44d4d"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x4x3.png",
+   "bytes": 3776,
+   "sha256": "15c42ababe709477f49c6214aea96dd7cab17e75ee3aa748b80e76ab98d2b1c6"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x4x5.png",
+   "bytes": 2901,
+   "sha256": "7ea857362ba88a565f09854ba3ca1cf5cef8335af5a524e0b45b302bf5d1c9ac"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x6.png",
+   "bytes": 4089,
+   "sha256": "b73d3bc49a840f8434549cbccf249a9fb4a94d63c4aadf2228c12227886e9edc"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x6F.png",
+   "bytes": 4028,
+   "sha256": "42d555dd65ced8aaf5f6d788238c2349378c5186cbd816281862ac236a28e907"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x6x3.png",
+   "bytes": 4195,
+   "sha256": "dd5a4cc66ffb97b0ed6533d7bf3cd4d60de6cf6901eb786ef092bd1c68e433a7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x6x5.png",
+   "bytes": 3347,
+   "sha256": "b3873401303f991637857025b06505c682be8bdd7ef1a225b89d3da9c88ad05b"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x8.png",
+   "bytes": 3929,
+   "sha256": "73a6b60037435235d11b6a996083310231afaecb108a21067849b43df11729b5"
+  },
+  {
+   "path": "base/client/ui/brickIcons/2x8F.png",
+   "bytes": 3843,
+   "sha256": "bb86b26c9d50c4bc98b6d4de7172be2692bfbb7e04ca98a93ba7f937cd65f9f2"
+  },
+  {
+   "path": "base/client/ui/brickIcons/32x32 Base.png",
+   "bytes": 5659,
+   "sha256": "38424a33288772d3054a195062a4b1e384e973a177fda3f82ca54debc1a3e0c3"
+  },
+  {
+   "path": "base/client/ui/brickIcons/32x32 Road C.png",
+   "bytes": 6621,
+   "sha256": "8f8b4510f01d9f1e7bb3882afaf68167577509d4f2d12ceb6291f1e3b885fab5"
+  },
+  {
+   "path": "base/client/ui/brickIcons/32x32 Road T.png",
+   "bytes": 7458,
+   "sha256": "54df27fddb052de92ff102d98cf09d525d29915edc22caee6cd13f8360b1fd22"
+  },
+  {
+   "path": "base/client/ui/brickIcons/32x32 Road X.png",
+   "bytes": 7977,
+   "sha256": "c7f698111cb7a19d544ad884adb422a9f47ab7e1947b19b7af517a45aae10c89"
+  },
+  {
+   "path": "base/client/ui/brickIcons/32x32 Road.png",
+   "bytes": 7234,
+   "sha256": "749a9a7cfc9d97b51bf998f0d3759a20c77754f8c12e6cb9d51c655ef5d4cab2"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Crest 1x.png",
+   "bytes": 1785,
+   "sha256": "53dd603b3ee6d09385a5fd29ab7398b74c903310b52c5ab69cae349df13f1d80"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Crest 2x.png",
+   "bytes": 2537,
+   "sha256": "81187f09d4bf6d768ddc731eb3bbe1a6c49981dc7de8992c7a5ee93b587a67a7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Crest 4x.png",
+   "bytes": 4120,
+   "sha256": "c426f133c7d28e5f581abcba06e90726d65b2e3466cc86351819eb8cd9918a3f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Crest Corner.png",
+   "bytes": 3074,
+   "sha256": "0f08e86d40962a02cf98ec2dd4daf946490e9cb288ed530417503fac2fc3bf91"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Crest End.png",
+   "bytes": 1353,
+   "sha256": "405181f342c225c9ea535357ff5f6ca2c9d05b98ca30d2fab0d83e134e2845c8"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Ramp 1x.png",
+   "bytes": 2110,
+   "sha256": "8a24bdde8172c5991f88aea5bfe3f8106833e0123af6ba58c8f946b59fbd52b9"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Ramp 2x Print.png",
+   "bytes": 4765,
+   "sha256": "9abc31b8efcef4512923a4064abad81740c875082b230f70f268246e52a831e7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Ramp 2x.png",
+   "bytes": 3069,
+   "sha256": "ffbc159826e4c0ff4a5d22149a84c1e52e0dc7ab357c0f13900425c6839d533a"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Ramp 4x.png",
+   "bytes": 5207,
+   "sha256": "3658b0de472aa921923da4c75813d843aa020319159cf865add769586ac39eca"
+  },
+  {
+   "path": "base/client/ui/brickIcons/45 Ramp Corner.png",
+   "bytes": 2504,
+   "sha256": "e4f9594cec65fffbe8737f79abe9ac436b4bb3ddf6ec98c08f102357ef5fe5a7"
+  },
+  {
+   "path": "base/client/ui/brickIcons/48x48 Base.png",
+   "bytes": 4918,
+   "sha256": "67c609d5d1b05c5ce0df04d46d2ad136d7df4e3d010b66a56c13b380e702092c"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x10.png",
+   "bytes": 4560,
+   "sha256": "f86022ff4fa7d9a077cd6dc45b78087dc93a11348081d096f1c664a200f34b94"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x10F.png",
+   "bytes": 4390,
+   "sha256": "94aa51d8d4bb7654baba5ccfa8ef3c5b23cbf1782820fb9fb5ff49778580c72f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x12.png",
+   "bytes": 4444,
+   "sha256": "74e9b97df28507015abefa08324944975a768870ca0ca20f114d349e5d3a3b51"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x12F.png",
+   "bytes": 4307,
+   "sha256": "e1f2c47462e18813918e8c6f073c050115f673cb1ea730165cf4dcd4f51c035d"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x16.png",
+   "bytes": 4237,
+   "sha256": "5f33e682a95d50d9bc2febc68c4ca299017283fd91dac92d321257db44ef55f5"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x16F.png",
+   "bytes": 4010,
+   "sha256": "0e3a6219fecabc78c14a21c479bdbe41dd1d9dface678eeba260683ebf607c33"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x4.png",
+   "bytes": 4606,
+   "sha256": "d0c112ba4cafe935ab07897f9d6324446ff8f00c1c6f90bc79a057904d7f145e"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x4F.png",
+   "bytes": 4527,
+   "sha256": "bef369a7b7dd4391f06f08b2edb15b99dbcb22799b7386cfa09175d97546c92c"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x6.png",
+   "bytes": 4639,
+   "sha256": "719e49432a1c3985a46cf2416e87558f99836f46fffdfca7007a867c503a0139"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x6F.png",
+   "bytes": 4579,
+   "sha256": "a6728bad35fe948f6f785a3bc9e6a593295bcc91447103618ad294049c3de9d3"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x8.png",
+   "bytes": 6439,
+   "sha256": "b9cde257938de5970473fae8c7d39d47f4a8da66f9f58eb91a3b1873ade87675"
+  },
+  {
+   "path": "base/client/ui/brickIcons/4x8F.png",
+   "bytes": 4519,
+   "sha256": "22b6752528afd498196e4a65f539729630c051d156097ecd264ec8093550ff1c"
+  },
+  {
+   "path": "base/client/ui/brickIcons/64x64 Base.png",
+   "bytes": 4896,
+   "sha256": "583d3906956e19afb786e49052068d1c0b48d7281f954b74850cbdc3e0d90020"
+  },
+  {
+   "path": "base/client/ui/brickIcons/6x10F.png",
+   "bytes": 4718,
+   "sha256": "1e28d53ec540200680a23bf27462a2d4ce1207cde2582b68fad045ab8c4d15b9"
+  },
+  {
+   "path": "base/client/ui/brickIcons/6x12F.png",
+   "bytes": 4677,
+   "sha256": "f1af73fa88a16eee9a1ba75de7b4e72d0fd45992178fcf09df9b489fe87ac029"
+  },
+  {
+   "path": "base/client/ui/brickIcons/6x16F.png",
+   "bytes": 4518,
+   "sha256": "f0d248665697edd041c2ce0595091fe713fbb2a135e6ef14a276b8b469962f2d"
+  },
+  {
+   "path": "base/client/ui/brickIcons/6x24F.png",
+   "bytes": 4079,
+   "sha256": "304e6a2bfe89ed12ea1c3e69a5939cba54ce2ce15bf04b88e763f69d44b971df"
+  },
+  {
+   "path": "base/client/ui/brickIcons/6x6F.png",
+   "bytes": 4815,
+   "sha256": "d25563962ba275c2661baa840cf1e0b4bcead19625cbb077782f0d2cd7e128e8"
+  },
+  {
+   "path": "base/client/ui/brickIcons/6x8F.png",
+   "bytes": 4790,
+   "sha256": "669ec3018567b65ad4273b578bc70d2b409c6d6888a7d316e868b077eba2c21a"
+  },
+  {
+   "path": "base/client/ui/brickIcons/72 Ramp 1x.png",
+   "bytes": 3293,
+   "sha256": "7c99b9387142de02f60474ef433ce0aec291afe88cb874addd7242111da7a3c5"
+  },
+  {
+   "path": "base/client/ui/brickIcons/72 Ramp 2x.png",
+   "bytes": 4373,
+   "sha256": "1c2917daca5218afb147ed64795a4f73e73b7c011462cc3088343581cdd34f47"
+  },
+  {
+   "path": "base/client/ui/brickIcons/72 Ramp Corner.png",
+   "bytes": 4077,
+   "sha256": "7b1012a9b86db860d8abbf623eccb6cee7dc93afd00f531a8a880f00a0bf836d"
+  },
+  {
+   "path": "base/client/ui/brickIcons/80 Ramp 1x.png",
+   "bytes": 2522,
+   "sha256": "0c499e9d715c386577b832470f8bb9177ace09ec31c3ff32e0978a94fa4e30ba"
+  },
+  {
+   "path": "base/client/ui/brickIcons/80 Ramp 2x.png",
+   "bytes": 3120,
+   "sha256": "cc9860644ecbc30326efbc4ab4c43e8cf14aba576ca691338d7459258c225fbf"
+  },
+  {
+   "path": "base/client/ui/brickIcons/80 Ramp Corner.png",
+   "bytes": 2957,
+   "sha256": "cd506a774102beb9925bcb1de8bd4bfe7d7e40da249c5c38c193e5f27135a457"
+  },
+  {
+   "path": "base/client/ui/brickIcons/8x16.png",
+   "bytes": 4980,
+   "sha256": "c7a6122419af5be6dc9050d5923bad45df0a43fcdeb00c232c97977c1c29403f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/8x16F.png",
+   "bytes": 4747,
+   "sha256": "6959a96e5f245375ad80d9618dba7e7d42b5e72ad25bbd1733b1931bafcc7a6f"
+  },
+  {
+   "path": "base/client/ui/brickIcons/8x8.png",
+   "bytes": 4991,
+   "sha256": "ae43d27dcca8772200108af18586daec1192fe61b516129129bc6c4dfce86327"
+  },
+  {
+   "path": "base/client/ui/brickIcons/8x8F.png",
+   "bytes": 4929,
+   "sha256": "ec2ddf9e1e023b5dd9b81d5e3618d5835af6b59424c61627c22fea9dfa389ec0"
+  },
+  {
+   "path": "base/client/ui/brickIcons/BrickIconActive.png",
+   "bytes": 5782,
+   "sha256": "97e7e03d4c9f028986f1c1ff6212f461f498cdc5e7e464b0c5f0c03a1ed77406"
+  },
+  {
+   "path": "base/client/ui/brickIcons/BrickIconBG.png",
+   "bytes": 1837,
+   "sha256": "91c47ce59f7dbd4848d5a357fa51af0ef5b6bb8e12fd9ba3ab7de0c56886c191"
+  },
+  {
+   "path": "base/client/ui/brickIcons/BrickIconBtn_d.png",
+   "bytes": 2643,
+   "sha256": "14ed14eb0e262ddcdad07d2db1774e84965329d79c3a0066337ba940c315814b"
+  },
+  {
+   "path": "base/client/ui/brickIcons/BrickIconBtn_h.png",
+   "bytes": 2958,
+   "sha256": "28e0a89106323890bf021b4deda3420580e7cd5d7d1ef67524995b7b822fba37"
+  },
+  {
+   "path": "base/client/ui/brickIcons/BrickIconBtn_i.png",
+   "bytes": 290,
+   "sha256": "0f0d0f99dd09254fdb4c177bb67f61d0758412ea7fc57ad6d6075984ad8fb721"
+  },
+  {
+   "path": "base/client/ui/brickIcons/BrickIconBtn_n.png",
+   "bytes": 290,
+   "sha256": "0f0d0f99dd09254fdb4c177bb67f61d0758412ea7fc57ad6d6075984ad8fb721"
+  },
+  {
+   "path": "base/client/ui/brickIcons/Castle Wall.png",
+   "bytes": 1917,
+   "sha256": "9864dd014b2eb2e0c09c240adb8dc8d571b31d07962c0050bc502718af3d1a0e"
+  },
+  {
+   "path": "base/client/ui/brickIcons/Music Brick.png",
+   "bytes": 1196,
+   "sha256": "6cddd22443ecb4c069170beac2a042a5fa211bcf7dcd7b802c93b92ff06bbca2"
+  },
+  {
+   "path": "base/client/ui/brickIcons/Pine Tree.png",
+   "bytes": 3302,
+   "sha256": "fa95b124c991707fad2f885edb324f7dc1070541716ad79e17cba4a3b54fd42d"
+  },
+  {
+   "path": "base/client/ui/brickIcons/Spawn Point.png",
+   "bytes": 3177,
+   "sha256": "29119f1ac65b97eb3d79b7938193b8fb0255843530ee3dd2be3a4b042e3edfca"
+  },
+  {
+   "path": "base/client/ui/brickIcons/Unknown.png",
+   "bytes": 1510,
+   "sha256": "116c9ecf9d24a3d601f8a75d771f44ec38827ace378d603ff76fb7df4c191c4b"
+  },
+  {
+   "path": "base/client/ui/brickIcons/Vehicle Spawn.png",
+   "bytes": 3587,
+   "sha256": "2e4476100fc7044c6c2d0499f3aa74dd9260b4adb3b85b5afab73d69bc67c146"
+  },
+  {
+   "path": "base/client/ui/btnAbout_d.png",
+   "bytes": 2858,
+   "sha256": "8765b490b37edc180526b8a7a05fb6b14f43041be65774fa288070d595ae4a06"
+  },
+  {
+   "path": "base/client/ui/btnAbout_h.png",
+   "bytes": 5038,
+   "sha256": "8c27e7ae5ac9168301efd466890c8461a562e0b2a284864fd1263a8b437bb5f9"
+  },
+  {
+   "path": "base/client/ui/btnAbout_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnAbout_n.png",
+   "bytes": 2951,
+   "sha256": "d276951840afc474fe11bd59acfa98e689cec570e88512e5ca9ff45b8c62725a"
+  },
+  {
+   "path": "base/client/ui/btnColor_d.png",
+   "bytes": 196,
+   "sha256": "16212b60e11b9e7e5b0dd43f736f63a6802a457594ade7f20457518d380d293b"
+  },
+  {
+   "path": "base/client/ui/btnColor_h.png",
+   "bytes": 189,
+   "sha256": "9c086ed0530380d09b8dd7a9992a708ba91092f0a920cbecb2936a9fa9ffd1f8"
+  },
+  {
+   "path": "base/client/ui/btnColor_i.png",
+   "bytes": 199,
+   "sha256": "2c23c09d6d4ffd234b790fb6130d0603d9fc85b690faf235d6002d8030c1833a"
+  },
+  {
+   "path": "base/client/ui/btnColor_n.png",
+   "bytes": 199,
+   "sha256": "2c23c09d6d4ffd234b790fb6130d0603d9fc85b690faf235d6002d8030c1833a"
+  },
+  {
+   "path": "base/client/ui/btnCredits_d.png",
+   "bytes": 3974,
+   "sha256": "27579a7728eb3c4708795c1bd585cf9a2bf2b1111c77436718d69dc700c81ea6"
+  },
+  {
+   "path": "base/client/ui/btnCredits_h.png",
+   "bytes": 6715,
+   "sha256": "b879d65210a38d37bac076cf58e7a9574ebce1c49eafe1a5c5fe7d274904713c"
+  },
+  {
+   "path": "base/client/ui/btnCredits_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnCredits_n.png",
+   "bytes": 4157,
+   "sha256": "e8021dfb77ddc632df4b4535255c75fc984e64793a9900c90fefa22530aa58de"
+  },
+  {
+   "path": "base/client/ui/btnDecalA_d.png",
+   "bytes": 3136,
+   "sha256": "fad4f01aa7fcf8541e6b1943cf4788f7759384d6c55edd714ae327917785ee5e"
+  },
+  {
+   "path": "base/client/ui/btnDecalA_h.png",
+   "bytes": 3134,
+   "sha256": "61283cd00ef1451c5a9aafb2157ec1f0305d12284fdf2227fdff2f3925d94a7f"
+  },
+  {
+   "path": "base/client/ui/btnDecalA_i.png",
+   "bytes": 3137,
+   "sha256": "34fce4050d80e49647e85ae4afbc48766c8f483da57a57bbac1bf38bf0e37da8"
+  },
+  {
+   "path": "base/client/ui/btnDecalA_n.png",
+   "bytes": 3138,
+   "sha256": "50b7b92aa9fdaac1e54beee40f8c0466fb64e622e55f54adc1f8b88b01289cfb"
+  },
+  {
+   "path": "base/client/ui/btnDecalBG.png",
+   "bytes": 5834,
+   "sha256": "51e0215827b228f4d2b467c268c1367ab4193adfb4bd662d941cadb5c5dff136"
+  },
+  {
+   "path": "base/client/ui/btnDecal_d.png",
+   "bytes": 3128,
+   "sha256": "a086ac06173358cdb0eb023f6f3bc9a5afcb7222c6f19ea98b0c9830135b756e"
+  },
+  {
+   "path": "base/client/ui/btnDecal_h.png",
+   "bytes": 3160,
+   "sha256": "dc667f11383df4c6b792092bccf2235bb1f6f18f18f6c799436b24d01d51dce2"
+  },
+  {
+   "path": "base/client/ui/btnDecal_i.png",
+   "bytes": 2933,
+   "sha256": "9a0233ff5ae4bf884d58cf053c0a539431eb7a66f015272c1532cd1524ac6e57"
+  },
+  {
+   "path": "base/client/ui/btnDecal_n.png",
+   "bytes": 3154,
+   "sha256": "840a075b802977dd3f3550f48d3c3f71938571f4581e636d97dc7ab16e400753"
+  },
+  {
+   "path": "base/client/ui/btnDemos_d.png",
+   "bytes": 3434,
+   "sha256": "ccf101f2575e6788a300b0f0e958b143d7e2a5ed53951c76efd0027ac794218a"
+  },
+  {
+   "path": "base/client/ui/btnDemos_h.png",
+   "bytes": 5834,
+   "sha256": "10673172c6ede3ce65f1ca6fca412b35a7219c8cbd5ac371edcb47e46f1fc5be"
+  },
+  {
+   "path": "base/client/ui/btnDemos_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnDemos_n.png",
+   "bytes": 3524,
+   "sha256": "eb4bfc4644b6f598a618a7669cefef9d370c1b932abf637d7604ca266e187568"
+  },
+  {
+   "path": "base/client/ui/btnJoinGame_d.png",
+   "bytes": 4111,
+   "sha256": "ffcf5083d1df46f46e6dac3bc03d9849f1c03b14d9d97fdb62d93d5c3f97cca2"
+  },
+  {
+   "path": "base/client/ui/btnJoinGame_h.png",
+   "bytes": 7510,
+   "sha256": "38c295069a73804e396cd75e9f7cb9eb115f29f68226f4fe45c423b1abc98751"
+  },
+  {
+   "path": "base/client/ui/btnJoinGame_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnJoinGame_n.png",
+   "bytes": 4201,
+   "sha256": "644669064f9fef188453b4d597fb53be9a34d0af4100dcbe0000802ae096fe69"
+  },
+  {
+   "path": "base/client/ui/btnOptions_d.png",
+   "bytes": 3877,
+   "sha256": "f04da2a09f46c9c796f0d6f91532848d9d6c3aa415b5395ad6afe0afba667711"
+  },
+  {
+   "path": "base/client/ui/btnOptions_h.png",
+   "bytes": 6759,
+   "sha256": "4b7ede54023fec55b4ba7460f7b3f85b781072db3b7e3c593fd3369cbd3f9c45"
+  },
+  {
+   "path": "base/client/ui/btnOptions_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnOptions_n.png",
+   "bytes": 4065,
+   "sha256": "bc4b428c141f1b49ce38632926fa1b4b5ea64e2dc6accdb491631fae0245a6fa"
+  },
+  {
+   "path": "base/client/ui/btnPartColor_d.png",
+   "bytes": 3037,
+   "sha256": "0b9125c6572fa62cc0a50839dd76a8c515cd2ff0a43492da06687f5df7587806"
+  },
+  {
+   "path": "base/client/ui/btnPartColor_h.png",
+   "bytes": 3035,
+   "sha256": "b75ec55d97f1bb576469ba52a60ee8788ac3c58c555f4514d3fc761f5e004b8c"
+  },
+  {
+   "path": "base/client/ui/btnPartColor_i.png",
+   "bytes": 3039,
+   "sha256": "bb2cda3ed415a0be0da0c42372192da158f581f3492779ab83ec78da0ea6f5e9"
+  },
+  {
+   "path": "base/client/ui/btnPartColor_n.png",
+   "bytes": 3040,
+   "sha256": "9970c2d29a80d409a0e8edfc8bcfab15e7e496a3f5cf7b4e57ab2d4dd29f2a6f"
+  },
+  {
+   "path": "base/client/ui/btnPlayer_d.png",
+   "bytes": 6138,
+   "sha256": "533ad23faaa9cb91bf412012e6b6991178cb0d6a2e912290ef5a942e04481614"
+  },
+  {
+   "path": "base/client/ui/btnPlayer_h.png",
+   "bytes": 8666,
+   "sha256": "4d60bd06b4c34747b8ab28fafbf015c7935631296c60ae7c44de0fdc41ebc34c"
+  },
+  {
+   "path": "base/client/ui/btnPlayer_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnPlayer_n.png",
+   "bytes": 6328,
+   "sha256": "12d01a0882a12fe3802e32e2908c82c2604e74c0915f2ff05f3545e6f0071838"
+  },
+  {
+   "path": "base/client/ui/btnPrint_d.png",
+   "bytes": 522,
+   "sha256": "81a7a91845883cfab5f6c1f2f8c61d7618fb01e60581b85d36ff54c44d9da72b"
+  },
+  {
+   "path": "base/client/ui/btnPrint_h.png",
+   "bytes": 935,
+   "sha256": "7263d60c37eaa0881d1945e38011976bae100281969811153c46b2549505a9e4"
+  },
+  {
+   "path": "base/client/ui/btnPrint_i.png",
+   "bytes": 212,
+   "sha256": "03f6a4b1933ce0475211aa442613d93669b43ae3f58c62dd84f2f035170e1000"
+  },
+  {
+   "path": "base/client/ui/btnPrint_n.png",
+   "bytes": 212,
+   "sha256": "098c3aff3ce2551c10f2662698552163fadd4a7c40b451c2fdec947540e27e60"
+  },
+  {
+   "path": "base/client/ui/btnQuit_d.png",
+   "bytes": 2142,
+   "sha256": "4cd751e8a0a1bbfac68b695791a5e102d27ae41c1c76e55c4521446a176c323d"
+  },
+  {
+   "path": "base/client/ui/btnQuit_h.png",
+   "bytes": 3752,
+   "sha256": "e6fb3a1202b7d36a3d0f02e6080f24bc4dc640665a5a96482509fec6f49cac3c"
+  },
+  {
+   "path": "base/client/ui/btnQuit_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnQuit_n.png",
+   "bytes": 2260,
+   "sha256": "75e7749029c79f75386adee5f574b161b2d561cfe29208d911fcb1a56bef2253"
+  },
+  {
+   "path": "base/client/ui/btnStartServer_d.png",
+   "bytes": 4769,
+   "sha256": "93eade10238ab307c0c5008a76f258841f18df88298adfb893d645f24a2ffb60"
+  },
+  {
+   "path": "base/client/ui/btnStartServer_h.png",
+   "bytes": 8512,
+   "sha256": "121a3ac95a9d7ae62758ec07affd496f42068d1e01431e5d0e835ba9b6ed079b"
+  },
+  {
+   "path": "base/client/ui/btnStartServer_i.png",
+   "bytes": 2729,
+   "sha256": "f0c1c3945cf4e1cef23dd87f9ebf26a3dc5592b36b233770afe4ea881ebede7e"
+  },
+  {
+   "path": "base/client/ui/btnStartServer_n.png",
+   "bytes": 4909,
+   "sha256": "9f793a5d1171134432e92fdb39b08795cdfd0827dae03cdf83ac11bade1b1db1"
+  },
+  {
+   "path": "base/client/ui/btnTutorial_d.png",
+   "bytes": 6004,
+   "sha256": "1a2a6f335bc653ba4757195f6e239c6a1347e81a0d8638b6ce7e11c76aa5ee48"
+  },
+  {
+   "path": "base/client/ui/btnTutorial_h.png",
+   "bytes": 8799,
+   "sha256": "694d11631e5d823e277eb97b6d86189d022aa6119d64c415d118556fb39dc7fc"
+  },
+  {
+   "path": "base/client/ui/btnTutorial_i.png",
+   "bytes": 69,
+   "sha256": "1280e8de649805526731cc11672b0479f5ca25d9bd7ebf7a3375f8a9c966205e"
+  },
+  {
+   "path": "base/client/ui/btnTutorial_n.png",
+   "bytes": 6430,
+   "sha256": "c8d3c07f67464498900e6bc4318fa9748fb13e617d34cec16dd76fa914b866bd"
+  },
+  {
+   "path": "base/client/ui/button1_d.png",
+   "bytes": 5571,
+   "sha256": "b4101e68445fbe02f0a63fdd3b74294ae44f1faf9ec7bf684ee02fdbf2014185"
+  },
+  {
+   "path": "base/client/ui/button1_h.png",
+   "bytes": 7745,
+   "sha256": "d0c342954ea8402ca7c3d663a99c1a233986515d850144baebebdbfab14f4e77"
+  },
+  {
+   "path": "base/client/ui/button1_i.png",
+   "bytes": 4958,
+   "sha256": "2fb014db0622da5923ef98cece8f89ad524f7c521ece0bed5737b1f35b7138e9"
+  },
+  {
+   "path": "base/client/ui/button1_n.png",
+   "bytes": 5065,
+   "sha256": "41fde9393b96ac74b69ece77a60caa010ef4e2f175e027e37ee87b7b8d0f6e9b"
+  },
+  {
+   "path": "base/client/ui/buyNowB_d.png",
+   "bytes": 4039,
+   "sha256": "6e6eebec769a804024bb2ff29a5f5b335765161084a35ab04b399d03f6f00a43"
+  },
+  {
+   "path": "base/client/ui/buyNowB_h.png",
+   "bytes": 10414,
+   "sha256": "053a76c3480d48a4104994771c53afc03bf0bcbaca308ca6a0bd92bd464c3b42"
+  },
+  {
+   "path": "base/client/ui/buyNowB_i.png",
+   "bytes": 4039,
+   "sha256": "6e6eebec769a804024bb2ff29a5f5b335765161084a35ab04b399d03f6f00a43"
+  },
+  {
+   "path": "base/client/ui/buyNowB_n.png",
+   "bytes": 4039,
+   "sha256": "6e6eebec769a804024bb2ff29a5f5b335765161084a35ab04b399d03f6f00a43"
+  },
+  {
+   "path": "base/client/ui/buyNowW_d.png",
+   "bytes": 4131,
+   "sha256": "a26f216659ed7fcadc8cfd194aa2e0c6437bef49e7aae861cdac71a7972104e4"
+  },
+  {
+   "path": "base/client/ui/buyNowW_h.png",
+   "bytes": 10937,
+   "sha256": "a7c82eb6cc6208619d168e4e51cd112a397d3a50db1c1cff8b5099e3402d44ff"
+  },
+  {
+   "path": "base/client/ui/buyNowW_i.png",
+   "bytes": 3887,
+   "sha256": "e5e9f3819665e5f1db0545f22580d253f0d2811809b26aecbffe68289f3816a6"
+  },
+  {
+   "path": "base/client/ui/buyNowW_n.png",
+   "bytes": 4076,
+   "sha256": "84e7b99b5e64f5e8d960768f2ec9caeb621b20bfecbf30db79bf6cda6ddefe7f"
+  },
+  {
+   "path": "base/client/ui/cache/Arial Bold Italic_16.gft",
+   "bytes": 9493,
+   "sha256": "1466949797acf2cfb60fa02e7d9d0f2fa3107d1ad1877bb2abd6e90e0799f64d"
+  },
+  {
+   "path": "base/client/ui/cache/Arial Bold_14.gft",
+   "bytes": 6772,
+   "sha256": "76edf1c1500cc324a6f127454340e8df16981eaf3f366aba07af90aa0e0426ad"
+  },
+  {
+   "path": "base/client/ui/cache/Arial Bold_16.gft",
+   "bytes": 7932,
+   "sha256": "a6a2ea8f3428f209c3a1b856eff1aa82ddd70f92c3c370221e8549785f31016e"
+  },
+  {
+   "path": "base/client/ui/cache/Arial Bold_18.gft",
+   "bytes": 9100,
+   "sha256": "6fbfab06ee0d44b974a355253fb53adb571e8a0c6d603d009bfb3fb56f8481cf"
+  },
+  {
+   "path": "base/client/ui/cache/Arial Bold_20.gft",
+   "bytes": 9929,
+   "sha256": "7f374171cf2f174112c1fe2b4fe452a6e800e42f7741e1d88481272dcdd03b54"
+  },
+  {
+   "path": "base/client/ui/cache/Arial Bold_26.gft",
+   "bytes": 14104,
+   "sha256": "ed21da5aa1a116da01fd43cf3126c8ff767be09cc30d9ac8c01f39937596502b"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_12.gft",
+   "bytes": 5843,
+   "sha256": "2c414697927f9624284b5286a1551487fdc6fba2db09e1fe1f2318aaa4d9a9a1"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_13.gft",
+   "bytes": 6036,
+   "sha256": "8427711de9d83d0f9fdfe10c28ed8bc3a5b89154b7979b311c8ebe0b73d1a234"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_14.gft",
+   "bytes": 6685,
+   "sha256": "c70930125bcb88eb6876a6b6d9dbb1844117c25d58413296773e490d6143bf48"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_16.gft",
+   "bytes": 7669,
+   "sha256": "a1fcd4471643fc121a6f178da20c477b2397e6df3c4e343df4e6949b557b2d39"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_18.gft",
+   "bytes": 9380,
+   "sha256": "66f3e071e064189cda50b9e2df2f2767c618e62957b304bf15b376ccce5ad728"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_24.gft",
+   "bytes": 13228,
+   "sha256": "2be48f1b3c5dd22b309440865538cd836a17535c89d48922cfc8a4cac0ff832b"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_28.gft",
+   "bytes": 15847,
+   "sha256": "4ad11eedb69b4e3c8db76db499ca1e0ff618fa4ee6e3d38e4535dad4e5e21972"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_32.gft",
+   "bytes": 17645,
+   "sha256": "28da51448c6b8b2591f925d54252805bd829dced22f09c5a74c4a7f92cf284a3"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_34.gft",
+   "bytes": 19261,
+   "sha256": "58ef7b22e1934a5a3f13f2e9d83575fa3ed5199c1121b65e01c5edc3bd69c8b7"
+  },
+  {
+   "path": "base/client/ui/cache/Arial_36.gft",
+   "bytes": 21847,
+   "sha256": "07084951126933e27393ef2866a2cf28165dd47d67b7788dc84216e5ecae0b05"
+  },
+  {
+   "path": "base/client/ui/cache/Book Antiqua_22.gft",
+   "bytes": 10395,
+   "sha256": "9bfc63c10072a559203c95a71ce1827a18e5ee878e3b66a22cba80c0eef879eb"
+  },
+  {
+   "path": "base/client/ui/cache/Impact_18.gft",
+   "bytes": 7545,
+   "sha256": "06e68ca0992979f5046db565e6a561425aed6f24e0e6b8e6f3af6bd5a41f9c08"
+  },
+  {
+   "path": "base/client/ui/cache/Lucida Console_12.gft",
+   "bytes": 6686,
+   "sha256": "185fca22d7e665a81455060e79604af0a9957e44f22c77ca73458e5d0169f5aa"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_16.gft",
+   "bytes": 6876,
+   "sha256": "26f2e227f55378e3fe73f1f2512438e91c3f9f4e827a56e337bee4f856bb5328"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_18.gft",
+   "bytes": 7714,
+   "sha256": "db59c7b182e4b1c78a98641756f133369c901fbd52804460d58668fc35b705e6"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_20.gft",
+   "bytes": 8894,
+   "sha256": "76c099d064da314947bee510290f63701d799c8c02961a25592cd5712ab1c76d"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_22.gft",
+   "bytes": 9344,
+   "sha256": "2b996fc085e2cc5c836e2bdcd9167b3226ff155808b1a1a5dd3cdda404ac2044"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_24.gft",
+   "bytes": 11370,
+   "sha256": "6e931b2cd4d2d1b26732ffa2809edf19ea993b49599adfb922574191e58e85d0"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_26.gft",
+   "bytes": 11911,
+   "sha256": "1ec5c6e0fafd365d498b63c83935d2181e8598f4035a8754e367da4a2da3b275"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_28.gft",
+   "bytes": 13785,
+   "sha256": "9decb13f92d01e3908f373541e884ec896300ac5bc3822b0d46a605607db68e9"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_30.gft",
+   "bytes": 14039,
+   "sha256": "f20f67075116516b4632c55f3344ccd662dd815b0ca18017345ff53c8d9413e8"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_32.gft",
+   "bytes": 15993,
+   "sha256": "7e6d23c2469f7e293cd2e708f718947331e829fc6120d36e3cc59a7d0eac6c67"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_34.gft",
+   "bytes": 16523,
+   "sha256": "c5ea4eeceaf9699885524d16906f4b7137fb13f5e784a406b7881fbe80633b3e"
+  },
+  {
+   "path": "base/client/ui/cache/Palatino Linotype_36.gft",
+   "bytes": 18195,
+   "sha256": "8324935cf2d7d73e2ab25ee8559d8e2af908011bdbbf5c3059b6aa52b2351c1d"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana Bold_10.gft",
+   "bytes": 7267,
+   "sha256": "574e4d7640f56ab08c91ada61d2be2259fdcada904585b6fd6cd534ef4aad406"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana Bold_12.gft",
+   "bytes": 6358,
+   "sha256": "76436b062114490481f85eed7ef12a8f03306c596c1e17f0ddf351fba51866a2"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana Bold_13.gft",
+   "bytes": 7106,
+   "sha256": "01ae4a0a1db885111dc58c99bea24b5a0384e0524ab4f103ae280c95a6547e1c"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana Bold_14.gft",
+   "bytes": 7750,
+   "sha256": "caea05971027c7a0b5daa3149e1f79a2d39683855b546319e5a2471f22ad7e5b"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana Bold_15.gft",
+   "bytes": 7750,
+   "sha256": "caea05971027c7a0b5daa3149e1f79a2d39683855b546319e5a2471f22ad7e5b"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana Bold_18.gft",
+   "bytes": 9553,
+   "sha256": "4f202dde9b1a6b5330eae7728a812b0a2e17db93016a865338e08a2734c49078"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana Italic_12.gft",
+   "bytes": 6820,
+   "sha256": "7a13324f8540434e860c55698bd45ee1b6510f0aeeb5c2ee33fe5a3595176dc8"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana_12.gft",
+   "bytes": 5998,
+   "sha256": "f08f955a72f8e71c8d0768dd0434ab4a2d4474283495896a8c34579f650cd05c"
+  },
+  {
+   "path": "base/client/ui/cache/Verdana_13.gft",
+   "bytes": 6758,
+   "sha256": "b91f7f2149c7fd28ea8f868de9d7c6eecd6ac14d28f6cc250f1f7d5a3b99b1f5"
+  },
+  {
+   "path": "base/client/ui/colorFrame.png",
+   "bytes": 170,
+   "sha256": "2f623e41bb26e453d39fc7809c96b479e44f87d952899485649f408e68c23677"
+  },
+  {
+   "path": "base/client/ui/crossHair.png",
+   "bytes": 3373,
+   "sha256": "ea794bdcafa538a6f82357b28431dbb46065342b5ba5a0e1d2eb14c0eab6636d"
+  },
+  {
+   "path": "base/client/ui/decalFrame.png",
+   "bytes": 258,
+   "sha256": "2aec73fe8dfde5067af6a7a3cbd492f90f383be020dfafecd86891d7696fc93b"
+  },
+  {
+   "path": "base/client/ui/decalRadio.png",
+   "bytes": 3758,
+   "sha256": "def65afc5745e95413709cea63ee00e9c8820a3eaa1b17898da4c2980ba6e261"
+  },
+  {
+   "path": "base/client/ui/gglogo150.png",
+   "bytes": 12578,
+   "sha256": "e3d2e6f1243b3e0433203e8bd81ad0f20c2db112b5c9293b65730a0409c0261a"
+  },
+  {
+   "path": "base/client/ui/halfScroll.png",
+   "bytes": 4909,
+   "sha256": "159a7a1671fe0483fb16529043b01bed27e30a1a8437b9feb4c2df6287c25e4f"
+  },
+  {
+   "path": "base/client/ui/itemIcons/ItemActive.png",
+   "bytes": 10005,
+   "sha256": "f74d13ad90db008425b26ead6d5de5ae826896c19a35f385efae0d7b68ee9475"
+  },
+  {
+   "path": "base/client/ui/itemIcons/Printer.png",
+   "bytes": 5242,
+   "sha256": "2d58a8b2c74a1820205deed289378131ff321a2b456a4805f4d78d3546c62882"
+  },
+  {
+   "path": "base/client/ui/itemIcons/ToolBG.png",
+   "bytes": 972,
+   "sha256": "e71c048b0e181283539a2f98b0d6233cf86fad3f8df2703e9b5c1dfa2f303a8c"
+  },
+  {
+   "path": "base/client/ui/itemIcons/ToolLabelBG.png",
+   "bytes": 324,
+   "sha256": "906daaf0b503b0574fe6ec3e8cd463520292a2eff4eb1298898c32bde7eaf45f"
+  },
+  {
+   "path": "base/client/ui/itemIcons/Wand.png",
+   "bytes": 2639,
+   "sha256": "493f6947d6c1bd9b767ea06c7896d44188d730202ef91cd1a0439609d1fa8534"
+  },
+  {
+   "path": "base/client/ui/itemIcons/Wrench.png",
+   "bytes": 5726,
+   "sha256": "d1145fea5d5c7236287376b37518bbb61307583f58e3a126f473e49f67d32966"
+  },
+  {
+   "path": "base/client/ui/itemIcons/hammer.png",
+   "bytes": 3826,
+   "sha256": "94cac380828e6e81a1704beb168ae5d9c28dc1b728402b58d592523f3a6fd050"
+  },
+  {
+   "path": "base/client/ui/lagIcon.png",
+   "bytes": 3021,
+   "sha256": "03aded2335f8dc6a4d106c6d22543c41ffdb4130bf483a3296e312a90c579a17"
+  },
+  {
+   "path": "base/client/ui/paintActive.png",
+   "bytes": 2986,
+   "sha256": "9e89ce035409c1805b01f78bd075b9979d0d5334129bedeea4bb574265248814"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_buried.png",
+   "bytes": 4727,
+   "sha256": "5c08f9e1e8084efe35a62f357a49e042b00c3b5cbf8ff33420ea1a704eb72f40"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_float.png",
+   "bytes": 3903,
+   "sha256": "fa8afc1d1a1bf7816f6dd2de1a047b260cd83be287ce0c71582c74d388ed7af4"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_flood.png",
+   "bytes": 4002,
+   "sha256": "f1251bbe08bd7b1a5ecf0ebd212cc96f5f055203b9d7e0a131cda7b6b313862a"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_limit.png",
+   "bytes": 9285,
+   "sha256": "4486ea68775677c83823b6cfe15d3490acfd9a3fa59401dbefe778c96dadd649"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_overlap.png",
+   "bytes": 5468,
+   "sha256": "974418cfe01fb1e5f76a26d1fe42cff75fce9f17cd094ae4911493683f2faf98"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_stuck.png",
+   "bytes": 5277,
+   "sha256": "06b5c38eb4704ebfa6c7f410c7e6db64d2a141d6831fe548b28ac04b14f516f0"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_tooLoud.png",
+   "bytes": 7124,
+   "sha256": "19875628cd503493281b4b2188c0e64f375eb49ac647c35286b14b57dbc1db38"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_toofar.png",
+   "bytes": 5047,
+   "sha256": "1a778f93c65494dcfa4270003e61eab1ff7dfbdd2f4da3d5bd0e8b24882b7fd4"
+  },
+  {
+   "path": "base/client/ui/plantErrors/plantError_unstable.png",
+   "bytes": 7626,
+   "sha256": "a1c633d3a3560bb81435c59ab85a75c29ea3df13a3f00dbdb22555f7d9d4d414"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_buried.png",
+   "bytes": 1373,
+   "sha256": "2cad2d3c1d98355aba4360bcf7a508cb3b6069568dbd90e34b53b810be2b19b2"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_float.png",
+   "bytes": 1447,
+   "sha256": "b6253f2ae8e48a0004bc559f0f5038d5b7b6eb63880e6814bf20d68434784741"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_flood.png",
+   "bytes": 1153,
+   "sha256": "6ae985380886ade62caa90ba5ea243c90faf33e89fd547550d1cee2796b06f61"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_limit.png",
+   "bytes": 3706,
+   "sha256": "ae62f675fdf6ccf559b383e874c4797e060223620d969f2c4f0ea9c7614f8421"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_overlap.png",
+   "bytes": 1458,
+   "sha256": "314e755cbea87d33066e974684906fe8970ef174a0b8af51c296a60c9c075be4"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_stuck.png",
+   "bytes": 1251,
+   "sha256": "2685b21229c9a7d9ed91851c370cab050380b790f9d7bcf85188b3c88d0a0b1e"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_teams.png",
+   "bytes": 1190,
+   "sha256": "6ec6dc9e9e810a2114bc1aec14cc7f2d325711f82e67d37d475ac1c65e4ac5bb"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_tooLoud.png",
+   "bytes": 4893,
+   "sha256": "15a29f7f791cbea19046e9834c4d5d98c5c5d6ba7eb5a8aab2395d70c1ea7f7f"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_toofar.png",
+   "bytes": 750,
+   "sha256": "bdf20a46ea4fb1cad506c77d3006c8ac45bd1d7ea63454705efb59db0f93adeb"
+  },
+  {
+   "path": "base/client/ui/plantErrors_small/plantError_unstable.png",
+   "bytes": 1851,
+   "sha256": "8cec5618e4ab298d1936f714b8fbec0a5eec7b24b23d3c65acfd11fc6d3b3b42"
+  },
+  {
+   "path": "base/client/ui/superShift.png",
+   "bytes": 4212,
+   "sha256": "2f652896b44fc54c0f673f0d4668a90214f0bf40ab732a144586f632411ceb1b"
+  },
+  {
+   "path": "base/client/ui/torqueCheck.png",
+   "bytes": 2914,
+   "sha256": "e5785108761b0492ac12a165cba06c659bb6c91cba8e63c2c4bd9a6e6cbb1b4e"
+  },
+  {
+   "path": "base/client/ui/torqueMenu.png",
+   "bytes": 1923,
+   "sha256": "55670a68cc74cd11ff48c0ecace75923ce5ef80a0d0a0f9b39401f28a09031fb"
+  },
+  {
+   "path": "base/client/ui/torqueRadio.png",
+   "bytes": 3725,
+   "sha256": "247c25e0849b5864129f2dc4a6ca88a0b4f862646eb744f60713db6bf68e51fd"
+  },
+  {
+   "path": "base/client/ui/wrenchBotDlg.cs",
+   "bytes": 10160,
+   "sha256": "9cf22fe91de46ac18b6a1046dd5b98f7e6685f5e01a1ca85fa5e209d3a66f345"
+  },
+  {
+   "path": "base/client/ui/wrenchBotDlg.gui",
+   "bytes": 24886,
+   "sha256": "6dff9025e786f1a269da8716232d1efc688a1c01408c9c4f9421ae41ff20409a"
+  },
+  {
+   "path": "base/data/bricks/baseplates/16x16F.blb",
+   "bytes": 13,
+   "sha256": "f15cd742241657bc8f550f3a7b7228edb3b70a2c36ad1029285b11756f928ce8"
+  },
+  {
+   "path": "base/data/bricks/baseplates/16x32F.blb",
+   "bytes": 13,
+   "sha256": "27be6e81a75737403d8cf412d0ef9c1c1eff2b1d2f0b90bae854c8a5fe56f522"
+  },
+  {
+   "path": "base/data/bricks/baseplates/32x32F.blb",
+   "bytes": 13,
+   "sha256": "b545205bc26db671c3046d25647b75f59fbdc71e33c110711a5ad64938532901"
+  },
+  {
+   "path": "base/data/bricks/baseplates/32x32FRoadC.blb",
+   "bytes": 13178,
+   "sha256": "90d48ecf3ab14f6974160eaf1ec47b212f375674a3e1fe8b5a0598437e0038b5"
+  },
+  {
+   "path": "base/data/bricks/baseplates/32x32FRoadS.blb",
+   "bytes": 4238,
+   "sha256": "760b3ca87ecbb8147e4949f9e4648cac498cc3d2f0b4005209ffb32737192f23"
+  },
+  {
+   "path": "base/data/bricks/baseplates/32x32FRoadT.blb",
+   "bytes": 5970,
+   "sha256": "998a20269c093588eb0013dc78ed843c62e1e94ee3c15779b707a948aba06c83"
+  },
+  {
+   "path": "base/data/bricks/baseplates/32x32FRoadX.blb",
+   "bytes": 10991,
+   "sha256": "a6505e044e86fbc8cfaa952aa26e7d6399be4c20d50dda236898d6778ea7bedf"
+  },
+  {
+   "path": "base/data/bricks/baseplates/48x48F.blb",
+   "bytes": 13,
+   "sha256": "16542f201dc56dae219af60a2ca47456cb129f9ef5991e2c609e99488e8c07b3"
+  },
+  {
+   "path": "base/data/bricks/baseplates/64x64F.blb",
+   "bytes": 13,
+   "sha256": "ea281ba8bb7aa67c74aec3fcabfcaac644ab9c5913f703c5d9e534d12e59bb9f"
+  },
+  {
+   "path": "base/data/bricks/bricks/10x10.blb",
+   "bytes": 13,
+   "sha256": "14389b87026f5bf541b41ddc47fd480f343948c11f0c38b03b8b2f87b175e5bb"
+  },
+  {
+   "path": "base/data/bricks/bricks/10x20.blb",
+   "bytes": 13,
+   "sha256": "eac6a0c0a647c489a1f7c5cf19181343e3791bb5ba10a9fc1e88d433b934dd68"
+  },
+  {
+   "path": "base/data/bricks/bricks/12x24.blb",
+   "bytes": 13,
+   "sha256": "5f435f3742b1dbb43575d8e1377c2845a0e588ff16a59aa2ad046338ab609681"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x1.blb",
+   "bytes": 11,
+   "sha256": "540f4ce36310e76cd06fa8cf226f5d103cc67c75bb97b143bd0721430bc88627"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x10.blb",
+   "bytes": 12,
+   "sha256": "4c045e6c87f5aa6f2ba6ae0089520b4be6fca27e31344f1a40d1d108fe8c7453"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x12.blb",
+   "bytes": 12,
+   "sha256": "d73eca06582dc57cd8ae476b23b00aa5f2533cb2ad07807020f12af2dfccb99b"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x12x5.blb",
+   "bytes": 13,
+   "sha256": "a3fb46a61fdb4728d4d971510d06437cb762390e585a3d7ff47afe2f87c84c15"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x16.blb",
+   "bytes": 12,
+   "sha256": "f93dc50ae8931c14a3174cece0bbe53698c925508f687dabb1823bf0a3644f27"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x1Print.blb",
+   "bytes": 1590,
+   "sha256": "21e9586bfa1d1017661a0bf2a42307623b4eea97a0ae3d115f1d0dd71d2bf52b"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x1x5.blb",
+   "bytes": 12,
+   "sha256": "a67fd8af3915000bd8761ce21941bd145fc49fbc853995824f84902e079215e0"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x2.blb",
+   "bytes": 11,
+   "sha256": "2ea54381daa4e5a3f2d3388748d67975ab7b15f00bd6c90d03a48712c0a1cd05"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x2x5.blb",
+   "bytes": 12,
+   "sha256": "8d8fdd30c42c04490c6335890dbfec1811a9f1600097b30b2595df3c053b8ed5"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x3.blb",
+   "bytes": 11,
+   "sha256": "8152e8123dcdf8b98a4e233ba0d03580de274407f91e7ed2225d76823a5f3146"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x3x5.blb",
+   "bytes": 12,
+   "sha256": "52894533096c105ef86595d6c7cb766f8d428b34fe73611ffc3049cb5aa32494"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x4.blb",
+   "bytes": 11,
+   "sha256": "5b6a814da2fea49a602ef64f0eb8ebbeaee0da5d728af6e654f609fa92df9dee"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x4x4Print.blb",
+   "bytes": 1604,
+   "sha256": "d241677ecbf2a691a7d87d1c6d4e01ecce4c628412a79fcb320fa7ca2232df69"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x4x5.blb",
+   "bytes": 12,
+   "sha256": "b19d508e29380cf0e97b3d0841e3018e1eef02e1264011ff1af69b41def8a19c"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x6.blb",
+   "bytes": 11,
+   "sha256": "ef828d8f82e31e723c67dd72d53d65ffaded8402acd7c456ccbfefc5c13238a7"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x6x5.blb",
+   "bytes": 12,
+   "sha256": "579b098196a9f8cc2cf4701e57c3ed9a84b75ac25289e3b6cec8e69bc1effd3b"
+  },
+  {
+   "path": "base/data/bricks/bricks/1x8.blb",
+   "bytes": 11,
+   "sha256": "a61800df7359f77a766a7cc8ca42c034d78b3ce9b4b3f63858af4b34e3d8faff"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x10.blb",
+   "bytes": 12,
+   "sha256": "26c8545d812d83634b50d01132fec36208b112309672c975e36ffeb0caf2f421"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x12x5.blb",
+   "bytes": 13,
+   "sha256": "5a5866eb539adf96e202152aa11c003fdd28a84b55fb637717ba38f174354e89"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x2.blb",
+   "bytes": 11,
+   "sha256": "c7516ca15c6927967a47da6ac55e56b9360b1a22bd8a83d59b2c639d62995da9"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x2x3.blb",
+   "bytes": 11,
+   "sha256": "dd7753119c2b74ffb46ca6f4efb91c96498a4bab988bfb2b1e87e99c6989453a"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x2x5.blb",
+   "bytes": 12,
+   "sha256": "5ee1800732070df0eef76cdc227addbbe612ffbeef528fdcf9642698edf822f0"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x3.blb",
+   "bytes": 11,
+   "sha256": "cde2335afeb0f884e52ebe804b341f011dc4115b32291c3d9f647bae076af02d"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x3x5.blb",
+   "bytes": 12,
+   "sha256": "086afcae42705fc4c051a09534f7b9d30d644757652c1d99fd3cab09bf759a8d"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x4.blb",
+   "bytes": 11,
+   "sha256": "b9900c7f7174f0b5887646d1a271cde125ed5b75939fa8cd6e680560260f0507"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x4x3.blb",
+   "bytes": 11,
+   "sha256": "5b198a0e9505559fd4234619dbcc7b51d8cb097c29327d048d030d0c96d95520"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x4x5.blb",
+   "bytes": 12,
+   "sha256": "103af254287bed87a3a159d1becd411f77d01944f84da9eb158f35918bba9ae8"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x6.blb",
+   "bytes": 11,
+   "sha256": "659a06e09da0ddffdf2e571a9b90c60ac6d23f424ed3cf037ca266adca6fd2b8"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x6x3.blb",
+   "bytes": 11,
+   "sha256": "6a533c24a96d83e2043492bd491e1726abea27db77420f4a6953050c3bb90660"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x6x5.blb",
+   "bytes": 12,
+   "sha256": "96ea2b2ca78929f4f0e8cb870fde1f7849a1bc49ead3f6dfdf9adaadb28a2111"
+  },
+  {
+   "path": "base/data/bricks/bricks/2x8.blb",
+   "bytes": 11,
+   "sha256": "9f2588f9ec132305fbca937aa5bf7b1cbfe54f40b8dfffd0e05b3ea1d94084cf"
+  },
+  {
+   "path": "base/data/bricks/bricks/4x10.blb",
+   "bytes": 12,
+   "sha256": "84cec45d3b1fd5360dd8e495bbc42ac44bf716c8bff59006f38e4201f85a4ae4"
+  },
+  {
+   "path": "base/data/bricks/bricks/4x12.blb",
+   "bytes": 12,
+   "sha256": "022a29434bc77c25b58e6548289f4bd371cf1245707ed7622e6191b6d00723a8"
+  },
+  {
+   "path": "base/data/bricks/bricks/4x16.blb",
+   "bytes": 12,
+   "sha256": "ac8341226837fad96d175f21c70500172c5e19179be8b4c29846b9401b6b1603"
+  },
+  {
+   "path": "base/data/bricks/bricks/4x4.blb",
+   "bytes": 11,
+   "sha256": "233bbd5f21607cdb32519808418f70adfc7fae836431947c11c2833491460898"
+  },
+  {
+   "path": "base/data/bricks/bricks/4x6.blb",
+   "bytes": 11,
+   "sha256": "e846b99546a680a1b24d048f182a6f43fbfc02aab3824e0577410b6f8ed6e7c3"
+  },
+  {
+   "path": "base/data/bricks/bricks/4x8.blb",
+   "bytes": 11,
+   "sha256": "17a27ca9a8f5a517afcb8f9ccb9b895874a8f684ca5e92d3e093f328acb00a8d"
+  },
+  {
+   "path": "base/data/bricks/bricks/8x16.blb",
+   "bytes": 12,
+   "sha256": "9dbc0903018010c4eb9b618b2db90b56bb49bf5be3b576d8c4b9de93c706fc84"
+  },
+  {
+   "path": "base/data/bricks/bricks/8x8.blb",
+   "bytes": 11,
+   "sha256": "2f9c7a0070a3174b4bc82735cafb603d40f9c96e4f087c752652d2d99a5b0ddb"
+  },
+  {
+   "path": "base/data/bricks/flats/1x10F.blb",
+   "bytes": 12,
+   "sha256": "81c2dc49996fd2b41fac02b124b5832af1661d3bd23637e81847ad27f48de470"
+  },
+  {
+   "path": "base/data/bricks/flats/1x12F.blb",
+   "bytes": 12,
+   "sha256": "c1ed267351b635d0b78c9fe5cc11405e355e25a48e8b1e86a8e457e1fc5910dd"
+  },
+  {
+   "path": "base/data/bricks/flats/1x16F.blb",
+   "bytes": 12,
+   "sha256": "f6a40c3a58b23f02c8b007ce5f0bfb3bb1f26f0a671bcc0f8f13f2cbfee9d189"
+  },
+  {
+   "path": "base/data/bricks/flats/1x1F.blb",
+   "bytes": 11,
+   "sha256": "0795e7d49a25dd5e155cd3708b70d447396f1a9646164ded175e56b06fe83f64"
+  },
+  {
+   "path": "base/data/bricks/flats/1x1FPrint.blb",
+   "bytes": 1634,
+   "sha256": "eaf233c6b1f4cecc0c2c8cadb7215d2f6b645d6ebe6b8aed7e06ea8ef72f3d43"
+  },
+  {
+   "path": "base/data/bricks/flats/1x2F.blb",
+   "bytes": 11,
+   "sha256": "c68e1190854c38fa708369f7932bedf497984c43594291d2575f62eeacce7ceb"
+  },
+  {
+   "path": "base/data/bricks/flats/1x2FPrint.blb",
+   "bytes": 1563,
+   "sha256": "d45c6a50da287a09413fa75810af6b7f9d2ca2a1b2f3aca5dc81900b868be62d"
+  },
+  {
+   "path": "base/data/bricks/flats/1x3F.blb",
+   "bytes": 11,
+   "sha256": "ffdea63c441275956eeae55d70b43ad57a09ed08dede5eb593593c9053a2e4ea"
+  },
+  {
+   "path": "base/data/bricks/flats/1x4F.blb",
+   "bytes": 11,
+   "sha256": "9d10421f65b027c762d8c1bbefd63b3729e4a9512acb225e1803396114529c71"
+  },
+  {
+   "path": "base/data/bricks/flats/1x6F.blb",
+   "bytes": 11,
+   "sha256": "639dfd681b4201d55fa88c34d709ff75b663bf5936a0a6e05b436aec9da62e55"
+  },
+  {
+   "path": "base/data/bricks/flats/1x8F.blb",
+   "bytes": 11,
+   "sha256": "41f55b65c0d8214c24851efd2dc08f0ad702598efab88a570ff3dd1d2627f0c6"
+  },
+  {
+   "path": "base/data/bricks/flats/2x10F.blb",
+   "bytes": 12,
+   "sha256": "29dc62c9023afbef768fde4db5c3a2fadb6ded34c0e087d64a61c804ac67559c"
+  },
+  {
+   "path": "base/data/bricks/flats/2x2F.blb",
+   "bytes": 11,
+   "sha256": "982aadc8d3b73d5cb35d0a2b20e8dc08a839422e6372a5120574db1720251712"
+  },
+  {
+   "path": "base/data/bricks/flats/2x2FPrint.blb",
+   "bytes": 1637,
+   "sha256": "46210b086271b8835e4ec04d437d0f25dd09f1030056a739aa78f20a26a9d414"
+  },
+  {
+   "path": "base/data/bricks/flats/2x3F.blb",
+   "bytes": 11,
+   "sha256": "23e5e9545dd16cf2b5138ef82f14d08a180b3630451889a81443656d0033d3f0"
+  },
+  {
+   "path": "base/data/bricks/flats/2x4F.blb",
+   "bytes": 11,
+   "sha256": "83ac10e1ba746effc9f649e1ff25f3b1d315a61f0dd74a7a5bfe8fd6c8ff3041"
+  },
+  {
+   "path": "base/data/bricks/flats/2x6F.blb",
+   "bytes": 11,
+   "sha256": "f17239210a2c8548e402bcd51e883e38c2224eb7d16df4eb79fe9c739fc0fb1c"
+  },
+  {
+   "path": "base/data/bricks/flats/2x8F.blb",
+   "bytes": 11,
+   "sha256": "b7c974599bea5cbc879206e74da8b21bbf0e990eabbf9ea4bfe31cc2da2ccdae"
+  },
+  {
+   "path": "base/data/bricks/flats/4x10F.blb",
+   "bytes": 12,
+   "sha256": "055a64575aaa5cfbc0773e929928a7fc1649396cbb6ce1cd9c12523a2d2a6638"
+  },
+  {
+   "path": "base/data/bricks/flats/4x12F.blb",
+   "bytes": 12,
+   "sha256": "27aa5715c8cc7f5e0d4cb1b0755db4d451d1732073f4850de1de7c8481eb9593"
+  },
+  {
+   "path": "base/data/bricks/flats/4x16F.blb",
+   "bytes": 12,
+   "sha256": "8c6f00817a4ca1e3942a914e7530aced70e90ba2e274a23f45e68277be196b8b"
+  },
+  {
+   "path": "base/data/bricks/flats/4x4F.blb",
+   "bytes": 11,
+   "sha256": "ca32c63d60e6f619816b45f8cc0209c58c8f21af4f9bc6469931ee793796d66c"
+  },
+  {
+   "path": "base/data/bricks/flats/4x6F.blb",
+   "bytes": 11,
+   "sha256": "03a207cdeeaf329a347554999f93063675fecb9e463a1ee9624aa5574baa934d"
+  },
+  {
+   "path": "base/data/bricks/flats/4x8F.blb",
+   "bytes": 11,
+   "sha256": "9a8365cba66d03c6cffa2af16f99810dc034ba9ea054978a68226a75c69b6b88"
+  },
+  {
+   "path": "base/data/bricks/flats/6x10F.blb",
+   "bytes": 12,
+   "sha256": "9fa8f22109ee600e79b66438ba69c685c5260a0d19d55f97620dd4dd053df188"
+  },
+  {
+   "path": "base/data/bricks/flats/6x12F.blb",
+   "bytes": 12,
+   "sha256": "e967903fb755a8b6705282baa25a6b2b336ab234210e111b21055b15003d6079"
+  },
+  {
+   "path": "base/data/bricks/flats/6x16F.blb",
+   "bytes": 12,
+   "sha256": "41e9389b17b967a5ba0b057d5b786fcf39ce5aa4c15082d276dedda44153e6f6"
+  },
+  {
+   "path": "base/data/bricks/flats/6x24F.blb",
+   "bytes": 12,
+   "sha256": "b772e8a551c03c6fb9ae4c89517fece2be655cb59164ef93f09a5afb7391146b"
+  },
+  {
+   "path": "base/data/bricks/flats/6x6F.blb",
+   "bytes": 11,
+   "sha256": "c99a89efec771675db6f3574339dea3255b3b6c61909c4f1a0db30278decad3a"
+  },
+  {
+   "path": "base/data/bricks/flats/6x8F.blb",
+   "bytes": 11,
+   "sha256": "3163affc0f53578fb52d913ea21ef6a908289a43d6649196561fc33973945f92"
+  },
+  {
+   "path": "base/data/bricks/flats/8x16F.blb",
+   "bytes": 12,
+   "sha256": "f0061a4f502284a1568d448aa8fa2b9cd6701bd0267fffeedf1ad7b7550ae345"
+  },
+  {
+   "path": "base/data/bricks/flats/8x8F.blb",
+   "bytes": 11,
+   "sha256": "c1e101c4179552a29da1376e941c3ab03719cedd0afa851e4be8b0813b714679"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2crestHigh.blb",
+   "bytes": 2194,
+   "sha256": "88a29544e46631044fcff87a3627c5194931b36ca35bcce63bbaac8917625d0d"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2crestHighEnd.blb",
+   "bytes": 2259,
+   "sha256": "5a742913575041fd3f8b217de03eabc6962b63408975a68af47113ed3ef16bb8"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2crestLow.blb",
+   "bytes": 2208,
+   "sha256": "db39b21db2b6776fedfbd94b1bace77061371f52b9e8aa98ff6d153d84780bf3"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2crestLowEnd.blb",
+   "bytes": 2272,
+   "sha256": "57922668108c3983a6d19e004a7ad82bc49889338bc9c1a9c21f30629237c8e1"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2ramp.blb",
+   "bytes": 2139,
+   "sha256": "3341d26ce85680f3b77cd590a886681a04aefcd669b0641b2acfdb64d38eb701"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2rampUp.blb",
+   "bytes": 2187,
+   "sha256": "44253a4b9e773ee0d2ce04e3916bd29924cc7174eadf479a29e5813bd4e5f19b"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2x3ramp.blb",
+   "bytes": 2156,
+   "sha256": "98ede55bb56c7a67de7f0f225ae8b7e4f6b9623919fd302a0790b55f0db4b301"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2x3rampUp.blb",
+   "bytes": 2206,
+   "sha256": "2302385c44e68afc616af6b76b5fe78fd0119adfa6c486ac91ec7d1124be7848"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2x5ramp.blb",
+   "bytes": 2188,
+   "sha256": "c93368ebd64c97155237b06a1f21ae9a43c988108561aa7b5c90e981bd6d899c"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x2x5rampUp.blb",
+   "bytes": 2235,
+   "sha256": "b166c7ddf34bc366ab2ddbf639a09d1a8d8fc658b3d5991ad02d4fa3d14267db"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x3ramp.blb",
+   "bytes": 2296,
+   "sha256": "f4c22248074e404f2900057c1ccdd00e14c02b52b9f80db213e9bd3341dd7102"
+  },
+  {
+   "path": "base/data/bricks/ramps/1x3rampUp.blb",
+   "bytes": 2334,
+   "sha256": "af0b0562df3275110d050afe4f3ff290bfddadcbb884bdb16e11aa1835aa596e"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2crestHigh.blb",
+   "bytes": 2247,
+   "sha256": "cb31e4e2278d08bdb34465e47a2913d3ded1b06304ddecd9cac62c02c6172332"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2crestHighCorner.blb",
+   "bytes": 2679,
+   "sha256": "bd985020943b6721af9fe5f6634ffba964c1ee0c1f98bc72ce881c3a95022e72"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2crestHighX.blb",
+   "bytes": 2694,
+   "sha256": "b974ae81db9a6cb3dbd4370006f43e242e8484ae7c4a3ec327166f727ad773ff"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2crestLow.blb",
+   "bytes": 2269,
+   "sha256": "d359f92336770ad4ce9c8e028df1784f2b4db2d063275f0cddf620e46483b1ac"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2crestLowCorner.blb",
+   "bytes": 2701,
+   "sha256": "9fd92c6d35ec6ec9dd95675c65a565b65d385d6d521f7beec6229c23bdeed4fb"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2ramp.blb",
+   "bytes": 2191,
+   "sha256": "36ebdc455a9c23cc38e1731ae1a35eb20be9f109933ff4276ecb607cd37a33f4"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2rampCorner.blb",
+   "bytes": 2374,
+   "sha256": "70a6e14586609dc9e2e3c9317f1f2592dc8175622b34fd87ef3591cd2aebc0de"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2rampPrint.blb",
+   "bytes": 2190,
+   "sha256": "0888fb6d77260256f7214915eb0738e9354c52086bb31cf1290f85071b621998"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2rampUp.blb",
+   "bytes": 2085,
+   "sha256": "02b8917e64a734348cd25f5b5b36865c81e5a7e54726243c5f3960c032bdc935"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2rampUpCorner.blb",
+   "bytes": 2280,
+   "sha256": "7ae06cdc6b4f036a1369bdc3179e7d7882ce7b4c8fc6e5e0d1f7548b272910ee"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2rampUpPrint.blb",
+   "bytes": 2076,
+   "sha256": "923e5f0f3af7f5c44826a99fde1d312d3dfc2f814345cbbb5e36bc1f9f5bbc93"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x3ramp.blb",
+   "bytes": 2221,
+   "sha256": "bdc554450585269c9713a4c42f2e84c583ab2634822ff67f5dcde0b8798177f3"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x3rampCorner.blb",
+   "bytes": 2431,
+   "sha256": "00c35b8fa3e7cc22089f93d2054c1187bedd036b99fc0d6035b4fa89a39d6d26"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x3rampUp.blb",
+   "bytes": 2118,
+   "sha256": "a3980d5edb884912b631328cc80bb0b4b7738d88bbb522941c0efbf8b3b4c882"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x3rampUpCorner.blb",
+   "bytes": 2320,
+   "sha256": "8ecfc32f14125c3f987b7500073044ec23f1cf5b45d99698713de32fa079a993"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x5ramp.blb",
+   "bytes": 2260,
+   "sha256": "0336464dd1e48a0e105e27e0f0c52c828c10f9ab08edc70e7bdbd4405037a9ec"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x5rampCorner.blb",
+   "bytes": 2448,
+   "sha256": "c29d37ccac13601ffc2947aca91f86dc669747056cb0ca351ce37e0cbfa6c108"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x5rampUp.blb",
+   "bytes": 2152,
+   "sha256": "a81272e66606788a0dd64d905971f59f290614511fd47101a653238238a0f9ed"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x2x5rampUpCorner.blb",
+   "bytes": 2352,
+   "sha256": "c90e00bfe441b769cf0edc43e016fad9ee1def53d308148fdbeb490f3d0ef57b"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x3ramp.blb",
+   "bytes": 2347,
+   "sha256": "3ab1cc58b7446962435a8b18d578873e45c8289034af2b7b931a5f965f113884"
+  },
+  {
+   "path": "base/data/bricks/ramps/2x3rampUp.blb",
+   "bytes": 2240,
+   "sha256": "adda0a6bbec40c4882f27ae98903a966149aafd0bb8f5fcacf6b6a33540121af"
+  },
+  {
+   "path": "base/data/bricks/ramps/3x3rampCorner.blb",
+   "bytes": 2701,
+   "sha256": "d00915f5933cbf4cd3fdd32b5b3cbe3166099b947b85cc0cf30a1248f17183b0"
+  },
+  {
+   "path": "base/data/bricks/ramps/3x3rampUpCorner.blb",
+   "bytes": 2552,
+   "sha256": "a9c2e7036f62a95d46acea1989c02882043216f3d64f8ee6f348ea79f88bdac2"
+  },
+  {
+   "path": "base/data/bricks/ramps/4x2crestHigh.blb",
+   "bytes": 2309,
+   "sha256": "cc4137d12bb9aee0fab7f762afc493ca937a9c5cde2b00b93910da7675be802c"
+  },
+  {
+   "path": "base/data/bricks/ramps/4x2crestLow.blb",
+   "bytes": 2321,
+   "sha256": "9df6ec00f37f88c8ddcb4406d946f160d872cae23aebc7482a539f67a162b43d"
+  },
+  {
+   "path": "base/data/bricks/ramps/4x2ramp.blb",
+   "bytes": 2275,
+   "sha256": "88c7d0ca3c32151b6c33bdf039cf8561a33036902ea718c2e1dbdb1a7a9ddf3f"
+  },
+  {
+   "path": "base/data/bricks/ramps/4x3ramp.blb",
+   "bytes": 2406,
+   "sha256": "6f3b59c9a38b0b7bb3bf3a791bef68e5f7020410c5505f57f6f7f5c48fdaedd4"
+  },
+  {
+   "path": "base/data/bricks/rounds/1x1FRound.blb",
+   "bytes": 5820,
+   "sha256": "4a9f071ba7142d8f226ccf1fc089ba0b5876ba89ac3e2f59c0285fded604aba6"
+  },
+  {
+   "path": "base/data/bricks/rounds/1x1cone.blb",
+   "bytes": 5793,
+   "sha256": "91b9e4b7c7f281679095b1fb97184b6846c1b6132366f954951871549ef387cf"
+  },
+  {
+   "path": "base/data/bricks/rounds/1x1round.blb",
+   "bytes": 5794,
+   "sha256": "30c8cb07f9423423dfe38adcc01f2b79d33c2c804ae4c3cc10acb2a4510f9b54"
+  },
+  {
+   "path": "base/data/bricks/rounds/1x1x5spike.blb",
+   "bytes": 1489,
+   "sha256": "03198d6a46b44a827ad6aa24d918760b6e3db7bd7911d7e835ef4417f389edd1"
+  },
+  {
+   "path": "base/data/bricks/rounds/2x2Fround.blb",
+   "bytes": 4814,
+   "sha256": "f2e7b6d97ff753508cb90b4eacaab921c2a1cf8a84785d8fe771b9c6243abfae"
+  },
+  {
+   "path": "base/data/bricks/rounds/2x2disc.blb",
+   "bytes": 5709,
+   "sha256": "587cce550790975c3db3575cd4a29cf179d2db7df331d83f2a57f7a4311467c4"
+  },
+  {
+   "path": "base/data/bricks/rounds/2x2round.blb",
+   "bytes": 4822,
+   "sha256": "1cada99026c5a6a745cedcf0ca8b4f0d01b6510819f25fbf02aeeef335e5e427"
+  },
+  {
+   "path": "base/data/bricks/rounds/2x2x2cone.blb",
+   "bytes": 4587,
+   "sha256": "dcb2abbf8acd953df00531b74a5d9bc20b3a04daf2896046122514af1a046348"
+  },
+  {
+   "path": "base/data/bricks/special/1x1music.blb",
+   "bytes": 3080,
+   "sha256": "17728102c34a61e6e0a5feb52d7a7d2357a9477a9ca0fd8fccc916c38f7709e0"
+  },
+  {
+   "path": "base/data/bricks/special/2x2x5girder.blb",
+   "bytes": 6823,
+   "sha256": "41a5080efa7104d4734f7700d0f5ea3406d6a7593c29fc5886ecf82d15ee1a42"
+  },
+  {
+   "path": "base/data/bricks/special/3x1x7wall.blb",
+   "bytes": 4544,
+   "sha256": "7b2fa28e02213aec3e77bf24f0ec3e4b9dcccd5d0c33b3f44e35b3694a243965"
+  },
+  {
+   "path": "base/data/bricks/special/4x1x2Fence.blb",
+   "bytes": 5304,
+   "sha256": "e283fd73798b388226cde6507edd4272be2a1f5dd7266797d98b977763d393f5"
+  },
+  {
+   "path": "base/data/bricks/special/4x1x5window.blb",
+   "bytes": 4591,
+   "sha256": "44e1467e4efd0994c4619dd0555d1f93d0d9525e3fdfb63a3e280c75c1b58ee2"
+  },
+  {
+   "path": "base/data/bricks/special/pineTree.blb",
+   "bytes": 6416,
+   "sha256": "774d8f440fc2265686e71c623286e84d476afacb77932fed2930a74b910c88e7"
+  },
+  {
+   "path": "base/data/bricks/special/spawnPoint.blb",
+   "bytes": 3371,
+   "sha256": "a8feef79678b2e6547df5342d75835ce0c4f99be379ce42a4cefe843b7c75fef"
+  },
+  {
+   "path": "base/data/bricks/special/vehicleSpawn.blb",
+   "bytes": 2040,
+   "sha256": "a1366368c9c272f0d903f4b62343541613bca42c808ceb09e866485d40c7e109"
+  },
+  {
+   "path": "base/data/foliage/bearGrass.png",
+   "bytes": 17494,
+   "sha256": "596ee298c9a0a88518fc4d75865c586a9303e4366b4d6ba56afb8440bf51e64b"
+  },
+  {
+   "path": "base/data/foliage/grassComp.png",
+   "bytes": 45252,
+   "sha256": "2e3bce4287d220027e4bb1c80f67075b4b486a0f6fb28d2e78fea277ef836ea1"
+  },
+  {
+   "path": "base/data/missions/default.jpg",
+   "bytes": 42663,
+   "sha256": "f3346598fb2ddb97a5c284bd994aec838502e6e4b2707abf4e0a9801100342cd"
+  },
+  {
+   "path": "base/data/missions/detail1.png",
+   "bytes": 62278,
+   "sha256": "8d6c5249713317ebde5eb2212d928e5739ed232df7444beffb634185ce95a828"
+  },
+  {
+   "path": "base/data/particles/Pain.png",
+   "bytes": 4570,
+   "sha256": "415d0c5c78393950bb3bd26e414dc406b7dacad3c2b798605c0ca5ddba338aa1"
+  },
+  {
+   "path": "base/data/particles/bricks.png",
+   "bytes": 7922,
+   "sha256": "2552a7e26f30706924cda411f4c00f59394594a2a9dff688a73792c417108a0a"
+  },
+  {
+   "path": "base/data/particles/bubble.png",
+   "bytes": 15096,
+   "sha256": "077cc5013af98d02fd3c35aa429f67d3569081d105890a4fcf23da4ed9f16926"
+  },
+  {
+   "path": "base/data/particles/chunk.png",
+   "bytes": 708,
+   "sha256": "9d4b22dbcf0248fd95167ecdafca0888d2d02e1a251c243235403e174359c66f"
+  },
+  {
+   "path": "base/data/particles/cloud.png",
+   "bytes": 14946,
+   "sha256": "bce09397c3e44ea34ef544c8e520f27a5b5e98658a7f5b77d6c9c2bdf201e9ad"
+  },
+  {
+   "path": "base/data/particles/dot.png",
+   "bytes": 4751,
+   "sha256": "344e6caa22b8b155b88f6a011ffda99bf896df18f48e557650fd03613416632e"
+  },
+  {
+   "path": "base/data/particles/exclamation.png",
+   "bytes": 3381,
+   "sha256": "47e8329feaeb83fe324444b510dddde4da21e6156cf667fa55a20f2a3485b103"
+  },
+  {
+   "path": "base/data/particles/heart.png",
+   "bytes": 4723,
+   "sha256": "3df74c5a9ec89ecaea639c4ee71d5dd7b67fbe2261691ea538df233c56f197c2"
+  },
+  {
+   "path": "base/data/particles/nut.png",
+   "bytes": 10674,
+   "sha256": "140aee7fe9965108b72a9103b76abe9d06c08e1a23ff355de6149b12c0ecd88f"
+  },
+  {
+   "path": "base/data/particles/qmark.png",
+   "bytes": 4294,
+   "sha256": "bb26361ba0147837dc2d37ca5a5ad3307c7a5d517bf7a8ab8fa9154784faa9f0"
+  },
+  {
+   "path": "base/data/particles/ring.png",
+   "bytes": 5455,
+   "sha256": "49e02994a93b2dc364153f9c48c73f75f1cd99c081ab7cc2027beb94168aa1c7"
+  },
+  {
+   "path": "base/data/particles/star1.png",
+   "bytes": 4469,
+   "sha256": "bab02d9cd4226decea95ab693d06513ef736670ddd175d142ca56ad502d6fc44"
+  },
+  {
+   "path": "base/data/particles/thinRing.png",
+   "bytes": 10406,
+   "sha256": "cc3a22eb48d3ab6646ebd9416ba57e507ab9d3a3453622b357ccaa3f895cdeec"
+  },
+  {
+   "path": "base/data/shapes/Hammer.dts",
+   "bytes": 18567,
+   "sha256": "8abc52f0044fe201e34bcaac13725aa23fca6200cef69c298d33180afc2b81aa"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Main_Maple.png",
+   "bytes": 485722,
+   "sha256": "0e5457418faef9d5a60817b6886277d983e09711011607c4dc3e6ea4849c251f"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Maples/Sharp_Maple09.dts",
+   "bytes": 62063,
+   "sha256": "c3b66d4f165ddc9a6335c652cd92b4e9a10b2db0d3abad781e7dd8887aa3eaad"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Oak_Main.png",
+   "bytes": 507444,
+   "sha256": "1913cd6ad765abbcc166a7e5d29205909e19b8cdef4674afa3b146006eb0c092"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Oaks/Sharp_Oak02.dts",
+   "bytes": 81047,
+   "sha256": "93e7c5a4b017eab429ef261ed076729138f0bed993ca137e46410f2d3c4c4852"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Palm/Sharp_Palm02.dts",
+   "bytes": 152441,
+   "sha256": "b586007c1c41ccc7d8969b8a49769e5b173ad595f7b6378315785a71241f7d9f"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Palm/Sharp_Palm04.dts",
+   "bytes": 213497,
+   "sha256": "ad47ad4efd0cb97cc64fcc93657eee17b471cd39129c6dd70911e970f64db4a8"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Palm/Sharp_Palm05.dts",
+   "bytes": 214085,
+   "sha256": "bcfc57a0f3e6fb08c4b755363ef13d02693f50ee6ec9fc279b01a1c721925154"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Palm_Main.png",
+   "bytes": 554367,
+   "sha256": "cf09413560c9e199b0ceec4404f1a744c6822e88bdf5a70e0398accfe9fdba38"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/ScrubBrush.png",
+   "bytes": 560454,
+   "sha256": "b0f4296ce3d5ae38ed774ce7aed8cd01209f3d406a0642d7b2a9d3d7880c39f9"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Scrub_Pines/Sharp_ScrubPine04.dts",
+   "bytes": 405203,
+   "sha256": "fbfe0cf7b6ab970b8667b7b113b9c7cd5a62ec981f2859a52d44efed7586cc46"
+  },
+  {
+   "path": "base/data/shapes/Sharp_Trees/Trees/Scrub_Pines/Sharp_ScrubPine09.dts",
+   "bytes": 223503,
+   "sha256": "fa381c6a63172fd48840265acb735923df6a17d0eeb94729d4d047fe2b9ef8a5"
+  },
+  {
+   "path": "base/data/shapes/black.png",
+   "bytes": 73,
+   "sha256": "f953fefc62ac75b9c15631c5ffbe4e234fc4e36d3bc98b972a971fb8fb1b5875"
+  },
+  {
+   "path": "base/data/shapes/black25.png",
+   "bytes": 86,
+   "sha256": "24f48bfeac5776d77f6c79ad7449cb375ac05736d2faef9f427e8b1a5cc5d011"
+  },
+  {
+   "path": "base/data/shapes/black50.png",
+   "bytes": 86,
+   "sha256": "7130d432600d09e7b888abc5681964d68b90b778129d95497ab12d1e56228141"
+  },
+  {
+   "path": "base/data/shapes/black75.png",
+   "bytes": 86,
+   "sha256": "9035705340f75ec94db64c7bf971328d016a5db99a0b1698300378ec37f2ebd7"
+  },
+  {
+   "path": "base/data/shapes/blank.png",
+   "bytes": 85,
+   "sha256": "d781980879d206ed12f801e2bcb5aa22824677788b1103e479e954926eb119e8"
+  },
+  {
+   "path": "base/data/shapes/blue.png",
+   "bytes": 82,
+   "sha256": "d2543bbe8ad6c7c3adf916540b5cab51c1a47a4707438f1e1cf8d9ab11a4433f"
+  },
+  {
+   "path": "base/data/shapes/brickBOTTOMEDGE.png",
+   "bytes": 76267,
+   "sha256": "6a5d2f604822d9a4f300f21efecf5b2e2e7de4df24ef7573bf6e8682981f1b40"
+  },
+  {
+   "path": "base/data/shapes/brickBOTTOMLOOP.png",
+   "bytes": 75222,
+   "sha256": "108f30e3cb8497e3e8006edc6515d8bf4db6433d669607559be45c867901e270"
+  },
+  {
+   "path": "base/data/shapes/brickRAMP.png",
+   "bytes": 323789,
+   "sha256": "3c7ba2b3eb26225f8dc729adc32319760a3c7b203eaed8d1497428ee4bad2564"
+  },
+  {
+   "path": "base/data/shapes/brickSIDE.png",
+   "bytes": 12367,
+   "sha256": "ca60a37f9aab40d15b1a601d96f380acd2a324a07bc42f9557ebdef3b90846d0"
+  },
+  {
+   "path": "base/data/shapes/brickTOP.png",
+   "bytes": 44653,
+   "sha256": "7a6932e912ebca4eae8280c870161e509c1408705deae72d8bdeb785d815490a"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x1cone.dts",
+   "bytes": 1761,
+   "sha256": "6dc17be398bb7a4c661e19b086e5f70d8b1fca060b62c88feaf2cf1f7bd8ad6b"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x1fround.dts",
+   "bytes": 1761,
+   "sha256": "0a1a077a15fddc7ee46bfa7ca682193a2f96956792a3ed046e1fed44399c7783"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x1round.dts",
+   "bytes": 1761,
+   "sha256": "069bb11a5636ff8ce24b9ddba76f3e1ad8955b7a6429a0a5d279adb2da77ac4d"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2cresthigh.dts",
+   "bytes": 1421,
+   "sha256": "f406afd8fd06eb81c337d064a25dd65fa63200e94ea153a131c4169aaee94e09"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2cresthighend.dts",
+   "bytes": 1421,
+   "sha256": "c632a389d5b3953054186e534d922a8c585d8440b403f4112ccdca12d7464731"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2crestlow.dts",
+   "bytes": 1337,
+   "sha256": "1acd6913fef16dc08ab87fe24bc6aefc8eb56cbfd65f8890c273c17a5a8bfc67"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2crestlowend.dts",
+   "bytes": 1337,
+   "sha256": "8323830c362e21f7a9f739983ced1161458598e0b0a50b968f59eb25acdadd66"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2ramp.dts",
+   "bytes": 1553,
+   "sha256": "5f590c92e100dddc7ba8fc470f4de993469a09b24c5a7caf352cbd1a5a73e537"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2rampup.dts",
+   "bytes": 1553,
+   "sha256": "20adfa08c7fd67db371576cf823591ccf505e8715f15926ded5c71c2413f5990"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2x3ramp.dts",
+   "bytes": 1553,
+   "sha256": "e2cf903e5d915b0c74f3149e0424584cda488c074c6e6a21bc15e5ba743f8631"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2x3rampup.dts",
+   "bytes": 1553,
+   "sha256": "b913f400f90e76c997475773acacfefb53b5cb09d33448322fb9822a6d0076d6"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2x5ramp.dts",
+   "bytes": 1553,
+   "sha256": "dc796e82b45a3cfd91fdedee8a7c78559196b505410a27c263f804d0fdb8807f"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x2x5rampup.dts",
+   "bytes": 1553,
+   "sha256": "88f809ab22d14af79ac3ef3b6ab7f9b6879b86a7b11b1dbae52685809b24ae61"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x3ramp.dts",
+   "bytes": 1469,
+   "sha256": "8df46811d2c5c9e8eed41fdbff6554941b5288fcf487504b4fd2dcac62d3bbc3"
+  },
+  {
+   "path": "base/data/shapes/bricks/1x3rampup.dts",
+   "bytes": 1469,
+   "sha256": "c202a6159cf880dbec77777da9dd7112342f78b307a70e8264be5a52dcb216eb"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2cresthigh.dts",
+   "bytes": 1421,
+   "sha256": "2bf7d0389e9755503eb6d3990008da4c124d5dfc6bab9707acdba66cfc3f2481"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2cresthighcorner.dts",
+   "bytes": 2205,
+   "sha256": "f63dd410ef68cc7e225befb667547ccd9bd12895ee0b01008ea6929946cf18ad"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2crestlow.dts",
+   "bytes": 1337,
+   "sha256": "28bb5a29dfc1dc522e6588b446c5be5262cbe01964caa8f7cd9c8a9ad0a9c0ba"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2crestlowcorner.dts",
+   "bytes": 2205,
+   "sha256": "f9285001ff30bf4b6594ac62dc37b73eac405d39e915e30ee9af5a2388454dda"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2fround.dts",
+   "bytes": 1761,
+   "sha256": "9763ba7020dc1a1148b7b83d0fb26787155bf67c0b8433a64d3cabd9c30d8aaa"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2ramp.dts",
+   "bytes": 1553,
+   "sha256": "8058521118df0d6413d81bc81d16435316e0f04892d562c8e8f1e1ccce6a1b23"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2rampcorner.dts",
+   "bytes": 1553,
+   "sha256": "de122bd6d8a35827ef68c8fa9dd4d4612f20180a89856646e0945ff61b6876e8"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2rampup.dts",
+   "bytes": 1553,
+   "sha256": "f9c0ca11ced1ec6b353eb8f657de6b5b2bbdd3817a7c291eab0189b8148bdf7c"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2rampupcorner.dts",
+   "bytes": 1553,
+   "sha256": "faef7b30ec351fe393974f22bcb21351d0e734f21de329b2b940162bf062d8d3"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2round.dts",
+   "bytes": 1761,
+   "sha256": "21975917f24a85a68345f6c742fe1a280887abcc99dd7c28006db4932cc559ab"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x2cone.dts",
+   "bytes": 1761,
+   "sha256": "6cf29abcf2b780a6ccb47e87d0bcba436a1f0fdad4306dab99f285ca8db9c536"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x3ramp.dts",
+   "bytes": 1553,
+   "sha256": "d0955252e21d78a64be86c8d33efeaa5467b6a3c608d027e308f86599b2f57fa"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x3rampcorner.dts",
+   "bytes": 1469,
+   "sha256": "e337b07e143a4a438a3670ed7cc714dd105172e859998b28f43ca02b6fe0eb69"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x3rampup.dts",
+   "bytes": 1553,
+   "sha256": "abd60d9ab50cbf42b08cd55aff2845e4a6c87adf246cc12bf00a76fe0d6d9193"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x3rampupcorner.dts",
+   "bytes": 1469,
+   "sha256": "2830c7c9848f94add75b5c2968048b1cca22ba0d72a38b1588460674b97754ad"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x5ramp.dts",
+   "bytes": 1553,
+   "sha256": "30cbfebd28ee20dbaf97355bf44fe03e3bb1d1dec486f62f15bb8dd9c2ab78c2"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x5rampcorner.dts",
+   "bytes": 1469,
+   "sha256": "09953360fdf54d1154c7972db13b18cd906edb41814c4c3287bce4f596d9926b"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x5rampup.dts",
+   "bytes": 1553,
+   "sha256": "aae82fc1427aeed8de8f96e933643871eaf660e39b27e2631876b4a82f7b45d0"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x2x5rampupcorner.dts",
+   "bytes": 1469,
+   "sha256": "49018219843d6596c3960e85b38f45e0fa497b12c6dc9b3ca96e0a4c0bb2070b"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x3ramp.dts",
+   "bytes": 1469,
+   "sha256": "029f1b40b9d01b7611164c4e90074ecae0a36ca055ef169c08be89a3222e571a"
+  },
+  {
+   "path": "base/data/shapes/bricks/2x3rampup.dts",
+   "bytes": 1469,
+   "sha256": "c5b95071c8e00864f0c2e3c456b914e56b68fb3b10181ed324cc7462754b8ffb"
+  },
+  {
+   "path": "base/data/shapes/bricks/3x3rampcorner.dts",
+   "bytes": 1485,
+   "sha256": "cf5e4b112e54681d6224884aa21bf40065899c2b552d2d1005e7c56c262067dc"
+  },
+  {
+   "path": "base/data/shapes/bricks/3x3rampupcorner.dts",
+   "bytes": 1485,
+   "sha256": "4e5a2b38d75164f54bc19ca0acb3921ff9f2af6ce3a61767e2966fa0dd32f4cf"
+  },
+  {
+   "path": "base/data/shapes/bricks/4x2cresthigh.dts",
+   "bytes": 1421,
+   "sha256": "5bc0d0ba35d26f1e35b05aeef5723b8e2819a4795114202c7d8e559130a5daee"
+  },
+  {
+   "path": "base/data/shapes/bricks/4x2crestlow.dts",
+   "bytes": 1337,
+   "sha256": "225e6899ecf4838a7f967c6fdbdd40eb8fb317619f7e46ffb1a938b840b49f63"
+  },
+  {
+   "path": "base/data/shapes/bricks/4x2ramp.dts",
+   "bytes": 1553,
+   "sha256": "bf5b65251122a5c1abb7218e2817301b09b330620aa111fc46867beb871a1053"
+  },
+  {
+   "path": "base/data/shapes/bricks/4x3ramp.dts",
+   "bytes": 1469,
+   "sha256": "ff7a7ec5a4514f9a12aae00f9c7cd7a58ce01e6f690d0318ed54a7c6d411e495"
+  },
+  {
+   "path": "base/data/shapes/bricks/pinetree.dts",
+   "bytes": 20583,
+   "sha256": "94d96707a6467bd11d82f0213e699ed152963fe4d7b30b6b39a5cb6e8eb69c45"
+  },
+  {
+   "path": "base/data/shapes/brickweapon.dts",
+   "bytes": 13015,
+   "sha256": "65d6be95e4021f13c7f35d380ea8c596c900adf02b85535bb87ae20b2746602d"
+  },
+  {
+   "path": "base/data/shapes/darkRed.png",
+   "bytes": 80,
+   "sha256": "2952b59aff9ca6fa0ac15dc7f16a6f47257c91c4ff243f9c954610820ec7473d"
+  },
+  {
+   "path": "base/data/shapes/empty.dts",
+   "bytes": 421,
+   "sha256": "6c5f796c1fe9ca9b2ac7c36607e88c288ffb2085ad47ff763382514e274142d1"
+  },
+  {
+   "path": "base/data/shapes/environment/base.LCD.png",
+   "bytes": 86,
+   "sha256": "9f9685ca28c2f72f8495926ce22e96e70e602d6b655a54af1da958e4df52d175"
+  },
+  {
+   "path": "base/data/shapes/environment/black.png",
+   "bytes": 86,
+   "sha256": "fc455c2981531b1cf42d4d240aeb0ea17f684017630926588af6c9262d89b6da"
+  },
+  {
+   "path": "base/data/shapes/environment/blue.LCD.png",
+   "bytes": 86,
+   "sha256": "6451479b428e988833f14185d882416590271207a46e1b2ce69bdfd9ed94e349"
+  },
+  {
+   "path": "base/data/shapes/environment/bulb1.dts",
+   "bytes": 5561,
+   "sha256": "363823912953298b1f33a1b299a3f0b722fe93d7a014a4db55f04c495ed37dec"
+  },
+  {
+   "path": "base/data/shapes/environment/fluorescentlight.dts",
+   "bytes": 4697,
+   "sha256": "ba18c694911c82dee86b4ad91936e5f88df580e9baf2648edfaf30ba6f80d28c"
+  },
+  {
+   "path": "base/data/shapes/environment/glass05.png",
+   "bytes": 435800,
+   "sha256": "8e4d119ea0617866c337142da0c7881c8d74e088ba1604a8e9066680391d14f2"
+  },
+  {
+   "path": "base/data/shapes/environment/glassa.dts",
+   "bytes": 8461,
+   "sha256": "df76109bac1bc3b3ec9ab8309c665fa2055d9df124883772f1eae5b01789ea18"
+  },
+  {
+   "path": "base/data/shapes/environment/green.LCD.png",
+   "bytes": 86,
+   "sha256": "bef246f762a0e0963a51838d36ddafe0f77dba21e441f01c6247671f7636f95b"
+  },
+  {
+   "path": "base/data/shapes/environment/lcd.dts",
+   "bytes": 5502,
+   "sha256": "8e405094e12e40ab3dffab8796833a03bcfeb74895e4df363ee6cd4036b6a948"
+  },
+  {
+   "path": "base/data/shapes/environment/lcdcolon.dts",
+   "bytes": 1642,
+   "sha256": "a10a28155183a2e5977a3ce092b666a5d33f7afcc6144ed4cb40ac025a8b3eda"
+  },
+  {
+   "path": "base/data/shapes/environment/stoveBurner.png",
+   "bytes": 67059,
+   "sha256": "2e3bce9c304707533a8df718c687ea4ac7567e859c1e81e50a0b4f2281d107ae"
+  },
+  {
+   "path": "base/data/shapes/environment/stoveburner.dts",
+   "bytes": 2113,
+   "sha256": "f10ba3417cbe8bd9349ca9852f0ce5ee2dbedb4a6bf2e5d44db7c943ad4ede50"
+  },
+  {
+   "path": "base/data/shapes/environment/white.png",
+   "bytes": 86,
+   "sha256": "4a4ff538932f71bccd1147bc243e059d224bed6576d3a53b15cf28cfde60cc8e"
+  },
+  {
+   "path": "base/data/shapes/gray25.png",
+   "bytes": 82,
+   "sha256": "1a368a0a4040914551e0a4e07870cb0b257a5a848668df3b51c54b2fc097b96b"
+  },
+  {
+   "path": "base/data/shapes/gray50.png",
+   "bytes": 82,
+   "sha256": "835741a345540513f9216c7c0bc93d18647e96dc4bf4fda8fd614dd263354963"
+  },
+  {
+   "path": "base/data/shapes/gray75.png",
+   "bytes": 82,
+   "sha256": "56b3c2b662f756905ff34d1e38a32ee062e34b7a4444e45dbe717eb76a6e27e6"
+  },
+  {
+   "path": "base/data/shapes/green.png",
+   "bytes": 82,
+   "sha256": "d73b39f4eae9e009af49f96fbfb05069f6ae3344e1f837adaab663c1a0bd8e56"
+  },
+  {
+   "path": "base/data/shapes/lightBlue.png",
+   "bytes": 82,
+   "sha256": "66a2ad28964904a96d3b6854dbd76ea23e3f0dfb16fab80ad17532ab4641d330"
+  },
+  {
+   "path": "base/data/shapes/lightYellow.png",
+   "bytes": 850,
+   "sha256": "cdcccb474219bcde405de4887b5b509bd82b52eb4b101cd1ddc1082ce9a4326b"
+  },
+  {
+   "path": "base/data/shapes/markers/octahedron.dts",
+   "bytes": 536,
+   "sha256": "3443488da0cab410fefdc255f4316e168227db3ee9479cb5a575092622e13d94"
+  },
+  {
+   "path": "base/data/shapes/megaPhoneRidge.png",
+   "bytes": 6276,
+   "sha256": "6a61fbd963af473dd902c4ec893028883da3c5f98ae5799dca67fa9f4e07f71f"
+  },
+  {
+   "path": "base/data/shapes/palegreen.png",
+   "bytes": 82,
+   "sha256": "47ada53dd67c3221cb40fac31a8689a386414109f83906c5f3f561ca889b783a"
+  },
+  {
+   "path": "base/data/shapes/player/Faces/smiley.png",
+   "bytes": 817,
+   "sha256": "8e830ecb1a4563718309347f06f040f99c7ab3071bbb2df0588147a9ac39d2ea"
+  },
+  {
+   "path": "base/data/shapes/player/Faces/thumbs/smiley.png",
+   "bytes": 282,
+   "sha256": "af63a3793a97fdaad188cf822ed9583f679d98ec211df52c7eb81f2c6e4676e6"
+  },
+  {
+   "path": "base/data/shapes/player/LArm.txt",
+   "bytes": 14,
+   "sha256": "365219607dd48e22a25224001b9d22a62da1db5adc8342ec1f043770b79c8b28"
+  },
+  {
+   "path": "base/data/shapes/player/LHand.txt",
+   "bytes": 12,
+   "sha256": "6c4e6f2f39d67552dd19f5d41ef8ae55f47b7f3690d29fcf927eb28bf58b134d"
+  },
+  {
+   "path": "base/data/shapes/player/LLeg.txt",
+   "bytes": 11,
+   "sha256": "4a76925c463d9ddf2812c7b4ce0db127ce77cb5c000651de857f663244f63c18"
+  },
+  {
+   "path": "base/data/shapes/player/RArm.txt",
+   "bytes": 14,
+   "sha256": "b9ab9912c2e69c8b70f13d7ea1ce405f8faeffbb33d8811e49feac1373348f32"
+  },
+  {
+   "path": "base/data/shapes/player/RHand.txt",
+   "bytes": 12,
+   "sha256": "f32b47894f9033ee0efea36bb5453629ef327fb040f69192f641e12fc998c088"
+  },
+  {
+   "path": "base/data/shapes/player/RLeg.txt",
+   "bytes": 11,
+   "sha256": "4edcfc4ed25fd811a0d9efee9cc37ba06b21f05ee36d14ec9e5ff3d2f4e2d14c"
+  },
+  {
+   "path": "base/data/shapes/player/accent.txt",
+   "bytes": 265,
+   "sha256": "60febe4af7bc296d48d1cf73fc07dae79145558183620183fd291503229ebfe5"
+  },
+  {
+   "path": "base/data/shapes/player/chest.txt",
+   "bytes": 15,
+   "sha256": "5e64fea9cd8168ba272250f408ffea27a794ef0da9618c4aab85161d00c99cb4"
+  },
+  {
+   "path": "base/data/shapes/player/decal.ifl",
+   "bytes": 1044,
+   "sha256": "8bff283ee87d31434d00f37bd955f05a338d75961a1a17ffb30585dd2ca1a216"
+  },
+  {
+   "path": "base/data/shapes/player/decals/AAA-None.png",
+   "bytes": 3396,
+   "sha256": "2f80bfb64fcc45c90c9709e0ba0ded7bf9e7fed211f4209d54c51f5f362d0736"
+  },
+  {
+   "path": "base/data/shapes/player/decals/thumbs/AAA-None.png",
+   "bytes": 2891,
+   "sha256": "ed622345c067f60d894d2d9240af4c47c5f37670f2c6649ed5092e179047a4aa"
+  },
+  {
+   "path": "base/data/shapes/player/face.ifl",
+   "bytes": 1026,
+   "sha256": "2b33278b17b1cd434a4023fc76b18abec7eb0008b72c217c2b0bd5d4ec7ecdba"
+  },
+  {
+   "path": "base/data/shapes/player/hat.txt",
+   "bytes": 67,
+   "sha256": "1e2bb529b206f08c0df19e64f7f83e5d2600b6212985a3031f08a374a319cb8c"
+  },
+  {
+   "path": "base/data/shapes/player/hip.txt",
+   "bytes": 15,
+   "sha256": "ee9e5ecd0f99c2735fd178d0c81f46932b91a9727036a9a30b6b8a86bad3c918"
+  },
+  {
+   "path": "base/data/shapes/player/m.dts",
+   "bytes": 230023,
+   "sha256": "279b2852b248ccc0b7242e528723b1395c0947c037d31a6e918283b184037844"
+  },
+  {
+   "path": "base/data/shapes/player/m_activate.dsq",
+   "bytes": 2759,
+   "sha256": "fcfb6d7f7944ccb99cba8fa63abf2bf1e735095df2dff405f7b86471a75efba2"
+  },
+  {
+   "path": "base/data/shapes/player/m_activate2.dsq",
+   "bytes": 3923,
+   "sha256": "9434b11c42a374c45b36c07cdb1373e006f9d864490e86c998024978320dcd18"
+  },
+  {
+   "path": "base/data/shapes/player/m_armattack.dsq",
+   "bytes": 1595,
+   "sha256": "21a2835a03f952c2de5ddd2d3ebde18abe318f4a5a2f5553de3796d49309582b"
+  },
+  {
+   "path": "base/data/shapes/player/m_armready.dsq",
+   "bytes": 379,
+   "sha256": "51100089c00a623617e6f70bd5bfd46afc0ba346db0b9bf832de92313c670b6b"
+  },
+  {
+   "path": "base/data/shapes/player/m_armreadyboth.dsq",
+   "bytes": 490,
+   "sha256": "6fa3f1356f794f72018381bb114cce918d16862ecec4bd9fc31234e4e392991e"
+  },
+  {
+   "path": "base/data/shapes/player/m_armreadyleft.dsq",
+   "bytes": 458,
+   "sha256": "78c1daf81e840a035fe8f99d79b1504567e476703a5c9b143fce7225000fd024"
+  },
+  {
+   "path": "base/data/shapes/player/m_armreadyright.dsq",
+   "bytes": 458,
+   "sha256": "af95b103be7599ab49f2b43c2a57c44a5e991851b08260a41c9e2732cde37596"
+  },
+  {
+   "path": "base/data/shapes/player/m_back.dsq",
+   "bytes": 468,
+   "sha256": "ac4e10107493c423b7cfd4e5218356254ccc2b9b91551c866cd60981b9462447"
+  },
+  {
+   "path": "base/data/shapes/player/m_boot.dsq",
+   "bytes": 1018,
+   "sha256": "53734fa897fb98a9560998c3071070d7b69acf93dd20927d2fb9a5d7fd93a01d"
+  },
+  {
+   "path": "base/data/shapes/player/m_crouch.dsq",
+   "bytes": 684,
+   "sha256": "db53d67f8e80c77005a2600870354803ccad6b71b4f175afb03a82d3bb615742"
+  },
+  {
+   "path": "base/data/shapes/player/m_crouchback.dsq",
+   "bytes": 410,
+   "sha256": "d30d5427aa5b6038c0726a8cff0e59ec45d6d03ba7df2b31a7f51b6a3deca99f"
+  },
+  {
+   "path": "base/data/shapes/player/m_crouchrun.dsq",
+   "bytes": 341,
+   "sha256": "6f9c2ade22725b0e9bce796d3b2bdf291d81a36447fa4d3df762311f5afa8abf"
+  },
+  {
+   "path": "base/data/shapes/player/m_crouchside.dsq",
+   "bytes": 362,
+   "sha256": "a163fa43ab6f4e47f8b6d4caa802906cb265ccdb3d39146383810278c60354bf"
+  },
+  {
+   "path": "base/data/shapes/player/m_death1.dsq",
+   "bytes": 1513,
+   "sha256": "f65259f08b1120001f8a422b13a36570653670185d32c67a561991662697cec9"
+  },
+  {
+   "path": "base/data/shapes/player/m_fall.dsq",
+   "bytes": 344,
+   "sha256": "e0146131438fa07588e0344e082437ce55b4c19597c5e80e4ba6e9d594d8efbc"
+  },
+  {
+   "path": "base/data/shapes/player/m_headside.dsq",
+   "bytes": 3598,
+   "sha256": "c0a16f33a1172bd9a3d47860b0339a9a314ced129560af9d6e3610815222476a"
+  },
+  {
+   "path": "base/data/shapes/player/m_headup.dsq",
+   "bytes": 1107,
+   "sha256": "9be28f299fd4044df89538373fff2e3cc73aa52dfe2bb0bdd58d383e7062ef00"
+  },
+  {
+   "path": "base/data/shapes/player/m_jump.dsq",
+   "bytes": 659,
+   "sha256": "9f52d5e0a2997cd687cf4cef18b837164046468d0c840742f515a9f12c661b07"
+  },
+  {
+   "path": "base/data/shapes/player/m_leftrecoil.dsq",
+   "bytes": 1983,
+   "sha256": "1d72442c0b0dadd823cf001e43eb80e463c97417ff4f9a2cc51d74424728e85e"
+  },
+  {
+   "path": "base/data/shapes/player/m_look.dsq",
+   "bytes": 6209,
+   "sha256": "d2a9dd9eafc9580c78af3e20174abf6d96f6f48b9439c356c80ea4f42a1012e9"
+  },
+  {
+   "path": "base/data/shapes/player/m_plant.dsq",
+   "bytes": 3663,
+   "sha256": "77a16d6032eb5518d5204a67173b4661564f858ad96c26bc44f5b8ec7bb27dcb"
+  },
+  {
+   "path": "base/data/shapes/player/m_root.dsq",
+   "bytes": 292,
+   "sha256": "47d9ca8ebe936537178420fa4023bce7dbcd4184051bf381c9e651207a69bf3d"
+  },
+  {
+   "path": "base/data/shapes/player/m_rotccw.dsq",
+   "bytes": 1983,
+   "sha256": "8f1d2451036385da7f8d751f7a8531d5fb3725c34b85d01ea0dc6d9a5deae7a0"
+  },
+  {
+   "path": "base/data/shapes/player/m_rotcw.dsq",
+   "bytes": 1983,
+   "sha256": "6d6b11b3bc76d75d12ef514e41d4507f3686a47ab63730d3452aca4de98a5878"
+  },
+  {
+   "path": "base/data/shapes/player/m_run.dsq",
+   "bytes": 1582,
+   "sha256": "9b0d1d51ecf537008b3856fc7d942de724f005c1fc58c816aeda1d9abd8f63d0"
+  },
+  {
+   "path": "base/data/shapes/player/m_shiftaway.dsq",
+   "bytes": 1983,
+   "sha256": "a38fddbd85ce3c41f320c907702db371f256f387e1008a3e2ff8b1b75e8bfd3c"
+  },
+  {
+   "path": "base/data/shapes/player/m_shiftdown.dsq",
+   "bytes": 3147,
+   "sha256": "7534bb347b68e27d88593296396a63545d321f52c5f23c6f5f5b91292346c97c"
+  },
+  {
+   "path": "base/data/shapes/player/m_shiftleft.dsq",
+   "bytes": 1983,
+   "sha256": "491cf46f2dad7a23dc6d43ca0605c703e074973e0ea6fc916109019f8ede34af"
+  },
+  {
+   "path": "base/data/shapes/player/m_shiftright.dsq",
+   "bytes": 1983,
+   "sha256": "95ac273185bd79088fadee3c3ab746760c9fdc2d7f8a09d3d6ac5f514436f6fe"
+  },
+  {
+   "path": "base/data/shapes/player/m_shiftto.dsq",
+   "bytes": 1983,
+   "sha256": "21adb928d33e194f0631054c91af0a235bef6309f019776268b46060c6cd5e6f"
+  },
+  {
+   "path": "base/data/shapes/player/m_shiftup.dsq",
+   "bytes": 3147,
+   "sha256": "b8f00c1cdad34b8fc9d149c770e4f19557757a65cb1c4560377da52e38a2a352"
+  },
+  {
+   "path": "base/data/shapes/player/m_side.dsq",
+   "bytes": 360,
+   "sha256": "ec92c740cd6e0745229db2e7cea4e64f91c5ee05b554d25a16473b219757ce84"
+  },
+  {
+   "path": "base/data/shapes/player/m_sit.dsq",
+   "bytes": 1052,
+   "sha256": "ff162def96175785b8625ff3f47fe0b42938a8628e1f47b9d9385020dd861f16"
+  },
+  {
+   "path": "base/data/shapes/player/m_spearready.dsq",
+   "bytes": 9744,
+   "sha256": "bfc6fedca9210b0248c33af72bc092948ecb47f7b7cd2f791d9a83da1c8980ba"
+  },
+  {
+   "path": "base/data/shapes/player/m_spearthrow.dsq",
+   "bytes": 3924,
+   "sha256": "a7b315c14936044814f9cffb7d53c9c7067c64445c8d7f320b355a0bcdfb9c50"
+  },
+  {
+   "path": "base/data/shapes/player/m_standjump.dsq",
+   "bytes": 1548,
+   "sha256": "d0128dfc50f26b2232c4012ef3782b2f89302bafacb24fa812faa311ff67dc42"
+  },
+  {
+   "path": "base/data/shapes/player/m_talk.dsq",
+   "bytes": 2276,
+   "sha256": "1ab52b6f5534296d90eb6db871044f11dcf522909781cf865076a0fd11792116"
+  },
+  {
+   "path": "base/data/shapes/player/m_undo.dsq",
+   "bytes": 3599,
+   "sha256": "4f2ae8475400a20ae1dd6c518c219acd20c08d311bb9ddde220a3133f70c1ecc"
+  },
+  {
+   "path": "base/data/shapes/player/m_visorup.dsq",
+   "bytes": 421,
+   "sha256": "0e18b6af5144140b38021c41781cc7e73357a4a8f6f5d6ed97d08c89d59e9d0c"
+  },
+  {
+   "path": "base/data/shapes/player/m_wrench.dsq",
+   "bytes": 3147,
+   "sha256": "bcb27cf434b88157b768331cd1a8d25c92bd77a00327dce3b7fc22f1e533888c"
+  },
+  {
+   "path": "base/data/shapes/player/pack.txt",
+   "bytes": 39,
+   "sha256": "bf1528817aefa32676ec69765f9ff369addda5bd71ddae01cfd2e2b6830cd8a0"
+  },
+  {
+   "path": "base/data/shapes/player/secondPack.txt",
+   "bytes": 83,
+   "sha256": "3cd88a20c7e529803762fc9b97c1fb3f9f712b3cfbf73da5cca7297b3a7088a4"
+  },
+  {
+   "path": "base/data/shapes/printGun.dts",
+   "bytes": 22927,
+   "sha256": "9b74b7bfbbbba10b17e7a7932508b3d2f9124a72c97373b6a988d32b519e3f9d"
+  },
+  {
+   "path": "base/data/shapes/red.png",
+   "bytes": 86,
+   "sha256": "1ef8d616663aa70080fad21d5975e3573eb1a1bdc25252c2e7c5ed7bfb68aa94"
+  },
+  {
+   "path": "base/data/shapes/spraycan.dts",
+   "bytes": 43776,
+   "sha256": "86adadd56bcc64907c730eea9fba44547be46d6203ba467e3c02f72193a13e2a"
+  },
+  {
+   "path": "base/data/shapes/spraycanLabel.png",
+   "bytes": 25921,
+   "sha256": "319a7295adf95fa9a7f2dc60bb61664cf107137388f83edcab4d8e80a5396684"
+  },
+  {
+   "path": "base/data/shapes/transspraycan.dts",
+   "bytes": 41203,
+   "sha256": "95fdb7203a5134972f3c7b816c369e3a76d3f2562919d683118e5033b875782a"
+  },
+  {
+   "path": "base/data/shapes/wand.dts",
+   "bytes": 17009,
+   "sha256": "0b8bee753b2d2b5c7e031cdfe698e5adf69859c8eaf951b6d7e3201f0db808ec"
+  },
+  {
+   "path": "base/data/shapes/white.png",
+   "bytes": 134,
+   "sha256": "814b88a56f189b43de540e77a2275864a9d713717b005283215a0dc8e435a3e0"
+  },
+  {
+   "path": "base/data/shapes/whiteCheck.png",
+   "bytes": 305,
+   "sha256": "a4df2a8f3753602aa8636056cd6096506be9a2046bfd8ebf598c137f95e7b09a"
+  },
+  {
+   "path": "base/data/shapes/wrench.dts",
+   "bytes": 57783,
+   "sha256": "d97c76e0b5e65ed8f6f987ab433da4b487544ec2c2d05432ed53030852ad7f83"
+  },
+  {
+   "path": "base/data/shapes/yellow.png",
+   "bytes": 134,
+   "sha256": "9b2376b166050a20acdff35f832aaec5fdc76eff678138fc36fddf6eaecfbea7"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/1.jpg",
+   "bytes": 71004,
+   "sha256": "dfd05b3b7fff72669f94d961eb287be36a02afa24671ef934102f1d984133f7c"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/2.jpg",
+   "bytes": 72328,
+   "sha256": "53ea67f740e849ef6a76f56b952383863a64838358c132e20bbc38f215b4c973"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/3.jpg",
+   "bytes": 74311,
+   "sha256": "06ba3d206b913c9dc695cf69aec92f857c6b42d5ded8701b44bafa2ccffef7a1"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/4.jpg",
+   "bytes": 76007,
+   "sha256": "78f00af88a8d3ba2894cfe10e39c59083ef6f7f51e634638cb7f45e2cf5b5bc0"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/5.jpg",
+   "bytes": 14518,
+   "sha256": "df085818a54e9f870cbd6e320f9ec71560d1c2f98ca253ebd77f5f60e60f8bcf"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/6.jpg",
+   "bytes": 9573,
+   "sha256": "b31dda1a0011d33ae50f20290cd5780edacdd1ecd655cb3833de30c6c4822915"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/7.jpg",
+   "bytes": 22306,
+   "sha256": "4bdb849caaec236d74d8b779ade5701b98d7e8ee799fab7fbb3e8dee3e284a37"
+  },
+  {
+   "path": "base/data/skies/Sky_Blue2/resource.dml",
+   "bytes": 14,
+   "sha256": "2338c8517a3e79838da1c02cf77a2c87be47f0275d34cb551661b4ef68c07a63"
+  },
+  {
+   "path": "base/data/skies/Sky_Default/blue.png",
+   "bytes": 82,
+   "sha256": "08179324cf2ea82dc1e52e241306bdb346b5714664158efc1d5451e4c42669c3"
+  },
+  {
+   "path": "base/data/skies/Sky_Default/resource.dml",
+   "bytes": 34,
+   "sha256": "756ebfb1ee3ba50b5d925198f2d5a4e0796590b8f150ca8da150939e820f2353"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/1.jpg",
+   "bytes": 91482,
+   "sha256": "a188c14fff25dff54c738b5305042e87d34fc818ac98c9c3fb9aca039c4d8e9a"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/2.jpg",
+   "bytes": 104736,
+   "sha256": "945953fa96aaadf44b2140ad2359ff7a3c08e9910c6c328cb19076a5c9aa8287"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/3.jpg",
+   "bytes": 100478,
+   "sha256": "a537800da79406cc302fd52f0a010085992df5de40a9c1e6c80436316d1f8eca"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/4.jpg",
+   "bytes": 98916,
+   "sha256": "f9d85602853545a76a46f4424f039c2456036b170e4d35b297d5e3dc8d5104ce"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/5.jpg",
+   "bytes": 74078,
+   "sha256": "1d90b43faa93b4a86aaf9dda88342fdf470a95c5e82560108b7c091f53507402"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/6.jpg",
+   "bytes": 9550,
+   "sha256": "dc61f61b9edcd47b8d17fd0c8ab9f883bd30ca50498fd19ec1181b8943eea923"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/7.jpg",
+   "bytes": 26570,
+   "sha256": "188230f82cd29a31ec22f15a88a31e9ecc5911869d7c1c0a13dd28eb4a71e265"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky1/resource.dml",
+   "bytes": 14,
+   "sha256": "6d781a9e491f239bf08a0bf56e21b6e0203f80168f5b66b3ca4be11bd94e6d11"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/1.jpg",
+   "bytes": 41417,
+   "sha256": "89293cdcccd980322d899809edad7f7ff6049979bb2cd7cb96879964864be295"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/2.jpg",
+   "bytes": 47250,
+   "sha256": "2d9e4449b663a27e8e4f516f1323d2cb3f4c2f990c610f3df65b0e52710ae1a5"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/3.jpg",
+   "bytes": 42847,
+   "sha256": "a3d3d9b1871756adb3b9906481bf98ced680d3253e522dd0994a0d1ac2c520c4"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/4.jpg",
+   "bytes": 47115,
+   "sha256": "3c50fe26e368c416ee4b0b7ee600fc236a1bf38d2ec7b9e3a610eca0a0bf5a3d"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/5.jpg",
+   "bytes": 51610,
+   "sha256": "c0a680981f8aef6eae48c6da7ad8590d51bcb05c62661b5d74f4bbc688c77c75"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/6.jpg",
+   "bytes": 1848,
+   "sha256": "b6ec9b40c5a9c36c67798b58bf46d59dd6346eebf445e6627ea2b13eaa76046d"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/7.jpg",
+   "bytes": 12101,
+   "sha256": "f914cec6bfeaa00e1bc3e093feed62e1860024f869ea9fb32d3097f18cc0c84d"
+  },
+  {
+   "path": "base/data/skies/Sky_Spooky3/resource.dml",
+   "bytes": 14,
+   "sha256": "2338c8517a3e79838da1c02cf77a2c87be47f0275d34cb551661b4ef68c07a63"
+  },
+  {
+   "path": "base/data/skies/sunset/default.jpg",
+   "bytes": 285,
+   "sha256": "ef5ee7a9736dc2c4b22303a129cfa3943219e401705d4358cd7fcba60d56f329"
+  },
+  {
+   "path": "base/data/skies/sunset/resource.dml",
+   "bytes": 59,
+   "sha256": "9d06c0ecab23bacc7242c7834baf7a735a89c1dd3b6b3eaa4e624f0f9653f343"
+  },
+  {
+   "path": "base/data/skies/sunset/sunset1.jpg",
+   "bytes": 50129,
+   "sha256": "2e10c022ca97d03e31b9efa4e9b70f2c02f340dd7f8963577a0e048d39939471"
+  },
+  {
+   "path": "base/data/skies/sunset/sunset2.jpg",
+   "bytes": 38091,
+   "sha256": "f00abe46fbd41a758c9648874071d1e6c93f875e53683bd47bdd6d600b73d235"
+  },
+  {
+   "path": "base/data/skies/sunset/sunset3.jpg",
+   "bytes": 45801,
+   "sha256": "504c0e10d520a31b17cf31f994f1011be0e485ee81aa0b33a807df842c74a836"
+  },
+  {
+   "path": "base/data/skies/sunset/sunset4.jpg",
+   "bytes": 52143,
+   "sha256": "bad49207df5b7c2202f5548667ad3346ffbf14c256a2c69a1aef732a8db5cc15"
+  },
+  {
+   "path": "base/data/skies/sunset/sunset5.jpg",
+   "bytes": 40113,
+   "sha256": "281bba0b4c50939b1db9f446074a6276c2cbb76ae66fc338682abdca519d210d"
+  },
+  {
+   "path": "base/data/skies/sunset/sunset6.jpg",
+   "bytes": 56200,
+   "sha256": "4ce1e72d968fd7d53a7f532351bacacfaa6a8a258d4467d335b1bce6d6168692"
+  },
+  {
+   "path": "base/data/sound/admin.wav",
+   "bytes": 44950,
+   "sha256": "f06ddcdaa86ffa115bfd22e8efdfa6efef99536b8c286aaf5ac93569b1858cf8"
+  },
+  {
+   "path": "base/data/sound/banned.wav",
+   "bytes": 33752,
+   "sha256": "7bc7c5d3ebd40c46d180a2c6b27bbab8b6d74f967d86fbf575d760d36d9ef89d"
+  },
+  {
+   "path": "base/data/sound/bodyRemove.wav",
+   "bytes": 64024,
+   "sha256": "6cb8595b85da893480ab49f4260abf1fda921276d3da8abaae066c4cf284ce8c"
+  },
+  {
+   "path": "base/data/sound/breakBrick.wav",
+   "bytes": 5744,
+   "sha256": "7bf409d3b9b5aa7bfb4ce3753d31eaf66865cc8c0c06fc89c85d64a46cde6ca8"
+  },
+  {
+   "path": "base/data/sound/brickClear.wav",
+   "bytes": 190888,
+   "sha256": "cf9c592a67c1eb35e42802a0e8de5d44cc490c2d1aa52491485f839cf1b354b9"
+  },
+  {
+   "path": "base/data/sound/clickChange.wav",
+   "bytes": 714,
+   "sha256": "aad5dd89a2d5da5aead883c36c7fd05f38654552e4a93ae4e1e8197e53a8624a"
+  },
+  {
+   "path": "base/data/sound/clickMove.wav",
+   "bytes": 1302,
+   "sha256": "01d083e36b36de046205d190ffbf98e876565ed3a4b1182b272c2aba6e747b7f"
+  },
+  {
+   "path": "base/data/sound/clickPlant.wav",
+   "bytes": 6434,
+   "sha256": "01a2b7bf9b50050f64143110bfdcd5758bb339c4931d00333c60072f250ee105"
+  },
+  {
+   "path": "base/data/sound/clickRotate.wav",
+   "bytes": 4482,
+   "sha256": "3d756cc6c2820fb9b704e3f944972b5935c18d9f2a41bf8ecb462d772db927b6"
+  },
+  {
+   "path": "base/data/sound/clickSuperMove.wav",
+   "bytes": 1554,
+   "sha256": "050977583edcf2c37690e1ee3c2c522a48a49b55ab812b2e3ca167017cd3acc2"
+  },
+  {
+   "path": "base/data/sound/death.wav",
+   "bytes": 10634,
+   "sha256": "808ec8e2457fab356e77e6aabc2ca2f6d6c271408606a5420f3c956868872779"
+  },
+  {
+   "path": "base/data/sound/error.wav",
+   "bytes": 8500,
+   "sha256": "dfb8849236457f27c4cd1e3b003aa04be454abaf668357be5add371872a8168b"
+  },
+  {
+   "path": "base/data/sound/exitWater.wav",
+   "bytes": 42330,
+   "sha256": "35dc4a4f156761eb9c889d9fb995cfe1b43743be05addcd8dabd8dae30dd31e0"
+  },
+  {
+   "path": "base/data/sound/fastimpact.wav",
+   "bytes": 24912,
+   "sha256": "a55ad4d79a7be82355e729bd496e5e03fd10f4b9424a917b382d3b0028aa329b"
+  },
+  {
+   "path": "base/data/sound/glassBreak.wav",
+   "bytes": 84570,
+   "sha256": "c4f4634847e06d61092420402d23484d688592c2c11a262fe2d1be6768ff6a50"
+  },
+  {
+   "path": "base/data/sound/hammerHit.WAV",
+   "bytes": 12392,
+   "sha256": "7832767e233d124f618378b17e8810eacfee15d2c3aeea0106bc5467a88edd41"
+  },
+  {
+   "path": "base/data/sound/jump.wav",
+   "bytes": 9378,
+   "sha256": "dea01ad4700f45e036c5856f6a81c6f5f958d2073e26ee5698cd9836096ddbf2"
+  },
+  {
+   "path": "base/data/sound/lightOff.wav",
+   "bytes": 10640,
+   "sha256": "97e57cd1a038a5bc069baefc9b2ed22be7b84f886c2fd281f34fe41cb30608e9"
+  },
+  {
+   "path": "base/data/sound/lightOn.wav",
+   "bytes": 10578,
+   "sha256": "f017a7697b705bdb324026ea769667f74fd7818e3f58d2d10862748e42166254"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_00.WAV",
+   "bytes": 25930,
+   "sha256": "a2d7f2817f4af9a98b15010b9ed6ed25360f74d01e6366d0ac19ac588d635f25"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_01.WAV",
+   "bytes": 27864,
+   "sha256": "b88899835a8d44d62904cd76bfe798319cd6a4d66eed65762273c8ffd21aedf1"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_02.WAV",
+   "bytes": 25382,
+   "sha256": "128a8125a3783c52d0373315abf19da9764d51cea66eb2a71dfda86e3f2a3efa"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_03.WAV",
+   "bytes": 27384,
+   "sha256": "33304cd7d745f6b96f9a503284dbf63f05af3b68f876007edd5b8f976e6c40ba"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_04.WAV",
+   "bytes": 26660,
+   "sha256": "fa20149d394ced179e428db758fba2c685cb26f18f0047ffb28d575973cec4ac"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_05.WAV",
+   "bytes": 23656,
+   "sha256": "37dc7d405eee66850d5ff3a2d41dfb8dfca24a235cd82afb90025a0123a66ab4"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_06.WAV",
+   "bytes": 30200,
+   "sha256": "6ff05eeef622d7a10dca7b5f54a8fcdda30eaea1af213a736c97f541805e57f5"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_07.WAV",
+   "bytes": 23086,
+   "sha256": "b9a892f1879125670d5051fa1871dc64daf507960fd87ded223b47cff91727f1"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_08.WAV",
+   "bytes": 26124,
+   "sha256": "254ea46bf0dbcec1cf1989da3742f95131965a039d24db6e08c44a5f04bd6bfb"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_09.WAV",
+   "bytes": 27600,
+   "sha256": "777a6542c8a689a60689eab7a1c22d743b43d51b30b26eacf9e507a04013d419"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_10.WAV",
+   "bytes": 20998,
+   "sha256": "0f61ac81a7b93da8c43286716388cb3e6783551eaef8e6a0a0f91403c12710ec"
+  },
+  {
+   "path": "base/data/sound/notes/Synth 4/Synth4_11.WAV",
+   "bytes": 27324,
+   "sha256": "6a5bfde52a0811878d8e2929cfc489a9f0ae4a70e14e8c2361a56d0bac64a808"
+  },
+  {
+   "path": "base/data/sound/orchhith.wav",
+   "bytes": 41594,
+   "sha256": "71a50eefe3dd73e8ddaed5f73c6b5ca7364a286c4c5b3748b7d3e366beee8c85"
+  },
+  {
+   "path": "base/data/sound/pain.wav",
+   "bytes": 11308,
+   "sha256": "d29cfc5c4a1b9e9f6b20d637973d2c8d66648cc4b736aafaad9b3788b997c9f5"
+  },
+  {
+   "path": "base/data/sound/playerConnect.wav",
+   "bytes": 23596,
+   "sha256": "426b01641c79d45cf221084efc775e28aa7599bc4d7e3d365c416236a8d1e2e5"
+  },
+  {
+   "path": "base/data/sound/playerLeave.wav",
+   "bytes": 27236,
+   "sha256": "b784ba653c89c89f92f0afde94a2cba50ce12eef2a516f247671bb4bf5518a24"
+  },
+  {
+   "path": "base/data/sound/playerMount.wav",
+   "bytes": 3180,
+   "sha256": "fe07cd65a87fc1983068d686c6fd7e451a9085d0b74c5ee62788ba5c43c811b0"
+  },
+  {
+   "path": "base/data/sound/printFire.wav",
+   "bytes": 20838,
+   "sha256": "8be6b2a482a235e539fe946afc9ee633a21c693ce8d7fb999d56313e3ec1a2d4"
+  },
+  {
+   "path": "base/data/sound/processComplete.wav",
+   "bytes": 47082,
+   "sha256": "6084b67db6470ff7031a716702d4dfcad7da3d9956e4f46d24c7f309ca2243e8"
+  },
+  {
+   "path": "base/data/sound/slowimpact.wav",
+   "bytes": 18814,
+   "sha256": "f30b58da86d90748d4b1235dbfe81a4ef1199d5ab2430be3105c4cc37415e930"
+  },
+  {
+   "path": "base/data/sound/spawn.wav",
+   "bytes": 21860,
+   "sha256": "ee74d5613a3f439edf2fb72af7a560f4beed9260a200b0798fe73f92a639dd79"
+  },
+  {
+   "path": "base/data/sound/splash1.wav",
+   "bytes": 12314,
+   "sha256": "a4324278486835663294d671dc3bf1b2d6a3649a8aedeb11406c471000213669"
+  },
+  {
+   "path": "base/data/sound/sprayActivate.wav",
+   "bytes": 13718,
+   "sha256": "b225ce05699e872d9f83667c7f081317886e2db01627bcc59b3832a5f97ded91"
+  },
+  {
+   "path": "base/data/sound/sprayLoop.wav",
+   "bytes": 33760,
+   "sha256": "fae689b63dd32e51e345435f8a98955408b512a55b93179ebe197b87c4f3127f"
+  },
+  {
+   "path": "base/data/sound/underWater1.wav",
+   "bytes": 113748,
+   "sha256": "c0c6ab9d8f98c11f1e0b19aa5a2975f205d2d4e32be344d206c9024c0adf1009"
+  },
+  {
+   "path": "base/data/sound/uploadEnd.wav",
+   "bytes": 64602,
+   "sha256": "344a0316433ed134a439144586e90b61749c23864be178176d72338f4266f09d"
+  },
+  {
+   "path": "base/data/sound/uploadStart.wav",
+   "bytes": 47178,
+   "sha256": "a11ece01bdc36a2696b2168b604b1aee2b63053e7160f025361e3459d7b2a135"
+  },
+  {
+   "path": "base/data/sound/vehicleExplosion.wav",
+   "bytes": 132548,
+   "sha256": "e2921161f2525afc38c8182b5f34e6c3de3cfd9b432e77170a3e5f1a3be0c54e"
+  },
+  {
+   "path": "base/data/sound/wandhit.wav",
+   "bytes": 23522,
+   "sha256": "1e3e22b46956fec605480870171b4452505c5e88f321a4576481df06d66c693a"
+  },
+  {
+   "path": "base/data/sound/weaponSwitch.wav",
+   "bytes": 4462,
+   "sha256": "1b73406b72eb574fb88e38c652f670584125084601bf7c52f1b73eb8f4be6eb7"
+  },
+  {
+   "path": "base/data/sound/wrenchHit.wav",
+   "bytes": 13400,
+   "sha256": "e68730e920063cc4353903ce537d76a58984cdfce6c432b804ef2bdddf655deb"
+  },
+  {
+   "path": "base/data/sound/wrenchMiss.wav",
+   "bytes": 11398,
+   "sha256": "618ba3b7b2b64ba06601b33ec7a4c7184314b646d21a36455fb3ac0e9fbe9bf6"
+  },
+  {
+   "path": "base/data/specialfx/bubbleSplash.png",
+   "bytes": 81653,
+   "sha256": "171624d89ee74ef0ff249d895529357117a82ad3942ed6e9cbd9941aea7ee6ab"
+  },
+  {
+   "path": "base/data/specialfx/bubbles.png",
+   "bytes": 23903,
+   "sha256": "b8b713bb365875492c1f04749ba90e5dcedb11477c94d70fcd6f903f7b762c5b"
+  },
+  {
+   "path": "base/data/specialfx/cloakTexture.png",
+   "bytes": 762,
+   "sha256": "4cbaecc01abf98de0bcaf5d5ff4a03f44a0e31c0b4083e26d5eae3066c74b8c8"
+  },
+  {
+   "path": "base/data/specialfx/snow.png",
+   "bytes": 55402,
+   "sha256": "fc705c8d5d434dd3f9efd538bff884c64ac145a72c78559fce64bed63adf4958"
+  },
+  {
+   "path": "base/data/terrains/default.jpg",
+   "bytes": 17705,
+   "sha256": "139711efb785285fb3174faf52dcb436f7fc86fc7cd658fb52a098d66b48b28b"
+  },
+  {
+   "path": "base/data/water/TSwater1.jpg",
+   "bytes": 48050,
+   "sha256": "3561ebd5ec0fb1295ed24688b8aabda6799a9faf8e9664296e957624834a9c84"
+  },
+  {
+   "path": "base/help/0. Credits.hfl",
+   "bytes": 3448,
+   "sha256": "afa44399503295418f7b86a3390a427ac27677559a515b723ce09838c1eeb5a4"
+  },
+  {
+   "path": "base/help/1. Controls.hfl",
+   "bytes": 2145,
+   "sha256": "a9b3a83c7ef086efd833e05db607c7c837035ab3791bcfbafafebc86c527fd50"
+  },
+  {
+   "path": "base/help/2. Getting Into the Game.hfl",
+   "bytes": 2969,
+   "sha256": "3f66f40d62a58deae34514e66cfeffd56e1b744641e88d2350cc8a68a45b65a6"
+  },
+  {
+   "path": "base/help/3. How To Build.hfl",
+   "bytes": 1565,
+   "sha256": "5aefd15efce03870892290e7c40b66749efbe157ab51df6fdc2a864e284ae87f"
+  },
+  {
+   "path": "base/help/4. Brick Appearance.hfl",
+   "bytes": 1751,
+   "sha256": "a03c9d418317726409237dbc696e92b105ec5bf3d4d5ea029cbdfe6864956fbe"
+  },
+  {
+   "path": "base/help/5. Destroying Bricks.hfl",
+   "bytes": 825,
+   "sha256": "27953d4c7ed59e904fe67974381b664a31d2f3290dd476cf2eb986d7433ddf39"
+  },
+  {
+   "path": "base/help/6. Saving.hfl",
+   "bytes": 243,
+   "sha256": "49bb0070f53ecdca6eeba41a520a776c5bc4f690bb571d10a57d69369a9bee3c"
+  },
+  {
+   "path": "base/help/7. Loading.hfl",
+   "bytes": 316,
+   "sha256": "ff1d61e50900eddcfcd41a06cb0f5e3c52da341627893cf3744a2e6c10533853"
+  },
+  {
+   "path": "base/lighting/corona.png",
+   "bytes": 8048,
+   "sha256": "d1d2d333c28f4c88187842d002c8ff0c953c5deee7f26a1d9860cb7723cd33b1"
+  },
+  {
+   "path": "base/lighting/corona2.png",
+   "bytes": 13166,
+   "sha256": "8eb05a910b8385cf0f445102d0b7614306dd468c78f33549e99068a86d3bf84e"
+  },
+  {
+   "path": "base/lighting/flare.jpg",
+   "bytes": 9594,
+   "sha256": "82d08dbd217dcc52d310e9ae6d5f56d4a0b548a6234921304a8516cf2a8c4cf6"
+  },
+  {
+   "path": "base/lighting/flare2.png",
+   "bytes": 7206,
+   "sha256": "368fc459d3d3fb0cee1f9c9d0d6383de3c21a2fc73f29448d758bf7f5d979c0c"
+  },
+  {
+   "path": "base/lighting/lightFalloffMono.png",
+   "bytes": 72853,
+   "sha256": "b0753ba9a333b4fde51aa3eccfbca6b4fa1317816c5f45087f64744d1be491d9"
+  },
+  {
+   "path": "base/lighting/whiteAlpha255.png",
+   "bytes": 79,
+   "sha256": "6fbcc4b9129eac79a7a59e6b35290fbbcb946913f5dcbf99123699186f4c1cc9"
+  },
+  {
+   "path": "base/lighting/whiteNoAlpha.png",
+   "bytes": 78,
+   "sha256": "b68de61392c506377e0d673fa36e239a47b67e603bdcb9cbf61d4ddbcd9722ff"
+  },
+  {
+   "path": "base/main-Vanilla.cs.dso",
+   "bytes": 1153,
+   "sha256": "fa165fdba3ce6abb1b7193e911c3fb9e749ac9e9642f56c17f9e708fd935eb48"
+  },
+  {
+   "path": "base/main.cs",
+   "bytes": 2352,
+   "sha256": "91dafe789ebc72218db50b21b9f95ccfefadfc3cb6763a7e39493b3845b13fba"
+  },
+  {
+   "path": "base/server/defaultAddOnList.cs",
+   "bytes": 1713,
+   "sha256": "faa903e5a5b5114876dabd1bac3d09ac04bf7939fd2d9e3a343fa6310526bc62"
+  },
+  {
+   "path": "base/server/defaultMusicList.cs.dso",
+   "bytes": 551,
+   "sha256": "91c151c4cce1dc85dd79130566e555be1f8b9999c4f916b433c63b79b0ff0b12"
+  },
+  {
+   "path": "base/server/defaults.cs",
+   "bytes": 2494,
+   "sha256": "eba817e8dce7b6160a80d79e508a3e565fb60030880dda7c51b2fbb539485c57"
+  },
+  {
+   "path": "base/server/init.cs.dso",
+   "bytes": 5764,
+   "sha256": "3118d14be416a81e6112d74af3f214f99782b39f03ea32649592dca423061f7c"
+  },
+  {
+   "path": "base/server/mainServer.cs.dso",
+   "bytes": 67059,
+   "sha256": "2bc7bd2d9341a17f800584606290ab68130ce0c714e60d943a019e619cb89c18"
+  },
+  {
+   "path": "base/server/scripts/DamageTypes.cs.dso",
+   "bytes": 3531,
+   "sha256": "ee0dec6ad664073dd1148726001c8d22872ce94e02051c18a4a48df15c4dfe6e"
+  },
+  {
+   "path": "base/server/scripts/allGameScripts-Vanilla.cs.dso",
+   "bytes": 578680,
+   "sha256": "e1d0d0d5dc8535ff00ce5b1471bd876971106db2049aff74249ad6e130f114da"
+  },
+  {
+   "path": "base/server/scripts/allGameScripts.cs",
+   "bytes": 30579,
+   "sha256": "66ca95decb93265cbdcd7e0448c2955e52b8174ad81bea1e1262a0703b2c62c9"
+  },
+  {
+   "path": "base/server/scripts/game.cs.dso",
+   "bytes": 36737,
+   "sha256": "b62dac3d1fea737f02668726ef862d1e63c457425469ff69a12cadcafc643e89"
+  },
+  {
+   "path": "Add-Ons/Brick_Arch.zip",
+   "bytes": 87635,
+   "sha256": "b3359e7febb45f5305c84703276a3ba5b9725421faddd4142902094f16052826"
+  },
+  {
+   "path": "Add-Ons/Brick_Checkpoint.zip",
+   "bytes": 7933,
+   "sha256": "fed72eab0e3711befc532b92dcdff2d2c84153400fab208ce077a3a8a30fae67"
+  },
+  {
+   "path": "Add-Ons/Brick_Christmas_Tree.zip",
+   "bytes": 22638,
+   "sha256": "9e4ba59c9be2b783af55d82c1b541328b95ef7e8d7038af8cb3b5f268770771c"
+  },
+  {
+   "path": "Add-Ons/Brick_Halloween.zip",
+   "bytes": 40526,
+   "sha256": "2817b65f675366f48376da679ff359ec4426009cedc986face34e6ba7bca3660"
+  },
+  {
+   "path": "Add-Ons/Brick_Large_Cubes.zip",
+   "bytes": 48503,
+   "sha256": "667b0850f7433c464b7d5cf781f36985508a531fdbc6521a0947de558572d3a8"
+  },
+  {
+   "path": "Add-Ons/Brick_Teledoor.zip",
+   "bytes": 8679,
+   "sha256": "9703202caf5a96183a5e1d5e78f175f34265d9be03f418b0e3e0944fe73a3f92"
+  },
+  {
+   "path": "Add-Ons/Brick_Treasure_Chest.zip",
+   "bytes": 21578,
+   "sha256": "1715a778146072aabdaefc7881ca41e2f2dc374f8a283b9bc733d5f4ad822345"
+  },
+  {
+   "path": "Add-Ons/Brick_V15.zip",
+   "bytes": 30457,
+   "sha256": "d343dd89d907280d4942c56789235d3af7bbc8eda03848f6fc383ac50fc86f30"
+  },
+  {
+   "path": "Add-Ons/Colorset_Default/colorSet.txt",
+   "bytes": 774,
+   "sha256": "03d45772bd787f176a95b01d94535473d7cfeb35210165442eb23bce325ef2b3"
+  },
+  {
+   "path": "Add-Ons/Colorset_Default/description.txt",
+   "bytes": 48,
+   "sha256": "79fa2df1ad038cbb8d3f9df0ee1105ea9ef25deb77909063800308262600a733"
+  },
+  {
+   "path": "Add-Ons/Decal_Default.zip",
+   "bytes": 600845,
+   "sha256": "9fa6fbf926d08bc3de077e13d6aa2558c817acc211cc1fdb795509f5177d087b"
+  },
+  {
+   "path": "Add-Ons/Decal_Hoodie.zip",
+   "bytes": 17616,
+   "sha256": "620445141941655e1c6b0374e57e6340db44d840e68893fd31f30993a4936d05"
+  },
+  {
+   "path": "Add-Ons/Decal_Jirue.zip",
+   "bytes": 243284,
+   "sha256": "cd49da2671c2e3483b5295f4c8a891eae7e2ad7a53b3f33975cdbd0da9a7b5d4"
+  },
+  {
+   "path": "Add-Ons/Decal_WORM.zip",
+   "bytes": 42030,
+   "sha256": "83a7c4e49d4cf25fb1d0ae84c50f80d47e5bc124f38f177bc8d953355038265e"
+  },
+  {
+   "path": "Add-Ons/Emote_Alarm.zip",
+   "bytes": 38783,
+   "sha256": "551807e5b8c968576bc99d383f0be527daac7bc7e8ddb5fa2e2942a311546533"
+  },
+  {
+   "path": "Add-Ons/Emote_Confusion.zip",
+   "bytes": 1165,
+   "sha256": "1a7cbeb9ef2d580f77209dde09b69c812f3701f9ad55e91749c9cbf432d9f753"
+  },
+  {
+   "path": "Add-Ons/Emote_Hate.zip",
+   "bytes": 1135,
+   "sha256": "99fab8548e672902c5a5353de9e7a65f954c38414e59f1bc7befae5b6a6417c3"
+  },
+  {
+   "path": "Add-Ons/Emote_Love.zip",
+   "bytes": 1147,
+   "sha256": "0db22ffc26aa4facc28a15de8848e6c47b38d71651e12613b2fc2f2787a0862b"
+  },
+  {
+   "path": "Add-Ons/Face_Default.zip",
+   "bytes": 400747,
+   "sha256": "85c79b3715bb4f72de09caddae872c2a11a38a2b8ad1085ddade269311d4b2fa"
+  },
+  {
+   "path": "Add-Ons/Face_Jirue.zip",
+   "bytes": 39382,
+   "sha256": "d82b15108a3e4a972fd7bc5bd20f5c3ed9915cdde5bfb12b8b2a420f27f36de1"
+  },
+  {
+   "path": "Add-Ons/Face_Mythbusters.zip",
+   "bytes": 84461,
+   "sha256": "4c61b7aa6a99699340333cc6768899796a8853903fabdf2d31517fc16eff3181"
+  },
+  {
+   "path": "Add-Ons/Item_Key.zip",
+   "bytes": 51255,
+   "sha256": "6e36bdb20abf6341943029befaeec1a85ba2a7f1224761229db43583a86a11cc"
+  },
+  {
+   "path": "Add-Ons/Item_Skis.zip",
+   "bytes": 71619,
+   "sha256": "1606418f9c8d4c0c7589629336b87247808c0e04b283504cf125175ee99bdd5a"
+  },
+  {
+   "path": "Add-Ons/Item_Sports.zip",
+   "bytes": 117778,
+   "sha256": "2dbeb5a0998197e97b7c6a9882fc5c3a74e9c483ab9bffe9e11facc5d0f63ca0"
+  },
+  {
+   "path": "Add-Ons/Light_Animated.zip",
+   "bytes": 1184,
+   "sha256": "40fc7f60cee74e67d7da1c7e344040dd8822952baad1e866589a450110c81591"
+  },
+  {
+   "path": "Add-Ons/Light_Basic.zip",
+   "bytes": 1072,
+   "sha256": "755f0836591dd06739a1a983159616fbc9ef2db4b72e0058714bb74eb2f04422"
+  },
+  {
+   "path": "Add-Ons/Map_Bedroom.zip",
+   "bytes": 1585857,
+   "sha256": "8c0ea6743258340a46992453ac9b74602900013fe1375e5aa1d62810df6957e1"
+  },
+  {
+   "path": "Add-Ons/Map_BedroomDark.zip",
+   "bytes": 63208,
+   "sha256": "969f80a1c7e7f5ba6166f1a87edb1013ea6e1ee11d07c1736b11c0473bbd3f99"
+  },
+  {
+   "path": "Add-Ons/Map_Construct.zip",
+   "bytes": 1487,
+   "sha256": "259aed11174180c5c4c667a9ea477f61a7dd6edb34e4b4274fe79a2b9e69b1ca"
+  },
+  {
+   "path": "Add-Ons/Map_Destruct.zip",
+   "bytes": 1414,
+   "sha256": "5ed4919edcfa6c011bdd5aeab046a28b23e43996912ffaa78fd870b24a67d211"
+  },
+  {
+   "path": "Add-Ons/Map_Halloween_Slate.zip",
+   "bytes": 791146,
+   "sha256": "a7c1620cb498e8558ebe79132b752f1de7474e9edd51bb703c334ad0ea853b75"
+  },
+  {
+   "path": "Add-Ons/Map_Kitchen.zip",
+   "bytes": 2701032,
+   "sha256": "364b73c124419a9d1bb69a7803e51196976b76d05619f81744c9c91488680dd4"
+  },
+  {
+   "path": "Add-Ons/Map_KitchenDark.zip",
+   "bytes": 66123,
+   "sha256": "5721e5ad301d0e74159739f5855bb9f785d52ad521866a8e850ba52050abcd9c"
+  },
+  {
+   "path": "Add-Ons/Map_Skylands.zip",
+   "bytes": 555460,
+   "sha256": "e6541ca6bed39e57ec49d475f52a7b55e45ff762cc2bda7bc8e6a40a1097c874"
+  },
+  {
+   "path": "Add-Ons/Map_Slate.zip",
+   "bytes": 46569,
+   "sha256": "2315c6768e29c6d82504719ccaa0ac681b617fc26035f58571ae5e815dc02064"
+  },
+  {
+   "path": "Add-Ons/Map_Slate_Desert.zip",
+   "bytes": 722542,
+   "sha256": "ba7c2d42d1e94c50ffb8dc5135a9dce7efbc81e97d6168c2c503785e1ab3980c"
+  },
+  {
+   "path": "Add-Ons/Map_Slate_Sea_Revised.zip",
+   "bytes": 58227,
+   "sha256": "c41d7ba7cf1ff24977292e0052c3dc98d918402cb5f1efdaea685ce834adcacb"
+  },
+  {
+   "path": "Add-Ons/Map_Slate_Storm_Revised.zip",
+   "bytes": 665740,
+   "sha256": "16d2c12ad31fdb2e91897b8ea7f769eb5dec2d4e9084337569e7fd5f478212c3"
+  },
+  {
+   "path": "Add-Ons/Map_Slopes.zip",
+   "bytes": 389489,
+   "sha256": "f290843b20de4863723860e9e2175157fb6093f83781e02dbf904a1110fd1eea"
+  },
+  {
+   "path": "Add-Ons/Map_Tutorial.zip",
+   "bytes": 1913548,
+   "sha256": "28e3d1e0135ac89f59a2792a5c7c4265587e6a55adedeb89a84b6b0350afd45e"
+  },
+  {
+   "path": "Add-Ons/Music/After_School_Special.ogg",
+   "bytes": 639314,
+   "sha256": "55d2bfbe57d5e9f2c296928ddfe6f0c06a4c20b5674336ab3e3d80753d626212"
+  },
+  {
+   "path": "Add-Ons/Music/Ambient_Deep.ogg",
+   "bytes": 44773,
+   "sha256": "b44c6ac3f0f5b42e8941a3a2a07438153192d176d4e63a384ddb835221da5317"
+  },
+  {
+   "path": "Add-Ons/Music/Bass_1.ogg",
+   "bytes": 82221,
+   "sha256": "4463537d707c90a0697f60e930338e5e16243b76d228a16d5125df6db9140b28"
+  },
+  {
+   "path": "Add-Ons/Music/Bass_2.ogg",
+   "bytes": 48591,
+   "sha256": "756dd8a578212377d1d9cf4f1617c6fdac23ad871476d189818b1d9621907820"
+  },
+  {
+   "path": "Add-Ons/Music/Bass_3.ogg",
+   "bytes": 56472,
+   "sha256": "1e3982962c106ccc5f4e127aa6101a821429416975b02fc5261031f3d76fe944"
+  },
+  {
+   "path": "Add-Ons/Music/Creepy.ogg",
+   "bytes": 85011,
+   "sha256": "b172ecdb7500842e0f066fa6b56c6f2c2a02ccc43a7d9cd49a1f20c2593a3fc3"
+  },
+  {
+   "path": "Add-Ons/Music/Distort.ogg",
+   "bytes": 46538,
+   "sha256": "b45538bea605e2819104c4c6ce9edf1d968e9895fb6a18e5fd73e0ab616ffa0c"
+  },
+  {
+   "path": "Add-Ons/Music/Drums.ogg",
+   "bytes": 43720,
+   "sha256": "c6fa3e5a30d585867e6da640d2c077dcf130bbadc04ce83b7f55e787ad6c792e"
+  },
+  {
+   "path": "Add-Ons/Music/Factory.ogg",
+   "bytes": 64978,
+   "sha256": "4f024d8786fea4ed356b128e0a902381878d990de229de87a29d6ed3f250a0c2"
+  },
+  {
+   "path": "Add-Ons/Music/Icy.ogg",
+   "bytes": 67268,
+   "sha256": "1b26245634dd4f1176c0e5b5bd9925583465ff29331aaefe3696327386d20e7d"
+  },
+  {
+   "path": "Add-Ons/Music/Jungle.ogg",
+   "bytes": 35512,
+   "sha256": "63ea4a97f0759aa247d60e0957359be020f53de837630afd13da2fa3d43b7011"
+  },
+  {
+   "path": "Add-Ons/Music/Peaceful.ogg",
+   "bytes": 85509,
+   "sha256": "c38cb3e9add71ba96f9b707b115ebc3fc47f4a0f86a06744485252575a95e782"
+  },
+  {
+   "path": "Add-Ons/Music/Piano_Bass.ogg",
+   "bytes": 42142,
+   "sha256": "bb6666f2229a735bec09c1f27e5066deb0a68c6772f18fd2367b2dc6c556410f"
+  },
+  {
+   "path": "Add-Ons/Music/Rock.ogg",
+   "bytes": 62158,
+   "sha256": "fd557efd12b201c7b6742c52a5cb9f22d1f9a803ac0cde66a90c6f3910ad9aad"
+  },
+  {
+   "path": "Add-Ons/Music/Stress_.ogg",
+   "bytes": 46375,
+   "sha256": "f3152aa74a94c1610afe178e86c0310b0d1adf560f15547c952bee14442635fe"
+  },
+  {
+   "path": "Add-Ons/Particle_Basic.zip",
+   "bytes": 1565,
+   "sha256": "9ebf26632b50cfb09ece62d45083547fcf168500b38f6a4fa9146d9960e4ce8d"
+  },
+  {
+   "path": "Add-Ons/Particle_FX_Cans.zip",
+   "bytes": 969,
+   "sha256": "15a67d712cdc62114ad0c774f2547fdba79e66b3cc7bf0fce50f120eedb29644"
+  },
+  {
+   "path": "Add-Ons/Particle_Grass.zip",
+   "bytes": 850,
+   "sha256": "858941ddf0a80fa4e14fa0e04b702fa534a965f06d489bad3a0213cdb7f41928"
+  },
+  {
+   "path": "Add-Ons/Particle_Player.zip",
+   "bytes": 779,
+   "sha256": "bc586ea90c1b71642790e89ccaf93bd4fa4cea3caea7f9fbc81bc07379e77c35"
+  },
+  {
+   "path": "Add-Ons/Particle_Tools.zip",
+   "bytes": 589,
+   "sha256": "090c9c57eada241005dca676a93b7291d11b851991111f3e57fc2e5ca3758a14"
+  },
+  {
+   "path": "Add-Ons/Player_Fuel_Jet.zip",
+   "bytes": 743,
+   "sha256": "e0edb296ec05fc3b7f95ec90a735ffc3626ca0b9fe862ab9cefdc6badba5540a"
+  },
+  {
+   "path": "Add-Ons/Player_Jump_Jet.zip",
+   "bytes": 749,
+   "sha256": "8400220e2a938546f298711a85cc34eea79e2b345daa2abdfeade0cdf848fbeb"
+  },
+  {
+   "path": "Add-Ons/Player_Leap_Jet.zip",
+   "bytes": 759,
+   "sha256": "0ca12dc9ee2d2fd5fb0c401f68dd1b6d6dac2349ab616278575c5e7de3fea5ca"
+  },
+  {
+   "path": "Add-Ons/Player_No_Jet.zip",
+   "bytes": 687,
+   "sha256": "8695d962cbaaa267fdc35ffd0db8e60a5a2431b0351508f61d15788f9fba8f0a"
+  },
+  {
+   "path": "Add-Ons/Player_Quake.zip",
+   "bytes": 774,
+   "sha256": "2cdc8084f9f826f221e400b268460a7b91d8b0afcaf5b0c956bff6d7246366fb"
+  },
+  {
+   "path": "Add-Ons/Print_1x2f_BLPRemote.zip",
+   "bytes": 116395,
+   "sha256": "8fa4f2cc4441974cc913938ae861f6a6a826a10b73c39c24a8a14f94e12d513d"
+  },
+  {
+   "path": "Add-Ons/Print_1x2f_Default.zip",
+   "bytes": 224794,
+   "sha256": "ae51c7a694c6bf4bb7d785f029c210e8af7770aa56d22e0acf7525a708d6e4e4"
+  },
+  {
+   "path": "Add-Ons/Print_2x2f_Default.zip",
+   "bytes": 252522,
+   "sha256": "0d5d63351ef20791119f597aca69af38d97c29ae30e783c073a868d549d21df6"
+  },
+  {
+   "path": "Add-Ons/Print_2x2r_Default.zip",
+   "bytes": 2455821,
+   "sha256": "254d7269e871b0e3f44845776482a4e16d5ed2932ef74d6816b365f9519db5ab"
+  },
+  {
+   "path": "Add-Ons/Print_2x2r_Monitor3.zip",
+   "bytes": 555446,
+   "sha256": "5dc92d58577caaf8075454589cd9bb5189d9f14ea399a74d1a8225f53aa806de"
+  },
+  {
+   "path": "Add-Ons/Print_Letters_Default.zip",
+   "bytes": 407018,
+   "sha256": "dc5351380be1b22ca72398b02467d2299d6a45c64730273b40a8c1003f1459e2"
+  },
+  {
+   "path": "Add-Ons/Projectile_GravityRocket.zip",
+   "bytes": 167740,
+   "sha256": "4675c18a6b1ef349ccf03e22e1a462b13901dfe0d5873b7a47856b90ba0a101c"
+  },
+  {
+   "path": "Add-Ons/Projectile_Pinball.zip",
+   "bytes": 36363,
+   "sha256": "fba0a6d79622d9c7c3912470cd90becce217e48da66003d8f88f31a883e4da2d"
+  },
+  {
+   "path": "Add-Ons/Projectile_Pong.zip",
+   "bytes": 30922,
+   "sha256": "d7d50d11df1454a97a993e22e901049507ba004ccbf64cb88edd1cf112fcdc8a"
+  },
+  {
+   "path": "Add-Ons/Projectile_Radio_Wave.zip",
+   "bytes": 14788,
+   "sha256": "ccf42f3f93e2f87cbd8d69e2f5ae3faeb92c2408070a3337ade41910fceaa60a"
+  },
+  {
+   "path": "Add-Ons/Script_Player_Persistence.zip",
+   "bytes": 3824,
+   "sha256": "8f60da1e49d90116531c775b1e2410fe0d73311435d6857412547ad6f5ef16d1"
+  },
+  {
+   "path": "Add-Ons/Sound_Beeps.zip",
+   "bytes": 330445,
+   "sha256": "30022bad5fb60ff0c775ac1c61b8dc0ef2143841a8da98d067791ed8dbb887d0"
+  },
+  {
+   "path": "Add-Ons/Sound_Phone.zip",
+   "bytes": 442002,
+   "sha256": "d38b0c868e92bd44676c71285883165361cc399d5676980019890380df60169f"
+  },
+  {
+   "path": "Add-Ons/Sound_Synth4.zip",
+   "bytes": 691,
+   "sha256": "a6214cb052311ad8c990e19ddf0e9514e9709cd0473580187235d7e80ec87d7a"
+  },
+  {
+   "path": "Add-Ons/System_ReturnToBlockland.zip",
+   "bytes": 1985463,
+   "sha256": "a29829287ed4d2d384f8421ed9a1826763ad12f73ab5ca52b033ad81d25d89f4"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Ball.zip",
+   "bytes": 8946,
+   "sha256": "309195dab2bf0c21c0878eb6dd5c26a887b3ce25a4fa0853a8afe758b31ac9be"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Flying_Wheeled_Jeep.zip",
+   "bytes": 2819,
+   "sha256": "1ef3c469c8d0fb67dcc179f0cecdbfa0c412a63638e33f3715f25ccfc39c5372"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Horse.zip",
+   "bytes": 31588,
+   "sha256": "cf51a71966c54e67c13aa0a4355d9e80eaea939c93de208abb047adb82e47801"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Jeep.zip",
+   "bytes": 48477,
+   "sha256": "239eeedcbf5f40d3b1f1290aef7b3bffc42d9cb3e57fe53e3f2bcc7b6b70f4ff"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Magic_Carpet.zip",
+   "bytes": 11782,
+   "sha256": "ddcd4d19e39851159960175d1b76111a37313b06065dbbaf3253bec8b1735cd9"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Pirate_Cannon.zip",
+   "bytes": 262876,
+   "sha256": "3c853e6c44e02b2be185accba8688576aa6331f868a702db23d1e88f93ca0690"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Rowboat.zip",
+   "bytes": 17234,
+   "sha256": "5929808b675d2e89a3f7fd5f92d4694448df48a36b94f2edad83b15ef8f47dc6"
+  },
+  {
+   "path": "Add-Ons/Vehicle_Tank.zip",
+   "bytes": 358169,
+   "sha256": "46879c173094cae0ad450c7de8402f202227bb4d821c2581f45ff959c3c89f4f"
+  },
+  {
+   "path": "Add-Ons/Weapon_Bow.zip",
+   "bytes": 38712,
+   "sha256": "9234ddf272aefa223bdd9bd349fdaa6fe773fe6be75e6cc61b26527f04d940e1"
+  },
+  {
+   "path": "Add-Ons/Weapon_Gun.zip",
+   "bytes": 64537,
+   "sha256": "5a5f3176e1a0d4ac097c69122b3a7f74028a93e4d24decb907a989c558367943"
+  },
+  {
+   "path": "Add-Ons/Weapon_Guns_Akimbo.zip",
+   "bytes": 17518,
+   "sha256": "c8463020f11f540ece51dc9c11687472ca0e0c6d67feb52e4234c58d1355626c"
+  },
+  {
+   "path": "Add-Ons/Weapon_Horse_Ray.zip",
+   "bytes": 3811,
+   "sha256": "b42c7e5690c9bff3ece3a4a87e911132afcb691b94fec4ab6928645f588127b2"
+  },
+  {
+   "path": "Add-Ons/Weapon_Push_Broom.zip",
+   "bytes": 38969,
+   "sha256": "a710b0721a75e39fe0569f932eb33434dddd7481b50e606cc3e2c7a02977cc5f"
+  },
+  {
+   "path": "Add-Ons/Weapon_Rocket_Launcher.zip",
+   "bytes": 224142,
+   "sha256": "e8dcbc8884a8ba67f509280b19f67f91b647336b92198dc9539e8428f51d4a9b"
+  },
+  {
+   "path": "Add-Ons/Weapon_Spear.zip",
+   "bytes": 103094,
+   "sha256": "b79469ced962931f78bb34034fed1f2364110721f2401412088e3ffb7d97ecbc"
+  },
+  {
+   "path": "Add-Ons/Weapon_Sword.zip",
+   "bytes": 47840,
+   "sha256": "225601b0976a581f7c4468898a9e90a3ffbdb688f863ea715fbad9e9f7b18452"
+  },
+  {
+   "path": "saves/Bedroom/A.T.C. Fort.bls",
+   "bytes": 273341,
+   "sha256": "b3a31cab2e763877fec57195d8421d70a2694124954659e8405db6a2d050f02e"
+  },
+  {
+   "path": "saves/Bedroom/A.T.C. Fort.jpg",
+   "bytes": 28506,
+   "sha256": "7805af43bd9135b15fbd9dcfc3764912a11c83f684ab6b92b92c11c5d4c6a1f8"
+  },
+  {
+   "path": "saves/Bedroom/ACM City.bls",
+   "bytes": 725928,
+   "sha256": "4e571a43c17652dba76d4775b1a9f5441c8d155c08f3558f162bf0f62dd3e514"
+  },
+  {
+   "path": "saves/Bedroom/ACM City.jpg",
+   "bytes": 43495,
+   "sha256": "94ae4dec418d97afc570a4187d2e704b3634adc8f0ebaa164dda792aea024f05"
+  },
+  {
+   "path": "saves/Bedroom/Arch of Constantine.bls",
+   "bytes": 109633,
+   "sha256": "65f308a565955e89b6633d81e37ea10aee5a12f756099d25cfb0256f2e6628a7"
+  },
+  {
+   "path": "saves/Bedroom/Arch of Constantine.jpg",
+   "bytes": 52336,
+   "sha256": "fef21f9029fe2c1d48aa1887efe697695da1118dfdc6ee24634009a568ee7f36"
+  },
+  {
+   "path": "saves/Bedroom/BLOKO Blupo.bls",
+   "bytes": 202390,
+   "sha256": "51c41550fa3701b20bdd246b9b7f0f19b1219cdf9dac14ba25b4d426c79d5c32"
+  },
+  {
+   "path": "saves/Bedroom/BLOKO Blupo.jpg",
+   "bytes": 59373,
+   "sha256": "50264b738052cdcb3cc85974ecb5ea7391182f0820ab9d739b978a94da3e2b86"
+  },
+  {
+   "path": "saves/Bedroom/Beta City 16.bls",
+   "bytes": 379956,
+   "sha256": "48f73bad7f2a0391eab98dfc8e79af4eef8d11f1c77e33bfc3acce7daa527849"
+  },
+  {
+   "path": "saves/Bedroom/Beta City 16.jpg",
+   "bytes": 51949,
+   "sha256": "128a02644314ab833a8021646a55b0b33910e12ecb9332a46dd1ef377c6b99d2"
+  },
+  {
+   "path": "saves/Bedroom/Cottage.bls",
+   "bytes": 75950,
+   "sha256": "2792213feabfcc043e9fddfbebae3368d8e110090d5abf34eeaab5181a637276"
+  },
+  {
+   "path": "saves/Bedroom/Cottage.jpg",
+   "bytes": 54504,
+   "sha256": "efa727f32d1efc8a9e34e6fba55871ee305bb14d5c19af61dd5164a77cfe45ad"
+  },
+  {
+   "path": "saves/Bedroom/Demo House.bls",
+   "bytes": 9465,
+   "sha256": "1d1679fca49fa09325f55b8ac77c35ddc7c4131d6ff2e4ae96096c1af54dfca8"
+  },
+  {
+   "path": "saves/Bedroom/Demo House.jpg",
+   "bytes": 42607,
+   "sha256": "678bb59959e2b7267bf9ec4d3935c5ac6d9a428a75e96ed049c056943eecc79e"
+  },
+  {
+   "path": "saves/Bedroom/Demo Midi Sequencer.bls",
+   "bytes": 30637,
+   "sha256": "4bc21ce5b5f9786a8b022736100ca0f6cb1c03d00d16605c6df79f07f284264b"
+  },
+  {
+   "path": "saves/Bedroom/Demo Midi Sequencer.jpg",
+   "bytes": 34979,
+   "sha256": "b882b447703b91e3913a0632e9c689c174fa8ea79627db9e520101998e286da7"
+  },
+  {
+   "path": "saves/Bedroom/Demo Pong.bls",
+   "bytes": 26364,
+   "sha256": "8a3130ab3cd542e8cac5dbabdee87e80f6eec7f7ba041d995610aee47156d50c"
+  },
+  {
+   "path": "saves/Bedroom/Demo Pong.jpg",
+   "bytes": 34003,
+   "sha256": "c45809f523fc5a3b8484f3ed3e28f583f004d55b8077817b10744cb4a3177dba"
+  },
+  {
+   "path": "saves/Bedroom/Facechild's House.bls",
+   "bytes": 51067,
+   "sha256": "03bdc144b1387a08d8dde4514a9387be4077da62cdec3dab4ba064a5c1e9450a"
+  },
+  {
+   "path": "saves/Bedroom/Facechild's House.jpg",
+   "bytes": 33565,
+   "sha256": "f94127cbd7b7a6fdfbdb160574d3308f0d7a793624d420acace1590f01ed5e27"
+  },
+  {
+   "path": "saves/Bedroom/Fort Papa.bls",
+   "bytes": 578487,
+   "sha256": "150e1b253a53e086c4ef3365a9db794aeb98a3514dd60ff7a238112450a9fa2e"
+  },
+  {
+   "path": "saves/Bedroom/Fort Papa.jpg",
+   "bytes": 28333,
+   "sha256": "ef8e8587e7c90c54a779536f2973d912b8acbe0ad9c4075605e4234a9d7d4760"
+  },
+  {
+   "path": "saves/Bedroom/Jetpuff's Towers.bls",
+   "bytes": 291877,
+   "sha256": "05b9b3cb4c3b26d0d956cd698a753003e6b420ece3d758a24d4ea040fadb703b"
+  },
+  {
+   "path": "saves/Bedroom/Jetpuff's Towers.jpg",
+   "bytes": 40928,
+   "sha256": "d617acced6b4b0b4e80fb10a8d73887b60d076aa7289fc170887d03b5211dcee"
+  },
+  {
+   "path": "saves/Bedroom/Kaje's Castle.bls",
+   "bytes": 197958,
+   "sha256": "20912c269a0f9b58446f0da8a39b86ba54e1b7120c01cf487321b12b20329d91"
+  },
+  {
+   "path": "saves/Bedroom/Kaje's Castle.jpg",
+   "bytes": 46698,
+   "sha256": "8a9016ea2e5416558c592a9c6159905f5547aca4d8dc2e0d70b8cd5263d7fda2"
+  },
+  {
+   "path": "saves/Bedroom/Mansion.bls",
+   "bytes": 531578,
+   "sha256": "f77517644658befce5029710cb128e6a9a76019e5f08da6d6addb00c6513f58b"
+  },
+  {
+   "path": "saves/Bedroom/Mansion.jpg",
+   "bytes": 43857,
+   "sha256": "1866938f936833a4f7bec320b8ab1adeffe3b53f4ed9a305a0532b0b1062c0b6"
+  },
+  {
+   "path": "saves/Kitchen/Demo Fort.bls",
+   "bytes": 6620,
+   "sha256": "f5f9b6b018802cf57da69c6489b57ea3497ccd784d7f145c6c4af0410d4788ec"
+  },
+  {
+   "path": "saves/Kitchen/Demo Fort.jpg",
+   "bytes": 52330,
+   "sha256": "7bad514f8d371a7d5a270f624f1a83067ed8df841d74127f49e41aae2f2122d2"
+  },
+  {
+   "path": "saves/Kitchen/Haunted House.bls",
+   "bytes": 77976,
+   "sha256": "09182e6331fcff66443c691f41cfe76b708383afcfe51febe9553a61fc4ca1ca"
+  },
+  {
+   "path": "saves/Kitchen/Haunted House.jpg",
+   "bytes": 40609,
+   "sha256": "5267adf0ea5a2789787e4870bd41173581bff190d0b15d8ef14888bb1c3cb803"
+  },
+  {
+   "path": "saves/Kitchen/Horse Race.bls",
+   "bytes": 28001,
+   "sha256": "ba3c175d01b4d1ac21d959d473ca7d2842c3bfd26db931e4c4f936a0818f8b9c"
+  },
+  {
+   "path": "saves/Kitchen/Horse Race.jpg",
+   "bytes": 54389,
+   "sha256": "d6b76a1bc5fb1fa794e01918376f988b51a8790d097306976dbd2d5540a4c99b"
+  },
+  {
+   "path": "saves/Kitchen/Pirate World.bls",
+   "bytes": 567287,
+   "sha256": "abcd70cda8a5c008f8d2053dcf4b558925247a896fb7b63d133220fc2af69f7e"
+  },
+  {
+   "path": "saves/Kitchen/Pirate World.jpg",
+   "bytes": 67412,
+   "sha256": "b25c3cdd5600ebe0f78e8072843a5090ceda0aacf2efeb5f5ea54a130731ebe8"
+  },
+  {
+   "path": "saves/Kitchen/Town.bls",
+   "bytes": 104903,
+   "sha256": "afb2a967bc15a76807529d9d5d328272b0e45b7a3e36745fefa9e27e3749bcac"
+  },
+  {
+   "path": "saves/Kitchen/Town.jpg",
+   "bytes": 33432,
+   "sha256": "e87cc54a8f1b5ed5620bfafb0517192d3d9ecc53a01f0fb9c0cc29463f00db3a"
+  },
+  {
+   "path": "saves/Slate/Afghanistan DM .bls",
+   "bytes": 565308,
+   "sha256": "3caf961cb172c266ebc98b651525e6f8f1d1ca2935ba6a7806d46242037a4eaf"
+  },
+  {
+   "path": "saves/Slate/Afghanistan DM .jpg",
+   "bytes": 51646,
+   "sha256": "d58a2de37f564edabb2e8613b06d70d06df8a0b3d81c76f375f837ac9a2631af"
+  },
+  {
+   "path": "saves/Slate/Apartment.bls",
+   "bytes": 103525,
+   "sha256": "cbe2362f7d40cc4f9c0d587cd71b7810614f05bb69a24dfb9c5250d1c268bbb4"
+  },
+  {
+   "path": "saves/Slate/Apartment.jpg",
+   "bytes": 36596,
+   "sha256": "cc9aebfb0623a129827882410229ec2624f6c499553cda4ac7d559fd6ff1bee9"
+  },
+  {
+   "path": "saves/Slate/Building 6.bls",
+   "bytes": 68585,
+   "sha256": "250aff92a06e06e44ec1159c4ad321d4dbc2c5a5f5a19459e23f7430cca95b37"
+  },
+  {
+   "path": "saves/Slate/Building 6.jpg",
+   "bytes": 48796,
+   "sha256": "7395f48ca5392d0825cc635af8feaa4cfd89a5926738e778f3ab9d99d2fde225"
+  },
+  {
+   "path": "saves/Slate/C.T.F. Battle Grounds.bls",
+   "bytes": 206310,
+   "sha256": "d5e533f4bcf060a53a7421500a969d07a9e1ed0cdcd03957cdd90dcb139696a9"
+  },
+  {
+   "path": "saves/Slate/C.T.F. Battle Grounds.jpg",
+   "bytes": 42952,
+   "sha256": "4874d8517f2e3f902f2547951d82fc90d4ab8bdfa99eac018ad5dcd210acb2b3"
+  },
+  {
+   "path": "saves/Slate/Crysta Castle.bls",
+   "bytes": 495500,
+   "sha256": "bc256a53abe134fb6d5c465c6a60994454ca16da0ca3ab471500098bbfa7b599"
+  },
+  {
+   "path": "saves/Slate/Crysta Castle.jpg",
+   "bytes": 50334,
+   "sha256": "d3e33355ab2ee0bd83eaa090303c3318fa69919328c415d7ec631ed105f1c959"
+  },
+  {
+   "path": "saves/Slate/Demo Blockland Sign.bls",
+   "bytes": 5276,
+   "sha256": "5697e0cd0c18db1289d10467d39ccf15f283d09488d2ba193646164159fbea12"
+  },
+  {
+   "path": "saves/Slate/Demo Blockland Sign.jpg",
+   "bytes": 29418,
+   "sha256": "cce0d71534ac054095f79452850fad74173673c3d9368436db81a8986f7ba8db"
+  },
+  {
+   "path": "saves/Slate/Festung der Schwarzung.bls",
+   "bytes": 279646,
+   "sha256": "4561ec34b15e3006a958c492c6ecfc2ec76f7924ffd9e0779fd7b947812fcb6e"
+  },
+  {
+   "path": "saves/Slate/Festung der Schwarzung.jpg",
+   "bytes": 45811,
+   "sha256": "759bb028e63be5ac62ac75f861680a96ae89d2823d92f9554cd72673378d2dac"
+  },
+  {
+   "path": "saves/Slate/Gazebo Garden.bls",
+   "bytes": 138335,
+   "sha256": "39b6b721f9fcd0f5b4f7ff895ed8e71a1c369a90148710f00483f37a9004f214"
+  },
+  {
+   "path": "saves/Slate/Gazebo Garden.jpg",
+   "bytes": 52768,
+   "sha256": "f630e7786ebdac233822add719a8f5d650b66b7ddcb86873619f77ae14294514"
+  },
+  {
+   "path": "saves/Slate/Golden Gate Bridge.bls",
+   "bytes": 1833309,
+   "sha256": "3ee5411a5dad254435b638dff4c2faea81ce40ab937035b14570cff4ccc032fe"
+  },
+  {
+   "path": "saves/Slate/Golden Gate Bridge.jpg",
+   "bytes": 34307,
+   "sha256": "9ba02eb54781d0ecd8c5ee32c076cb10c7b30165cd17beafba442a00d8d8f04c"
+  },
+  {
+   "path": "saves/Slate/Ice Palace.bls",
+   "bytes": 263081,
+   "sha256": "0250caa444ad68155e9912f8b2cf44d8721a7cf99b923dc91f7dc7d67a226b89"
+  },
+  {
+   "path": "saves/Slate/Ice Palace.jpg",
+   "bytes": 39032,
+   "sha256": "f6d29c48a2f4c6157b382ee6b59a9eab1755886573374fee97bc707b75ba575a"
+  },
+  {
+   "path": "saves/Slate/Maze.bls",
+   "bytes": 58034,
+   "sha256": "8842e5a7bb42fb394564968da53e299cef7377131479e9686ec99cb2578643eb"
+  },
+  {
+   "path": "saves/Slate/Maze.jpg",
+   "bytes": 54317,
+   "sha256": "2fea8e09247008deae7ca3ed937addc009fb16ca1690442ac112446d135c471b"
+  },
+  {
+   "path": "saves/Slate/Mr.Block's Slides.bls",
+   "bytes": 509634,
+   "sha256": "0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c"
+  },
+  {
+   "path": "saves/Slate/Mr.Block's Slides.jpg",
+   "bytes": 51946,
+   "sha256": "4f8b289777af03d455e34563aaf148b40631480f1ddc8d8a8c593b10cec82d31"
+  },
+  {
+   "path": "saves/Slate/Pyramid.bls",
+   "bytes": 609775,
+   "sha256": "2187d53c46cff7c50af3924a7fb6e5de9742663b34e84cb7c71909937f3f6319"
+  },
+  {
+   "path": "saves/Slate/Pyramid.jpg",
+   "bytes": 56299,
+   "sha256": "f42aa707a39de0f50724de0e1b987538eb89f16955724af2dbe02fcc53d89946"
+  },
+  {
+   "path": "saves/Slate/Sirrus Military Compound.bls",
+   "bytes": 758139,
+   "sha256": "51579d41456dded6209720cdb64a0c68fc0b23b173bfdd3b1650d2532f125cc5"
+  },
+  {
+   "path": "saves/Slate/Sirrus Military Compound.jpg",
+   "bytes": 41358,
+   "sha256": "a6529201b8d2655d550dcf535a5799e910bac3adbb140df16dc6df5cf8ba54a6"
+  },
+  {
+   "path": "saves/Slate/The Bedroom.bls",
+   "bytes": 1385531,
+   "sha256": "09af0fa2a058492cf21f227c766cb9f244ea6da25f9d132550220a50678d1c05"
+  },
+  {
+   "path": "saves/Slate/The Bedroom.jpg",
+   "bytes": 36461,
+   "sha256": "94bb5248f662099fe6542ae769a866f2a3a02aa8b18a720dcab75b57cdf91e3e"
+  },
+  {
+   "path": "saves/Slate/Two Ships.bls",
+   "bytes": 290107,
+   "sha256": "e45dbde558782d5573a3e6c66c6cea4afbc2e2e9115a0cf2571506b6810f12c4"
+  },
+  {
+   "path": "saves/Slate/Two Ships.jpg",
+   "bytes": 136216,
+   "sha256": "2db720b8715e533c8291111b1ade8ab8ceb637ab8e39cb8664ba434f3bddd8ab"
+  }
+ ]
+}

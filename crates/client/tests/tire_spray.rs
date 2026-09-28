@@ -29,7 +29,7 @@ fn frame(d: &bri_vehicles::Definition, speed: f32, contact: bool) -> VehicleFram
 fn stock_vehicles_spray_their_tire_emitter_by_speed_over_max_wheel_speed() {
     let pack = pack();
     let effects =
-        bri_fx_runtime::EffectsPack::load(root().join("content/effects-runtime-pack-004")).unwrap();
+        bri_fx_runtime::EffectsPack::load(root().join("content/effects-runtime-pack-005")).unwrap();
     let emitters: Vec<_> = effects.emitter_ids().collect();
     let expected = [
         ("JeepVehicle", Some("v20/emitter/vehicletireemitter")),

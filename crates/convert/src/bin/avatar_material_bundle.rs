@@ -106,8 +106,29 @@ fn main() -> Result<()> {
         face: pref("facename")?.into(),
         decal: pref("decalname")?.into(),
     };
-    for slot in parts.keys() {
-        defaults.parts.insert(slot.clone(), pref(slot)?.parse()?);
+    // v20 prefs hold list positions; the pack names the part. The accent's
+    // list is the one its hat allows, and accent 0 with none allowed is none.
+    let index = |slot: &str| -> Result<usize> { Ok(pref(slot)?.parse()?) };
+    let accents: BTreeMap<String, Vec<String>> =
+        serde_json::from_value(avatar["accents_allowed"].clone())?;
+    let hat = parts
+        .get("hat")
+        .and_then(|c| c.get(index("hat").ok()?))
+        .map(|h| h.to_ascii_lowercase())
+        .unwrap_or_default();
+    for (slot, choices) in &parts {
+        let at = index(slot)?;
+        let choices = if slot == "accent" {
+            accents.get(&hat)
+        } else {
+            Some(choices)
+        };
+        let name = match choices.and_then(|c| c.get(at)) {
+            Some(name) => name.to_ascii_lowercase(),
+            None if slot == "accent" && at == 0 => "none".into(),
+            None => anyhow::bail!("Original avatar default {slot}:{at} names no part"),
+        };
+        defaults.parts.insert(slot.clone(), name);
     }
     for slot in [
         "head",
@@ -141,7 +162,7 @@ fn main() -> Result<()> {
         rig: "rig.json".into(),
         rig_sha256: hash(&rig_bytes),
         parts,
-        accents_allowed: serde_json::from_value(avatar["accents_allowed"].clone())?,
+        accents_allowed: accents,
         faces: serde_json::from_value(avatar["faces"].clone())?,
         decals: serde_json::from_value(avatar["decals"].clone())?,
         surfaces: BTreeMap::new(),
