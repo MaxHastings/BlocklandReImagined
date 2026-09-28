@@ -1412,7 +1412,7 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
         minute.events.extend(problems);
         let t = start.elapsed();
         // Builder: a brick every ~2 s, a hammer every 5th, walking a circle.
-        if step % 240 == 0 {
+        if step.is_multiple_of(240) {
             let b = &mut s.apps[1];
             builder_yaw += 0.7;
             let result = (|| -> Result<bool> {
@@ -1448,7 +1448,7 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             let _ = held(&mut s.apps[1], HeldControl::Forward, false);
         }
         // Gunner: equip the gun (slot 3) and fire about once a second.
-        if step % 120 == 0 {
+        if step.is_multiple_of(120) {
             let g = &mut s.apps[2];
             let yaw = (step as f32 * 0.013).sin() * 3.0;
             let r = aim(g, yaw, 0.05)
@@ -1463,14 +1463,14 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             let _ = held(&mut s.apps[2], HeldControl::Fire, false);
         }
         // Driver: board the jeep and drive in weaving circles.
-        if step % 60 == 0 {
+        if step.is_multiple_of(60) {
             minute.projectiles_seen = minute
                 .projectiles_seen
                 .max(s.apps[0].network_view().map_or(0, |v| v.weapons.projectiles.len()));
             let d = &mut s.apps[3];
             if mounted(d) {
                 minute.driver_mounted_s += 0.5;
-                let left = (step / 360) % 2 == 0;
+                let left = (step / 360).is_multiple_of(2);
                 let _ = held(d, HeldControl::Forward, true);
                 let _ = held(d, HeldControl::Left, left);
                 let _ = held(d, HeldControl::Right, !left);
@@ -1505,7 +1505,7 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
                 });
                 let _ = held(d, HeldControl::Crouch, false);
                 // Pressed against the side: hop in, as the horse test does.
-                let _ = held(d, HeldControl::Jump, !on_top && step % 240 == 0);
+                let _ = held(d, HeldControl::Jump, !on_top && step.is_multiple_of(240));
                 if on_top {
                     // Step off backwards.
                     let _ = held(d, HeldControl::Forward, false);
@@ -1516,7 +1516,7 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             }
         }
         // Chat from everyone.
-        if step % 2400 == 0 {
+        if step.is_multiple_of(2400) {
             for (i, app) in s.apps.iter_mut().enumerate() {
                 let text = format!("{} at {:.0} s", ["hi", "brb", "nice build", "gg"][i], t.as_secs_f32());
                 if request(app, UiAction::Chat { channel: ChatChannel::Say, text }).is_ok() {
