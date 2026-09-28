@@ -103,6 +103,12 @@ struct Game {
 }
 impl Game {
     fn new() -> Self {
+        Self::with_pack(tool_pack(), None)
+    }
+    fn with_pack(
+        pack: bri_weapons::Pack,
+        bounds: Option<BTreeMap<String, bri_weapons::ItemBounds>>,
+    ) -> Self {
         let mut s = Session::new(
             Simulation::new(
                 World::new(
@@ -119,7 +125,10 @@ impl Game {
             .unwrap(),
         );
         s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
-        s.set_weapon_pack(tool_pack()).unwrap();
+        s.set_weapon_pack(pack).unwrap();
+        if let Some(bounds) = bounds {
+            s.set_item_bounds(bounds).unwrap();
+        }
         s.install_packages(add_ons(), None).unwrap();
         Self {
             s,
@@ -490,6 +499,53 @@ fn slash_dup_and_a_swing_of_the_duplicator_copy_the_build_underfoot() {
     assert_eq!(copy.bricks.len(), 1, "the top plate, nothing below it");
     let told = g.prints(host);
     assert!(told.iter().any(|t| t == "Copied 1 brick"), "{told:?}");
+}
+
+#[test]
+fn slash_duplorcator_pulls_the_duplicator_out_with_every_slot_full() {
+    // Five other tools to fill the slots with.
+    let mut pack = tool_pack();
+    let fillers: Vec<String> = (0..5)
+        .map(|n| format!("duplicator-tool:weapon/filler{n}"))
+        .collect();
+    for id in &fillers {
+        let mut item = pack.items[TOOL].clone();
+        item.id = id.clone();
+        pack.items.insert(id.clone(), item);
+    }
+    let bounds = pack
+        .items
+        .keys()
+        .map(|id| (id.clone(), bri_weapons::ItemBounds::FALLBACK))
+        .collect();
+    let mut g = Game::with_pack(pack, Some(bounds));
+    let host =
+        g.s.join("Host".into(), Vec3::new(0.0, 0.05, 3.0), true)
+            .unwrap();
+    for id in &fillers {
+        if g.s.give_item(host, id).is_err() {
+            break;
+        }
+    }
+    let tools = g.s.tool_inventories()[&host].clone();
+    assert!(tools.slots.iter().all(Option::is_some), "{tools:?}");
+    g.cmd(host, Command::EquipTool { slot: Some(1) }).unwrap();
+    let in_hand = tools.slots[1].clone().unwrap();
+    // v20's Add-On named it `/duplorcator`; it came out whatever you carried.
+    g.cmd(
+        host,
+        Command::Package(PackageCommand {
+            package: String::new(),
+            command: "duplorcator".into(),
+            args: vec![],
+        }),
+    )
+    .unwrap();
+    let tools = g.s.tool_inventories()[&host].clone();
+    assert_eq!(tools.slots[1].as_deref(), Some(TOOL));
+    assert_eq!(tools.selected, Some(1));
+    // The tool it replaced went down on the ground, not away.
+    assert!(g.s.weapon_view().drops.iter().any(|d| d.item == in_hand));
 }
 
 #[test]

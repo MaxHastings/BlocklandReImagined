@@ -2011,6 +2011,31 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   digging it out (`cargo test -p bri-sim --test blocks`). Found W14 again
   (closed brick looks). The world renderer does not draw block faces yet.
 
+- 2026-09-28 Player names reach the server. In the Internet playtest everyone
+  still joined as "Blockhead" after typing a name on Player (Avatar) and
+  clicking Done. Cause: `Avatar::read_fields` read each box's label text
+  (`View::text_of`), which only holds what the screen last wrote, instead of
+  the typed edit value (`View::edit_text`). Done therefore saved and sent the
+  old name. The join path, settings file and server were fine. Fixes: Done now
+  reads the typed Name, Clan Prefix and Suffix; the "LAN Name:" label reads
+  "Name:"; Done while connected sends a new `Command::SetName` (appended last
+  in `session::Command`; Gate owns the protocol version) so the server renames
+  the player live, updates admin and minigame records, and posts "Old is now
+  known as New." v20 only applied the name on the next join. Main's join-time
+  "Name 2", "Name 3" numbering now also covers resume and rename.
+  The client clamps the hello name to the server's 48-byte rule. A first-open
+  prompt built on v20's `regNameGui` window ("Choose Your Name", prefilled
+  "Blockhead" plus four digits, OK or Skip) appears in `--run` while the saved
+  name is still Blockhead; `$pref::Player::NamePrompted` remembers the answer.
+  Evidence: `cargo test -p bri-client --test player_name -- --ignored`
+  (drives the real Avatar screen, hosts LAN, joins over loopback, renames
+  live, checks the duplicate suffix, and the first-open prompt with a render
+  at `artifacts/native-player-name/first-open-name-prompt.png`); new tests in
+  `crates/sim/tests/session.rs`, `screens::avatar` and `screens::name`.
+  `cargo test --no-fail-fast` for bri-sim, bri-admin, bri-minigames, bri-net,
+  bri-ui and bri-client passed, except one bri-net LAN discovery test that lost
+  port 28050 to a parallel run and passed on rerun.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
@@ -4364,3 +4389,257 @@ brick and colour, keep Demo Pong's events and stay unchanged on disk;
 clippy on the four crates. An offscreen render of Load Bricks shows the
 button fitting beside the ownership box. Not seen in a window: Max's
 playtest of dropping saves in and loading them.
+
+## 2026-09-28 Duplicator chat commands and item bounds for every item (branch `claude/duplicator-cmd`)
+
+Max, on a21: `/duplicator` did not pull the Duplicator out, and setting a
+brick's wrench item to the Duplicator was refused with "Missing authored
+item bounds: duplicator-tool:weapon/duplicator".
+
+- Reference: the archived v20 Duplicator Add-On (`Tool_Duplicator.zip`, by
+  Plornt; not in the v20 reference install) registers `serverCmdDuplorcator`,
+  `serverCmdDup` and (packaged) `serverCmdDuplicator`, with no permission
+  check: each mounts `DuplorcatorImage` on the player without a tool slot.
+  Its "Admin Only" pref (off by default) gates planting, not pulling it out.
+- Our Add-On already declared `/dup` and `/duplicator` (anyone may use).
+  It now declares `/duplorcator` too. What stopped Max: ours lives in a tool
+  slot, and with all five full `give_item` failed ("Inventory full").
+  `Session::give_tool` with equip now puts the tool in hand (else the last)
+  down on the ground to make room, so the command works whatever the player
+  carries, as v20's slotless mount did, without losing an item.
+- Item bounds, the general path: only the base weapons package ships item
+  physics, so an Add-On item without an importer-made `item-physics.json`
+  had none on the host. That refused wrench item spawns, build loads holding
+  the item, drops of it (`Item physics catalog is not installed`), and
+  pickups of a dropped one (no contact box). Two layers now:
+  `ItemPhysicsContent::load_with` gives such an item its stock model's
+  bounds (the Duplicator's `wand.dts`, as its presentation already borrows
+  that model), else `ItemBounds::FALLBACK` (half a unit each way); and
+  `Session::set_item_bounds` gives every item the server has
+  (`WeaponsWorld::item_ids`, core tools included) the fallback when its
+  content gave none. Unknown items are still refused.
+
+Evidence: `cargo test -p bri-sim` (new
+`slash_duplorcator_pulls_the_duplicator_out_with_every_slot_full`);
+`cargo test -p bri-net`; `cargo test -p bri-weapons --lib`;
+`cargo test -p bri-client --test add_on_fallbacks` (every Add-On weapon has
+bounds, a stock model lends its box, an artless item gets the fallback, and
+the wrench's item-spawn edit for it validates); clippy on weapons, sim and
+net. Not seen in a window: Max's playtest of `/duplicator` with full slots
+and a wrench item spawn of the Duplicator.
+## 2026-09-28 Admin ranks and clearing bricks (branch `claude/admin-ranks`)
+
+What a20 already had (checked first): Admin/Super Admin roles, the host as
+Super Admin ("has become Super Admin (Host)"), Admin and Super Admin
+passwords from Start Game, the Player List password login with v20's four
+tries, kick/ban/clear bricks/admin menu gated on rank, a per-host
+`administration.json` with bans and an auto-rank list. Missing: any way to
+give or take a rank, a reachable auto-rank list, and other players' ranks in
+the Player List (only your own showed; everyone else read as a player).
+
+- v20 had no stock command to promote someone: ranks came from passwords or
+  `$Pref::Server::AutoAdminList`/`AutoSuperAdminList` edited by hand. Native
+  adaptation: the host and Super Admins make a player Admin or Super Admin,
+  or take it away, from three buttons under the Admin menu's player list and
+  with `/admin`, `/superAdmin` and `/deAdmin <name>`. Admins cannot. The host
+  can never be demoted; bots can't be ranked. Everyone sees "X made Y Admin".
+- A given rank is saved in the host's list and returns on rejoin, like v20's
+  auto-admin lists. **Pivot from the brief's "keyed by name"**: the list is
+  keyed by the player's verified key (the principal every client proves on
+  join, a20's BL_ID), with the name kept for display. Matching on name over
+  the Internet would let anyone type an admin's name and get Super Admin.
+  Duplicate-name suffixes and renamed players are therefore handled
+  naturally. A player without a key (none in practice) keeps a rank for the
+  visit only. Old list files without names still load.
+- **Saved Ranks >>** (Admin menu, host and Super Admins) lists the saved
+  ranks with name, rank and key prefix; Remove takes one off after a
+  confirmation (an online player keeps theirs until they leave).
+- Player List shows everyone's rank as v20 did: `S`, `A` or `-`.
+- Server Settings stay host-only: v20's serverConfigGui was a host-local
+  prefs dialog, not a remote admin screen. Super Admins set the Admin
+  password as v20's `serverCmdSADSetPassword` allowed.
+- Clear All Bricks hang (Max, single player): every removed brick ran a full
+  physics refresh, so clearing was quadratic (40,000 bricks: 16 s in a debug
+  sim test, the host frozen and the menu on "Waiting for host" meanwhile).
+  `Simulation::remove_many` removes a batch and refreshes once (0.6 s);
+  Clear All Bricks and Clear Brick Group use it.
+- v20 chat commands: `/clearBricks` clears your own bricks (anyone, once per
+  five seconds, "X cleared X's bricks", `ServerCmdClearBricks`), and
+  `/clearAllBricks` is admin-only (`ServerCmdClearAllBricks`), the same
+  server path as the menu.
+- Wire changes for Gate: new `Action::RequestAutoRoles`,
+  `AdminData::AutoRoles`, `HostSetRole`/`HostSetAutoRole` now allowed to
+  Super Admins, `AutoRole.name`. Protocol version left at main's 50 (Gate
+  owns numbering; this needs the next one).
+
+Evidence: `cargo test -p bri-admin` (grant/revoke/rejoin by key, imposter by
+name gets nothing, host protected, keyless visit-only, saved list reads,
+old files load); `cargo test -p bri-ui --test admin_screens` and `--lib`
+(rank buttons confirm before sending, only SA/host, saved list validation
+and removal); `cargo test -p bri-sim --test clear_bricks --test
+hardening_session` (40k clear under 5 s, `/clearBricks` own-only with the
+cooldown, Clear All admin-only); `cargo test -p bri-client --lib admin_ui`
+(chat commands, key round trip, rank replies); `cargo test -p bri-net --test
+loopback` (over QUIC: host makes a player Super Admin, who makes another
+Admin; an Admin cannot; the file names both; a fresh rejoin with the same
+key is Super Admin again, a stranger using the name is not). Release, real app, headless:
+`cargo test -p bri-client --test clear_bricks_flow --release -- --ignored`
+hosts Kitchen in single player, loads 20,000 bricks, opens Admin > Clear
+Bricks and clears all in 0.09 s ("Action accepted by the host"). Offscreen
+renders of the Admin menu and Saved Ranks (`artifacts/native-admin-ui`)
+show the new buttons fitting under the list. Not seen in a window: Max's
+playtest over the Internet with a second player.
+Follow-up outside this lane: the brick chain kill (`debris.rs`) still
+removes stranded bricks one at a time with a physics refresh each.
+## 2026-09-28 Guests hammer their own spawn bricks (branch `claude/project-thread-7p7umh`)
+
+Playtest a20 (5b476a991): an Internet guest placed a vehicle spawn, set it to
+the Blockhead Bot, and could not hammer the brick back; the host could.
+
+- Cause: v20 flags the Spawn Point and Vehicle Spawn datablocks
+  `indestructable = 1`, and our `Simulation::remove` refused such bricks for
+  anyone but an administrator (the hammer and wand asked the same rule
+  first). The host is Super Admin, so only guests hit it. In v20 the flag
+  only keeps explosions off a brick: `hammerImage::onHitObject` asks the
+  chain kill and trust, nothing else, and `killBrick` removes any brick.
+  Undoing a planted spawn brick failed the same way for guests.
+- Fix: removal no longer checks the flag; the hammer and player wand no
+  longer ask it. Explosions (`ProjectileData::onExplode` path) and the chain
+  kill still skip indestructible bricks, as before.
+- Ruled out with the loopback test: the brick's owner is the guest, not the
+  host or the map; it stays theirs after they leave and rejoin with the same
+  identity; the swing lands on the brick once the bot walks off (a swing at
+  the bot itself hits the player, as in v20). The client does no hammer
+  prediction. Killing the brick takes its bot or vehicle with it, like
+  `fxDTSBrick::onDeath`, through the existing reconcile.
+
+Evidence: `cargo test -p bri-net --test loopback
+a_guest_hammers_their_own_bot_spawn_brick_after_rejoining` (host plus guest
+over QUIC with default trust; failed before the fix with the brick still
+standing, passes after, and the bot leaves with the brick);
+`cargo test -p bri-sim --test tools
+builders_hammer_and_undo_their_own_indestructible_bricks` (replaces the test
+that asserted the old rule); with content, `cargo test -p bri-sim --test
+vehicles a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it
+-- --ignored` (stock Vehicle Spawn and Jeep, non-admin guest); full
+`cargo test -p bri-sim -p bri-net`. Not seen in a window: Max's playtest.
+## 2026-09-28 The Stunt Plane ships as a default Add-On (branch `claude/project-thread-rwzbus`)
+
+Max asked for the Stunt Plane as a first-class Add-On that comes with the
+game. It is not in the v20 reference: its `Add-Ons` holds eight vehicles
+(Ball, Flying Wheeled Jeep, Horse, Jeep, Magic Carpet, Pirate Cannon,
+Rowboat, Tank). The only copy is the community `Vehicle_Stunt_Plane.zip`
+(Kaje and Ephialtes, no licence file, sha256 `e68fd173…329e`) in Maxwell's
+archive. Asked first because the repo treats that archive as not
+redistributable; Max said yes to shipping it in public releases.
+
+Picked: a packaged Add-On, not base content. Stock vehicles ship in the
+generated `v20-vehicles` pack, but the plane is not v20's, and a base pack is
+never offered to joining players (the join Add-Ons fix lets them in without
+it). As an Add-On it ships like the Duplicator:
+`content/addons/vehicle_stunt_plane`, turned on in the release's
+`packages.json`, offered for download by hosts, and players can turn it off.
+
+- `tools/shipped-addons.json` lists it (id, version, archive hash, vehicle
+  id). `tools/shipped_addons.py build` runs Import Add-On with the v20
+  reference and recovered core scripts into `content/shipped-addons/<id>`
+  and checks it; bootstrap does this when the archive is present. The
+  import converts with no failed assets; its `JeepVehicle.uiName = ""`
+  (hiding the Jeep) stays unsupported, so the Jeep keeps its place.
+- `package_playtest.ps1` refuses to package without it, copies it in and
+  turns it on; `-VerifyPackage` (run by the release workflow) refuses a
+  release that does not turn it on at `addons/vehicle_stunt_plane` with its
+  vehicle. `ci_content.py` packs it and `fetch` requires it, so the GitHub
+  release build carries it once the content zip is uploaded again.
+- Upgrades keep it on: the launcher keeps the new version's own list less
+  what the player turned off.
+
+Evidence: `tools/tests/Test-PlaytestPackaging.ps1` (the fixture release
+ships it on and shared; verify refuses a release without it; the packager
+refuses to build without it); `ci_content.py pack` over a fixture content
+root with and without it; `cargo test --release -p bri-client --test
+add_on_join -- --ignored a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it`
+(a host with it lists it among its spawnable vehicles; a guest with only
+the base game downloads it, joins and lists it). Not seen in a window:
+Max's playtest of spawning and flying it from a fresh standalone install.
+Needed on the PC: `python tools/ci_content.py upload`, or release runs stop
+at "Fetch the generated v20 content" asking for it.
+## 2026-09-28 Event explosion loops no longer end the game (branch `claude/project-thread-xc3a5y`)
+
+Playtest report: a friend's endless relay loop of `spawnExplosion` ended the
+a20 host with "Network worker stopped". The session log held no other error.
+
+Cause, reproduced headlessly on main (`crates/net/tests/event_storm.rs`):
+- Event `spawnExplosion` spawned a stationary live projectile instead of
+  exploding it (v20 `%p.explode()`). A zero-delay loop filled the host's
+  1024-projectile budget within a tick and kept it full: nothing exploded,
+  every player's weapons were refused, and the debug host ran about 5x
+  slower than real time.
+- The dialog hid the real failure. When the network worker's `run` ends, the
+  movement channel closes at once, but `Event::Failed` was sent only after
+  the host finished stopping and saving (and with `try_send`, so a full UI
+  queue lost it). The next frame's movement send reported "Network worker
+  stopped" instead. The worker also died outright when 128 presentation
+  events or notices were waiting.
+
+Fix:
+- `WeaponsWorld::spawn_explosion` explodes where it is made at the start of
+  the next tick without flying; at most 8 per tick (`MAX_EXPLOSIONS_PER_TICK`).
+  Brick and player `spawnExplosion` use it; a fake-killed brick spawns none,
+  as v20. Event-spawned projectiles are also capped at 8 per host tick
+  (`MAX_EVENT_PROJECTILES_PER_TICK`), besides the owner quota. Over-limit
+  spawns are dropped and the host logs the count at most every 10 s.
+- Players who are not administrators get v20's `serverCmdAddEvent` floor:
+  `fireRelay*` rows under 33 ms are saved as 33 ms. Administrators (the
+  existing flag, so the admin-ranks lane's roles inherit it) and loaded
+  builds keep zero-delay relays. This narrows the alpha-contract item
+  "without an imposed 33 ms per-hop wait" to administrators, per the
+  playtesters' request relayed by Maxwell; the event engine is unchanged.
+- The client network worker waits (up to 5 s) to deliver `Event::Failed`,
+  movement sends to a stopped worker are dropped so the real reason is
+  shown, and presentation cues and notices only use queue room beyond what
+  replies need (256 slots, 98 reserved); excess cues are counted as dropped.
+
+Evidence: `cargo test -p bri-net --test event_storm -- --ignored` (debug
+and `--release`): a zero-delay loop for 1200 host ticks gives 9592
+explosions (8 per tick), no lingering rockets, no step errors; release ran
+in real time with 73 dropped ticks. A 33 ms loop gives 302 explosions in 10
+s (v20's 30 a second). On unmodified main the same loop held 1024 rockets
+and produced no explosions. `hardening_session`
+`relay_rows_keep_v20s_33_ms_floor_except_for_administrators`. Not seen in a
+window: Maxwell's playtest of an event explosion loop on a hosted game.
+## 2026-09-28 Horse and turret third-person camera (branch `claude/horse-camera`)
+
+Max, a21: riding a horse, the third-person camera was wrong. Horse riders,
+like every player-type mount's rider (rowboat, pirate cannon, tank turret),
+fell through to the gunner chase camera: it orbited a pivot `cameraOffset`
+over the mount's feet (2.3 for the horse) along the untilted look and only
+turned the view down by `cameraTilt` afterwards. In v20 the horse is a
+`PlayerData` (`Vehicle_Horse/server.cs` `HorseArmor`: `cameraMaxDist` 8,
+`cameraVerticalOffset` 2.3, `cameraTilt` 0.261, box `2.5 2.5 2.4` x4) and
+the rider's control object, so the view is the horse's own
+`Player::getCameraTransform` (0x5ab7d0, `docs/player-simulation.md`): the
+pivot is the middle of the horse's box plus 2.3 (feet + 3.5, 1.2 higher than
+ours), the look is pitched down by the tilt and the camera sits 8 back along
+that tilted look. The Horse-Rayed player already used that camera.
+
+Now every `SeatRole::Actor` rider uses the same `pivot_camera` as players
+on foot, with the mount's collision hull as its box and its own camera
+fields. The same flaw hit the Tank's gunner: v20's `TankVehicle::onAdd`
+mounts a `TankTurretPlayer` (8 / 2.3 / 0.261, box 1.7) on mount2 and the
+gunner controls it, so the gunner now sees the turret's player camera from
+the mount2 node instead of the Tank's 13 / 7.5 / 0.4 camera. The turret's
+definition is found as the pack's player-type definition drawn with the
+Tank's attachment model (`VehicleAssets::attachment_definition`). The old
+chase camera only remains for a gunner seat with no turret player (none in
+the stock packs). Drivers of real vehicles are unchanged.
+
+Defaults picked: first person on a horse stays at the rider's seated eye
+(the horse's `Eye` node, 2.39 over its feet, was not adopted without v20
+first-person evidence); the mount's scale is not applied (the client does not
+know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
+`cargo test -p bri-client --lib -- camera horse --include-ignored`
+(`a_horse_rider_sees_the_horse_player_camera`: pivot feet + 3.5, 8 back,
+tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
+`TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
+playtest riding a horse and gunning a Tank in third person.

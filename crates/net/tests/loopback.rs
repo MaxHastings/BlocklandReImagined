@@ -23,6 +23,11 @@ use rapier3d::prelude::*;
 use sha2::Digest;
 use std::time::Duration;
 fn session() -> Session {
+    session_with_sturdy(&[])
+}
+/// The plate fixture, plus plates under `sturdy` ids marked like v20's
+/// `indestructable` special bricks (spawn points and vehicle spawns).
+fn session_with_sturdy(sturdy: &[&str]) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -46,18 +51,17 @@ fn session() -> Session {
         .build()
         .shared_shape()
         .clone();
+    let definition = |indestructible| Definition {
+        mesh: mesh.clone(),
+        collision: collision.clone(),
+        shape: shape.clone(),
+        indestructible,
+        special: Default::default(),
+    };
     let defs = Definitions {
-        entries: [(
-            "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-            },
-        )]
-        .into(),
+        entries: std::iter::once(("plate".to_string(), definition(false)))
+            .chain(sturdy.iter().map(|id| (id.to_string(), definition(true))))
+            .collect(),
     };
     let mut session = Session::new(
         Simulation::new(
@@ -2658,6 +2662,236 @@ async fn look_pitch_and_head_turn_reach_other_players() -> Result<()> {
         })
     })
     .await?;
+    server.stop().await?;
+    Ok(())
+}
+
+/// Playtest a20: a guest planted a vehicle spawn brick, set it to the
+/// Blockhead Bot and could not hammer it back, though the host could. v20's
+/// `indestructable` spawn bricks only shrug off explosions: `hammerImage::
+/// onHitObject` asks nothing but the chain kill and trust, so the builder
+/// always breaks their own, and `fxDTSBrick::onDeath` takes the spawned bot
+/// or vehicle with it. Over real QUIC, with the host present and trust left
+/// at its defaults, after the builder rejoins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<()> {
+    use bri_sim::session::{ToolCatalog, WrenchProperties};
+    const SPAWN: &str = "vehicle_spawn";
+    let mut game = session_with_sturdy(&[SPAWN]);
+    game.set_weapon_pack(tool_pack())?;
+    game.set_vehicle_pack(bri_vehicles::Pack {
+        schema_version: bri_vehicles::schema::SCHEMA_VERSION,
+        definitions: vec![],
+        assets: vec![],
+        evidence: vec![],
+        unresolved: vec![],
+        animation_aliases: Default::default(),
+    })?;
+    game.set_tool_catalog(ToolCatalog {
+        vehicles: ["bot.blockhead".to_string()].into(),
+        vehicle_bricks: [SPAWN.to_string()].into(),
+        ..Default::default()
+    })?;
+    let server = server::start(game, options())?;
+    let mut host = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        Vec::new(),
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let dir = tempfile::tempdir()?;
+    let identity = ClientIdentity::load_or_create(dir.path().join("guest.identity"))?;
+    let connect = || {
+        Client::connect_with_identity(
+            server.address,
+            &server.certificate,
+            "Guest".into(),
+            Vec::new(),
+            None,
+            None,
+            &identity,
+        )
+    };
+    let mut guest = connect().await?;
+    let owner = guest.owner;
+    let Reply::Planted(brick) = guest
+        .command(Command::Plant {
+            definition: SPAWN.into(),
+            position: [0.5, 0.1, -3.25],
+            quarter_turns: 0,
+            color: 0,
+        })
+        .await?
+    else {
+        panic!("the spawn brick plants")
+    };
+    wait(&mut guest, |c| c.replica.world.bricks.contains_key(&brick)).await?;
+    assert_eq!(guest.replica.world.bricks[&brick].owner, owner);
+    aim(&mut guest).await?;
+    let (opened, _, _) = swing(&mut guest, 1)
+        .await?
+        .expect("the builder's wrench opens their spawn brick");
+    assert_eq!(opened, brick);
+    guest
+        .command(Command::Tool(ToolAction::SetWrench {
+            brick,
+            properties: WrenchProperties {
+                vehicle: Some("bot.blockhead".into()),
+                raycast: true,
+                colliding: true,
+                visible: true,
+                ..Default::default()
+            },
+        }))
+        .await?;
+    wait(&mut host, |c| c.replica.names.len() == 3).await?;
+    let bot = *host
+        .replica
+        .names
+        .keys()
+        .find(|o| ![owner, host.owner].contains(o))
+        .expect("the brick spawned its bot");
+
+    // Leave and come back: the brick is still the guest's.
+    guest.close();
+    drop(guest);
+    wait(&mut host, |c| !c.replica.names.contains_key(&owner)).await?;
+    let mut guest = connect().await?;
+    assert_eq!(guest.owner, owner);
+    assert_eq!(guest.replica.world.bricks[&brick].owner, owner);
+
+    // The bot wanders off its brick, so the swing lands on the brick.
+    let spot = Vec3::new(0.5, 0.1, -3.25);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let feet = Vec3::from(guest.replica.poses[&bot].player.feet);
+            if Vec3::new(feet.x - spot.x, 0.0, feet.z - spot.z).length() > 2.5 {
+                break;
+            }
+            guest.receive().await?;
+        }
+        Result::<()>::Ok(())
+    })
+    .await
+    .context("the bot never left its brick")??;
+    aim(&mut guest).await?;
+    assert!(swing(&mut guest, 0).await?.is_none());
+    wait(&mut guest, |c| {
+        !c.replica.world.bricks.contains_key(&brick) && !c.replica.names.contains_key(&bot)
+    })
+    .await?;
+    wait(&mut host, |c| {
+        !c.replica.world.bricks.contains_key(&brick) && !c.replica.names.contains_key(&bot)
+    })
+    .await?;
+    drop(guest);
+    drop(host);
+    let report = server.stop().await?;
+    assert!(report.final_world.bricks.is_empty());
+    Ok(())
+}
+
+/// A rank given over the network is saved under the player's key: the same
+/// key gets it back on a fresh join, a copied name does not, and a Super
+/// Admin (not only the host) can give and take ranks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
+    use bri_admin::{Action, ConnectionId, DurableState, Request, Role};
+
+    let state_dir = tempfile::tempdir()?;
+    let admin_file = state_dir.path().join("admin.json");
+    let key = |name: &str| ClientIdentity::load_or_create(state_dir.path().join(name));
+    let (host_key, friend_key, other_key) = (key("host")?, key("friend")?, key("other")?);
+    let server = server::start_with_admin_store_and_limit(session(), options(), 8, &admin_file)?;
+    macro_rules! join {
+        ($name:expr, $identity:expr, $host:expr) => {
+            Client::connect_with_identity(
+                server.address,
+                &server.certificate,
+                $name.into(),
+                Vec::new(),
+                None,
+                $host.then(|| server.host_token.clone()),
+                $identity,
+            )
+        };
+    }
+    let connection = |c: &Client, name: &str| {
+        c.admin_snapshot
+            .as_ref()
+            .and_then(|s| s.players.iter().find(|p| p.name == name))
+            .map(|p| ConnectionId(p.connection))
+    };
+    let mut host = join!("Host", &host_key, true).await?;
+    let mut friend = join!("Friend", &friend_key, false).await?;
+    let mut other = join!("Other", &other_key, false).await?;
+    wait(&mut host, |c| {
+        connection(c, "Friend").is_some() && connection(c, "Other").is_some()
+    })
+    .await?;
+    let target = connection(&host, "Friend").unwrap();
+    host.command(Command::Admin(Request::new(Action::HostSetRole {
+        target,
+        role: Role::SuperAdmin,
+    })))
+    .await?;
+    wait(&mut friend, |c| {
+        c.admin_snapshot
+            .as_ref()
+            .is_some_and(|s| s.role == Role::SuperAdmin)
+    })
+    .await?;
+    // The new Super Admin hands out a rank of their own.
+    wait(&mut friend, |c| connection(c, "Other").is_some()).await?;
+    let other_connection = connection(&friend, "Other").unwrap();
+    friend
+        .command(Command::Admin(Request::new(Action::HostSetRole {
+            target: other_connection,
+            role: Role::Admin,
+        })))
+        .await?;
+    wait(&mut other, |c| {
+        c.admin_snapshot.as_ref().is_some_and(|s| s.role == Role::Admin)
+    })
+    .await?;
+    // A plain Admin cannot.
+    assert!(
+        other
+            .command(Command::Admin(Request::new(Action::HostSetRole {
+                target: other_connection,
+                role: Role::SuperAdmin,
+            })))
+            .await
+            .is_err()
+    );
+    let saved = DurableState::read(std::fs::File::open(&admin_file)?)?;
+    let names: Vec<_> = saved
+        .auto_roles
+        .iter()
+        .map(|a| (a.name.as_str(), a.role))
+        .collect();
+    assert_eq!(names, [("Friend", Role::SuperAdmin), ("Other", Role::Admin)]);
+
+    // Leave and join again fresh: the key brings the rank back.
+    friend.close();
+    wait(&mut host, |c| connection(c, "Friend").is_none()).await?;
+    let mut back = join!("Friend", &friend_key, false).await?;
+    wait(&mut back, |c| c.admin_snapshot.is_some()).await?;
+    assert_eq!(back.admin_snapshot.as_ref().unwrap().role, Role::SuperAdmin);
+    // Someone else calling themselves "Friend" gets nothing (Other leaves
+    // to free a spawn point).
+    other.close();
+    wait(&mut host, |c| connection(c, "Other").is_none()).await?;
+    let stranger_key = key("stranger")?;
+    let mut stranger = join!("Friend", &stranger_key, false).await?;
+    wait(&mut stranger, |c| c.admin_snapshot.is_some()).await?;
+    assert_eq!(stranger.admin_snapshot.as_ref().unwrap().role, Role::Player);
+    for client in [host, back, stranger] {
+        client.close();
+    }
     server.stop().await?;
     Ok(())
 }

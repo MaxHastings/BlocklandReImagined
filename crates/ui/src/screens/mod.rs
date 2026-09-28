@@ -12,6 +12,7 @@ pub mod menus;
 pub mod modes;
 pub mod music;
 pub mod minigames;
+pub mod name;
 pub mod options;
 pub mod perf;
 pub mod play;
@@ -57,12 +58,16 @@ pub enum ScreenId {
     AdminMaps,
     AdminOptions,
     AdminCredentials,
+    /// The saved ranks (v20's auto-admin lists).
+    AdminRanks,
     AdminConfirm,
     BrickSelector,
     PrintSelector,
     Wrench(WrenchVariant),
     WrenchEvents,
     Avatar,
+    /// First-open name prompt (v20 `regNameGui` window).
+    ChooseName,
     SaveBricks,
     LoadBricks,
     MessageBox,
@@ -171,10 +176,12 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         | ScreenId::AdminMaps
         | ScreenId::AdminOptions
         | ScreenId::AdminCredentials
+        | ScreenId::AdminRanks
         | ScreenId::AdminConfirm => return Box::new(admin::AdminScreen::new(id, core)),
         ScreenId::Wrench(variant) => return Box::new(wrench::Wrench::new(core, variant)),
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),
         ScreenId::Avatar => return Box::new(avatar::Avatar::new(core)),
+        ScreenId::ChooseName => return Box::new(name::ChooseName::new(core)),
         ScreenId::Play => return Box::new(play::Play::new(core)),
         ScreenId::Console => return Box::new(console::Console::new(core)),
         ScreenId::AddOns => return Box::new(addons::AddOns::new(core)),

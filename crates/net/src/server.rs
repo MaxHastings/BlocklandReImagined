@@ -1079,6 +1079,9 @@ async fn run(
     let mut state_stream = crate::stream::StateStream::default();
     let mut sent_dropped_cues = session.dropped_cues();
     let mut step_errors = 0_u64;
+    // Event explosions/projectiles refused over the per-tick limits, logged
+    // at most every ten seconds so a runaway loop cannot flood the log.
+    let mut event_overload = (0_u64, None::<std::time::Instant>);
     let mut spawn_points = options.spawn_points.clone();
     let (map_tx, mut map_rx) = mpsc::channel::<(OwnerId, Result<Session>)>(1);
     let mut joins = 0;
@@ -1256,6 +1259,11 @@ async fn run(
                 send_package_views(&session,&peers,&mut package_views);
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}}
             }
+            }
+            event_overload.0+=session.take_event_overload();
+            if event_overload.0>0 && event_overload.1.is_none_or(|at|now.duration_since(at)>=Duration::from_secs(10)) {
+                eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
+                event_overload=(0,Some(now));
             }
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)

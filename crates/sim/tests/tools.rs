@@ -1489,32 +1489,43 @@ fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused() {
     );
 }
 
-/// A tool that may not destroy a brick leaves it alone before anything
-/// happens: no break events, and the game tick carries on.
+/// v20's `indestructable` (spawn points, vehicle spawns) only keeps
+/// explosions off a brick: a builder who is not an administrator hammers or
+/// undoes their own like any other (playtest a20).
 #[test]
-fn hammer_leaves_indestructible_bricks_without_failing_the_tick() {
+fn builders_hammer_and_undo_their_own_indestructible_bricks() {
     let mut s = session(vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
-    let Reply::Planted(sturdy) = s
-        .command(
-            owner,
-            1,
-            Command::Plant {
-                definition: "sturdy_plate".into(),
-                position: [0.5, 0.1, -3.25],
-                quarter_turns: 0,
-                color: 0,
-            },
-        )
-        .unwrap()
-    else {
-        panic!("expected plant")
+    let plant_sturdy = |s: &mut Session, seq| {
+        let Reply::Planted(id) = s
+            .command(
+                owner,
+                seq,
+                Command::Plant {
+                    definition: "sturdy_plate".into(),
+                    position: [0.5, 0.1, -3.25],
+                    quarter_turns: 0,
+                    color: 0,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("expected plant")
+        };
+        id
     };
+    plant_sturdy(&mut s, 1);
     aim(&mut s, owner, 2, [0.5, 0.1, -3.01]);
     swing(&mut s, owner, 3, 0).unwrap();
-    assert_eq!(bricks(&s), vec![sturdy]);
+    assert_eq!(bricks(&s), Vec::<u64>::new());
+    let again = plant_sturdy(&mut s, 4);
+    assert_eq!(
+        tool(&mut s, owner, 5, ToolAction::UndoBrick).unwrap(),
+        Reply::Undone(Some(again))
+    );
+    assert_eq!(bricks(&s), Vec::<u64>::new());
 }
 
 #[test]

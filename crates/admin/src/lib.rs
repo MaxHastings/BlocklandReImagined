@@ -156,6 +156,8 @@ pub enum Action {
         ban: BanId,
     },
     RequestBanList,
+    /// The saved ranks (v20's auto-admin lists), for the host and Super Admins.
+    RequestAutoRoles,
     RequestBrickGroups,
     RequestMaps,
     Spy {
@@ -193,7 +195,10 @@ pub enum Action {
     SetAdminPassword {
         password: Secret,
     },
-    /// Host-local native administration adaptation, not a recovered remote command.
+    /// Make a connected player Admin or Super Admin, or take the rank away.
+    /// The host and Super Admins may; the rank is also saved in the host's
+    /// auto-admin list under the player's verified key (v20's
+    /// `$Pref::Server::AutoAdminList`), so it returns when they rejoin.
     HostSetRole {
         target: ConnectionId,
         role: Role,
@@ -411,6 +416,7 @@ pub enum Effect {
     LoginIgnored,
     BansChanged,
     BanList(Vec<BanRecord>),
+    AutoRoleList(Vec<AutoRole>),
     AutoRolesChanged,
     PasswordChange {
         slot: PasswordSlot,
@@ -500,11 +506,15 @@ fn validate_principal(p: Principal) -> Result<(), Error> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AutoRole {
     pub principal: Principal,
     pub role: Role,
+    /// The name the player had when the rank was given, for people reading
+    /// the saved list. Joining matches the key, never the name.
+    #[serde(default)]
+    pub name: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -560,6 +570,7 @@ impl DurableState {
             if a.role == Role::Player {
                 return Err(Error::InvalidValue);
             }
+            validate_text(&a.name, 128)?;
             if !principals.insert(a.principal) {
                 return Err(Error::Duplicate);
             }
@@ -660,6 +671,16 @@ impl Administration {
     pub fn disconnect(&mut self, id: ConnectionId) {
         self.sessions.remove(&id);
     }
+    /// A connected player chose a new display name.
+    pub fn rename(&mut self, id: ConnectionId, display_name: String) -> Result<(), Error> {
+        validate_text(&display_name, 128)?;
+        if display_name.is_empty() {
+            return Err(Error::InvalidValue);
+        }
+        let session = self.sessions.get_mut(&id).ok_or(Error::UnknownConnection)?;
+        session.trusted.display_name = display_name;
+        Ok(())
+    }
     pub fn is_banned(&self, p: Principal, now: u64) -> bool {
         self.durable
             .bans
@@ -711,7 +732,15 @@ impl Administration {
             }
             Action::HostSetRole { .. }
             | Action::HostSetAutoRole { .. }
-            | Action::HostSetPassword { .. }
+            | Action::RequestAutoRoles => {
+                if self.host_authority(origin)? || actor.is_some_and(|s| s.role == Role::SuperAdmin)
+                {
+                    Ok(())
+                } else {
+                    Err(Error::Denied)
+                }
+            }
+            Action::HostSetPassword { .. }
             | Action::HostConfigure { .. } => {
                 if self.host_authority(origin)? {
                     Ok(())
@@ -909,26 +938,33 @@ impl Administration {
                     .sessions
                     .get_mut(&target)
                     .ok_or(Error::UnknownConnection)?;
-                if s.trusted.is_owner || s.trusted.is_local {
+                if s.trusted.is_owner || s.trusted.is_local || s.trusted.is_bot {
                     return Err(Error::Protected);
                 }
-                s.role = role;
-                return Ok(vec![Effect::RoleChanged { target, role }]);
+                let saved = s.trusted.principal.map(|p| (p, s.trusted.display_name.clone()));
+                let mut out = vec![Effect::RoleChanged { target, role }];
+                // Without a verified key the rank lasts for this visit only.
+                if let Some((principal, name)) = saved {
+                    self.set_auto_role(principal, role, name)?;
+                    out.push(Effect::AutoRolesChanged);
+                }
+                if let Some(s) = self.sessions.get_mut(&target) {
+                    s.role = role;
+                }
+                return Ok(out);
+            }
+            Action::RequestAutoRoles => {
+                return Ok(vec![Effect::AutoRoleList(self.durable.auto_roles.clone())]);
             }
             Action::HostSetAutoRole { principal, role } => {
-                if let Some(i) = self
+                let name = self
                     .durable
                     .auto_roles
                     .iter()
-                    .position(|a| a.principal == principal)
-                {
-                    self.durable.auto_roles.remove(i);
-                } else if role != Role::Player && self.durable.auto_roles.len() >= MAX_AUTO_ROLES {
-                    return Err(Error::Budget);
-                }
-                if role != Role::Player {
-                    self.durable.auto_roles.push(AutoRole { principal, role });
-                }
+                    .find(|a| a.principal == principal)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
+                self.set_auto_role(principal, role, name)?;
                 return Ok(vec![Effect::AutoRolesChanged]);
             }
             Action::SetAdminPassword { password } => {
@@ -972,6 +1008,31 @@ impl Administration {
             Action::RequestMaps => GameplayCommand::RequestMaps,
         };
         Ok(vec![Effect::Gameplay { actor, command }])
+    }
+}
+
+impl Administration {
+    /// Save (or, for `Player`, forget) the rank `principal` gets on joining.
+    fn set_auto_role(&mut self, principal: Principal, role: Role, name: String) -> Result<(), Error> {
+        let at = self
+            .durable
+            .auto_roles
+            .iter()
+            .position(|a| a.principal == principal);
+        if at.is_none() && role != Role::Player && self.durable.auto_roles.len() >= MAX_AUTO_ROLES {
+            return Err(Error::Budget);
+        }
+        if let Some(i) = at {
+            self.durable.auto_roles.remove(i);
+        }
+        if role != Role::Player {
+            self.durable.auto_roles.push(AutoRole {
+                principal,
+                role,
+                name,
+            });
+        }
+        Ok(())
     }
 }
 

@@ -382,7 +382,38 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
     let extras = kind_providers(client_root.path(), &joined, "weapons.json")?;
     assert_eq!(extras.len(), 4);
     let weapons = WeaponContent::load_with(&base.weapons, &extras)?;
-    ItemPhysicsContent::load_with(&base.items, &weapons, &extras)?;
+    let physics = ItemPhysicsContent::load_with(&base.items, &weapons, &extras)?;
+    // Every weapon has drop bounds, so the wrench can put any of them on a
+    // brick: none of these Add-Ons ships item physics. A stock model lends
+    // its box; an item with no art gets the stand-in box.
+    for id in weapons.pack.items.keys() {
+        assert!(physics.bounds.contains_key(id), "{id} has bounds");
+    }
+    let stock = bri_weapons::ItemBounds {
+        min: [-0.1; 3],
+        max: [0.1; 3],
+    };
+    assert_eq!(physics.bounds["stock-art:weapon/wand"], stock);
+    assert_eq!(
+        physics.bounds["stock-art:weapon/mystery"],
+        bri_weapons::ItemBounds::FALLBACK
+    );
+    let spawners = bri_sim::item_spawners::ItemSpawners::new(physics.bounds.clone());
+    let world = bri_world::World::new("Wrench".into(), "test".into(), vec![[1.0; 4]]);
+    let mut brick = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("plate".into()),
+        [0.0, 0.1, 0.0],
+        1,
+    );
+    brick.item_spawn.item = Some(bri_world::ContentRef::Resolved(
+        "stock-art:weapon/mystery".into(),
+    ));
+    brick.item_spawn.respawn_ms = 1000;
+    let edit = bri_world::authority::Edit::Properties(bri_world::authority::WrenchProperties {
+        item_spawn: brick.item_spawn,
+        ..Default::default()
+    });
+    spawners.validate_edit(&world, 1, &edit)?;
     let assets = ItemAssets::load_with(&base.items, &base.weapons, &extras)?;
     let ui = ItemUi::new(&assets, &weapons.item_choices, &letters()?)?;
     let catalog = ui.catalog();

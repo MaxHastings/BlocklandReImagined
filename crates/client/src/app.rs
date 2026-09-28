@@ -1661,8 +1661,8 @@ impl App {
             .and_then(|v| v.vitals.get(&v.owner))
             .is_none_or(|v| v.alive)
     }
-    /// The chase camera for a gunner or a player-type mount's rider:
-    /// distance, pivot above the vehicle and downward view tilt.
+    /// The chase camera for a gunner seat with no turret player to look
+    /// through: distance, pivot above the vehicle and downward view tilt.
     fn chase_camera(
         assets: &crate::vehicles::VehicleAssets,
         vehicles: &crate::vehicles::ClientVehicles,
@@ -1703,12 +1703,7 @@ impl App {
         };
         let scale = local.scale;
         let stand_height = archetypes.tuning(local.archetype, scale).stand_height;
-        let lift = stand_height * 0.5 + (offset * pos + 0.75 * (1.0 - pos)) * scale;
-        (
-            (max_dist * scale * pos).clamp(0.0, 40.0),
-            feet + Vec3::Y * lift,
-            tilt,
-        )
+        pivot_camera(stand_height, scale, (max_dist, offset, tilt), feet, pos)
     }
     /// Where the view camera is and how it looks (yaw, pitch): first person,
     /// sliding out to the chase camera, or an observer camera.
@@ -1753,8 +1748,8 @@ impl App {
             Some((info, d, usize::from(seat), vehicles.frame(vehicle)?))
         });
         // The driver's control object is the vehicle, which places the
-        // camera itself; everyone else rides their own player camera.
-        let feet = match riding {
+        // camera itself; everyone else sees a player camera.
+        let player_view = match riding {
             Some((_, d, seat, frame))
                 if matches!(
                     d.seat_role(seat),
@@ -1776,15 +1771,34 @@ impl App {
                     },
                 );
             }
+            // A player-type mount (horse, rowboat, cannon, tank turret) is a
+            // Player in v20 and its rider's control object, so the view is
+            // the mount's own `Player::getCameraTransform`.
+            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
+                Some(mount_camera(d, frame.position, pos))
+            }
+            // v20's Tank gunner rides and controls the `TankTurretPlayer`
+            // mounted on the Tank's mount2: the turret's camera, not the Tank's.
+            Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Gunner => assets
+                .attachment_definition(d)
+                .zip(d.attachment_mount.as_ref())
+                .map(|(turret, mount)| {
+                    let feet = frame.position + frame.rotation * Vec3::from(mount.position);
+                    mount_camera(turret, feet, pos)
+                }),
             Some((info, d, seat, _)) if d.seat_role(seat) == SeatRole::Passenger => vehicles
                 .seat(assets, info, seat)
-                .map(|(position, _)| position),
-            _ if seated.is_none() => Some(Vec3::from(local.feet)),
+                .map(|(feet, _)| Self::player_camera(assets, &view.archetypes, local, feet, pos)),
+            _ if seated.is_none() => Some(Self::player_camera(
+                assets,
+                &view.archetypes,
+                local,
+                Vec3::from(local.feet),
+                pos,
+            )),
             _ => None,
         };
-        if let Some(feet) = feet {
-            let (distance, pivot, tilt) =
-                Self::player_camera(assets, &view.archetypes, local, feet, pos);
+        if let Some((distance, pivot, tilt)) = player_view {
             // `getCameraTransform` composes the tilt onto the eye's pitch, so
             // the chase camera keeps swinging over the head past vertical.
             let pitch = pitch - tilt;
@@ -2118,11 +2132,25 @@ impl App {
         }
     }
     fn player_name(&self) -> String {
-        let name = self.ui.settings().avatar.lan_name;
-        if name.trim().is_empty() {
-            "Blockhead".into()
-        } else {
-            name
+        player_name(&self.ui.settings().avatar)
+    }
+    /// Game start: ask for a name once while it is still the stock "Blockhead".
+    pub fn prompt_for_name(&mut self) {
+        if bri_ui::screens::name::should_prompt(&self.ui.core) {
+            self.ui.core.push(ScreenId::ChooseName);
+            self.ui.update(0);
+        }
+    }
+    /// Avatar Done while connected also renames the player on the server.
+    fn send_name(&mut self, prefs: &AvatarPrefs) {
+        let name = player_name(prefs);
+        let current = self
+            .network_view()
+            .and_then(|v| v.names.get(&v.owner).cloned());
+        if current.as_deref() != Some(name.as_str())
+            && let Some(a) = self.attempt.as_mut().filter(|a| a.entered)
+        {
+            let _ = a.worker.request(REPORT_REQUEST, Command::SetName(name));
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -3014,6 +3042,7 @@ impl App {
                     reply.data,
                     bri_sim::session::AdminData::BrickGroups(_)
                         | bri_sim::session::AdminData::BanList { .. }
+                        | bri_sim::session::AdminData::AutoRoles(_)
                 ) {
                     ensure!(
                         reply.snapshot.revision >= self.ui.core.admin.revision,
@@ -4134,6 +4163,14 @@ impl App {
                     }
                 }
             }
+            // Everyone's rank, from the host's administration list. Names
+            // are unique on a server, so they pair the two lists.
+            let rank = |name: &str| {
+                view.admin_snapshot
+                    .as_ref()
+                    .and_then(|s| s.players.iter().find(|p| p.name == name))
+                    .map(|p| p.role)
+            };
             self.ui.apply_session(
                 a.id,
                 UiUpdate::Players {
@@ -4146,8 +4183,11 @@ impl App {
                             score: view.vitals.get(&owner).map_or(0, |v| {
                                 v.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32
                             }),
-                            admin: owner == view.owner && view.administrator,
-                            super_admin: false,
+                            admin: rank(name).map_or(
+                                owner == view.owner && view.administrator,
+                                bri_admin::Role::is_admin,
+                            ),
+                            super_admin: rank(name) == Some(bri_admin::Role::SuperAdmin),
                             bl_id: a
                                 .trust
                                 .get(&owner)
@@ -4232,6 +4272,45 @@ impl Drop for App {
             });
         }
     }
+}
+/// `Player::getCameraTransform` (blocklandv20.exe 0x5ab7d0) for a body
+/// `stand_height` tall standing at `feet`: distance, pivot and downward tilt.
+/// The pivot is the middle of the box plus `cameraVerticalOffset` (0.75
+/// while sliding in); offset and distance scale with the body.
+fn pivot_camera(
+    stand_height: f32,
+    scale: f32,
+    (max_dist, offset, tilt): (f32, f32, f32),
+    feet: Vec3,
+    pos: f32,
+) -> (f32, Vec3, f32) {
+    let lift = stand_height * 0.5 + (offset * pos + 0.75 * (1.0 - pos)) * scale;
+    (
+        (max_dist * scale * pos).clamp(0.0, 40.0),
+        feet + Vec3::Y * lift,
+        tilt,
+    )
+}
+/// The player camera of a player-type mount standing at `feet`: its
+/// `PlayerData` box is the collision hull (the horse's is 2.4 tall, so the
+/// pivot sits 1.2 + 2.3 over its feet). The client does not know the
+/// mount's scale, so it is drawn at 1.
+fn mount_camera(d: &bri_vehicles::schema::Definition, feet: Vec3, pos: f32) -> (f32, Vec3, f32) {
+    let (low, high) = d
+        .collision_hulls
+        .iter()
+        .flatten()
+        .fold((f32::MAX, f32::MIN), |(low, high), p| {
+            (low.min(p[1]), high.max(p[1]))
+        });
+    let stand_height = if high > low { high - low } else { 0.0 };
+    pivot_camera(
+        stand_height,
+        1.0,
+        (d.camera.max_dist, d.camera.offset, d.camera.tilt),
+        feet,
+        pos,
+    )
 }
 /// Eye of the camera in control: the free camera itself, an orbit around the
 /// spied player, the chase camera, or the player's own eye.
@@ -6454,6 +6533,7 @@ impl PlatformApp for App {
                         }
                     });
                     if connected && result.is_ok() {
+                        self.send_name(prefs);
                         continue;
                     }
                     result
@@ -7409,6 +7489,24 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
+/// The saved name as the server accepts it: trimmed, at most 48 bytes, and
+/// "Blockhead" when blank.
+fn player_name(prefs: &AvatarPrefs) -> String {
+    let mut name: String = prefs
+        .lan_name
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    while name.len() > 48 {
+        name.pop();
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        "Blockhead".into()
+    } else {
+        name.into()
+    }
+}
 /// Wait for every future (a small join_all, to avoid a dependency).
 async fn futures_join_all<F: std::future::Future + Send + 'static>(
     futures: impl IntoIterator<Item = F>,
@@ -8099,5 +8197,56 @@ mod tests {
             super::server_markup("\u{e003}Max<bitmap:base/client/ui/CI/skull>\u{e000}!"),
             "\u{e003}Max<bitmap:base/client/ui/ci/skull>\u{e000}!"
         );
+    }
+    #[test]
+    fn a_player_camera_pivots_over_the_middle_of_the_box() {
+        use glam::Vec3;
+        let feet = Vec3::new(3.0, 1.0, -2.0);
+        // PlayerStandardArmor: feet + 2.65 / 2 + 0.75, 8 back, tilted 0.261.
+        let (distance, pivot, tilt) =
+            super::pivot_camera(2.65, 1.0, super::PLAYER_CAMERA, feet, 1.0);
+        assert_eq!(distance, 8.0);
+        assert!(pivot.distance(feet + Vec3::Y * 2.075) < 1e-5, "{pivot}");
+        assert_eq!(tilt, 0.261);
+        // Sliding in, the offset eases to 0.75 and the distance to nothing.
+        let (distance, pivot, _) = super::pivot_camera(2.4, 1.0, (8.0, 2.3, 0.261), feet, 0.0);
+        assert_eq!(distance, 0.0);
+        assert!(pivot.distance(feet + Vec3::Y * 1.95) < 1e-5, "{pivot}");
+    }
+    /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
+    /// feet. v20's rider looks through the horse's own player camera: the
+    /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
+    #[test]
+    #[ignore = "requires the converted native vehicle pack; CPU only"]
+    fn a_horse_rider_sees_the_horse_player_camera() -> anyhow::Result<()> {
+        use glam::Vec3;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/vehicles-pack-011");
+        let assets = crate::vehicles::VehicleAssets::load(&root)?;
+        let horse = assets.definition("v20.vehicle.horsearmor").unwrap();
+        assert_eq!(
+            horse.seat_role(0),
+            bri_vehicles::schema::SeatRole::Actor,
+            "the horse's rider takes the actor path"
+        );
+        let feet = Vec3::new(10.0, 4.0, -6.0);
+        let (distance, pivot, tilt) = super::mount_camera(horse, feet, 1.0);
+        assert_eq!(distance, 8.0);
+        assert!(pivot.distance(feet + Vec3::Y * 3.5) < 1e-4, "{pivot}");
+        assert!((tilt - 0.261).abs() < 1e-6);
+        // The other player-type mounts use their own boxes and offsets.
+        let turret = assets.definition("v20.vehicle.tankturretplayer").unwrap();
+        let (_, pivot, _) = super::mount_camera(turret, feet, 1.0);
+        assert!(
+            pivot.distance(feet + Vec3::Y * (0.85 + 2.3)) < 1e-4,
+            "{pivot}"
+        );
+        // The Tank's gunner looks through that turret, not the Tank.
+        let tank = assets.definition("v20.vehicle.tankvehicle").unwrap();
+        assert_eq!(tank.seat_role(2), bri_vehicles::schema::SeatRole::Gunner);
+        let carried = assets.attachment_definition(tank).unwrap();
+        assert_eq!(carried.id, "v20.vehicle.tankturretplayer");
+        assert_eq!(carried.camera.max_dist, 8.0);
+        Ok(())
     }
 }
