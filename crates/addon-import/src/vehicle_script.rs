@@ -165,7 +165,7 @@ fn plays(s: &str) -> Vec<(u8, String, Option<Range>)> {
         .match_indices("=vectorlen(")
         .filter_map(|(i, _)| {
             let var_start = s[..i]
-                .rfind(|c: char| c == ';' || c == '{' || c == '}')
+                .rfind([';', '{', '}'])
                 .map_or(0, |p| p + 1);
             let rest = &s[i..];
             let call_end = close(s, i + "=vectorlen".len(), '(', ')')?;
