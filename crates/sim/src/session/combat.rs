@@ -476,6 +476,7 @@ impl Session {
         else {
             return Ok(());
         };
+        let instigator = killer.filter(|k| self.peers.contains_key(k));
         // A killer from another minigame (or none) cannot be credited.
         let killer = killer.filter(|k| *k == victim || self.game_of(*k) == self.game_of(victim));
         let killer_player = killer
@@ -497,6 +498,9 @@ impl Session {
             }
             _ => kind,
         };
+        // Packages see every death and who caused it; their own policy
+        // decides credit.
+        self.package_death(victim, instigator);
         self.eject(victim);
         {
             let peer = self.peers.get_mut(&victim).unwrap();

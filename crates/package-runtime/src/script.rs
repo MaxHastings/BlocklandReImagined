@@ -391,6 +391,31 @@ fn register_api(engine: &mut Engine) {
         push(Op::DamagePlayer {
             player: id(&player)?,
             amount: float(&amount)?,
+            by: None,
+        })
+    });
+    engine.register_fn(
+        "damage",
+        |player: Dynamic, amount: Dynamic, by: Dynamic| {
+            push(Op::DamagePlayer {
+                player: id(&player)?,
+                amount: float(&amount)?,
+                by: Some(id(&by)?),
+            })
+        },
+    );
+    engine.register_fn(
+        "teleport",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push(Op::Teleport {
+                player: id(&player)?,
+                position: [float(&x)?, float(&y)?, float(&z)?],
+            })
+        },
+    );
+    engine.register_fn("respawn", |player: Dynamic| {
+        push(Op::Respawn {
+            player: id(&player)?,
         })
     });
     engine.register_fn(

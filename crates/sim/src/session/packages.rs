@@ -238,7 +238,13 @@ pub(super) struct PackageHost {
     cooldowns: BTreeMap<(OwnerId, String, String), u64>,
     diagnostics: VecDeque<Diagnostic>,
     output: VecDeque<String>,
+    /// Deaths since the last tick, for `on_death` hooks: victim, killer.
+    deaths: VecDeque<(OwnerId, Option<OwnerId>)>,
 }
+
+/// Deaths held for `on_death` between ticks; more in one tick are dropped
+/// with a diagnostic rather than growing without bound.
+const MAX_PENDING_DEATHS: usize = 1024;
 
 fn note(host: &mut PackageHost, diagnostic: Diagnostic) {
     if host.diagnostics.len() == MAX_DIAGNOSTICS {
@@ -302,6 +308,7 @@ impl Session {
             cooldowns: BTreeMap::new(),
             diagnostics: VecDeque::new(),
             output: VecDeque::new(),
+            deaths: VecDeque::new(),
         }));
         let Some(view) = self
             .packages
@@ -735,14 +742,31 @@ impl Session {
                 damage,
                 brick_radius,
             } => self.explode(Vec3::from(position), radius, damage, brick_radius, package),
-            Op::DamagePlayer { player, amount } => self.damage_player(
+            Op::DamagePlayer { player, amount, by } => self.damage_player(
                 player,
                 amount,
                 combat::DamageKind::Package {
                     name: package.into(),
                 },
-                None,
+                by.filter(|by| self.peers.contains_key(by)),
             ),
+            Op::Teleport { player, position } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players can be moved");
+                let yaw = peer.player.state().yaw;
+                peer.player
+                    .teleport(&mut self.simulation.physics, Vec3::from(position), yaw)?;
+                peer.inputs.clear();
+                Ok(())
+            }
+            Op::Respawn { player } => {
+                let target = self.peers.get(&player).context("No such player")?.combat.player;
+                let effects = self
+                    .minigames
+                    .execute(bri_minigames::Command::ForceRespawn { target })
+                    .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
+                self.apply_minigame_effects(effects)
+            }
             Op::SpawnEntity { kind, position } => self
                 .spawn_package_entity(&kind, Vec3::from(position))
                 .map(|_| ()),
@@ -1113,6 +1137,7 @@ impl Session {
     /// Package work for one tick: entity thinking and movement, world
     /// streaming around players, and `on_tick` hooks.
     pub(super) fn step_packages(&mut self) -> Result<()> {
+        self.deliver_deaths();
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };
@@ -1257,6 +1282,52 @@ impl Session {
             );
         }
         Ok(())
+    }
+
+    /// Note a death for packages' `on_death` hooks.
+    pub(super) fn package_death(&mut self, victim: OwnerId, killer: Option<OwnerId>) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        if host.deaths.len() == MAX_PENDING_DEATHS {
+            note(
+                host,
+                Diagnostic::warning("hook.dropped", "Too many deaths in one tick for on_death"),
+            );
+            return;
+        }
+        host.deaths.push_back((victim, killer));
+    }
+    /// `on_death(victim, killer)` for every death since the last tick, in
+    /// order. Deaths the hooks cause are delivered next tick, so a hook can
+    /// never recurse.
+    fn deliver_deaths(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let deaths = std::mem::take(&mut host.deaths);
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_death)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for (victim, killer) in deaths {
+            for package in &hooks {
+                let _ = self.run_package(
+                    package,
+                    "on_death",
+                    vec![
+                        Dynamic::from_int(victim as i64),
+                        killer.map_or(Dynamic::UNIT, |k| Dynamic::from_int(k as i64)),
+                    ],
+                    Budget::Command,
+                    None,
+                    None,
+                    None,
+                );
+            }
+        }
     }
 
     pub fn packages_enabled(&self) -> bool {

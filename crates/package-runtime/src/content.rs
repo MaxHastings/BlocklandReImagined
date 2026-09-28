@@ -80,6 +80,11 @@ pub struct Behaviour {
     /// `on_join(player)` when a player joins.
     #[serde(default)]
     pub on_join: bool,
+    /// `on_death(victim, killer)` after any player dies, however it
+    /// happened; `killer` is the player credited, or `()`. Delivered at the
+    /// start of the next tick.
+    #[serde(default)]
+    pub on_death: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

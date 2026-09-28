@@ -13,6 +13,8 @@ pub const CAPABILITIES: &[&str] = &[
     "entity",
     // Send chat lines to players.
     "chat",
+    // Move players and respawn them (a race start, a round reset).
+    "player",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,9 +30,20 @@ pub enum Op {
         damage: f32,
         brick_radius: f32,
     },
+    /// Damage a player; `by` is the player credited if it kills.
     DamagePlayer {
         player: u64,
         amount: f32,
+        by: Option<u64>,
+    },
+    /// Move a living player, keeping their facing.
+    Teleport {
+        player: u64,
+        position: [f32; 3],
+    },
+    /// Give a player a new life at a spawn point, alive or dead.
+    Respawn {
+        player: u64,
     },
     SpawnEntity {
         kind: String,
@@ -68,6 +81,7 @@ impl Op {
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } => "chat",
+            Self::Teleport { .. } | Self::Respawn { .. } => "player",
         }
     }
     /// Shape limits, independent of who asks.
@@ -76,7 +90,8 @@ impl Op {
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let ok = match self {
-            Self::RemoveBrick { .. } | Self::RemoveEntity { .. } => true,
+            Self::RemoveBrick { .. } | Self::RemoveEntity { .. } | Self::Respawn { .. } => true,
+            Self::Teleport { position, .. } => finite(position),
             Self::Explode {
                 position,
                 radius,
@@ -141,6 +156,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Steer { .. } => "steer",
         Op::Label { .. } => "label",
         Op::Tell { .. } => "tell",
+        Op::Teleport { .. } => "teleport",
+        Op::Respawn { .. } => "respawn",
         Op::Broadcast { .. } => "broadcast",
     }
 }

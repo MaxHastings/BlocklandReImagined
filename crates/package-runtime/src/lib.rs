@@ -8,11 +8,15 @@
 //!
 //! - declared **commands** a client may send (v20's `serverCmd`),
 //! - namespaced, server-owned **state** per player and per server,
+//! - **hooks** the engine calls when something happens: `on_join`,
+//!   `on_tick`, and `on_death(victim, killer)` for every death, however
+//!   caused (the engine decides deaths; packages must not have to poll),
 //! - **entities** whose behaviour is a package `think` function,
 //! - a **chunk provider** that generates world chunks on demand,
-//! - typed **operations** (remove brick, explode, spawn entity, ...) that the
-//!   engine checks against the package's declared capabilities in one place
-//!   ([`ops::authorize`]) before applying them,
+//! - typed **operations** (remove brick, explode, spawn entity, move or
+//!   respawn a player, ...) that the engine checks against the package's
+//!   declared capabilities in one place ([`ops::authorize`]) before applying
+//!   them,
 //! - declarative client **HUD panels** and **box models** bound to replicated
 //!   state. Clients never receive or run package code.
 pub mod content;

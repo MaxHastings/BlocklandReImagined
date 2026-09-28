@@ -413,6 +413,11 @@ pub enum Command {
     Respawn {
         actor: PlayerId,
     },
+    /// The host gives `target` a new life now, alive or dead (a package's
+    /// round reset). Only the host constructs it.
+    ForceRespawn {
+        target: PlayerId,
+    },
     Message {
         game: GameId,
         authority: EventAuthority,
