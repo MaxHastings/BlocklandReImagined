@@ -348,6 +348,53 @@ impl Building {
     pub fn ghost(&self) -> Option<&Brick> {
         self.ghost.as_ref()
     }
+    /// Whether the server would refuse the ghost for a reason this client
+    /// can already see: it overlaps a brick, or nothing holds it up (no brick
+    /// to attach to and no map floor or terrain under it). The server still
+    /// decides; this only warns before the click.
+    pub fn ghost_blocked(&self) -> bool {
+        let Some(ghost) = &self.ghost else {
+            return false;
+        };
+        let Some(definition) = self.definitions.entries.get(match &ghost.definition {
+            ContentRef::Resolved(id) => id.as_str(),
+            ContentRef::Unresolved { .. } => return false,
+        }) else {
+            return false;
+        };
+        let Ok(bounds) = Bounds::new(ghost, &definition.mesh) else {
+            return false;
+        };
+        let mut supported = false;
+        for id in self.index.query(bounds.expanded(1)) {
+            let Some(existing) = self.bricks.get(&id) else {
+                continue;
+            };
+            let Some(other) = self.definitions.get(existing).ok() else {
+                continue;
+            };
+            let placed = (existing, &other.mesh, self.index.bounds(id));
+            if grid::overlaps((ghost, &definition.mesh, bounds), placed) {
+                return true;
+            }
+            supported |= grid::connected((ghost, &definition.mesh, bounds), placed);
+        }
+        if supported {
+            return false;
+        }
+        // The server's ground rule: from the top down to 0.1 under the
+        // bottom, map floor or terrain under any footprint cell.
+        let bottom = bounds.min[1] as f32 * 0.2;
+        let top = bounds.max()[1] as f32 * 0.2;
+        let reach = top - bottom + 0.1;
+        let grounded = (bounds.min[2]..bounds.max()[2]).any(|z| {
+            (bounds.min[0]..bounds.max()[0]).any(|x| {
+                let origin = Vec3::new((x as f32 + 0.5) * 0.5, top, (z as f32 + 0.5) * 0.5);
+                self.map_ray(origin, Vec3::NEG_Y, reach).is_some()
+            })
+        });
+        !grounded
+    }
     pub fn ghost_generation(&self) -> u64 {
         self.ghost_generation
     }
@@ -1363,6 +1410,27 @@ mod tests {
         assert_eq!(new.ghost().map(|g| g.color), Some(1));
     }
 
+    #[test]
+    fn a_ghost_that_would_overlap_or_float_is_blocked() {
+        let mut b = controller();
+        let plate = |y: f32| {
+            let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, y, 0.25], 1);
+            brick.color = 0;
+            brick
+        };
+        assert!(!b.ghost_blocked(), "no ghost");
+        b.ghost = Some(plate(0.1));
+        assert!(!b.ghost_blocked(), "on the floor");
+        b.ghost = Some(plate(1.1));
+        assert!(b.ghost_blocked(), "floating");
+        let mut world = world();
+        world.bricks = bri_world::Bricks::unit(7, plate(0.1));
+        b.sync_world(&world).unwrap();
+        b.ghost = Some(plate(0.1));
+        assert!(b.ghost_blocked(), "overlapping a planted brick");
+        b.ghost = Some(plate(0.3));
+        assert!(!b.ghost_blocked(), "on top of it");
+    }
     #[test]
     fn ghost_deploy_shift_rotate_plant_stays_local_and_body_relative() {
         let mut b = controller();

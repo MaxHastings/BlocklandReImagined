@@ -4055,6 +4055,16 @@ fn building_action(action: &UiAction) -> bool {
     )
 }
 
+/// A ghost the server would refuse, before `v20_temp_brick` brightens it.
+const BLOCKED_GHOST: [f32; 4] = [0.6, 0.05, 0.05, 1.0];
+/// The ghost is redrawn when it moves or the bricks around it change.
+fn ghost_key(building: &crate::building::Building) -> u64 {
+    building
+        .ghost_generation()
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ building.query_generation()
+}
+
 fn translucent_ghost(scene: &mut SceneData) {
     crate::world_scene::v20_temp_brick(scene);
 }
@@ -5762,7 +5772,7 @@ impl PlatformApp for App {
             }
         }
         if let Some(building) = &self.building
-            && self.ghost_uploaded != building.ghost_generation()
+            && self.ghost_uploaded != ghost_key(building)
         {
             self.ghost_gpu = None;
             if let Some(ghost) = building.ghost() {
@@ -5783,12 +5793,19 @@ impl PlatformApp for App {
                             .context("Ghost material catalog missing")?,
                     ),
                 )?;
+                // Warn before a plant the server would refuse: the ghost
+                // turns red (not in v20, which only showed the error icon).
+                if building.ghost_blocked() {
+                    for vertex in &mut data.vertices {
+                        vertex.color = BLOCKED_GHOST;
+                    }
+                }
                 translucent_ghost(&mut data);
                 if !data.indices.is_empty() {
                     self.ghost_gpu = Some(renderer.upload(frame.device, frame.queue, &data)?);
                 }
             }
-            self.ghost_uploaded = building.ghost_generation();
+            self.ghost_uploaded = ghost_key(building);
         }
         if let Some(building) = &self.building
             && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
