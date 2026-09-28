@@ -775,6 +775,13 @@ pub struct Question {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddOnMismatch {
     pub rows: Vec<MismatchRow>,
+    /// What differs, in plain words, when the version numbers alone do not
+    /// say (the same version with different files). Empty otherwise.
+    #[serde(default)]
+    pub explanation: String,
+    /// Some row is part of the base game rather than an Add-On.
+    #[serde(default)]
+    pub base_game: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
