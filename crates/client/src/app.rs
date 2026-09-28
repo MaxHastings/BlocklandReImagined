@@ -4890,14 +4890,24 @@ impl PlatformApp for App {
                         normal: hit.normal.normalize(),
                     })
                 });
-            let shells: Vec<_> = self
-                .weapon_effects
-                .take_host_requests()
-                .filter_map(|r| match r {
-                    crate::weapon_effects::HostRequest::Shell(cue) => Some(cue),
-                    _ => None,
-                })
-                .collect();
+            let mut shells = Vec::new();
+            for request in self.weapon_effects.take_host_requests() {
+                match request {
+                    crate::weapon_effects::HostRequest::Shell(cue) => shells.push(cue),
+                    crate::weapon_effects::HostRequest::Animation(cue) => {
+                        if let bri_sim::presentation::CueKind::WeaponAnimation {
+                            actor,
+                            thread: 0,
+                            sequence,
+                            image_hand: Some(hand),
+                        } = &cue.kind
+                        {
+                            self.world_items
+                                .restart_image_sequence(*actor, *hand, sequence);
+                        }
+                    }
+                }
+            }
             let world_items = &self.world_items;
             let eject = |actor: u64, image: &str, hand: u8| {
                 world_items

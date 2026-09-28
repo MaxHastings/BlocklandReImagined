@@ -393,3 +393,55 @@ fn actual_item_instances_match_independently_baked_world_geometry() -> Result<()
     assert!(empty.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]));
     Ok(())
 }
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
+    // hammerImage loops Fire, CheckFire (0 ticks), Fire while the trigger is
+    // held, so the replicated state reads "Fire" throughout. Each entry's
+    // Fire sequence cue must start the view model's swing over.
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.hammerimage".into(),
+                state: "Fire".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::IDENTITY,
+            mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            velocity: Vec3::ZERO,
+        })
+    };
+    let head = |adapter: &WorldItems| {
+        adapter
+            .mounted_node(7, 0, "v20.image.hammerimage", "FPhammer9999")
+            .unwrap()
+    };
+    let same = |a: Mat4, b: Mat4| a.abs_diff_eq(b, 1e-4);
+    let at = |seconds: f64| WorldItemFrame {
+        seconds,
+        first_person: true,
+        local_owner: Some(7),
+        ..frame()
+    };
+    adapter.sync(&view, at(1.0), pose)?;
+    let start = head(&adapter);
+    adapter.sync(&view, at(1.5), pose)?;
+    let end = head(&adapter);
+    assert!(!same(start, end), "the fire clip moves the head");
+    adapter.sync(&view, at(1.6), pose)?;
+    assert!(same(head(&adapter), end), "one entry swings once");
+    adapter.restart_image_sequence(7, 0, "Fire");
+    adapter.sync(&view, at(1.6), pose)?;
+    assert!(same(head(&adapter), start), "a new entry swings again");
+    Ok(())
+}

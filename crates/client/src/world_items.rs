@@ -134,6 +134,10 @@ struct AnimationClock {
     started: f64,
     speed: f64,
     frozen: bool,
+    /// The server re-entered a state playing this sequence (a held hammer
+    /// loops Fire, CheckFire, Fire), so the clip starts over even though
+    /// the replicated state name never changed.
+    restart: Option<String>,
 }
 #[derive(Clone)]
 struct MountedPose {
@@ -565,6 +569,7 @@ impl WorldItems {
                 started: seconds,
                 speed: 1.,
                 frozen: false,
+                restart: None,
             });
         if clock.image != image || clock.state != state {
             if clock.image != image {
@@ -588,6 +593,15 @@ impl WorldItems {
                     f64::from(clip.duration) / (f64::from(s.ticks) / 120.)
                 });
             }
+        }
+        // `ShapeBase::setImageState` restarts the state's sequence on every
+        // entry.
+        if let Some(restart) = clock.restart.take()
+            && let Some(clip) = clip.filter(|c| c.name.eq_ignore_ascii_case(&restart))
+        {
+            clock.sequence = Some(clip.name.clone());
+            clock.started = seconds;
+            clock.frozen = false;
         }
         let result = clock
             .sequence
@@ -811,6 +825,13 @@ impl WorldItems {
             .collect()
     }
     /// Resolve a named node only on the exact currently mounted image/hand.
+    /// A mounted image entered a state with this `stateSequence` (a
+    /// `WeaponAnimation` cue on the image's thread): start it over.
+    pub fn restart_image_sequence(&mut self, owner: u64, hand: u8, sequence: &str) {
+        if let Some(clock) = self.clocks.get_mut(&(owner, hand)) {
+            clock.restart = Some(sequence.to_owned());
+        }
+    }
     pub fn mounted_node(&self, owner: u64, hand: u8, image: &str, node: &str) -> Result<Mat4> {
         let mounted = self
             .mounted
