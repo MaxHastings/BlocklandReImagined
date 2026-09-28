@@ -90,6 +90,26 @@ impl CatalogLayout {
         }
         sections
     }
+
+    /// The brick Enter picks for `query`: the first whose name starts with
+    /// it, else the first whose name contains it, else the first search
+    /// result (a category or sub-category match).
+    pub fn best_match(catalog: &[BrickInfo], query: &str) -> Option<usize> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        let names: Vec<String> = catalog.iter().map(|b| b.ui_name.to_lowercase()).collect();
+        names
+            .iter()
+            .position(|n| n.starts_with(&q))
+            .or_else(|| names.iter().position(|n| n.contains(&q)))
+            .or_else(|| {
+                Self::search(catalog, query)
+                    .first()
+                    .and_then(|s| s.bricks.first().copied())
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -282,7 +302,10 @@ mod tests {
     fn search_matches_names_and_categories_in_any_case() {
         let c = cat();
         let names = |q: &str| -> Vec<Vec<usize>> {
-            CatalogLayout::search(&c, q).into_iter().map(|s| s.bricks).collect()
+            CatalogLayout::search(&c, q)
+                .into_iter()
+                .map(|s| s.bricks)
+                .collect()
         };
         assert_eq!(names("1X1"), vec![vec![0], vec![3]]);
         assert_eq!(names("ramp"), vec![vec![4]]);
@@ -290,6 +313,25 @@ mod tests {
         assert!(names("  ").is_empty());
         assert!(names("window").is_empty());
         assert_eq!(CatalogLayout::search(&c, "1x1")[0].name, "Bricks - 1x");
+    }
+
+    #[test]
+    fn best_match_prefers_name_prefix_then_name_then_category() {
+        let c = cat();
+        assert_eq!(CatalogLayout::best_match(&c, "1X"), Some(0));
+        assert_eq!(
+            CatalogLayout::best_match(&c, "2"),
+            Some(2),
+            "2x2 starts with it, beating 1x2"
+        );
+        assert_eq!(CatalogLayout::best_match(&c, "x1f"), Some(3));
+        assert_eq!(
+            CatalogLayout::best_match(&c, "plates"),
+            Some(3),
+            "category match"
+        );
+        assert_eq!(CatalogLayout::best_match(&c, "  "), None);
+        assert_eq!(CatalogLayout::best_match(&c, "window"), None);
     }
 
     #[test]

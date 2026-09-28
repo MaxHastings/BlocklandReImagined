@@ -1954,6 +1954,7 @@ fn hello_for_proof(name: &str) -> Hello {
         resume: None,
         host: None,
         identity: None,
+        accept_differences: false,
     }
 }
 

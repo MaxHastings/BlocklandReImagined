@@ -29,7 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 48: `PlayerState::tick`: players move on v20's 32 ms ticks.
 /// 49: `Vitals::ride` and `Archetype::mount_points`: players ride
 /// rideable players.
-pub const VERSION: u32 = 49;
+/// 50: `Hello::accept_differences`: a join after downloading the server's
+/// Add-Ons is let in without what it could not get.
+pub const VERSION: u32 = 50;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -87,6 +89,11 @@ pub struct Hello {
     pub resume: Option<ResumeToken>,
     pub host: Option<ResumeToken>,
     pub identity: Option<IdentityProof>,
+    /// Set on the join after downloading what the server offers: whatever
+    /// shared content still differs could not be had, and the server lets
+    /// the player in without it rather than refusing again.
+    #[serde(default)]
+    pub accept_differences: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

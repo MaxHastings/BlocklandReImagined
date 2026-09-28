@@ -33,6 +33,31 @@ const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// cast sun shadows too, off unless turned on.
 const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
+/// v20's Physics Quality radios (0 Best .. 4 Off; the stock default is 1,
+/// High): how many knocked-out bricks tumble as debris at once.
+pub const PHYSICS_QUALITY: &str = "$pref::PhysicsQuality";
+const PHYSICS_RADIO: &str = "OPT_PhysicsQuality";
+/// v20's `$pref::Physics::MaxBricks`: the debris limit itself. A radio sets
+/// it to that quality's limit; the console sets any other number.
+pub const MAX_BRICKS: &str = "$pref::Physics::MaxBricks";
+/// Debris bodies alive at once for each Physics Quality, Best first. Off
+/// leaves no debris: dead bricks just vanish.
+pub const PHYSICS_LIMITS: [i64; 5] = [2048, 512, 256, 128, 0];
+/// The most debris `$pref::Physics::MaxBricks` may ask for.
+pub const MAX_BRICKS_RANGE: (i64, i64) = (0, 4096);
+/// The debris limit the player chose: `$pref::Physics::MaxBricks` when they
+/// set it, else their Physics Quality's.
+pub fn debris_limit(p: &Prefs) -> usize {
+    let limit = if p.is_set(MAX_BRICKS) {
+        p.i64_or(MAX_BRICKS, PHYSICS_LIMITS[1])
+    } else {
+        PHYSICS_LIMITS[physics_quality(p)]
+    };
+    limit.clamp(MAX_BRICKS_RANGE.0, MAX_BRICKS_RANGE.1) as usize
+}
+fn physics_quality(p: &Prefs) -> usize {
+    p.i64_or(PHYSICS_QUALITY, 1).clamp(0, 4) as usize
+}
 const PRECIPITATION: &str = "$pref::precipitationOn";
 /// Not a v20 setting: the frame-rate cap in frames per second, 0 for none.
 pub const MAX_FPS: &str = "$pref::Video::MaxFps";
@@ -501,6 +526,7 @@ fn supported(v: &View, n: NodeId) -> bool {
         || SUPPORTED_CONTROLS.contains(&name)
         || name.starts_with(CHAT_SIZE_RADIO)
         || name.starts_with(SHADOW_RADIO)
+        || name.starts_with(PHYSICS_RADIO)
 }
 
 fn is_value(v: &View, n: NodeId) -> bool {
@@ -826,10 +852,10 @@ fn content_bottom(v: &View, section: NodeId) -> i32 {
 }
 
 /// Graphics: Display Settings grows to hold the added rows, and Shadow
-/// Quality (the one quality section left) goes under whichever column has
-/// room for it, the other column running the full height. Nothing is
-/// clipped and no empty band is left where v20's other quality sections
-/// were.
+/// Quality and Physics Quality (the quality sections left) go side by side
+/// under whichever column has room for them, the other column running the
+/// full height. Nothing is clipped and no empty band is left where v20's
+/// other quality sections were.
 fn graphics_pane(v: &mut View) {
     let (Some(pane), Some(display), Some(gui), Some(shadow)) = (
         v.id("OptGraphicsPane"),
@@ -844,7 +870,11 @@ fn graphics_pane(v: &mut View) {
     let g = v.node(gui).ctrl.clone();
     let display_h = d.extent[1].max(content_bottom(v, display) + 8);
     let gui_h = g.extent[1].max(content_bottom(v, gui) + 8);
-    let shadow_h = content_bottom(v, shadow) + 8;
+    let physics = find_section(v, "Physics Quality").filter(|&n| v.node(n).state.visible);
+    let shadow_h = physics
+        .map_or(0, |p| content_bottom(v, p))
+        .max(content_bottom(v, shadow))
+        + 8;
     let (above, full) = if d.position[1] + display_h + 3 + shadow_h <= PANE_BOTTOM {
         ((display, d.clone(), display_h), gui)
     } else {
@@ -853,15 +883,19 @@ fn graphics_pane(v: &mut View) {
     let (column, c, height) = above;
     v.nodes[column].ctrl.extent[1] = height;
     let top = c.position[1] + height + 3;
-    let s = &mut v.nodes[shadow].ctrl;
-    s.position = [c.position[0], top];
-    s.extent = [c.extent[0], PANE_BOTTOM - top];
-    let width = s.extent[0];
-    // The title bar spans the widened section.
-    for k in v.node(shadow).children.clone() {
-        let c = &mut v.nodes[k].ctrl;
-        if c.class == "GuiSwatchCtrl" && c.position == [2, 2] {
-            c.extent[0] = width - 4;
+    let sections: Vec<NodeId> = std::iter::once(shadow).chain(physics).collect();
+    let gap = 3;
+    let width = (c.extent[0] - gap * (sections.len() as i32 - 1)) / sections.len() as i32;
+    for (i, &section) in sections.iter().enumerate() {
+        let s = &mut v.nodes[section].ctrl;
+        s.position = [c.position[0] + i as i32 * (width + gap), top];
+        s.extent = [width, PANE_BOTTOM - top];
+        // The title bar spans the section.
+        for k in v.node(section).children.clone() {
+            let c = &mut v.nodes[k].ctrl;
+            if c.class == "GuiSwatchCtrl" && c.position == [2, 2] {
+                c.extent[0] = width - 4;
+            }
         }
     }
     let f = &mut v.nodes[full].ctrl;
@@ -979,6 +1013,13 @@ impl Options {
         s.slider(DISTANCE_SLIDER, visible_distance_max(&core.prefs));
         s.set_chat_size(chat_size(&core.prefs));
         s.set_shadow_quality(core.prefs.i64_or(SHADOW_QUALITY, 0));
+        // A limit set in the console matches no radio: none is shown.
+        let limit = debris_limit(&core.prefs) as i64;
+        if let Some(quality) = PHYSICS_LIMITS.iter().position(|&l| l == limit)
+            && let Some(n) = s.view.id(&format!("{PHYSICS_RADIO}{quality}"))
+        {
+            s.view.select_radio(n);
+        }
         let fps = max_fps(&core.prefs).unwrap_or(0);
         let fps_items = MAX_FPS_CHOICES
             .iter()
@@ -1339,6 +1380,17 @@ impl Options {
         let quality = quality.clamp(0, 4);
         self.draft.set(SHADOW_QUALITY, quality.to_string());
         if let Some(n) = self.view.id(&format!("{SHADOW_RADIO}{quality}")) {
+            self.view.select_radio(n);
+        }
+    }
+    /// `optionsDlg::setPhysicsQuality`: 0 = Best through 4 = Off, and its
+    /// debris limit.
+    fn set_physics_quality(&mut self, quality: i64) {
+        let quality = quality.clamp(0, 4);
+        self.draft.set(PHYSICS_QUALITY, quality.to_string());
+        self.draft
+            .set(MAX_BRICKS, PHYSICS_LIMITS[quality as usize].to_string());
+        if let Some(n) = self.view.id(&format!("{PHYSICS_RADIO}{quality}")) {
             self.view.select_radio(n);
         }
     }
@@ -1735,6 +1787,14 @@ impl Screen for Options {
             self.refresh_quality();
             return;
         }
+        if let Some(quality) = cmd
+            .strip_prefix("optionsDlg.setPhysicsQuality(")
+            .and_then(|c| c.strip_suffix(");"))
+            .and_then(|c| c.parse().ok())
+        {
+            self.set_physics_quality(quality);
+            return;
+        }
         match cmd.as_str() {
             "Canvas.popDialog(optionsDlg);" => self.apply(core, true),
             "optionsDlg.applyGraphics();" => self.apply(core, false),
@@ -2080,6 +2140,24 @@ mod tests {
                 "",
                 "optionsDlg.setShadowQuality(3);",
             ),
+            (
+                "GuiRadioCtrl",
+                "OPT_PhysicsQuality0",
+                "",
+                "optionsDlg.setPhysicsQuality(0);",
+            ),
+            (
+                "GuiRadioCtrl",
+                "OPT_PhysicsQuality1",
+                "",
+                "optionsDlg.setPhysicsQuality(1);",
+            ),
+            (
+                "GuiRadioCtrl",
+                "OPT_PhysicsQuality4",
+                "",
+                "optionsDlg.setPhysicsQuality(4);",
+            ),
         ] {
             let mut c = ctrl(class, "GuiDefaultProfile", Rect::new(0, 0, 100, 20));
             c.name = Some(name.into());
@@ -2098,6 +2176,9 @@ mod tests {
             // Authored radio sets sit in their own sections.
             if name.starts_with(SHADOW_RADIO) {
                 c.group = Some(1);
+            }
+            if name.starts_with(PHYSICS_RADIO) {
+                c.group = Some(2);
             }
             layout.children.push(c);
         }
@@ -2693,6 +2774,35 @@ mod tests {
         assert!(p.bool_or("$pref::OpenGL::useGLNearest", false));
         assert!(p.bool_or("$pref::OpenGL::textureTrilinear", false));
         assert_eq!(p.f32_or(ANISOTROPY, 0.0), 0.5);
+    }
+    #[test]
+    fn physics_quality_picks_the_debris_limit_and_the_console_any_other() {
+        let mut ui = fixture();
+        // A player who never chose: High, as v20's default.
+        assert_eq!(debris_limit(&ui.core.prefs), PHYSICS_LIMITS[1] as usize);
+        let mut s = Options::new(&ui.core);
+        let radio = |s: &Options, q: usize| s.view.bool_value(s.view.id(&format!("{PHYSICS_RADIO}{q}")).unwrap());
+        assert!(radio(&s, 1) && !radio(&s, 0));
+        assert!(s.view.node(s.view.id("OPT_PhysicsQuality0").unwrap()).state.visible);
+        click(&mut s, "OPT_PhysicsQuality0", &mut ui);
+        assert!(radio(&s, 0) && !radio(&s, 1));
+        assert!(!ui.core.prefs.is_set(MAX_BRICKS), "only Done saves");
+        click(&mut s, "done", &mut ui);
+        assert_eq!(debris_limit(&ui.core.prefs), PHYSICS_LIMITS[0] as usize);
+        assert_eq!(ui.core.prefs.i64_or(PHYSICS_QUALITY, 1), 0);
+        // Off: no debris at all.
+        let mut s = Options::new(&ui.core);
+        click(&mut s, "OPT_PhysicsQuality4", &mut ui);
+        click(&mut s, "done", &mut ui);
+        assert_eq!(debris_limit(&ui.core.prefs), 0);
+        // A console value matches no radio, and reopening Options keeps it.
+        ui.core.prefs.set(MAX_BRICKS, "300");
+        let mut s = Options::new(&ui.core);
+        assert!((0..5).all(|q| s.view.id(&format!("{PHYSICS_RADIO}{q}")).is_none_or(|n| !s.view.bool_value(n))));
+        click(&mut s, "done", &mut ui);
+        assert_eq!(debris_limit(&ui.core.prefs), 300);
+        ui.core.prefs.set(MAX_BRICKS, "100000");
+        assert_eq!(debris_limit(&ui.core.prefs), MAX_BRICKS_RANGE.1 as usize);
     }
     #[test]
     fn fov_slider_sits_right_of_its_label_and_saves_whole_degrees() {

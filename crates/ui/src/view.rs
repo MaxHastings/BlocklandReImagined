@@ -172,6 +172,42 @@ fn thumb(
     Some((ty, th))
 }
 
+/// Lowercased, trimmed item text the type-to-filter search matches against.
+fn search_key(text: &str) -> String {
+    text.trim().to_lowercase()
+}
+
+/// "NONE" (the Wrench's datablock lists) and "-" (the event editor) stay at
+/// the top of a filtered list so clearing a choice is always one row away.
+fn pinned_key(key: &str) -> bool {
+    key == "none" || key == "-"
+}
+
+/// Type-to-filter order for `keys` (from `search_key`) under a lowercase
+/// `query`: every row when the query is empty, otherwise the pinned rows,
+/// then rows starting with the query, then rows merely containing it, each
+/// group in list order.
+fn filter_keys(keys: &[String], query: &str, out: &mut Vec<usize>) {
+    out.clear();
+    if query.is_empty() {
+        out.extend(0..keys.len());
+        return;
+    }
+    out.extend((0..keys.len()).filter(|&i| pinned_key(&keys[i])));
+    out.extend((0..keys.len()).filter(|&i| !pinned_key(&keys[i]) && keys[i].starts_with(query)));
+    out.extend((0..keys.len()).filter(|&i| {
+        !pinned_key(&keys[i]) && !keys[i].starts_with(query) && keys[i].contains(query)
+    }));
+}
+
+/// The rows (item indices, in display order) a dropdown shows for `query`.
+pub fn filter_popup_items(items: &[(String, i64)], query: &str) -> Vec<usize> {
+    let keys: Vec<String> = items.iter().map(|(t, _)| search_key(t)).collect();
+    let mut out = Vec::new();
+    filter_keys(&keys, &query.to_lowercase(), &mut out);
+    out
+}
+
 /// Popup list scroll bar width (the blockscroll arrow pieces are 14px wide).
 const POPUP_BAR: i32 = 14;
 const SCROLL_SKIN: &str = "base/client/ui/blockscroll";
@@ -185,6 +221,13 @@ pub struct View {
     pub pressed: Option<(NodeId, MouseButton)>,
     pub focus: Option<NodeId>,
     popup: Option<Popup>,
+    /// What the player typed into the open dropdown (type-to-filter).
+    popup_query: String,
+    /// `search_key` of each item of the open dropdown.
+    popup_keys: Vec<String>,
+    /// Item indices the open dropdown shows, in order; `Popup::hover` and
+    /// `Popup::scroll` index this.
+    popup_shown: Vec<usize>,
     /// Scroll control whose thumb is being dragged: (control, grab offset,
     /// up arrow height, down arrow height).
     scroll_drag: Option<(NodeId, i32, i32, i32)>,
@@ -239,6 +282,9 @@ impl View {
             pressed: None,
             focus: None,
             popup: None,
+            popup_query: String::new(),
+            popup_keys: Vec::new(),
+            popup_shown: Vec::new(),
             scroll_drag: None,
             window_drag: None,
             window_resize: None,
@@ -932,8 +978,17 @@ impl View {
                         self.draw_ml(pack, dl, id, inner.offset(0, 2), &shown);
                     } else if scroll > 0 {
                         if dl.push_clip(inner) {
-                            let moved = Rect::new(inner.x - scroll, inner.y, inner.w + scroll, inner.h);
-                            self.draw_text_in(pack, dl, id, moved, &shown, Some(Justify::Left), None);
+                            let moved =
+                                Rect::new(inner.x - scroll, inner.y, inner.w + scroll, inner.h);
+                            self.draw_text_in(
+                                pack,
+                                dl,
+                                id,
+                                moved,
+                                &shown,
+                                Some(Justify::Left),
+                                None,
+                            );
                             dl.pop_clip();
                         }
                     } else {
@@ -986,7 +1041,57 @@ impl View {
                     let label = self.selected_text(id).unwrap_or_else(|| text.clone());
                     let inner = Rect::new(r.x + 4, r.y, r.w - 20, r.h);
                     let color = s.font_color.unwrap_or(geom::BLACK);
-                    if dl.push_clip(inner) {
+                    let searching = self.popup.is_some_and(|p| p.node == id);
+                    if searching && dl.push_clip(inner) {
+                        // Type-to-filter: the typed text, the rest of the
+                        // highlighted match as grey ghost text, and a caret.
+                        let typed = &self.popup_query;
+                        let ghost = self.popup_ghost().unwrap_or_default();
+                        let font = Self::font_id(pack, s).and_then(|f| Font::get(pack, f));
+                        let tw = font.as_ref().map_or(0, |f| f.width(typed));
+                        let grey = s.font_color_na.unwrap_or([128, 128, 128, 255]);
+                        if typed.is_empty() {
+                            // The current choice, greyed like a placeholder:
+                            // typing replaces it.
+                            self.draw_text_in(
+                                pack,
+                                dl,
+                                id,
+                                inner,
+                                &label,
+                                Some(Justify::Left),
+                                Some(grey),
+                            );
+                        } else {
+                            self.draw_text_in(
+                                pack,
+                                dl,
+                                id,
+                                inner,
+                                typed,
+                                Some(Justify::Left),
+                                Some(color),
+                            );
+                            let rest =
+                                Rect::new(inner.x + tw, inner.y, (inner.w - tw).max(0), inner.h);
+                            self.draw_text_in(
+                                pack,
+                                dl,
+                                id,
+                                rest,
+                                &ghost,
+                                Some(Justify::Left),
+                                Some(grey),
+                            );
+                        }
+                        if (self.time_ms / 500).is_multiple_of(2)
+                            && let Some(f) = font
+                        {
+                            let lh = f.line_height();
+                            dl.fill(Rect::new(inner.x + tw, r.y + (r.h - lh) / 2, 1, lh), color);
+                        }
+                        dl.pop_clip();
+                    } else if dl.push_clip(inner) {
                         self.draw_text_in(
                             pack,
                             dl,
@@ -1416,7 +1521,9 @@ impl View {
     pub fn measure(&mut self, pack: &Pack) {
         for id in 0..self.nodes.len() {
             match self.nodes[id].ctrl.class.as_str() {
-                "GuiTextListCtrl" => self.nodes[id].state.row_height = self.list_row_height(pack, id),
+                "GuiTextListCtrl" => {
+                    self.nodes[id].state.row_height = self.list_row_height(pack, id)
+                }
                 // GuiConsole cells are exactly one font line tall.
                 "GuiConsole" => {
                     self.nodes[id].state.row_height = self.line_height(pack, id).max(1);
@@ -1509,7 +1616,15 @@ impl View {
                 _ => style.font_color,
             };
             let row = Rect::new(r.x + 3, r.y + i as i32 * rh, r.w - 3, rh);
-            self.draw_text_in(pack, dl, id, row, text, Some(Justify::Left), Some(color.unwrap_or(black)));
+            self.draw_text_in(
+                pack,
+                dl,
+                id,
+                row,
+                text,
+                Some(Justify::Left),
+                Some(color.unwrap_or(black)),
+            );
         }
     }
 
@@ -1521,11 +1636,20 @@ impl View {
         let r = p.rect;
         dl.fill(r, WHITE);
         dl.frame(r, geom::BLACK);
-        let bar = p.scroll_bar(n.state.items.len());
+        let shown = self.popup_shown.len();
+        let bar = p.scroll_bar(shown);
         let text_w = r.w - 2 - bar.map_or(0, |b| b.w);
-        let visible = n.state.items.iter().enumerate().skip(p.scroll).take(p.rows);
-        for (row, (i, (text, _))) in visible.enumerate() {
-            let row = Rect::new(r.x + 1, r.y + 1 + row as i32 * p.row_h, text_w, p.row_h);
+        let visible = self
+            .popup_shown
+            .iter()
+            .enumerate()
+            .skip(p.scroll)
+            .take(p.rows);
+        for (row, (i, &item)) in visible.enumerate() {
+            let Some((text, _)) = n.state.items.get(item) else {
+                continue;
+            };
+            let row = Rect::new(r.x + 1, r.y + 1 + (row as i32) * p.row_h, text_w, p.row_h);
             if Some(i) == p.hover {
                 dl.fill(row, style.fill_color_hl.unwrap_or([171, 171, 171, 255]));
             }
@@ -1549,7 +1673,7 @@ impl View {
                 dl,
                 SCROLL_SKIN,
                 bar,
-                n.state.items.len() as i32 * p.row_h,
+                shown as i32 * p.row_h,
                 p.rows as i32 * p.row_h,
                 p.scroll as i32 * p.row_h,
             );
@@ -1605,6 +1729,15 @@ impl View {
         if let Some(i) = selected {
             p.scroll_to(i, items);
         }
+        self.popup_query.clear();
+        self.popup_keys = self.nodes[id]
+            .state
+            .items
+            .iter()
+            .map(|(t, _)| search_key(t))
+            .collect();
+        self.popup_shown.clear();
+        self.popup_shown.extend(0..items);
         self.popup = Some(p);
     }
 
@@ -1613,12 +1746,82 @@ impl View {
         self.popup.map(|p| p.node)
     }
 
+    /// What the player has typed into the open dropdown to filter it.
+    pub fn popup_query(&self) -> Option<&str> {
+        self.popup.map(|_| self.popup_query.as_str())
+    }
+
+    /// Items (text, id) the open dropdown currently lists, in order.
+    pub fn popup_rows(&self) -> Vec<(String, i64)> {
+        let Some(p) = self.popup else {
+            return Vec::new();
+        };
+        let items = &self.nodes[p.node].state.items;
+        self.popup_shown
+            .iter()
+            .filter_map(|&i| items.get(i).cloned())
+            .collect()
+    }
+
+    /// The highlighted item of the open dropdown, if any.
+    pub fn popup_highlight(&self) -> Option<(String, i64)> {
+        let p = self.popup?;
+        let item = *self.popup_shown.get(p.hover?)?;
+        self.nodes[p.node].state.items.get(item).cloned()
+    }
+
+    /// Rest of the highlighted item after the typed text, shown as grey
+    /// autocomplete when the item starts with it.
+    pub fn popup_ghost(&self) -> Option<String> {
+        if self.popup_query.is_empty() {
+            return None;
+        }
+        let (text, _) = self.popup_highlight()?;
+        let text = text.trim();
+        let n = self.popup_query.chars().count();
+        let head: String = text.chars().take(n).collect();
+        (head.to_lowercase() == self.popup_query.to_lowercase())
+            .then(|| text.chars().skip(n).collect())
+    }
+
+    /// Re-filter the open dropdown after the query changed. The highlight
+    /// goes to the best match (the current choice when the query is empty).
+    fn refilter_popup(&mut self) {
+        let Some(mut p) = self.popup else {
+            return;
+        };
+        let q = self.popup_query.to_lowercase();
+        filter_keys(&self.popup_keys, &q, &mut self.popup_shown);
+        p.scroll = 0;
+        p.hover = if q.is_empty() {
+            self.selected(p.node).and_then(|s| {
+                self.nodes[p.node]
+                    .state
+                    .items
+                    .iter()
+                    .position(|(_, i)| *i == s)
+            })
+        } else {
+            self.popup_shown
+                .iter()
+                .position(|&i| !pinned_key(&self.popup_keys[i]))
+        };
+        if let Some(i) = p.hover {
+            p.scroll_to(i, self.popup_shown.len());
+        }
+        self.popup = Some(p);
+    }
+
     pub fn close_popup(&mut self) {
         self.popup = None;
     }
 
-    fn choose_popup_item(&mut self, p: Popup, i: usize, out: &mut Vec<ViewEvent>) {
+    /// Choose display row `row` of the open list.
+    fn choose_popup_item(&mut self, p: Popup, row: usize, out: &mut Vec<ViewEvent>) {
         self.popup = None;
+        let Some(&i) = self.popup_shown.get(row) else {
+            return;
+        };
         if let Some((_, item)) = self.nodes[p.node].state.items.get(i).cloned() {
             self.nodes[p.node].state.value = Value::Selected(Some(item));
             out.push(ViewEvent {
@@ -1630,7 +1833,7 @@ impl View {
 
     fn scroll_popup(&mut self, rows: i32) {
         if let Some(p) = &mut self.popup {
-            let items = self.nodes[p.node].state.items.len();
+            let items = self.popup_shown.len();
             let max = items.saturating_sub(p.rows) as i32;
             p.scroll = (p.scroll as i32 + rows).clamp(0, max) as usize;
         }
@@ -1640,7 +1843,7 @@ impl View {
     /// scrolls, anything else closes the list without reaching the control
     /// underneath.
     fn popup_mouse_down(&mut self, mut p: Popup, x: i32, y: i32, out: &mut Vec<ViewEvent>) {
-        let items = self.nodes[p.node].state.items.len();
+        let items = self.popup_shown.len();
         if let Some(i) = p.row_at(x, y, items) {
             self.choose_popup_item(p, i, out);
         } else if let Some(bar) = p.scroll_bar(items).filter(|b| b.contains(x, y)) {
@@ -1663,16 +1866,29 @@ impl View {
 
     /// Keyboard while a list is open. The list owns every key so nothing
     /// leaks to the dialog or gameplay underneath.
+    /// Typing filters it (`char`): Backspace edits the filter, Escape clears
+    /// it and then closes, Enter or Tab takes the highlighted row.
     fn popup_key(&mut self, mut p: Popup, key: Key, out: &mut Vec<ViewEvent>) {
-        let items = self.nodes[p.node].state.items.len();
+        let items = self.popup_shown.len();
         let last = items.saturating_sub(1);
         let cur = p.hover;
         let next = match key {
+            Key::Escape if !self.popup_query.is_empty() => {
+                self.popup_query.clear();
+                self.refilter_popup();
+                return;
+            }
             Key::Escape => {
                 self.popup = None;
                 return;
             }
-            Key::Return | Key::NumpadEnter => {
+            Key::Backspace => {
+                if self.popup_query.pop().is_some() {
+                    self.refilter_popup();
+                }
+                return;
+            }
+            Key::Return | Key::NumpadEnter | Key::Tab => {
                 match cur {
                     Some(i) => self.choose_popup_item(p, i, out),
                     None => self.popup = None,
@@ -1766,7 +1982,7 @@ impl View {
     pub fn mouse_move(&mut self, x: i32, y: i32, out: &mut Vec<ViewEvent>) {
         self.mouse = (x, y);
         if let Some(p) = &mut self.popup {
-            let items = self.nodes[p.node].state.items.len();
+            let items = self.popup_shown.len();
             if let Some(i) = p.row_at(x, y, items) {
                 p.hover = Some(i);
             }
@@ -1955,7 +2171,7 @@ impl View {
         self.window_resize = None;
         if let Some(mut open) = self.popup {
             // Press-drag-release over a row picks it, like Torque's list.
-            let items = self.nodes[open.node].state.items.len();
+            let items = self.popup_shown.len();
             match open.row_at(x, y, items) {
                 Some(i) if open.dragging => self.choose_popup_item(open, i, out),
                 _ => {
@@ -2191,7 +2407,16 @@ impl View {
     }
 
     /// Typed character for the focused edit control.
+    /// With a dropdown open, the character goes into its type-to-filter
+    /// query instead.
     pub fn char(&mut self, c: char, out: &mut Vec<ViewEvent>) -> bool {
+        if self.popup.is_some() {
+            if !c.is_control() && text::to_cp1252(c).is_some() && self.popup_query.len() < 64 {
+                self.popup_query.push(c);
+                self.refilter_popup();
+            }
+            return true;
+        }
         let Some(f) = self.focus else { return false };
         if c.is_control() || text::to_cp1252(c).is_none() {
             return self.focus.is_some();
