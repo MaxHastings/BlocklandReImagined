@@ -1156,6 +1156,10 @@ impl App {
     pub fn weather_diagnostics(&self) -> bri_weather::WeatherDiagnostics {
         self.weather.world.diagnostics()
     }
+    /// Draws and binds the last rendered frame recorded.
+    pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
+        self.renderer.as_ref().map(|r| r.stats())
+    }
     pub fn frame_stats(&self) -> &crate::console::FrameStats {
         &self.frame_stats
     }

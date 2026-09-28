@@ -1274,6 +1274,77 @@ pub struct PointLight {
     pub color: [f32; 4],
 }
 
+/// What the last frame's world and shadow passes recorded. Counts, unlike
+/// times, do not change with the load on the machine, so they make stable
+/// regression checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RenderStats {
+    /// Indexed draws in the world pass.
+    pub draws: u32,
+    /// Pipeline, bind group and buffer binds in the world pass.
+    pub binds: u32,
+    /// Bounded scenes (chunks) drawn and skipped outside the view.
+    pub scenes_drawn: u32,
+    pub scenes_culled: u32,
+    /// Indexed draws and binds across every shadow cascade.
+    pub shadow_draws: u32,
+    pub shadow_binds: u32,
+    /// Triangles submitted by the world pass.
+    pub triangles: u64,
+    /// World-pass draws of blended batches, sorted back to front.
+    pub translucent_draws: u32,
+}
+
+/// The pass state last bound, so repeated binds are skipped.
+#[derive(Default)]
+struct Bound<'a> {
+    pipeline: Option<&'a wgpu::RenderPipeline>,
+    material: Option<&'a wgpu::BindGroup>,
+    vertices: Option<&'a wgpu::Buffer>,
+    instances: Option<&'a wgpu::Buffer>,
+    indices: Option<&'a wgpu::Buffer>,
+    binds: u32,
+}
+impl<'a> Bound<'a> {
+    fn pipeline(&mut self, pass: &mut wgpu::RenderPass<'_>, pipeline: &'a wgpu::RenderPipeline) {
+        if self.pipeline != Some(pipeline) {
+            pass.set_pipeline(pipeline);
+            self.pipeline = Some(pipeline);
+            self.binds += 1;
+        }
+    }
+    fn material(&mut self, pass: &mut wgpu::RenderPass<'_>, group: &'a wgpu::BindGroup) {
+        if self.material != Some(group) {
+            pass.set_bind_group(1, group, &[]);
+            self.material = Some(group);
+            self.binds += 1;
+        }
+    }
+    fn geometry(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        vertices: &'a wgpu::Buffer,
+        instances: &'a wgpu::Buffer,
+        indices: &'a wgpu::Buffer,
+    ) {
+        if self.vertices != Some(vertices) {
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            self.vertices = Some(vertices);
+            self.binds += 1;
+        }
+        if self.instances != Some(instances) {
+            pass.set_vertex_buffer(1, instances.slice(..));
+            self.instances = Some(instances);
+            self.binds += 1;
+        }
+        if self.indices != Some(indices) {
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            self.indices = Some(indices);
+            self.binds += 1;
+        }
+    }
+}
+
 pub struct SceneRenderer {
     identity_instance: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
@@ -1288,6 +1359,7 @@ pub struct SceneRenderer {
     shadows: crate::shadow::ShadowMaps,
     eye: Vec3,
     frustum: Option<[glam::Vec4; 6]>,
+    stats: std::cell::Cell<RenderStats>,
 }
 
 impl SceneRenderer {
@@ -1540,7 +1612,12 @@ impl SceneRenderer {
             shadows,
             eye: Vec3::ZERO,
             frustum: None,
+            stats: Default::default(),
         }
+    }
+    /// Counts from the passes recorded since the last `update_camera`.
+    pub fn stats(&self) -> RenderStats {
+        self.stats.get()
     }
     /// Upload once. Construct another GpuScene for dynamic bricks/characters;
     /// replacing that handle leaves the map buffers and textures untouched.
@@ -1856,6 +1933,7 @@ impl SceneRenderer {
     /// single submission would intentionally use the latest camera everywhere.
     pub fn update_camera(&mut self, queue: &wgpu::Queue, camera: &Camera) {
         self.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
+        self.stats.set(RenderStats::default());
         let view_projection = Mat4::from_cols_array(&camera.view_projection);
         self.frustum = Some(frustum_planes(view_projection));
         self.shadows.update(
@@ -1941,30 +2019,52 @@ impl SceneRenderer {
                     bind_group,
                     &[crate::shadow::ShadowMaps::caster_offset(index)],
                 );
-                let mut draw = |scene: &GpuScene, buffer: &wgpu::Buffer, range: Range<u32>| {
+                // Everything this cascade draws, then recorded with repeated
+                // binds skipped.
+                let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>)> = Vec::new();
+                for &scene in casters.scenes {
+                    items.push((scene, &self.identity_instance, 0..1));
+                }
+                for &(scene, instances) in casters.instances {
+                    // Fading copies stop casting once they turn translucent.
+                    let solid = instances.transforms.iter().all(|t| t.tint[3] == 1.);
+                    if !instances.is_empty() && solid {
+                        items.push((scene, &instances.buffer, 0..instances.len() as u32));
+                    } else {
+                        for (i, transform) in instances.transforms.iter().enumerate() {
+                            if transform.tint[3] == 1. {
+                                items.push((scene, &instances.buffer, i as u32..i as u32 + 1));
+                            }
+                        }
+                    }
+                }
+                let mut bound = Bound::default();
+                let mut draws = 0;
+                for (scene, buffer, range) in items {
                     // A pose can hide every object (the spear's `fire`
                     // sequence while it is thrown); wgpu panics on slicing
                     // the empty buffers.
                     if scene.vertex_count == 0 || scene.index_count == 0 {
-                        return;
+                        continue;
                     }
                     if let Some(bounds) = scene.bounds
                         && !aabb_visible(&planes, bounds)
                     {
-                        return;
+                        continue;
                     }
-                    pass.set_vertex_buffer(0, scene.vertices.slice(..));
-                    pass.set_vertex_buffer(1, buffer.slice(..));
-                    pass.set_index_buffer(scene.indices.slice(..), wgpu::IndexFormat::Uint32);
                     // Adjacent opaque batches (a chunk's coalesced materials)
                     // share one draw; masked batches bind their material.
                     let mut run: Option<Range<u32>> = None;
-                    let flush = |pass: &mut wgpu::RenderPass<'_>, run: &mut Option<Range<u32>>| {
-                        if let Some(indices) = run.take() {
-                            pass.set_pipeline(&pipelines[0]);
-                            pass.draw_indexed(indices, 0, range.clone());
-                        }
-                    };
+                    macro_rules! flush {
+                        () => {
+                            if let Some(indices) = run.take() {
+                                bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
+                                bound.pipeline(&mut pass, &pipelines[0]);
+                                pass.draw_indexed(indices, 0, range.clone());
+                                draws += 1;
+                            }
+                        };
+                    }
                     for batch in &scene.batches {
                         let (blend, _, background, masked, _) =
                             scene.material_modes[batch.material];
@@ -1972,37 +2072,27 @@ impl SceneRenderer {
                             continue;
                         }
                         if masked {
-                            flush(&mut pass, &mut run);
-                            pass.set_pipeline(&pipelines[1]);
-                            pass.set_bind_group(1, &scene.materials[batch.material], &[]);
+                            flush!();
+                            bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
+                            bound.pipeline(&mut pass, &pipelines[1]);
+                            bound.material(&mut pass, &scene.materials[batch.material]);
                             pass.draw_indexed(batch.indices.clone(), 0, range.clone());
+                            draws += 1;
                         } else if let Some(indices) =
                             run.as_mut().filter(|r| r.end == batch.indices.start)
                         {
                             indices.end = batch.indices.end;
                         } else {
-                            flush(&mut pass, &mut run);
+                            flush!();
                             run = Some(batch.indices.clone());
                         }
                     }
-                    flush(&mut pass, &mut run);
-                };
-                for &scene in casters.scenes {
-                    draw(scene, &self.identity_instance, 0..1);
+                    flush!();
                 }
-                for &(scene, instances) in casters.instances {
-                    // Fading copies stop casting once they turn translucent.
-                    let solid = instances.transforms.iter().all(|t| t.tint[3] == 1.);
-                    if !instances.is_empty() && solid {
-                        draw(scene, &instances.buffer, 0..instances.len() as u32);
-                    } else {
-                        for (i, transform) in instances.transforms.iter().enumerate() {
-                            if transform.tint[3] == 1. {
-                                draw(scene, &instances.buffer, i as u32..i as u32 + 1);
-                            }
-                        }
-                    }
-                }
+                let mut stats = self.stats.get();
+                stats.shadow_draws += draws;
+                stats.shadow_binds += bound.binds;
+                self.stats.set(stats);
             }
         }
     }
@@ -2040,12 +2130,28 @@ impl SceneRenderer {
             blend: usize,
         }
         let mut order = Vec::new();
+        let mut stats = self.stats.get();
+        // Unbounded scenes (the map, characters) keep their order and come
+        // first, as before; chunks follow nearest first so the depth test
+        // rejects hidden fragments early, and each chunk's buffers bind once.
+        let mut visible: Vec<(f32, &GpuScene)> = Vec::with_capacity(scenes.len());
         for &scene in scenes {
-            if let (Some(frustum), Some(bounds)) = (&self.frustum, scene.bounds)
+            let Some(bounds) = scene.bounds else {
+                visible.push((f32::NEG_INFINITY, scene));
+                continue;
+            };
+            if let Some(frustum) = &self.frustum
                 && !aabb_visible(frustum, bounds)
             {
+                stats.scenes_culled += 1;
                 continue;
             }
+            stats.scenes_drawn += 1;
+            let nearest = self.eye.clamp(bounds.0, bounds.1);
+            visible.push((nearest.distance_squared(self.eye), scene));
+        }
+        visible.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, scene) in visible {
             for batch in &scene.batches {
                 order.push(Draw {
                     scene,
@@ -2160,22 +2266,28 @@ impl SceneRenderer {
             multiview_mask: None,
         });
         pass.set_bind_group(0, &self.camera_group, &[]);
+        let mut bound = Bound::default();
         for draw in order {
             let (scene, batch) = (draw.scene, draw.batch);
             if scene.vertex_count == 0 || scene.index_count == 0 {
                 continue;
             }
             let (_, double_sided, background, _, _) = scene.material_modes[batch.material];
-            pass.set_pipeline(
+            bound.pipeline(
+                &mut pass,
                 &self.pipelines
                     [usize::from(background) * 6 + draw.blend * 2 + usize::from(double_sided)],
             );
-            pass.set_bind_group(1, &scene.materials[batch.material], &[]);
-            pass.set_vertex_buffer(0, scene.vertices.slice(..));
-            pass.set_vertex_buffer(1, draw.buffer.slice(..));
-            pass.set_index_buffer(scene.indices.slice(..), wgpu::IndexFormat::Uint32);
+            bound.material(&mut pass, &scene.materials[batch.material]);
+            bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
+            stats.draws += 1;
+            stats.translucent_draws += u32::from(draw.blend != 0);
+            stats.triangles += u64::from(batch.indices.end - batch.indices.start) / 3
+                * u64::from(draw.range.end - draw.range.start);
             pass.draw_indexed(batch.indices.clone(), 0, draw.range);
         }
+        stats.binds += bound.binds;
+        self.stats.set(stats);
     }
 }
 
