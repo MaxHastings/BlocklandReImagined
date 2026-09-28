@@ -92,6 +92,24 @@ All eight tests in `crates/sim/tests/brick_damage.rs` pass with
 like the other weapon tests. The combat, tools and session suites also pass,
 and `cargo clippy -p bri-sim --all-targets -- -D warnings` is clean.
 
+Max reported rocketed bricks staying gone, so the round trip is also proven
+on the client side. `crates/client/tests/brick_respawn.rs` hosts a LAN game
+over real loopback QUIC. The host plays through its own client, as Start
+Game does, and a second client joins. Each player rockets their own
+free-build brick outside any minigame.
+
+Each screen runs the app's own pipeline: the network worker and world log,
+the brick query and collision mirror (`Building`), and the render chunks
+(`ChunkedWorld`). On both screens, both bricks:
+
+- throw debris and stop being drawn and solid, while staying in the replica;
+- are still out 20 s later;
+- are drawn, solid and clickable again about 30 s after the blast.
+
+It passes (31 s), so no client bug turned up on this path. If a rocketed brick
+stays gone, the likely causes are an Add-On `explode`, which deletes for good
+as decided above, or a build from before fake kills landed.
+
 ## The fix
 
 `blow_up_bricks` (`crates/sim/src/session/events.rs`) now returns early while
