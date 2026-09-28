@@ -47,16 +47,28 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
         .shared_shape()
         .clone();
     let definitions = Definitions {
-        entries: [(
-            "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-            },
-        )]
+        entries: [
+            (
+                "plate".into(),
+                Definition {
+                    mesh: mesh.clone(),
+                    collision: collision.clone(),
+                    shape: shape.clone(),
+                    indestructible: false,
+                    special: Default::default(),
+                },
+            ),
+            (
+                "sturdy_plate".into(),
+                Definition {
+                    mesh,
+                    collision,
+                    shape,
+                    indestructible: true,
+                    special: Default::default(),
+                },
+            ),
+        ]
         .into(),
     };
     let mut world = World::new(
@@ -1445,4 +1457,32 @@ fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused() {
         center_prints(&mut s, owner),
         vec!["Guest does not trust you enough to do that.".to_string()]
     );
+}
+
+/// A tool that may not destroy a brick leaves it alone before anything
+/// happens: no break events, and the game tick carries on.
+#[test]
+fn hammer_leaves_indestructible_bricks_without_failing_the_tick() {
+    let mut s = session(vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    let Reply::Planted(sturdy) = s
+        .command(
+            owner,
+            1,
+            Command::Plant {
+                definition: "sturdy_plate".into(),
+                position: [0.5, 0.1, -3.25],
+                quarter_turns: 0,
+                color: 0,
+            },
+        )
+        .unwrap()
+    else {
+        panic!("expected plant")
+    };
+    aim(&mut s, owner, 2, [0.5, 0.1, -3.01]);
+    swing(&mut s, owner, 3, 0).unwrap();
+    assert_eq!(bricks(&s), vec![sturdy]);
 }

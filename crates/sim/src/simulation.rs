@@ -335,12 +335,17 @@ impl Simulation {
         self.detect_collisions();
         Ok(())
     }
+    /// Whether `actor` may destroy this brick at all: indestructible bricks
+    /// fall only to administrators. Tools ask before they act, so a refused
+    /// break never fires the brick's break events.
+    pub fn destructible_by(&self, actor: &Actor, id: BrickId) -> bool {
+        self.state().bricks.get(&id).is_some_and(|brick| {
+            actor.administrator || self.definitions.get(brick).is_ok_and(|d| !d.indestructible)
+        })
+    }
     pub fn remove(&mut self, actor: &Actor, id: BrickId) -> Result<()> {
-        let brick = self.state().bricks.get(&id).context("Unknown brick")?;
-        ensure!(
-            !self.definitions.get(brick)?.indestructible || actor.administrator,
-            "Brick is indestructible"
-        );
+        self.state().bricks.get(&id).context("Unknown brick")?;
+        ensure!(self.destructible_by(actor, id), "Brick is indestructible");
         self.authority.remove(actor, id)?;
         self.index.remove(id);
         self.brick_waters.remove(&id);
