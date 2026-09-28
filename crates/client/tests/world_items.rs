@@ -530,3 +530,50 @@ fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> 
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
+    // Sticking zeroes the arrow's velocity; it must not flip to point up.
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let arrow = |velocity: Vec3, age: u32| bri_weapons::Projectile {
+        id: 5,
+        definition: "v20.projectile.arrowprojectile".into(),
+        source: bri_weapons::ActorId(1),
+        position: Vec3::new(0., 2., 0.),
+        velocity,
+        scale: 1.,
+        age,
+        bounced: false,
+        stuck: velocity == Vec3::ZERO,
+        origin: Vec3::ZERO,
+        was_thrown: false,
+        paint: None,
+    };
+    let nose = |adapter: &WorldItems| {
+        let (_, t) = adapter
+            .instances()
+            .find(|(id, _)| matches!(id, ItemIdentity::Projectile(5)))
+            .expect("arrow drawn");
+        t.transform.transform_vector3(Vec3::NEG_Z).normalize()
+    };
+    let flying = Vec3::new(30., -5., 0.);
+    let view = |p| WeaponView {
+        projectiles: vec![p],
+        ..Default::default()
+    };
+    adapter.sync(&view(arrow(flying, 10)), frame(), |_| None)?;
+    assert!(nose(&adapter).abs_diff_eq(flying.normalize(), 1e-4));
+    let later = WorldItemFrame {
+        seconds: 1.5,
+        ..frame()
+    };
+    adapter.sync(&view(arrow(Vec3::ZERO, 20)), later, |_| None)?;
+    assert!(
+        nose(&adapter).abs_diff_eq(flying.normalize(), 1e-4),
+        "stuck arrow points along its flight, not up: {}",
+        nose(&adapter)
+    );
+    Ok(())
+}

@@ -166,6 +166,10 @@ pub struct WorldItems {
     last_seconds: Option<f64>,
     /// World palette for colour spray cans.
     palette: Vec<[f32; 4]>,
+    /// Each projectile's last flight direction. A stuck arrow's velocity is
+    /// zero, but it keeps pointing the way it flew into the wall, as v20's
+    /// projectile keeps its last render transform.
+    headings: BTreeMap<u64, Vec3>,
     pub diagnostics: WorldItemDiagnostics,
 }
 
@@ -199,6 +203,7 @@ impl WorldItems {
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
+            headings: BTreeMap::new(),
             diagnostics: Default::default(),
         })
     }
@@ -206,6 +211,7 @@ impl WorldItems {
         self.models.clear();
         self.clocks.clear();
         self.mounted.clear();
+        self.headings.clear();
         self.last_seconds = None;
         self.diagnostics = Default::default();
     }
@@ -320,7 +326,16 @@ impl WorldItems {
                 priority: false,
             });
         }
+        self.headings
+            .retain(|id, _| view.projectiles.iter().any(|p| p.id == *id));
         for projectile in &view.projectiles {
+            let velocity = Vec3::from(projectile.velocity);
+            let heading = if velocity.length_squared() > 1e-6 && velocity.is_finite() {
+                *self.headings.entry(projectile.id).or_default() = velocity;
+                velocity
+            } else {
+                self.headings.get(&projectile.id).copied().unwrap_or(velocity)
+            };
             let Some(binding) = self
                 .assets
                 .presentation
@@ -373,7 +388,7 @@ impl WorldItems {
                 transform: SceneTransform {
                     transform: Mat4::from_scale_rotation_translation(
                         Vec3::splat(projectile.scale),
-                        projectile_rotation(projectile.velocity),
+                        projectile_rotation(heading),
                         projectile.position,
                     ),
                     tint: [1., 1., 1., alpha],
