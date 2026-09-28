@@ -22,6 +22,13 @@ pub struct WeaponView {
     pub drops: Vec<bri_weapons::Drop>,
 }
 impl WeaponView {
+    /// Projectiles something fired, without the spawn and death effects
+    /// that ride the same projectile system (as in v20).
+    pub fn fired(&self) -> impl Iterator<Item = &bri_weapons::Projectile> {
+        self.projectiles.iter().filter(|p| {
+            p.definition != super::SPAWN_PROJECTILE && p.definition != super::DEATH_PROJECTILE
+        })
+    }
     pub fn validate(&self, names: &BTreeMap<OwnerId, String>) -> Result<()> {
         ensure!(
             self.static_items.len() <= crate::item_spawners::MAX_STATIC_ITEMS

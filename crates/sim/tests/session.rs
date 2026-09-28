@@ -1344,7 +1344,8 @@ fn native_akimbo_fires_two_bullets_per_click_over_seconds() {
             moves += 1;
             s.movement(actor, moves, MoveInput::default()).unwrap();
             s.step().unwrap();
-            seen.extend(s.weapon_view().projectiles.iter().map(|p| p.id));
+            // Not the join's spawn effect, itself a projectile.
+            seen.extend(s.weapon_view().fired().map(|p| p.id));
         }
         seen.len()
     };

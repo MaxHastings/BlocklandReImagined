@@ -47,7 +47,9 @@ pub use admin::{
     MapListing, disconnect_message,
 };
 pub use bri_world::authority::WrenchProperties;
-pub use combat::{MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, Vitals};
+pub use combat::{
+    DEATH_PROJECTILE, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, SPAWN_PROJECTILE, Vitals,
+};
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 /// Stock emotes (`Emote_*` add-ons plus the built-in sit animation).
 pub const EMOTES: [&str; 5] = ["alarm", "confusion", "love", "hate", "sit"];

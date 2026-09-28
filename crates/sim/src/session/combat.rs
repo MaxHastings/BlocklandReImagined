@@ -28,8 +28,10 @@ const PLAYER_MASS: f32 = 90.0;
 /// Minimum respawn delay outside minigames (`$Game::MinRespawnTime`).
 const MIN_RESPAWN_TICKS: u64 = 120;
 const SPAWN_BRICK: &str = "v20/brick/brickspawnpointdata";
-const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
-const DEATH_PROJECTILE: &str = "v20.projectile.deathprojectile";
+/// `GameConnection::spawnPlayer`'s effect on every join and respawn.
+pub const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
+/// The effect a body leaves when it disappears.
+pub const DEATH_PROJECTILE: &str = "v20.projectile.deathprojectile";
 const MAX_NOTICES: usize = 256;
 
 /// Per-player authoritative combat state.

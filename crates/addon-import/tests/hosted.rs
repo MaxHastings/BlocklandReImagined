@@ -68,8 +68,9 @@ fn fire(session: &mut Session, spawn: glam::Vec3, item: &str) -> Vec<String> {
                 .unwrap();
         }
         session.step().unwrap();
-        for p in session.weapon_view().projectiles {
-            seen.insert((p.id, p.definition));
+        // Joining plays the spawn effect, itself a projectile.
+        for p in session.weapon_view().fired() {
+            seen.insert((p.id, p.definition.clone()));
         }
     }
     session.disconnect(player).unwrap();
