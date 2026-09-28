@@ -44,7 +44,7 @@ fn definition(id: &str, studs: [u32; 2], plates: u32, size: [f32; 3]) -> (String
         id: id.into(),
         footprint_studs: studs,
         height_plates: plates,
-        attachment_rows: vec!["b".repeat(studs[0] as usize); studs[1] as usize],
+        attachment_rows: vec!["b".repeat(studs[0] as usize); (studs[1] * plates) as usize],
         collision_boxes: vec![],
         needs_external_collision: false,
         coverage: None,
@@ -1278,4 +1278,38 @@ fn player_operations_and_on_death_pass_the_capability_gate() {
     for (state, _) in s.motion_states() {
         assert!(state.feet.iter().all(|v| v.is_finite()), "{state:?}");
     }
+}
+
+/// Night QA finding C: a guest (not the host) builds on generated ground.
+#[test]
+fn a_guest_plants_on_generated_ground() {
+    let mut s = session(vec![Spec::server("terra", &[], json!({}), "fn gen(cx, cz) { if cx == 0 && cz == 0 { [[0, 0, 0, 0]] } else { [] } }")
+        .world(json!({
+            "schema_version": 1, "generate": "gen", "chunk_voxels": 4, "voxel_size": 2.0,
+            "voxel_brick": CUBE, "view_chunks": 1, "radius_chunks": 4,
+            "materials": [{ "id": "terra:material/stone", "name": "Stone", "color": [0.5, 0.5, 0.5, 1.0] }]
+        }))]);
+    let _host = s.join("Host".into(), spawn_at(1), true).unwrap();
+    let guest = s.join("Guest".into(), spawn_at(2), false).unwrap();
+    s.step().unwrap();
+    let cube = s
+        .simulation()
+        .state()
+        .bricks
+        .values()
+        .find(|b| matches!(&b.definition, bri_world::ContentRef::Resolved(id) if id == CUBE))
+        .expect("generated voxel")
+        .clone();
+    println!("voxel {:?} owner {}", cube.position, cube.owner);
+    let top = cube.position[1] + 1.0;
+    let reply = Client::new(guest).send(
+        &mut s,
+        Command::Plant {
+            definition: "plate".into(),
+            position: [cube.position[0] - 0.5, top + 0.1, cube.position[2] - 0.75],
+            quarter_turns: 0,
+            color: 0,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
 }

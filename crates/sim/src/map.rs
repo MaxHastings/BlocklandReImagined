@@ -226,8 +226,8 @@ impl NativeMap {
                             .map(|c| c.user_data(MapSurface::Static as u128)),
                     );
                     let datablock = node.properties.get("datablock");
-                    if let Some((name, (explosion, sound))) = datablock
-                        .and_then(|d| glass.get(&d.to_ascii_lowercase()).map(|g| (d, g)))
+                    if let Some((name, (explosion, sound))) =
+                        datablock.and_then(|d| glass.get(&d.to_ascii_lowercase()).map(|g| (d, g)))
                     {
                         breakables.push(Breakable {
                             node: u32::try_from(index)?,
@@ -347,6 +347,11 @@ impl TerrainStream {
     pub fn active_tiles(&self) -> usize {
         self.colliders.active_count()
     }
+    /// Whether `handle` is one of the streamed terrain tiles (which share
+    /// the map tag with interiors and static shapes).
+    pub fn is_terrain_collider(&self, handle: rapier3d::prelude::ColliderHandle) -> bool {
+        self.colliders.is_terrain_collider(handle)
+    }
     /// Load tiles around every non-fixed body and refresh the query pipeline
     /// when the loaded set changed.
     pub fn update(&mut self, physics: &mut PhysicsWorld) {
@@ -436,6 +441,106 @@ mod tests {
             diagnostics: vec![],
         };
         Arc::new(TerrainField::new(terrain, &instance).unwrap())
+    }
+
+    /// A 2x4-footprint plate, one plate tall.
+    fn plate_definitions() -> crate::definitions::Definitions {
+        use bri_content::collision::{CollisionBody, Part};
+        let mesh = bri_content::brick::Brick {
+            schema_version: 1,
+            id: "plate".into(),
+            footprint_studs: [4, 2],
+            height_plates: 1,
+            attachment_rows: vec!["bbbb".into(), "bbbb".into()],
+            collision_boxes: vec![],
+            needs_external_collision: false,
+            coverage: None,
+            quads: vec![],
+        };
+        let collision = CollisionBody {
+            id: "plate".into(),
+            parts: vec![Part::Box {
+                center: [0.0; 3],
+                size: [2.0, 0.2, 1.0],
+            }],
+        };
+        let shape = bri_physics::content::collider(&collision)
+            .unwrap()
+            .build()
+            .shared_shape()
+            .clone();
+        crate::definitions::Definitions {
+            entries: [(
+                "plate".into(),
+                crate::definitions::Definition {
+                    mesh,
+                    collision,
+                    shape,
+                    indestructible: false,
+                    special: Default::default(),
+                },
+            )]
+            .into(),
+        }
+    }
+
+    /// The Slopes: a level brick aimed at sloped terrain dips into the
+    /// uphill side (v20 even sinks terrain ghosts 0.1). It plants; only a
+    /// brick wholly under the surface is Buried.
+    #[test]
+    fn bricks_dipping_into_sloped_terrain_plant_and_only_buried_ones_fail() -> Result<()> {
+        use crate::simulation::{Builder, PlantFailure};
+        let field = field(false);
+        let mut simulation = crate::simulation::Simulation::new(
+            bri_world::World::new("Terrain".into(), "test".into(), vec![[1.0; 4]]),
+            plate_definitions(),
+            vec![],
+        )?;
+        let (x, z) = (1.0, -0.5);
+        simulation.attach_terrain(
+            vec![field.clone()],
+            vec![Focus {
+                center: Vec3::new(x, 20.0, z),
+                radius: 50.0,
+            }],
+        )?;
+        // The footprint spans 2 x 1 units; find the surface's low and high
+        // points under it.
+        let corners = [(0.0, -1.0), (2.0, -1.0), (0.0, 0.0), (2.0, 0.0)]
+            .map(|(cx, cz)| field.height(cx, cz).unwrap());
+        let low = corners.iter().copied().fold(f32::MAX, f32::min);
+        let high = corners.iter().copied().fold(f32::MIN, f32::max);
+        assert!(high - low > 0.05, "the test needs a slope: {corners:?}");
+        let owner = bri_world::authority::Actor {
+            owner: 1,
+            ..Default::default()
+        };
+        let builder = Builder {
+            actor: &owner,
+            position: Vec3::new(x, high + 2.0, z),
+            reach: 50.0,
+        };
+        let at = |bottom: f32| {
+            bri_world::Brick::new(
+                bri_world::ContentRef::Resolved("plate".into()),
+                [x, bottom + 0.1, z],
+                1,
+            )
+        };
+        // Bottom on the plate grid just under the low side: the whole
+        // footprint dips into the slope, the top still shows.
+        let bottom = (low / 0.2).floor() * 0.2;
+        assert!(bottom + 0.2 > low);
+        simulation.plant(&builder, at(bottom))?;
+        // Top under the surface everywhere: buried.
+        let deep = ((low - 0.4) / 0.2).floor() * 0.2;
+        let error = simulation.plant(&builder, at(deep)).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PlantFailure>(),
+            Some(&PlantFailure::Buried),
+            "{error:#}"
+        );
+        Ok(())
     }
 
     #[test]

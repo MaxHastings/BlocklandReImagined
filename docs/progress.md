@@ -3036,3 +3036,13 @@ real integrated GPU; needs a weaker PC.
   `cargo test -p bri-client --test actor_effects`, net codec worst case.
   Needs Max's playtest: F8 orb seen from a second client, F7 on foot, in a
   jeep and on a horse.
+- 2026-09-28 night QA map findings (`claude/map-fixes`). The Slopes: planting
+  refused any dip into terrain as Buried; terrain contacts are now judged
+  only by a whole-footprint "wholly under the surface" test (an
+  approximation: v20's engine buried test is unavailable; its script sinks
+  terrain ghosts 0.1). The Tutorial always starts single player. Strata's
+  guest plant and Slate Sea's hammer were harness aim (Stuck on the host's
+  feet; seabed beyond hammer reach); the harness now records plant icons.
+  Evidence: `cargo test -p bri-sim --release` (the 22 failures need imported
+  content absent from the worktree), night QA matrix `BRI_QA_MAPS=slopes`
+  (The Slopes ok; Strata plants, then stops at finding E).

@@ -84,7 +84,7 @@ Add-Ons enabled as shipped. Game modes offered: Custom and Stress Lab.
 | Custom | Kitchen - Dark | Change Map | pass | 0 |
 | Custom | Skylands | Change Map | pass | 0 |
 | Custom | Slate Desert | Change Map | pass | 0 |
-| Custom | Slate Sea Revised | Change Map | plant, save and reload pass; the hammer cannot reach (harness: the brick lands on the seabed 7 units below the player) | 0 |
+| Custom | Slate Sea Revised | Change Map | plant, save and reload pass; the hammer cannot reach (harness only: the ghost deploys through water to the seabed 7 units down, within the 15-unit brick reach but beyond the 5-unit hammer reach, as in v20) | 0 |
 | Custom | Slate Storm Revised | Host | as Slate Sea | 0 |
 | Custom | Tutorial | Host | the guest is refused (finding B) | 1 |
 | Stress Lab | Strata | Host | the guest cannot plant on the generated ground (finding C) | 0 |
@@ -126,16 +126,31 @@ A. **The Slopes: the first brick near spawn is refused as Buried.** At the
    place a first brick near spawn without finding flatter ground. Whether v20
    allowed it here was not checked. Repro: `plant_probe_single_player` with
    `BRI_QA_PROBE_MAP=v20/add-ons/map_slopes/slopes.mis`.
+   **Fixed on `claude/map-fixes`:** any dip into terrain was refused as
+   Buried, although v20 sinks terrain ghosts 0.1 into the ground and the
+   ground rule already counts terrain above a brick's bottom as support.
+   Terrain now refuses only a brick wholly under the surface. The Slopes
+   passes the matrix; test
+   `bricks_dipping_into_sloped_terrain_plant_and_only_buried_ones_fail`.
 B. **Tutorial hosted as LAN refuses every joiner** with "The server refused
    the join: Player spawn is obstructed". The Tutorial is in the Start Game
    map list with the LAN and Internet options, but it has one spawn. Either
    keep it single player in Start Game, or word the refusal for players.
+   **Fixed on `claude/map-fixes`:** the Tutorial always starts single
+   player, as v20's main-menu Tutorial did.
 C. **Stress Lab Strata: a joining player cannot build on the generated
    ground.** The host plants fine in single player (`BRI_QA_PROBE_MODE=1`); a
    guest's plant never appears and shows no plant-error icon. The generated
    blocks belong to the host, so this is likely the trust rule; the missing
    icon makes it look broken. Needs a decision: world blocks public, or an
    icon and message.
+   **Harness only (`claude/map-fixes`):** generated blocks are public (owner
+   0) and a guest plants on them (`a_guest_plants_on_generated_ground`). The
+   guest's ghost landed on the host's feet (Strata's spawns stand players two
+   units apart), so the server answered Stuck, as v20 would; the icon did
+   show, but hides after 800 ms, before the harness looked. The harness now
+   records any icon shown and skips headings onto another player; Strata's
+   plant then passes and the visit stops at finding E.
 D. **The Stress Lab Miner HUD shows on every map.** With the shipped
    Add-Ons, hosting Slate (Custom) shows the Stress Lab Miner panel with its
    H, G and J keys (`19-in-game.png` in the new-player shots). Consider

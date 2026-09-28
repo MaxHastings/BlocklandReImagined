@@ -1815,6 +1815,13 @@ impl App {
             password.is_empty(),
             "The server join password is not connected yet. It cannot be silently ignored."
         );
+        // v20's Tutorial is a single-player walkthrough (the main menu's
+        // Tutorial button): one spawn and a script per player, no guests.
+        let mode = if map.contains("map_tutorial") {
+            ServerMode::SinglePlayer
+        } else {
+            mode
+        };
         let admin = bri_admin::Secret::new(admin)?;
         let super_admin = bri_admin::Secret::new(super_admin)?;
         ensure!((1..=64).contains(&max_players), "Invalid player limit");

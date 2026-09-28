@@ -751,10 +751,17 @@ fn validate_placement(
         (-(definition.mesh.height_plates as f32) * 0.1 - local_bottom).max(0.0);
     let aabb = definition.shape.compute_aabb(&placement);
     let query = physics.query_pipeline();
-    for (_, obstacle) in query.intersect_aabb_conservative(aabb).filter(|(_, c)| {
-        c.user_data == MAP_TAG
-            || (!c.is_sensor() && c.parent().is_some_and(|p| !physics.bodies[p].is_fixed()))
-    }) {
+    // Terrain is judged by `buried` below, not by contact: v20 deploys a
+    // ghost aimed at terrain 0.1 into it, and a level brick on a slope dips
+    // into the uphill side, so terrain may reach above a brick's bottom.
+    let is_terrain = |handle| terrain.is_some_and(|t| t.is_terrain_collider(handle));
+    for (_, obstacle) in query
+        .intersect_aabb_conservative(aabb)
+        .filter(|(handle, c)| {
+            (c.user_data == MAP_TAG && !is_terrain(*handle))
+                || (!c.is_sensor() && c.parent().is_some_and(|p| !physics.bodies[p].is_fixed()))
+        })
+    {
         if let Some(contact) = rapier3d::parry::query::contact(
             &placement,
             definition.shape.as_ref(),
@@ -779,6 +786,9 @@ fn validate_placement(
             }
         }
     }
+    if terrain.is_some_and(|t| buried(t, bounds)) {
+        return Err(PlantFailure::Buried.into());
+    }
     if !supported {
         // The chain-kill root test: a brick the map holds up stays ground.
         supported = on_ground(physics, terrain, bounds);
@@ -787,6 +797,22 @@ fn validate_placement(
         return Err(PlantFailure::Float.into());
     }
     Ok(())
+}
+/// A brick is buried when the terrain surface stands above its top over its
+/// whole footprint: nothing of it would show. Partly sunk bricks plant, as
+/// v20's own terrain deploy sinks them. (The exact v20 engine test is not
+/// available; this is the documented approximation.)
+fn buried(terrain: &crate::map::TerrainStream, bounds: Bounds) -> bool {
+    const ABOVE: f32 = 1000.0;
+    let top = bounds.max()[1] as f32 * 0.2;
+    (bounds.min[2]..bounds.max()[2]).all(|z| {
+        (bounds.min[0]..bounds.max()[0]).all(|x| {
+            let origin = Vec3::new((x as f32 + 0.5) * 0.5, top + ABOVE, (z as f32 + 0.5) * 0.5);
+            terrain
+                .cast_ray(origin, Vec3::NEG_Y, ABOVE * 2.0)
+                .is_some_and(|(distance, _)| top + ABOVE - distance > top + 0.002)
+        })
+    })
 }
 /// The one "rests on the map" rule, for planting and chain-kill alike.
 /// v20's plant-time ground probe, approximately: a ray from the brick's top

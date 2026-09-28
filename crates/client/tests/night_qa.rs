@@ -321,7 +321,19 @@ pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
             )?;
             pair.settle(Duration::from_millis(100))?;
         }
-        if pair.guest.building().and_then(|b| b.ghost()).is_some() {
+        // A ghost on another player's feet is refused as Stuck (as in v20);
+        // Stress Lab's generated spawns stand players two units apart.
+        let ghost = pair.guest.building().and_then(|b| b.ghost()).map(|g| g.position);
+        let on_someone = ghost.is_some_and(|g| {
+            pair.guest.network_view().is_some_and(|v| {
+                v.poses.iter().any(|(owner, p)| {
+                    *owner != v.owner
+                        && (p.player.feet[0] - g[0]).abs() < 1.5
+                        && (p.player.feet[2] - g[2]).abs() < 1.5
+                })
+            })
+        });
+        if ghost.is_some() && !on_someone {
             used = Some(yaw);
             break;
         }
@@ -344,7 +356,12 @@ pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
     let spot = pair.guest.building().and_then(|b| b.ghost()).map(|g| g.position).unwrap();
     request(&mut pair.guest, UiAction::Game(GameAction::PlantBrick))?;
     let _ = before;
+    // The plant-error icon hides after 800 ms; remember any it showed.
+    let shown = std::cell::RefCell::new(None);
     pair.until("planted brick on both", Duration::from_secs(10), |h, g| {
+        if let Some((error, _)) = &g.ui.core.plant_error {
+            *shown.borrow_mut() = Some(format!("{error:?}"));
+        }
         brick_at(h, spot) && brick_at(g, spot) && g.pending_requests() == 0
     })
     .with_context(|| {
@@ -360,8 +377,9 @@ pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
             .map(|l| l.text.clone())
             .collect();
         format!(
-            "guest chat tail {chat:?}, plant error {:?}, ghost was {spot:?}, nearest host bricks {:?}",
-            pair.guest.ui.core.plant_error,
+            "guest chat tail {chat:?}, plant error shown {:?}, ghost was {spot:?}, players' feet {:?}, nearest host bricks {:?}",
+            shown.borrow(),
+            pair.host.network_view().map(|v| v.poses.values().map(|p| p.player.feet).collect::<Vec<_>>()),
             pair.host.network_view().map(|v| {
                 let mut near: Vec<_> = v
                     .world
