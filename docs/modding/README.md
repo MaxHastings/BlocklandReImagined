@@ -216,6 +216,7 @@ The fields you are most likely to change:
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
+| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
 | item | `ui_name` | the name players see |
 
 A tool rather than a gun: give its image `"command": "your-rule:command"`
@@ -276,6 +277,13 @@ is imported as `proprietary`; for your own work, set `license` in the new
 ```sh
 cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example
 ```
+
+Many v20 Add-Ons keep part of what they do in scripts: a shotgun's spread,
+a slash command. The report lists each such function under **Needs
+behaviour**. When someone has made a native **port** of that Add-On, the
+importer applies it and the report says **Ported**. The ports so far, and the
+recipe for making one (or having your agent make one), are in
+[porting.md](porting.md).
 
 That is also how you make **new bricks** today: write a small v20-style
 brick Add-On and import it. A folder `Brick_Tall` holding:

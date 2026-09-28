@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "notes": "shotgunImage::onFire fires its projectile several times with random spread after pushing the shooter back. The image's shot data does the same; the numbers come from this copy's own script.",
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "weapon_shotgun:image/shotgunimage": {
+          "shot": {
+            "projectiles": "{projectiles}",
+            "spread": "{spread}",
+            "recoil": "{recoil}"
+          }
+        }
+      }
+    }
+  }
+}

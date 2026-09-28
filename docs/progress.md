@@ -3596,3 +3596,57 @@ Needs Max's playtest: F8, fly with and without left click and shift.
   None seen in a visible window yet. Maxwell's checks: load a save made
   with other colours (the Color Warning should ask); host with Random Brick
   Color on and watch the ghost change colour after each plant.
+## 2026-09-28 Native ports of v20 Add-On scripts
+
+- Imported Add-Ons keep what their scripts did as `needs_behaviour`. There is
+  now a list of native ports, `crates/addon-import/ports/ports.json`: one entry
+  per v20 Add-On (folder name, checked source hashes, `verified` or
+  `partial`, the functions covered and the tests that prove it). A port is
+  JSON merge patches for the files the importer writes, plus files it adds.
+  It carries only the rewrite, never the original Add-On's files, so the list
+  is built into `bri-import-addon` and the in-game Import applies it with
+  nothing downloaded. A port applies when the Add-On's name matches and every
+  covered function matches the port's patterns; the patterns also read the
+  numbers the port uses from that copy's script. A copy that does not match
+  is left as imported, and the report names the port and what did not match.
+  The report (schema 2) gains `ports`, `port` on each covered entry and
+  `needs_behaviour_ported`. IMPORT-REPORT.md marks ported functions and
+  points at the recipe for the rest.
+- Engine mechanism: an image may carry `shot` (projectiles per shot, v20
+  `%spread`, recoil). It is v20's widespread spread `onFire`: recoil first,
+  then each projectile's velocity turned by random Euler angles of up to
+  ±5π·spread about each axis. The random angles are a hash of the tick,
+  shooter and pellet number, so host and players agree with nothing on the
+  wire. Recoil is a new weapons event, `Recoil`, that the session applies to
+  the shooter's velocity. No protocol change; packs without `shot` serialize
+  as before.
+- First port: `Weapon_Shotgun` (Sawn-off Shotgun) now fires its pellets with
+  spread and recoil instead of one pellet. Recipe for people and agents:
+  `docs/modding/porting.md`.
+- Evidence (cloud, no archive): `cargo test -p bri-addon-import` with the new
+  `tests/ports.rs` (a CC0 stand-in with the shotgun's folder name and
+  onFire shape: 5 pellets inside the v20 spread cone, each inheriting the
+  recoil; a mismatching copy left at one pellet; a port adding files and
+  patching `package.json`; a hosted `Session` where the recoil moves the
+  shooter). Still owed on Maxwell's PC: `real_community_samples` and
+  `community_shotgun_and_car_work_in_a_hosted_game` now expect the real
+  shotgun to be ported (three pellets); they print its sha256 for the list.
+- Porting in two commands, from the release folder: `bri-import-addon port
+  ADDON DIR` sets up a work folder (plain import and report, the original
+  scripts to read, a drafted `port/`, `port/checks.json` stating what v20
+  does, `entry.json`, `stubs.rhai` quoting each function still to port, and
+  an `AGENT.md` with a prompt filled in for the Add-On). v20's spread-code
+  weapons are drafted completely. `bri-import-addon check-port DIR` imports
+  again with the port, fires each checked weapon, lists what is still
+  unported and prints the ports-list entry (`verified` or `partial`, with the
+  copy's hash) to `submit.json`. Evidence: `tests/ports.rs`
+  (`port_command_drafts_a_spread_weapon_and_check_port_verifies_it`,
+  `hand_ports_start_from_stubs_and_check_as_partial`,
+  `port_and_check_port_run_from_the_executable`). The shotgun's own
+  `checks.json` (3 pellets) runs in `real_community_samples` on Maxwell's PC.
+- Fix: a port that patched `weapons.json` left the item presentation pinning
+  the old bytes, so hosts refused the Add-On ("item physics does not match
+  its weapons pack"; Gate's hosted shotgun test). Ports now re-pin
+  `presentation.json` to the patched `weapons.json` and `item-physics.json`.
+  `check-port` checks the pins the way hosts and players do, and the port
+  tests assert them.

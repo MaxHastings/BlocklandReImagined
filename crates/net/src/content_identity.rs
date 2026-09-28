@@ -539,6 +539,7 @@ mod tests {
                     min_shot_ticks: 0,
                     states: vec![],
                     command: None,
+                    shot: None,
                 },
             );
             items.insert(

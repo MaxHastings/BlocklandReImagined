@@ -22,6 +22,7 @@ bri-weapons-import = { path = "../weapons-import" }
 bri-vehicles = { path = "../vehicles" }
 bri-vehicles-import = { path = "../vehicles-import" }
 regex = "1.12"
+glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 sha2 = "0.10"
 zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
@@ -31,5 +32,4 @@ bri-net = { path = "../net" }
 bri-sim = { path = "../sim" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
-glam = "0.33"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
