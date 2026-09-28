@@ -40,9 +40,10 @@ branch changed.
 
 | | Present | Partial | Missing | Lane | Dropped |
 |---|---|---|---|---|---|
-| Part 1 (v20 features, 120 rows) | 74 | 5 | 27 | 7 | 7 |
+| Part 1 on `1932015` (120 rows) | 74 | 5 | 27 | 7 | 7 |
+| Part 1 now (120 rows) | 89 | 5 | 11 | 7 | 8 |
 
-The misses a player notices first, most noticeable first:
+At the audit, the misses a player noticed first were, most noticeable first:
 
 1. **Main menu Credits button** says "Interface under construction", and
    **F1 help does nothing**. v20 opened HelpDlg with eight help pages
@@ -68,10 +69,14 @@ The misses a player notices first, most noticeable first:
 8. **Load Bricks colour-set mismatch** (append, replace or match colours)
    has no screen.
 
+Items 1 to 4, 6 and 7, and the vehicle mouse invert in item 5, are fixed
+on this branch; the rest of item 5 and item 8 are open. The fix log at the
+end lists every change and what is still open.
+
 Part 2 in one line: the modern layer is **solid** on hosting, Add-On
-packaging, the sandbox and safety, **rough** on documentation drift and on
-the modder path for client code and bricks, and **missing** a native brick
-format and in-game help. Details are in Part 2.
+packaging, the sandbox and safety, and now on documentation; it is
+**missing** a native brick format, drawn block faces and the join-screen
+prompt for trusting client code. Details are in Part 2.
 
 ---
 
@@ -86,7 +91,7 @@ format and in-game help. Details are in Part 2.
 | Player (avatar) | Present | `menus.rs:716` |
 | Options | Present | `menus.rs:711` |
 | About | Present | `menus.rs:717`, text at `menus.rs:111` |
-| Credits (`getHelp("1. Credits")`) | Missing | `authored_buttons` test: "Interface under construction" |
+| Credits (`getHelp("1. Credits")`) | Present | fixed in `37a40b3`: HelpDlg with the eight v20 pages |
 | Tutorial | Present | `menus.rs:719`; see `docs/audits/night-qa.md` finding B for LAN |
 | Quit | Present | `menus.rs:698-706` |
 | Version line | Present | `menus.rs:27` |
@@ -115,7 +120,7 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | Play music, menu sounds, plant/move/error sounds | Present | `options.rs` (`CHECKBOX_PREFS`), `client/src/audio.rs` |
 | Key remapping, Remap All, Clear All, Defaults | Present | `crates/ui/src/binds.rs:157`, `menus.rs:726` |
 | Mouse sensitivity, invert mouse, keyboard turn rate | Present | `options.rs` (`SUPPORTED_CONTROLS`), `client/src/controls.rs` |
-| Invert mouse in vehicles | Missing | hidden, though `client/src/app.rs:4033` reads it |
+| Invert mouse in vehicles | Present | fixed in `828b4d9`; its pitch sign fixed in `394a6bc` |
 | Fast 1st/3rd switch, super-shift toggle and smart toggle | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs` |
 | Queue brick buying, reverse brick scroll, jump/jet combo | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs`, `screens/selector.rs` |
 | Recolour brick icons, show brick slot numbers, coloured escape menu | Present | `options.rs` (`CHECKBOX_PREFS`), `models/hud.rs` |
@@ -137,8 +142,8 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | Admin and super admin passwords | Present | `menus.rs:535-536` |
 | Join password | Lane | first impressions #14; hidden in `ac00991` |
 | Add-Ons | Present | `menus.rs:713` |
-| Advanced Config (`serverConfigGui`) | Missing | `authored_buttons` test |
-| Music Files (`MusicFilesGui`) | Missing | `authored_buttons` test |
+| Advanced Config (`serverConfigGui`) | Present | fixed in `6a3e230`: saved `$Pref::Server::*`, applied when hosting |
+| Music Files (`MusicFilesGui`) | Present | fixed in `49214a2`: tracks left off are not offered to music bricks |
 | Launch Game | Present | `menus.rs:473` |
 
 ### Join (`JoinServerGui`, `ManualJoin`, `JoinServerPassGui`)
@@ -148,32 +153,32 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | LAN query | Present | `menus.rs:745` |
 | Connect by IP | Present | `menus.rs:759` |
 | Favourites (in place of the internet list) | Present | `menus.rs:749-757` |
-| Column sorting (8 headers) | Missing | `authored_buttons` test |
-| Filters button | Missing | `authored_buttons` test; filters served the master list |
+| Column sorting (8 headers) | Present | fixed in `04fe08f` |
+| Filters button | Dropped | hidden in `04fe08f`; filters served the master list |
 | Internet server list | Dropped | direct IP only (`docs/STATUS.md`) |
 | Password prompt on join | Lane | first impressions #14 |
 | Connecting and loading screens | Present | `menus.rs:405-430`; guest preview: night QA finding |
 
 ### Server settings (`serverConfigGui`, v20 `$Pref::Server::*`)
 
-The screen exists as Admin > Host Options (`crates/ui/src/screens/admin.rs:122`),
-but the host rejects every change (`crates/sim/src/session/admin.rs:601`), so
-the client hides it (`crates/client/src/admin_ui.rs:361`). No setting below
-is read anywhere outside `crates/admin` and the UI.
+On `1932015` the host refused every change and no setting was read. Since
+then the first-impressions thread applied the brick limit, plant rate,
+chat length and reach (`d22e5d6`, Admin > Server Settings), and this branch
+opened Start Game's Advanced Config and applied the rows marked fixed.
 
 | Setting | Status | Evidence |
 |---|---|---|
 | Port | Present | set at host start |
 | Brick limit | Lane | first impressions #14 |
-| Max bricks per second | Missing | no reader |
-| Max chat length | Missing | no reader; chat is not capped |
-| Random brick colour | Missing | no reader |
+| Max bricks per second | Present | `d22e5d6` (first-impressions thread) |
+| Max chat length | Present | `d22e5d6` (first-impressions thread) |
+| Random brick colour | Present | fixed in `b3409a9`; the ghost still shows the builder's paint |
 | E-Tard (chat) filter | Missing | no reader |
-| Falling damage (outside mini-games) | Missing | only mini-game rules read it (`minigames/src/policy.rs`) |
+| Falling damage (outside mini-games) | Present | fixed in `74b8efa`; on by default as in v20 |
 | Public domain timeout | Missing | no reader |
-| Physics / player vehicle limits | Missing | no reader |
+| Physics / player vehicle limits | Present | fixed in `74b8efa` |
 | Per-player and LAN quotas | Missing | no reader |
-| Too-far distance | Missing | no reader |
+| Too-far distance | Present | `d22e5d6` (first-impressions thread) |
 
 ### Administration
 
@@ -187,7 +192,7 @@ is read anywhere outside `crates/admin` and the UI.
 | Admin wand, F7/F8 orb | Present | `client/src/app.rs:5008`; `3c8193b` |
 | `/fetch`, `/find`, `/warp`, `/timescale` | Present | `client/src/admin_ui.rs:188-197` |
 | `/realbrickcount`, `/cancelallevents`, `/clearbots`, vehicle resets | Present | `admin_ui.rs:198-202` |
-| `/spy` and `/ret` | Missing | not in `admin_ui.rs:187`; goes to the Add-On router and fails |
+| `/spy` and `/ret` | Present | fixed in `71b548f` |
 | `/magicwand` | Partial | `/wand` works; the `/magicwand` spelling does not |
 | `/getid`, `/gettransform`, `/getpz`, `/colortest`, `/tripout`, `/dfg` | Dropped | Torque debugging aids |
 
@@ -199,7 +204,7 @@ is read anywhere outside `crates/admin` and the UI.
 | Talking indicator | Present | `menus.rs:677-683` |
 | Emotes (`/sit`, `/love`, `/hate`, `/alarm`, `/confusion`, `/bsd`, `/hug`, `/wtf`, `/zombie`) | Present | `client/src/app.rs:5190-5196` |
 | `/suicide`, `/light`, `/wand` | Present | `app.rs:5186-5189` |
-| `/brickcount` | Missing | not handled |
+| `/brickcount` | Present | fixed in `71b548f` |
 | `/clearinventory` | Missing | not handled |
 | Player list (F2), trust invite/demote, ignore | Present | `crates/ui/src/screens/players.rs:227-265` |
 | Console (`~`) | Present | `crates/ui/src/screens/console.rs` |
@@ -213,7 +218,7 @@ is read anywhere outside `crates/admin` and the UI.
 |---|---|---|
 | Create, join, leave, invite, remove, reset, end | Present | `crates/ui/src/screens/minigames.rs:227-269` |
 | All 21 rule fields | Present | `crates/minigames/src/model.rs`; every field but `lives` has a reader in `sim`/`minigames` |
-| Mini-game favourites (10 slots, Set Favs) | Missing | `minigames.rs` has no handler; `list_inert_buttons` |
+| Mini-game favourites (10 slots, Set Favs) | Present | fixed in `a7e161f` |
 | Scoreboard / score in player list | Present | `screens/players.rs` |
 
 ### Building
@@ -271,7 +276,7 @@ All 81 entries of v20's remap list have a native command
 |---|---|---|
 | 81 remappable actions | Present | remap scan, `ui.rs` |
 | Alt+Enter fullscreen, `~` console | Present | `crates/ui/src/ui.rs:775` |
-| F1 context help | Missing | ignored, `crates/ui/src/ui.rs:859` |
+| F1 context help | Present | fixed in `37a40b3` |
 | F9 debug render modes | Dropped | Torque debugging |
 
 ### Gameplay feel
@@ -298,14 +303,14 @@ are the v20-fidelity thread's lane and are not rated here.
 | Add-On download on join, mismatch screen | Lane | night QA, now landing |
 | Server rules in Rhai, HUD panels, weapons as data | Solid | `packages/samples/*`, `crates/package-runtime` |
 | Chat commands from Add-Ons, with arguments | Solid | `9d501b7`, `crates/sim/src/session/packages.rs:1626-1680` |
-| Sandboxed client code (wasm, WGSL) behind trust tiers | Solid in code, rough for modders | built in PR #11 (`319ffbe`), red-teamed (`d662c73`); the guide still lists it as "still being built" and has no walkthrough |
+| Sandboxed client code (wasm, WGSL) behind trust tiers | Solid in code, rough for players | built in PR #11 (`319ffbe`), red-teamed (`d662c73`); the join-screen trust prompt is not built, so on others' servers only already-trusted code runs |
 | v20 Add-On import (bricks, weapons, vehicles) | Solid | guide section 7; night QA |
 | New bricks without v20 files | Missing | guide section 8: no native brick format |
 | Block faces for `block` content | Missing | guide section 8: loads, not drawn |
 | Modder tools: `bri-addon-check`, `bri-addon-run` | Solid | guide section 2 |
-| Modder guide | Rough | `docs/modding/README.md:272-286` lists chat commands and client code as unbuilt; both shipped |
-| Player docs: PLAYTEST.md, KNOWN-ISSUES.md | Rough | `docs/KNOWN-ISSUES.md` predates combat and vehicle work; no in-game help (Part 1, F1) |
-| README | Rough | says "Windows, macOS or Linux" while STATUS.md says Windows only; says combat, vehicles and mini-games are unfinished |
+| Modder guide | Solid | updated in `b639104`: chat commands and client code are no longer listed as unbuilt; client code has a section |
+| Player docs: PLAYTEST.md, KNOWN-ISSUES.md, in-game help | Solid | KNOWN-ISSUES updated in `b639104`; F1 help in `37a40b3` |
+| README | Solid | updated in `b639104`: Windows only; the playtest paragraph describes the current build |
 | Setup from source (`tools/bootstrap.py`) | Solid | one command, reruns incrementally (README) |
 | Setup for players (zip, `Launch.cmd`, SmartScreen) | Rough | no installer; SmartScreen step documented in PLAYTEST.md |
 
@@ -313,8 +318,55 @@ are the v20-fidelity thread's lane and are not rated here.
 
 # Fix log
 
-This branch fixes the most noticeable gaps first, across both parts. Each
-entry names its commit. Anything too large to finish well says exactly what
-is left.
+Hashes are this branch's; Gate lands each under a new hash on main.
 
-(Filled in as fixes land.)
+| Commit | What changed |
+|---|---|
+| `6a3e230` | Start Game's Advanced Config opens v20's serverConfigGui over the saved `$Pref::Server::*`; a hosted game starts with them and keeps them across Change Map. |
+| `04fe08f` | Join Server's column headers sort like `JS_sortList`; Filters and the query's Cancel are hidden. |
+| `828b4d9` | Options shows Controls' Invert Mouse In Vehicles (on by default). |
+| `37a40b3` | The Credits button and F1 open HelpDlg with v20's eight help pages (the UI importer carries `base/help/*.hfl`). |
+| `403b9eb` | Max's report: server list rows drew ServerListProfile's black outline around black text; list rows now draw plain. |
+| `394a6bc` | Max's report: mouse-steered vehicles pitched the wrong way under the default Vehicle Mouse Invert. |
+| `7f05b74`, `361b2f0` | Max's report: every Options tab fits inside the dialog at any window shape; a window under 640x480 scales the UI down. |
+| `71b548f` | `/brickcount` for everyone, `/spy <name>` and `/ret` for admins. |
+| `320d6a0` | Max's report: windows drag by their title bar (`canMove`) and stay on screen. |
+| `b639104` | README, Known Issues and the modding guide match what shipped. |
+| `74b8efa` | Falling Damage outside mini-games follows the host's setting (on, as in v20); the physics and player vehicle totals hold back spawns. |
+| `b3409a9` | Random Brick Color colours planted bricks from v20's six. |
+| `a7e161f` | Create Mini-Game's ten favourite slots and Set Favs. |
+| `49214a2` | Start Game's Music Files; a hosted game offers only the tracks left on. |
+
+`crates/ui/tests/authored_buttons.rs` now asserts that no visible button on
+the 19 menu screens answers "Interface under construction".
+
+## Still open
+
+Most noticeable first. None is started on this branch.
+
+1. **Options settings v20 had that are still hidden**: Censor Chat,
+   Press Up to Repeat Chat, Temp Brick paint-colour toggles (and flash
+   time and colours), Auto Light, Steering Auto-Return and Strafe
+   Steering, Render My Player / Items / Jets. Each needs its behaviour
+   built, then its checkbox added to `CHECKBOX_PREFS` in
+   `crates/ui/src/screens/options.rs`.
+2. **Help page formatting**: the pages keep their text but not their
+   bold headings, blue key names or margins, which the UI's ML subset
+   (`crates/ui/src/text.rs`, `layout_ml`) does not draw.
+3. **Window resize, minimize and maximize** (`resizeWidth`,
+   `resizeHeight`, `canMinimize`, `canMaximize`): only moving is built.
+   Few v20 windows allow them; resizing Options would need its tab layout
+   to reflow.
+4. **Per-player and LAN quotas, public domain timeout, E-Tard filter**
+   in Advanced Config are saved but not applied. Quotas need the host to
+   know whether it is a LAN game.
+5. **Load Bricks colour-set mismatch** (`LoadBricksColorGui`: append,
+   replace or match colours) has no screen.
+6. **`/clearinventory`** is an unknown command.
+7. **Random Brick Color's ghost**: the ghost shows the builder's paint;
+   v20 showed the random colour before planting.
+8. **Music Files for joiners**: a joiner's wrench still lists every track,
+   and the host refuses the ones it turned off.
+
+Other lanes' items (join password, name prompt, net graph, weapon feel,
+brick damage, Add-On downloads) stay with those threads.
