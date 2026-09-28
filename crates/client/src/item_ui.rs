@@ -165,6 +165,38 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[ignore = "requires native item pack003; model-only, no GPU/window/audio"]
+    fn duplicator_add_on_tool_reuses_the_stock_wand_icon() -> Result<()> {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let extras = vec![(
+            "addons/duplicator-tool/assets".to_string(),
+            manifest.join("../../packages/duplicator/duplicator-tool/assets"),
+        )];
+        let weapons = bri_net::content_identity::WeaponContent::load_with(
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        let assets = crate::items::ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        let pack = bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?;
+        let ui = ItemUi::new(&assets, &weapons.item_choices, &pack)?;
+        assert_eq!(ui.catalog.len(), 22);
+        let tool = "duplicator-tool:weapon/duplicator";
+        assert_eq!(ui.catalog[tool].name, "Duplicator");
+        let IconRef::External(key) = ui.catalog[tool].icon else {
+            panic!("the Duplicator should show the wand icon");
+        };
+        assert_eq!(
+            ui.icons[&key].rgba,
+            assets.icon("v20.weapon.wanditem")?.unwrap().rgba
+        );
+        Ok(())
+    }
+    #[test]
     #[ignore = "native pack003 and bounded offscreen GPU; no window or audio"]
     fn original_hud_icons_upload_and_reregister_after_gpu_reset() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
