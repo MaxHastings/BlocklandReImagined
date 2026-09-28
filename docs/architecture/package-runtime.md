@@ -114,13 +114,18 @@ If any operation or state write fails, the whole call is discarded.
 Chosen for the probe because it is pure Rust, needs no compiler for the
 agent, and is easy to bound; not a permanent commitment. Limits
 (`script.rs`): operation budget per call (`Budget`: command 200k, think
-100k, tick 400k, generate 4M), 32 call levels, expression depth, 4 KiB
+100k, tick 400k, generate 400k), 32 call levels, expression depth, 4 KiB
 strings, 64k arrays, 1k maps, 256 variables and functions, 1024 operations
 per call. No `eval`, modules, clock, file or network. Scripts may only
 define functions (`script.top_level`). Over budget is `script.budget`,
 limits `script.limit`, other failures `script.error`, each with the file and
 line. A failing entity think stops that entity for a second instead of
 spamming.
+
+Work the engine runs itself (thinks, `on_tick`, generation) shares 200k
+operations a tick, split evenly between packages with scripts: about 8 ms
+on a desktop. A package whose call ran past its share repays it over later
+ticks, and its waiting thinks run first next tick.
 
 ## Replication
 
