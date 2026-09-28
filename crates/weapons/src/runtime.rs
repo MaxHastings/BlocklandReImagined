@@ -296,6 +296,11 @@ pub enum Event {
     StopSkis {
         actor: ActorId,
     },
+    /// `SkiWeaponImage::onFire` while riding another vehicle: the host
+    /// center-prints "Can't use skis right now." for two seconds.
+    SkisUnavailable {
+        actor: ActorId,
+    },
     SkiNodes {
         actor: ActorId,
         visible: bool,
@@ -1112,10 +1117,7 @@ impl WeaponsWorld {
                 }
                 if name == "skiweaponimage" {
                     match a.frame.mount {
-                        Mount::Other => self.events.push(Event::Diagnostic {
-                            actor: Some(id),
-                            message: "Can't use skis right now.".into(),
-                        }),
+                        Mount::Other => self.events.push(Event::SkisUnavailable { actor: id }),
                         Mount::Skis => {
                             a.skiing = false;
                             self.events.push(Event::StopSkis { actor: id });

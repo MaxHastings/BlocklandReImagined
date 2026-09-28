@@ -490,6 +490,14 @@ impl Session {
                     mount_after_ticks,
                 } => self.start_skis(actor.0, position, velocity, mount_after_ticks)?,
                 WeaponEvent::StopSkis { actor } => self.stop_skis(actor.0),
+                // `commandToClient(..., 'CenterPrint', "\c4Can't use skis right now.", 2)`.
+                WeaponEvent::SkisUnavailable { actor } => self.notify(
+                    actor.0,
+                    Notice::Center {
+                        text: "\u{E004}Can't use skis right now.".into(),
+                        seconds: 2.0,
+                    },
+                ),
                 // Ski nodes follow the ski vehicle the avatar rides.
                 WeaponEvent::SkiNodes { .. } => {}
                 WeaponEvent::Tumble {

@@ -411,6 +411,9 @@ struct Peer {
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
     temp_color: Option<spray::TempColor>,
+    /// `%client.currentColor`: the palette index of the last colour spray
+    /// can picked (index 0 until one is).
+    current_color: u8,
     combat: combat::Combat,
     special: special::Progress,
     control: ControlObject,
@@ -769,6 +772,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                current_color: 0,
                 talking: false,
                 sitting: false,
                 input: MoveInput::default(),
@@ -925,6 +929,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                current_color: 0,
                 talking: false,
                 sitting: false,
                 input: MoveInput::default(),

@@ -4379,18 +4379,25 @@ impl PlatformApp for App {
                         }
                     }
                 }
-                // SkiItem's color shift tints the skis of anyone riding skis.
-                let skiing = view
+                // `Player::startSkiing` shows the LSki/RSki nodes in the
+                // skier's paint colour, carried by the ski vehicle.
+                let skis = view
                     .vitals
                     .get(owner)
                     .and_then(|v| v.mounted)
                     .and_then(|(vehicle, _)| view.vehicles.get(&vehicle))
-                    .and_then(|info| self.vehicle_assets.definition(&info.definition))
-                    .is_some_and(|d| d.family == bri_vehicles::Family::Skis);
-                self.avatars
-                    .get_mut(owner)
-                    .unwrap()
-                    .set_skis(skiing.then_some([0.0, 0.2, 0.64, 1.0]));
+                    .filter(|info| {
+                        self.vehicle_assets
+                            .definition(&info.definition)
+                            .is_some_and(|d| d.family == bri_vehicles::Family::Skis)
+                    })
+                    .map(|info| {
+                        info.color
+                            .and_then(|c| view.world.palette.get(usize::from(c)))
+                            .or_else(|| view.world.palette.first())
+                            .map_or([1.0; 4], |c| [c[0], c[1], c[2], c[3]])
+                    });
+                self.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.

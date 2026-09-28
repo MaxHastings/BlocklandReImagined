@@ -23,7 +23,11 @@ fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
         &root.join("content/stock-catalog-004"),
         &root.join("content/maps-pass-007"),
     )?;
-    let mut world = World::new("Vehicles".into(), "test".into(), vec![[1.0, 0.0, 0.0, 1.0]]);
+    let mut world = World::new(
+        "Vehicles".into(),
+        "test".into(),
+        vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+    );
     let mut brick = Brick::new(ContentRef::Resolved(SPAWN.into()), [0.0, 0.1, -12.0], 0);
     brick.vehicle = Some(VehicleSpawn {
         vehicle: ContentRef::Resolved(vehicle.into()),
@@ -453,6 +457,8 @@ fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
     let (mut s, owner) = session(&root)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 60)?;
+    // The skis take the last colour spray can's paint (`currentColor`).
+    s.command(owner, 99, Command::UseSprayCan { color: 1 })?;
     let slot = s.give_item(owner, "v20.weapon.skiitem")?;
     let mut command = 100;
     let mut fire = |s: &mut Session, p: &mut Feeder| -> anyhow::Result<()> {
@@ -474,6 +480,7 @@ fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
         .find(|v| v.id == vehicle)
         .unwrap();
     assert_eq!(skis.definition, "v20.vehicle.skivehicle");
+    assert_eq!(skis.color, Some(1));
     fire(&mut s, &mut p)?;
     p.feed(&mut s, MoveInput::default(), 4)?;
     assert_eq!(s.mounted(owner), None, "stepped off the skis");

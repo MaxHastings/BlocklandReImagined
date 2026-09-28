@@ -3076,3 +3076,26 @@ real integrated GPU; needs a weaker PC.
   reference worlds and both Tutorial layouts load with every brick; nothing
   over Bedroom's carpet hovers), `-p bri-render --test map_floor`,
   `-p bri-content --lib scene`, `-p bri-sim --lib`.
+## 2026-09-28 Skis matched to v20
+
+- Audited the skis against v20's `Item_Skis` add-on and the WheeledVehicle
+  code in `blocklandv20.exe`; the table is `docs/audits/skis-v20.md`.
+- Decoded new engine rules: `isSled` (datablock +0x378) keeps the surface
+  forces off unless wheel 0 is on the ground (0x57565f); `onWreck` fires when
+  the body collides with none of wheels 0-2 on the ground (0x572303);
+  `jumpForce` is not a WheeledVehicle field; VehicleData defaults (impact
+  speeds 25/25/50, collision damage 20 and 0.05).
+- Fixed: skis now move by Blockland's WheeledVehicle forces (thrust to 40,
+  speed-scaled sideways grip on the ground only, squared mouse steering that
+  needs speed, the decoded steering return, drag), no invented brake, the
+  decoded crash rule, collision-only impact puffs, `Impact1BSound` past 10,
+  skis in the skier's last colour can, the two-second "Can't use skis right
+  now." centre print, and boarding after 250 ms regardless of reach.
+- Adaptations: the skis collide as the box around their hulls, and their
+  `bodyFriction` is applied at the centre of mass, because Rapier's contacts
+  on the original hull spun sliding skis round.
+- Open: tire emitters (`SkiEmitter`) for every vehicle; the importer's
+  collision-damage default (0 instead of 0.05) for every vehicle.
+- Evidence: `cargo test -p bri-vehicles` (new `tests/skis.rs`),
+  `cargo test -p bri-weapons -- --ignored`,
+  `cargo test -p bri-sim --test vehicles -- --ignored`.

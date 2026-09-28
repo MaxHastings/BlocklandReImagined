@@ -890,6 +890,7 @@ impl Session {
             return Ok(());
         };
         let yaw = peer.player.state().yaw;
+        let paint = peer.current_color;
         let id = self.spawn_transient(
             owner,
             "v20.vehicle.skivehicle",
@@ -902,6 +903,10 @@ impl Session {
         );
         match id {
             Some(id) => {
+                // `setNodeColor("LSki"/"RSki", getColorIDTable(%client.currentColor))`:
+                // the skis take the skier's paint colour; the ski vehicle
+                // itself is invisible, so its colour carries it.
+                self.vehicles.colors.insert(id, Some(paint));
                 let due = self.simulation.state().tick + u64::from(after_ticks);
                 self.vehicles.pending_skis.push((owner, id, due));
             }
@@ -1039,19 +1044,23 @@ impl Session {
             let eligible = self
                 .peers
                 .get(&owner)
-                .filter(|p| p.combat.alive && !self.vehicles.mounted.contains_key(&owner))
-                .map(|p| Vec3::from(p.player.state().feet));
+                .is_some_and(|p| p.combat.alive && !self.vehicles.mounted.contains_key(&owner));
             let Some(world) = &mut self.vehicles.world else {
                 continue;
             };
-            let boarded = eligible.is_some_and(|feet| {
+            // The script's `mountObject` has no reach check: however far
+            // the skis slid in that quarter second, the skier is put on them.
+            let seat = eligible
+                .then(|| world.seat_position(&self.simulation.physics, vehicle, 0))
+                .flatten();
+            let boarded = seat.is_some_and(|seat| {
                 world
                     .mount(
                         &self.simulation.physics,
                         vehicle,
                         0,
                         occupant(&self.peers, owner),
-                        feet.to_array(),
+                        seat,
                     )
                     .is_ok()
             });

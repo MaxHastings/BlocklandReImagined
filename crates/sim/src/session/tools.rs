@@ -334,7 +334,12 @@ impl Session {
                 "Color outside world palette"
             );
         }
-        self.hold_image(owner, image, paint)
+        self.hold_image(owner, image, paint)?;
+        // `serverCmdUseSprayCan` remembers the colour; FX cans do not.
+        if let (Some(color), Some(peer)) = (paint, self.peers.get_mut(&owner)) {
+            peer.current_color = color;
+        }
+        Ok(())
     }
 
     /// `serverCmdMagicWand`: administrators get the Destructo Wand.

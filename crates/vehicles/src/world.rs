@@ -53,9 +53,9 @@ pub struct Controls {
     #[serde(default)]
     pub look_delta: [f32; 2],
 }
-/// Velocity change on contact that wrecks skis (`hardImpactSpeed` is 10;
-/// ordinary bumps only raise ski impact puffs).
-const SKI_WRECK_SPEED: f32 = 20.;
+/// `WheeledVehicle::updateCollision` (0x572303) wrecks a vehicle whose body
+/// collides while none of its first three wheels touches the ground.
+const WRECK_WHEELS: usize = 3;
 /// Torque's player step height (`maxStepHeight`) for player-type mounts.
 /// Steering Auto-Return (on by default in v20): released mouse steering
 /// halves every quarter second.
@@ -69,6 +69,9 @@ struct WheeledFlight {
     horizontal_surface: f32,
     vertical_surface: f32,
     stall: f32,
+    /// `isSled` (0x5703ea, datablock +0x378): the surfaces bite only while
+    /// wheel 0 touches the ground (0x57565f).
+    sled: bool,
     /// `steeringUseAutoReturn` (default on), `steeringAutoReturnRate` (0.9)
     /// and `steeringAutoReturnMaxSpeed` (10), from the data constructor.
     auto_return: Option<(f32, f32)>,
@@ -85,16 +88,19 @@ impl WheeledFlight {
                 .and_then(|v| v.trim().parse::<f32>().ok())
                 .unwrap_or(default)
         };
-        let auto_return = !d
-            .authored
-            .get("steeringuseautoreturn")
-            .is_some_and(|v| matches!(v.trim(), "0" | "false"));
+        let flag = |key: &str, default: bool| {
+            d.authored
+                .get(key)
+                .map_or(default, |v| !matches!(v.trim(), "0" | "false" | ""))
+        };
+        let auto_return = flag("steeringuseautoreturn", true);
         Self {
             max_forward: number("maxforwardvel", 0.),
             max_reverse: number("maxreversevel", 0.),
             horizontal_surface: number("horizontalsurfaceforce", 0.),
             vertical_surface: number("verticalsurfaceforce", 0.),
             stall: number("stallspeed", 0.),
+            sled: flag("issled", false),
             auto_return: auto_return.then(|| {
                 (
                     number("steeringautoreturnrate", 0.9),
@@ -621,6 +627,18 @@ impl VehiclesWorld {
         });
         Ok(())
     }
+    /// Where a seat is now, for mounts a script forces regardless of reach.
+    pub fn seat_position(
+        &self,
+        world: &PhysicsWorld,
+        id: VehicleId,
+        seat: usize,
+    ) -> Option<[f32; 3]> {
+        let v = self.instances.get(&id)?;
+        let d = &self.catalog[&v.spawn.definition];
+        (seat < d.seats.len())
+            .then(|| effective_seat_pose(&world.bodies[v.body], d, v, seat).position)
+    }
     pub fn set_controls(
         &mut self,
         owner: OwnerId,
@@ -1129,9 +1147,10 @@ impl VehiclesWorld {
                     let damping = f.auto_input_damping.powf(25. / 96.);
                     steering.iter_mut().for_each(|x| *x *= damping);
                 }
-                if d.family == Family::FlyingWheeled {
+                if matches!(d.family, Family::FlyingWheeled | Family::Skis) {
                     // WheeledVehicle::updateMove (0x570c4a): on a move with no
-                    // mouse turn, both axes return by rate × throttle share.
+                    // mouse turn, both axes return by rate × throttle share
+                    // (`move->y`, so steering holds with the throttle released).
                     if let Some((rate, max)) = WheeledFlight::of(d).auto_return
                         && c.look_delta[0] == 0.
                         && max > 0.
@@ -1189,28 +1208,6 @@ impl VehiclesWorld {
                 }
                 continue;
             }
-            let ground = world
-                .query_pipeline_with_filter(
-                    QueryFilter::default()
-                        .exclude_rigid_body(v.body)
-                        .exclude_sensors(),
-                )
-                .cast_ray_and_get_normal(&Ray::new(p + Vec3::Y * 0.1, -Vec3::Y), 0.3, true)
-                .is_some_and(|(_, hit)| {
-                    hit.normal.y
-                        >= if d.run_surface_angle > 0. {
-                            d.run_surface_angle.to_radians().cos()
-                        } else {
-                            0.2
-                        }
-                })
-                || v.controller
-                    .as_ref()
-                    .is_some_and(|c| c.wheels().iter().any(|w| w.raycast_info().is_in_contact));
-            let ground = ground
-                || v.restored_contacts
-                    .as_ref()
-                    .is_some_and(|contacts| contacts.iter().any(|x| *x));
             let hover_distance = d.flight.as_ref().map(|f| {
                 let desired = f.hover_height * v.spawn.scale;
                 let range = 10. * v.spawn.scale + desired;
@@ -1223,10 +1220,26 @@ impl VehiclesWorld {
                     .cast_ray(&Ray::new(p, -Vec3::Y), range, true)
                     .map_or(range, |(_, distance)| distance)
             });
+            // Wheel 0 on the ground at the last wheel update: a sled's
+            // surfaces bite only then.
+            let wheel0_contact = v
+                .controller
+                .as_ref()
+                .and_then(|c| c.wheels().first())
+                .is_some_and(|w| w.raycast_info().is_in_contact)
+                || v.restored_contacts
+                    .as_ref()
+                    .is_some_and(|contacts| contacts.first().copied().unwrap_or(false));
+            let hull_friction = if d.family == Family::Skis {
+                hull_friction(world, v.body, velocity, d.friction, d.mass)
+            } else {
+                Vec3::ZERO
+            };
             let gravity = VEHICLE_GRAVITY;
             let b = &mut world.bodies[v.body];
             b.reset_forces(false);
             b.reset_torques(false);
+            b.add_force(hull_friction, true);
             if submerged > 0. {
                 b.add_force(
                     Vec3::Y * (d.mass * gravity * submerged / d.density.max(0.05))
@@ -1236,7 +1249,9 @@ impl VehiclesWorld {
             }
             if alive {
                 match d.family {
-                    Family::Wheeled | Family::FlyingWheeled => {
+                    // Skis are a WheeledVehicle with frictionless NothingTires:
+                    // only Blockland's flying forces move and turn them.
+                    Family::Wheeled | Family::FlyingWheeled | Family::Skis => {
                         let target = steer * d.max_steering;
                         if d.strafe_steering {
                             // steeringStrafeSteeringRate: 0.1 radian per 32 ms
@@ -1247,7 +1262,7 @@ impl VehiclesWorld {
                         } else {
                             v.steering = target;
                         }
-                        if d.family == Family::FlyingWheeled {
+                        if matches!(d.family, Family::FlyingWheeled | Family::Skis) {
                             let f = WheeledFlight::of(d);
                             // Speed along the nose, either way (0x575208).
                             let speed = speed.abs();
@@ -1278,10 +1293,13 @@ impl VehiclesWorld {
                                 true,
                             );
                             // Wings: sideways and roof-wise air is resisted
-                            // with the square of speed once above stall.
-                            let air = velocity.length() * bite;
-                            force -= right * (right.dot(velocity) * air * f.horizontal_surface)
-                                + up * (up.dot(velocity) * air * f.vertical_surface);
+                            // with the square of speed once above stall. A
+                            // sled's (skis) grip only with wheel 0 down.
+                            if !f.sled || wheel0_contact {
+                                let air = velocity.length() * bite;
+                                force -= right * (right.dot(velocity) * air * f.horizontal_surface)
+                                    + up * (up.dot(velocity) * air * f.vertical_surface);
+                            }
                             b.add_force(force, true);
                             if velocity.length() > WHEELED_SPEED_CAP {
                                 let capped = velocity.normalize() * (WHEELED_SPEED_CAP - 1.);
@@ -1333,29 +1351,6 @@ impl VehiclesWorld {
                                     - d.roll_force * right.dot(velocity));
                         b.add_force(force, true);
                         b.add_torque(torque, true);
-                    }
-                    Family::Skis => {
-                        v.steering = steer * d.max_steering;
-                        if ground || in_water {
-                            b.add_force(
-                                forward * (d.thrust * c.throttle)
-                                    - right * velocity.dot(right) * 50.,
-                                true,
-                            );
-                            if c.brake {
-                                let horizontal = Vec3::new(velocity.x, 0., velocity.z);
-                                b.apply_impulse(
-                                    -horizontal.clamp_length_max(d.brake_force / d.mass * FIXED_DT)
-                                        * d.mass,
-                                    true,
-                                );
-                            }
-                        }
-                        b.add_torque(
-                            -up * (steer * d.yaw_force) - right * (pitch * d.pitch_force)
-                                + forward * (roll * d.roll_force),
-                            true,
-                        );
                     }
                     Family::Tumble | Family::Ball => {}
                     Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret => {
@@ -1467,27 +1462,66 @@ impl VehiclesWorld {
                         .contact_pairs_with(*c)
                         .any(|p| p.has_any_active_contact())
                 });
-                if contacting
-                    && delta > d.impact_threshold
-                    && matches!(d.family, Family::Skis | Family::Tumble)
-                {
-                    let projectile = if d.family == Family::Skis {
-                        "v20.projectile.skiimpactaprojectile"
-                    } else {
-                        "v20.projectile.tumbleimpactaprojectile"
+                if matches!(d.family, Family::Skis | Family::Tumble) {
+                    let number = |key: &str, default: f32| {
+                        d.authored
+                            .get(key)
+                            .and_then(|v| v.trim().parse::<f32>().ok())
+                            .unwrap_or(default)
                     };
-                    let mut fire = explosion(v, d, projectile, world, 0.);
-                    fire.velocity = [0.; 3];
-                    self.intents.push(Intent::Fire(fire));
-                }
-                // skiVehicle::onWreck: a hard landing or ending up on its
-                // side throws the skier into a tumble.
-                if d.family == Family::Skis
-                    && v.seats[0].is_some()
-                    && contacting
-                    && (delta >= SKI_WRECK_SPEED || (*b.rotation() * Vec3::Y).y < 0.25)
-                {
-                    wrecks.push(*id);
+                    // Vehicle::resolveCollision: the body struck something,
+                    // moving into it faster than `contactTol`. Resting
+                    // contacts and the wheels never count.
+                    let tolerance = number("contacttol", 0.1);
+                    let collided = b.colliders().iter().any(|c| {
+                        world.contact_pairs_with(*c).any(|p| {
+                            let outward = if p.collider1 == *c { 1. } else { -1. };
+                            p.solver_manifolds().iter().any(|m| {
+                                m.data.num_active_contacts() > 0
+                                    && v.previous_velocity.dot(m.data.normal) * outward > tolerance
+                            })
+                        })
+                    });
+                    if !collided {
+                        continue;
+                    }
+                    // `onImpact` past `minImpactSpeed`: the add-on's puff.
+                    if delta > d.impact_threshold {
+                        let projectile = if d.family == Family::Skis {
+                            "v20.projectile.skiimpactaprojectile"
+                        } else {
+                            "v20.projectile.tumbleimpactaprojectile"
+                        };
+                        let mut fire = explosion(v, d, projectile, world, 0.);
+                        fire.velocity = [0.; 3];
+                        self.intents.push(Intent::Fire(fire));
+                    }
+                    // The datablock's hard or soft impact sound by speed.
+                    let sound = if delta >= number("hardimpactspeed", f32::MAX) {
+                        d.authored.get("hardimpactsound")
+                    } else if delta >= number("softimpactspeed", f32::MAX) {
+                        d.authored.get("softimpactsound")
+                    } else {
+                        None
+                    };
+                    if let Some(sound) = sound.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                        self.intents.push(Intent::Audio {
+                            vehicle: *id,
+                            id: sound.into(),
+                        });
+                    }
+                    // `onWreck` (0x572348): the collision came with none of
+                    // the first three wheels on the ground. skiVehicle's
+                    // script throws its skier into a tumble.
+                    let airborne = v.controller.as_ref().is_some_and(|c| {
+                        c.wheels()
+                            .iter()
+                            .take(WRECK_WHEELS)
+                            .all(|w| !w.raycast_info().is_in_contact)
+                    });
+                    if d.family == Family::Skis && v.seats[0].is_some() && airborne {
+                        wrecks.push(*id);
+                    }
                     continue;
                 }
                 if contacting && delta > d.impact_threshold {
@@ -1834,7 +1868,22 @@ fn prepare_spawn(
         ));
     }
     let mut offset = Pose::IDENTITY;
-    let shape = if d.family == Family::Ball {
+    let shape = if d.family == Family::Skis {
+        // The box around skivehicle.dts's collision hulls (the main hull is
+        // a box with a slightly tapered, not quite flat base). Rapier gave
+        // those near-degenerate faces sideways contact normals that kicked
+        // sliding skis into spins; the box slides true.
+        let (min, max) = d
+            .collision_hulls
+            .iter()
+            .flatten()
+            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
+            });
+        offset = Pose::from_translation((min + max) * 0.5 * s.scale);
+        let half = (max - min) * 0.5 * s.scale;
+        SharedShape::cuboid(half.x, half.y, half.z)
+    } else if d.family == Family::Ball {
         let min = Vec3::from_array(d.bounds_min);
         let max = Vec3::from_array(d.bounds_max);
         SharedShape::ball((max - min).max_element() * 0.5 * s.scale)
@@ -1869,14 +1918,16 @@ fn prepare_spawn(
         // WheeledVehicle::updateForces: container drag (the datablock's
         // `drag`) on momentum, and `rotationalDrag` plus that drag on
         // angular momentum.
-        Family::FlyingWheeled => d.drag / d.mass.max(0.01),
+        Family::FlyingWheeled | Family::Skis => d.drag / d.mass.max(0.01),
         _ => d.drag * 0.05,
     })
-    .angular_damping(if d.family == Family::FlyingWheeled {
-        d.angular_drag + d.drag
-    } else {
-        d.angular_drag
-    })
+    .angular_damping(
+        if matches!(d.family, Family::FlyingWheeled | Family::Skis) {
+            d.angular_drag + d.drag
+        } else {
+            d.angular_drag
+        },
+    )
     .ccd_enabled(true);
     if d.is_actor() {
         builder = builder.can_sleep(false);
@@ -1903,17 +1954,52 @@ fn prepare_spawn(
         None
     };
 
-    Ok((
-        builder,
-        ColliderBuilder::new(shape)
-            .position(offset)
-            .mass_properties(mass_properties(d, s.scale))
-            .friction(d.friction)
-            .restitution(d.restitution),
-        prepared_turret,
-    ))
+    let mut collider = ColliderBuilder::new(shape)
+        .position(offset)
+        .mass_properties(mass_properties(d, s.scale))
+        .friction(d.friction)
+        .restitution(d.restitution);
+    if d.family == Family::Skis {
+        // The skis' body friction is applied by `hull_friction` at the
+        // centre of mass, so the solver's own contact friction is off.
+        collider = collider
+            .friction(0.)
+            .friction_combine_rule(CoefficientCombineRule::Min);
+    }
+    Ok((builder, collider, prepared_turret))
 }
 
+/// The skis ride on their body: four `skiSpring`s (195 each) cannot hold up
+/// 90 kg at 20 m/s², so the hull slides on the ground with `bodyFriction`
+/// (Torque's `Vehicle::resolveContacts`). Rapier's friction at the hull's
+/// off-centre contact points spun sliding skis round at speed, so the
+/// friction is applied here instead: Coulomb friction from last step's
+/// normal impulses, at the centre of mass, never reversing the slide.
+fn hull_friction(
+    world: &PhysicsWorld,
+    body: RigidBodyHandle,
+    velocity: Vec3,
+    friction: f32,
+    mass: f32,
+) -> Vec3 {
+    let mut force = Vec3::ZERO;
+    let mut slide = Vec3::ZERO;
+    for c in world.bodies[body].colliders() {
+        for p in world.contact_pairs_with(*c) {
+            for m in p.solver_manifolds() {
+                let n = m.data.normal;
+                let tangent = velocity - n * velocity.dot(n);
+                if tangent.length_squared() > 1e-8 {
+                    let impulse: f32 = m.points.iter().map(|pt| pt.data.impulse).sum();
+                    force -= tangent.normalize() * (friction * impulse / FIXED_DT);
+                    slide = tangent;
+                }
+            }
+        }
+    }
+    // Friction can stop the slide within a step but not push it backwards.
+    force.clamp_length_max(slide.length() * mass / FIXED_DT)
+}
 /// Torque rigid bodies: authored mass at `massCenter` with the inertia of a
 /// solid box, rather than a uniform-density collision hull.
 fn mass_properties(d: &Definition, scale: f32) -> MassProperties {
