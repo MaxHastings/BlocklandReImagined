@@ -4077,3 +4077,18 @@ the passenger camera does not tilt or roll with the seat (v20's does; our
 view has no roll). Evidence: `cargo test -p bri-client --lib vehicle_camera`.
 Not seen in a window: needs Max's playtest in a Jeep, driving and as a
 passenger.
+
+## 2026-09-28 Skis usable again after jetting off (branch `claude/ski-stuck`)
+
+Max reported skis that stop working: the player walks around holding them,
+firing does nothing, and self-delete does not help. Cause: jet queues the
+ski dismount, then the vehicle step deletes the now-empty skis before that
+dismount is applied, so the handler could no longer tell it had left skis
+and never cleared the weapons runtime's `skiing` flag. With the flag stuck,
+`SkiWeaponImage::onFire` never starts skis again, and respawn kept the
+flag. Fix: jetting off skis clears skiing at once (`vehicle_input`), and a
+respawn clears it too, since skiing belongs to the old Player object.
+Host-only state, so single player and multiplayer share the fix; no
+protocol change. Evidence: `cargo test -p bri-sim --test vehicles
+skis_work_again -- --ignored` fails before the fix and passes after;
+`cargo test -p bri-sim -- --include-ignored` passes.

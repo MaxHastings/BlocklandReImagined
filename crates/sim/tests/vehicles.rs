@@ -493,6 +493,62 @@ fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
 
 #[test]
 #[ignore = "requires the converted native vehicle, weapon and brick packs"]
+fn skis_work_again_after_jetting_off_them_and_after_respawning() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (mut s, owner) = session(&root)?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 60)?;
+    let use_skis = |s: &mut Session, p: &mut Feeder| -> anyhow::Result<()> {
+        let slot = match s.tool_inventories()[&owner]
+            .slots
+            .iter()
+            .position(|i| i.as_deref() == Some("v20.weapon.skiitem"))
+        {
+            Some(slot) => slot,
+            None => s.give_item(owner, "v20.weapon.skiitem")?,
+        };
+        s.equip_tool(owner, Some(slot))?;
+        p.feed(s, MoveInput::default(), 80)?;
+        for down in [true, false] {
+            p.sequence += 1;
+            s.command(owner, p.sequence, Command::WeaponTrigger { down })?;
+            p.feed(s, MoveInput::default(), 4)?;
+        }
+        p.feed(s, MoveInput::default(), 40)
+    };
+    let jet_off = |s: &mut Session, p: &mut Feeder| -> anyhow::Result<()> {
+        let jet = MoveInput {
+            jet: true,
+            ..Default::default()
+        };
+        p.feed(s, jet, 2)?;
+        p.feed(s, MoveInput::default(), 10)
+    };
+    use_skis(&mut s, &mut p)?;
+    assert!(s.mounted(owner).is_some(), "riding the skis");
+    // Jet steps off; the empty skis vanish before that dismount is applied.
+    jet_off(&mut s, &mut p)?;
+    assert_eq!(s.mounted(owner), None, "jet steps off the skis");
+    use_skis(&mut s, &mut p)?;
+    assert!(
+        s.mounted(owner).is_some(),
+        "the skis work again after jetting off"
+    );
+    // Self-delete and respawn: the new body starts off skis and can use them.
+    jet_off(&mut s, &mut p)?;
+    p.sequence += 1;
+    s.command(owner, p.sequence, Command::Suicide)?;
+    p.feed(&mut s, MoveInput::default(), 125)?;
+    p.sequence += 1;
+    s.command(owner, p.sequence, Command::Respawn)?;
+    p.feed(&mut s, MoveInput::default(), 10)?;
+    use_skis(&mut s, &mut p)?;
+    assert!(s.mounted(owner).is_some(), "the skis work after respawning");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native vehicle, weapon and brick packs"]
 fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun() -> anyhow::Result<()> {
     use bri_sim::session::ActionAim;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
