@@ -228,9 +228,23 @@ fn a_refresh_neither_moves_bodies_nor_drops_kinematic_targets() {
         RigidBodyBuilder::kinematic_position_based().translation(Vector::new(4.0, 1.0, 0.0)),
         ColliderBuilder::cuboid(0.5, 0.5, 0.5),
     );
+    // A resting body sunk into the floor (the solver would push it out) and
+    // a spinning, moving one: a refresh must not simulate either of them.
+    let (resting, _) = w.insert(
+        RigidBodyBuilder::dynamic().translation(Vector::new(-3.0, 0.45, 0.0)),
+        ColliderBuilder::cuboid(0.5, 0.5, 0.5),
+    );
+    w.bodies[falling].set_linvel(Vector::new(1.0, -2.0, 0.5), true);
+    w.bodies[falling].set_angvel(Vector::new(0.2, 0.3, 0.4), true);
     w.bodies[mount].set_next_kinematic_translation(Vector::new(5.0, 1.0, 0.0));
+    let before: Vec<_> = [falling, resting]
+        .map(|b| (*w.bodies[b].position(), w.bodies[b].linvel(), w.bodies[b].angvel()))
+        .into();
     detect(&mut w);
-    assert!((w.bodies[falling].translation().y - 3.0).abs() < 1e-3);
+    let after: Vec<_> = [falling, resting]
+        .map(|b| (*w.bodies[b].position(), w.bodies[b].linvel(), w.bodies[b].angvel()))
+        .into();
+    assert_eq!(before, after, "pose and velocities are bit-identical");
     assert_eq!(w.bodies[mount].translation().x, 4.0);
     // The mount still reaches the target it was given before the refresh.
     w.step();

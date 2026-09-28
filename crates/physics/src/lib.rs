@@ -44,12 +44,28 @@ pub fn detect_collisions(world: &mut PhysicsWorld) {
         let here = *body.position();
         body.set_next_kinematic_position(here);
     }
+    // The step also integrates dynamic bodies: gravity, damping, gyroscopic
+    // terms and the contact solver's penetration recovery nudge their poses
+    // and velocities. A refresh must not simulate, or a checkpoint restore
+    // would no longer continue the run it saved, so they are put back.
+    let dynamic: Vec<_> = world
+        .bodies
+        .iter()
+        .filter(|(_, body)| body.is_dynamic())
+        .map(|(handle, body)| (handle, *body.position(), body.linvel(), body.angvel()))
+        .collect();
     let dt = world.integration_parameters.dt;
     world.integration_parameters.dt = REFRESH_DT;
     world.step();
     world.integration_parameters.dt = dt;
     for (handle, target) in targets {
         world.bodies[handle].set_next_kinematic_position(target);
+    }
+    for (handle, position, linvel, angvel) in dynamic {
+        let body = &mut world.bodies[handle];
+        body.set_position(position, false);
+        body.set_linvel(linvel, false);
+        body.set_angvel(angvel, false);
     }
 }
 
