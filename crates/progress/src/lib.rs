@@ -129,6 +129,7 @@ fn grouped(n: u64) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct Progress {
     state: Arc<Mutex<Snapshot>>,
+    subject: Arc<Mutex<Option<String>>>,
 }
 
 impl Progress {
@@ -189,6 +190,17 @@ impl Progress {
 
     pub fn snapshot(&self) -> Snapshot {
         *self.state()
+    }
+
+    /// Name what is loading once it is known (a joiner learns the map from
+    /// the host's first message), so the loading screen can show it.
+    pub fn set_subject(&self, subject: impl Into<String>) {
+        *self.subject.lock().unwrap_or_else(|e| e.into_inner()) = Some(subject.into());
+        self.state().revision += 1;
+    }
+
+    pub fn subject(&self) -> Option<String> {
+        self.subject.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

@@ -284,7 +284,7 @@ impl NativeScreen {
                 if let ConnectionState::Loading {
                     map,
                     preview,
-                    phase,
+                    status,
                     progress,
                 } = &core.conn
                 {
@@ -297,15 +297,7 @@ impl NativeScreen {
                             .find(|m| m.id == *map || m.name == *map)
                             .map_or("", |m| m.description.as_str()),
                     );
-                    self.set(
-                        "LoadingProgressTxt",
-                        match phase {
-                            LoadPhase::WaitingForServer => "WAITING FOR SERVER",
-                            LoadPhase::LoadingObjects => "LOADING OBJECTS",
-                            LoadPhase::LightingMission => "LIGHTING MISSION",
-                            LoadPhase::Ghosting => "RECEIVING WORLD",
-                        },
-                    );
+                    self.set("LoadingProgressTxt", status);
                     if let Some(n) = self.view.id("LoadingProgress") {
                         self.view.set_num(
                             n,

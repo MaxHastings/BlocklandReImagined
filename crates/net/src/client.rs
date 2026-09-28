@@ -279,6 +279,7 @@ impl Client {
             _ => anyhow::bail!("Expected welcome"),
         };
         // The Welcome is small; the world streams after it in chunks.
+        progress.set_subject(&checkpoint.world.map_id);
         progress.begin(
             Stage::ReceivingWorld,
             Unit::Bricks,
@@ -438,6 +439,7 @@ impl Client {
                     }
                     Message::MapChanged(checkpoint) => {
                         let map = checkpoint.world.map_id.clone();
+                        self.progress.set_subject(&map);
                         self.progress.begin(
                             Stage::ReceivingWorld,
                             Unit::Bricks,

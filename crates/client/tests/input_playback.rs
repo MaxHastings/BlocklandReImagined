@@ -92,9 +92,31 @@ fn a_player_starts_single_player_and_walks_using_only_clicks_and_keys() -> Resul
     script.click(control(&app, ScreenId::StartMission, "SM_StartMission();")?);
     play(&mut app, &script.frames)?;
     recorded.extend(script.frames);
-    until(&mut app, "spawning in game", Duration::from_secs(120), |a| {
-        matches!(a.ui.core.conn, ConnectionState::InGame { .. }) && a.presented_local().is_some()
-    })?;
+    // The loading screen shows what is actually happening, not a fixed phase.
+    let mut statuses: Vec<String> = Vec::new();
+    let start = Instant::now();
+    let idle = Script::default().wait(Duration::from_millis(20)).frames.clone();
+    while !(matches!(app.ui.core.conn, ConnectionState::InGame { .. })
+        && app.presented_local().is_some())
+    {
+        ensure!(
+            start.elapsed() < Duration::from_secs(120),
+            "Timed out spawning; saw {statuses:?}; state {:?}",
+            app.ui.core.conn
+        );
+        if let ConnectionState::Loading { status, .. } = &app.ui.core.conn
+            && statuses.last() != Some(status)
+        {
+            statuses.push(status.clone());
+        }
+        play(&mut app, &idle)?;
+    }
+    eprintln!("loading screen showed {statuses:?}");
+    ensure!(
+        statuses.iter().any(|s| s.starts_with("LOADING MAP"))
+            && statuses.iter().any(|s| s.starts_with("RECEIVING WORLD")),
+        "Loading screen stages: {statuses:?}"
+    );
     // Let the spawn settle before measuring movement.
     until(&mut app, "the player to land", Duration::from_secs(10), |a| {
         a.presented_local().is_some_and(|p| p.grounded)
