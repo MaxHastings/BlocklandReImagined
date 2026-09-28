@@ -815,6 +815,9 @@ bug, so they wait for Max:
   host's Add-On code, so a game mode's HUD, keys and saved progress vanish.
   Re-running the packages is simple, but whether a mode should survive a
   map change is a product decision.
+- Add-On blasts on bricks (34): a package `explode` removes bricks for
+  good, while weapon blasts fake-kill bricks that come back. Whether an
+  Add-On's explosion should also be temporary is a design call.
 - Vehicle respawn (29): the game uses the brick owner's mini-game with a 1 s
   floor. v20's `WheeledVehicleData` uses the damage source's mini-game and
   waits out the burn first, and the tested rule in the minigames crate does
@@ -832,7 +835,8 @@ Each is one commit with a test that fails without it, except where noted.
 | 5 | `03f3900`, `7a87c78` | One HUD setup recipe on entry and after Change Map; brick bar and paint carry over; Tutorial limits reset (no test for the reset). |
 | 7 | `e2361ae` | Planting, painting and the wand share one build gate, alive first. |
 | 9 | `db5cadc` | Projectiles obey Ray Casting, not Colliding. |
-| 15 | `c4a7162` | Tools check a brick may be destroyed before breaking it. |
+| 11 | `b02bbf2` | Prediction mirrors other living players' bodies, so you bump into them as on the host (parked vehicles not yet mirrored). |
+| 15 | `c4a7162`, `8b582f4` | Tools check a brick may be destroyed before breaking it; each tick system contains its own failure and the tick always completes (no test for the containment). |
 | 16 | `d462a60` | Every in-world client visual runs on the game clock (no test: needs the full client). |
 | 17 | `084b31e` | One `submersion` query for players, splashes and vehicles. |
 | 18 | `0e07fbe` | Planting uses chain-kill's ground rule. |
@@ -841,11 +845,19 @@ Each is one commit with a test that fails without it, except where noted.
 | 21 | `ea476fc`, `0e2075b` | A dialog's opening key closes it; lists read double-click as Submit; trust invites queue and Escape closes them. |
 | 23 | `003c3aa` | Mouse sensitivity, chat lines and zoom FOV each have one range, default and apply step. |
 | 24 | `dde532c` | One setter for the admin role; the UI reads the live admin snapshot. |
+| 28 | `b219093` | Brick FX (glow, pulse) are centred in world space for moved and instanced bricks. |
 | 30 | `5e0fcf6` | Core tools and the Tutorial map are named, not indexed. |
+| 32 | `22ef5fb`, `b69158d` | Joining and resuming pick the spawn the way a respawn does (spawn bricks, checkpoints, bot homes), with the same spawn effect. |
+| 33 | `5f062eb` | Sitting is replicated player state that moving ends (protocol 36). |
+| 34 | `aaeb137` | A player's Add-On blast obeys the mini-game's radius damage rule, as their weapons do. |
+| 36 | `12174cb` | With Brick Shadows off, debris still stops shadows like the bricks it came from (no test). |
+| 39 | `e065e16` | The host fires from the crouch-blended eye the camera shows; one crouch thread in the motor. |
+| 40 | `e3376fc` | Every targeting ray sees terrain, loaded tile or not (vehicle flips and own-vehicle exclusion unchanged). |
 | — | `5bc58e5` | Add-On commands can be typed in chat (`/sell coal`). |
 
-Left for other threads: 2 and 8 (the sandbox thread), 28, 36 and 37 (they
-touch the shadow thread's caster and shader changes).
+Left for other threads: 2 and 8 (the sandbox thread). Not started: 10, 12,
+13, 22, 25 (large or cross-cutting), 37 (small gain for a shader-uniform
+change).
 
 ## Suggested order
 
