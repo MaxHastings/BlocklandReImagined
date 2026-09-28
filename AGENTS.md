@@ -84,6 +84,29 @@ Record meaningful decisions, evidence, commands, failures and next work in
 `docs/progress.md`. Check off acceptance items only with evidence. Keep the
 active goal incomplete until the full alpha contract and handoff are satisfied.
 
+## Before you push
+A pre-push hook runs `tools/gate.py` on every push to main. It refuses the
+push unless the commit contains the latest origin/main, no pushed commit undoes
+recent main work (the stale-tree check), protocol VERSION does not go backwards,
+and build, `clippy -D warnings`, `bri-client --check` on the main checkout's
+`content` and `cargo test --workspace -- --include-ignored` pass (about 10
+minutes). Push with `python tools/gate.py --push`: with your work committed,
+it rebases onto origin/main, gates and pushes while holding the gate lock, so
+main cannot move under you. A plain `git push origin HEAD:main` also runs the
+gate but fails if main moves meanwhile. `python tools/gate.py` checks without
+pushing; `--diff-only` runs only the fast history checks. Gate runs use one
+dedicated worktree and target dir in `../.bri-gate` (nothing else builds
+there) and queue on a lock, so a wait is normal; logs are in
+`../.bri-gate/logs`. Never push with `--no-verify`. If the
+gate flags an intentional undo, add `Gate-Allow-Undo: <path>` to that commit's
+message. A test already failing on main goes in
+`tools/gate-known-failures.toml` with the owning thread, which removes the
+entry when it fixes the test; a new failure that passes when retried alone is
+reported as flaky and does not block. Pull requests must pass the Windows
+GitHub Actions check (build, clippy, content-free tests, history check) before
+merging; it also reruns on every push to main. In a fresh clone, install the
+hook with `python tools/gate.py --install-hook`.
+
 ## Current collaboration boundary
 Maxwell requires GPT-6 Luna for all subagent work going forward (latest instruction
 2026-09-26). Earlier GPT-6 Astra subagents were interrupted; do not resume them.

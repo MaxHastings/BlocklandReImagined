@@ -211,6 +211,11 @@ impl ClientAudio {
             | CueKind::Burn { .. }
             | CueKind::Emote { .. }
             | CueKind::VehicleEffect { .. } => return,
+            // The engine explosion operation sounds like v20's rocket.
+            CueKind::Explosion { .. } => {
+                self.profile("rocketExplodeSound", Placement::World(cue.position));
+                return;
+            }
             CueKind::VehicleSound { sound, .. } => {
                 if sound.contains('.') {
                     self.trigger(sound, Placement::World(cue.position));

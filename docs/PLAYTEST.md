@@ -68,6 +68,7 @@ under `logs/`. Keep both when reporting a problem. Do not share
 ## Send back
 
 For each issue: map, what you did, what v20 would do, what happened, whether it
-repeats, and the latest file from `logs/`. Screenshots help (they save under
+repeats, and the latest file from `logs/` (after a crash, also the
+newest `crash-*.txt` and any `crash-*.dmp`). Screenshots help (they save under
 `user-state/screenshots/`). Separate crashes and blockers from feel and visual
 differences.

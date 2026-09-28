@@ -36,6 +36,11 @@ pub use weapons::{MountedImage, WeaponView};
 mod tools;
 mod undo;
 mod spray;
+mod packages;
+pub use packages::{
+    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand, PackageSave,
+    PackageStateView, PackageStats, WorldSave,
+};
 pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
     MapListing,
@@ -204,6 +209,8 @@ pub enum Command {
     /// A ghost-brick move, which stays client-side; the server only animates
     /// the builder.
     BuildGesture(BuildGesture),
+    /// A command declared by an enabled package (v20 `commandToServer`).
+    Package(PackageCommand),
 }
 
 /// What a command needs of its sender, checked once before dispatch.
@@ -487,6 +494,8 @@ pub struct Session {
     /// Admin Change Map choices and the pending request.
     map_list: Vec<MapListing>,
     map_change: Option<(OwnerId, String)>,
+    /// Enabled mod packages and the gameplay they define.
+    packages: Option<Box<packages::PackageHost>>,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -545,6 +554,7 @@ impl Session {
             trust: Default::default(),
             map_list: Vec::new(),
             map_change: None,
+            packages: None,
         }
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).
@@ -729,6 +739,7 @@ impl Session {
             self.announce(owner, "connected.", "ClientJoinSound");
         }
         self.refresh_trust();
+        self.packages_joined(owner);
         Ok(owner)
     }
     /// `MsgClientJoin` / `onDrop` lines and sounds for everyone else.
@@ -875,6 +886,7 @@ impl Session {
         self.departed.remove(&owner);
         self.announce(owner, "connected.", "ClientJoinSound");
         self.refresh_trust();
+        self.packages_joined(owner);
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the
@@ -1370,6 +1382,7 @@ impl Session {
                 Ok(Reply::Activated(hit))
             }
             Command::Tool(action) => self.tool_action(owner, action),
+            Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
                 ensure!(peer.chats <= 4, "Chat rate exceeded");
@@ -1513,6 +1526,7 @@ impl Session {
         for (owner, input) in driving {
             self.vehicle_input(owner, input)?;
         }
+        self.step_packages()?;
         self.vehicle_pre_step()?;
         self.simulation.step()?;
         self.vehicle_post_step()?;

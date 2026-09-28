@@ -30,6 +30,7 @@ ring = "0.17.14"
 zstd = "0.13"
 rmp-serde = "1"
 bytes = "1"
+bri-crash = { path = "../crash" }
 igd-next = { version = "0.17", default-features = false }
 
 [dev-dependencies]
