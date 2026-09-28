@@ -403,6 +403,15 @@ impl Building {
         self.held_image = held;
     }
 
+    /// A map change builds a new controller; the player keeps the bricks
+    /// they bought (those the new catalog still offers) and their paint,
+    /// which the next world sync clamps to the new palette.
+    pub fn carry_over(&mut self, old: &Building) {
+        for (slot, id) in self.inventory.iter_mut().zip(&old.inventory) {
+            *slot = id.clone().filter(|id| self.catalog.contains_key(id));
+        }
+        self.paint = old.paint;
+    }
     pub fn initial_updates(&self) -> Vec<UiUpdate> {
         vec![
             UiUpdate::BrickInventory(self.inventory.to_vec()),
@@ -1332,6 +1341,28 @@ mod tests {
         slots[3] = Some("plate".into());
         b.ui_action(&UiAction::BuyBricks { slots }, &player())
             .unwrap();
+    }
+
+    #[test]
+    fn a_map_change_keeps_the_brick_bar_and_paint() {
+        let mut old = controller();
+        buy(&mut old);
+        old.ui_action(&UiAction::UseSprayCan { color: 1 }, &player())
+            .unwrap();
+        // The controller the next map builds starts empty, as on first entry.
+        let mut new = controller();
+        assert!(new.inventory().iter().all(Option::is_none));
+        new.carry_over(&old);
+        assert_eq!(new.inventory()[3].as_deref(), Some("plate"));
+        assert!(
+            new.initial_updates()
+                .iter()
+                .any(|u| matches!(u, UiUpdate::BrickInventory(slots) if slots[3].is_some()))
+        );
+        new.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        new.ui_action(&fire(), &player()).unwrap();
+        assert_eq!(new.ghost().map(|g| g.color), Some(1));
     }
 
     #[test]

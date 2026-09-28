@@ -2572,6 +2572,59 @@ impl App {
             }),
         );
     }
+    /// Paint divisions for a world palette: the content's named divisions
+    /// when the world uses the default palette, numbered ones otherwise.
+    fn colorset(&self, palette: &[[f32; 4]]) -> Vec<PaintDivision> {
+        let default_colors: Vec<_> = self
+            .content
+            .paint
+            .iter()
+            .flat_map(|d| d.colors.iter().copied())
+            .collect();
+        if palette == default_colors.as_slice() {
+            self.content.paint.clone()
+        } else {
+            palette
+                .chunks(9)
+                .enumerate()
+                .map(|(i, c)| PaintDivision {
+                    name: format!("World {}", i + 1),
+                    colors: c.to_vec(),
+                })
+                .collect()
+        }
+    }
+
+    /// Everything the HUD takes from the map and the building controller.
+    /// First entry sends it, and every map change sends it again, since the
+    /// change replaces both.
+    fn map_setup_updates(&self, scene: &SceneData, palette: &[[f32; 4]]) -> Result<Vec<UiUpdate>> {
+        let mut updates = vec![
+            UiUpdate::Bricks(self.content.bricks.clone()),
+            UiUpdate::Colorset(self.colorset(palette)),
+            UiUpdate::Datablocks(self.content.datablocks.clone()),
+            UiUpdate::BuildingAllowed(true),
+        ];
+        updates.extend(self.tool_ui.catalog_updates());
+        updates.extend(
+            self.building
+                .as_ref()
+                .context("Ready connection has no building controller")?
+                .initial_updates(),
+        );
+        updates.push(UiUpdate::SaveContext {
+            map: scene.name.clone(),
+            preview: self
+                .content
+                .maps
+                .iter()
+                .find(|m| m.id == scene.id)
+                .map(|m| m.preview.clone())
+                .unwrap_or(IconRef::None),
+        });
+        Ok(updates)
+    }
+
     fn poll_network(&mut self) -> Result<()> {
         let Some(mut a) = self.attempt.take() else {
             return Ok(());
@@ -2854,14 +2907,23 @@ impl App {
             self.materials = Some(prepared.materials);
             self.palette = Some(prepared.palette);
             self.gpu_palette = None;
-            self.building = Some(prepared.building);
+            let old = self.building.replace(prepared.building);
             self.motion.install(prepared.mirror);
-            self.building
-                .as_mut()
-                .unwrap()
-                .set_tool_catalog(self.item_ui.catalog())?;
+            let building = self.building.as_mut().unwrap();
+            building.set_tool_catalog(self.item_ui.catalog())?;
+            if let Some(old) = &old {
+                building.carry_over(old);
+            }
             self.gpu_scene = None;
             self.gpu_terrain.clear();
+            // A map change replaced what first entry set the HUD up from.
+            if a.entered
+                && let (Some(scene), Some(view)) = (&self.cpu_scene, &a.view)
+            {
+                for update in self.map_setup_updates(scene, &view.world.palette)? {
+                    self.ui.apply_session(a.id, update);
+                }
+            }
         }
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
@@ -2942,16 +3004,7 @@ impl App {
                     .as_ref()
                     .is_none_or(|old| old.palette != view.world.palette)
             {
-                let colors = view
-                    .world
-                    .palette
-                    .chunks(9)
-                    .enumerate()
-                    .map(|(i, c)| PaintDivision {
-                        name: format!("World {}", i + 1),
-                        colors: c.to_vec(),
-                    })
-                    .collect();
+                let colors = self.colorset(&view.world.palette);
                 self.ui.apply_session(a.id, UiUpdate::Colorset(colors));
             }
             self.query_source = Some(view.world.clone());
@@ -3086,60 +3139,15 @@ impl App {
                     admin: a.view.as_ref().is_some_and(|v| v.administrator),
                 }),
             );
-            self.ui
-                .apply_session(a.id, UiUpdate::Bricks(self.content.bricks.clone()));
             let palette = &a
                 .view
                 .as_ref()
                 .context("Ready connection has no world")?
                 .world
                 .palette;
-            let default_colors: Vec<_> = self
-                .content
-                .paint
-                .iter()
-                .flat_map(|d| d.colors.iter().copied())
-                .collect();
-            let colors = if palette == &default_colors {
-                self.content.paint.clone()
-            } else {
-                palette
-                    .chunks(9)
-                    .enumerate()
-                    .map(|(i, c)| PaintDivision {
-                        name: format!("World {}", i + 1),
-                        colors: c.to_vec(),
-                    })
-                    .collect()
-            };
-            self.ui.apply_session(a.id, UiUpdate::Colorset(colors));
-            self.ui
-                .apply_session(a.id, UiUpdate::Datablocks(self.content.datablocks.clone()));
-            self.ui.apply_session(a.id, UiUpdate::BuildingAllowed(true));
-            for update in self.tool_ui.catalog_updates() {
+            for update in self.map_setup_updates(scene, palette)? {
                 self.ui.apply_session(a.id, update);
             }
-            for update in self
-                .building
-                .as_ref()
-                .context("Ready connection has no building controller")?
-                .initial_updates()
-            {
-                self.ui.apply_session(a.id, update);
-            }
-            self.ui.apply_session(
-                a.id,
-                UiUpdate::SaveContext {
-                    map: scene.name.clone(),
-                    preview: self
-                        .content
-                        .maps
-                        .iter()
-                        .find(|m| m.id == scene.id)
-                        .map(|m| m.preview.clone())
-                        .unwrap_or(IconRef::None),
-                },
-            );
             a.entered = true;
             self.reconnects = 0;
             // A game this player hosts runs their own Add-Ons' code; someone
