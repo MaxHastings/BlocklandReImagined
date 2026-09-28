@@ -603,10 +603,13 @@ fn every_map_every_mode_two_players_build_save_reload_change_map() -> Result<()>
             let result = (|| -> Result<()> {
                 if hosting {
                     report.reached_by = "Change Map".into();
-                    request(&mut pair.host, UiAction::Admin(AdminAction::RequestMaps))?;
+                    // Opening Change Map asks the host for its list.
+                    pair.host.ui.core.push(ScreenId::AdminMaps);
+                    pair.host.ui.update(0);
                     pair.until("map list", Duration::from_secs(10), |h, _| {
                         h.ui.core.admin.maps.iter().any(|m| m.id == *map)
                     })?;
+                    pair.host.ui.core.pop(ScreenId::AdminMaps);
                     request(
                         &mut pair.host,
                         UiAction::Admin(AdminAction::ChangeMap { map: map.clone() }),
