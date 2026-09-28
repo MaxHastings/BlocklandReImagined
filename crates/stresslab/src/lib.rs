@@ -69,6 +69,18 @@ pub fn fixture_set() -> PackageSet {
         packages,
     }
 }
+/// The Stress Lab packages alone, as a peer lists them under `root`.
+pub fn stresslab_set() -> PackageSet {
+    PackageSet {
+        schema_version: 1,
+        packages: entries(""),
+    }
+}
+/// The hashed environment of the Stress Lab packages in `root`: what a host
+/// publishes and a joining client must agree with.
+pub fn environment(root: &Path) -> Result<bri_package::environment::Environment> {
+    bri_package::environment::Environment::load(root, &stresslab_set())
+}
 /// Load the Stress Lab as a server (`server`) or client would.
 pub fn catalog(root: &Path, set: &PackageSet, server: bool) -> Result<Arc<Catalog>> {
     Catalog::load(root, set, server)

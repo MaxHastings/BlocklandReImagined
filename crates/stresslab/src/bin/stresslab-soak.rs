@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
         session,
         ServerOptions {
             bind: "127.0.0.1:0".parse()?,
-            content_id: "stresslab".into(),
+            environment: bri_stresslab::environment(&bri_stresslab::packages_root()).unwrap(),
             spawn_points: spawns,
             certificate: None,
             map_loader: None,
@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
             server.address,
             &server.certificate,
             format!("Soak{i}"),
-            "stresslab".into(),
+            bri_stresslab::environment(&bri_stresslab::packages_root())?.client_packages(),
             None,
             None,
             &identity,

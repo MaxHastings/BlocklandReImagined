@@ -17,7 +17,7 @@ const ECONOMY: &str = "stresslab-economy";
 fn options(spawns: Vec<Vec3>) -> ServerOptions {
     ServerOptions {
         bind: "127.0.0.1:0".parse().unwrap(),
-        content_id: "stresslab".into(),
+        environment: bri_stresslab::environment(&bri_stresslab::packages_root()).unwrap(),
         spawn_points: spawns,
         certificate: None,
         map_loader: None,
@@ -34,7 +34,7 @@ async fn join(
         server.address,
         &server.certificate,
         name.into(),
-        "stresslab".into(),
+        bri_stresslab::environment(&bri_stresslab::packages_root())?.client_packages(),
         None,
         host,
         identity,

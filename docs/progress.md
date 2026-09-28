@@ -2440,7 +2440,7 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
   new loopback `join_refusal_names_each_differing_shared_package`,
   `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.
-## 2026-09-28 Stress Lab: gameplay from packages (protocol 30)
+## 2026-09-28 Stress Lab: gameplay from packages (protocol 32)
 
 - Package-defined gameplay seams: `bri-package-runtime` (mod package loading,
   Rhai sandbox, `ops::authorize` capability gate), `session/packages.rs`

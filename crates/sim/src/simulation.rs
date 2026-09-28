@@ -182,6 +182,15 @@ impl Simulation {
             .as_ref()
             .and_then(|t| t.cast_ray(origin, direction, max_distance))
     }
+    /// Rapier's collision-only pass consumes a newly inserted body's pending
+    /// changes without an island manager. A body spawned since the last
+    /// physics step (a player joining, a package entity) would then never
+    /// enter an island and trip Rapier's consistency check on the next step,
+    /// so every body is marked modified again afterwards.
+    fn detect_collisions(&mut self) {
+        self.physics.detect_collisions(&(), &());
+        for _ in self.physics.bodies.iter_mut() {}
+    }
     pub fn state(&self) -> &World {
         self.authority.state()
     }
@@ -231,7 +240,7 @@ impl Simulation {
             self.handles
                 .insert(id, self.physics.insert_collider(collider, None));
         }
-        self.physics.detect_collisions(&(), &());
+        self.detect_collisions();
         Ok(ids)
     }
     pub fn plant(&mut self, builder: &Builder<'_>, brick: Brick) -> Result<BrickId> {
@@ -256,13 +265,13 @@ impl Simulation {
         if let Some(water) = brick_water(brick, definition) {
             self.brick_waters.insert(id, water);
         }
-        self.physics.detect_collisions(&(), &());
+        self.detect_collisions();
         Ok(id)
     }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         self.authority.edit(actor, id, edit)?;
         self.sync_flags(id);
-        self.physics.detect_collisions(&(), &());
+        self.detect_collisions();
         Ok(())
     }
     pub fn remove(&mut self, actor: &Actor, id: BrickId) -> Result<()> {
@@ -277,7 +286,7 @@ impl Simulation {
         if let Some(handle) = self.handles.remove(&id) {
             self.physics.remove_collider(handle);
         }
-        self.physics.detect_collisions(&(), &());
+        self.detect_collisions();
         Ok(())
     }
     fn sync_flags(&mut self, id: BrickId) {
@@ -319,7 +328,7 @@ impl Simulation {
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
         self.authority.mutate(id, change)?;
         self.sync_flags(id);
-        self.physics.detect_collisions(&(), &());
+        self.detect_collisions();
         Ok(())
     }
     /// Continue an earlier world's clock (the host changed maps).
@@ -377,7 +386,7 @@ impl Simulation {
         }
         self.handles
             .insert(id, self.physics.insert_collider(collider, None));
-        self.physics.detect_collisions(&(), &());
+        self.detect_collisions();
         Ok(())
     }
     /// Bricks whose grid volume overlaps a world-space box.

@@ -38,11 +38,16 @@ Other threads, from the main history since 2026-09-27 21:00Z:
   - held bricks and items `eeebfbe`, `9b872aa`, `7c0527e`;
   - avatars `697e73e`, `3c79620`;
   - presentation `7c622df`, `7c02273`, `1eb0bdd`, `c092117`.
+- **WORKING NOW.** Engine fix found by the Stress Lab: a mid-session
+  collision pass (a generated chunk, a mined block) right after a player
+  joined consumed the new body's pending changes, so it never entered a
+  Rapier island and a debug build panicked on the next step. Every
+  `Simulation` collision pass now re-marks bodies modified.
 - **WORKING NOW.** Stress Lab, this thread:
   - the package runtime and sandbox (`a223280`);
   - the session seams (`b7ede11`);
   - replication, client HUD, models and hosting, tools, soak and packaging
-    (queued behind the gate at the time of writing, protocol 30).
+    (queued behind the gate at the time of writing, protocol 32).
 
 ## 2. What the Stress Lab can do
 
@@ -58,7 +63,7 @@ Other threads, from the main history since 2026-09-27 21:00Z:
 | Bits, ore and dug holes survive a reconnect and a host restart (saved to `<state>/packages/<world>.save.json` when the host stops) | WORKING NOW |
 | A second client on LAN sees the same world, holes, creepers and every player's public numbers | WORKING NOW (loopback QUIC test; not playtested) |
 | Forged, mistyped and unprivileged package commands refused with codes | WORKING NOW |
-| Package mismatch at join named per package | MISSING in this slice: door-closers is wiring `packages.json` into Hello and join (their protocol 31). Stress Lab packages are listed in `packages.json` with sides, so they will be compared as soon as it lands. |
+| Package mismatch at join named per package: a changed or missing shared package refuses the join naming it; a changed client package (the HUD) joins with a chat line naming it | WORKING NOW (door-closers' join check, exercised with Stress Lab packages) |
 | Clients download missing packages | FUTURE IDEA (mod platform lane) |
 
 ## 3. The exact passing tests
@@ -90,6 +95,10 @@ Run on Windows in this worktree (content linked from the main checkout):
     - Bits after a reconnect;
     - Bits and holes after a host restart.
   - `check_reports_every_planted_mistake_once` (workflow errors).
+  - `differing_packages_are_named_at_join`: a loopback host and clients
+    with differing package copies. A changed or missing shared
+    `stresslab-creeper-model` is refused naming it, and a changed
+    `stresslab-hud` joins and is told `stresslab-hud` differs.
 - `cargo test -p bri-client --lib packages` (2 tests): the miner panel shows
   the viewer's server values, and the creeper boxes follow the entity and its
   fuse label.
@@ -167,7 +176,7 @@ Smaller engine changes:
 - `package_playtest.ps1 -StressLab`.
 - `.gitattributes` keeps `packages/**` byte-identical so hashes agree.
 
-Protocol 30: `Checkpoint` and `Delta` carry `entities` and `package_state`.
+Protocol 32: `Checkpoint` and `Delta` carry `entities` and `package_state`.
 
 Family coverage: player/control and game-rule are thin. There is a command
 path and a damage operation, but no package can change how players move,
@@ -266,9 +275,8 @@ From [docs/audits/spike-addon-import.md](../audits/spike-addon-import.md)
 
 ## 10. Next steps
 
-1. Land door-closers' join wiring, then add the Stress Lab mismatch test:
-   - a different `stresslab-hud` (client side) is named and tolerated;
-   - a changed shared package is named and refused.
+1. Clients download missing data packages (mod platform lane), so the
+   mismatch refusal becomes a download instead.
 2. Promote `stresslab check` and `stresslab test` into the platform's
    workflow commands (mod platform lane), taking any package set.
 3. Per-entity replication deltas, and a weapon target for entities.
