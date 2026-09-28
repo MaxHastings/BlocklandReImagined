@@ -3481,3 +3481,34 @@ plus a 64-player crowd capped at 32 pushers: ~1 ms/frame in debug).
   --tests`, `cargo build -p bri-client --bins`. Not yet seen in a visible
   window. Maxwell's check is to paint a brick, undo it, and watch both fade
   over about a second.
+
+## 2026-09-28 Crash hunt: fuzzing and chaos soaks
+
+Max asked how to find crashes like the a16 casing one before players do.
+New test crate `crates/chaos` (see `docs/crash-hunt.md`): bots doing
+everything at once in one session (`session_chaos`, deterministic per seed)
+and over real QUIC connections (`net_chaos`), plus property tests for Rapier
+update patterns, ray and sweep queries, wire decoding, damaged saves, the
+weapons runtime and damaged Add-On imports. Content variants are
+`#[ignore]`d behind `BRI_CONTENT` for long soaks on Max's PC.
+Found and fixed at the root:
+- Rapier island panics (debug) and a release out-of-bounds in its sleep scan
+  from collision-only refreshes after vehicle spawns and build loads.
+  `bri_physics::detect_collisions` now runs a 1e-6 s full step holding
+  kinematic targets; every runtime call site uses it (the player-only requeue
+  workaround is gone). Regression inputs in `physics_fuzz.rs`.
+- Zero normals from rays starting inside bricks in `Simulation::target`,
+  `WeaponQuery::sweep`/`sweep_box`, tool melee and client building targets:
+  `bri_sim::simulation::hit_normal`.
+- `Replica::pose` accepted NaN energy, scale, head turn and jump normal.
+- Every spawn point built over refused all joins and failed map changes;
+  joins now fall back to a clear point, then place the body anyway
+  (`Player::spawn_overlapping`), as v20 and our respawns do.
+- `ServerReport` now counts contained step errors (`step_errors`).
+Evidence: `cargo test -p bri-chaos` green; `cargo test --no-fail-fast -p
+bri-physics -p bri-motor -p bri-sim -p bri-vehicles -p bri-weapons -p
+bri-world -p bri-net` green apart from tests that need generated content
+(not present in the cloud checkout); clippy -D warnings on every changed
+crate. Not covered: the client renderer and audio (need a window), fx-runtime
+particles beyond the debris/weapon paths, and `.bls` text import.
+

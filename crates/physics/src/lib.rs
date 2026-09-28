@@ -13,6 +13,46 @@ pub fn new_world() -> PhysicsWorld {
     world
 }
 
+/// Time a [`detect_collisions`] refresh advances the world: far too short
+/// for anything to move, long enough for Rapier's sleep bookkeeping, which
+/// breaks on a zero-length step.
+const REFRESH_DT: f32 = 1e-6;
+
+/// Refresh contacts and queries between physics steps (after inserting,
+/// moving or removing colliders or bodies), so queries see the change now.
+///
+/// This runs Rapier's full pipeline for a microsecond, not its
+/// collision-only pipeline (`PhysicsWorld::detect_collisions`), which does
+/// not keep islands in step with contacts: a body inserted since the last
+/// step lost its island registration, and contacts starting or stopping in
+/// that pass were linked into the wrong island or not at all. Rapier's
+/// consistency check then panicked on the next step ("touching pair not
+/// linked in the persistent islands": a vehicle spawned where a build was
+/// then loaded), and release builds kept going with islands that no longer
+/// matched their contacts. Kinematic bodies keep their pending targets for
+/// the real step instead of reaching them here. Call this, never
+/// `PhysicsWorld::detect_collisions`.
+pub fn detect_collisions(world: &mut PhysicsWorld) {
+    let targets: Vec<_> = world
+        .bodies
+        .iter()
+        .filter(|(_, body)| body.is_kinematic())
+        .map(|(handle, body)| (handle, *body.next_position()))
+        .collect();
+    for (handle, _) in &targets {
+        let body = &mut world.bodies[*handle];
+        let here = *body.position();
+        body.set_next_kinematic_position(here);
+    }
+    let dt = world.integration_parameters.dt;
+    world.integration_parameters.dt = REFRESH_DT;
+    world.step();
+    world.integration_parameters.dt = dt;
+    for (handle, target) in targets {
+        world.bodies[handle].set_next_kinematic_position(target);
+    }
+}
+
 pub mod preflight {
     use super::*;
     use anyhow::{Result, ensure};
@@ -58,7 +98,7 @@ pub mod preflight {
             RigidBodyBuilder::fixed().translation(Vector::new(2.0, 2.0, 0.0)),
             ColliderBuilder::cuboid(0.1, 2.0, 5.0),
         );
-        world.detect_collisions(&(), &());
+        detect_collisions(&mut world);
         let controller = KinematicCharacterController::default();
         let shape = Capsule::new_y(0.5, 0.3);
         let mut position = Pose::translation(0.0, 0.85, 0.0);
@@ -111,7 +151,7 @@ pub mod preflight {
                 );
             }
         }
-        world.detect_collisions(&(), &());
+        detect_collisions(&mut world);
         for tick in 0..600 {
             for wheel in vehicle.wheels_mut() {
                 wheel.engine_force = if tick > 120 { 800.0 } else { 0.0 };

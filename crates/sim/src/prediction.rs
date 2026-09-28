@@ -106,7 +106,7 @@ impl CollisionMirror {
             .into_iter()
             .map(|collider| physics.insert_collider(collider.user_data(MAP_TAG), None))
             .collect();
-        physics.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut physics);
         Self {
             physics,
             definitions,
@@ -191,7 +191,7 @@ impl CollisionMirror {
             .chain(self.brick_waters.values())
             .cloned()
             .collect();
-        self.physics.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut self.physics);
         Ok(true)
     }
     /// Every liquid with its v20 `waterColor`: each water brick in the colour
@@ -347,7 +347,7 @@ impl Predictor {
                 other.despawn(&mut self.world.physics);
             }
         }
-        self.world.physics.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut self.world.physics);
         Ok(())
     }
     /// Advance one fixed tick. Returns the input's sequence number, which the

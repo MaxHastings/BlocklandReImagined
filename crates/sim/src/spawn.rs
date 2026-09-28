@@ -118,12 +118,12 @@ mod tests {
             ColliderBuilder::cuboid(10., 0.5, 10.).translation(Vector::new(0., -0.5, 0.)),
             None,
         );
-        world.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut world);
         let points = candidates(&world, &scene, &PlayerTuning::default()).unwrap();
         assert_eq!(points.len(), 1);
         assert!((points[0].y - 0.01).abs() < 1e-4);
         world.insert_collider(ColliderBuilder::cuboid(20., 400., 20.), None);
-        world.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut world);
         assert!(candidates(&world, &scene, &PlayerTuning::default()).is_err());
     }
 }

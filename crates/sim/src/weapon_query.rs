@@ -1,5 +1,5 @@
 //! Weapon queries against the same native collision world used by players.
-use crate::simulation::Simulation;
+use crate::simulation::{Simulation, hit_normal};
 use bri_weapons::{
     ActorId, ContactResponse, Filter, Hit, Nearby, ProjectileContact, Query, TargetId,
 };
@@ -147,7 +147,7 @@ impl Query for WeaponQuery<'_> {
                 .map(|(time, normal)| Hit {
                     target: TargetId::Map(0),
                     position: start + direction * time,
-                    normal,
+                    normal: hit_normal(normal, direction),
                     fraction: time / distance,
                     color: None,
                 });
@@ -172,7 +172,7 @@ impl Query for WeaponQuery<'_> {
                 Some(Hit {
                     target,
                     position: start + direction * hit.time_of_impact,
-                    normal: Vec3::from_array(hit.normal.to_array()),
+                    normal: hit_normal(Vec3::from_array(hit.normal.to_array()), direction),
                     fraction: hit.time_of_impact / distance,
                     color,
                 })
@@ -233,7 +233,7 @@ impl Query for WeaponQuery<'_> {
                 Some(Hit {
                     target: target(self.simulation.physics.colliders[handle].user_data)?,
                     position: start + delta * hit.time_of_impact,
-                    normal: Vec3::from_array(hit.normal1.to_array()),
+                    normal: hit_normal(Vec3::from_array(hit.normal1.to_array()), delta),
                     fraction: hit.time_of_impact,
                     color: None,
                 })
@@ -247,7 +247,7 @@ impl Query for WeaponQuery<'_> {
             .map(|(time, normal)| Hit {
                 target: TargetId::Map(0),
                 position: start + direction * time,
-                normal,
+                normal: hit_normal(normal, direction),
                 fraction: time / distance,
                 color: None,
             });

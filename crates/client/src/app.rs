@@ -5162,7 +5162,7 @@ impl PlatformApp for App {
                     let hit = building.target(from, delta / length, length).ok()??;
                     Some(crate::weapon_debris::DebrisHit {
                         fraction: (hit.distance / length).clamp(0., 1.),
-                        normal: hit.normal.normalize(),
+                        normal: hit.normal.normalize_or(Vec3::Y),
                     })
                 });
             let mut shells = Vec::new();
@@ -5207,7 +5207,7 @@ impl PlatformApp for App {
                     let hit = building.target(from, delta / length, length).ok()??;
                     Some(crate::weapon_debris::DebrisHit {
                         fraction: (hit.distance / length).clamp(0., 1.),
-                        normal: hit.normal.normalize(),
+                        normal: hit.normal.normalize_or(Vec3::Y),
                     })
                 });
             self.cosmetic_faults.absorb("gun casings", moved);
