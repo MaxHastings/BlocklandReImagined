@@ -22,9 +22,27 @@ pub enum Kind {
     Model,
     /// A declarative HUD panel (JSON).
     Hud,
+    /// A weapons pack (`weapons.json`) merged onto the base game's by the
+    /// engine's content loading (`content_identity::kind_providers`).
+    Weapons,
+    /// A vehicles pack (`vehicles.json`), merged the same way.
+    Vehicles,
+    /// A brick catalog (`brick-catalog/stock-catalog.json` with its meshes
+    /// and collisions beside it), merged the same way.
+    Bricks,
 }
 impl Kind {
-    pub const NAMES: [&str; 6] = ["behaviour", "script", "world", "entity", "model", "hud"];
+    pub const NAMES: [&str; 9] = [
+        "behaviour",
+        "script",
+        "world",
+        "entity",
+        "model",
+        "hud",
+        "weapons",
+        "vehicles",
+        "bricks",
+    ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
             "behaviour" => Self::Behaviour,
@@ -33,19 +51,24 @@ impl Kind {
             "entity" => Self::Entity,
             "model" => Self::Model,
             "hud" => Self::Hud,
+            "weapons" => Self::Weapons,
+            "vehicles" => Self::Vehicles,
+            "bricks" => Self::Bricks,
             _ => return None,
         })
     }
     pub fn side(self) -> Side {
         match self {
             Self::Behaviour | Self::Script | Self::World | Self::Entity => Side::Server,
-            Self::Model | Self::Hud => Side::Client,
+            // Shared gameplay data is client-visible: clients load it too.
+            Self::Model | Self::Hud | Self::Weapons | Self::Vehicles | Self::Bricks => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
     pub fn max_bytes(self) -> usize {
         match self {
             Self::Script => 256 * 1024,
+            Self::Weapons | Self::Vehicles | Self::Bricks => 32 * 1024 * 1024,
             _ => 128 * 1024,
         }
     }

@@ -306,6 +306,17 @@ impl ItemAssets {
     }
     /// Both directories are native generated content. No source field is interpreted.
     pub fn load(root: &Path, weapons_root: &Path) -> Result<Self> {
+        Self::load_with(root, weapons_root, &[])
+    }
+    /// [`Self::load`] plus the presentation other weapon packages provide in
+    /// `assets/presentation.json` (see `content_identity::kind_providers`).
+    /// Their models and textures are read from their own directories; a
+    /// model key another package already provides is shared.
+    pub fn load_with(
+        root: &Path,
+        weapons_root: &Path,
+        extras: &[(String, std::path::PathBuf)],
+    ) -> Result<Self> {
         let root = root.canonicalize()?;
         let weapons_root = weapons_root.canonicalize()?;
         let bytes = crate::materials::read_resource(&root, "presentation.json", 8 * 1024 * 1024)?;
@@ -390,11 +401,48 @@ impl ItemAssets {
             &manifest.item_physics_sha256,
             1024 * 1024,
         )?;
-        let item_physics: ItemPhysicsCatalog = serde_json::from_slice(&physics_bytes)?;
+        let mut item_physics: ItemPhysicsCatalog = serde_json::from_slice(&physics_bytes)?;
         ensure!(
             item_physics.schema_version == 1,
             "Unknown item physics schema"
         );
+        let mut manifest = manifest;
+        // Where each model and texture file lives: the base presentation
+        // directory unless an extra package provided it.
+        let mut origin: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
+        for (dir, abs) in extras {
+            let abs = abs.canonicalize()?;
+            if !abs.join("presentation.json").is_file() {
+                continue;
+            }
+            let bytes = crate::materials::read_resource(&abs, "presentation.json", 8 * 1024 * 1024)?;
+            let part: Presentation = serde_json::from_slice(&bytes)?;
+            ensure!(part.schema_version == 2, "{dir}: unknown item presentation schema");
+            checked_read(&abs, "weapons.json", &part.weapons_sha256, 32 * 1024 * 1024)
+                .with_context(|| format!("{dir}: presentation does not match its weapons pack"))?;
+            let physics = checked_read(&abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
+            let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
+            for (key, model) in part.models {
+                if let std::collections::btree_map::Entry::Vacant(e) = manifest.models.entry(key) {
+                    origin.insert(format!("model:{}", e.key()), abs.clone());
+                    e.insert(model);
+                }
+            }
+            for (key, texture) in part.textures {
+                if let std::collections::btree_map::Entry::Vacant(e) = manifest.textures.entry(key) {
+                    origin.insert(format!("texture:{}", e.key()), abs.clone());
+                    e.insert(texture);
+                }
+            }
+            for (id, item) in part.items {
+                ensure!(!manifest.items.contains_key(&id), "{dir}: item {id} is already presented");
+                manifest.items.insert(id, item);
+            }
+            manifest.images.extend(part.images);
+            manifest.projectiles.extend(part.projectiles);
+            item_physics.items.extend(physics.items);
+        }
+        let file_root = |kind: &str, id: &str| origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
         ensure!(
             item_physics.items.len() == manifest.items.len()
                 && item_physics.items.keys().eq(manifest.items.keys()),
@@ -428,7 +476,7 @@ impl ItemAssets {
         let mut textures = BTreeMap::new();
         let mut input_bytes = 0usize;
         for (id, t) in &manifest.textures {
-            let bytes = checked_read(&root, &t.file, &t.sha256, 16 * 1024 * 1024)?;
+            let bytes = checked_read(&file_root("texture", id), &t.file, &t.sha256, 16 * 1024 * 1024)?;
             input_bytes += bytes.len();
             ensure!(
                 input_bytes <= 256 * 1024 * 1024,
@@ -455,7 +503,7 @@ impl ItemAssets {
         let mut shapes = BTreeMap::new();
         let mut vertex_budget = 0usize;
         for (id, m) in &manifest.models {
-            let bytes = checked_read(&root, &m.file, &m.sha256, 32 * 1024 * 1024)?;
+            let bytes = checked_read(&file_root("model", id), &m.file, &m.sha256, 32 * 1024 * 1024)?;
             input_bytes += bytes.len();
             ensure!(
                 input_bytes <= 256 * 1024 * 1024,

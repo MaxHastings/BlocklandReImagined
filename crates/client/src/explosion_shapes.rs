@@ -37,15 +37,15 @@ impl ExplosionShapes {
         let root = root.canonicalize()?;
         let mut models = BTreeMap::new();
         for (key, explosion) in pack.explosions.iter().filter(|(_, e)| !e.shape.is_empty()) {
-            let resource = pack
+            let (resource, file) = pack
                 .resources
                 .iter()
                 .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
-                .and_then(|r| r.native_file.as_deref())
+                .and_then(|r| Some((r, r.native_file.as_deref()?)))
                 .with_context(|| format!("Unconverted explosion shape {}", explosion.shape))?;
             let shape: Shape = serde_json::from_slice(&crate::materials::read_resource(
-                &root,
-                resource,
+                &bri_weapons::resource_root(&root, resource),
+                file,
                 32 << 20,
             )?)?;
             shape.validate()?;
@@ -59,7 +59,7 @@ impl ExplosionShapes {
                     .find(|r| r.path.eq_ignore_ascii_case(&path))
                     .with_context(|| format!("Missing explosion texture {path}"))?;
                 let bytes = crate::items::checked_read(
-                    &root,
+                    &bri_weapons::resource_root(&root, texture),
                     texture.native_file.as_deref().context("Unstored texture")?,
                     &texture.sha256,
                     16 << 20,

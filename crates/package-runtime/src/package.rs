@@ -287,6 +287,8 @@ impl Package {
                         self.huds.insert(asset.id.clone(), h);
                     }
                 }
+                // Read and validated by the engine systems that merge them.
+                Kind::Weapons | Kind::Vehicles | Kind::Bricks => {}
             }
         }
         if (!self.worlds.is_empty() || !self.entities.is_empty()) && self.behaviour.is_none() {

@@ -3,6 +3,7 @@ pub mod client;
 mod admin_store;
 pub mod codec;
 pub mod content_identity;
+pub mod dedicated;
 pub mod discovery;
 pub mod impair;
 pub mod protocol;

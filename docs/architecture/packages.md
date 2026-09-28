@@ -99,7 +99,7 @@ base game's list, `crates/package/base-packages.json`.
 | `version` | `major.minor.patch`. Base packages use their generation number as the major version (`weapons-pack-009` is `9.0.0`). |
 | `side` | `server`: only the server loads it; never compared or sent. `shared`: both simulate with it; must match to join. `client`: presentation only; a difference is reported but does not refuse the join. |
 | `dir` | Directory under the content root; plain relative path, no `..`, must stay inside the root. |
-| `role` | Optional. The engine system that reads the package directly (`map_bundle`, `brick_catalog`, `geometry`, `effects`, `brick_materials`, `avatar`, `audio`, `weapons`, `item_presentation`, `vehicles`, `events`, `ui_pack`, `effects_runtime`, `weather`, `foliage`, `weapon_debris`, `worlds`, `tutorial`). At most one package per role. Packages without a role are still loaded, hashed and agreed on. |
+| `role` | Optional. The engine system that reads the package directly (`map_bundle`, `brick_catalog`, `geometry`, `effects`, `brick_materials`, `avatar`, `audio`, `weapons`, `item_presentation`, `vehicles`, `events`, `ui_pack`, `effects_runtime`, `weather`, `foliage`, `weapon_debris`, `worlds`, `tutorial`). At most one package per role: it is that kind's *base* package. Packages without a role are still loaded, hashed and agreed on, and add to a kind when they provide it (below). |
 
 Unknown fields are errors. Every problem is a diagnostic with a stable code
 (`packages.id`, `packages.duplicate`, `packages.dir`, `packages.role_conflict`,
@@ -152,6 +152,61 @@ package directories holding a `package.json` that neither file lists are
 discovered as disabled. `bri_package::library` owns scanning, dependency
 planning and atomic rewrites; loaders only read `packages.json`. The in-game
 Add-Ons screen is built on it: see [`mod-manager.md`](mod-manager.md).
+## Content from several packages
+
+A role names a kind's *base* package, not its only one. Loading builds one
+merged pack per kind from the base package plus every role-less package in
+`packages.json` whose directory holds that kind's file under `assets/`, in
+list order (`bri_net::content_identity::kind_providers`). The dedicated server
+(`bri_net::dedicated`, which `bri-server` runs), a client-hosted game and a
+joining client all load this way (`ContentPaths::weapon_content`,
+`item_physics`, `vehicle_pack`, `brick_extras`).
+
+| Kind (`provides.kind`) | File under `assets/` | Merge |
+|---|---|---|
+| `weapons` | `weapons.json`; optional `presentation.json` and `item-physics.json` beside it for drawing and drop bounds | `bri_weapons::Pack::merge`, `WeaponContent::load_with`, `ItemPhysicsContent::load_with`, client `ItemAssets::load_with` |
+| `vehicles` | `vehicles.json` | `bri_vehicles::schema::Pack::merge`, client `VehicleAssets::load_with` |
+| `bricks` | `brick-catalog/stock-catalog.json` with `catalog-audit.json`, `native-collisions.json` and the mesh files beside it (the stock catalog layout) | `Definitions::load_with` |
+
+The package runtime accepts these kinds in a package's `provides`
+(`crates/package-runtime/src/content.rs` `Kind`), and `bri-import-addon`
+declares them.
+
+Rules:
+- Ids are namespaced, so packages cannot collide. A duplicate weapon or
+  vehicle id keeps the earlier package's and is reported; a duplicate brick
+  id is an error. Explosions and damage types are still keyed by bare Torque
+  name, so a clash there is reported too.
+- A weapon reference no loaded package satisfies drops only the image or item
+  that needs it, with a diagnostic (`merge: ...`, printed by `bri-server`). It
+  never refuses the whole set.
+- A merged resource or asset records its package directory
+  (`Resource::package`, `Asset::package`). Paths stay relative to their own
+  package. Base packages sit directly under the content root, and
+  `bri_weapons::resource_root` and `bri_vehicles::asset_root` resolve a package
+  beside them.
+- Without extra packages, loading is byte-for-byte what it was: the same packs
+  and the same weapon fingerprint.
+- Systems still take one pack each, and the wire carries ids that were already
+  strings, so this needs no protocol or save change. The join check already
+  requires identical `shared` packages on both sides.
+
+Imported bricks join the brick menu under the category and subcategory they
+declare, with icons from the package's `brick-catalog/brick-icons.json`
+(`install_package_bricks` in `crates/client/src/content.rs`). A brick
+without a stored icon shows none. Imported sounds and effects are not merged
+yet.
+
+## Enabling and disabling packages
+
+Enabled means exactly the entries in the content root's `packages.json`, and
+loading reads nothing else. The in-game mod manager
+(`crates/package/src/library.rs`) moves disabled entries to a sibling
+`packages-disabled.json` with the same `PackageSet` schema, and treats
+unlisted directories holding a `package.json` (up to three levels deep) as
+discovered and disabled. A package imported by `bri-import-addon` becomes
+loadable by adding the `packages.json` line its report prints (`side`
+`shared`, no `role`).
 
 ## Per-package manifests (`package.json`)
 

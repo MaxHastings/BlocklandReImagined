@@ -9,7 +9,6 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use bri_net::{
     client::Client,
-    content_identity,
     server::{self, ServerOptions},
 };
 use bri_render::{
@@ -881,9 +880,10 @@ impl App {
                 .map(|(id, p)| (id.clone(), p.name.clone()))
                 .collect(),
         );
-        let item_assets = Arc::new(crate::items::ItemAssets::load(
+        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
             &content.paths.item_presentation,
             &content.paths.weapons,
+            &content.paths.weapon_extras,
         )?);
         let item_ui = crate::item_ui::ItemUi::new(
             &item_assets,
@@ -893,7 +893,10 @@ impl App {
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);
-        let vehicle_assets = crate::vehicles::VehicleAssets::load(&content.paths.vehicles)?;
+        let vehicle_assets = crate::vehicles::VehicleAssets::load_with(
+            &content.paths.vehicles,
+            &content.paths.vehicle_extras,
+        )?;
         let world_items = crate::world_items::WorldItems::new(
             item_assets.clone(),
             Arc::new(content.weapons.pack.clone()),
@@ -1569,19 +1572,15 @@ impl App {
             let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
                     let _permit = permit;
-                    let weapons = content_identity::WeaponContent::load(&paths.weapons)?;
+                    let weapons = paths.weapon_content()?;
                     weapon_snapshot.ensure_same(&weapons)?;
-                    let item_physics = content_identity::ItemPhysicsContent::load(
-                        &paths.item_presentation,
-                        &weapons,
-                    )?;
+                    let item_physics = paths.item_physics(&weapons)?;
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&base_map, None)?;
                     let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
-                    let vehicle_pack =
-                        bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?;
+                    let vehicle_pack = paths.vehicle_pack()?;
                     let meshes = Arc::new(
                         loaded
                             .simulation
@@ -1841,12 +1840,9 @@ impl App {
             let permit = load_limit.clone().acquire_owned().await?;
             let identity = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
-                let weapons = content_identity::WeaponContent::load(&identity_paths.weapons)?;
+                let weapons = identity_paths.weapon_content()?;
                 weapon_snapshot.ensure_same(&weapons)?;
-                let item_physics = content_identity::ItemPhysicsContent::load(
-                    &identity_paths.item_presentation,
-                    &weapons,
-                )?;
+                let item_physics = identity_paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
                 identity_paths.environment()
             })

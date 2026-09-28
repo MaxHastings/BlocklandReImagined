@@ -45,3 +45,4 @@ bri-foliage = { path = "../foliage" }
 
 [dev-dependencies]
 tempfile = "3"
+bri-addon-import = { path = "../addon-import" }

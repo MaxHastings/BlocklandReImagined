@@ -110,6 +110,27 @@ impl Definitions {
             .get(id)
             .with_context(|| format!("Missing native definition {id}"))
     }
+    /// [`Self::load`] plus other packages' brick catalogs, each a directory in
+    /// the stock catalog layout holding its own meshes (as `bri-import-addon`
+    /// writes to `assets/brick-catalog/`). Brick ids are namespaced, so a
+    /// duplicate is an error naming the package.
+    pub fn load_with(
+        catalog_dir: &Path,
+        content: &Path,
+        extras: &[(String, std::path::PathBuf)],
+    ) -> Result<Self> {
+        let mut out = Self::load(catalog_dir, content)?;
+        for (dir, catalog) in extras {
+            for (id, definition) in Self::load(catalog, catalog)?.entries {
+                ensure!(
+                    !out.entries.contains_key(&id),
+                    "{dir}: brick {id} is already defined"
+                );
+                out.entries.insert(id, definition);
+            }
+        }
+        Ok(out)
+    }
     pub fn load(catalog_dir: &Path, content: &Path) -> Result<Self> {
         let catalog: Catalog =
             serde_json::from_slice(&std::fs::read(catalog_dir.join("stock-catalog.json"))?)?;

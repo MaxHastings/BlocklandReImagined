@@ -89,10 +89,11 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
     std::fs::create_dir_all(&out)?;
     let palette = [[0.9, 0.1, 0.1, 1.0]];
     let mut report = serde_json::Map::new();
+    // Horses are drawn by the avatar horse rig, not this vehicle path;
+    // horse_riding_render covers them.
     for (definition, distance) in [
         ("v20.vehicle.jeepvehicle", 12.0),
         ("v20.vehicle.tankvehicle", 14.0),
-        ("v20.vehicle.horsearmor", 7.0),
         ("v20.vehicle.magiccarpetvehicle", 9.0),
         ("v20.vehicle.rowboatarmor", 9.0),
         ("v20.vehicle.cannonturret", 7.0),

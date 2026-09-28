@@ -2580,3 +2580,25 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `cargo test -p bri-client --lib add_ons`, all content-free. Open: toggles
   take effect once multi-pack loading and door-closers' join wiring read
   `packages.json`; the join screen needs PR #1's `fetch_missing` call.
+- 2026-09-28 Content from several packages (steps a to e of the multi-package
+  proposal in `docs/audits/spike-addon-import.md`).
+  - Weapons (with item presentation and drop bounds), vehicles and brick
+    catalogs merge from every role-less package in `packages.json` that
+    provides them, onto the base packages.
+  - This happens in the dedicated host (`bri_net::dedicated`, now shared with
+    `bri-server`), in a client-hosted game and in joining clients.
+  - `bri-import-addon` writes the presentation, drop bounds and a loadable
+    brick catalog, and declares the new runtime kinds `weapons`, `vehicles`
+    and `bricks`.
+  - Without extra packages, loading and the weapon fingerprint are unchanged.
+  Evidence:
+  - `crates/addon-import/tests/hosted.rs`: the real Sawn-off Shotgun and
+    Blocko Car hosted beside the base game on Slate. The shotgun and the
+    vanilla gun both fire, and a player mounts the spawned car and drives it
+    more than 5 units. An imported brick loads into a hosted world.
+  - `crates/client/tests/addon_packages.rs`: the client-side load of the same
+    packages, including the shotgun model and the car assets.
+  Imported bricks also show in the brick menu under the category they
+  declare, with icons the importer stores in `brick-catalog/brick-icons.json`
+  (`crates/client/tests/addon_packages.rs`). Open: sounds and effects, and
+  Maxwell's interactive playtest.

@@ -55,6 +55,11 @@ pub struct ContentPaths {
     pub root: PathBuf,
     /// The packages.json this content was resolved from.
     pub packages: PackageSet,
+    /// Other packages adding weapons and vehicles to the base packages
+    /// (`content_identity::kind_providers`).
+    pub weapon_extras: Vec<(String, PathBuf)>,
+    pub vehicle_extras: Vec<(String, PathBuf)>,
+    pub brick_extras: Vec<(String, PathBuf)>,
     pub map_bundle: PathBuf,
     pub brick_catalog: PathBuf,
     pub geometry: PathBuf,
@@ -284,9 +289,39 @@ impl ContentPaths {
             vehicles: role("vehicles")?,
             events: role("events")?,
             tutorial: role("tutorial")?,
+            weapon_extras: bri_net::content_identity::kind_providers(&root, packages, "weapons.json")?,
+            vehicle_extras: bri_net::content_identity::kind_providers(&root, packages, "vehicles.json")?,
+            brick_extras: bri_net::content_identity::brick_catalog_providers(&root, packages)?,
             packages: packages.clone(),
             root,
         })
+    }
+
+    /// The base weapons pack merged with every other package's.
+    pub fn weapon_content(&self) -> Result<bri_net::content_identity::WeaponContent> {
+        bri_net::content_identity::WeaponContent::load_with(&self.weapons, &self.weapon_extras)
+    }
+    pub fn item_physics(
+        &self,
+        weapons: &bri_net::content_identity::WeaponContent,
+    ) -> Result<bri_net::content_identity::ItemPhysicsContent> {
+        bri_net::content_identity::ItemPhysicsContent::load_with(
+            &self.item_presentation,
+            weapons,
+            &self.weapon_extras,
+        )
+    }
+    /// The base vehicles pack merged with every other package's.
+    pub fn vehicle_pack(&self) -> Result<bri_vehicles::Pack> {
+        let mut parts = Vec::new();
+        for (dir, abs) in &self.vehicle_extras {
+            let part = bri_vehicles::Pack::load(abs.join("vehicles.json"))?;
+            part.verify_assets(abs)?;
+            parts.push((dir.clone(), part));
+        }
+        let (pack, _) = bri_vehicles::Pack::load(self.vehicles.join("vehicles.json"))?.merge(parts);
+        pack.validate()?;
+        Ok(pack)
     }
 
     /// Hash every package this content loads. Blocking: run it on a worker.
@@ -336,9 +371,9 @@ impl ContentPaths {
             let palette = palette(&pack)?.into_iter().flat_map(|p| p.colors).collect();
             bri_world::World::new(entry.name.clone(), map_id.into(), palette)
         };
-        let weapons = bri_net::content_identity::WeaponContent::load(&self.weapons)?;
+        let weapons = self.weapon_content()?;
         let mut unresolved_items = weapons.resolve_world_items(&mut world)?;
-        let definitions = Definitions::load(&self.brick_catalog, &self.geometry)
+        let definitions = Definitions::load_with(&self.brick_catalog, &self.geometry, &self.brick_extras)
             .context("Loading native brick definitions")?;
         let native =
             NativeMap::load(&self.map_bundle, map_id).context("Loading native map collision")?;
@@ -414,11 +449,8 @@ impl ClientContent {
 
     pub fn load_packages(root: &Path, packages: &PackageSet) -> Result<Self> {
         let paths = ContentPaths::resolve(root, packages)?;
-        let weapons = bri_net::content_identity::WeaponContent::load(&paths.weapons)?;
-        let item_physics = bri_net::content_identity::ItemPhysicsContent::load(
-            &paths.item_presentation,
-            &weapons,
-        )?;
+        let weapons = paths.weapon_content()?;
+        let item_physics = paths.item_physics(&weapons)?;
         let mut schema = load_ui_schema(&paths.ui_pack)?;
         install_death_icons(&mut schema, &weapons.pack, &paths.weapons)?;
         let paint = palette(&schema)?;
@@ -484,6 +516,10 @@ impl ClientContent {
                 icon: IconRef::Pack(icon),
             });
         }
+        for (dir, catalog_dir) in &paths.brick_extras {
+            install_package_bricks(&mut schema, &mut bricks, catalog_dir)
+                .with_context(|| format!("Loading bricks of {dir}"))?;
+        }
         let effects: Library = read_json(
             &file(&paths.effects, "effects.json", INDEX_LIMIT)?,
             INDEX_LIMIT,
@@ -537,8 +573,7 @@ impl ClientContent {
                 bundle.unresolved_textures.len()
             ));
         }
-        let vehicles = bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))
-            .context("Loading native vehicles")?;
+        let vehicles = paths.vehicle_pack().context("Loading native vehicles")?;
         let music = music_choices(&paths.audio)?;
         let event_sounds = event_sound_choices(&paths.audio)?;
         let events = bri_events::Catalog::load(paths.events.join("catalog.json"))
@@ -809,7 +844,7 @@ fn install_death_icons(
             .find(|r| r.path.eq_ignore_ascii_case(&source))
             .and_then(|r| Some((r, r.native_file.as_deref()?)))
             .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
-        let path = file(root, native, INDEX_LIMIT)?;
+        let path = file(&bri_weapons::resource_root(root, resource), native, INDEX_LIMIT)?;
         let bytes = fs::read(&path)?;
         ensure!(
             format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
@@ -832,6 +867,55 @@ fn install_death_icons(
                 source: resource.path.clone(),
             },
         );
+    }
+    Ok(())
+}
+/// Another package's selectable bricks join the brick menu under the
+/// category and subcategory they declare, with the icons the package stores
+/// beside its catalog (`brick-icons.json`, written by `bri-import-addon`).
+fn install_package_bricks(
+    schema: &mut UiPack,
+    bricks: &mut Vec<BrickInfo>,
+    catalog_dir: &Path,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Icons {
+        icons: BTreeMap<String, bri_ui::schema::ImageEntry>,
+    }
+    let catalog: Catalog = read_json(&file(catalog_dir, "stock-catalog.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
+    let icons = if catalog_dir.join("brick-icons.json").is_file() {
+        read_json::<Icons>(&file(catalog_dir, "brick-icons.json", INDEX_LIMIT)?, INDEX_LIMIT)?.icons
+    } else {
+        BTreeMap::new()
+    };
+    for entry in catalog.bricks.iter().filter(|b| b.selectable()) {
+        let icon = match icons.get(&entry.icon_source) {
+            Some(image) => {
+                let path = file(catalog_dir, &image.file, INDEX_LIMIT)?;
+                let bytes = fs::read(&path)?;
+                ensure!(
+                    format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
+                    "Brick icon checksum mismatch: {}",
+                    entry.id
+                );
+                schema.images.insert(
+                    entry.icon_source.clone(),
+                    bri_ui::schema::ImageEntry {
+                        file: path.to_string_lossy().into_owned(),
+                        ..image.clone()
+                    },
+                );
+                IconRef::Pack(entry.icon_source.clone())
+            }
+            None => IconRef::None,
+        };
+        bricks.push(BrickInfo {
+            id: entry.id.clone(),
+            ui_name: entry.display_name.clone(),
+            category: entry.category.clone(),
+            subcategory: entry.subcategory.clone(),
+            icon,
+        });
     }
     Ok(())
 }

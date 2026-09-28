@@ -2,6 +2,8 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod merge;
+pub use merge::resource_root;
 pub mod runtime;
 pub use runtime::*;
 /// 3 adds explosion vertical impulse and per-type vehicle damage scale.
@@ -219,6 +221,11 @@ pub struct Resource {
     pub sha256: String,
     pub native_file: Option<String>,
     pub diagnostics: Vec<String>,
+    /// Content-root-relative directory of the package holding `native_file`,
+    /// set when packs from several packages are merged; None is this pack's
+    /// own directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 /// `AddDamageType`: kill-message templates, `%1` the victim and `%2` the
 /// killer, with `<bitmap:...>` death icons kept verbatim.
@@ -463,7 +470,7 @@ impl Pack {
             );
         }
         for resource in &self.resources {
-            if let Some(path) = &resource.native_file {
+            for path in resource.native_file.iter().chain(&resource.package) {
                 ensure!(
                     !path.starts_with('/')
                         && !path.contains(':')
