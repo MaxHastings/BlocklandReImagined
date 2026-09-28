@@ -1618,7 +1618,13 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
     assert_eq!(events, b.replica.take_cues());
     assert_eq!(events, late.replica.take_cues());
     assert_eq!(events.len(), 2);
-    wait(&mut a, |c| c.replica.poses[&c.owner].player.grounded).await?;
+    // v20 refuses a jump tapped in the tick the feet land (canJump reads
+    // contact from before the move), so wait until the jumper can jump.
+    wait(&mut a, |c| {
+        let p = &c.replica.poses[&c.owner].player;
+        p.grounded && p.jump.delay == 0 && p.jump.since_contact == 0
+    })
+    .await?;
     // Movement is unreliable, so a real client repeats every input in each
     // frame's datagram until the host acknowledges it. Resend the jump
     // (always the same input, so the host takes it once) each frame.
@@ -1627,7 +1633,11 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
         ..Default::default()
     }];
     let sequence = a.replica.poses[&a.owner].acknowledged_input + 1;
-    tokio::time::timeout(Duration::from_secs(5), async {
+    // The jumper's state as it changes, and every cue either side hears,
+    // for the failure message.
+    let mut timeline = Vec::new();
+    let mut last = None;
+    let heard = tokio::time::timeout(Duration::from_secs(5), async {
         while b.replica.cue_cursor < 5 {
             if a.replica.poses[&a.owner].acknowledged_input < sequence {
                 a.movement(sequence, &jump, None)?;
@@ -1637,15 +1647,39 @@ async fn authoritative_cues_reach_two_peers_once_and_late_join_only_hears_new_ac
                 received = a.receive() => { received?; }
                 () = tokio::time::sleep(Duration::from_millis(16)) => {}
             }
+            let pose = &a.replica.poses[&a.owner];
+            let p = &pose.player;
+            let now = format!(
+                "ack {} feet {:?} velocity {:?} grounded {} jump {:?} motor {:?}",
+                pose.acknowledged_input, p.feet, p.velocity, p.grounded, p.jump, p.tick
+            );
+            if last.as_ref() != Some(&now) {
+                timeline.push(format!("tick {} {now}", a.replica.tick));
+                last = Some(now);
+            }
+            for (side, client) in [("jumper", &mut a), ("listener", &mut b)] {
+                for cue in client.replica.take_cues() {
+                    timeline.push(format!("{side} heard {:?} at tick {}", cue.kind, cue.tick));
+                }
+            }
         }
         anyhow::Ok(())
     })
-    .await
-    .context("waiting for the listener to hear the jump")??;
+    .await;
+    heard
+        .with_context(|| {
+            format!(
+                "waiting for the listener to hear the jump (input {sequence}):\n{}",
+                timeline.join("\n")
+            )
+        })??;
     assert_eq!(b.replica.cue_cursor, 5);
-    let jumps = b.replica.take_cues();
-    assert_eq!(jumps.len(), 1);
-    assert_eq!(jumps[0].kind, CueKind::Jump);
+    let jumps: Vec<_> = timeline
+        .iter()
+        .filter(|line| line.starts_with("listener heard"))
+        .collect();
+    assert_eq!(jumps.len(), 1, "{timeline:#?}");
+    assert!(jumps[0].starts_with("listener heard Jump"), "{timeline:#?}");
     drop((a, b, late));
     server.stop().await?;
     Ok(())
