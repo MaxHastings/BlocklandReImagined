@@ -2,7 +2,7 @@
 //! typed content. Identity, hashing and the join comparison are
 //! `bri-package`'s; this adds what the packages provide.
 use crate::content::{self, Kind};
-use crate::manifest::{MANIFEST_FILE, Manifest, location};
+use crate::manifest::{MANIFEST_FILE, Manifest, Rejected, location};
 use bri_package::diag::Diagnostic;
 use bri_package::id::{Requirement, Version};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
@@ -38,22 +38,41 @@ impl Package {
     /// Read a mod package directory. Every problem is returned, not just the
     /// first.
     pub fn load(dir: &Path, entry: &PackageEntry) -> Result<Self, Vec<Diagnostic>> {
+        match Self::inspect(dir, entry) {
+            (Some(package), problems) if problems.is_empty() => Ok(package),
+            (_, problems) => Err(problems),
+        }
+    }
+    /// Read as much of a package as its manifest allows, with every problem.
+    /// A package with problems is only for reporting (`Catalog::inspect`).
+    pub fn inspect(dir: &Path, entry: &PackageEntry) -> (Option<Self>, Vec<Diagnostic>) {
+        match Self::read(dir, entry) {
+            Ok(package) => (Some(package), Vec::new()),
+            Err(rejected) => *rejected,
+        }
+    }
+    fn read(dir: &Path, entry: &PackageEntry) -> Result<Self, Rejected<Self>> {
         let manifest_bytes = bri_package::path::inside(dir, MANIFEST_FILE)
             .map_err(std::io::Error::other)
             .and_then(std::fs::read)
             .map_err(|e| {
-                vec![
-                    Diagnostic::error(
-                        "package.manifest_missing",
-                        format!("cannot read {MANIFEST_FILE}: {e}"),
-                    )
-                    .at(location(&entry.id, MANIFEST_FILE))
-                    .hint("a mod package is a folder containing package.json"),
-                ]
+                (
+                    None,
+                    vec![
+                        Diagnostic::error(
+                            "package.manifest_missing",
+                            format!("cannot read {MANIFEST_FILE}: {e}"),
+                        )
+                        .at(location(&entry.id, MANIFEST_FILE))
+                        .hint("a mod package is a folder containing package.json"),
+                    ],
+                )
             })?;
-        let manifest = Manifest::parse(&manifest_bytes, &entry.id)?;
+        let (manifest, mut out) = Manifest::inspect(&manifest_bytes, &entry.id);
+        let Some(manifest) = manifest else {
+            return Err(Box::new((None, out)));
+        };
         let id = entry.id.clone();
-        let mut out = Vec::new();
         if manifest.version != entry.version {
             out.push(
                 Diagnostic::error(
@@ -69,7 +88,10 @@ impl Package {
         let mut assets = Vec::new();
         let mut total = manifest_bytes.len();
         for provide in &manifest.provides {
-            let kind = Kind::parse(&provide.kind).expect("checked by the manifest");
+            // Unknown kinds were reported with the manifest.
+            let Some(kind) = Kind::parse(&provide.kind) else {
+                continue;
+            };
             let at = location(&id, &provide.file);
             let path = match bri_package::path::inside(dir, &provide.file) {
                 Ok(path) => path,
@@ -144,7 +166,11 @@ impl Package {
         }
         let mut package = Self {
             side: entry.side,
-            version: Version::parse(&manifest.version).expect("checked by the manifest"),
+            version: Version::parse(&manifest.version).unwrap_or(Version {
+                major: 0,
+                minor: 0,
+                patch: 0,
+            }),
             behaviour: None,
             worlds: BTreeMap::new(),
             entities: BTreeMap::new(),
@@ -158,7 +184,7 @@ impl Package {
         if out.is_empty() {
             Ok(package)
         } else {
-            Err(out)
+            Err(Box::new((Some(package), out)))
         }
     }
 
@@ -298,10 +324,22 @@ impl Catalog {
     /// `server` packages are skipped when `server` is false (a client never
     /// loads them).
     pub fn load(root: &Path, set: &PackageSet, server: bool) -> Result<Self, Vec<Diagnostic>> {
+        let (catalog, problems) = Self::inspect(root, set, server);
+        if problems.is_empty() {
+            Ok(catalog)
+        } else {
+            Err(problems)
+        }
+    }
+    /// Load for reporting: every package that could be read, even with
+    /// problems, and every problem once. Never run a catalog with problems.
+    pub fn inspect(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
         let mut out = Vec::new();
+        let listed: BTreeMap<&str, &PackageEntry> =
+            set.packages.iter().map(|p| (p.id.as_str(), p)).collect();
         let mut dirs = Vec::new();
         for entry in &set.packages {
-            if entry.role.is_some() || (!server && entry.side == Side::Server) {
+            if entry.role.is_some() {
                 continue;
             }
             match bri_package::packages::package_dir(root, entry) {
@@ -311,14 +349,9 @@ impl Catalog {
                 ),
             }
         }
-        match Self::load_dirs(&dirs, server) {
-            Ok(catalog) if out.is_empty() => Ok(catalog),
-            Ok(_) => Err(out),
-            Err(mut more) => {
-                out.append(&mut more);
-                Err(out)
-            }
-        }
+        let (catalog, mut problems) = Self::inspect_dirs(&dirs, &listed, server);
+        out.append(&mut problems);
+        (catalog, out)
     }
     /// Load packages from where they are, each with its entry: a client's
     /// downloaded packages live in its cache, not under a content root.
@@ -327,10 +360,21 @@ impl Catalog {
         packages: &[(std::path::PathBuf, PackageEntry)],
         server: bool,
     ) -> Result<Self, Vec<Diagnostic>> {
-        let mut catalog = Self::default();
-        let mut out = Vec::new();
         let listed: BTreeMap<&str, &PackageEntry> =
             packages.iter().map(|(_, p)| (p.id.as_str(), p)).collect();
+        match Self::inspect_dirs(packages, &listed, server) {
+            (catalog, problems) if problems.is_empty() => Ok(catalog),
+            (_, problems) => Err(problems),
+        }
+    }
+    fn inspect_dirs(
+        packages: &[(std::path::PathBuf, PackageEntry)],
+        listed: &BTreeMap<&str, &PackageEntry>,
+        server: bool,
+    ) -> (Self, Vec<Diagnostic>) {
+        let mut catalog = Self::default();
+        let mut out = Vec::new();
+        let mut failed = std::collections::BTreeSet::new();
         for (dir, entry) in packages {
             if !server && entry.side == Side::Server {
                 continue;
@@ -338,22 +382,25 @@ impl Catalog {
             if !dir.join(MANIFEST_FILE).is_file() {
                 continue;
             }
-            match Package::load(dir, entry) {
-                Ok(p) => {
-                    catalog.packages.insert(entry.id.clone(), p);
-                }
-                Err(mut e) => out.append(&mut e),
+            let (package, mut problems) = Package::inspect(dir, entry);
+            if !problems.is_empty() {
+                failed.insert(entry.id.clone());
+                out.append(&mut problems);
+            }
+            if let Some(package) = package {
+                catalog.packages.insert(entry.id.clone(), package);
             }
         }
-        out.extend(catalog.check(&listed, server));
-        if out.is_empty() {
-            Ok(catalog)
-        } else {
-            Err(out)
-        }
+        out.extend(catalog.check(listed, &failed, server));
+        (catalog, out)
     }
     /// Cross-package checks: dependencies, model and state references.
-    fn check(&self, listed: &BTreeMap<&str, &PackageEntry>, server: bool) -> Vec<Diagnostic> {
+    fn check(
+        &self,
+        listed: &BTreeMap<&str, &PackageEntry>,
+        failed: &std::collections::BTreeSet<String>,
+        server: bool,
+    ) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         // One key press sends one command: two panels may share a key only
         // if they send the same thing.
@@ -386,10 +433,27 @@ impl Catalog {
                 }
             }
         }
+        // References into a package that failed to load are reported once,
+        // there, rather than again for every reference.
+        let broken = |package: &str| failed.contains(package);
         for (id, p) in &self.packages {
             let at = location(id, MANIFEST_FILE);
             for (dependency, requirement) in &p.manifest.dependencies {
-                let requirement = Requirement::parse(requirement).expect("checked by the manifest");
+                let Ok(requirement) = Requirement::parse(requirement) else {
+                    continue;
+                };
+                if broken(dependency) {
+                    out.push(
+                        Diagnostic::error(
+                            "set.dependency.broken",
+                            format!(
+                                "`{id}` needs `{dependency}`, which has errors of its own (above)"
+                            ),
+                        )
+                        .at(at.clone()),
+                    );
+                    continue;
+                }
                 let Some(entry) = listed.get(dependency.as_str()) else {
                     out.push(
                         Diagnostic::error(
@@ -422,6 +486,9 @@ impl Catalog {
                 for kind in p.entities.values() {
                     let model = &kind.model;
                     let owner = model.split(':').next().unwrap_or_default();
+                    if broken(owner) {
+                        continue;
+                    }
                     if !listed.get(owner).is_some_and(|e| e.side.on_client()) {
                         out.push(
                             Diagnostic::error(
@@ -432,11 +499,26 @@ impl Catalog {
                             )
                             .at(at.clone()),
                         );
+                    } else if let Some(o) = self.packages.get(owner)
+                        && !o.models.contains_key(model)
+                    {
+                        let known: Vec<&String> = o.models.keys().collect();
+                        out.push(
+                            Diagnostic::error(
+                                "set.model.unknown",
+                                format!("`{owner}` provides no model `{model}`"),
+                            )
+                            .at(at.clone())
+                            .hint(format!("it provides {known:?}")),
+                        );
                     }
                 }
             }
             for hud in p.huds.values() {
                 for key in &hud.keys {
+                    if broken(&key.package) {
+                        continue;
+                    }
                     if let Some(owner) = self.packages.get(&key.package) {
                         let declared = owner.behaviour.as_ref().is_some_and(|b| {
                             b.commands
@@ -464,6 +546,9 @@ impl Catalog {
                 }
                 for row in &hud.rows {
                     let binding = content::Binding::parse(&row.bind).expect("checked by the HUD");
+                    if broken(&binding.package) {
+                        continue;
+                    }
                     // Clients do not load the server package that owns the state.
                     let Some(owner) = self.packages.get(&binding.package) else {
                         if server || !listed.contains_key(binding.package.as_str()) {

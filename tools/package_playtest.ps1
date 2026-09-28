@@ -6,7 +6,10 @@ param(
     [string]$Version,
     [string]$ExpectedExecutableSha256,
     [switch]$ValidateOnly,
-    [string]$VerifyPackage
+    [string]$VerifyPackage,
+    # Also ship the Stress Lab mod packages (packages/stresslab), enabled in
+    # content/packages.json; the release folder gets a -stress-lab suffix.
+    [switch]$StressLab
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -144,25 +147,41 @@ foreach ($package in @($effective.list.packages)) {
     $selected += [pscustomobject]@{ field = $field; name = $name; path = $directory; files = $files.Count; bytes = [long]$bytes }
 }
 
+$modPackages = @()
+if ($StressLab) {
+    $modRoot = Join-Path $RepoRoot 'packages/stresslab'
+    foreach ($dir in @(Get-ChildItem -LiteralPath $modRoot -Directory | Sort-Object Name)) {
+        $manifestPath = Join-Path $dir.FullName 'package.json'
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $files = @(Get-PackageFiles $dir.FullName)
+        $side = if (@($manifest.provides | Where-Object { $_.kind -in @('behaviour','script','world','entity') }).Count -gt 0) { 'server' } else { 'client' }
+        $modPackages += [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $dir.FullName; files = $files.Count }
+    }
+    if ($modPackages.Count -eq 0) { throw "No Stress Lab packages found in $modRoot" }
+}
+
 $docInputs = @(
     @{ source = (Join-Path $RepoRoot 'docs/PLAYTEST.md'); destination = 'PLAYTEST.md' },
     @{ source = (Join-Path $RepoRoot 'docs/KNOWN-ISSUES.md'); destination = 'KNOWN-ISSUES.md' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.ps1'); destination = 'Launch-Playtest.ps1' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' }
 )
+if ($StressLab) { $docInputs += @{ source = (Join-Path $RepoRoot 'docs/stress-lab/PLAYTEST-STRESS-LAB.md'); destination = 'PLAYTEST-STRESS-LAB.md' } }
 foreach ($input in $docInputs) { if (-not (Test-Path -LiteralPath $input.source -PathType Leaf)) { throw "Required package file is missing: $($input.source)" } }
 if ($ValidateOnly) {
     $configSource = $effective.source
     [pscustomobject]@{ selected_packages = $selected; content_files = $contentFiles; content_bytes = $contentBytes;
         executable_bytes = $exeInfo.Length; estimated_package_bytes = [long]$contentBytes + [long]$exeInfo.Length;
-        executable_sha256 = $executableSha256; package_count = $selected.Count; content_config_source = $configSource } | ConvertTo-Json -Depth 6
+        executable_sha256 = $executableSha256; package_count = $selected.Count; content_config_source = $configSource; mod_packages = $modPackages } | ConvertTo-Json -Depth 6
     return
 }
 if ([string]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'Supply -Version using 1–64 letters, digits, dot, underscore or dash.' }
 if ([string]::IsNullOrWhiteSpace($ExpectedExecutableSha256) -or $ExpectedExecutableSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'Supply the SHA-256 reported for the root-provided release executable using -ExpectedExecutableSha256.' }
 if ($executableSha256 -cne $ExpectedExecutableSha256.ToLowerInvariant()) { throw "Release executable hash differs from root's expected build: $executableSha256" }
 [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
-$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-alpha-$Version"
+$suffix = if ($StressLab) { '-stress-lab' } else { '' }
+$releasePath = Join-Path $DestinationRoot "BlocklandReImagined-alpha-$Version$suffix"
 if (Test-Path -LiteralPath $releasePath) { throw "Refusing to overwrite an existing playtest release: $releasePath" }
 [IO.Directory]::CreateDirectory($releasePath) | Out-Null
 try {
@@ -177,7 +196,16 @@ try {
             Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
         }
     }
-    $configJson = ConvertTo-Json -InputObject $effective.list -Depth 5
+    $list = [ordered]@{ schema_version = $effective.list.schema_version; packages = @($effective.list.packages) }
+    foreach ($mod in $modPackages) {
+        $destination = Join-Path $packagedContent (Join-Path 'stresslab' $mod.id)
+        [IO.Directory]::CreateDirectory($destination) | Out-Null
+        foreach ($child in Get-ChildItem -LiteralPath $mod.path -Force) {
+            Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
+        }
+        $list.packages += [pscustomobject][ordered]@{ id = $mod.id; version = $mod.version; side = $mod.side; dir = "stresslab/$($mod.id)" }
+    }
+    $configJson = ConvertTo-Json -InputObject $list -Depth 5
     [IO.File]::WriteAllText((Join-Path $packagedContent 'packages.json'), $configJson + "`n", [Text.UTF8Encoding]::new($false))
     $entries = Get-ManifestEntries $releasePath
     $manifest = [ordered]@{ schema_version = 1; version = $Version; executable = 'bri-client.exe'; content_config = 'content/packages.json'; files = $entries }

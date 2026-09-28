@@ -1,24 +1,38 @@
 //! Add-On packages this client downloaded from a server. Joining a server
 //! whose shared packages this client lacks downloads them into the package
 //! cache (`bri_net::client::Client::connect_fetching`), loads them here and
-//! joins again with the server's package list. Only data is loaded: models,
-//! HUD panels and other declarative kinds. Base game content cannot be
+//! joins again with the server's package list. The catalog holds this
+//! client's own packages with the downloaded ones in place of those of the
+//! same id. Only data is loaded: models, HUD panels and other declarative
+//! kinds. Base game content cannot be
 //! swapped while the game runs, so a server running different base content
 //! is refused with that reason rather than joined with content this client
 //! does not actually use.
 use anyhow::{Result, bail};
 use bri_net::packages::Fetched;
-use bri_package::{environment::PackageRef, packages::PackageEntry};
+use bri_package::{
+    environment::PackageRef,
+    packages::{PackageEntry, PackageSet},
+};
 use bri_package_runtime::{Catalog, manifest::MANIFEST_FILE};
 
 /// Load downloaded packages and return the catalog with the package list
-/// to join with: this client's own packages, with every package the server
-/// sent in place of the local one of the same id.
+/// to join with: this client's own packages (`set` under `root`, whose
+/// references are `local`), with every package the server sent in place of
+/// the local one of the same id.
 pub fn load_fetched(
+    root: &std::path::Path,
+    set: &PackageSet,
     local: &[PackageRef],
     fetched: &[Fetched],
 ) -> Result<(Catalog, Vec<PackageRef>)> {
     let mut dirs = Vec::new();
+    for entry in &set.packages {
+        if entry.role.is_some() || fetched.iter().any(|f| f.package.id == entry.id) {
+            continue;
+        }
+        dirs.push((bri_package::packages::package_dir(root, entry)?, entry.clone()));
+    }
     for f in fetched {
         let differs = !local.contains(&f.package);
         if differs && !f.dir.join(MANIFEST_FILE).is_file() {
@@ -113,8 +127,16 @@ mod tests {
             hash: "ab".repeat(32),
             size: 1,
         };
-        let (catalog, packages) =
-            load_fetched(std::slice::from_ref(&base), std::slice::from_ref(&blocks)).unwrap();
+        let (catalog, packages) = load_fetched(
+            &root,
+            &PackageSet {
+                schema_version: 1,
+                packages: Vec::new(),
+            },
+            std::slice::from_ref(&base),
+            std::slice::from_ref(&blocks),
+        )
+        .unwrap();
         assert!(catalog.model("blocks:model/cube").is_some());
         assert_eq!(packages, [base, blocks.package]);
     }
@@ -123,7 +145,11 @@ mod tests {
     fn different_base_content_is_refused_not_pretended() {
         let root = scratch("base");
         let other_base = package(&root, "v20-bricks", false);
-        let error = load_fetched(&[], &[other_base]).unwrap_err();
+        let error =
+            load_fetched(&root, &PackageSet {
+                schema_version: 1,
+                packages: Vec::new(),
+            }, &[], &[other_base]).unwrap_err();
         assert!(
             format!("{error:#}").contains("base game content"),
             "{error:#}"

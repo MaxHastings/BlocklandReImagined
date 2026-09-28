@@ -161,6 +161,11 @@ pub struct ServerReport {
     #[serde(skip)]
     pub native_world: bri_world::World,
     pub notices: Vec<String>,
+    /// Durable package state and world edits for the host to save.
+    #[serde(skip)]
+    pub packages: Option<bri_sim::session::PackageSave>,
+    pub package_diagnostics: Vec<bri_package::diag::Diagnostic>,
+    pub package_stats: bri_sim::session::PackageStats,
 }
 impl ServerHandle {
     /// Answer LAN discovery queries for this host until it stops.
@@ -825,6 +830,21 @@ impl Tickets {
         Ok(())
     }
 }
+/// Send each client its view of package state when it changed: keys visible
+/// to everyone plus its own owner-visible keys, never another player's.
+fn send_package_views(
+    session: &Session,
+    peers: &BTreeMap<OwnerId, Peer>,
+    sent: &mut BTreeMap<OwnerId, bri_sim::session::PackageStateView>,
+) {
+    for (owner, peer) in peers {
+        let view = session.package_state_for(*owner);
+        if sent.get(owner) != Some(&view) {
+            peer.send_message(&Message::PackageState(view.clone()));
+            sent.insert(*owner, view);
+        }
+    }
+}
 fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>) {
     for (owner, peer) in peers {
         peer.bulk
@@ -868,6 +888,9 @@ async fn run(
     let mut weapons = bri_sim::session::WeaponView::default();
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
+    let mut entities = session.package_entities();
+    // What each client last received of package state (per viewer).
+    let mut package_views: BTreeMap<OwnerId, bri_sim::session::PackageStateView> = BTreeMap::new();
     let mut minigames = Vec::new();
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
@@ -923,10 +946,11 @@ async fn run(
                     session.adopt(old,admin)?;
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks});
                     for peer in peers.values(){peer.send(transfer.clone());}
+                    package_views.clear();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
                 }
                 Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
@@ -956,15 +980,16 @@ async fn run(
                     };
                     if !cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
-                    let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
+                    let (mut checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
+                    let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks});
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
-                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,bulk});Ok(owner)
+                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,bulk});package_views.insert(owner,view);Ok(owner)
                 })();
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
-            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
+            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;
@@ -1018,13 +1043,15 @@ async fn run(
                 let current_palette=&session.simulation().state().palette;let changed_palette=if &palette!=current_palette{palette=current_palette.clone();Some(palette.clone())}else{None};
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
                 let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
+                let current_entities=session.package_entities();let changed_entities=if entities!=current_entities{entities=current_entities;Some(entities.clone())}else{None};
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken}));cursor=next;
+                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,entities:changed_entities}));cursor=next;
+                send_package_views(&session,&peers,&mut package_views);
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(&Message::Notice(notice));}}
             }
             }
@@ -1071,6 +1098,9 @@ async fn run(
         autosave_failures,
         native_world: session.simulation().state().clone(),
         notices: session.take_notices(),
+        packages: session.package_save(),
+        package_diagnostics: session.package_diagnostics(),
+        package_stats: session.package_stats(),
     })
 }
 

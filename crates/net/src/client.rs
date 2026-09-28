@@ -453,6 +453,14 @@ impl Client {
                         Ok(ClientEvent::Reply { sequence, result })
                     }
                     Message::Notice(notice) => Ok(ClientEvent::Notice(notice)),
+                    Message::PackageState(view) => {
+                        self.replica.package_state(view)?;
+                        Ok(ClientEvent::Updated {
+                            world_changed: false,
+                            changed_bricks: Vec::new(),
+                            palette_changed: false,
+                        })
+                    }
                     Message::AdminSnapshot(snapshot) => {
                         self.administrator = snapshot.role.is_admin();
                         self.admin_snapshot = Some(snapshot.clone());

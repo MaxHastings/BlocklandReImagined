@@ -1,0 +1,103 @@
+{
+  "clients": 8,
+  "seconds": 120.0,
+  "host_ticks": 14782,
+  "host_dropped_ticks": 0,
+  "host_commands": 2850,
+  "host_rejected": 0,
+  "chunks_generated": 399,
+  "voxels_live": 98743,
+  "voxels_removed": 1140,
+  "world_bricks_at_end": 98743,
+  "world_extent_chunks": [
+    -10,
+    10,
+    -7,
+    11
+  ],
+  "replicas_agree": true,
+  "package_diagnostics": [],
+  "per_client": [
+    {
+      "name": "Soak0",
+      "mined": 154,
+      "bits": 0,
+      "commands": 353,
+      "rejected": 0,
+      "distance_walked": 1542.1285,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    },
+    {
+      "name": "Soak1",
+      "mined": 141,
+      "bits": 117,
+      "commands": 356,
+      "rejected": 0,
+      "distance_walked": 264.46506,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    },
+    {
+      "name": "Soak2",
+      "mined": 119,
+      "bits": 64,
+      "commands": 354,
+      "rejected": 0,
+      "distance_walked": 260.66467,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    },
+    {
+      "name": "Soak3",
+      "mined": 154,
+      "bits": 199,
+      "commands": 353,
+      "rejected": 0,
+      "distance_walked": 261.08365,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    },
+    {
+      "name": "Soak4",
+      "mined": 14,
+      "bits": 2,
+      "commands": 357,
+      "rejected": 0,
+      "distance_walked": 20.38582,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    },
+    {
+      "name": "Soak5",
+      "mined": 187,
+      "bits": 200,
+      "commands": 359,
+      "rejected": 0,
+      "distance_walked": 319.2865,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    },
+    {
+      "name": "Soak6",
+      "mined": 150,
+      "bits": 125,
+      "commands": 361,
+      "rejected": 0,
+      "distance_walked": 318.69873,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    },
+    {
+      "name": "Soak7",
+      "mined": 182,
+      "bits": 161,
+      "commands": 357,
+      "rejected": 0,
+      "distance_walked": 320.04837,
+      "bricks_in_replica": 98743,
+      "entities_in_replica": 4
+    }
+  ],
+  "wall_seconds": 123.27916
+}

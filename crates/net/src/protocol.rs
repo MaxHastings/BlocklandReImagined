@@ -249,6 +249,11 @@ pub struct Checkpoint {
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
+    /// Entities of enabled packages.
+    pub entities: Vec<bri_sim::session::EntityInfo>,
+    /// Enabled packages' state as this client sees it: keys visible to
+    /// everyone, plus its own owner-visible keys in a welcome.
+    pub package_state: bri_sim::session::PackageStateView,
 }
 impl Checkpoint {
     /// Everything but the bricks, plus an O(1) snapshot of the authoritative
@@ -281,6 +286,8 @@ impl Checkpoint {
             broken_shapes: session.broken_shapes(),
             archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
+            entities: session.package_entities(),
+            package_state: session.package_state(),
         };
         (checkpoint, world.bricks.clone())
     }
@@ -389,6 +396,8 @@ pub struct Delta {
     pub vehicles: Option<Vec<bri_sim::session::VehicleInfo>>,
     pub time_scale: Option<f32>,
     pub broken_shapes: Option<BTreeSet<u32>>,
+    /// Package entities, when any moved or changed.
+    pub entities: Option<Vec<bri_sim::session::EntityInfo>>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
@@ -408,6 +417,11 @@ pub enum Message {
     /// Up to `WORLD_CHUNK` bricks of the checkpoint sent just before.
     WorldChunk(Vec<(BrickId, Brick)>),
     AdminSnapshot(bri_sim::session::AdminSnapshot),
+    /// Package state as this client sees it (`Session::package_state_for`):
+    /// keys visible to everyone plus its own owner-visible keys. Sent to
+    /// each client when its view changes, so one player's private keys
+    /// never reach another.
+    PackageState(bri_sim::session::PackageStateView),
     /// Addressed to this client only (minigame chat, prints, invitations).
     Notice(bri_sim::session::Notice),
     Reply {

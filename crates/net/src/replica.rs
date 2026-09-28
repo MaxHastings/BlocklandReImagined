@@ -25,6 +25,15 @@ pub struct Replica {
     pub broken_shapes: BTreeSet<u32>,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
+    pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
+    pub package_state: bri_sim::session::PackageStateView,
+}
+fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
+    ensure!(entities.len() <= 1024, "Too many package entities");
+    for e in entities {
+        e.validate()?;
+    }
+    Ok(())
 }
 fn validate_broken_shapes(shapes: &BTreeSet<u32>) -> Result<()> {
     ensure!(shapes.len() <= 4096, "Invalid broken map shapes");
@@ -115,6 +124,8 @@ impl Replica {
         validate_vehicles(&checkpoint.vehicles)?;
         validate_time_scale(checkpoint.time_scale)?;
         validate_broken_shapes(&checkpoint.broken_shapes)?;
+        validate_entities(&checkpoint.entities)?;
+        checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
             validate_vehicle_pose(pose)?;
         }
@@ -144,6 +155,8 @@ impl Replica {
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
             archetypes: checkpoint.archetypes.into(),
+            entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
+            package_state: checkpoint.package_state,
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -226,6 +239,9 @@ impl Replica {
         if let Some(shapes) = &delta.broken_shapes {
             validate_broken_shapes(shapes)?;
         }
+        if let Some(entities) = &delta.entities {
+            validate_entities(entities)?;
+        }
         if let Some(palette) = &delta.palette {
             ensure!(
                 palette.len() <= 256
@@ -287,6 +303,9 @@ impl Replica {
         if let Some(shapes) = delta.broken_shapes {
             self.broken_shapes = shapes;
         }
+        if let Some(entities) = delta.entities {
+            self.entities = entities.into_iter().map(|e| (e.id, e)).collect();
+        }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();
             self.vehicle_poses
@@ -311,6 +330,12 @@ impl Replica {
         }
         self.dropped_cues = delta.dropped_cues;
         self.tick = delta.tick;
+        Ok(())
+    }
+    /// This client's view of package state, replacing the last one.
+    pub fn package_state(&mut self, view: bri_sim::session::PackageStateView) -> Result<()> {
+        view.validate()?;
+        self.package_state = view;
         Ok(())
     }
     /// Newest-tick vehicle motion; older or unknown datagrams are ignored.

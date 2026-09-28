@@ -1978,6 +1978,21 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   frame ("closed by peer") or found the per-address download slots still
   held, both consistent with the server's 1 s wait for the client to read
   its last frame.
+- The game client now joins remote servers through `connect_fetching`:
+  downloads go to `<state>/package-cache`, `bri_client::mods::load_fetched`
+  loads the client's own packages with the downloaded ones in their place,
+  and the HUD and entity models draw with that catalog. A server running
+  different base game content is refused with that reason.
+- Merged the Stress Lab (main da5668e), keeping protocol 34. Package state
+  now replicates per client: the welcome carries
+  `Session::package_state_for(viewer)` and the server sends each client
+  `Message::PackageState` when its own view changes (it left `Delta`). The
+  miner's purse keys are `"visible": "owner"`; the loopback test asserts
+  another client never receives them, and its world-convergence wait is now
+  bounded in time rather than 40 messages (alice no longer waits on bob's
+  purse, so she had not caught up). `stresslab test`: strata.rhai generates
+  25 chunks (10,934 voxels) with 0 diagnostics inside the 400k Generate
+  budget.
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
@@ -2491,3 +2506,21 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
   new loopback `join_refusal_names_each_differing_shared_package`,
   `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.
+## 2026-09-28 Stress Lab: gameplay from packages (protocol 32)
+
+- Package-defined gameplay seams: `bri-package-runtime` (mod package loading,
+  Rhai sandbox, `ops::authorize` capability gate), `session/packages.rs`
+  (package commands, namespaced durable state, entities, chunked world
+  provider, `Session::explode`), `Checkpoint`/`Delta` `entities` and
+  `package_state`, the UI's `hud.overlay` slot and package keys, client box
+  models, hosting package worlds from Start Game. Design:
+  `docs/architecture/package-runtime.md`.
+- The Stress Lab (`packages/stresslab`, five CC0 packages: generated world,
+  creeper, creeper model, mining economy, miner HUD) uses only those seams.
+- Evidence: `bri-package-runtime` tests, `bri-sim --test packages`,
+  `bri-stresslab` loopback and workflow tests, `bri-client --test
+  stresslab_flow -- --ignored` (offscreen, also against a packaged release),
+  soak `docs/stress-lab/soak-8x120.json` (8 clients, 120 s, 0 dropped ticks,
+  replicas agree). Handoff and labels: `docs/stress-lab/HANDOFF.md`.
+- Open: join mismatch naming waits on door-closers' Hello wiring; see the
+  handoff's next steps.

@@ -1,0 +1,128 @@
+{
+  "compiled": false,
+  "diagnostics": [
+    {
+      "code": "manifest.provide.namespace",
+      "location": "stresslab-world/package.json#/provides/2",
+      "message": "`v20:world/strata` is outside this package's namespace `stresslab-world`",
+      "severity": "error"
+    },
+    {
+      "code": "manifest.capability",
+      "hint": "known capabilities: world.edit, damage, entity, chat",
+      "location": "stresslab-economy/package.json#/capabilities",
+      "message": "unknown capability `teleport`",
+      "severity": "error"
+    },
+    {
+      "code": "set.model.unknown",
+      "hint": "it provides [\"stresslab-creeper-model:model/creeper\"]",
+      "location": "stresslab-creeper/package.json",
+      "message": "`stresslab-creeper-model` provides no model `stresslab-creeper-model:model/creepr`",
+      "severity": "error"
+    },
+    {
+      "code": "set.dependency.broken",
+      "location": "stresslab-economy/package.json",
+      "message": "`stresslab-economy` needs `stresslab-world`, which has errors of its own (above)",
+      "severity": "error"
+    },
+    {
+      "code": "set.dependency.broken",
+      "location": "stresslab-hud/package.json",
+      "message": "`stresslab-hud` needs `stresslab-economy`, which has errors of its own (above)",
+      "severity": "error"
+    },
+    {
+      "code": "set.hud.key",
+      "location": "stresslab-hud/package.json",
+      "message": "key J sends `summon` which `stresslab-creeper` does not declare without arguments",
+      "severity": "error"
+    },
+    {
+      "code": "set.hud.binding",
+      "hint": "declare it under the owner's behaviour state with \"public\": true",
+      "location": "stresslab-hud/package.json",
+      "message": "`stresslab-creeper:player/secret` is not a public state key",
+      "severity": "error"
+    },
+    {
+      "code": "script.syntax",
+      "location": "stresslab-economy/economy.rhai:68",
+      "message": "Expecting ',' to separate the parameters of function 'cmd_sell_all'",
+      "severity": "error"
+    }
+  ],
+  "ok": false,
+  "packages": [
+    {
+      "capabilities": [
+        "entity",
+        "damage",
+        "chat"
+      ],
+      "commands": [
+        "spawn",
+        "spawn_here"
+      ],
+      "id": "stresslab-creeper",
+      "provides": [
+        "stresslab-creeper:behaviour/creeper",
+        "stresslab-creeper:script/creeper",
+        "stresslab-creeper:entity/creeper"
+      ],
+      "side": "server",
+      "version": "1.0.0"
+    },
+    {
+      "capabilities": [],
+      "commands": null,
+      "id": "stresslab-creeper-model",
+      "provides": [
+        "stresslab-creeper-model:model/creeper"
+      ],
+      "side": "client",
+      "version": "1.0.0"
+    },
+    {
+      "capabilities": [
+        "chat",
+        "teleport"
+      ],
+      "commands": [
+        "mine",
+        "sell",
+        "sell_all"
+      ],
+      "id": "stresslab-economy",
+      "provides": [
+        "stresslab-economy:behaviour/economy",
+        "stresslab-economy:script/economy"
+      ],
+      "side": "server",
+      "version": "1.0.0"
+    },
+    {
+      "capabilities": [],
+      "commands": null,
+      "id": "stresslab-hud",
+      "provides": [
+        "stresslab-hud:hud/miner"
+      ],
+      "side": "client",
+      "version": "1.0.0"
+    },
+    {
+      "capabilities": [],
+      "commands": [],
+      "id": "stresslab-world",
+      "provides": [
+        "stresslab-world:behaviour/strata",
+        "stresslab-world:script/strata",
+        "v20:world/strata"
+      ],
+      "side": "server",
+      "version": "1.0.0"
+    }
+  ]
+}

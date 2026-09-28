@@ -174,11 +174,17 @@ fn generated_world_mines_into_server_owned_currency() {
     s.command(a, seq, pkg("stresslab-economy", "sell_all", vec![]))
         .unwrap();
     assert_eq!(value(&s, a, "bits"), ore);
-    // Public state reaches clients; the view names the owner.
-    let view = s.package_state();
+    // A purse reaches its owner's client only; the view names the owner.
+    let view = s.package_state_for(a);
     assert_eq!(
         view.packages["stresslab-economy"].players[&a]["mined"],
         serde_json::json!(value(&s, a, "mined"))
+    );
+    assert!(
+        s.package_state()
+            .packages
+            .get("stresslab-economy")
+            .is_none_or(|n| !n.players.contains_key(&a))
     );
     assert!(value(&s, a, "mined") >= mined);
 }

@@ -13,6 +13,7 @@
 //! prints, event tables, datablock menus) come from catalogs the host
 //! supplies; the UI pack only provides the original art, fonts and layouts.
 
+use crate::geom::Rgba;
 use crate::input::{Chord, MouseButton};
 use crate::schema::ParamSpec;
 use serde::{Deserialize, Serialize};
@@ -448,6 +449,42 @@ pub enum GameAction {
     },
     ToggleBuildMacroRecording,
     PlayBackBuildMacro,
+    /// A key a package HUD declared: send that package's command.
+    Package {
+        package: String,
+        command: String,
+    },
+}
+
+/// Where a package HUD panel sits on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelAnchor {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+/// A HUD panel an enabled package declared, with values already resolved
+/// from replicated state by the host. Data only: the UI draws it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackagePanel {
+    pub anchor: PanelAnchor,
+    pub title: String,
+    pub background: Rgba,
+    pub accent: Rgba,
+    pub text: Rgba,
+    /// (label, value, colour)
+    pub rows: Vec<(String, String, Rgba)>,
+    /// (key letter, label) hints.
+    pub keys: Vec<(char, String)>,
+}
+/// A key a package HUD binds to one of its commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageKey {
+    /// Lower-case letter.
+    pub key: char,
+    pub package: String,
+    pub command: String,
 }
 
 /// Requests from the UI. See the module docs for the request/answer rules.

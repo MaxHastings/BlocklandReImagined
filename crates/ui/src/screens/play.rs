@@ -131,6 +131,64 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
     }
 }
 
+/// The `hud.overlay` slot: panels enabled packages declared, drawn from
+/// data (title, rows of label and value, key hints) in their own colours.
+fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
+    use crate::api::PanelAnchor;
+    let Some(font) = pack
+        .data
+        .styles
+        .get("BlockChatTextProfile")
+        .and_then(|s| s.font.as_deref())
+        .and_then(|f| crate::text::Font::get(pack, f))
+    else {
+        return;
+    };
+    let (w, h) = core.logical;
+    let line = font.line_height().max(1);
+    let pad = 6;
+    let mut offsets = [0_i32; 4];
+    for panel in &core.package_panels {
+        let hints: String = panel
+            .keys
+            .iter()
+            .map(|(k, label)| format!("[{}] {label}", k.to_ascii_uppercase()))
+            .collect::<Vec<_>>()
+            .join("   ");
+        let row_width = panel
+            .rows
+            .iter()
+            .map(|(l, v, _)| font.width(l) + font.width(v) + 24)
+            .max()
+            .unwrap_or(0);
+        let pw = (font.width(&panel.title).max(row_width).max(font.width(&hints)) + pad * 2).max(140);
+        let ph = line + 4 + panel.rows.len() as i32 * line + if hints.is_empty() { 0 } else { line + 4 } + pad * 2;
+        let slot = panel.anchor as usize;
+        let (x, top) = match panel.anchor {
+            PanelAnchor::TopLeft => (8, 8 + offsets[slot]),
+            PanelAnchor::TopRight => (w - pw - 8, 8 + offsets[slot] + if core.net_graph.is_some() { 24 } else { 0 }),
+            PanelAnchor::BottomLeft => (8, h - ph - 120 - offsets[slot]),
+            PanelAnchor::BottomRight => (w - pw - 8, h - ph - 120 - offsets[slot]),
+        };
+        offsets[slot] += ph + 6;
+        dl.fill(Rect::new(x, top, pw, ph), panel.background);
+        dl.fill(Rect::new(x, top, pw, line + 4), panel.accent);
+        dl.fill(Rect::new(x, top + ph - 2, pw, 2), panel.accent);
+        let dark = [16, 16, 24, 255];
+        font.draw(dl, (x + pad) as f32, (top + 2) as f32, &panel.title, dark, &[]);
+        let mut y = top + line + 4 + pad;
+        for (label, value, color) in &panel.rows {
+            font.draw(dl, (x + pad) as f32, y as f32, label, panel.text, &[]);
+            let vx = x + pw - pad - font.width(value);
+            font.draw(dl, vx as f32, y as f32, value, *color, &[]);
+            y += line;
+        }
+        if !hints.is_empty() {
+            font.draw(dl, (x + pad) as f32, (y + 4) as f32, &hints, panel.accent, &[]);
+        }
+    }
+}
+
 fn hud(core: &Core) -> View {
     let (w, h) = core.logical;
     let m = &core.hud;
@@ -452,5 +510,6 @@ impl Screen for Play {
             name_tags(pack, dl, core);
         }
         hud(core).draw(pack, dl);
+        package_panels(pack, dl, core);
     }
 }

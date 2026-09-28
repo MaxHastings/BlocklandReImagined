@@ -21,6 +21,7 @@ pub mod minigame_ui;
 pub mod mods;
 pub mod motion;
 pub mod network;
+pub mod packages;
 pub mod platform;
 pub mod saves;
 pub mod settings;
