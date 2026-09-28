@@ -1393,7 +1393,7 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
     s.run(Duration::from_secs(2), &mut events);
     // Driver: load a jeep spawn in front of them.
     let (map, file) = jeep_save(&host_state, &s.apps[3])?;
-    request(&mut s.apps[0], UiAction::LoadBricks { map, name: file, ownership: false })?;
+    request(&mut s.apps[0], UiAction::LoadBricks { map, name: file, ownership: true })?;
     wait(&mut s, "jeep", 30, &|a| a[3].network_view().is_some_and(|v| !v.vehicles.is_empty()))?;
     let driver_yaw = s.apps[3].controls.yaw;
 
@@ -1464,6 +1464,9 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
         }
         // Driver: board the jeep and drive in weaving circles.
         if step % 60 == 0 {
+            minute.projectiles_seen = minute
+                .projectiles_seen
+                .max(s.apps[0].network_view().map_or(0, |v| v.weapons.projectiles.len()));
             let d = &mut s.apps[3];
             if mounted(d) {
                 minute.driver_mounted_s += 0.5;
@@ -1490,7 +1493,26 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
                     let _ = aim(d, driver_yaw, 0.0);
                 }
                 let _ = held(d, HeldControl::Forward, true);
-                let _ = held(d, HeldControl::Jump, step % 120 == 0);
+                // Walk into it, like a player; jump only if stuck on top.
+                let on_top = d.network_view().is_some_and(|v| {
+                    v.poses.get(&v.owner).is_some_and(|p| {
+                        v.vehicle_poses.values().any(|x| {
+                            let dx = p.player.feet[0] - x.position[0];
+                            let dz = p.player.feet[2] - x.position[2];
+                            dx * dx + dz * dz < 9.0 && p.player.feet[1] > x.position[1] + 1.5
+                        })
+                    })
+                });
+                let _ = held(d, HeldControl::Crouch, false);
+                // Pressed against the side: hop in, as the horse test does.
+                let _ = held(d, HeldControl::Jump, !on_top && step % 240 == 0);
+                if on_top {
+                    // Step off backwards.
+                    let _ = held(d, HeldControl::Forward, false);
+                    let _ = held(d, HeldControl::Backward, true);
+                } else {
+                    let _ = held(d, HeldControl::Backward, false);
+                }
             }
         }
         // Chat from everyone.
@@ -1520,6 +1542,15 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
             last_tick = tick;
             minute.bricks = bricks(host);
             minute.vehicles = host.network_view().map_or(0, |v| v.vehicles.len());
+            if let Some(v) = s.apps[3].network_view() {
+                let me = v.poses.get(&v.owner).map(|p| glam::Vec3::from(p.player.feet));
+                let jeep = v.vehicle_poses.values().next().map(|p| glam::Vec3::from(p.position));
+                minute.events.push(format!(
+                    "driver at {me:?}, jeep at {jeep:?}, {} vehicle poses, mounted {}",
+                    v.vehicle_poses.len(),
+                    mounted(&s.apps[3])
+                ));
+            }
             minute.players = s.apps.iter().map(|a| a.ui.core.players.len()).collect();
             minute.connected = s.apps.iter().map(in_game).collect();
             for (i, ms) in s.step_ms.iter_mut().enumerate() {
