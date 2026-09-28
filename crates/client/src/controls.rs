@@ -10,7 +10,7 @@ use std::{
     f32::consts::{FRAC_PI_2, PI},
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Controls {
     held: BTreeSet<HeldControl>,
     pub yaw: f32,
