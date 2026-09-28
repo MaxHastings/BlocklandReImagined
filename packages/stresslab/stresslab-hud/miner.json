@@ -15,6 +15,7 @@
   ],
   "keys": [
     { "key": "H", "label": "Mine", "package": "stresslab-economy", "command": "mine" },
-    { "key": "G", "label": "Sell ore", "package": "stresslab-economy", "command": "sell_all" }
+    { "key": "G", "label": "Sell ore", "package": "stresslab-economy", "command": "sell_all" },
+    { "key": "J", "label": "Creeper (admin)", "package": "stresslab-creeper", "command": "spawn" }
   ]
 }

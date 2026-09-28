@@ -229,9 +229,9 @@ mod tests {
         assert_eq!(p.rows[0], ("Bits".into(), "125".into(), [252, 209, 77, 255]));
         assert_eq!(p.rows[2].1, "3");
         assert_eq!(p.rows[1].1, "-", "no coal value yet");
-        // G is taken by a base-game bind here, so only H is offered.
-        assert_eq!(keys.iter().map(|k| k.key).collect::<Vec<_>>(), ['h']);
-        assert_eq!(p.keys, vec![('h', "Mine".to_string())]);
+        // G is taken by a base-game bind here, so only H and J are offered.
+        assert_eq!(keys.iter().map(|k| k.key).collect::<Vec<_>>(), ['h', 'j']);
+        assert_eq!(p.keys[0], ('h', "Mine".to_string()));
     }
 
     #[test]
