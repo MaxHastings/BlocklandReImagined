@@ -32,9 +32,20 @@ pub enum Kind {
     /// A block: textures or flipbooks per face, and named states game rules
     /// switch between (JSON). Drawn on bricks whose `look` names it.
     Block,
+    /// A weapons pack (`weapons.json`) merged onto the base game's by the
+    /// engine's content loading (`content_identity::kind_providers`).
+    Weapons,
+    /// A vehicles pack (`vehicles.json`), merged the same way.
+    Vehicles,
+    /// A brick catalog (`brick-catalog/stock-catalog.json` with its meshes
+    /// and collisions beside it), merged the same way.
+    Bricks,
+    /// A game mode the host can pick in Start Game: which Add-Ons run and
+    /// on which map (JSON). Server side: only the host reads it.
+    Mode,
 }
 impl Kind {
-    pub const NAMES: [&str; 9] = [
+    pub const NAMES: [&str; 13] = [
         "behaviour",
         "script",
         "world",
@@ -44,6 +55,10 @@ impl Kind {
         "archetype",
         "texture",
         "block",
+        "weapons",
+        "vehicles",
+        "bricks",
+        "mode",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -56,21 +71,36 @@ impl Kind {
             "archetype" => Self::Archetype,
             "texture" => Self::Texture,
             "block" => Self::Block,
+            "weapons" => Self::Weapons,
+            "vehicles" => Self::Vehicles,
+            "bricks" => Self::Bricks,
+            "mode" => Self::Mode,
             _ => return None,
         })
     }
     pub fn side(self) -> Side {
         match self {
-            Self::Behaviour | Self::Script | Self::World | Self::Entity | Self::Archetype => {
-                Side::Server
-            }
-            Self::Model | Self::Hud | Self::Texture | Self::Block => Side::Client,
+            Self::Behaviour
+            | Self::Script
+            | Self::World
+            | Self::Entity
+            | Self::Archetype
+            | Self::Mode => Side::Server,
+            // Shared gameplay data is client-visible: clients load it too.
+            Self::Model
+            | Self::Hud
+            | Self::Texture
+            | Self::Block
+            | Self::Weapons
+            | Self::Vehicles
+            | Self::Bricks => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
     pub fn max_bytes(self) -> usize {
         match self {
             Self::Script => 256 * 1024,
+            Self::Weapons | Self::Vehicles | Self::Bricks => 32 * 1024 * 1024,
             _ => 128 * 1024,
         }
     }
@@ -254,6 +284,47 @@ impl Behaviour {
             ensure!(
                 (1..=12_000).contains(&interval),
                 "tick_interval must be 1 to 12000"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// A game mode: a named choice in Start Game that says which Add-Ons run
+/// and, optionally, on which map. Like a v21 gamemode, it is data: the
+/// Add-Ons it names bring the rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameMode {
+    pub schema_version: u32,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// A world an included Add-On provides (`package:world/name`) or a base
+    /// game map id. None lets the host pick any base map.
+    #[serde(default)]
+    pub map: Option<String>,
+    /// Package ids that run: the mode's own package or its dependencies,
+    /// so turning the mode on turns them on.
+    pub add_ons: Vec<String>,
+}
+impl GameMode {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "mode schema_version must be 1");
+        ensure!(text(&self.name, 48), "name must be 1 to 48 characters");
+        ensure!(
+            self.description.len() <= 512 && !self.description.chars().any(char::is_control),
+            "description must be at most 512 characters on one line"
+        );
+        ensure!(
+            self.map.as_ref().is_none_or(|m| text(m, 160)),
+            "map must be a world id or a map id"
+        );
+        ensure!(self.add_ons.len() <= 64, "at most 64 add_ons");
+        for id in &self.add_ons {
+            ensure!(
+                bri_package::id::namespace_problem(id).is_none(),
+                "add_ons entry `{id}` is not a package id"
             );
         }
         Ok(())

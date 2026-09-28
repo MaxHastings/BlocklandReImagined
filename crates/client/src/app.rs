@@ -8,8 +8,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use bri_net::{
-    client::Client,
-    content_identity,
+    client::{Client, HostPin},
     server::{self, ServerOptions},
 };
 use bri_render::{
@@ -89,8 +88,9 @@ struct Attempt {
     last_chat: u64,
     /// Players typing in the chat box, in the order they started.
     talking: Vec<bri_world::OwnerId>,
-    /// Internet hosts: router port-forwarding outcomes for the host player.
-    router: Option<mpsc::Receiver<String>>,
+    /// LAN and internet hosts: reachability, invite and firewall news for
+    /// the host player.
+    router: Option<mpsc::Receiver<HostNotice>>,
     /// How this player trusts each other player (`secureClientCmd_ClientTrust`).
     trust: BTreeMap<bri_world::OwnerId, bri_sim::session::PlayerTrust>,
     /// Loading the map the host changed to failed.
@@ -101,6 +101,12 @@ struct Attempt {
     /// screen; the network client reports its part into the same one.
     progress: bri_progress::Progress,
     progress_seen: u64,
+    /// Hosts: the world revision last saved under a name (or entered, or
+    /// loaded). `None` takes the next revision seen.
+    saved_revision: Option<u64>,
+    /// Hosts: a load or map change is still rebuilding the world until this
+    /// time; its changes are not the player's unsaved work.
+    settling: Option<std::time::Instant>,
 }
 struct PendingAction {
     action: UiAction,
@@ -254,6 +260,8 @@ pub struct App {
     debris_models: crate::brick_debris::DebrisModels,
     /// Client-side mod packages (HUD panels, models) from `packages.json`.
     package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
+    /// Sandboxed code of enabled Add-Ons, run while a game is entered.
+    client_code: crate::client_code::ClientCode,
     /// Every enabled package including server behaviour, for hosting.
     server_packages: Option<Arc<bri_package_runtime::Catalog>>,
     package_models: crate::packages::PackageModels,
@@ -339,15 +347,102 @@ pub struct App {
     frame_stats: crate::console::FrameStats,
     /// LAN listings from the last discovery query: address -> certificate.
     lan_hosts: BTreeMap<String, Vec<u8>>,
-    lan_query: Option<mpsc::Receiver<Vec<(SocketAddr, bri_net::discovery::Beacon)>>>,
+    lan_query: Option<mpsc::Receiver<JoinList>>,
+    /// Add-On import in progress: request, row id and the worker's answer.
+    add_on_import: Option<(RequestId, String, mpsc::Receiver<Result<String>>)>,
+    /// The invite for the game this player hosts (`/invite` copies it).
+    invite: Option<String>,
+    /// The elevated firewall helper's outcome.
+    firewall_fix: Option<mpsc::Receiver<Result<(), String>>>,
+    /// The frame cap the platform was last given (startup, then saves), so
+    /// a save that leaves it alone sends no window command.
+    frame_limit: Option<u32>,
     macro_recording: Option<Vec<UiAction>>,
     build_macro: Vec<UiAction>,
     macro_playback: VecDeque<UiAction>,
     combat: CombatPresentation,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
+    /// Transport tasks still stopping a host and keeping its world; quitting
+    /// waits for them.
+    closing: Vec<tokio::task::JoinHandle<()>>,
+    /// When the window's close button last asked about unsaved changes.
+    close_asked: Option<std::time::Instant>,
 }
+/// News for a hosting player from background checks.
+enum HostNotice {
+    /// Internet host: router, public address and reachability.
+    Reach(bri_net::reach::Report),
+    /// LAN host: the invite on the home network.
+    Lan { invite: String },
+    Firewall { status: crate::firewall::Status, port: u16 },
+}
+
+/// What the Join Server list found: LAN games and the saved servers, each
+/// probed over its game port.
+struct JoinList {
+    lan: Vec<(SocketAddr, bri_net::discovery::Beacon)>,
+    saved: Vec<(crate::servers::SavedServer, Result<bri_net::client::Probe, String>)>,
+}
+
+/// Put `text` on the system clipboard.
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .map_err(|error| anyhow::anyhow!("Could not use the clipboard: {error}"))
+}
+
 impl App {
+    /// Chat lines (and an optional question) for a host notice.
+    fn host_notice(&mut self, notice: HostNotice) -> Vec<(String, Option<UiUpdate>)> {
+        match notice {
+            HostNotice::Reach(report) => {
+                bri_console::echo(format!("Hosting check: {report:?}"));
+                let mut lines: Vec<_> = report.lines().into_iter().map(|l| (l, None)).collect();
+                if let Some(invite) = report.invite.clone()
+                    && matches!(
+                        report.verdict,
+                        bri_net::reach::Verdict::Reachable | bri_net::reach::Verdict::Likely
+                    )
+                {
+                    let copied = copy_to_clipboard(&invite).is_ok();
+                    self.invite = Some(invite);
+                    lines.push((
+                        if copied {
+                            "Your invite is on the clipboard; paste it to friends. Type /invite to copy it again.".into()
+                        } else {
+                            "Type /invite to copy your invite.".into()
+                        },
+                        None,
+                    ));
+                } else if let Some(invite) = report.invite.or(report.lan_invite) {
+                    // Without a public address, the home network invite is
+                    // still something to copy.
+                    self.invite = Some(invite);
+                    lines.push(("Type /invite to copy an invite.".into(), None));
+                }
+                lines
+            }
+            HostNotice::Lan { invite } => {
+                self.invite = Some(invite);
+                vec![(
+                    "Players on your network see this game in Join Server. Type /invite to copy an invite for them.".into(),
+                    None,
+                )]
+            }
+            HostNotice::Firewall { status, port } => match status.advice() {
+                Some(advice) => vec![(
+                    advice.to_string(),
+                    Some(UiUpdate::Confirm {
+                        title: "Windows Firewall".into(),
+                        text: "Windows Firewall would stop friends from joining your game. Let Blockland ReImagined through? Windows will ask for permission once.".into(),
+                        action: Box::new(UiAction::AllowFirewall { port }),
+                    }),
+                )],
+                None => Vec::new(),
+            },
+        }
+    }
     /// Enable mod packages from another root than the content root (tools
     /// and tests); replaces the packages loaded at startup. Their worlds
     /// join the Start Game list.
@@ -364,8 +459,10 @@ impl App {
             self.content.maps.extend(worlds);
         }
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
+        self.ui.apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
         self.package_catalog = client;
         self.server_packages = server;
+        self.client_code = crate::client_code::ClientCode::load(root, set);
         Ok(())
     }
     /// Package HUD panels and keys from the latest replicated state.
@@ -811,6 +908,11 @@ impl App {
             }
             catalog
         };
+        let client_code = crate::client_code::ClientCode::load(
+            &content.paths.root,
+            &bri_package::packages::PackageSet::load_root(&content.paths.root)
+                .unwrap_or_else(|_| bri_package::packages::PackageSet::base()),
+        );
         // Worlds that packages provide are hosted like maps.
         let server_packages = {
             let (catalog, problems) = crate::packages::load_server(&content.paths.root);
@@ -887,9 +989,10 @@ impl App {
                 .map(|(id, p)| (id.clone(), p.name.clone()))
                 .collect(),
         );
-        let item_assets = Arc::new(crate::items::ItemAssets::load(
+        let item_assets = Arc::new(crate::items::ItemAssets::load_with(
             &content.paths.item_presentation,
             &content.paths.weapons,
+            &content.paths.weapon_extras,
         )?);
         let item_ui = crate::item_ui::ItemUi::new(
             &item_assets,
@@ -899,13 +1002,19 @@ impl App {
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);
-        let vehicle_assets = crate::vehicles::VehicleAssets::load(&content.paths.vehicles)?;
+        let vehicle_assets = crate::vehicles::VehicleAssets::load_with(
+            &content.paths.vehicles,
+            &content.paths.vehicle_extras,
+        )?;
         let world_items = crate::world_items::WorldItems::new(
             item_assets.clone(),
             Arc::new(content.weapons.pack.clone()),
             Default::default(),
         )?;
-        let mut saved = settings::load(&state_dir.join("settings.json"))?;
+        let settings::Recovered {
+            settings: mut saved,
+            notice: settings_notice,
+        } = settings::recover(&state_dir.join("settings.json"));
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
         let graphics = crate::graphics::Graphics::from_settings(&saved);
         let audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
@@ -924,7 +1033,14 @@ impl App {
             saved,
         );
         ui.set_console_commands(crate::console::commands());
+        if let Some(text) = settings_notice {
+            ui.apply(UiUpdate::MessageBox {
+                title: "Settings Problem".into(),
+                text,
+            });
+        }
         ui.apply(UiUpdate::Maps(content.maps.clone()));
+        ui.apply(UiUpdate::GameModes(crate::packages::modes(server_packages.as_ref())));
         let backgrounds = content
             .ui_pack
             .data
@@ -935,6 +1051,7 @@ impl App {
             .map(IconRef::Pack)
             .collect();
         ui.apply(UiUpdate::MainMenuBackgrounds(backgrounds));
+        let frame_limit = settings::startup_display(&ui.settings()).max_fps;
         Ok(Self {
             item_assets,
             item_ui,
@@ -946,6 +1063,8 @@ impl App {
             ui,
             saves: crate::saves::Store::new(state_dir, &content),
             file_jobs: Default::default(),
+            closing: Vec::new(),
+            close_asked: None,
             content,
             controls: Controls::default(),
             state_dir: state_dir.into(),
@@ -970,6 +1089,7 @@ impl App {
             brick_debris: Default::default(),
             debris_models: Default::default(),
             package_catalog,
+            client_code,
             server_packages,
             package_models: Default::default(),
             brick_kills: Vec::new(),
@@ -1033,6 +1153,10 @@ impl App {
             frame_stats: Default::default(),
             lan_hosts: BTreeMap::new(),
             lan_query: None,
+            add_on_import: None,
+            invite: None,
+            firewall_fix: None,
+            frame_limit,
             macro_recording: None,
             build_macro: Vec::new(),
             macro_playback: VecDeque::new(),
@@ -1085,6 +1209,7 @@ impl App {
         Ok(())
     }
     fn disconnect(&mut self) {
+        self.invite = None;
         self.ui.core.name_tags.clear();
         self.scene_map = None;
         self.abilities = Default::default();
@@ -1111,7 +1236,12 @@ impl App {
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
-        self.attempt.take();
+        if let Some(mut attempt) = self.attempt.take() {
+            self.closing.retain(|task| !task.is_finished());
+            self.closing.extend(attempt.worker.finish());
+        }
+        self.ui.apply(UiUpdate::UnsavedChanges(false));
+        self.client_code.stop();
         self.avatars.clear();
         self.mount_meshes.clear();
         self.avatar_actions.clear();
@@ -1452,6 +1582,7 @@ impl App {
         id: RequestId,
         map: String,
         mode: ServerMode,
+        game_mode: Option<String>,
         max_players: u32,
         name: String,
         password: String,
@@ -1465,21 +1596,21 @@ impl App {
         let admin = bri_admin::Secret::new(admin)?;
         let super_admin = bri_admin::Secret::new(super_admin)?;
         ensure!((1..=64).contains(&max_players), "Invalid player limit");
+        // What runs: the chosen game mode's Add-Ons, or (Custom) every
+        // enabled Add-On that fits the map. A package world stands on its
+        // environment map; the packages then generate the ground.
+        let hosted = crate::packages::hosted(self.server_packages.as_ref(), &map, game_mode.as_deref())?;
+        let map = hosted.map;
         ensure!(
             self.content.maps.iter().any(|m| m.id == map),
             "This map has no usable native bundle yet"
         );
         let paths = self.content.paths.clone();
         let paths_for_maps = paths.clone();
-        // A package world stands on its environment map; the packages then
-        // generate the ground and bring their gameplay.
-        let package_world = self
-            .server_packages
-            .clone()
-            .and_then(|c| c.world().filter(|(_, id, _)| **id == map).map(|(_, _, w)| w.environment.clone()).map(|base| (c, base)));
-        let base_map = package_world.as_ref().map_or_else(|| map.clone(), |(_, base)| base.clone());
+        let base_map = hosted.base_map;
+        let package_world = hosted.catalog;
         let package_save = package_world.as_ref().map(|_| {
-            self.state_dir.join("packages").join(format!("{}.save.json", map.replace([':', '/'], "-")))
+            self.state_dir.join("packages").join(format!("{}.save.json", hosted.save_key.replace([':', '/'], "-")))
         });
         // Admin Change Map choices (the Tutorial has its own entry point).
         let map_list: Vec<_> = self
@@ -1524,6 +1655,7 @@ impl App {
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
         let load_limit = self.load_limit.clone();
+        let saves = self.saves.clone();
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -1560,19 +1692,15 @@ impl App {
             let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
                     let _permit = permit;
-                    let weapons = content_identity::WeaponContent::load(&paths.weapons)?;
+                    let weapons = paths.weapon_content()?;
                     weapon_snapshot.ensure_same(&weapons)?;
-                    let item_physics = content_identity::ItemPhysicsContent::load(
-                        &paths.item_presentation,
-                        &weapons,
-                    )?;
+                    let item_physics = paths.item_physics(&weapons)?;
                     physics_snapshot.ensure_same(&item_physics)?;
                     let loaded = paths.load_map(&base_map, None)?;
                     let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
-                    let vehicle_pack =
-                        bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?;
+                    let vehicle_pack = paths.vehicle_pack()?;
                     let meshes = Arc::new(
                         loaded
                             .simulation
@@ -1662,18 +1790,25 @@ impl App {
             };
             let mut spawn_points = loaded.spawn_points.clone();
             let mut session = setup.session(loaded)?;
-            if let Some((catalog, _)) = package_world {
+            if let Some(catalog) = package_world {
                 let save = match package_save.as_ref().map(std::fs::read) {
                     Some(Ok(bytes)) => Some(bri_sim::session::PackageSave::decode(&bytes)?),
                     _ => None,
                 };
-                spawn_points = session.install_packages(catalog, save)?;
-                ensure!(!spawn_points.is_empty(), "The package world generated no ground to stand on");
+                let world = catalog.world().is_some();
+                let generated = session.install_packages(catalog, save)?;
+                if world {
+                    ensure!(!generated.is_empty(), "The package world generated no ground to stand on");
+                    spawn_points = generated;
+                }
                 if let Some(dir) = package_save.as_ref().and_then(|p| p.parent()) {
                     std::fs::create_dir_all(dir)?;
                 }
             }
             session.set_admin_passwords(admin, super_admin)?;
+            // Single-player and hosted games autosave into the map's saves, and
+            // keep the world they end with (v20 lost unsaved builds).
+            let autosaver = saves.autosaver(session.simulation().state());
             let map_loader: server::MapLoader = {
                 let paths = paths_for_maps.clone();
                 Arc::new(move |map: &str| setup.session(paths.load_map(map, None)?))
@@ -1691,7 +1826,10 @@ impl App {
                         Some(server::HostCertificate::load_or_create(&state_dir)?)
                     },
                     map_loader: Some(map_loader),
-                    autosave: None,
+                    autosave: Some(server::Autosave {
+                        every: crate::saves::AUTOSAVE_EVERY,
+                        save: autosaver.clone(),
+                    }),
                     packages: None,
                 },
                 max_players as usize,
@@ -1705,8 +1843,26 @@ impl App {
                 host.advertise(listing_name, listing_map, max_players, identity.digest())
                     .await?;
             }
+            if !single {
+                // Windows Firewall can block friends whatever the router does.
+                let firewall = router_tx.clone();
+                let port = host.address.port();
+                std::thread::spawn(move || {
+                    let status = crate::firewall::status(port);
+                    let _ = firewall.send(HostNotice::Firewall { status, port });
+                });
+            }
             if internet {
-                host.open_router_ports(router_tx);
+                let reach = router_tx.clone();
+                host.open_to_internet(move |report| {
+                    let _ = reach.send(HostNotice::Reach(report));
+                });
+            } else if !single && let Some(ip) = bri_net::reach::local_ip() {
+                let invite = bri_net::invite::invite(
+                    SocketAddr::new(ip, host.address.port()),
+                    &host.certificate,
+                );
+                let _ = router_tx.send(HostNotice::Lan { invite });
             }
             let client = Client::connect_reporting(
                 address,
@@ -1724,6 +1880,7 @@ impl App {
                 host: Some(host),
                 mods: Default::default(),
                 package_save,
+                keep_world: Some(autosaver),
             })
         });
         self.attempt = Some(Attempt {
@@ -1739,12 +1896,14 @@ impl App {
             view: None,
             last_chat: 0,
             talking: Vec::new(),
-            router: internet.then_some(router),
+            router: (!single).then_some(router),
             trust: BTreeMap::new(),
             map_failure: None,
             reloading: false,
             progress,
             progress_seen: 0,
+            saved_revision: None,
+            settling: None,
         });
         Ok(())
     }
@@ -1753,24 +1912,13 @@ impl App {
             password.is_empty(),
             "Password authentication is not connected yet"
         );
-        let address = parse_join_address(&address)?;
-        // Certificates come from LAN discovery, then saved pins, then a direct
-        // discovery query to the address (trust on first use, then pinned).
+        let target = bri_net::invite::JoinTarget::parse(&address)?;
+        let typed = target.address();
+        // An invite's key, a LAN listing or a saved pin identifies the host;
+        // a first join trusts the certificate the host presents and pins it.
         let pins_file = self.state_dir.join("trusted-hosts.json");
-        let known = self
-            .lan_hosts
-            .get(&address.to_string())
-            .cloned()
-            .or_else(|| {
-                std::fs::metadata(&pins_file)
-                    .ok()
-                    .filter(|m| m.len() <= 1024 * 1024)
-                    .and_then(|_| std::fs::read(&pins_file).ok())
-                    .and_then(|bytes| {
-                        serde_json::from_slice::<BTreeMap<String, Vec<u8>>>(&bytes).ok()
-                    })
-                    .and_then(|pins| pins.get(&address.to_string()).cloned())
-            });
+        let servers_file = self.state_dir.join("servers.json");
+        let lan_hosts = self.lan_hosts.clone();
         let paths = self.content.paths.clone();
         let player = self.player_name();
         let weapon_snapshot = self.content.weapons.clone();
@@ -1792,32 +1940,28 @@ impl App {
         self.ui.apply_session(
             id,
             UiUpdate::Connection(ConnectionState::Connecting {
-                text: format!("Connecting to {address}…"),
+                text: format!("Connecting to {typed}…"),
             }),
         );
+        let pin_key = typed.clone();
         let progress = bri_progress::Progress::new();
         let reporting = progress.clone();
         let worker = Worker::start(self.runtime.handle(), async move {
-            let certificate = match known {
-                Some(certificate) => certificate,
-                None => bri_net::discovery::query(
-                    &[SocketAddr::new(
-                        address.ip(),
-                        bri_net::discovery::DISCOVERY_PORT,
-                    )],
-                    Duration::from_millis(1500),
-                )
-                .await?
-                .into_iter()
-                .find(|(a, _)| a.port() == address.port())
-                .context("No Blockland ReImagined host answered at that address")?
-                .1
-                .certificate_der()?,
+            let route = target.resolve().await?;
+            let address = route.address;
+            let pins = pins_file.clone();
+            let saved_key = pin_key.clone();
+            let pin = match (route.key, lan_hosts.get(&address.to_string())) {
+                (Some(key), _) => HostPin::Key(key),
+                (None, Some(certificate)) => HostPin::Certificate(certificate.clone()),
+                (None, None) => tokio::task::spawn_blocking(move || {
+                    read_small_json::<BTreeMap<String, Vec<u8>>>(&pins)
+                        .and_then(|pins| pins.get(&saved_key).cloned())
+                        .map_or(HostPin::FirstUse, HostPin::Certificate)
+                })
+                .await?,
             };
-            ensure!(
-                !certificate.is_empty() && certificate.len() <= 16384,
-                "Invalid host certificate"
-            );
+            let had_pin = matches!(pin, HostPin::Certificate(_));
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })
@@ -1827,12 +1971,9 @@ impl App {
             let permit = load_limit.clone().acquire_owned().await?;
             let identity = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
-                let weapons = content_identity::WeaponContent::load(&identity_paths.weapons)?;
+                let weapons = identity_paths.weapon_content()?;
                 weapon_snapshot.ensure_same(&weapons)?;
-                let item_physics = content_identity::ItemPhysicsContent::load(
-                    &identity_paths.item_presentation,
-                    &weapons,
-                )?;
+                let item_physics = identity_paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
                 identity_paths.environment()
             })
@@ -1843,9 +1984,9 @@ impl App {
             let cache = bri_package::sync::Cache::open(&package_cache)?;
             let local = identity.client_packages();
             let mut mods = None;
-            let (client, _) = Client::connect_fetching(
+            let joined = Client::connect_fetching(
                 address,
-                &certificate,
+                pin,
                 player,
                 local.clone(),
                 None,
@@ -1859,20 +2000,48 @@ impl App {
                     Ok(packages)
                 },
             )
-            .await?;
-            let mods = std::sync::Arc::new(mods.unwrap_or_default());
-            // Remember the host's certificate for later direct joins.
-            let pin = certificate.clone();
-            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut pins: BTreeMap<String, Vec<u8>> = std::fs::read(&pins_file)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice(&b).ok())
-                    .unwrap_or_default();
-                if pins.len() < 1024 {
-                    pins.insert(address.to_string(), pin);
-                    bri_files::replace(&pins_file, &serde_json::to_vec_pretty(&pins)?)?;
+            .await;
+            let client = match joined {
+                Ok((client, _)) => client,
+                Err(error) => {
+                    // A host that reinstalled has a new identity: forget the
+                    // old pin so joining again (the player's choice) trusts it.
+                    // An invite's key is never forgotten this way: it came
+                    // from the host just now.
+                    if had_pin
+                        && matches!(
+                            error.downcast_ref::<bri_net::client::JoinError>(),
+                            Some(bri_net::client::JoinError::IdentityChanged(_))
+                        )
+                    {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            update_small_json(&pins_file, |pins: &mut BTreeMap<String, Vec<u8>>| {
+                                pins.remove(&pin_key);
+                            })
+                        })
+                        .await;
+                    }
+                    return Err(error);
                 }
-                Ok(())
+            };
+            let mods = std::sync::Arc::new(mods.unwrap_or_default());
+            // Remember the host's certificate and the server for later joins.
+            let pin = client.certificate.clone();
+            let name = plain_chat(&client.listing.name);
+            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                let shared = bri_net::invite::JoinTarget::Direct {
+                    host: target_host(&pin_key),
+                    port: address.port(),
+                    key: Some(bri_net::invite::host_key(&pin)),
+                };
+                update_small_json(&pins_file, |pins: &mut BTreeMap<String, Vec<u8>>| {
+                    if pins.len() < 1024 || pins.contains_key(&pin_key) {
+                        pins.insert(pin_key.clone(), pin);
+                    }
+                })?;
+                let mut saved = crate::servers::SavedServers::load(&servers_file);
+                saved.joined(&pin_key, Some(shared.to_string()), &name, unix_now());
+                saved.save(&servers_file)
             })
             .await;
             let map = client.replica.world.map_id.clone();
@@ -1893,13 +2062,14 @@ impl App {
                 host: None,
                 mods,
                 package_save: None,
+                keep_world: None,
             })
         });
         self.attempt = Some(Attempt {
             id,
             worker,
             scene,
-            name: address.to_string(),
+            name: typed.clone(),
             max_players: 64,
             local: false,
             single: false,
@@ -1914,6 +2084,8 @@ impl App {
             reloading: false,
             progress,
             progress_seen: 0,
+            saved_revision: None,
+            settling: None,
         });
         Ok(())
     }
@@ -2261,6 +2433,12 @@ impl App {
         };
         let result = match result {
             Ok(crate::saves::Outcome::Listed(entries)) => {
+                // A save finished: what the host has now is saved under a name.
+                if matches!(request.action, UiAction::SaveBricks { .. })
+                    && let Some(a) = self.attempt.as_mut().filter(|a| a.local)
+                {
+                    a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
+                }
                 let maps = entries
                     .iter()
                     .map(|e| e.info.map.clone())
@@ -2289,7 +2467,13 @@ impl App {
                         },
                         request.action,
                     ) {
-                        Ok(()) => return, // Complete only after authoritative acceptance.
+                        Ok(()) => {
+                            // The loaded build arrives in batches; it matches its file.
+                            if let Some(a) = self.attempt.as_mut() {
+                                a.settling = Some(std::time::Instant::now() + SETTLE);
+                            }
+                            return; // Complete only after authoritative acceptance.
+                        }
                         Err(error) => Err(error),
                     }
                 } else {
@@ -2364,6 +2548,8 @@ impl App {
                 }
                 network::Event::Ready => a.ready = true,
                 network::Event::MapChanged(map) => {
+                    a.saved_revision = None;
+                    a.settling = Some(std::time::Instant::now() + SETTLE);
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
                     let paths = self.content.paths.clone();
@@ -2564,6 +2750,9 @@ impl App {
             failed = Some("Connection worker stopped".into());
         }
         if let Some(reason) = failed {
+            if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
+                self.ui.apply_session(a.id, UiUpdate::AddOnMismatch(mismatch));
+            }
             self.ui.apply_session(
                 a.id,
                 UiUpdate::Connection(ConnectionState::Failed { reason }),
@@ -2890,6 +3079,16 @@ impl App {
                 },
             );
             a.entered = true;
+            // A game this player hosts runs their own Add-Ons' code; someone
+            // else's server runs only code the player trusted there.
+            self.client_code.start(
+                if a.local {
+                    crate::client_code::Host::Local
+                } else {
+                    crate::client_code::Host::Remote(&a.name)
+                },
+                &self.state_dir,
+            );
             if let Some(view) = &a.view {
                 self.reset_weapon_effect_session(a.id, view.checkpoint_cue_cursor);
             }
@@ -2955,8 +3154,13 @@ impl App {
             if a.entered
                 && let Some(router) = &a.router
             {
-                while let Ok(text) = router.try_recv() {
-                    self.ui.apply_session(a.id, UiUpdate::Chat { text: plain_chat(&text) });
+                while let Ok(notice) = router.try_recv() {
+                    for (text, confirm) in self.host_notice(notice) {
+                        self.ui.apply_session(a.id, UiUpdate::Chat { text: plain_chat(&text) });
+                        if let Some(update) = confirm {
+                            self.ui.apply_session(a.id, update);
+                        }
+                    }
                 }
             }
             self.ui.apply_session(
@@ -3007,14 +3211,54 @@ impl App {
             self.disconnect();
             return Ok(());
         }
+        self.track_unsaved(&mut a);
         self.attempt = Some(a);
         Ok(())
     }
+    /// Tell the menus whether leaving would drop changes the host has not
+    /// saved under a name.
+    fn track_unsaved(&mut self, a: &mut Attempt) {
+        let now = std::time::Instant::now();
+        let unsaved = match a.view.as_ref().map(|v| v.world_revision) {
+            Some(revision) if a.local && a.entered => {
+                match a.settling {
+                    Some(until) if now < until => {
+                        // Still rebuilding: follow it, and wait for it to go quiet.
+                        if a.saved_revision != Some(revision) {
+                            a.settling = Some(now + SETTLE);
+                        }
+                        a.saved_revision = Some(revision);
+                    }
+                    Some(_) => a.settling = None,
+                    None => {}
+                }
+                *a.saved_revision.get_or_insert(revision) != revision
+            }
+            _ => false,
+        };
+        if unsaved != self.ui.core.unsaved_changes {
+            self.ui.apply_session(a.id, UiUpdate::UnsavedChanges(unsaved));
+        }
+    }
 }
+/// How long a load or map change must stop changing the world before later
+/// changes count as unsaved.
+const SETTLE: Duration = Duration::from_secs(3);
 /// Chat strings are plain user content, never UI markup/color instructions.
 impl Drop for App {
     fn drop(&mut self) {
         self.disconnect();
+        // Let a hosted game stop and keep its world before the runtime (and
+        // every task on it) goes away.
+        let closing = std::mem::take(&mut self.closing);
+        if !closing.is_empty() && tokio::runtime::Handle::try_current().is_err() {
+            self.runtime.block_on(async {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+                for task in closing {
+                    let _ = tokio::time::timeout_at(deadline, task).await;
+                }
+            });
+        }
     }
 }
 /// Eye of the camera in control: the free camera itself, an orbit around the
@@ -3320,6 +3564,9 @@ impl PlatformApp for App {
     fn ui(&self) -> &Ui {
         &self.ui
     }
+    fn focus_changed(&mut self, focused: bool) {
+        self.audio.set_focused(focused);
+    }
     fn ui_mut(&mut self) -> &mut Ui {
         &mut self.ui
     }
@@ -3337,6 +3584,11 @@ impl PlatformApp for App {
         self.poll_network()?;
         self.poll_files();
         self.update_package_hud();
+        if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
+            for text in self.client_code.take_messages() {
+                self.ui.apply_session(a.id, UiUpdate::Chat { text });
+            }
+        }
         let alive = self.local_alive();
         self.follow_control();
         self.controls.fly(elapsed.as_secs_f32());
@@ -3562,13 +3814,31 @@ impl PlatformApp for App {
         }
         self.update_combat_presentation();
         self.update_net_graph();
+        if let Some((request, _, receiver)) = &self.add_on_import
+            && let Ok(result) = receiver.try_recv()
+        {
+            let request = *request;
+            self.add_on_import = None;
+            let mut view = crate::add_ons::view(&self.content.paths.root);
+            match result {
+                Ok(notice) => {
+                    view.notice = notice;
+                    self.ui.apply(UiUpdate::AddOns(view));
+                    self.answer(request, Ok(()));
+                }
+                Err(error) => {
+                    self.ui.apply(UiUpdate::AddOns(view));
+                    self.answer(request, Err(error));
+                }
+            }
+        }
         if let Some(receiver) = &self.lan_query
             && let Ok(found) = receiver.try_recv()
         {
             self.lan_query = None;
             self.lan_hosts.clear();
             let mut servers = Vec::new();
-            for (address, beacon) in found {
+            for (address, beacon) in found.lan {
                 if let Ok(certificate) = beacon.certificate_der() {
                     self.lan_hosts.insert(address.to_string(), certificate);
                     servers.push(ServerInfo {
@@ -3581,12 +3851,78 @@ impl PlatformApp for App {
                         max_players: beacon.max_players,
                         bricks: 0,
                         map: plain_chat(&beacon.map),
+                        favorite: false,
                     });
                 }
             }
+            // Servers joined before or starred, favourites first, with what
+            // their game port answered just now.
+            let mut saved_rows = Vec::new();
+            for (saved, probe) in found.saved {
+                let lan = servers
+                    .iter_mut()
+                    .find(|s| s.address.eq_ignore_ascii_case(&saved.address));
+                if let Some(lan) = lan {
+                    lan.favorite = saved.favorite;
+                    continue;
+                }
+                let name = if saved.name.is_empty() {
+                    saved.address.clone()
+                } else {
+                    plain_chat(&saved.name)
+                };
+                let mut row = ServerInfo {
+                    address: saved.target().to_string(),
+                    name,
+                    password: false,
+                    dedicated: false,
+                    ping_ms: None,
+                    players: 0,
+                    max_players: 0,
+                    bricks: 0,
+                    map: String::new(),
+                    favorite: saved.favorite,
+                };
+                match probe {
+                    Ok(probe) => {
+                        if !probe.listing.name.is_empty() {
+                            row.name = plain_chat(&probe.listing.name);
+                        }
+                        row.map = plain_chat(&probe.listing.map);
+                        row.players = probe.listing.players;
+                        row.max_players = probe.listing.max_players;
+                        row.ping_ms = Some(probe.ping.as_millis().min(9999) as u32);
+                    }
+                    Err(reason) => row.map = reason,
+                }
+                saved_rows.push(row);
+            }
+            // LAN favourites and saved favourites lead the list.
+            servers.sort_by_key(|s| !s.favorite);
+            saved_rows.sort_by_key(|s| !s.favorite);
+            let (favorites, rest): (Vec<_>, Vec<_>) = saved_rows.into_iter().partition(|s| s.favorite);
+            let mut list = favorites;
+            list.extend(servers);
+            list.extend(rest);
             self.ui.apply(UiUpdate::LanServers {
-                servers,
+                servers: list,
                 querying: false,
+            });
+        }
+        if let Some(receiver) = &self.firewall_fix
+            && let Ok(result) = receiver.try_recv()
+        {
+            self.firewall_fix = None;
+            let (title, text) = match result {
+                Ok(()) => (
+                    "Windows Firewall",
+                    "Blockland ReImagined can now accept friends through Windows Firewall.".to_string(),
+                ),
+                Err(reason) => ("Windows Firewall", reason),
+            };
+            self.ui.apply(UiUpdate::MessageBox {
+                title: title.into(),
+                text,
             });
         }
         // Build macro playback: one recorded building action per frame so the
@@ -4079,6 +4415,11 @@ impl PlatformApp for App {
                     continue;
                 }
                 UiAction::SaveSettings(value) => {
+                    let max_fps = settings::startup_display(&value).max_fps;
+                    if max_fps != self.frame_limit {
+                        self.frame_limit = max_fps;
+                        platform.push(PlatformCommand::FrameLimit(max_fps));
+                    }
                     settings::save(&self.state_dir.join("settings.json"), &value).and_then(|()| {
                         self.audio.apply_settings(&value);
                         self.graphics = crate::graphics::Graphics::from_settings(&value);
@@ -4089,6 +4430,7 @@ impl PlatformApp for App {
                 UiAction::HostGame {
                     map,
                     mode,
+                    game_mode,
                     max_players,
                     server_name,
                     password,
@@ -4102,6 +4444,7 @@ impl PlatformApp for App {
                         id,
                         map,
                         mode,
+                        game_mode,
                         max_players,
                         server_name,
                         password,
@@ -4326,6 +4669,24 @@ impl PlatformApp for App {
                     }
                     result
                 }
+                UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
+                    match self.invite.clone() {
+                        Some(invite) => {
+                            let copied = copy_to_clipboard(&invite);
+                            let text = match &copied {
+                                Ok(()) => format!("Invite copied to the clipboard: {invite}"),
+                                Err(_) => format!("Your invite: {invite}"),
+                            };
+                            if let Some(a) = &self.attempt {
+                                self.ui.apply_session(a.id, UiUpdate::Chat { text });
+                            }
+                            Ok(())
+                        }
+                        None => Err(anyhow::anyhow!(
+                            "Only the host has an invite, and it appears once hosting has checked your connection."
+                        )),
+                    }
+                }
                 UiAction::ChatCommand { ref name, ref args } => {
                     let snapshot = self
                         .attempt
@@ -4374,6 +4735,7 @@ impl PlatformApp for App {
                         id,
                         "v20/add-ons/map_tutorial/tutorial.mis".into(),
                         ServerMode::SinglePlayer,
+                        None,
                         1,
                         "Tutorial".into(),
                         String::new(),
@@ -4449,20 +4811,118 @@ impl PlatformApp for App {
                     }),
                 UiAction::QueryLan => {
                     let (send, receive) = mpsc::sync_channel(1);
+                    let saved = crate::servers::SavedServers::load(&self.state_dir.join("servers.json"));
+                    let pins: BTreeMap<String, Vec<u8>> =
+                        read_small_json(&self.state_dir.join("trusted-hosts.json")).unwrap_or_default();
                     self.runtime.spawn(async move {
-                        let found = bri_net::discovery::query(
-                            &[bri_net::discovery::broadcast()],
-                            Duration::from_millis(1200),
-                        )
-                        .await
-                        .unwrap_or_default();
-                        let _ = send.send(found);
+                        let broadcast = [bri_net::discovery::broadcast()];
+                        let lan = bri_net::discovery::query(&broadcast, Duration::from_millis(1200));
+                        // Every saved server is asked at once over its game
+                        // port; a probe never pins anything.
+                        let probes = saved.servers.into_iter().map(|server| {
+                            let pin = pins.get(&server.address).cloned();
+                            async move {
+                                let probe = async {
+                                    let target = bri_net::invite::JoinTarget::parse(server.target())?;
+                                    let route = target.resolve().await?;
+                                    let pin = match (route.key, pin) {
+                                        (Some(key), _) => HostPin::Key(key),
+                                        (None, Some(certificate)) => HostPin::Certificate(certificate),
+                                        (None, None) => HostPin::FirstUse,
+                                    };
+                                    bri_net::client::probe(route.address, &pin, Duration::from_secs(2)).await
+                                }
+                                .await
+                                .map_err(|error| probe_failure(&error));
+                                (server, probe)
+                            }
+                        });
+                        let (lan, saved) = tokio::join!(lan, futures_join_all(probes));
+                        let _ = send.send(JoinList {
+                            lan: lan.unwrap_or_default(),
+                            saved,
+                        });
                     });
                     self.lan_query = Some(receive);
                     self.ui.apply(UiUpdate::LanServers {
                         servers: vec![],
                         querying: true,
                     });
+                    Ok(())
+                }
+                UiAction::RequestAddOns => {
+                    let view = crate::add_ons::view(&self.content.paths.root);
+                    self.ui.apply(UiUpdate::AddOns(view));
+                    Ok(())
+                }
+                UiAction::SetAddOnEnabled { ref id, enabled } => {
+                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+                        .map(|view| self.ui.apply(UiUpdate::AddOns(view)))
+                }
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
+                    .map(|view| self.ui.apply(UiUpdate::AddOns(view))),
+                UiAction::ImportAddOn { id: ref row } => {
+                    let root = self.content.paths.root.clone();
+                    let started = if self.add_on_import.is_some() {
+                        Err(anyhow::anyhow!("Another add-on is importing; wait for it to finish."))
+                    } else {
+                        crate::add_ons::importer()
+                            .and_then(|importer| crate::add_ons::start_import(&root, row, &importer))
+                    };
+                    match started {
+                        Ok(receiver) => {
+                            let mut view = crate::add_ons::view(&root);
+                            crate::add_ons::mark_importing(&mut view, row);
+                            view.notice = "Importing... the game keeps running meanwhile.".into();
+                            self.ui.apply(UiUpdate::AddOns(view));
+                            self.add_on_import = Some((id, row.clone(), receiver));
+                            continue;
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+                UiAction::ToggleFavorite { ref address } => {
+                    let path = self.state_dir.join("servers.json");
+                    let mut saved = crate::servers::SavedServers::load(&path);
+                    // LAN rows are keyed by address; saved rows may be invites.
+                    let target = bri_net::invite::JoinTarget::parse(address);
+                    let key = target.as_ref().map_or(address.clone(), |t| t.address());
+                    let invite = target
+                        .ok()
+                        .filter(|t| t.key().is_some())
+                        .map(|t| t.to_string())
+                        .or_else(|| {
+                            self.lan_hosts.get(address).map(|certificate| {
+                                bri_net::invite::JoinTarget::Direct {
+                                    host: target_host(address),
+                                    port: address
+                                        .rsplit_once(':')
+                                        .and_then(|(_, p)| p.parse().ok())
+                                        .unwrap_or(bri_net::invite::DEFAULT_PORT),
+                                    key: Some(bri_net::invite::host_key(certificate)),
+                                }
+                                .to_string()
+                            })
+                        });
+                    let name = self
+                        .ui
+                        .core
+                        .servers
+                        .iter()
+                        .find(|s| s.address == *address)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default();
+                    saved.toggle_favorite(&key, invite, &name);
+                    let result = saved.save(&path);
+                    self.ui.core.request(UiAction::QueryLan);
+                    result
+                }
+                UiAction::AllowFirewall { port } => {
+                    let (send, receive) = mpsc::sync_channel(1);
+                    std::thread::spawn(move || {
+                        let _ = send.send(crate::firewall::allow(port).map_err(|e| format!("{e:#}")));
+                    });
+                    self.firewall_fix = Some(receive);
                     Ok(())
                 }
                 UiAction::Console { ref line } => {
@@ -4507,6 +4967,7 @@ impl PlatformApp for App {
         ));
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
+        self.client_code.gpu_stopped();
         let weather_limits = bri_weather::WeatherLimits::default();
         self.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
@@ -4540,7 +5001,23 @@ impl PlatformApp for App {
         self.depth = None;
         Ok(())
     }
+    fn close_requested(&mut self) -> bool {
+        // Closing again while being asked quits, so the window can always close.
+        let asked = self
+            .close_asked
+            .replace(std::time::Instant::now())
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(30));
+        if !self.ui.core.unsaved_changes || asked {
+            return true;
+        }
+        self.ui.core.confirm_unsaved(bri_ui::ui::Callback::Quit);
+        false
+    }
+    fn gpu_lost(&mut self) {
+        self.client_code.device_lost();
+    }
     fn gpu_stopped(&mut self) {
+        self.client_code.gpu_stopped();
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
@@ -4907,6 +5384,19 @@ impl PlatformApp for App {
             right,
             up: right.cross(forward).normalize(),
         };
+        if self.client_code.is_started() {
+            self.client_code.run_frame(self.animation_time, eye, forward);
+            self.client_code.prepare(
+                frame.device,
+                frame.queue,
+                frame.format,
+                bri_render::scene::DEPTH_FORMAT,
+                renderer.samples(),
+                effects_camera.view_projection,
+                eye,
+                u64::from(frame.size.0) * u64::from(frame.size.1),
+            );
+        }
         let world_frame = self.effects.world.snapshot(&effects_camera);
         let weapon_frame = self.weapon_effects.world().snapshot(&effects_camera);
         let actor_frame = self.actor_effects.world().snapshot(&effects_camera);
@@ -5097,22 +5587,74 @@ impl PlatformApp for App {
         self.foliage.render(&mut pass);
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
+        self.client_code.render(&mut pass);
+        drop(pass);
+        self.client_code.resolve(frame.encoder);
         Ok(true)
     }
 }
-/// Connect to IP input: an IPv4/IPv6 address with an optional port. A bare
-/// address uses the default game port, as Torque's `connect` did.
-fn parse_join_address(text: &str) -> Result<SocketAddr> {
-    let text = text.trim();
-    text.parse::<SocketAddr>()
-        .or_else(|_| {
-            text.trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .map(|ip| SocketAddr::new(ip, 28000))
-        })
+/// Wait for every future (a small join_all, to avoid a dependency).
+async fn futures_join_all<F: std::future::Future + Send + 'static>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
+where
+    F::Output: Send + 'static,
+{
+    let handles: Vec<_> = futures.into_iter().map(tokio::spawn).collect();
+    let mut out = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if let Ok(value) = handle.await {
+            out.push(value);
+        }
+    }
+    out
+}
+
+/// What the join list shows for a saved server that did not answer.
+fn probe_failure(error: &anyhow::Error) -> String {
+    use bri_net::client::JoinError;
+    match error.downcast_ref::<JoinError>() {
+        Some(JoinError::NoAnswer(_)) => "(no answer)".into(),
+        Some(JoinError::IdentityChanged(_)) => "(host changed)".into(),
+        Some(JoinError::Rejected(reason)) if reason.contains("version") => "(other version)".into(),
+        _ if error.to_string().contains("Could not find") => "(unknown name)".into(),
+        _ => "(unreachable)".into(),
+    }
+}
+
+/// The host part of a normalized `host:port` / `[v6]:port` address.
+fn target_host(address: &str) -> String {
+    address
+        .rsplit_once(':')
+        .map_or(address, |(host, _)| host)
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string()
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// A small JSON file in the client state folder, or None when missing or
+/// unreadable.
+pub(crate) fn read_small_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    std::fs::metadata(path)
         .ok()
-        .context("Enter an IP address and port, for example 203.0.113.10:28000")
+        .filter(|m| m.len() <= 1024 * 1024)
+        .and_then(|_| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+/// Read, change and crash-safely write back a small JSON state file.
+fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default>(
+    path: &Path,
+    change: impl FnOnce(&mut T),
+) -> Result<()> {
+    let mut value: T = read_small_json(path).unwrap_or_default();
+    change(&mut value);
+    bri_files::replace(path, &serde_json::to_vec_pretty(&value)?)?;
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -5126,21 +5668,26 @@ mod tests {
         assert!(fov_y.to_degrees() < 60.0);
     }
     #[test]
-    fn join_address_accepts_public_ips_with_or_without_port() {
-        use super::parse_join_address;
-        assert_eq!(
-            parse_join_address(" 203.0.113.10:28001 ").unwrap().to_string(),
-            "203.0.113.10:28001"
-        );
-        assert_eq!(
-            parse_join_address("100.64.1.2").unwrap().to_string(),
-            "100.64.1.2:28000"
-        );
-        assert_eq!(
-            parse_join_address("[2001:db8::1]").unwrap().to_string(),
-            "[2001:db8::1]:28000"
-        );
-        assert!(parse_join_address("example.com").is_err());
+    fn saved_pins_are_keyed_by_the_typed_host() {
+        assert_eq!(super::target_host("play.example.com:28000"), "play.example.com");
+        assert_eq!(super::target_host("[2001:db8::1]:28000"), "2001:db8::1");
+        assert_eq!(super::target_host("203.0.113.10:28001"), "203.0.113.10");
+    }
+    #[test]
+    fn small_state_files_update_in_place() {
+        let dir = std::env::temp_dir().join(format!("bri-recent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("state.json");
+        for address in ["a.example.com", "b.example.com", "A.example.com"] {
+            super::update_small_json(&file, |list: &mut Vec<String>| {
+                list.retain(|a| !a.eq_ignore_ascii_case(address));
+                list.insert(0, address.to_string());
+            })
+            .unwrap();
+        }
+        let list: Vec<String> = super::read_small_json(&file).unwrap();
+        assert_eq!(list, ["A.example.com", "b.example.com"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
     #[ignore = "requires generated native content; no window, GPU or audio device"]
@@ -5299,7 +5846,7 @@ mod tests {
         assert_eq!(app.content.item_physics.bounds.len(), 21);
         app.ui.core.request(UiAction::HostGame {
             map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
-            mode: ServerMode::SinglePlayer,
+            mode: ServerMode::SinglePlayer, game_mode: None,
             max_players: 1,
             server_name: "Weapon catalog test".into(),
             password: String::new(),

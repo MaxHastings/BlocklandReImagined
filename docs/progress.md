@@ -1947,8 +1947,7 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   entity slots and state bytes, and a start-of-tick view shared by calls.
 - Platform: one package path rule, load-time conflict checks, verified
   package cache, byte-bounded join chunks, storage budgets and reliable
-  outbox. Protocol 34 on the branch (coordinator's numbering after Stress
-  Lab 32 and door-closers' avatar names 33).
+  outbox. Protocol 35 (hosting's listing took 34 first).
 - Evidence: `cargo test -p bri-sim --test unlike_modes --test
   hardening_packages --test packages`, `cargo test -p bri-package-runtime`,
   `cargo test -p bri-net`, clippy clean on Linux; Windows CI on PR #1.
@@ -1983,7 +1982,7 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   loads the client's own packages with the downloaded ones in their place,
   and the HUD and entity models draw with that catalog. A server running
   different base game content is refused with that reason.
-- Merged the Stress Lab (main da5668e), keeping protocol 34. Package state
+- Merged the Stress Lab (main da5668e). Package state
   now replicates per client: the welcome carries
   `Session::package_state_for(viewer)` and the server sends each client
   `Message::PackageState` when its own view changes (it left `Delta`). The
@@ -2524,6 +2523,62 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
   new loopback `join_refusal_names_each_differing_shared_package`,
   `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.
+
+- 2026-09-28 Client sandbox: Add-Ons may send joining players sandboxed code
+  (Maxwell's decision; principle 10 is now trust tiers: data without asking,
+  sandboxed WebAssembly and WGSL after a per-server trust prompt, elevated
+  capabilities after a separate per-Add-On choice; native plugins are tier 3
+  with a typed confirmation, designed but not built). Crate
+  `bri-client-sandbox`: Wasmtime 45 with fuel, epoch deadlines and store limits;
+  capability-gated host functions (render layer, shaders, audio, focused
+  input, messages to the Add-On's server script); naga validation of Add-On
+  WGSL with every loop rewritten to draw on one per-invocation allowance; a
+  wgpu layer renderer; the trust prompt model and `addon-trust.json` store.
+  Sample `packages/samples/spinning-cube` draws a cube with an animated
+  shader. Red team round 1 found and fixed two issues: the wall-clock
+  deadline stopped advancing once the `Sandbox` was dropped (an endless loop
+  then ran forever), and modules shaped to compile slowly took 5 s (now
+  bounded at load; worst allowed 0.5 to 0.7 s on 4 cores). Open: compiling
+  on a worker thread with a cache. Design and findings: `docs/architecture/client-sandbox.md`.
+  Evidence: `cargo test -p bri-client-sandbox` (23 tests; the two GPU tests
+  are ignored without an adapter and passed on llvmpipe),
+  `bri-addon-preview packages/samples/spinning-cube <out>`.
+  In the client (`client_code.rs`): enabled Add-Ons' code starts when the
+  player enters a game they host, and on other servers only for code
+  `addon-trust.json` grants (the join-screen prompt is next, with PR #4);
+  layers draw in the world's last pass. Not yet seen in a real session:
+  the cloud container has no v20 content; verify on the PC.
+  Evidence: `cargo test -p bri-client --lib client_code`.
+  GPU budget fix after the verifier measured Maxwell's RTX 4070 SUPER (no
+  reset, but the heaviest allowed shader took about 2.4 s a frame and the
+  4 ms x 30-strike rule tolerated about 75 s of that). The loop allowance
+  is now set per frame (`bri_frame.limits.x`): 16 until the GPU is measured,
+  then fitted by `gpu::calibrate` (a small timed offscreen pass, once per
+  device) to the GPU's speed, the screen size and the shader's cost, and
+  halved after every frame whose timestamps show it over 4 ms. One frame
+  over 100 ms stops the Add-On at once; 20 slow frames in a row stop it.
+  Shaders whose helpers fan out (no loop, a million times the work) are
+  refused by an expanded-cost limit. A device loss stops every Add-On's code
+  until the next join. The client requests timestamp features where the GPU
+  has them. On llvmpipe the endless-loop shader over 512x512 went from 0.96 s
+  to 23, 5.8, then 4.6 ms a frame. Evidence: `cargo test -p
+  bri-client-sandbox` (25 tests; the 4 ignored GPU tests passed on llvmpipe with
+  `--ignored`), `cargo test -p bri-client --lib client_code` (4 tests),
+  clippy `-D warnings`. Next: re-measure on the PC.
+## 2026-09-28 Ramp slides: v20 player collision
+
+- player collision is now v20's own `updatePos`/`findContact`/`step`
+  (`crates/motor/src/torque.rs`, from the exe at 0x5B0714/0x5AA570/0x5A9FD0),
+  replacing Rapier's character controller, which stood players still on the
+  74.5 degree face of every "72 degree" ramp. Gravity always applies; slopes
+  past runSurfaceAngle slide; the crease rule carries riders down V lanes.
+  Per-tick epsilons are rescaled for 120 Hz (docs/player-simulation.md).
+  Evidence on "Mr.Block's Slides": 524/524 ramp faces release the player;
+  889/893 lane rides reach the end of their leg, one from the tower top to
+  the ground (`cargo test --release -p bri-sim --test slides -- --ignored`).
+  Open: canJump's post-ceiling-hit refusal and the hard-landing recover
+  state need new PlayerState fields (protocol bump).
+
 ## 2026-09-28 Stress Lab: gameplay from packages (protocol 32)
 
 - Package-defined gameplay seams: `bri-package-runtime` (mod package loading,
@@ -2601,3 +2656,245 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   placeable bricks still refuse the load atomically. No protocol change.
   Evidence: `cargo test -p bri-world -p bri-sim` (updated
   `build_load_keeps_unknown_bricks_aside_and_preserves_existing_players`).
+- 2026-09-28 In-game Add-Ons manager, first slice (`docs/architecture/mod-manager.md`,
+  player research in `docs/research/mod-manager-expectations.md`). Players see
+  one word, "Add-Ons"; "package" stays internal. `bri_package::library` scans
+  the content root: `packages.json` is the enabled list, a disabled package's
+  exact entry moves to `packages-disabled.json`, and unlisted directories with
+  a `package.json` are discovered as disabled. Enabling pulls in dependencies
+  first, disabling takes dependents, base `v20-*` packages stay on, and
+  refusals (missing or wrong-version dependency, newer API, role conflict,
+  unreadable manifest, missing folder) are named diagnostics. The main menu
+  gains an Add-Ons button opening a native dialog (grouped list, search,
+  details with what it adds, where it runs, what it needs and what it may do,
+  Enabled box, Defaults). A native join screen shows a server's missing
+  add-ons with byte progress and Cancel
+  (`ConnectionState::DownloadingPackages`). No wire change. Evidence:
+  `cargo test -p bri-package library`, `cargo test -p bri-ui --lib addons`,
+  `cargo test -p bri-client --lib add_ons`, all content-free. Open: toggles
+  take effect once multi-pack loading and door-closers' join wiring read
+  `packages.json`; the join screen needs PR #1's `fetch_missing` call.
+- 2026-09-28 Content from several packages (steps a to e of the multi-package
+  proposal in `docs/audits/spike-addon-import.md`).
+  - Weapons (with item presentation and drop bounds), vehicles and brick
+    catalogs merge from every role-less package in `packages.json` that
+    provides them, onto the base packages.
+  - This happens in the dedicated host (`bri_net::dedicated`, now shared with
+    `bri-server`), in a client-hosted game and in joining clients.
+  - `bri-import-addon` writes the presentation, drop bounds and a loadable
+    brick catalog, and declares the new runtime kinds `weapons`, `vehicles`
+    and `bricks`.
+  - Without extra packages, loading and the weapon fingerprint are unchanged.
+  Evidence:
+  - `crates/addon-import/tests/hosted.rs`: the real Sawn-off Shotgun and
+    Blocko Car hosted beside the base game on Slate. The shotgun and the
+    vanilla gun both fire, and a player mounts the spawned car and drives it
+    more than 5 units. An imported brick loads into a hosted world.
+  - `crates/client/tests/addon_packages.rs`: the client-side load of the same
+    packages, including the shotgun model and the car assets.
+  Imported bricks also show in the brick menu under the category they
+  declare, with icons the importer stores in `brick-catalog/brick-icons.json`
+  (`crates/client/tests/addon_packages.rs`). Open: sounds and effects, and
+  Maxwell's interactive playtest.
+- 2026-09-28 Add-Ons: Import. Old Blockland zips or folders dropped into
+  `content/Add-Ons/` show under "Not Imported Yet" with an Import button; the
+  client runs `bri-import-addon` as a separate program into
+  `content/addons/<name>`, then the new add-on is listed (off) and turns on
+  like any other. Evidence: library, UI and client unit tests, plus a manual
+  end-to-end import of the CC0 `Weapon_Synthetic_Blaster` fixture that ended
+  with it in `packages.json`. Open: packaging must ship
+  `bri-import-addon.exe` next to the client.
+## 2026-09-28 Game modes in Start Game
+
+Max asked for easy in-game Add-On management; the coordinator scheduled the
+game mode picker once the Stress Lab landed (da5668e).
+
+- New server content kind `mode` (`bri_package_runtime::content::GameMode`):
+  name, description, optional map, `add_ons`. Checks `set.mode.add_on`,
+  `set.mode.map`; `Catalog::for_mode`, `Catalog::for_world` pick what a hosted
+  game runs, and the one-world check moved from load to hosting, so several
+  world Add-Ons can be turned on together.
+- UI: Start Game gets a **Mode:** button above Start opening the Game Mode
+  screen (`crates/ui/src/screens/modes.rs`); `UiUpdate::GameModes`,
+  `HostGame.game_mode`. Custom keeps today's behaviour.
+- Client: `packages::hosted` resolves mode, map, base map and save key;
+  `packages::modes` feeds the list.
+- `packages/stresslab/stresslab-mode` adds the Stress Lab mode (added to
+  `bri_stresslab::PACKAGES`).
+- Evidence: `cargo test -p bri-package-runtime -p bri-ui -p bri-stresslab`,
+  `-p bri-sim --test packages`, `-p bri-client --lib` all pass; clippy
+  `-D warnings` clean on those crates. New tests:
+  `the_stress_lab_mode_runs_its_world_and_rules`,
+  `a_package_world_without_a_mode_runs_every_add_on_that_fits_it`,
+  `a_mode_may_only_run_add_ons_its_package_depends_on`,
+  `hosting_runs_the_chosen_mode_or_the_plain_base_game`,
+  `start_game_hosts_the_chosen_game_mode_on_its_map`.
+- Not interactively checked; Max's playtest covers the screen's look.
+- Follow-up: the Add-Ons screen (PR #4) must list `mode` as a server kind.
+## 2026-09-28 — Add-On author guide and samples
+
+- `docs/modding/README.md`: the Add-On author guide (manifest, sides,
+  scripts, state, capabilities, content kinds, HUD panels, weapons, headless
+  testing, importing v20 Add-Ons). It describes only what is on `main` and
+  lists in-flight work (multi-pack loading, state visibility, the `players`
+  capability, player archetypes, sandboxed client code with its trust
+  prompt, downloads on join) as coming soon.
+- `packages/samples/`: Survival Points (server rule: timer, public state,
+  a cooldown command, an admin-only command, chat), its HUD panel, and the
+  Bubble Blaster weapon (hand-written in the Import Add-On weapons format).
+- Evidence: `cargo test -p bri-package-runtime --test samples` (loads on
+  server and client, compiles, HUD binds only public keys and real
+  commands), `cargo test -p bri-sim --test samples` (a session awards
+  points to living players, greets on join, runs the leaderboard, refuses
+  a non-admin reset and allows the host's), `cargo test -p bri-weapons
+  --test sample_addon` (the bubble fires, harmless and shoving).
+## 2026-09-28 — first-impressions audit and three robustness fixes
+
+- `docs/audits/first-impressions.md` ranks 20 things a new player would find
+  missing, rough or fragile on main `1599ef2`, with evidence for each.
+- Settings: a damaged or older `settings.json` no longer stops startup. Missing
+  fields take defaults; a damaged file is copied to
+  `settings.damaged-<time>.json`, readable sections are kept, and the player is
+  told in plain words (`settings::recover`).
+- Saves: one unreadable save no longer empties the Save and Load lists. It is
+  listed as damaged (`SaveFileInfo::damaged`) and can be saved over.
+- Messages: the Connection Failed dialog explains transport and join failures
+  in plain words (`bri_ui::models::disconnect::explain`); kicks and bans close
+  with the reason and ban length, and a banned rejoin is told how long is left.
+  No protocol change: the close reason is free text.
+- Evidence: `cargo test -p bri-ui --lib`, `-p bri-sim --lib --test session`,
+  `-p bri-client --lib`, `-p bri-net --lib`; clippy `-D warnings` on those
+  four crates with `--all-targets`.
+
+## 2026-09-28 — autosave and unsaved-changes prompt for hosted games
+
+- Single-player, LAN and Internet games hosted from the client autosave every
+  60 s into the map's own save folder (`autosave-<unix ms>.world.json`, newest
+  three kept), so they appear in Load Bricks as "Autosave" with their date. An
+  interval with no world change writes nothing, so idle play never pushes out
+  older autosaves (`saves::Store::autosaver`).
+- When a hosted game ends (Disconnect, Quit, the window's close button, a
+  crash of the host loop) its final world is kept the same way. Quitting waits
+  up to 15 s for the host to stop and write it (`App` drop, `Worker::finish`).
+- Leaving or quitting a hosted game whose world changed since it was last
+  saved under a name asks first ("Unsaved Changes"); loads and map changes do
+  not count until they settle. Closing the window asks too; a second close
+  quits.
+- The server-side mechanism is PR #1's `ServerOptions::autosave` /
+  `server::Autosave` and `bri_world::persistence::autosave`, ported unchanged
+  (plus `autosave_bytes` and `is_autosave`) so PR #1 can drop its copy.
+  `bri-server` autosaves as PR #1 had it.
+- Evidence: `cargo test -p bri-world --lib`, `-p bri-net --lib --test
+  loopback`, `-p bri-ui --lib --tests`, `-p bri-client --lib --test transport`,
+  `-p bri-sim --lib --test session`; clippy `-D warnings --all-targets` on those
+  crates. New tests: `hosted_games_autosave_changes_into_the_load_list`,
+  `a_host_autosaves_on_its_timer_and_returns_its_final_world`,
+  `leaving_a_host_with_unsaved_changes_asks_about_them_first`, and the
+  transport test now checks the final world is kept.
+## 2026-09-28 — modplatform package draft folded into main
+
+- Reviewed the uncommitted modplatform `bri-package` draft (PR #6,
+  `wip/modplatform-package/`). Main already covers its id grammar,
+  diagnostics and environment. Its archive, store and luau kinds are
+  superseded by directory hashing, the package sync cache and the Rhai
+  runtime. Kept:
+  - `bri_package::capability`: the one capability list, with the plain
+    words players read. `ops::CAPABILITIES` re-exports it.
+  - Strict manifests: unknown `package.json` fields are errors.
+  - `bri-addon-check <folder> [--json]`: checks an Add-On and its
+    dependencies found beside it the way the game loads them, and prints
+    the side, provides, capabilities and needs.
+- Evidence: `cargo test -p bri-package-runtime --test check` (a HUD
+  checked with its rules; a misspelt field, a missing dependency, a private
+  HUD binding and a script syntax error are each named; sides follow
+  kinds), plus the bri-package, bri-package-runtime and bri-addon-import
+  tests and clippy `-D warnings`.
+## 2026-09-28 Settings players expect
+
+- Options gains what players look for today, on top of v20's rebinding,
+  sensitivity, resolution, fullscreen and volumes. Graphics: a Quality menu
+  (Low, Medium, High, Ultra; Custom while hand-set values match none) that
+  sets shadows, anti-aliasing, brick shadows, anisotropy and precipitation,
+  and a Max FPS menu (30 to 240 or Unlimited, `$pref::Video::MaxFps`,
+  default Unlimited). High equals the renderer's defaults, so new players
+  see High. Audio: Shell and Sim volumes read Interface and Effects, a new
+  Music volume (`$pref::Audio::musicVolume`, the runtime's existing music
+  bus), live volume preview while dragging (undone if the dialog closes
+  without Done), and Mute when in background
+  (`$pref::Audio::MuteInBackground`, default off). Every slider shows its
+  value (percent, sensitivity, anisotropy as Off/2x..16x, FOV degrees).
+- The frame cap paces the focused loop by deadline (`PlatformCommand::
+  FrameLimit`, `PlatformConfig::max_fps`); without it the loop still runs
+  flat out, paced by VSync. Console cvars `maxfps`, `musicvolume`,
+  `mutebackground`.
+- Fix: with no saved anisotropy the slider showed 0 while the renderer drew
+  8x; it now shows the renderer's value, and Done always stores the preset
+  options so a stock default the renderer ignores cannot hide a choice.
+- Evidence: `cargo test -p bri-ui --lib` (new options tests for presets,
+  Max FPS, music volume and readouts, mute), `cargo test -p bri-client
+  --lib`, clippy `-D warnings` on both. Not yet seen on the authored layout:
+  the new rows are placed relative to Resolution and the Sim volume row;
+  needs the offscreen options render on a PC with content.
+
+- 2026-09-28 Modern hosting (first-impressions item 5, Max's "make hosting
+  first class"). Joining needs only the game port: door-closers' first-use
+  pinning, host names, typed join errors and remembered address (from
+  859c012, item 5 parts only) plus `bri://host:port/<key>` invites whose key
+  (first 128 bits of the certificate's SHA-256) verifies a first join. One TLS
+  verifier handles every `HostPin`. Protocol 34: `Challenge` carries the
+  server `Listing`, so `client::probe` reads name, map and players over the
+  game port without joining; a client on another version is told which side
+  must update (that refusal was dropped unsent before). Internet hosts and
+  non-loopback dedicated servers run `reach::open_and_check`: UPnP IGD, then
+  NAT-PMP (RFC 6886), the public address as the router reports it (no
+  outside service is contacted), a self-probe of that address, and one plain verdict (reachable, likely, shared address,
+  needs forward, unknown) with the invite put on the clipboard and `/invite`
+  to copy it again. UDP 28050 is no longer forwarded. Windows hosts read the
+  firewall rules for the game (PowerShell NetSecurity, per active profile) and
+  offer a one-prompt fix (`bri-client --allow-firewall <port>`, elevated,
+  removes the program's inbound rules and keeps one allow rule for the game
+  and discovery UDP ports, so new build folders need no second prompt). Hosts
+  whose router gives no public address still get a home network invite. Join Server searches the LAN
+  and probes saved servers on open; Query Internet became Favorite
+  (`servers.json`: 64 favourites, 10 recent). Join codes with hole punching
+  and a relay were built and tested against simulated routers, then shelved
+  because they need a hosted service (Max: direct IP only, no relay, no
+  third-party services); the patch is kept outside the repository. Evidence: `cargo test -p bri-net --lib`
+  (invite, natpmp against a fake router, reach verdicts), `--test
+  loopback` (`invites_pin_the_host_key_and_probes_read_the_listing`,
+  `a_different_version_is_told_which_side_to_update`,
+  `first_join_needs_only_the_game_port_and_errors_are_plain`), `cargo test -p
+  bri-client --lib` (servers, firewall decisions), `cargo test -p bri-ui`
+  (Favorite button, Confirm dialog, list query on open), clippy `-D warnings`
+  on Linux and `--target x86_64-pc-windows-gnu`. Not yet exercised: a real
+  router, the Windows Firewall helper on
+  Windows, and a remote friend joining.
+
+## 2026-09-28: stress campaign merged onto the combined landing (protocol 35)
+
+- PR #1 merged main 47dcf2a (Add-Ons tab, game modes, first impressions,
+  settings, hosting, client sandbox, slides). Protocol 35: hosting's
+  `Challenge` listing is 34.
+- The campaign's autosave copy is gone; `bri-server` and the windowed host
+  use main's (#5).
+- Joins keep hosting's `HostPin`s and `JoinError`s; `connect_fetching`
+  takes the join's pin and downloads over `client::connect_quic`, so a
+  download reaches the host the join trusts. `PackagesDiffer` prints as
+  `environment::refusal`, which the Add-Ons screen parses into rows.
+- `JoinBegin.purpose` defaults to a join, so an older client still hears
+  which side must update.
+- Admin disconnects keep the campaign's publish-before-reply order and
+  carry #5's close messages.
+- The `player` capability has plain words on the Add-Ons screen. The
+  survival-points sample and the modding guide use `visible` instead of
+  `public`; the guide lists archetypes, textures, blocks and the `player`
+  operations.
+- `bri-client-sandbox` moved from the Windows-only dependency table to the
+  client's dependencies (the client did not build on other targets).
+- E22's moon jump now settles 120 ticks first: under main's v20 contact
+  port a player spawned 5 cm up is still airborne after 10 ticks, so the
+  jump was ignored.
+- Evidence: clippy `-D warnings` on the workspace; `cargo test` for bri-net,
+  bri-package, bri-package-runtime, bri-world, bri-progress, bri-stresslab,
+  bri-sim (content-free targets; `tools` needs generated content) and
+  `bri-client --lib --test transport`.

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "stresslab-mode",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Stress Lab Game Mode",
+  "description": "Adds Stress Lab to Start Game's Game Mode list: the mineable world, its economy, the creepers and the miner's panel together.",
+  "authors": ["Stress Lab"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": {
+    "stresslab-world": "^1.0.0",
+    "stresslab-economy": "^1.0.0",
+    "stresslab-creeper": "^1.0.0",
+    "stresslab-hud": "^1.0.0"
+  },
+  "capabilities": [],
+  "provides": [
+    { "kind": "mode", "id": "stresslab-mode:mode/stresslab", "file": "mode.json" }
+  ]
+}

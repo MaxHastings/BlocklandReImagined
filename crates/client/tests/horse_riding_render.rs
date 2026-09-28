@@ -228,6 +228,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
         mode: ServerMode::SinglePlayer,
+        game_mode: None,
         max_players: 1,
         server_name: "Horse riding render".into(),
         password: String::new(),

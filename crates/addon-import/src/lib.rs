@@ -479,7 +479,7 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
                 (
                     "unsupported",
                     vec![
-                        "client script: packages send data to clients, never code (principle 10)"
+                        "client script: TorqueScript is not run; client code must be sandboxed WebAssembly (principle 10)"
                             .into(),
                     ],
                 )
@@ -1221,14 +1221,311 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             sha256: hash(&f.bytes),
             native_file: Some(rel.clone()),
             diagnostics: vec![],
+            package: None,
         });
     }
     cx.report
         .diagnostics
         .extend(pack.diagnostics.iter().map(|d| format!("weapons: {d}")));
     pack.validate().context("imported weapons pack")?;
-    cx.write(file, &serde_json::to_vec_pretty(&pack)?)?;
+    let bytes = serde_json::to_vec_pretty(&pack)?;
+    cx.write(file, &bytes)?;
+    presentation(cx, &pack, &hash(&bytes))?;
     Ok(())
+}
+
+/// Item presentation and drop physics for this package's weapons, in the
+/// base game's `item-presentation` schema, so clients draw imported items
+/// and hosts give them pickup bounds. Models and textures a dependency owns
+/// are named by their source path and come from that package.
+fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) -> Result<()> {
+    use serde_json::Map;
+    let (mut models, mut textures) = (Map::new(), Map::new());
+    fn texture(
+        cx: &mut Ctx,
+        textures: &mut Map<String, serde_json::Value>,
+        reference: &str,
+    ) -> Option<String> {
+        for ext in ["", ".png", ".jpg", ".jpeg"] {
+            let key = format!("{reference}{ext}").to_ascii_lowercase();
+            if textures.contains_key(&key) {
+                return Some(key);
+            }
+            let (Some(f), Some(rel)) = (cx.src.get(&key), cx.outputs.get(&key)) else {
+                continue;
+            };
+            let dims = image::ImageReader::new(std::io::Cursor::new(&f.bytes))
+                .with_guessed_format()
+                .ok()
+                .and_then(|r| r.into_dimensions().ok());
+            let Some((width, height)) = dims else {
+                cx.report
+                    .diagnostics
+                    .push(format!("presentation: unreadable image {key}"));
+                return None;
+            };
+            textures.insert(
+                key.clone(),
+                json!({ "file": rel, "sha256": hash(&f.bytes), "width": width, "height": height, "source": key }),
+            );
+            return Some(key);
+        }
+        None
+    }
+    let referenced: BTreeSet<String> = pack
+        .items
+        .values()
+        .map(|i| i.model.to_ascii_lowercase())
+        .chain(pack.images.values().map(|i| i.model.to_ascii_lowercase()))
+        .chain(
+            pack.projectiles
+                .values()
+                .map(|p| p.model.to_ascii_lowercase()),
+        )
+        .collect();
+    for key in &referenced {
+        let (Some(f), Some((rel, shape))) = (cx.src.get(key).cloned(), cx.shapes.get(key).cloned())
+        else {
+            continue; // Another package's model, or none.
+        };
+        let Ok((lo, hi)) = bri_vehicles_import::dts_bounds(&f.bytes) else {
+            cx.report
+                .diagnostics
+                .push(format!("presentation: no DTS bounds for {key}"));
+            continue;
+        };
+        let folder = f.path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
+        let mut bindings = vec![];
+        for m in &shape.materials {
+            match texture(cx, &mut textures, &format!("{folder}/{}", m.name)) {
+                Some(t) => bindings.push(t),
+                None => {
+                    cx.report.diagnostics.push(format!(
+                        "presentation: {key} material {} has no texture",
+                        m.name
+                    ));
+                }
+            }
+        }
+        if bindings.len() != shape.materials.len() {
+            continue;
+        }
+        let native = std::fs::read(cx.out.join("assets").join(&rel))?;
+        models.insert(
+            key.clone(),
+            json!({
+                "file": rel, "sha256": hash(&native), "source": f.path, "source_sha256": hash(&f.bytes),
+                "textures": bindings,
+                // Torque (x, y, z) to native (x, z, -y); the Z interval flips.
+                "bounds_min": [lo.x, lo.z, -hi.y], "bounds_max": [hi.x, hi.z, -lo.y],
+            }),
+        );
+    }
+    // This package's own models that did not convert get a small placeholder
+    // cube, so every item it declares can be drawn and picked up. Models of
+    // other packages keep their key; that package presents them.
+    let own = format!("{}/", cx.src.dir().to_ascii_lowercase());
+    let missing: Vec<String> = referenced
+        .iter()
+        .filter(|k| k.starts_with(&own) && !models.contains_key(*k))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        let (shape, white) = placeholder();
+        let shape_bytes = serde_json::to_vec(&shape)?;
+        let shape_rel = format!("models/{}.shape.json", &hash(&shape_bytes)[..24]);
+        cx.write(&format!("assets/{shape_rel}"), &shape_bytes)?;
+        let white_rel = format!("textures/{}.png", &hash(&white)[..24]);
+        cx.write(&format!("assets/{white_rel}"), &white)?;
+        textures.insert(
+            "placeholder:white".into(),
+            json!({ "file": white_rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
+        );
+        for key in missing {
+            cx.report.ambiguous.push(Finding {
+                what: format!("model {key}"),
+                source: None,
+                detail: "not in this Add-On or did not convert; presented as a placeholder cube"
+                    .into(),
+                resolution: Some(shape_rel.clone()),
+            });
+            models.insert(
+                key,
+                json!({
+                    "file": shape_rel, "sha256": hash(&shape_bytes), "source": "placeholder",
+                    "source_sha256": hash(&shape_bytes), "textures": ["placeholder:white"],
+                    "bounds_min": [-0.1, -0.1, -0.1], "bounds_max": [0.1, 0.1, 0.1],
+                }),
+            );
+        }
+    }
+    let tint = |on: bool, c: [f32; 4]| {
+        if on {
+            c.map(|v| v.clamp(0.0, 1.0))
+        } else {
+            [1.0; 4]
+        }
+    };
+    let (mut items, mut images, mut projectiles, mut physics) =
+        (Map::new(), Map::new(), Map::new(), Map::new());
+    for (id, im) in &pack.images {
+        let eye = cx
+            .owned
+            .get(&im.name.to_ascii_lowercase())
+            .and_then(|o| o.fields.get("eyerotation"))
+            .map(|v| {
+                literal(v)
+                    .split_whitespace()
+                    .filter_map(|n| n.parse::<f32>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v| v.len() == 3)
+            .unwrap_or(vec![0.0; 3]);
+        images.insert(
+            id.clone(),
+            json!({
+                "model": im.model.to_ascii_lowercase(), "mount_point": im.mount_point, "offset": im.offset,
+                "eye_offset": im.eye_offset, "source_rotation_degrees": im.source_rotation_degrees,
+                "eye_rotation_degrees": eye, "tint": tint(im.color_shift, im.color),
+                "evidence": pack.definitions.iter().find(|d| d.name == im.name).map(|d| &d.source),
+            }),
+        );
+    }
+    for (id, it) in &pack.items {
+        let model = it.model.to_ascii_lowercase();
+        let Some(m) = models.get(&model) else {
+            cx.report.diagnostics.push(format!(
+                "presentation: item {id} model {model} was not converted"
+            ));
+            continue;
+        };
+        physics.insert(
+            id.clone(),
+            json!({ "min": m["bounds_min"], "max": m["bounds_max"] }),
+        );
+        // An item shows its image's colour shift.
+        let image = pack.images.get(&it.image);
+        let icon = if it.icon.is_empty() {
+            None
+        } else {
+            texture(cx, &mut textures, &it.icon)
+        };
+        items.insert(
+            id.clone(),
+            json!({
+                "model": model, "image": it.image,
+                "tint": image.map_or([1.0; 4], |i| tint(i.color_shift, i.color)), "icon": icon,
+                "evidence": pack.definitions.iter().find(|d| d.name == it.name).map(|d| &d.source),
+            }),
+        );
+    }
+    for (id, p) in &pack.projectiles {
+        let model = p.model.to_ascii_lowercase();
+        projectiles.insert(
+            id.clone(),
+            json!({ "model": (!model.is_empty()).then_some(model), "tint": [1.0, 1.0, 1.0, 1.0] }),
+        );
+    }
+    let physics = serde_json::to_vec_pretty(&json!({ "schema_version": 1, "items": physics }))?;
+    cx.write("assets/item-physics.json", &physics)?;
+    let manifest = json!({
+        "schema_version": 2, "id": format!("{}:item-presentation/main", cx.ns),
+        "weapons_sha256": weapons_sha256, "item_physics_sha256": hash(&physics),
+        "models": models, "textures": textures, "items": items, "images": images,
+        "projectiles": projectiles, "diagnostics": [],
+    });
+    cx.write(
+        "assets/presentation.json",
+        &serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    Ok(())
+}
+
+/// A 0.2 unit cube with one white material, and its 1x1 white PNG.
+fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
+    use bri_content::shape::*;
+    let mut positions = vec![];
+    let mut normals = vec![];
+    let mut uv = vec![];
+    let mut triangles = vec![];
+    for axis in 0..3 {
+        for sign in [-1.0f32, 1.0] {
+            let base = positions.len() as u32;
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let mut p = [0.0f32; 3];
+                p[axis] = 0.1 * sign;
+                p[u] = 0.1 * a;
+                p[v] = 0.1 * b * sign;
+                let mut n = [0.0f32; 3];
+                n[axis] = sign;
+                positions.push(p);
+                normals.push(n);
+                uv.push([(a + 1.0) / 2.0, (b + 1.0) / 2.0]);
+            }
+            triangles.push([base, base + 1, base + 2]);
+            triangles.push([base, base + 2, base + 3]);
+        }
+    }
+    let shape = Shape {
+        schema_version: 1,
+        id: "placeholder:shape/cube".into(),
+        nodes: vec![Node {
+            name: "root".into(),
+            parent: None,
+            translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        }],
+        objects: vec![Object {
+            name: "cube".into(),
+            node: Some(0),
+            meshes: vec![0],
+            visibility: 1.0,
+            frame: 0,
+            material_frame: 0,
+        }],
+        details: vec![Detail {
+            name: "detail0".into(),
+            pixel_threshold: 0.0,
+            object_start: 0,
+            object_count: 1,
+            mesh_offset: 0,
+            collision: false,
+        }],
+        meshes: vec![Some(Mesh {
+            frame_vertices: positions.len(),
+            positions,
+            normals,
+            uv,
+            primitives: vec![Primitive {
+                material: Some(0),
+                triangles,
+            }],
+            skin: None,
+            billboard: false,
+            billboard_y: false,
+        })],
+        materials: vec![Material {
+            name: "white".into(),
+            wrap_u: true,
+            wrap_v: true,
+            blend: "opaque".into(),
+            unlit: false,
+            environment: false,
+            mipmaps: false,
+            detail_map: None,
+            bump_map: None,
+            reflectance_map: None,
+            detail_scale: 1.0,
+            reflectance: 0.0,
+        }],
+        animations: vec![],
+    };
+    let mut png = vec![];
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("in-memory PNG");
+    (shape, png)
 }
 
 fn vehicles(cx: &mut Ctx) -> Result<()> {
@@ -1383,6 +1680,7 @@ fn vehicles(cx: &mut Ctx) -> Result<()> {
             }
             .into(),
             source_sha256: hash(&f.bytes),
+            package: None,
         });
     }
     let evidence = wanted
@@ -1521,7 +1819,113 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             bricks: entries,
         };
         cx.write("assets/bricks.json", &serde_json::to_vec_pretty(&catalog)?)?;
+        loadable_bricks(cx, catalog)?;
     }
+    Ok(())
+}
+
+/// The bricks whose geometry converted, in the base game's brick catalog
+/// layout under `assets/brick-catalog/`, so `Definitions::load` reads them
+/// like the stock catalog: `stock-catalog.json`, `catalog-audit.json` (mesh
+/// bindings), `native-collisions.json` and the mesh files beside them.
+fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result<()> {
+    let meshes: BTreeMap<String, String> = cx
+        .outputs
+        .iter()
+        .filter(|(_, rel)| rel.starts_with("bricks/"))
+        .filter_map(|(vp, rel)| {
+            let f = cx.src.get(vp)?;
+            Some((
+                content_id(&cx.ns, "brick_geometry", &rel_member(cx, &f.path)),
+                rel.clone(),
+            ))
+        })
+        .collect();
+    let (mut bricks, mut resolved, mut bodies) = (vec![], vec![], vec![]);
+    let mut icons = serde_json::Map::new();
+    for entry in catalog.bricks {
+        let Some(rel) = meshes.get(&entry.mesh_id) else {
+            continue;
+        };
+        let bytes = std::fs::read(cx.out.join("assets").join(rel))?;
+        let brick: bri_content::brick::Brick = serde_json::from_slice(&bytes)?;
+        match bri_convert::collision::bake(entry.id.clone(), &brick, None) {
+            Ok(body) => bodies.push(body),
+            Err(e) => {
+                cx.report
+                    .diagnostics
+                    .push(format!("brick {}: no collision: {e:#}", entry.id));
+                continue;
+            }
+        }
+        let file = rel.trim_start_matches("bricks/").to_owned();
+        cx.write(&format!("assets/brick-catalog/{file}"), &bytes)?;
+        resolved.push(json!({ "id": entry.id, "native_mesh": file }));
+        // The brick menu's icon, stored beside the catalog.
+        let icon = entry.icon_source.clone();
+        if !icon.is_empty() && !icons.contains_key(&icon) {
+            let found = ["", ".png", ".jpg"]
+                .iter()
+                .find_map(|e| cx.src.get(&format!("{icon}{e}")).cloned());
+            let dims = found.as_ref().and_then(|f| {
+                image::ImageReader::new(std::io::Cursor::new(&f.bytes))
+                    .with_guessed_format()
+                    .ok()?
+                    .into_dimensions()
+                    .ok()
+            });
+            match (found, dims) {
+                (Some(f), Some((width, height))) => {
+                    let ext = f
+                        .path
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("png")
+                        .to_ascii_lowercase();
+                    let digest = hash(&f.bytes);
+                    let name = format!("icons/{}.{ext}", &digest[..24]);
+                    cx.write(&format!("assets/brick-catalog/{name}"), &f.bytes)?;
+                    icons.insert(
+                        icon,
+                        json!({ "file": name, "sha256": digest, "width": width, "height": height, "source": f.path }),
+                    );
+                }
+                _ => cx.report.diagnostics.push(format!(
+                    "brick {}: icon {icon} not found; the menu shows no icon",
+                    entry.id
+                )),
+            }
+        }
+        bricks.push(entry);
+    }
+    if bricks.is_empty() {
+        return Ok(());
+    }
+    let dir = "assets/brick-catalog";
+    let catalog = bri_content::brick::Catalog {
+        schema_version: 1,
+        bricks,
+    };
+    cx.write(
+        &format!("{dir}/stock-catalog.json"),
+        &serde_json::to_vec_pretty(&catalog)?,
+    )?;
+    cx.write(
+        &format!("{dir}/catalog-audit.json"),
+        &serde_json::to_vec_pretty(&json!({ "resolved_meshes": resolved }))?,
+    )?;
+    cx.write(
+        &format!("{dir}/brick-icons.json"),
+        &serde_json::to_vec_pretty(&json!({ "schema_version": 1, "icons": icons }))?,
+    )?;
+    let library = bri_content::collision::CollisionLibrary {
+        schema_version: 1,
+        bodies,
+    };
+    cx.write(
+        &format!("{dir}/native-collisions.json"),
+        &serde_json::to_vec_pretty(&library)?,
+    )?;
     Ok(())
 }
 
@@ -1731,6 +2135,20 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
     cx.report.dependencies = deps.into_values().collect();
 }
 
+/// The package runtime's content kinds this package provides, one entry per
+/// merged pack file (`crates/package-runtime/src/content.rs` `Kind`).
+fn runtime_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
+    [
+        ("weapons", "assets/weapons.json"),
+        ("vehicles", "assets/vehicles.json"),
+        ("bricks", "assets/brick-catalog/stock-catalog.json"),
+    ]
+    .into_iter()
+    .filter(|(_, file)| out.join(file).is_file())
+    .map(|(kind, file)| json!({ "kind": kind, "id": format!("{namespace}:{kind}/main"), "file": file }))
+    .collect()
+}
+
 fn finish(mut cx: Ctx, opts: &Options) -> Result<Report> {
     for a in cx
         .report
@@ -1777,7 +2195,7 @@ fn finish(mut cx: Ctx, opts: &Options) -> Result<Report> {
         },
         "dependencies": dependencies,
         "capabilities": [],
-        "provides": [],
+        "provides": runtime_provides(&cx.out, &cx.ns),
     });
     cx.write(
         "assets/content.json",

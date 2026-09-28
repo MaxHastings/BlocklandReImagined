@@ -30,6 +30,7 @@ file:
 | `hud` | client | A HUD panel: title, colours, rows bound to public state, keys bound to commands. |
 | `texture` | client | A PNG image (at most 1024 pixels on an edge), downloaded with the package. |
 | `block` | client | A block: per face (`all`, `side`, `top`, `bottom`, `north`, `south`, `east`, `west`; the most specific wins) a texture id or a flipbook (`frames`, `fps`, `once`), and named `states` that replace some faces. |
+| `mode` | server | A game mode: name, description, optional map, and the Add-Ons it runs. |
 
 **Clients never receive or run package code.** Server kinds may only appear
 in packages listed with `"side": "server"`; models and HUD panels only in
@@ -37,6 +38,40 @@ in packages listed with `"side": "server"`; models and HUD panels only in
 `package.side.server_content` or `package.side.client_content`. Clients load
 only their `client`/`shared` packages; the server tells them everything
 else through replicated data (entities carry their model id).
+
+## Game modes
+
+Start Game's **Game Mode** button (above Start) opens a list, like v21's
+gamemodes: **Custom** first, then every `mode` an enabled Add-On declares,
+sorted by name, with its description and map. The choice is the
+`$Pref::Server::GameMode` pref (empty for Custom). A mode that names a map
+locks the map list to it.
+
+```json
+{ "schema_version": 1, "name": "Stress Lab",
+  "description": "Dig through layered ground for ore ...",
+  "map": "stresslab-world:world/strata",
+  "add_ons": ["stresslab-world", "stresslab-economy", "stresslab-creeper", "stresslab-hud"] }
+```
+
+`add_ons` may name only the mode's own package and its direct dependencies
+(`set.mode.add_on`), so turning the mode on turns on what it runs. A `map`
+with a `:` must be a world one of those Add-Ons (or their dependencies)
+provides (`set.mode.map`); a plain map name is a base map. Name, 1–48
+characters; description, up to 512; up to 64 Add-Ons.
+
+What a host runs (`crates/client/src/packages.rs` `hosted`):
+
+- **A mode** runs its package, its `add_ons` and their dependencies
+  (`Catalog::for_mode`) on its map, or on the selected map when it names
+  none. Its state saves under `<mode>-<map>`.
+- **Custom on a package world** runs every enabled Add-On except those that
+  need a different world (`Catalog::for_world`), as before modes existed.
+- **Custom on a base map** runs no Add-On rules: the plain base game.
+
+Several world providers may be enabled at once; only a hosted game must
+settle on one (`set.world.conflict`, raised by `for_mode`/`for_world`).
+`packages/stresslab/stresslab-mode` is the worked example.
 
 ## The seams
 
@@ -94,7 +129,7 @@ they change at the 20 Hz delta rate. Package state is per client: a state key
 declares `visible` (`server`, `owner` or `everyone`), the welcome's
 `Checkpoint.package_state` is `Session::package_state_for(viewer)`, and the
 server sends each client `Message::PackageState` with its whole view when
-that view changes (protocol 34). One player's owner-visible keys never reach
+that view changes (protocol 35). One player's owner-visible keys never reach
 another client. Whole views are fine for tens of entities and small state;
 larger counts need per-entity deltas (see the Stress Lab handoff).
 

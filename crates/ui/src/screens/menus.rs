@@ -9,6 +9,9 @@ use crate::view::EventKind;
 
 const SERVER_TYPE: &str = "$Pref::Net::ServerType";
 const MAX_PLAYERS: &str = "$Pref::Server::MaxPlayers";
+/// Start Game's native Game Mode button (v20 had no game modes).
+const GAME_MODE_BUTTON: &str = "SM_GameMode";
+const GAME_MODE_COMMAND: &str = "nativegamemodes";
 
 pub struct NativeScreen {
     id: ScreenId,
@@ -16,6 +19,8 @@ pub struct NativeScreen {
     map_ids: Vec<String>,
     server_addresses: Vec<String>,
     request: Option<RequestId>,
+    /// The game mode the Start Game controls last showed.
+    shown_mode: Option<Option<String>>,
 }
 
 impl NativeScreen {
@@ -40,6 +45,7 @@ impl NativeScreen {
             map_ids: vec![],
             server_addresses: vec![],
             request: None,
+            shown_mode: None,
         };
         // Preferences are data; script strings are never evaluated.
         for n in s.view.walk().collect::<Vec<_>>() {
@@ -78,11 +84,16 @@ impl NativeScreen {
                 };
                 s.radio(radio);
                 s.server_type(core, radio != "SM_OptSinglePlayer");
+                s.game_mode_button();
             }
             ScreenId::JoinServer => {
                 s.visible("JSG_demoBanner", false); s.visible("JSG_demoBanner2", false);
                 s.visible("JS_QueryInternetBlocker", false);
-                if let Some(n) = s.view.by_command("JoinServerGui.queryWebMaster();") { s.view.set_active(n, false); }
+                // There is no master server: Query Internet becomes the star
+                // for servers the player wants to keep in the list.
+                if let Some(n) = s.view.by_command("JoinServerGui.queryWebMaster();") {
+                    s.view.set_text(n, "Favorite");
+                }
             }
             ScreenId::About => s.set("aboutText", "Blockland ReImagined\nOriginal Blockland by Eric Hartman and contributors.\nNative engine rewrite — development build."),
             ScreenId::MessageInput(ch) => {
@@ -185,6 +196,60 @@ impl NativeScreen {
             };
         }
     }
+    /// Start Game's Game Mode button, above Start in the same column.
+    fn game_mode_button(&mut self) {
+        let Some(start) = self.view.by_command("SM_StartMission();") else {
+            return;
+        };
+        let parent = self.view.node(start).parent.unwrap_or(self.view.root);
+        // Beside v20's Advanced Config / Music Files / Add-Ons row: above
+        // Launch Game it covered the map preview's description.
+        let anchor = self
+            .view
+            .by_command("canvas.pushDialog(AddOnsGui);")
+            .filter(|&n| self.view.node(n).parent == Some(parent));
+        let (rect, h_sizing, v_sizing) = match anchor {
+            Some(tab) => {
+                let c = &self.view.node(tab).ctrl;
+                let ([x, y], [w, h]) = (c.position, c.extent);
+                (Rect::new(x + w + 7, y, 150, h), c.h_sizing, c.v_sizing)
+            }
+            None => {
+                let c = &self.view.node(start).ctrl;
+                let ([x, y], [w, h]) = (c.position, c.extent);
+                (Rect::new(x, y - h - 4, w, h), c.h_sizing, c.v_sizing)
+            }
+        };
+        let mut b = button(
+            "BlockButtonProfile",
+            rect,
+            "base/client/ui/button1",
+            "Mode: Custom",
+            GAME_MODE_COMMAND,
+        );
+        b.name = Some(GAME_MODE_BUTTON.into());
+        b.h_sizing = h_sizing;
+        b.v_sizing = v_sizing;
+        self.view.add(parent, b);
+    }
+    /// Show the chosen game mode: its name on the button, and its map
+    /// locked in the list when it plays on one.
+    fn show_game_mode(&mut self, core: &Core) {
+        let mode = super::modes::chosen(core);
+        self.shown_mode = Some(mode.map(|m| m.id.clone()));
+        let label = format!("Mode: {}", mode.map_or("Custom", |m| m.name.as_str()));
+        self.set(GAME_MODE_BUTTON, &label);
+        let fixed = mode.and_then(|m| m.map.clone());
+        if let Some(n) = self.view.id("SM_missionList") {
+            if let Some(i) = fixed
+                .as_ref()
+                .and_then(|id| self.map_ids.iter().position(|m| m == id))
+            {
+                self.view.select(n, Some(i as i64));
+            }
+            self.view.set_active(n, fixed.is_none());
+        }
+    }
     /// startMissionGui::ClickSinglePlayer/ClickLAN/ClickInternet: single
     /// player greys the server options out and plays alone.
     fn server_type(&mut self, core: &Core, lan: bool) {
@@ -224,6 +289,7 @@ impl NativeScreen {
                         .or_else(|| (!maps.is_empty()).then_some(0));
                     self.view.select(n, i.map(|i| i as i64));
                 }
+                self.show_game_mode(core);
                 self.map_preview(core);
                 if let Some(n) = self.view.by_command("SM_StartMission();") {
                     self.view
@@ -244,9 +310,10 @@ impl NativeScreen {
                         .map(|(i, s)| {
                             (
                                 format!(
-                                    "{}\t{}\t{}\t{}\t{}\t/\t{}\t{}\t{}",
+                                    "{}\t{}\t{}{}\t{}\t{}\t/\t{}\t{}\t{}",
                                     if s.password { "Yes" } else { "" },
                                     if s.dedicated { "Yes" } else { "" },
+                                    if s.favorite { "* " } else { "" },
                                     s.name,
                                     s.ping_ms.map(|p| p.to_string()).unwrap_or_default(),
                                     s.players,
@@ -265,11 +332,20 @@ impl NativeScreen {
                             .map(|i| i as i64),
                     );
                 }
+                let selected = self
+                    .selected("JS_serverList")
+                    .and_then(|i| core.servers.get(i));
+                if let Some(n) = self.view.by_command("JoinServerGui.queryWebMaster();") {
+                    self.view.set_text(
+                        n,
+                        if selected.is_some_and(|s| s.favorite) { "Unfavorite" } else { "Favorite" },
+                    );
+                }
                 self.visible("JS_queryStatus", core.lan_querying);
                 self.set(
                     "JS_statusText",
                     if core.lan_querying {
-                        "Querying LAN..."
+                        "Looking for games..."
                     } else {
                         ""
                     },
@@ -402,9 +478,12 @@ impl NativeScreen {
             core.prefs.set(MAX_PLAYERS, max_players.to_string());
         }
         core.save_settings();
+        let game_mode = super::modes::chosen(core).cloned();
+        let map = game_mode.as_ref().and_then(|m| m.map.clone()).unwrap_or(id);
         let action = UiAction::HostGame {
-            map: id,
+            map,
             mode,
+            game_mode: game_mode.map(|m| m.id),
             max_players,
             server_name: self.edit("TxtServerName"),
             password: self.edit("TxtServerPassword"),
@@ -447,6 +526,11 @@ impl NativeScreen {
             core.message_ok("Connect to IP", "Enter a server address.");
             return;
         }
+        if self.id == ScreenId::ManualJoin {
+            // v20 remembers the last typed address for next time.
+            core.prefs.set("$pref::Join::Address", &address);
+            core.save_settings();
+        }
         self.request =
             Some(core.request_pending(UiAction::JoinServer { address, password }, Pending::Other));
     }
@@ -475,6 +559,10 @@ impl Screen for NativeScreen {
         self.id != ScreenId::Play
     }
     fn on_wake(&mut self, core: &mut Core) {
+        // LAN games and saved servers are listed as soon as the list opens.
+        if self.id == ScreenId::JoinServer && !core.lan_querying {
+            core.request(UiAction::QueryLan);
+        }
         if self.id == ScreenId::ManualJoin {
             self.set("MJ_txtIP", core.prefs.str_or("$pref::Join::Address", ""));
         }
@@ -491,6 +579,12 @@ impl Screen for NativeScreen {
         self.refresh(core);
     }
     fn tick(&mut self, _dt_ms: u64, core: &mut Core) {
+        // The Game Mode dialog stores its choice; show it once it closes.
+        if self.id == ScreenId::StartMission
+            && self.shown_mode.as_ref() != Some(&super::modes::chosen(core).map(|m| m.id.clone()))
+        {
+            self.refresh(core);
+        }
         // The box follows the chat as lines arrive and fade.
         if matches!(self.id, ScreenId::MessageInput(_)) {
             self.place_chat_box(core);
@@ -538,6 +632,7 @@ impl Screen for NativeScreen {
         if ev.kind == EventKind::Changed {
             match self.view.node(ev.node).ctrl.name.as_deref() {
                 Some("SM_missionList") => self.map_preview(core),
+                Some("JS_serverList") => self.refresh(core),
                 // NMH_Type::type: the first typed character, unless it starts
                 // a slash command, shows this player as talking.
                 Some("NMH_Type") => {
@@ -556,18 +651,28 @@ impl Screen for NativeScreen {
         ) {
             return;
         }
+        // Picking a server relabels the Favorite button.
+        if self.view.node(ev.node).ctrl.name.as_deref() == Some("JS_serverList") {
+            self.refresh(core);
+        }
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
         // Exact allowlist only: never evaluate script or infer arbitrary actions.
         match command.as_str() {
+            "quit();" if core.unsaved_changes => core.confirm_unsaved(Callback::Quit),
             "quit();" => {
                 core.request(UiAction::Quit);
             }
+            "quitgame();" if core.unsaved_changes => core.confirm_unsaved(Callback::Quit),
             "quitgame();" => {
                 core.message_yes_no("Quit", "Quit Blockland ReImagined?", Callback::Quit)
             }
             "canvas.pushdialog(startmissiongui);" => core.push(ScreenId::StartMission),
             "canvas.pushdialog(joinservergui);" => core.push(ScreenId::JoinServer),
             "canvas.pushdialog(optionsdlg);" => core.push(ScreenId::Options),
+            // v20 Start Game's Add-Ons tab opens the same Add-Ons screen.
+            "canvas.pushdialog(addonsgui);" | "canvas.pushdialog(addonsgui)" => {
+                core.push(ScreenId::AddOns)
+            }
             "canvas.pushdialog(avatargui);" => core.push(ScreenId::Avatar),
             "canvas.pushdialog(aboutdlg);" => core.push(ScreenId::About),
             "canvas.pushdialog(\"manualjoin\");" => core.push(ScreenId::ManualJoin),
@@ -575,6 +680,7 @@ impl Screen for NativeScreen {
                 core.request(UiAction::StartTutorial);
             }
             "sm_startmission();" => self.host(core),
+            GAME_MODE_COMMAND => core.push(ScreenId::GameModes),
             "sm_missionlist.select();" => self.map_preview(core),
             "startmissiongui.clicklan();" | "startmissiongui.clickinternet();" => {
                 self.server_type(core, true)
@@ -599,9 +705,23 @@ impl Screen for NativeScreen {
             "joinservergui.querylan();" => {
                 core.request(UiAction::QueryLan);
             }
+            // A double click must not star and unstar at once.
+            "joinservergui.querywebmaster();" if ev.kind != EventKind::DoubleClick => {
+                if let Some(address) = self
+                    .selected("JS_serverList")
+                    .and_then(|i| self.server_addresses.get(i))
+                    .cloned()
+                {
+                    core.request(UiAction::ToggleFavorite { address });
+                }
+            }
+            "joinservergui.querywebmaster();" => {}
             "mj_connect();" | "joinservergui.join();" => self.join(core),
             "connectinggui::cancel();" => self.cancel(core),
             "disconnect();" if self.id == ScreenId::Loading => self.cancel(core),
+            "escapefromgame();" if core.unsaved_changes => {
+                core.confirm_unsaved(Callback::Disconnect)
+            }
             "escapefromgame();" => {
                 core.message_yes_no("Disconnect", "Leave this game?", Callback::Disconnect)
             }
@@ -704,8 +824,17 @@ impl MessageScreen {
                 );
             }
             Callback::CloseEvents => core.pop(ScreenId::WrenchEvents),
+            Callback::Request(action) => {
+                core.request((**action).clone());
+            }
             Callback::IgnoreTrust { from } => {
                 super::trust::answer(core, *from, crate::api::TrustAnswer::Ignore)
+            }
+            Callback::AddOn { id, enabled } => {
+                core.request(UiAction::SetAddOnEnabled { id: id.clone(), enabled: *enabled });
+            }
+            Callback::DefaultAddOns => {
+                core.request(UiAction::DefaultAddOns);
             }
             Callback::MiniGame { game, operation } => {
                 let valid = match operation {

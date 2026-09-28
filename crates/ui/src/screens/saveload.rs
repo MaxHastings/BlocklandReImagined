@@ -9,7 +9,12 @@ use crate::view::EventKind;
 const EXTENSION: &str = ".world.json";
 
 fn display_name(file: &str) -> &str {
-    file.strip_suffix(EXTENSION).unwrap_or(file)
+    let name = file.strip_suffix(EXTENSION).unwrap_or(file);
+    // Autosaves are `autosave-<unix millis>`; the list's date column says when.
+    match name.strip_prefix("autosave-") {
+        Some(stamp) if !stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()) => "Autosave",
+        _ => name,
+    }
 }
 
 pub struct SaveLoad {
@@ -183,7 +188,12 @@ impl SaveLoad {
                 .enumerate()
                 .map(|(i, f)| {
                     (
-                        format!("{}\t{}", display_name(&f.name), f.modified),
+                        format!(
+                            "{}{}\t{}",
+                            display_name(&f.name),
+                            if f.damaged { " (damaged)" } else { "" },
+                            f.modified
+                        ),
                         i as i64,
                     )
                 })
@@ -430,7 +440,9 @@ impl Screen for SaveLoad {
                 if self.save() {
                     if let Some(f) = self.selected().cloned() {
                         self.set("SaveBricks_FileName", display_name(&f.name));
-                        self.set("SaveBricks_Description", &f.description);
+                        // A damaged file's description is our notice, not the player's text.
+                        let description = if f.damaged { "" } else { f.description.as_str() };
+                        self.set("SaveBricks_Description", description);
                     }
                 } else {
                     self.description();
@@ -562,6 +574,7 @@ mod tests {
                 modified: "2026-09-26".into(),
                 description: "My house".into(),
                 brick_count: Some(25),
+                damaged: false,
             },
             SaveFileInfo {
                 name: "Table.world.json".into(),
@@ -569,6 +582,7 @@ mod tests {
                 modified: "2026-09-25".into(),
                 description: "My table".into(),
                 brick_count: Some(10),
+                damaged: false,
             },
         ];
         ui.drain_actions();

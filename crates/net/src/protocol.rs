@@ -5,7 +5,10 @@ use bri_sim::{
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-pub const VERSION: u32 = 34;
+/// 34: `Challenge` carries the server `Listing` (join list and reachability probes).
+/// 35: player archetypes, control targets, block looks, per-viewer package
+/// state (`PackageState`), typed package refusals and package downloads.
+pub const VERSION: u32 = 35;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -41,10 +44,37 @@ pub struct IdentityProof {
     pub public_key: [u8; 32],
     pub signature: Vec<u8>,
 }
+/// What the join list shows about a server. Public: sent before identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Listing {
+    pub name: String,
+    pub map: String,
+    pub players: u32,
+    pub max_players: u32,
+}
+impl Listing {
+    /// Bounds a client applies before showing a listing.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.name.len() <= 128
+                && self.map.len() <= 256
+                && self.players <= 64
+                && self.max_players <= 64
+                && !self.name.chars().any(char::is_control)
+                && !self.map.chars().any(char::is_control),
+            "Invalid server listing"
+        );
+        Ok(())
+    }
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JoinBegin {
     pub version: u32,
+    /// Defaulted so an older client still decodes and hears the version
+    /// refusal.
+    #[serde(default)]
     pub purpose: Purpose,
 }
 /// What a new connection is for.
@@ -401,8 +431,12 @@ pub struct Delta {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
+    /// First answer to a `JoinBegin`. The listing lets a probe (the join
+    /// list, the host's reachability check) learn about the server over the
+    /// game port and stop here.
     Challenge {
         nonce: [u8; 32],
+        listing: Listing,
     },
     Welcome {
         owner: OwnerId,

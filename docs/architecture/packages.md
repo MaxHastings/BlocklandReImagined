@@ -1,5 +1,9 @@
 # Packages
 
+Authors making Add-Ons start with the guide in
+[docs/modding/README.md](../modding/README.md) and the samples in
+`packages/samples/`; this page is the engine-side format.
+
 Status: format landed 2026-09-27 (platform API level 1); the client, the
 dedicated server and the join check use it (protocol 31). Code:
 `crates/package` (`bri-package`). This closes the shape of door-closer P0 items 2 (package
@@ -99,7 +103,7 @@ base game's list, `crates/package/base-packages.json`.
 | `version` | `major.minor.patch`. Base packages use their generation number as the major version (`weapons-pack-009` is `9.0.0`). |
 | `side` | `server`: only the server loads it; never compared or sent. `shared`: both simulate with it; must match to join. `client`: presentation only; a difference is reported but does not refuse the join. |
 | `dir` | Directory under the content root; plain relative path, no `..`, must stay inside the root. |
-| `role` | Optional. The engine system that reads the package directly (`map_bundle`, `brick_catalog`, `geometry`, `effects`, `brick_materials`, `avatar`, `audio`, `weapons`, `item_presentation`, `vehicles`, `events`, `ui_pack`, `effects_runtime`, `weather`, `foliage`, `weapon_debris`, `worlds`, `tutorial`). At most one package per role. Packages without a role are still loaded, hashed and agreed on. |
+| `role` | Optional. The engine system that reads the package directly (`map_bundle`, `brick_catalog`, `geometry`, `effects`, `brick_materials`, `avatar`, `audio`, `weapons`, `item_presentation`, `vehicles`, `events`, `ui_pack`, `effects_runtime`, `weather`, `foliage`, `weapon_debris`, `worlds`, `tutorial`). At most one package per role: it is that kind's *base* package. Packages without a role are still loaded, hashed and agreed on, and add to a kind when they provide it (below). |
 
 Unknown fields are errors. Every problem is a diagnostic with a stable code
 (`packages.id`, `packages.duplicate`, `packages.dir`, `packages.role_conflict`,
@@ -158,14 +162,125 @@ Where it is used:
   listed here like any other package; `bri-package-runtime` loads their
   manifests from the same list.
 
+## Turning packages on and off
+
+`packages.json` is also the enabled list. A disabled package's exact entry
+moves to `packages-disabled.json` in the same content root (same schema), and
+package directories holding a `package.json` that neither file lists are
+discovered as disabled. `bri_package::library` owns scanning, dependency
+planning and atomic rewrites; loaders only read `packages.json`. The in-game
+Add-Ons screen is built on it: see [`mod-manager.md`](mod-manager.md).
+## Content from several packages
+
+A role names a kind's *base* package, not its only one. Loading builds one
+merged pack per kind from the base package plus every role-less package in
+`packages.json` whose directory holds that kind's file under `assets/`, in
+list order (`bri_net::content_identity::kind_providers`). The dedicated server
+(`bri_net::dedicated`, which `bri-server` runs), a client-hosted game and a
+joining client all load this way (`ContentPaths::weapon_content`,
+`item_physics`, `vehicle_pack`, `brick_extras`).
+
+| Kind (`provides.kind`) | File under `assets/` | Merge |
+|---|---|---|
+| `weapons` | `weapons.json`; optional `presentation.json` and `item-physics.json` beside it for drawing and drop bounds | `bri_weapons::Pack::merge`, `WeaponContent::load_with`, `ItemPhysicsContent::load_with`, client `ItemAssets::load_with` |
+| `vehicles` | `vehicles.json` | `bri_vehicles::schema::Pack::merge`, client `VehicleAssets::load_with` |
+| `bricks` | `brick-catalog/stock-catalog.json` with `catalog-audit.json`, `native-collisions.json` and the mesh files beside it (the stock catalog layout) | `Definitions::load_with` |
+
+The package runtime accepts these kinds in a package's `provides`
+(`crates/package-runtime/src/content.rs` `Kind`), and `bri-import-addon`
+declares them.
+
+Rules:
+- Ids are namespaced, so packages cannot collide. A duplicate weapon or
+  vehicle id keeps the earlier package's and is reported; a duplicate brick
+  id is an error. Explosions and damage types are still keyed by bare Torque
+  name, so a clash there is reported too.
+- A weapon reference no loaded package satisfies drops only the image or item
+  that needs it, with a diagnostic (`merge: ...`, printed by `bri-server`). It
+  never refuses the whole set.
+- A merged resource or asset records its package directory
+  (`Resource::package`, `Asset::package`). Paths stay relative to their own
+  package. Base packages sit directly under the content root, and
+  `bri_weapons::resource_root` and `bri_vehicles::asset_root` resolve a package
+  beside them.
+- Without extra packages, loading is byte-for-byte what it was: the same packs
+  and the same weapon fingerprint.
+- Systems still take one pack each, and the wire carries ids that were already
+  strings, so this needs no protocol or save change. The join check already
+  requires identical `shared` packages on both sides.
+
+Imported bricks join the brick menu under the category and subcategory they
+declare, with icons from the package's `brick-catalog/brick-icons.json`
+(`install_package_bricks` in `crates/client/src/content.rs`). A brick
+without a stored icon shows none. Imported sounds and effects are not merged
+yet.
+
+## Enabling and disabling packages
+
+Enabled means exactly the entries in the content root's `packages.json`, and
+loading reads nothing else. The in-game mod manager
+(`crates/package/src/library.rs`) moves disabled entries to a sibling
+`packages-disabled.json` with the same `PackageSet` schema, and treats
+unlisted directories holding a `package.json` (up to three levels deep) as
+discovered and disabled. A package imported by `bri-import-addon` becomes
+loadable by adding the `packages.json` line its report prints (`side`
+`shared`, no `role`).
+
 ## Per-package manifests (`package.json`)
 
-The mod platform lane defines the manifest a mod package carries inside its
-directory (`package.json`: id, version, api, license, provenance,
-dependencies, capabilities, provides, slots), its archive format and its
-download cache, in `docs/modding/package-format.md`. They build on this crate:
-the same id grammar, versions, diagnostics and `PackageRef`/`Mismatch` shapes.
-Base packages carry no `package.json`; `packages.json` describes them.
+A mod package carries a `package.json` in its directory: `schema_version`,
+`id`, `version`, `api`, `name`, `description`, `authors`, `license`,
+`provenance`, `dependencies`, `capabilities` and `provides`. It is parsed by
+`bri_package_runtime::manifest` with the id grammar, versions and
+diagnostics above. Unknown fields are errors, so a misspelt field is
+reported rather than ignored. Base packages carry no `package.json`;
+`packages.json` describes them. The author-facing walkthrough is
+[docs/modding/README.md](../modding/README.md).
+
+- **Capabilities** are listed once, in `bri_package::capability`, each with
+  the plain words players read ("send chat messages"). The runtime refuses any
+  operation whose capability the manifest lacks (`ops::authorize`).
+- **Sides follow content kinds.** Behaviour, script, world and entity are
+  server content; model and HUD are client content. A package holding only
+  server kinds is `server`, only client kinds `client`, none `shared`. A
+  package mixing both cannot load on either side and must be split.
+- **`bri-addon-check <folder> [--json]`** (`bri_package_runtime::check`)
+  loads one Add-On the way the game does, with the Add-Ons it needs found
+  beside it. It checks the manifest, files, HUD bindings and scripts, and
+  prints the side, what the Add-On provides, what it may do and what it
+  needs. It runs nothing.
+
+The modplatform draft (PR #6) had a luau behaviour host, a single-archive
+package identity, a content-addressed store and exclusive `slots`. Main
+chose Rhai behaviour, directory hashing (`environment::hash_dir`) and the
+file-level download cache of the package sync work, so those parts were not
+carried over. Only its plain-language capabilities, strict manifests and the
+`check` report were kept. An exclusive slot for the server's game mode
+returns with the game mode picker, which is where it is first read.
+
+## Client code (`client` in `package.json`)
+
+An Add-On may carry code that runs on players' machines: a WebAssembly
+module and WGSL shaders, sandboxed and presentation only. It is declared in
+the `client` section of the Add-On's own `package.json`:
+
+```json
+"client": {
+  "module": "client/main.wasm",
+  "capabilities": ["render.layer", "render.shader"],
+  "shaders": ["client/cube.wgsl"],
+  "sounds": []
+}
+```
+
+Capabilities have tiers: `render.layer`, `render.shader`, `audio`,
+`input.focused` and `net.message` are sandboxed (the player trusts the
+server once); `net.http` and `files.addon_folder` are elevated (a separate,
+stronger per-Add-On choice); `native` (a native plugin) is elevated too,
+needs the server's name typed on the prompt, and does not run yet. A package with client code travels like any other
+`shared` or `client` package; the trust prompt comes before its code
+downloads. Checks, host API, budgets and prompts:
+[client-sandbox.md](client-sandbox.md). Code: `crates/client-sandbox`.
 
 ## Distribution: clients fetch what they lack
 
@@ -225,6 +340,9 @@ Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
   server lacks, fetches the server's packages, hands them to the caller's
   `load` step and joins again with the list it returns; the server checks
   that list like any other.
+  The refusal's text is `environment::refusal`, which the Add-Ons screen
+  reads back into rows; the download uses the join's `HostPin`, so it
+  reaches the same host the join trusts.
 
 ## Not built yet
 
@@ -242,3 +360,6 @@ Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
   is no reload.
 - Dependency resolution and archives are the mod platform lane's. Renaming
   the base packs' ids follows the plan under "Legacy spellings" above.
+- Content inside the base packages still uses older id spellings
+  (`v20/brick/...`, `v20.weapon....`) until those packs are regenerated
+  under the grammar above; see the audit.

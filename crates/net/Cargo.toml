@@ -33,6 +33,9 @@ bytes = "1"
 bri-crash = { path = "../crash" }
 igd-next = { version = "0.17", default-features = false }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_Ndis"] }
+
 [dev-dependencies]
 bri-package-runtime = { path = "../package-runtime" }
 tempfile = "3"

@@ -114,7 +114,9 @@ pub fn registry(core: &Core) -> Registry<Core> {
         use crate::api::ConnectionState as C;
         match core.conn {
             C::InGame { .. } => core.request(UiAction::Disconnect),
-            C::Connecting { .. } | C::Loading { .. } => core.request(UiAction::CancelConnect),
+            C::Connecting { .. } | C::Loading { .. } | C::DownloadingPackages(_) => {
+                core.request(UiAction::CancelConnect)
+            }
             C::Idle | C::Failed { .. } => return Err("Not connected.".into()),
         };
         Ok(())
@@ -231,6 +233,9 @@ pub fn registry(core: &Core) -> Registry<Core> {
     // Typed views of settings the Options menus already own.
     r.cvar("volume", "$pref::Audio::masterVolume", Kind::Float { min: 0.0, max: 1.0 }, "Master volume.");
     r.cvar("music", "$pref::Audio::PlayMusic", Kind::Bool, "Play music.");
+    r.cvar("musicvolume", super::options::MUSIC_VOLUME, Kind::Float { min: 0.0, max: 1.0 }, "Music volume.");
+    r.cvar("mutebackground", super::options::MUTE_IN_BACKGROUND, Kind::Bool, "Mute while another window has focus.");
+    r.cvar("maxfps", super::options::MAX_FPS, Kind::Int { min: 0, max: 1000 }, "Frame-rate cap; 0 for unlimited.");
     r.cvar("menusounds", "$pref::Audio::MenuSounds", Kind::Bool, "Menu button sounds.");
     r.cvar("mousesensitivity", "$pref::Input::MouseSensitivity", Kind::Float { min: 0.0, max: 10.0 }, "Mouse look speed.");
     r.cvar("invertmouse", "$pref::Input::MouseInvert", Kind::Bool, "Invert mouse look.");

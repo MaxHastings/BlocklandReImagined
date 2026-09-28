@@ -24,6 +24,78 @@ const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// cast sun shadows too, off unless turned on.
 const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
+const PRECIPITATION: &str = "$pref::precipitationOn";
+/// Not a v20 setting: the frame-rate cap in frames per second, 0 for none.
+pub const MAX_FPS: &str = "$pref::Video::MaxFps";
+/// The Max FPS menu's choices; 0 is Unlimited.
+pub const MAX_FPS_CHOICES: &[u32] = &[30, 60, 75, 120, 144, 165, 240, 0];
+const MAX_FPS_MENU: &str = "OptGraphicsMaxFpsMenu";
+const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
+/// Not a v20 setting: music bricks' volume (v20 only had Play Music).
+pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
+/// Not a v20 setting: silence the game while another window has focus.
+pub const MUTE_IN_BACKGROUND: &str = "$pref::Audio::MuteInBackground";
+const MUSIC_SLIDER: &str = "OptAudioVolumeMusic";
+/// The renderer's anisotropy when the player never set one (8x, as
+/// `bri_render::scene::TextureFiltering::default`).
+const DEFAULT_ANISOTROPY: f32 = 7.0 / 15.0;
+
+/// One Graphics Quality choice. Each sets the options that cost the most
+/// frame time; the menu shows Custom when they match no preset.
+struct Preset {
+    name: &'static str,
+    shadows: i64,
+    anti_aliasing: bool,
+    brick_shadows: bool,
+    anisotropy: f32,
+    precipitation: bool,
+}
+/// High is the renderer's defaults, so a new player sees High.
+const PRESETS: &[Preset] = &[
+    Preset {
+        name: "Low",
+        shadows: 4,
+        anti_aliasing: false,
+        brick_shadows: false,
+        anisotropy: 0.0,
+        precipitation: false,
+    },
+    Preset {
+        name: "Medium",
+        shadows: 2,
+        anti_aliasing: true,
+        brick_shadows: false,
+        anisotropy: 3.0 / 15.0,
+        precipitation: true,
+    },
+    Preset {
+        name: "High",
+        shadows: 0,
+        anti_aliasing: true,
+        brick_shadows: false,
+        anisotropy: DEFAULT_ANISOTROPY,
+        precipitation: true,
+    },
+    Preset {
+        name: "Ultra",
+        shadows: 0,
+        anti_aliasing: true,
+        brick_shadows: true,
+        anisotropy: 1.0,
+        precipitation: true,
+    },
+];
+/// The Quality menu id for "Custom".
+const CUSTOM_QUALITY: i64 = PRESETS.len() as i64;
+/// Preferences a preset writes. Done always stores them, even when they
+/// equal a stock default the renderer does not read.
+const PRESET_PREFS: &[&str] = &[
+    SHADOW_QUALITY,
+    ANTI_ALIASING,
+    BRICK_SHADOWS,
+    ANISOTROPY,
+    PRECIPITATION,
+];
 /// `$pref::Player::defaultFov`, the normal camera FOV in degrees (v20
 /// default 90). The B4v21 patch of the reference v20 install adds its slider.
 pub const DEFAULT_FOV: &str = "$pref::Player::defaultFov";
@@ -31,12 +103,16 @@ pub const DEFAULT_FOV: &str = "$pref::Player::defaultFov";
 pub const FOV_RANGE: (f32, f32) = (70.0, 140.0);
 const FOV_SLIDER: &str = "SliderFOV";
 /// Checkboxes whose v20 default is on.
-const DEFAULT_ON: &[&str] = &["$pref::OpenGL::textureTrilinear", ANTI_ALIASING];
+const DEFAULT_ON: &[&str] = &[
+    "$pref::OpenGL::textureTrilinear",
+    ANTI_ALIASING,
+    PRECIPITATION,
+];
 /// Checkbox preferences the native game honours.
 const CHECKBOX_PREFS: &[&str] = &[
     FULLSCREEN,
     NO_VSYNC,
-    "$pref::precipitationOn",
+    PRECIPITATION,
     "$pref::OpenGL::textureTrilinear",
     "$pref::OpenGL::useGLNearest",
     ANTI_ALIASING,
@@ -61,6 +137,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::Input::ReverseBrickScroll",
     "$pref::Input::noobjet",
     "$pref::Input::MouseInvert",
+    MUTE_IN_BACKGROUND,
 ];
 /// Other authored controls with native behaviour.
 const SUPPORTED_CONTROLS: &[&str] = &[
@@ -97,7 +174,48 @@ const VOLUMES: &[(&str, &str, &str)] = &[
         "shell",
     ),
     ("OptAudioVolumeSim", "$pref::Audio::channelVolume2", "sim"),
+    (MUSIC_SLIDER, MUSIC_VOLUME, "music"),
 ];
+/// Sliders that show their value to their right.
+const READOUTS: &[&str] = &[
+    "OptAudioVolumeMaster",
+    "OptAudioVolumeShell",
+    "OptAudioVolumeSim",
+    MUSIC_SLIDER,
+    "SliderControlsMouseSensitivity",
+    "slider_KeyboardTurnSpeed",
+    "SliderGraphicsAnisotropy",
+    FOV_SLIDER,
+];
+
+/// The text a slider's readout shows for `value`.
+fn readout(slider: &str, value: f32) -> String {
+    match slider {
+        FOV_SLIDER => format!("{value:.0}"),
+        "SliderGraphicsAnisotropy" => {
+            // As `TextureFiltering::from_v20` rounds it.
+            let samples = 1.0 + value.clamp(0.0, 1.0) * 15.0;
+            match [16, 8, 4, 2].into_iter().find(|n| samples >= *n as f32) {
+                Some(n) => format!("{n}x"),
+                None => "Off".into(),
+            }
+        }
+        "SliderControlsMouseSensitivity" | "slider_KeyboardTurnSpeed" => format!("{value:.2}"),
+        _ => format!("{:.0}%", value.clamp(0.0, 1.0) * 100.0),
+    }
+}
+
+/// A volume pref as a gain in 0..=1 (full when unset or unreadable).
+pub fn volume(p: &Prefs, pref: &str) -> f32 {
+    let v = p.f32_or(pref, 1.0);
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }
+}
+
+/// The frame-rate cap `$pref::Video::MaxFps` asks for, `None` for none.
+pub fn max_fps(p: &Prefs) -> Option<u32> {
+    let fps = p.i64_or(MAX_FPS, 0);
+    (fps > 0).then(|| fps.clamp(15, 1000) as u32)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DisplaySettings {
@@ -327,6 +445,83 @@ fn close_rows(v: &mut View, section: NodeId) -> i32 {
     bottom
 }
 
+/// v20 sized each volume label to its own text, ending where its slider
+/// starts. The longer names ("Interface Volume") would be clipped at both
+/// ends, so the label keeps its right edge and grows to the pane's edge.
+fn widen_label(label: &mut Control) {
+    let right = label.position[0] + label.extent[0];
+    label.position[0] = 1;
+    label.extent[0] = (right - 1).max(label.extent[0]);
+}
+
+/// Audio additions: v20's Shell and Sim volumes get the names players know,
+/// and a Music volume and Mute in Background follow them.
+fn audio_rows(v: &mut View) {
+    let (Some(shell), Some(sim)) = (v.id("OptAudioVolumeShell"), v.id("OptAudioVolumeSim")) else {
+        return;
+    };
+    let Some(parent) = v.node(sim).parent else {
+        return;
+    };
+    let label_of = |v: &View, slider: NodeId| {
+        v.node(parent)
+            .children
+            .iter()
+            .copied()
+            .find(|&k| {
+                v.node(k).ctrl.class == "GuiTextCtrl" && labels(&v.node(k).ctrl, &v.node(slider).ctrl)
+            })
+    };
+    for (slider, from, to) in [(shell, "Shell", "Interface"), (sim, "Sim", "Effects")] {
+        if let Some(l) = label_of(v, slider) {
+            let text = v.text_of(l).replace(from, to);
+            v.nodes[l].ctrl.text = Some(text);
+            widen_label(&mut v.nodes[l].ctrl);
+        }
+    }
+    let (s, sim_ctrl) = (v.node(shell).ctrl.clone(), v.node(sim).ctrl.clone());
+    let step = match sim_ctrl.position[1] - s.position[1] {
+        d if d > 0 => d,
+        _ => sim_ctrl.extent[1] + 12,
+    };
+    let mut music = sim_ctrl.clone();
+    music.name = Some(MUSIC_SLIDER.into());
+    music.variable = None;
+    music.command = None;
+    music.position[1] += step;
+    let y = music.position[1];
+    if let Some(l) = label_of(v, sim) {
+        let mut label = v.node(l).ctrl.clone();
+        let text = v.text_of(l).replace("Effects", "Music");
+        label.text = Some(if text.contains("Music") { text } else { "Music:".into() });
+        label.position[1] += step;
+        widen_label(&mut label);
+        v.add(parent, label);
+    }
+    v.add(parent, music);
+    let x = label_of(v, sim).map_or(sim_ctrl.position[0], |l| v.node(l).ctrl.position[0]);
+    let mut mute = ctrl("GuiCheckBoxCtrl", "GuiCheckBoxProfile", Rect::new(x, y + step, 220, 20));
+    // Look like the pane's own checkboxes.
+    if let Some(style) = v
+        .walk()
+        .find(|&n| {
+            v.node(n)
+                .ctrl
+                .variable
+                .as_deref()
+                .is_some_and(|var| var.eq_ignore_ascii_case("$Pref::Audio::PlayMusic"))
+        })
+        .map(|n| v.node(n).ctrl.clone())
+    {
+        mute.style = style.style;
+        mute.extent[1] = style.extent[1];
+    }
+    mute.name = Some("OptAudioMuteInBackground".into());
+    mute.variable = Some(MUTE_IN_BACKGROUND.into());
+    mute.text = Some("Mute when in background".into());
+    v.add(parent, mute);
+}
+
 pub struct Options {
     view: View,
     draft: Prefs,
@@ -339,6 +534,8 @@ pub struct Options {
     resolutions: Vec<(u32, u32)>,
     modes: Option<DisplayModes>,
     committed: bool,
+    /// A volume slider was dragged, so its channel plays the draft value.
+    previewed: bool,
 }
 
 impl Options {
@@ -358,6 +555,7 @@ impl Options {
             resolutions,
             modes,
             committed: false,
+            previewed: false,
         };
         s.native_layout();
         // Duplicate authored names occur throughout Options. Preference identity
@@ -372,7 +570,7 @@ impl Options {
         }
         s.resolution_menu(current.resolution);
         for &(name, pref, _) in VOLUMES {
-            s.slider(name, core.prefs.f32_or(pref, 1.0).clamp(0.0, 1.0));
+            s.slider(name, volume(&core.prefs, pref));
         }
         s.slider(
             "SliderControlsMouseSensitivity",
@@ -393,13 +591,32 @@ impl Options {
                     .set_text(n, core.prefs.i64_or(pref, fallback).to_string());
             }
         }
+        // The renderer ignores the stock default; show what it draws.
+        let anisotropy = if core.prefs.is_set(ANISOTROPY) {
+            core.prefs.f32_or(ANISOTROPY, 0.0)
+        } else {
+            DEFAULT_ANISOTROPY
+        };
         s.slider(
             "SliderGraphicsAnisotropy",
-            core.prefs.f32_or(ANISOTROPY, 0.0).clamp(0.0, 1.0),
+            if anisotropy.is_finite() { anisotropy.clamp(0.0, 1.0) } else { 0.0 },
         );
         s.slider(FOV_SLIDER, default_fov(&core.prefs));
         s.set_chat_size(chat_size(&core.prefs));
         s.set_shadow_quality(core.prefs.i64_or(SHADOW_QUALITY, 0));
+        let fps = max_fps(&core.prefs).unwrap_or(0);
+        let fps_items = MAX_FPS_CHOICES
+            .iter()
+            .copied()
+            .chain((!MAX_FPS_CHOICES.contains(&fps)).then_some(fps))
+            .map(|f| {
+                let label = if f == 0 { "Unlimited".into() } else { f.to_string() };
+                (label, i64::from(f))
+            })
+            .collect();
+        s.menu(MAX_FPS_MENU, fps_items, i64::from(fps));
+        s.refresh_quality();
+        s.refresh_readouts();
         s.pane("Graphics");
         s.refresh_binds(core);
         s.smart_toggle();
@@ -470,7 +687,7 @@ impl Options {
             c.text = Some("Anti-Aliasing".into());
             // Under the resolution menu, left of Apply.
             let menu = v.id("OptGraphicsResolutionMenu").map(|m| v.node(m).ctrl.clone());
-            let (x, y) = menu.map_or((60, 85), |m| (m.position[0] - 40, m.position[1] + m.extent[1] + 4));
+            let (x, y) = menu.as_ref().map_or((60, 85), |m| (m.position[0] - 40, m.position[1] + m.extent[1] + 4));
             c.position = [x, y];
             c.extent = [110, 23];
             c.command = None;
@@ -481,13 +698,47 @@ impl Options {
             c.variable = Some(BRICK_SHADOWS.into());
             c.text = Some("Brick Shadows".into());
             c.position[1] += c.extent[1] - 3;
+            let below = c.position[1] + c.extent[1] + 8;
             v.add(parent, c);
+            // Quality presets and the frame-rate cap follow as menu rows
+            // shaped like Resolution.
+            if let Some(menu) = menu {
+                let label = v
+                    .node(parent)
+                    .children
+                    .iter()
+                    .map(|&k| v.node(k).ctrl.clone())
+                    .find(|k| k.class == "GuiTextCtrl" && labels(k, &menu));
+                let mut y = below;
+                for (name, text) in [(QUALITY_MENU, "Quality:"), (MAX_FPS_MENU, "Max FPS:")] {
+                    let mut m = menu.clone();
+                    m.name = Some(name.into());
+                    m.position[1] = y;
+                    m.extent[0] = m.extent[0].max(84);
+                    m.command = None;
+                    m.variable = None;
+                    let mut l = label.clone().unwrap_or_else(|| {
+                        ctrl(
+                            "GuiTextCtrl",
+                            "GuiTextProfile",
+                            Rect::new(menu.position[0] - 60, 0, 56, 18),
+                        )
+                    });
+                    l.name = None;
+                    l.text = Some(text.into());
+                    l.position[1] = y + (menu.extent[1] - l.extent[1]) / 2;
+                    v.add(parent, l);
+                    v.add(parent, m);
+                    y += menu.extent[1] + 6;
+                }
+            }
         }
         // Audio: Volume takes the driver section's place.
         if let Some(n) = find_section(v, "Volume") {
             v.nodes[n].ctrl.position[1] = 7;
             v.nodes[n].ctrl.extent[1] = 301;
         }
+        audio_rows(v);
         // Advanced: stack the remaining sections of the scrolled page.
         let page = v.walk().find(|&n| {
             v.node(n)
@@ -527,6 +778,19 @@ impl Options {
         for (i, n) in tabs.into_iter().enumerate() {
             v.nodes[n].ctrl.position[0] = 12 + 90 * i as i32;
         }
+        // Sliders give up room on their right for their value.
+        for &name in READOUTS {
+            let Some(n) = v.id(name) else { continue };
+            let Some(parent) = v.node(n).parent else {
+                continue;
+            };
+            let c = &mut v.nodes[n].ctrl;
+            c.extent[0] = (c.extent[0] - 44).max(40);
+            let r = Rect::new(c.position[0] + c.extent[0] + 4, c.position[1], 40, c.extent[1]);
+            let mut t = ctrl("GuiTextCtrl", "GuiTextProfile", r);
+            t.name = Some(format!("{name}Value"));
+            v.add(parent, t);
+        }
     }
     fn menu(&mut self, name: &str, items: Vec<(String, i64)>, selected: i64) {
         if let Some(n) = self.view.id(name) {
@@ -553,6 +817,77 @@ impl Options {
         if let Some(n) = self.view.id(name) {
             self.view.set_num(n, value);
         }
+    }
+    fn refresh_readouts(&mut self) {
+        for &name in READOUTS {
+            if let (Some(n), Some(t)) = (self.view.id(name), self.view.id(&format!("{name}Value"))) {
+                self.view.state(t).text = Some(readout(name, self.view.num(n)));
+            }
+        }
+    }
+    /// Checkboxes bound to `var` (authored names repeat; variables identify).
+    fn checkboxes(&self, var: &str) -> Vec<NodeId> {
+        self.view
+            .walk()
+            .filter(|&n| {
+                let c = &self.view.node(n).ctrl;
+                c.class == "GuiCheckBoxCtrl"
+                    && c.variable.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(var))
+            })
+            .collect()
+    }
+    fn check(&mut self, var: &str, on: bool) {
+        for n in self.checkboxes(var) {
+            self.view.set_bool(n, on);
+        }
+        self.draft.set_bool(var, on);
+    }
+    /// The preset the dialog's current values match, else Custom.
+    fn quality(&self) -> i64 {
+        let on = |var: &str| {
+            self.checkboxes(var)
+                .first()
+                .map_or_else(|| self.draft.bool_or(var, false), |&n| self.view.bool_value(n))
+        };
+        let anisotropy = self
+            .view
+            .id("SliderGraphicsAnisotropy")
+            .map_or(DEFAULT_ANISOTROPY, |n| self.view.num(n));
+        let shadows = self.draft.i64_or(SHADOW_QUALITY, 0).clamp(0, 4);
+        PRESETS
+            .iter()
+            .position(|p| {
+                p.shadows == shadows
+                    && p.anti_aliasing == on(ANTI_ALIASING)
+                    && p.brick_shadows == on(BRICK_SHADOWS)
+                    && p.precipitation == on(PRECIPITATION)
+                    && (p.anisotropy - anisotropy).abs() < 0.02
+            })
+            .map_or(CUSTOM_QUALITY, |i| i as i64)
+    }
+    fn refresh_quality(&mut self) {
+        let mut items: Vec<(String, i64)> = PRESETS
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.name.to_string(), i as i64))
+            .collect();
+        let quality = self.quality();
+        // Custom is a state, not a choice: listed only while it applies.
+        if quality == CUSTOM_QUALITY {
+            items.push(("Custom".into(), CUSTOM_QUALITY));
+        }
+        self.menu(QUALITY_MENU, items, quality);
+    }
+    fn apply_preset(&mut self, index: usize) {
+        let Some(p) = PRESETS.get(index) else {
+            return;
+        };
+        self.set_shadow_quality(p.shadows);
+        self.check(ANTI_ALIASING, p.anti_aliasing);
+        self.check(BRICK_SHADOWS, p.brick_shadows);
+        self.check(PRECIPITATION, p.precipitation);
+        self.slider("SliderGraphicsAnisotropy", p.anisotropy);
+        self.refresh_readouts();
     }
     /// `optionsDlg::setShadowQuality`: 0 = Best through 4 = Minimum.
     fn set_shadow_quality(&mut self, quality: i64) {
@@ -642,6 +977,13 @@ impl Options {
             let fov = v.round().clamp(FOV_RANGE.0, FOV_RANGE.1);
             self.draft.set(DEFAULT_FOV, fov.to_string());
             self.view.set_num(n, fov);
+        }
+        if let Some(fps) = self
+            .view
+            .id(MAX_FPS_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(MAX_FPS, fps.clamp(0, 1000).to_string());
         }
         for &(name, pref, _) in VOLUMES {
             if let Some(n) = self.view.id(name) {
@@ -746,7 +1088,8 @@ impl Options {
         // Copy only supported edited values. Preserve concurrent avatar/favorite
         // changes made by other dialogs and preferences owned by the host.
         for (key, value) in self.draft.overrides() {
-            if self.initial.get(&key) != Some(value.as_str()) {
+            let preset = PRESET_PREFS.iter().any(|p| p.eq_ignore_ascii_case(&key));
+            if preset || self.initial.get(&key) != Some(value.as_str()) {
                 core.prefs.set(&key, value);
             }
         }
@@ -765,7 +1108,7 @@ impl Options {
         for &(_, pref, channel) in VOLUMES {
             core.request(UiAction::SetVolume {
                 channel: channel.into(),
-                value: core.prefs.f32_or(pref, 1.0).clamp(0.0, 1.0),
+                value: volume(&core.prefs, pref),
             });
         }
         self.committed = true;
@@ -806,6 +1149,13 @@ impl Screen for Options {
     }
     fn on_sleep(&mut self, core: &mut Core) {
         if !self.committed {
+            // Volumes play live while dragged; undo the preview.
+            for &(_, pref, channel) in VOLUMES.iter().filter(|_| self.previewed) {
+                core.request(UiAction::SetVolume {
+                    channel: channel.into(),
+                    value: volume(&self.initial, pref),
+                });
+            }
             core.binds = self.saved_binds.clone();
             core.settings.mouse_type = self.saved_hardware.0;
             core.settings.keyboard_type = self.saved_hardware.1;
@@ -829,6 +1179,25 @@ impl Screen for Options {
             return;
         }
         if ev.kind == EventKind::Changed {
+            let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
+            if let Some(&(_, _, channel)) = VOLUMES.iter().find(|(n, _, _)| *n == name) {
+                let value = self.view.num(ev.node);
+                if value.is_finite() {
+                    self.previewed = true;
+                    core.request(UiAction::SetVolume {
+                        channel: channel.into(),
+                        value: value.clamp(0.0, 1.0),
+                    });
+                }
+            }
+            if name == QUALITY_MENU {
+                if let Some(i) = self.view.selected(ev.node).and_then(|i| usize::try_from(i).ok()) {
+                    self.apply_preset(i);
+                }
+                self.refresh_quality();
+                return;
+            }
+            self.refresh_readouts();
             if let Some(var) = self
                 .view
                 .node(ev.node)
@@ -850,6 +1219,7 @@ impl Screen for Options {
                     self.resolution_menu(keep);
                 }
             }
+            self.refresh_quality();
             return;
         }
         if !matches!(ev.kind, EventKind::Click | EventKind::Submit) {
@@ -883,6 +1253,7 @@ impl Screen for Options {
             .and_then(|c| c.parse().ok())
         {
             self.set_shadow_quality(quality);
+            self.refresh_quality();
             return;
         }
         match cmd.as_str() {
@@ -1212,6 +1583,7 @@ mod tests {
                 "",
             ),
             ("GuiSliderCtrl", "SliderGraphicsAnisotropy", "value", ""),
+            ("GuiCheckBoxCtrl", "OptPrecipitation", PRECIPITATION, ""),
             (
                 "GuiRadioCtrl",
                 "OPT_ShadowQuality0",
@@ -1378,7 +1750,7 @@ mod tests {
                 .iter()
                 .filter(|(_, a)| matches!(a, UiAction::SetVolume { .. }))
                 .count(),
-            3
+            VOLUMES.len()
         );
         let saves: Vec<_> = actions
             .iter()
@@ -1398,6 +1770,138 @@ mod tests {
         }
         ui.apply(UiUpdate::PlantError(crate::api::PlantError::Overlap));
         assert_eq!(ui.drain_sounds().len(), 1);
+    }
+
+    fn change(s: &mut Options, ui: &mut Ui, node: NodeId) {
+        s.on_event(
+            &ViewEvent {
+                node,
+                kind: EventKind::Changed,
+            },
+            &mut ui.core,
+        );
+    }
+    fn saved_prefs(ui: &mut Ui) -> Prefs {
+        ui.drain_actions()
+            .into_iter()
+            .find_map(|(_, a)| match a {
+                UiAction::SaveSettings(s) => Some(Prefs::new(&Default::default(), &s.prefs)),
+                _ => None,
+            })
+            .expect("Done saves settings")
+    }
+
+    #[test]
+    fn a_new_player_sees_high_quality_and_presets_set_every_option() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(QUALITY_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("High"));
+        assert!(!s.view.node(menu).state.items.iter().any(|(t, _)| t == "Custom"));
+        // Low turns off everything costly.
+        s.view.select(menu, Some(0));
+        change(&mut s, &mut ui, menu);
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Low"));
+        let aa = s.checkboxes(ANTI_ALIASING)[0];
+        assert!(!s.view.bool_value(aa));
+        assert!(!s.view.bool_value(s.checkboxes(PRECIPITATION)[0]));
+        let aniso = s.view.id("SliderGraphicsAnisotropy").unwrap();
+        assert_eq!(s.view.num(aniso), 0.0);
+        // Changing one option by hand makes it Custom.
+        s.view.set_bool(aa, true);
+        change(&mut s, &mut ui, aa);
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Custom"));
+        // Ultra, then Done, stores every preset option explicitly.
+        s.view.select(menu, Some(3));
+        change(&mut s, &mut ui, menu);
+        assert!(!s.view.node(menu).state.items.iter().any(|(t, _)| t == "Custom"));
+        click(&mut s, "done", &mut ui);
+        let saved = saved_prefs(&mut ui);
+        assert_eq!(saved.get(SHADOW_QUALITY), Some("0"));
+        assert!(saved.bool_or(BRICK_SHADOWS, false));
+        assert!(saved.bool_or(ANTI_ALIASING, false));
+        assert!(saved.bool_or(PRECIPITATION, false));
+        assert_eq!(saved.f32_or(ANISOTROPY, 0.0), 1.0);
+        // The next open recognises Ultra.
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(QUALITY_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Ultra"));
+    }
+
+    #[test]
+    fn max_fps_defaults_to_unlimited_and_saves_the_chosen_cap() {
+        let mut ui = fixture();
+        assert_eq!(max_fps(&ui.core.prefs), None);
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(MAX_FPS_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unlimited"));
+        s.view.select(menu, Some(144));
+        click(&mut s, "done", &mut ui);
+        assert_eq!(saved_prefs(&mut ui).get(MAX_FPS), Some("144"));
+        assert_eq!(max_fps(&ui.core.prefs), Some(144));
+        // A value typed in the console that the menu lacks still shows.
+        ui.core.prefs.set(MAX_FPS, "50");
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(MAX_FPS_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("50"));
+        ui.core.prefs.set(MAX_FPS, "-3");
+        assert_eq!(max_fps(&ui.core.prefs), None);
+    }
+
+    #[test]
+    fn music_volume_and_readouts_follow_their_sliders() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let music = s.view.id(MUSIC_SLIDER).unwrap();
+        let text = |s: &Options, name: &str| s.view.text_of(s.view.id(&format!("{name}Value")).unwrap());
+        assert_eq!(text(&s, MUSIC_SLIDER), "100%");
+        assert_eq!(text(&s, "SliderGraphicsAnisotropy"), "8x");
+        // Dragging previews the volume at once.
+        s.view.set_num(music, 0.4);
+        change(&mut s, &mut ui, music);
+        assert_eq!(text(&s, MUSIC_SLIDER), "40%");
+        let previews: Vec<_> = ui
+            .drain_actions()
+            .into_iter()
+            .filter_map(|(_, a)| match a {
+                UiAction::SetVolume { channel, value } => Some((channel, value)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(previews, [("music".to_string(), 0.4)]);
+        // Leaving without Done restores what was playing before.
+        s.on_sleep(&mut ui.core);
+        let restored: Vec<_> = ui
+            .drain_actions()
+            .into_iter()
+            .filter_map(|(_, a)| match a {
+                UiAction::SetVolume { channel, value } => Some((channel, value)),
+                _ => None,
+            })
+            .collect();
+        assert!(restored.contains(&("music".to_string(), 1.0)));
+        assert_eq!(ui.core.prefs.get(MUSIC_VOLUME), None);
+        // Done keeps it.
+        let mut s = Options::new(&ui.core);
+        let music = s.view.id(MUSIC_SLIDER).unwrap();
+        s.view.set_num(music, 0.25);
+        click(&mut s, "done", &mut ui);
+        assert_eq!(saved_prefs(&mut ui).f32_or(MUSIC_VOLUME, 1.0), 0.25);
+        assert_eq!(readout(FOV_SLIDER, 90.0), "90");
+        assert_eq!(readout("SliderControlsMouseSensitivity", 0.75), "0.75");
+        assert_eq!(readout("SliderGraphicsAnisotropy", 0.0), "Off");
+    }
+
+    #[test]
+    fn mute_in_background_is_an_audio_checkbox_saved_on_done() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id("OptAudioMuteInBackground").unwrap();
+        assert!(!s.view.bool_value(n));
+        s.view.set_bool(n, true);
+        change(&mut s, &mut ui, n);
+        click(&mut s, "done", &mut ui);
+        assert!(saved_prefs(&mut ui).bool_or(MUTE_IN_BACKGROUND, false));
     }
 
     #[test]
@@ -1704,6 +2208,7 @@ mod tests {
             modified: "2026-09-26".into(),
             description: "Native save test".into(),
             brick_count: Some(42),
+            damaged: false,
         }];
         let output = root.join("artifacts/ui-native-dialogs");
         std::fs::create_dir_all(&output).unwrap();

@@ -7,19 +7,9 @@ use std::collections::BTreeMap;
 /// Variables an entity may be given when it is spawned.
 pub const MAX_SPAWN_VARS: usize = 16;
 
-/// Every capability a manifest may declare.
-pub const CAPABILITIES: &[&str] = &[
-    // Add world-owned bricks to the world and remove them.
-    "world.edit",
-    // Explosions and direct damage to players and bricks.
-    "damage",
-    // Spawn, steer and remove the package's own entities.
-    "entity",
-    // Send chat lines to players.
-    "chat",
-    // Move players and respawn them (a race start, a round reset).
-    "player",
-];
+/// Every capability a manifest may declare (with plain-language words in
+/// `bri_package::capability`).
+pub use bri_package::capability::CAPABILITIES;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Op {

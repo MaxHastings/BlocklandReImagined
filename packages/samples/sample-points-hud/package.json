@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "sample-points-hud",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Survival Points HUD",
+  "description": "A sample HUD panel showing your Survival Points, with a key that asks for the leaderboard.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "sample-survival-points": "^1.0.0" },
+  "provides": [
+    { "kind": "hud", "id": "sample-points-hud:hud/points", "file": "points.json" }
+  ]
+}

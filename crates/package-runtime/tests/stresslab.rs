@@ -26,6 +26,7 @@ fn set() -> PackageSet {
         ("stresslab-creeper-model", Side::Client),
         ("stresslab-economy", Side::Server),
         ("stresslab-hud", Side::Client),
+        ("stresslab-mode", Side::Server),
     ] {
         packages.push(PackageEntry {
             id: id.into(),
@@ -67,7 +68,11 @@ fn call<'a>(function: &'a str, args: Vec<Dynamic>, snapshot: &Arc<Snapshot>) -> 
 #[test]
 fn stress_lab_packages_load_on_server_and_client() {
     let server = Catalog::load(&root(), &set(), true).unwrap_or_else(|e| panic!("{e:#?}"));
-    assert_eq!(server.packages.len(), 5);
+    assert_eq!(
+        server.packages.len(),
+        6,
+        "v20-bricks, the three server Add-Ons and the mode"
+    );
     assert!(server.world().is_some());
     assert!(server.entity("stresslab-creeper:entity/creeper").is_some());
     // A client loads only client-side packages and never sees scripts.
@@ -367,4 +372,69 @@ fn broken_packages_report_every_problem_with_codes() {
             .all(|d| d.location.as_deref().is_some_and(|l| l.starts_with("bad/"))),
         "{problems:#?}"
     );
+}
+
+#[test]
+fn the_stress_lab_mode_runs_its_world_and_rules() {
+    let server = Catalog::load(&root(), &set(), true).unwrap_or_else(|e| panic!("{e:#?}"));
+    let modes: Vec<_> = server
+        .modes()
+        .map(|(id, m)| (id.as_str(), m.name.as_str()))
+        .collect();
+    assert_eq!(modes, [("stresslab-mode:mode/stresslab", "Stress Lab")]);
+    let hosted = server
+        .for_mode("stresslab-mode:mode/stresslab")
+        .unwrap_or_else(|e| panic!("{e:#?}"));
+    assert_eq!(
+        hosted.world().map(|(_, id, _)| id.as_str()),
+        Some("stresslab-world:world/strata")
+    );
+    assert!(hosted.packages.contains_key("stresslab-creeper"));
+    Runtime::compile(&hosted).unwrap_or_else(|e| panic!("{e:#?}"));
+    let err = server.for_mode("stresslab-mode:mode/missing").unwrap_err();
+    assert_eq!(err[0].code, "set.mode.unknown");
+}
+
+#[test]
+fn a_package_world_without_a_mode_runs_every_add_on_that_fits_it() {
+    let server = Catalog::load(&root(), &set(), true).unwrap();
+    let hosted = server
+        .for_world("stresslab-world:world/strata")
+        .unwrap_or_else(|e| panic!("{e:#?}"));
+    assert_eq!(hosted.packages.len(), server.packages.len());
+    assert_eq!(
+        server.for_world("stresslab-world:world/other").unwrap_err()[0].code,
+        "set.world.unknown"
+    );
+}
+
+#[test]
+fn a_mode_may_only_run_add_ons_its_package_depends_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("loose");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        pkg.join("package.json"),
+        r#"{"schema_version":1,"id":"loose","version":"1.0.0","api":1,"name":"Loose","license":"CC0-1.0",
+            "provides":[{"kind":"mode","id":"loose:mode/m","file":"m.json"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("m.json"),
+        r#"{"schema_version":1,"name":"Loose","map":"other:world/w","add_ons":["other"]}"#,
+    )
+    .unwrap();
+    let set = PackageSet {
+        schema_version: 1,
+        packages: vec![PackageEntry {
+            id: "loose".into(),
+            version: "1.0.0".into(),
+            side: Side::Server,
+            dir: "loose".into(),
+            role: None,
+        }],
+    };
+    let problems = Catalog::load(dir.path(), &set, true).unwrap_err();
+    let codes: Vec<&str> = problems.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(codes, ["set.mode.add_on", "set.mode.map"], "{problems:#?}");
 }

@@ -645,3 +645,29 @@ fn crouched_jets_push_flat_along_the_facing_without_lift() {
     assert!(s.velocity[0].abs() < 0.01, "{s:?}");
     assert!(s.velocity[1] < start.velocity[1] - 5.0, "{s:?}");
 }
+#[test]
+fn motion_events_name_the_colliders_the_sweep_hit() {
+    let mut w = scene();
+    let mut p = spawn(&mut w);
+    let wall = w.insert_collider(
+        ColliderBuilder::cuboid(3.0, 2.0, 0.25).translation(Vector::new(0.0, 2.0, -2.0)),
+        None,
+    );
+    w.detect_collisions(&(), &());
+    let forward = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    let mut hit = vec![];
+    for _ in 0..60 {
+        hit.extend(
+            p.step(&mut w, forward)
+                .unwrap()
+                .hits
+                .into_iter()
+                .map(|(c, _)| c),
+        );
+        w.step();
+    }
+    assert!(hit.contains(&wall), "{hit:?}");
+}

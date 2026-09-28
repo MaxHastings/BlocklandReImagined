@@ -33,6 +33,17 @@ pub enum IconRef {
 
 // ----------------------------------------------------------------- catalogs
 
+/// A game mode an enabled Add-On declares, for Start Game.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameModeInfo {
+    /// Content id the host understands (`package:mode/name`).
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// The map id it always plays on, or None when the host picks.
+    pub map: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapInfo {
     /// Stable id the host understands (e.g. the converted map bundle id).
@@ -53,6 +64,9 @@ pub struct ServerInfo {
     pub max_players: u32,
     pub bricks: u32,
     pub map: String,
+    /// Starred by the player (listed first; Favorite button toggles it).
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// One brick in the server's catalog, in datablock (registration) order.
@@ -283,6 +297,7 @@ pub const AVATAR_PART_KEYS: [&str; 12] = [
 ];
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AvatarPrefs {
     /// `$pref::Avatar::*` values by short name: parts (`Hat`, `Accent`,
     /// `Pack`, `SecondPack`, `Chest`, `Hip`, `LArm`…) by the lowercase name of
@@ -387,6 +402,8 @@ pub struct SaveFileInfo {
     pub modified: String,
     pub description: String,
     pub brick_count: Option<u32>,
+    /// The file could not be read; it is listed so it can be saved over.
+    pub damaged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -542,13 +559,23 @@ pub enum UiAction {
     HostGame {
         map: String,
         mode: ServerMode,
+        /// A game mode an enabled Add-On declares (content id), or None for
+        /// Custom: every enabled Add-On that fits the map.
+        game_mode: Option<String>,
         max_players: u32,
         server_name: String,
         password: String,
         admin_password: String,
         super_admin_password: String,
     },
+    /// Search the LAN and check the servers the player joined or starred.
     QueryLan,
+    /// Star or unstar a server in the join list.
+    ToggleFavorite {
+        address: String,
+    },
+    /// Let the game through Windows Firewall (one Windows permission prompt).
+    AllowFirewall { port: u16 },
     JoinServer {
         address: String,
         password: String,
@@ -680,6 +707,17 @@ pub enum UiAction {
     ResetMiniGame { game: MiniGameId },
     RespawnMiniGameMembers { game: MiniGameId },
     EndMiniGame { game: MiniGameId },
+    // ---- add-ons (the package library; see docs/architecture/mod-manager.md)
+    /// Read the installed packages; answered with [`UiUpdate::AddOns`].
+    RequestAddOns,
+    /// Turn a package on or off. The host also turns on what it needs, or
+    /// off what needs it, and answers with the new [`UiUpdate::AddOns`].
+    SetAddOnEnabled { id: String, enabled: bool },
+    /// Turn off every package that is not part of the base game.
+    DefaultAddOns,
+    /// Convert an old Blockland add-on waiting in the drop folder into a
+    /// package (a row with `importable`). Answered when the import finishes.
+    ImportAddOn { id: String },
 }
 
 // -------------------------------------------------------------- view models
@@ -706,8 +744,99 @@ pub enum ConnectionState {
         single_player: bool,
         admin: bool,
     },
+    /// Fetching the packages a server needs before joining it.
+    DownloadingPackages(PackageDownload),
     /// Connection failed or was dropped; shown in a message box.
     Failed { reason: String },
+}
+
+/// A join refused because this player's add-ons differ from the server's
+/// shared ones, as the Can't Join dialog lists them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnMismatch {
+    pub rows: Vec<MismatchRow>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MismatchRow {
+    pub name: String,
+    /// The server's version, or empty when it does not use it.
+    pub server: String,
+    /// This player's version, or empty when they do not have it on.
+    pub yours: String,
+}
+
+/// Join-time package download, as the join screen shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackageDownload {
+    pub server: String,
+    pub packages: Vec<DownloadRow>,
+    /// Bytes fetched and to fetch over every package.
+    pub done_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadRow {
+    pub name: String,
+    pub version: String,
+    pub bytes: u64,
+    pub state: DownloadState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadState {
+    /// Already in the download cache; nothing to fetch.
+    Cached,
+    Waiting,
+    Downloading,
+    Done,
+}
+
+/// One package as the Add-Ons screen shows it. Everything is display text
+/// the host prepared; the screen does not interpret package data.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnRow {
+    /// Package id, sent back in [`UiAction::SetAddOnEnabled`].
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// Group heading ("Game Modes", "Weapons & Items", ...).
+    pub category: String,
+    pub enabled: bool,
+    /// Base game: shown on and cannot be turned off.
+    pub locked: bool,
+    /// Where it runs, in words ("Server only: players never download it").
+    pub runs: String,
+    pub description: String,
+    pub authors: String,
+    pub license: String,
+    pub source: String,
+    /// "3 weapons", "a world", ...
+    pub provides: Vec<String>,
+    /// Package names this one needs.
+    pub needs: Vec<String>,
+    /// Names of enabled packages that need this one; turning it off turns
+    /// them off too, so the screen asks first.
+    pub needed_by: Vec<String>,
+    /// What the package is allowed to do, in words.
+    pub allowed: Vec<String>,
+    /// Problems in words, worst first.
+    pub problems: Vec<String>,
+    /// A problem stops it from loading.
+    pub broken: bool,
+    /// An old Blockland add-on not converted yet: the screen offers Import
+    /// instead of Enabled.
+    pub importable: bool,
+    /// Being imported right now.
+    pub importing: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddOnsView {
+    pub rows: Vec<AddOnRow>,
+    /// Result of the last change ("Also turned on: ...") or a list problem.
+    pub notice: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -889,6 +1018,8 @@ pub enum UiUpdate {
     },
     Connection(ConnectionState),
     Maps(Vec<MapInfo>),
+    /// Game modes the enabled Add-Ons declare (Start Game).
+    GameModes(Vec<GameModeInfo>),
     LanServers {
         servers: Vec<ServerInfo>,
         querying: bool,
@@ -957,6 +1088,12 @@ pub enum UiUpdate {
     MiniGameInvite(MiniGameInvitation),
     /// Server `MessageBoxOK`.
     MessageBox { title: String, text: String },
+    /// A yes/no question from the platform; YES sends `action`.
+    Confirm {
+        title: String,
+        text: String,
+        action: Box<UiAction>,
+    },
     /// `clientCmdTrustInvite`.
     TrustInvite(TrustInvitation),
     Lagging(bool),
@@ -994,12 +1131,23 @@ pub enum UiUpdate {
     },
     /// Avatar preview texture for the Player Appearance screen.
     AvatarPreview(IconRef),
+    /// The installed packages, for the Add-Ons screen.
+    AddOns(AddOnsView),
+    /// The next connection failure is a refused join over differing
+    /// add-ons: show these instead of a plain message box.
+    AddOnMismatch(AddOnMismatch),
+    /// The hosted world changed since it was last saved under a name (or
+    /// loaded); leaving and quitting ask first.
+    UnsavedChanges(bool),
 }
 
 // ----------------------------------------------------------------- settings
 
 /// Everything the UI persists through the host (`UiAction::SaveSettings`).
+/// Missing fields take their defaults, so adding a field never makes an
+/// older settings file unreadable.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// `$pref::`-style values by their original names (stock defaults from
     /// the UI pack are used for missing keys).
@@ -1014,7 +1162,6 @@ pub struct Settings {
     pub brick_favorites: BTreeMap<u8, Vec<String>>,
     pub avatar: AvatarPrefs,
     pub avatar_favorites: BTreeMap<u8, AvatarPrefs>,
-    #[serde(default)]
     pub avatar_colors: Vec<[f32; 4]>,
 }
 

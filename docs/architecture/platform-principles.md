@@ -104,10 +104,26 @@ mistakes, because every mod would have to work around them.
    be asked what exists (entity kinds, events, UI slots, packages, owners) and
    why something happened.
 
-10. **Data to clients, never code.** Servers send assets, declarative UI, effect
-    and content definitions, and shaders only through a validated path. Server
-    behaviour from packages runs sandboxed with capabilities and budgets.
-    Packages are hash-verified. No native code is ever delivered by a server.
+10. **Trust tiers: safe by default, further with trust.** (Maxwell,
+    2026-09-28: allow as much potential as possible, keep people reasonably
+    safe by default, and let them go beyond safety for more capability if
+    they trust the other person.) Servers send joining players:
+    - **data** (assets, declarative UI, effect and content definitions)
+      without asking;
+    - **sandboxed code** (WebAssembly and WGSL shaders that use only declared
+      sandbox capabilities, under CPU, memory and GPU budgets) after the
+      player trusts the server once, asked again when the code changes;
+    - **elevated code** (capabilities beyond the sandbox: URLs, a folder of
+      its own, even native plugins) only after a separate, stronger
+      per-Add-On choice that spells out the risk and can be revoked; a
+      native plugin also needs the server's name typed.
+
+    Nothing escalates silently: a grant covers exactly the code and
+    capabilities the player saw. Native plugins are designed into tier 3
+    but not built yet. Client code is presentation (and prediction the server
+    corrects); gameplay truth stays on the server. Server behaviour from
+    packages runs sandboxed with capabilities and budgets. Packages are
+    hash-verified. Design: [client-sandbox.md](client-sandbox.md).
 
 11. **The server environment is explicit.** Game build + platform API level +
     packages + versions + hashes + server configuration = the server
@@ -137,7 +153,8 @@ mistakes, because every mod would have to work around them.
     the player is allowed to use; server owners are responsible for what they
     redistribute.
 
-Principles 1 to 4, 7 to 9 and 11 are things we enforce in code now. The rest
+Principles 1 to 4, 7 to 9 and 11 are things we enforce in code now; 10's
+client sandbox has a working prototype (`crates/client-sandbox`). The rest
 (5, 6, 10, 12 to 15) are shapes we preserve now so they can be built later; see
 the scope table below.
 
@@ -199,7 +216,8 @@ So nobody thinks they are forgotten, and so nobody builds them yet:
 - Reversibility: enable, test, roll back, restore the world.
 - Server lockfile / world manifest published to joining clients.
 - Fast iteration: hot reload or very fast headless reload.
-- A separate, unsupported native-extension tier outside the safety guarantees.
+- A separate, unsupported native-extension tier outside the safety guarantees
+  (native plugins: tier 3, behind the strongest per-Add-On prompt).
 - A versioned platform API level, separate from the game build (`api >= N`).
 - Composition over override through named slots and hooks.
 - Plain-language capability consent when a server owner enables a mod ("can

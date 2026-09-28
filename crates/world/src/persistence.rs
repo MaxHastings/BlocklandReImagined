@@ -53,17 +53,32 @@ const AUTOSAVE_SUFFIX: &str = ".world.json";
 /// all but the newest `keep` autosaves. A failed write leaves every earlier
 /// autosave in place, so the newest good one always survives.
 pub fn autosave(dir: &Path, world: &World, keep: usize) -> Result<PathBuf> {
+    world.validate()?;
+    let bytes = serde_json::to_vec(world)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_SAVE_BYTES,
+        "Oversized native world"
+    );
+    autosave_bytes(dir, &bytes, keep)
+}
+/// [`autosave`] for an already encoded file (the client stores builds, which
+/// its Load dialog reads, rather than running worlds).
+pub fn autosave_bytes(dir: &Path, bytes: &[u8], keep: usize) -> Result<PathBuf> {
     ensure!(keep >= 1, "Autosave must keep at least one revision");
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis();
     let path = dir.join(format!("{AUTOSAVE_PREFIX}{millis:020}{AUTOSAVE_SUFFIX}"));
-    save_new(&path, world)?;
+    bri_files::create_new(&path, bytes)?;
     let saves = autosaves(dir)?;
     for old in &saves[..saves.len().saturating_sub(keep)] {
         let _ = std::fs::remove_file(old);
     }
     Ok(path)
+}
+/// Whether `name` is a file [`autosave`] wrote.
+pub fn is_autosave(name: &str) -> bool {
+    name.starts_with(AUTOSAVE_PREFIX) && name.ends_with(AUTOSAVE_SUFFIX)
 }
 /// Autosaves in `dir`, oldest first.
 pub fn autosaves(dir: &Path) -> Result<Vec<PathBuf>> {
@@ -72,7 +87,7 @@ pub fn autosaves(dir: &Path) -> Result<Vec<PathBuf>> {
         .filter(|path| {
             path.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(AUTOSAVE_PREFIX) && n.ends_with(AUTOSAVE_SUFFIX))
+                .is_some_and(is_autosave)
         })
         .collect();
     saves.sort();

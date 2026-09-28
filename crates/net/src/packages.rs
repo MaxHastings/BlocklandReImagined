@@ -4,7 +4,7 @@
 //! content-addressed cache (`bri_package::sync`). The server offers only
 //! packages it loads on the client side; server-only packages and any other
 //! file are never reachable. Everything received is verified before use.
-use crate::{codec, protocol::*};
+use crate::{client::HostPin, codec, protocol::*};
 use anyhow::{Context, Result, bail, ensure};
 use bri_package::{
     environment::{Environment, PackageRef},
@@ -169,7 +169,19 @@ pub async fn fetch_missing(
     cache: &Cache,
     progress: &Progress,
 ) -> Result<Vec<Fetched>> {
-    let (endpoint, connection) = crate::client::open(address, certificate).await?;
+    fetch_missing_pinned(address, &HostPin::from(certificate), cache, progress).await
+}
+
+/// [`fetch_missing`] from the host `pin` names (a saved certificate, an
+/// invite's key, or trust on first use, as for joining).
+pub async fn fetch_missing_pinned(
+    address: std::net::SocketAddr,
+    pin: &HostPin,
+    cache: &Cache,
+    progress: &Progress,
+) -> Result<Vec<Fetched>> {
+    let (endpoint, connection, _) =
+        crate::client::connect_quic(address, pin, Duration::from_secs(10)).await?;
     let result = async {
         let (mut send, mut receive) = connection.open_bi().await?;
         codec::write_small_request(

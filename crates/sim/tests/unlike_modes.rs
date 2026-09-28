@@ -921,7 +921,8 @@ fn a_low_gravity_mode_changes_how_players_move() {
     let p = s
         .join("P".into(), Vec3::new(0.0, 0.05, 0.0), false)
         .unwrap();
-    steps(&mut s, 10);
+    // Settle onto the ground first: a jump needs contact.
+    steps(&mut s, 120);
     assert!(
         s.package_diagnostics().is_empty(),
         "{:#?}",

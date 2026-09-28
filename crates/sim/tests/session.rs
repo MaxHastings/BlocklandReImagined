@@ -246,6 +246,10 @@ fn ban_and_unban_publish_only_after_durable_commit() {
     assert_eq!(s.admin_durable_state().bans.len(), 1);
     assert_eq!(saved.bans, s.admin_durable_state().bans);
     assert_eq!(s.take_admin_disconnects(), vec![target]);
+    assert_eq!(
+        s.take_admin_disconnect_message(target),
+        "You were banned from this server permanently. Reason: fixture"
+    );
     s.disconnect(target).unwrap();
 
     let unban = Command::Admin(Request::new(Action::Unban {
@@ -1327,4 +1331,46 @@ fn native_akimbo_fires_two_bullets_per_click_over_seconds() {
     assert_eq!(drive(&mut s, 240, &|_| false), 2);
     // Four clicks a second for five seconds: exactly two bullets per click.
     assert_eq!(drive(&mut s, 600, &|t| t % 30 < 15), 42);
+}
+
+#[test]
+fn kicked_and_banned_players_are_told_why_and_for_how_long() {
+    use bri_admin::{BanId, BanRecord, DisconnectReason, DurableState, Principal};
+    use bri_sim::session::disconnect_message;
+    let now = 1_000_000;
+    let ban = |id, minutes: Option<u64>, reason: &str| BanRecord {
+        id: BanId(id),
+        principal: Principal([id as u8; 32]),
+        victim_name: "Victim".into(),
+        issued_by: "Admin".into(),
+        reason: reason.into(),
+        created_unix_seconds: now,
+        expires_unix_seconds: minutes.map(|m| now + m * 60),
+    };
+    let durable = DurableState {
+        bans: vec![
+            ban(1, Some(10), "spam"),
+            ban(2, Some(3 * 60), ""),
+            ban(3, Some(5 * 24 * 60), "griefing\nthe spawn"),
+        ],
+        ..Default::default()
+    };
+    let say = |reason| disconnect_message(&reason, &durable, now);
+    assert_eq!(
+        say(DisconnectReason::Kicked),
+        "You were kicked from the server by an admin."
+    );
+    assert_eq!(
+        say(DisconnectReason::Banned(BanId(1))),
+        "You were banned from this server for 10 minutes. Reason: spam"
+    );
+    assert_eq!(
+        say(DisconnectReason::Banned(BanId(2))),
+        "You were banned from this server for 3 hours."
+    );
+    assert_eq!(
+        say(DisconnectReason::Banned(BanId(3))),
+        "You were banned from this server for 5 days. Reason: griefingthe spawn"
+    );
+    assert!(say(DisconnectReason::FailedPasswords).contains("wrong admin passwords"));
 }

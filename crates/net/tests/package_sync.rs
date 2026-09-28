@@ -567,7 +567,7 @@ async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()>
     let mut loaded = Vec::new();
     let (client, fetched) = bri_net::client::Client::connect_fetching(
         server.address,
-        &server.certificate,
+        bri_net::client::HostPin::from(&server.certificate[..]),
         "Fetcher".into(),
         Vec::new(),
         None,
@@ -597,7 +597,7 @@ async fn a_refused_join_downloads_the_missing_packages_and_joins() -> Result<()>
     let empty_cache = tempfile::tempdir()?;
     let error = bri_net::client::Client::connect_fetching(
         server.address,
-        &server.certificate,
+        bri_net::client::HostPin::from(&server.certificate[..]),
         "Extra".into(),
         extra,
         None,

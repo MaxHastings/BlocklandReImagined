@@ -142,6 +142,12 @@ pub enum Callback {
     MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
     /// `TrustInviteGui.ignore()`.
     IgnoreTrust { from: u64 },
+    /// Turn a package on or off once the player confirmed what else changes.
+    AddOn { id: String, enabled: bool },
+    /// Turn off every add-on outside the base game.
+    DefaultAddOns,
+    /// Send this request (a platform question answered YES).
+    Request(Box<crate::api::UiAction>),
 }
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
@@ -193,6 +199,8 @@ pub struct Core {
     pub print_letters_visible: bool,
     // catalogs
     pub maps: Vec<MapInfo>,
+    /// Start Game's game modes, from the enabled Add-Ons.
+    pub game_modes: Vec<crate::api::GameModeInfo>,
     pub servers: Vec<ServerInfo>,
     pub lan_querying: bool,
     pub bricks: Vec<BrickInfo>,
@@ -205,6 +213,12 @@ pub struct Core {
     pub save_maps: Vec<String>,
     pub save_files: Vec<SaveFileInfo>,
     pub save_context: Option<(String, IconRef)>,
+    /// Installed packages for the Add-Ons screen (host-prepared text).
+    pub add_ons: crate::api::AddOnsView,
+    /// Differing add-ons behind the last refused join (Can't Join dialog).
+    pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
+    /// See `UiUpdate::UnsavedChanges`.
+    pub unsaved_changes: bool,
     // live state
     pub conn: ConnectionState,
     pub hud: HudModel,
@@ -418,6 +432,16 @@ impl Core {
             yes_no: false,
             on_yes: Callback::None,
         }));
+    }
+    /// Ask before leaving a hosted game whose world changed since it was last
+    /// saved. The autosave keeps it either way; this is about a named save.
+    pub fn confirm_unsaved(&mut self, on_yes: Callback) {
+        self.message_yes_no(
+            "Unsaved Changes",
+            "Your build has changes you haven't saved. It is kept as an autosave you can \
+             load later from Load Bricks, but not under a name of your own.\n\nLeave anyway?",
+            on_yes,
+        );
     }
     pub fn message_yes_no(&mut self, title: &str, text: &str, on_yes: Callback) {
         self.cmds.push(StackCmd::Message(MessageBox {
@@ -913,6 +937,7 @@ impl Ui {
             options_open: false,
             print_letters_visible: false,
             maps: Vec::new(),
+            game_modes: Vec::new(),
             servers: Vec::new(),
             lan_querying: false,
             bricks: Vec::new(),
@@ -925,6 +950,9 @@ impl Ui {
             save_maps: Vec::new(),
             save_files: Vec::new(),
             save_context: None,
+            add_ons: Default::default(),
+            add_on_mismatch: None,
+            unsaved_changes: false,
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
@@ -1236,6 +1264,7 @@ impl Ui {
                     ConnectionState::Idle | ConnectionState::Failed { .. } => ScreenId::MainMenu,
                     ConnectionState::Connecting { .. } => self.content.id(),
                     ConnectionState::Loading { .. } => ScreenId::Loading,
+                    ConnectionState::DownloadingPackages(_) => ScreenId::PackageDownload,
                     ConnectionState::InGame { .. } => ScreenId::Play,
                 };
                 if let ConnectionState::InGame {
@@ -1270,10 +1299,19 @@ impl Ui {
                     c.pop(ScreenId::Connecting);
                 }
                 if let Some(r) = failed {
-                    c.message_ok("Connection Failed", &r);
+                    bri_console::warn(format!("Connection failed: {r}"));
+                    if c.add_on_mismatch.is_some() {
+                        c.push(ScreenId::AddOnMismatch);
+                    } else {
+                        c.message_ok(
+                            "Connection Failed",
+                            &crate::models::disconnect::explain(&r),
+                        );
+                    }
                 }
             }
             UiUpdate::Maps(m) => c.maps = m,
+            UiUpdate::GameModes(m) => c.game_modes = m,
             UiUpdate::LanServers { servers, querying } => {
                 c.servers = servers;
                 c.lan_querying = querying;
@@ -1364,6 +1402,11 @@ impl Ui {
                 c.minigames = state;
             }
             UiUpdate::MessageBox { title, text } => c.message_ok(&title, &text),
+            UiUpdate::Confirm {
+                title,
+                text,
+                action,
+            } => c.message_yes_no(&title, &text, Callback::Request(action)),
             UiUpdate::TrustInvite(invitation) => {
                 c.trust_invite = Some(invitation);
                 c.pop(ScreenId::TrustInvitation);
@@ -1427,6 +1470,9 @@ impl Ui {
             }
             UiUpdate::SaveContext { map, preview } => c.save_context = Some((map, preview)),
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
+            UiUpdate::AddOns(view) => c.add_ons = view,
+            UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
+            UiUpdate::UnsavedChanges(unsaved) => c.unsaved_changes = unsaved,
             UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
             UiUpdate::DisplayChanged {
                 resolution,

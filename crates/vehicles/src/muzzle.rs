@@ -54,7 +54,7 @@ fn read(root: &Path, asset: &Asset, limit: u64) -> Result<Vec<u8>> {
         !path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_))),
         "unsafe vehicle asset path"
     );
-    let path = root.join(path);
+    let path = crate::asset_root(root, asset).join(path);
     ensure!(
         std::fs::metadata(&path)?.len() < limit,
         "vehicle asset too large"

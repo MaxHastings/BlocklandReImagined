@@ -15,7 +15,10 @@ pub const MANIFEST_FILE: &str = "package.json";
 pub const MANIFEST_SCHEMA: u32 = 1;
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 
+/// Unknown fields are errors, so a misspelt field is reported rather than
+/// silently ignored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub schema_version: u32,
     pub id: String,
@@ -37,6 +40,7 @@ pub struct Manifest {
     pub provides: Vec<Provide>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Provide {
     pub kind: String,
     pub id: String,

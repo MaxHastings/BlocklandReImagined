@@ -21,6 +21,7 @@ while [[ $# -gt 0 ]]; do
         --version) version="$2"; shift 2 ;;
         --sha256) expected="$2"; shift 2 ;;
         --executable) executable="$2"; shift 2 ;;
+        --importer) importer="$2"; shift 2 ;;
         --destination) destination="$2"; shift 2 ;;
         --validate-only) validate_only=1; shift ;;
         --verify) verify="$2"; shift 2 ;;
@@ -75,6 +76,9 @@ for field in "${fields[@]}"; do
 done
 
 [[ -f "$executable" && ! -L "$executable" && -s "$executable" ]] || die "release client missing; build it first: $executable"
+# The Add-Ons screen's Import runs bri-import-addon from beside the client.
+importer="${importer:-$(dirname "$executable")/bri-import-addon}"
+[[ -f "$importer" && ! -L "$importer" && -s "$importer" ]] || die "Add-On importer missing; build it first (cargo build --release --locked -p bri-addon-import): $importer"
 sha="$(sha256sum "$executable" | cut -d' ' -f1)"
 total_files=0 total_bytes=0
 for field in "${fields[@]}"; do
@@ -104,6 +108,7 @@ release="$destination/BlocklandReImagined-alpha-$version-linux"
 mkdir -p "$release/content"
 trap 'rm -rf "$release"' ERR
 install -m 755 "$executable" "$release/bri-client"
+install -m 755 "$importer" "$release/bri-import-addon"
 cp "$repo/docs/PLAYTEST.md" "$repo/docs/KNOWN-ISSUES.md" "$release/"
 install -m 755 "$repo/tools/launch_playtest.sh" "$release/launch.sh"
 cp "$list" "$release/content/packages.json"

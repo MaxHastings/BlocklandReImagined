@@ -98,6 +98,46 @@ pub struct AdminCall {
     pub reply: AdminReply,
 }
 
+/// The close message a disconnected player sees (v20 showed the kick or ban
+/// reason and how long a ban lasts).
+pub fn disconnect_message(
+    reason: &bri_admin::DisconnectReason,
+    durable: &DurableState,
+    now: u64,
+) -> String {
+    match reason {
+        bri_admin::DisconnectReason::Kicked => "You were kicked from the server by an admin.".into(),
+        bri_admin::DisconnectReason::FailedPasswords => {
+            "You were disconnected after too many wrong admin passwords.".into()
+        }
+        bri_admin::DisconnectReason::Banned(id) => {
+            let ban = durable.bans.iter().find(|b| b.id == *id);
+            let length = match ban.and_then(|b| b.expires_unix_seconds) {
+                None if ban.is_some() => " permanently".to_string(),
+                None => String::new(),
+                Some(end) => {
+                    let minutes = end.saturating_sub(now).div_ceil(60).max(1);
+                    match minutes {
+                        1 => " for 1 minute".into(),
+                        m if m < 120 => format!(" for {m} minutes"),
+                        m if m < 48 * 60 => format!(" for {} hours", m.div_ceil(60)),
+                        m => format!(" for {} days", m.div_ceil(24 * 60)),
+                    }
+                }
+            };
+            let reason: String = ban
+                .map(|b| b.reason.chars().filter(|c| !c.is_control()).take(120).collect())
+                .unwrap_or_default();
+            let reason = reason.trim();
+            if reason.is_empty() {
+                format!("You were banned from this server{length}.")
+            } else {
+                format!("You were banned from this server{length}. Reason: {reason}")
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct AdminRuntime {
     authority: Administration,
@@ -336,12 +376,17 @@ impl AdminRuntime {
         self.authority = candidate;
         let mut data = AdminData::None;
         let mut disconnects = Vec::new();
+        let mut disconnect_messages = BTreeMap::new();
         let mut changed = false;
         for effect in effects {
             match effect {
-                Effect::Disconnect { target, .. } => {
+                Effect::Disconnect { target, reason } => {
                     if let Some(owner) = self.connection_to_owner.get(&target).copied() {
                         disconnects.push(owner);
+                        disconnect_messages.insert(
+                            owner,
+                            disconnect_message(&reason, self.authority.durable(), now),
+                        );
                     }
                 }
                 Effect::RoleChanged { target, role } => {
@@ -504,6 +549,7 @@ impl AdminRuntime {
         // reply can fail (a sender who just locked itself out has no
         // snapshot) and must not take the disconnects with it.
         session.admin_disconnects.extend(disconnects);
+        session.admin_disconnect_messages.extend(disconnect_messages);
         let snapshot = self.snapshot(owner)?;
         Ok(AdminCall {
             reply: AdminReply { snapshot, data },
@@ -585,6 +631,21 @@ impl Session {
             .as_secs();
         self.admin
             .connect(owner, name, trusted_host, is_bot, principal, now)
+            .map_err(|error| {
+                // Tell a banned player how long is left and why, as v20 did.
+                let durable = self.admin.durable();
+                let ban = principal
+                    .filter(|_| matches!(error.downcast_ref(), Some(bri_admin::Error::Banned)))
+                    .and_then(|p| durable.bans.iter().find(|b| b.principal == p && b.active(now)));
+                match ban {
+                    Some(ban) => anyhow::anyhow!(
+                        "{}",
+                        disconnect_message(&bri_admin::DisconnectReason::Banned(ban.id), durable, now)
+                            .replacen("You were banned", "You are banned", 1)
+                    ),
+                    None => error,
+                }
+            })
     }
 
     pub fn restore_admin_state(&mut self, bytes: &[u8]) -> Result<()> {

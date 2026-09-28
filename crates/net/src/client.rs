@@ -49,11 +49,8 @@ pub enum ClientEvent {
 pub struct PackagesDiffer(pub Vec<bri_package::environment::Mismatch>);
 impl std::fmt::Display for PackagesDiffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Your content does not match the server: {}",
-            bri_package::environment::describe(&self.0)
-        )
+        // The Add-Ons screen reads the differing packages back from this.
+        f.write_str(&bri_package::environment::refusal(&self.0))
     }
 }
 impl std::error::Error for PackagesDiffer {}
@@ -68,6 +65,10 @@ pub struct Client {
     pub administrator: bool,
     pub admin_snapshot: Option<bri_sim::session::AdminSnapshot>,
     pub resume: ResumeToken,
+    /// The certificate the host presented, to pin for later joins.
+    pub certificate: Vec<u8>,
+    /// The host's listing from the handshake (its name for saved servers).
+    pub listing: Listing,
     pub replica: Replica,
     /// A changed map whose bricks are still streaming in.
     changing_map: Option<WorldAssembly>,
@@ -97,7 +98,7 @@ impl Client {
     ) -> Result<Self> {
         Self::connect_inner(
             address,
-            certificate,
+            HostPin::from(certificate),
             name,
             packages,
             resume,
@@ -137,7 +138,7 @@ impl Client {
     #[allow(clippy::too_many_arguments)]
     pub async fn connect_fetching(
         address: SocketAddr,
-        certificate: &[u8],
+        pin: HostPin,
         name: String,
         packages: Vec<bri_package::environment::PackageRef>,
         host: Option<ResumeToken>,
@@ -146,9 +147,9 @@ impl Client {
         progress: Progress,
         load: impl FnOnce(&[crate::packages::Fetched]) -> Result<Vec<bri_package::environment::PackageRef>>,
     ) -> Result<(Self, Vec<crate::packages::Fetched>)> {
-        let refused = match Self::connect_reporting(
+        let refused = match Self::connect_pinned(
             address,
-            certificate,
+            pin.clone(),
             name.clone(),
             packages,
             None,
@@ -172,13 +173,13 @@ impl Client {
         {
             return Err(refused);
         }
-        let fetched = crate::packages::fetch_missing(address, certificate, cache, &progress)
+        let fetched = crate::packages::fetch_missing_pinned(address, &pin, cache, &progress)
             .await
             .context("Downloading the server's packages")?;
         let packages = load(&fetched)?;
-        let client = Self::connect_reporting(
+        let client = Self::connect_pinned(
             address,
-            certificate,
+            pin,
             name,
             packages,
             None,
@@ -202,9 +203,34 @@ impl Client {
         identity: &ClientIdentity,
         progress: Progress,
     ) -> Result<Self> {
+        Self::connect_pinned(
+            address,
+            HostPin::from(certificate),
+            name,
+            packages,
+            resume,
+            host,
+            identity,
+            progress,
+        )
+        .await
+    }
+    /// Connects to a host identified by `pin` (a saved certificate, an
+    /// invite's key, or trust on first use).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_pinned(
+        address: SocketAddr,
+        pin: HostPin,
+        name: String,
+        packages: Vec<bri_package::environment::PackageRef>,
+        resume: Option<ResumeToken>,
+        host: Option<ResumeToken>,
+        identity: &ClientIdentity,
+        progress: Progress,
+    ) -> Result<Self> {
         Self::connect_inner(
             address,
-            certificate,
+            pin,
             name,
             packages,
             resume,
@@ -217,7 +243,7 @@ impl Client {
     #[allow(clippy::too_many_arguments)]
     async fn connect_inner(
         address: SocketAddr,
-        certificate: &[u8],
+        pin: HostPin,
         name: String,
         packages: Vec<bri_package::environment::PackageRef>,
         resume: Option<ResumeToken>,
@@ -226,20 +252,15 @@ impl Client {
         progress: Progress,
     ) -> Result<Self> {
         progress.begin(Stage::Connecting, Unit::Steps, None);
-        let (endpoint, connection) = open(address, certificate).await?;
-        let (mut send, mut receive) = connection.open_bi().await?;
-        codec::write_small_request(&mut send, &JoinBegin::join()).await?;
-        let challenge = match codec::decode::<Message>(
-            &tokio::time::timeout(
-                Duration::from_secs(10),
-                codec::read_frame(&mut receive, codec::MAX_FRAME),
-            )
-            .await??,
-        )? {
-            Message::Challenge { nonce } => nonce,
-            Message::Rejected(reason) => anyhow::bail!("Join rejected: {reason}"),
-            _ => anyhow::bail!("Expected identity challenge"),
-        };
+        let Opened {
+            endpoint,
+            connection,
+            certificate,
+            mut send,
+            mut receive,
+            nonce: challenge,
+            listing,
+        } = open(address, &pin, Duration::from_secs(10)).await?;
         let mut hello = Hello {
             version: VERSION,
             name,
@@ -249,7 +270,7 @@ impl Client {
             identity: None,
         };
         if let Some(identity) = identity {
-            let server_fingerprint: [u8; 32] = sha2::Sha256::digest(certificate).into();
+            let server_fingerprint: [u8; 32] = sha2::Sha256::digest(&certificate).into();
             let transcript = identity_transcript(&hello, &challenge, &server_fingerprint)?;
             hello.identity = Some(IdentityProof {
                 public_key: *identity.public_key(),
@@ -272,7 +293,7 @@ impl Client {
                 resume,
                 checkpoint,
             } => (owner, administrator, resume, checkpoint),
-            Message::Rejected(reason) => anyhow::bail!("Join rejected: {reason}"),
+            Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
             Message::PackagesDiffer(differences) => {
                 return Err(PackagesDiffer(differences).into());
             }
@@ -309,6 +330,7 @@ impl Client {
         );
         let (events, incoming) = mpsc::channel(128);
         let reliable_events = events.clone();
+        let reader_connection = connection.clone();
         let reader = tokio::spawn(async move {
             loop {
                 let message = async {
@@ -328,9 +350,13 @@ impl Client {
                         }
                     }
                     Err(error) => {
-                        let _ = reliable_events
-                            .send(Incoming::Closed(error.to_string()))
-                            .await;
+                        // A read fails with a bare "connection lost"; the
+                        // server's close frame (a kick's message, a
+                        // shutdown) is the reason the player should see.
+                        let reason = reader_connection
+                            .close_reason()
+                            .map_or_else(|| error.to_string(), |r| r.to_string());
+                        let _ = reliable_events.send(Incoming::Closed(reason)).await;
                         break;
                     }
                 }
@@ -357,6 +383,8 @@ impl Client {
             administrator,
             admin_snapshot: None,
             resume,
+            certificate,
+            listing,
             replica,
             changing_map: None,
             progress,
@@ -557,14 +585,152 @@ impl Client {
         self.connection.close(0_u32.into(), b"Client disconnect");
     }
 }
-/// A QUIC connection to the host whose certificate is `certificate`.
-pub(crate) async fn open(
+impl Drop for Client {
+    fn drop(&mut self) {
+        self.close();
+        for reader in &self.readers {
+            reader.abort();
+        }
+        self.endpoint.close(0_u32.into(), b"Client closed");
+    }
+}
+
+/// Why a join failed, in words a player can act on. Other failures stay as
+/// they are.
+#[derive(Debug)]
+pub enum JoinError {
+    /// Nothing answered: wrong address, host not running, or a firewall.
+    NoAnswer(SocketAddr),
+    /// The host answered with a different identity than the one pinned.
+    IdentityChanged(SocketAddr),
+    /// The host refused the join and said why.
+    Rejected(String),
+    /// The connection failed another way.
+    Connection(SocketAddr, String),
+}
+impl JoinError {
+    fn from_connection(address: SocketAddr, error: quinn::ConnectionError) -> Self {
+        match &error {
+            quinn::ConnectionError::TimedOut => Self::NoAnswer(address),
+            quinn::ConnectionError::TransportError(e)
+                if e.code.to_string().contains("CRYPTO") || e.reason.contains("certificate") =>
+            {
+                Self::IdentityChanged(address)
+            }
+            _ => Self::Connection(address, error.to_string()),
+        }
+    }
+}
+impl std::fmt::Display for JoinError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoAnswer(address) => write!(
+                f,
+                "No server answered at {address}. Check the address, that the server is running, and that UDP port {} is open on the host's router and firewall.",
+                address.port()
+            ),
+            Self::IdentityChanged(address) => write!(
+                f,
+                "The server at {address} has a different identity than when you last joined. If its host reinstalled the game, join again to trust the new identity."
+            ),
+            Self::Rejected(reason) => write!(f, "The server refused the join: {reason}"),
+            Self::Connection(address, reason) => {
+                write!(f, "Could not connect to {address}: {reason}")
+            }
+        }
+    }
+}
+impl std::error::Error for JoinError {}
+
+/// Which host a connection must reach. Never disables verification: the
+/// handshake signature is always checked against the presented certificate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostPin {
+    /// Accept the first certificate presented; the caller pins it from
+    /// `Client::certificate` (trust on first use, like SSH).
+    FirstUse,
+    /// Exactly this certificate (a saved pin or a LAN listing's).
+    Certificate(Vec<u8>),
+    /// A certificate with this key (from an invite).
+    Key(crate::invite::HostKey),
+}
+impl From<&[u8]> for HostPin {
+    /// An empty certificate means first use.
+    fn from(certificate: &[u8]) -> Self {
+        if certificate.is_empty() {
+            Self::FirstUse
+        } else {
+            Self::Certificate(certificate.to_vec())
+        }
+    }
+}
+
+/// What a probe learned about a server over its game port.
+#[derive(Debug, Clone)]
+pub struct Probe {
+    pub listing: Listing,
+    pub certificate: Vec<u8>,
+    pub ping: Duration,
+}
+
+/// Ask a server for its listing over the game port without joining: the
+/// start of a join, stopped after the host's first answer. Used by the join
+/// list for saved servers and by a host checking it can be reached.
+pub async fn probe(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Probe> {
+    let started = std::time::Instant::now();
+    let opened = open(address, pin, wait).await?;
+    let ping = opened.connection.rtt().min(started.elapsed());
+    opened.connection.close(0_u32.into(), b"Probe");
+    opened.endpoint.wait_idle().await;
+    Ok(Probe {
+        listing: opened.listing,
+        certificate: opened.certificate,
+        ping,
+    })
+}
+
+/// A QUIC connection that has sent `JoinBegin` and read the challenge.
+struct Opened {
+    endpoint: quinn::Endpoint,
+    connection: quinn::Connection,
+    certificate: Vec<u8>,
+    send: quinn::SendStream,
+    receive: quinn::RecvStream,
+    nonce: [u8; 32],
+    listing: Listing,
+}
+
+async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Opened> {
+    let (endpoint, connection, certificate) = connect_quic(address, pin, wait).await?;
+    let (mut send, mut receive) = connection.open_bi().await?;
+    codec::write_small_request(&mut send, &JoinBegin::join()).await?;
+    let (nonce, listing) = match codec::decode::<Message>(
+        &tokio::time::timeout(wait, codec::read_frame(&mut receive, codec::MAX_FRAME)).await??,
+    )? {
+        Message::Challenge { nonce, listing } => (nonce, listing),
+        Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
+        _ => anyhow::bail!("Expected identity challenge"),
+    };
+    listing.validate()?;
+    Ok(Opened {
+        endpoint,
+        connection,
+        certificate,
+        send,
+        receive,
+        nonce,
+        listing,
+    })
+}
+
+/// A QUIC connection to the host `pin` names, and the certificate it
+/// presented; nothing is sent yet (a join or a package download follows).
+pub(crate) async fn connect_quic(
     address: SocketAddr,
-    certificate: &[u8],
-) -> Result<(quinn::Endpoint, quinn::Connection)> {
-    let mut roots = quinn::rustls::RootCertStore::empty();
-    roots.add(certificate.to_vec().into())?;
-    let mut config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))?;
+    pin: &HostPin,
+    wait: Duration,
+) -> Result<(quinn::Endpoint, quinn::Connection, Vec<u8>)> {
+    let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
     config.transport_config(Arc::new(transport()));
     let ip = if address.is_ipv4() {
         IpAddr::V4(Ipv4Addr::UNSPECIFIED)
@@ -573,19 +739,92 @@ pub(crate) async fn open(
     };
     let mut endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
     endpoint.set_default_client_config(config);
-    let connection = tokio::time::timeout(
-        Duration::from_secs(10),
-        endpoint.connect(address, "blockland.local")?,
-    )
-    .await??;
-    Ok((endpoint, connection))
+    let connection = match tokio::time::timeout(wait, endpoint.connect(address, "blockland.local")?)
+        .await
+    {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(error)) => return Err(JoinError::from_connection(address, error).into()),
+        Err(_) => return Err(JoinError::NoAnswer(address).into()),
+    };
+    let certificate = connection
+        .peer_identity()
+        .and_then(|identity| {
+            identity
+                .downcast::<Vec<quinn::rustls::pki_types::CertificateDer<'static>>>()
+                .ok()
+        })
+        .and_then(|chain| chain.first().map(|c| c.to_vec()))
+        .context("The server presented no certificate")?;
+    Ok((endpoint, connection, certificate))
 }
-impl Drop for Client {
-    fn drop(&mut self) {
-        self.close();
-        for reader in &self.readers {
-            reader.abort();
+
+/// TLS configuration that accepts the pinned host (or, for first use, any
+/// host); the caller pins what it saw from `Client::certificate`.
+fn pinned_config(pin: HostPin) -> Result<quinn::crypto::rustls::QuicClientConfig> {
+    use quinn::rustls;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let crypto = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(Pinned { provider, pin }))
+        .with_no_client_auth();
+    Ok(quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?)
+}
+
+#[derive(Debug)]
+struct Pinned {
+    provider: Arc<quinn::rustls::crypto::CryptoProvider>,
+    pin: HostPin,
+}
+impl quinn::rustls::client::danger::ServerCertVerifier for Pinned {
+    fn verify_server_cert(
+        &self,
+        end_entity: &quinn::rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[quinn::rustls::pki_types::CertificateDer<'_>],
+        _server_name: &quinn::rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: quinn::rustls::pki_types::UnixTime,
+    ) -> Result<quinn::rustls::client::danger::ServerCertVerified, quinn::rustls::Error> {
+        let matches = match &self.pin {
+            HostPin::FirstUse => true,
+            HostPin::Certificate(der) => der.as_slice() == end_entity.as_ref(),
+            HostPin::Key(key) => crate::invite::host_key(end_entity) == *key,
+        };
+        if matches {
+            Ok(quinn::rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(quinn::rustls::Error::InvalidCertificate(
+                quinn::rustls::CertificateError::ApplicationVerificationFailure,
+            ))
         }
-        self.endpoint.close(0_u32.into(), b"Client closed");
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &quinn::rustls::pki_types::CertificateDer<'_>,
+        dss: &quinn::rustls::DigitallySignedStruct,
+    ) -> Result<quinn::rustls::client::danger::HandshakeSignatureValid, quinn::rustls::Error> {
+        quinn::rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &quinn::rustls::pki_types::CertificateDer<'_>,
+        dss: &quinn::rustls::DigitallySignedStruct,
+    ) -> Result<quinn::rustls::client::danger::HandshakeSignatureValid, quinn::rustls::Error> {
+        quinn::rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
+        self.provider.signature_verification_algorithms.supported_schemes()
     }
 }

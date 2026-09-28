@@ -72,6 +72,7 @@ fn catalog() -> Arc<Catalog> {
         ("stresslab-creeper-model", Side::Client),
         ("stresslab-economy", Side::Server),
         ("stresslab-hud", Side::Client),
+        ("stresslab-mode", Side::Server),
     ] {
         packages.push(PackageEntry {
             id: id.into(),

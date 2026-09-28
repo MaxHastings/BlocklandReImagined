@@ -172,7 +172,7 @@ async fn raw_challenge(
     let first =
         codec::decode::<Message>(&codec::read_frame(&mut receive, codec::MAX_FRAME).await?)?;
     let nonce = match &first {
-        Message::Challenge { nonce } => *nonce,
+        Message::Challenge { nonce, .. } => *nonce,
         _ => [0; 32],
     };
     Ok((

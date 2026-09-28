@@ -47,16 +47,26 @@ fn fixture() -> Rc<Pack> {
                 ),
                 node("GuiButtonCtrl", "host", 45, "SM_StartMission();"),
                 node("GuiTextEditCtrl", "TxtServerName", 80, ""),
+                node(
+                    "GuiButtonCtrl",
+                    "addons",
+                    115,
+                    "canvas.pushDialog(AddOnsGui);",
+                ),
             ],
         ),
         (
             "JoinServerGui",
-            vec![node(
-                "GuiButtonCtrl",
-                "manual",
-                10,
-                "Canvas.pushDialog(\"manualJoin\");",
-            )],
+            vec![
+                node(
+                    "GuiButtonCtrl",
+                    "manual",
+                    10,
+                    "Canvas.pushDialog(\"manualJoin\");",
+                ),
+                node("GuiTextListCtrl", "JS_serverList", 45, ""),
+                node("GuiButtonCtrl", "internet", 80, "JoinServerGui.queryWebMaster();"),
+            ],
         ),
         (
             "ManualJoin",
@@ -317,19 +327,74 @@ fn host_uses_current_catalog_once_and_rejection_reenables_form() {
 fn direct_join_accepts_text_and_blocks_duplicate_request() {
     let mut u = ui();
     click(&mut u, ScreenId::MainMenu, "join");
+    // Opening the list looks for LAN games and checks saved servers.
+    assert_eq!(actions(&mut u), vec![UiAction::QueryLan]);
     click(&mut u, ScreenId::JoinServer, "manual");
     for ch in "127.0.0.1:28000".chars() {
         u.handle_input(InputEvent::Char(ch));
     }
     down(&mut u, Key::Return);
     down(&mut u, Key::Return);
+    let actions = actions(&mut u);
+    // The typed address is remembered for the next visit, like v20.
+    assert!(matches!(&actions[0], UiAction::SaveSettings(s)
+        if s.prefs.get("$pref::Join::Address").map(String::as_str) == Some("127.0.0.1:28000")));
     assert_eq!(
-        actions(&mut u),
-        vec![UiAction::JoinServer {
+        actions[1..],
+        [UiAction::JoinServer {
             address: "127.0.0.1:28000".into(),
             password: String::new()
         }]
     );
+}
+#[test]
+fn favorite_button_stars_the_selected_server() {
+    let mut u = ui();
+    click(&mut u, ScreenId::MainMenu, "join");
+    actions(&mut u);
+    let server = |address: &str, favorite| ServerInfo {
+        address: address.into(),
+        name: "Server".into(),
+        password: false,
+        dedicated: false,
+        ping_ms: Some(20),
+        players: 1,
+        max_players: 8,
+        bricks: 0,
+        map: "Slate".into(),
+        favorite,
+    };
+    u.apply(UiUpdate::LanServers {
+        servers: vec![server("bri://203.0.113.10:28000/key", true), server("192.168.1.20:28000", false)],
+        querying: false,
+    });
+    // Nothing selected: the button does nothing.
+    click(&mut u, ScreenId::JoinServer, "JoinServerGui.queryWebMaster();");
+    assert!(actions(&mut u).is_empty());
+    let list = u.screen(ScreenId::JoinServer).unwrap().view().id("JS_serverList").unwrap();
+    u.screen_mut(ScreenId::JoinServer).unwrap().view_mut().select(list, Some(1));
+    click(&mut u, ScreenId::JoinServer, "JoinServerGui.queryWebMaster();");
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::ToggleFavorite {
+            address: "192.168.1.20:28000".into()
+        }]
+    );
+}
+#[test]
+fn platform_questions_send_their_action_only_on_yes() {
+    let mut u = ui();
+    let ask = || UiUpdate::Confirm {
+        title: "Windows Firewall".into(),
+        text: "Let the game through?".into(),
+        action: Box::new(UiAction::AllowFirewall { port: 28000 }),
+    };
+    u.apply(ask());
+    down(&mut u, Key::Escape);
+    assert!(actions(&mut u).is_empty());
+    u.apply(ask());
+    down(&mut u, Key::Return);
+    assert_eq!(actions(&mut u), vec![UiAction::AllowFirewall { port: 28000 }]);
 }
 #[test]
 fn confirmation_is_modal_and_escape_declines_without_underlying_action() {
@@ -593,4 +658,102 @@ fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
     u.handle_input(InputEvent::Wheel { delta: -0.5 });
     u.handle_input(InputEvent::Wheel { delta: 1.0 });
     assert_eq!(actions(&mut u), vec![UiAction::UseBrickSlot { slot: 1 }]);
+}
+#[test]
+fn start_games_add_ons_tab_opens_the_add_ons_screen() {
+    let mut u = ui();
+    click(&mut u, ScreenId::MainMenu, "start");
+    u.drain_actions();
+    click(&mut u, ScreenId::StartMission, "addons");
+    assert_eq!(u.top_id(), ScreenId::AddOns);
+    assert!(actions(&mut u).contains(&UiAction::RequestAddOns));
+}
+
+#[test]
+fn start_game_hosts_the_chosen_game_mode_on_its_map() {
+    let mut u = ui();
+    let strata = "stresslab-world:world/strata";
+    u.apply(UiUpdate::Maps(
+        ["native/bedroom", strata]
+            .map(|id| MapInfo {
+                id: id.into(),
+                name: id.into(),
+                description: String::new(),
+                preview: IconRef::None,
+            })
+            .to_vec(),
+    ));
+    u.apply(UiUpdate::GameModes(vec![GameModeInfo {
+        id: "stresslab-mode:mode/stresslab".into(),
+        name: "Stress Lab".into(),
+        description: "Dig.".into(),
+        map: Some(strata.into()),
+    }]));
+    click(&mut u, ScreenId::MainMenu, "start");
+    // The picker opens from Start Game; Select keeps Custom.
+    click(&mut u, ScreenId::StartMission, "SM_GameMode");
+    assert_eq!(u.top_id(), ScreenId::GameModes);
+    click(&mut u, ScreenId::GameModes, "GM_Select");
+    assert_eq!(u.top_id(), ScreenId::StartMission);
+    click(&mut u, ScreenId::StartMission, "host");
+    let hosted: Vec<_> = actions(&mut u)
+        .into_iter()
+        .filter(|a| matches!(a, UiAction::HostGame { .. }))
+        .collect();
+    assert!(
+        matches!(&hosted[..], [UiAction::HostGame { map, game_mode: None, .. }] if map == "native/bedroom"),
+        "{hosted:?}"
+    );
+    // A chosen mode hosts on its own map, whatever the list showed.
+    let mut u = ui();
+    u.apply(UiUpdate::Maps(vec![MapInfo {
+        id: "native/bedroom".into(),
+        name: "Bedroom".into(),
+        description: String::new(),
+        preview: IconRef::None,
+    }]));
+    u.apply(UiUpdate::GameModes(vec![GameModeInfo {
+        id: "stresslab-mode:mode/stresslab".into(),
+        name: "Stress Lab".into(),
+        description: String::new(),
+        map: Some(strata.into()),
+    }]));
+    u.core.prefs.set(
+        bri_ui::screens::modes::GAME_MODE,
+        "stresslab-mode:mode/stresslab",
+    );
+    click(&mut u, ScreenId::MainMenu, "start");
+    click(&mut u, ScreenId::StartMission, "host");
+    let hosted: Vec<_> = actions(&mut u)
+        .into_iter()
+        .filter(|a| matches!(a, UiAction::HostGame { .. }))
+        .collect();
+    assert!(
+        matches!(&hosted[..], [UiAction::HostGame { map, game_mode: Some(mode), .. }]
+            if map == strata && mode == "stresslab-mode:mode/stresslab"),
+        "{hosted:?}"
+    );
+}
+
+#[test]
+fn leaving_a_host_with_unsaved_changes_asks_about_them_first() {
+    let mut u = ui();
+    play(&mut u);
+    u.apply(UiUpdate::UnsavedChanges(true));
+    assert!(u.core.unsaved_changes);
+    down(&mut u, Key::Escape);
+    click(&mut u, ScreenId::EscapeMenu, "disconnect");
+    down(&mut u, Key::Escape);
+    assert!(actions(&mut u).is_empty(), "declining keeps the game");
+    click(&mut u, ScreenId::EscapeMenu, "disconnect");
+    down(&mut u, Key::Return);
+    assert_eq!(actions(&mut u), vec![UiAction::Disconnect]);
+    // The question names the unsaved build, not just leaving.
+    u.core.confirm_unsaved(bri_ui::ui::Callback::Quit);
+    let Some(bri_ui::ui::StackCmd::Message(message)) = u.core.cmds.last() else {
+        panic!("a question was asked");
+    };
+    assert_eq!(message.title, "Unsaved Changes");
+    assert!(message.text.contains("autosave"));
+    assert_eq!(message.on_yes, bri_ui::ui::Callback::Quit);
 }

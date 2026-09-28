@@ -3,3 +3,4 @@
 pub mod archetype;
 pub mod player;
 pub mod player_types;
+pub mod torque;

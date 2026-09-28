@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "spinning-cube",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Spinning Cube",
+  "description": "A sample of Add-On client code: a cube drawn with its own animated shader.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": ["render.layer", "render.shader"],
+    "shaders": ["client/cube.wgsl"]
+  }
+}

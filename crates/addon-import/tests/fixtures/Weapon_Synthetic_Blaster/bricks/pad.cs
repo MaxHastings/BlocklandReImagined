@@ -4,4 +4,5 @@ datablock fxDTSBrickData(brickBlasterPadData)
    category = "Special";
    subCategory = "Synthetic";
    uiName = "Blaster Pad";
+   iconName = "./icon_pad";
 };

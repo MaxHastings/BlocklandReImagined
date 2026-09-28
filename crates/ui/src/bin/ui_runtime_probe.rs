@@ -204,6 +204,7 @@ fn main() -> Result<()> {
                 max_players: 8,
                 bricks: 1534,
                 map: "Bedroom".into(),
+                favorite: true,
             }],
             querying: false,
         });
@@ -425,6 +426,7 @@ fn main() -> Result<()> {
                 modified: "2026-09-26".into(),
                 description: "Original Demo build".into(),
                 brick_count: Some(150),
+                damaged: false,
             }],
         });
         ui.core.push(ScreenId::SaveBricks);

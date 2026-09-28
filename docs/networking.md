@@ -100,6 +100,18 @@ ticks with zero dropped ticks. Longer stalls discard excess debt and record it
 as `dropped_ticks`. Checkpoint preparation is off the authority loop (see
 World transfer above).
 
+## Hosting and joining
+
+Joining needs only the game port. The host's certificate is pinned by the
+client (saved pin, LAN listing, an invite's key, or trust on first use), and
+protocol 34's `Challenge` carries the server listing so the join list and the
+host's reachability check can probe a server over the game port without
+joining. Internet hosts and non-loopback dedicated servers ask the router to
+forward the port (UPnP, then NAT-PMP), take their public address from the
+router, probe it, and tell the host in plain words whether friends can reach
+them. No outside service is contacted. See
+[architecture/hosting.md](architecture/hosting.md).
+
 ## Executable host
 
 ```powershell
@@ -140,7 +152,7 @@ count. This adds `item-presentation-dir` after `weapons-dir` in the dedicated CL
 No renderer or original-file reader is required by the dedicated loader.
 See [item startup integration](research/item-spawners/startup-integration.md) and
 [checked physics startup](research/item-spawners/item-physics-startup.md).
-The protocol wire version is 8; it is independent of content identity version 9.
+The protocol wire version (35 at this writing) is independent of content identity version 9.
 Content digest domains distinguish older packs before entering a session.
 Pending scene objects and finite terrain coverage are disclosed in host metadata.
 

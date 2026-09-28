@@ -546,6 +546,110 @@ fn options() -> ServerOptions {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_join_needs_only_the_game_port_and_errors_are_plain() -> Result<()> {
+    use bri_net::client::JoinError;
+    let server = server::start(session(), options())?;
+    // No certificate yet: the first certificate is trusted and handed back
+    // for pinning, with no discovery port involved.
+    let first = Client::connect(server.address, &[], "First".into(), Vec::new(), None).await?;
+    assert_eq!(first.certificate, server.certificate);
+    first.close();
+    // A pinned identity that no longer matches is named as such.
+    let other = server::HostCertificate::generate()?;
+    let error = Client::connect(server.address, &other.der, "Pinned".into(), Vec::new(), None)
+        .await
+        .err()
+        .context("Wrong pin accepted")?;
+    assert!(
+        matches!(error.downcast_ref::<JoinError>(), Some(JoinError::IdentityChanged(_))),
+        "{error:#}"
+    );
+    assert!(format!("{error}").contains("different identity"), "{error}");
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invites_pin_the_host_key_and_probes_read_the_listing() -> Result<()> {
+    use bri_net::{
+        client::{HostPin, JoinError, probe},
+        invite::{JoinTarget, host_key, invite},
+    };
+    let mut server = server::start(session(), options())?;
+    let lan = server
+        .advertise_on(0, "Max's Server".into(), "Slate".into(), 12, "id".into())
+        .await?;
+    assert_ne!(lan, 0);
+    // A probe over the game port reads the listing and the certificate.
+    let seen = probe(server.address, &HostPin::FirstUse, Duration::from_secs(5)).await?;
+    assert_eq!(seen.listing.name, "Max's Server");
+    assert_eq!(seen.listing.map, "Slate");
+    assert_eq!((seen.listing.players, seen.listing.max_players), (0, 12));
+    assert_eq!(seen.certificate, server.certificate);
+    // An invite's key is enough to join a host never seen before.
+    let text = invite(server.address, &server.certificate);
+    let route = JoinTarget::parse(&text)?.resolve().await?;
+    assert_eq!(route.key, Some(host_key(&server.certificate)));
+    let dir = tempfile::tempdir()?;
+    let identity = ClientIdentity::load_or_create(dir.path().join("client.identity"))?;
+    let joined = Client::connect_pinned(
+        route.address,
+        HostPin::Key(route.key.context("key")?),
+        "Invited".into(),
+        Vec::new(),
+        None,
+        None,
+        &identity,
+        Default::default(),
+    )
+    .await?;
+    assert_eq!(joined.certificate, server.certificate);
+    assert_eq!(joined.listing.name, "Max's Server");
+    // The live count reaches later probes.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let busy = probe(server.address, &HostPin::Key(host_key(&server.certificate)), Duration::from_secs(5)).await?;
+    assert_eq!(busy.listing.players, 1);
+    joined.close();
+    // An invite for another host is refused as a changed identity.
+    let stranger = server::HostCertificate::generate()?;
+    let error = probe(server.address, &HostPin::Key(host_key(&stranger.der)), Duration::from_secs(5))
+        .await
+        .err()
+        .context("Wrong key accepted")?;
+    assert!(
+        matches!(error.downcast_ref::<JoinError>(), Some(JoinError::IdentityChanged(_))),
+        "{error:#}"
+    );
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_different_version_is_told_which_side_to_update() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let mut config = quinn::ClientConfig::with_root_certificates(std::sync::Arc::new({
+        let mut roots = quinn::rustls::RootCertStore::empty();
+        roots.add(server.certificate.clone().into())?;
+        roots
+    }))?;
+    config.transport_config(std::sync::Arc::new(server::transport()));
+    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
+    endpoint.set_default_client_config(config);
+    let connection = endpoint.connect(server.address, "blockland.local")?.await?;
+    let (mut send, mut receive) = connection.open_bi().await?;
+    bri_net::codec::write_small_request(&mut send, &JoinBegin { version: VERSION - 1, ..JoinBegin::join() }).await?;
+    let answer = bri_net::codec::decode::<Message>(
+        &bri_net::codec::read_frame(&mut receive, bri_net::codec::MAX_FRAME).await?,
+    )?;
+    let Message::Rejected(reason) = answer else {
+        anyhow::bail!("Expected a refusal")
+    };
+    assert!(reason.contains("newer version") && reason.contains("Update your game"), "{reason}");
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn join_refusal_names_each_differing_shared_package() -> Result<()> {
     use bri_package::{
         environment::{Environment, PackageRef},
@@ -887,16 +991,19 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
     else {
         panic!("authorized kick returns its confirmation")
     };
-    assert!(
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if target.receive().await.is_err() {
-                    break;
-                }
+    // The kicked player learns why: the server's close frame, not a bare
+    // "connection lost".
+    let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Err(error) = target.receive().await {
+                break format!("{error:#}");
             }
-        })
-        .await
-        .is_ok()
+        }
+    })
+    .await?;
+    assert!(
+        closed.contains("closed by peer: You were kicked"),
+        "{closed}"
     );
 
     guest.close();
@@ -1618,7 +1725,7 @@ async fn raw_identity_challenge(
     let challenge = bri_net::codec::decode::<Message>(
         &bri_net::codec::read_frame(&mut receive, bri_net::codec::MAX_FRAME).await?,
     )?;
-    let Message::Challenge { nonce } = challenge else {
+    let Message::Challenge { nonce, .. } = challenge else {
         anyhow::bail!("Expected server identity challenge")
     };
     Ok((endpoint, connection, send, receive, nonce))
@@ -2165,5 +2272,36 @@ async fn unread_pose_datagrams_never_block_reliable_delivery() -> Result<()> {
     let reply = first.command(Command::Chat("still here".into())).await;
     assert!(reply.is_ok(), "{reply:?}");
     server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_autosaves_on_its_timer_and_returns_its_final_world() -> Result<()> {
+    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let log = saved.clone();
+    let server = server::start(
+        session(),
+        ServerOptions {
+            autosave: Some(server::Autosave {
+                every: Duration::from_secs(1),
+                save: std::sync::Arc::new(move |world: &World| {
+                    log.lock().unwrap().push(world.revision);
+                    Ok(())
+                }),
+            }),
+            ..options()
+        },
+    )?;
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    let report = server.stop().await?;
+    let saves = saved.lock().unwrap().len() as u64;
+    assert!(saves >= 1, "the timer autosaved");
+    assert_eq!(report.autosaves, saves);
+    assert_eq!(report.autosave_failures, 0);
+    // A clean stop hands back the world for the caller to keep.
+    assert_eq!(
+        report.native_world.map_id,
+        session().simulation().state().map_id
+    );
     Ok(())
 }
