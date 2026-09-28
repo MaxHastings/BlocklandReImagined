@@ -4077,3 +4077,16 @@ the passenger camera does not tilt or roll with the seat (v20's does; our
 view has no roll). Evidence: `cargo test -p bri-client --lib vehicle_camera`.
 Not seen in a window: needs Max's playtest in a Jeep, driving and as a
 passenger.
+
+## 2026-09-28 Pong "Event color outside palette" report
+
+Max's Pong crash ("Invalid replicated brick 76: Event color outside
+palette") was on a18 (29a600a77; session log 20260928-182915, 74 minutes
+into a hosted game). It is the paint-fade bug fixed in a19 (5ccf50c6,
+f30e8019): Pong's `setColor` rows repaint bricks, the fade drew a repainted
+brick in a one-colour palette but kept its event colours. The host was
+checked and keeps no such brick: every Demo Pong test now validates every
+brick against the palette after each tick (reset, rallies, scoring, win,
+hammered paddle buttons, timed reverts). Evidence:
+`cargo test -p bri-sim --test pong -- --ignored` (6 passed). No host change
+was needed.
