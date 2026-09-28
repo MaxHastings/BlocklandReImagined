@@ -357,7 +357,7 @@ impl MouseButton {
 }
 
 /// Host input, in physical window pixels (the UI divides by its scale).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum InputEvent {
     KeyDown {
         key: Key,
