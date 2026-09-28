@@ -558,7 +558,7 @@ impl Session {
                 .filter(|p| p.combat.alive)
                 .map(|p| (p.player.eye(), p.player.state().forward()));
             let keep = aim.is_some()
-                && !self.vehicles.is_mounted(player)
+                && !self.seated(player)
                 && (!recheck || self.may_move(player, hold.target));
             let centre = self.object_centre(hold.target);
             let (Some((eye, look)), Some(centre), true) = (aim, centre, keep) else {

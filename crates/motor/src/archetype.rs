@@ -18,6 +18,8 @@ pub struct ArchetypeId(pub u16);
 
 /// Most archetypes one table holds: v20's eight plus packages'.
 pub const MAX_ARCHETYPES: usize = 256;
+/// Most riders one rideable archetype seats.
+pub const MAX_MOUNT_POINTS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,7 +37,30 @@ pub struct Archetype {
     pub rideable: bool,
     /// It may mount vehicles and rideable players.
     pub can_ride: bool,
+    /// Where riders sit (`numMountPoints`, `mountNode[i]`, `mountThread[i]`),
+    /// in seat order. A rideable archetype with none cannot be mounted.
+    #[serde(default)]
+    pub mount_points: Vec<MountPoint>,
     pub look: Look,
+}
+/// One rider's seat on a rideable archetype.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MountPoint {
+    /// The model's mount node, which clients follow as it animates.
+    pub node: String,
+    /// The node's rest position from the feet, facing -Z, at scale 1. The
+    /// host seats the rider here.
+    pub position: [f32; 3],
+    /// The rider's action thread while seated (`mountThread`): `root`
+    /// stands, `sit` sits.
+    pub pose: String,
+}
+impl MountPoint {
+    /// The seat in the world for a mount at `feet`, facing `yaw`.
+    pub fn seat(&self, feet: glam::Vec3, yaw: f32, scale: f32) -> glam::Vec3 {
+        feet + glam::Quat::from_rotation_y(-yaw) * glam::Vec3::from(self.position) * scale
+    }
 }
 /// How clients draw an archetype and place its camera.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,7 +85,15 @@ impl Archetype {
                 && self.max_health.is_finite()
                 && (1.0..=100_000.0).contains(&self.max_health)
                 && self.look.camera_distance.is_finite()
-                && (0.0..=64.0).contains(&self.look.camera_distance),
+                && (0.0..=64.0).contains(&self.look.camera_distance)
+                && self.mount_points.len() <= MAX_MOUNT_POINTS
+                && self.mount_points.iter().all(|m| {
+                    !m.node.is_empty()
+                        && m.node.len() <= 64
+                        && !m.pose.is_empty()
+                        && m.pose.len() <= 64
+                        && m.position.iter().all(|v| v.is_finite() && v.abs() <= 64.0)
+                }),
             "Invalid archetype {}",
             self.id
         );
@@ -75,6 +108,7 @@ impl Archetype {
             energy_bar: kind.shows_energy(),
             rideable: kind.rideable(),
             can_ride: kind.can_ride(),
+            mount_points: kind.mount_points(),
             look: Look {
                 model: if kind == PlayerType::Horse {
                     "v20.shape.horse".into()

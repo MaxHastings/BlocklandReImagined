@@ -574,6 +574,18 @@ impl AvatarMesh {
     pub fn body_transform(&self) -> Mat4 {
         self.model_transform
     }
+    /// A node's last posed transform relative to the model (feet, facing
+    /// -Z, unscaled), for placing something on it before this frame's pose.
+    pub fn model_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
+        let assets = assets.for_mesh(self);
+        let index = assets
+            .rig
+            .shape
+            .nodes
+            .iter()
+            .position(|n| n.name.eq_ignore_ascii_case(name))?;
+        self.posed_nodes.get(index).copied()
+    }
     pub fn world_node(&self, assets: &AvatarAssets, name: &str) -> Option<Mat4> {
         let assets = assets.for_mesh(self);
         let index = assets

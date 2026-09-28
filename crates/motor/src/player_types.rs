@@ -123,6 +123,19 @@ impl PlayerType {
     pub fn can_ride(self) -> bool {
         self != Self::Horse
     }
+    /// `numMountPoints`, `mountNode` and `mountThread`: HorseArmor seats one
+    /// rider on horse.dts's `mount2` (`mountNode[0] = 2`), standing in
+    /// `root`. The position is that node's rest translation.
+    pub fn mount_points(self) -> Vec<crate::archetype::MountPoint> {
+        match self {
+            Self::Horse => vec![crate::archetype::MountPoint {
+                node: "mount2".into(),
+                position: [0.0, 1.456_470_4, -0.115_328_49],
+                pose: "root".into(),
+            }],
+            _ => Vec::new(),
+        }
+    }
     /// `minImpactSpeed`: the engine calls `Armor::onImpact` (falling damage)
     /// only for hits faster than this.
     pub fn min_impact_speed(self) -> f32 {
