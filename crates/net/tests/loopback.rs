@@ -764,10 +764,12 @@ async fn join_refusal_names_each_differing_shared_package() -> Result<()> {
     let mut cosmetic = environment.client_packages();
     cosmetic[1].hash = "bb".repeat(32);
     let mut client = connect(cosmetic).await?;
+    // v20's "Welcome to Blockland" line arrives too; wait for the package one.
     let told = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let bri_net::client::ClientEvent::Notice(bri_sim::session::Notice::Chat(text)) =
                 client.receive().await?
+                && text.contains("server has")
             {
                 return anyhow::Ok(text);
             }

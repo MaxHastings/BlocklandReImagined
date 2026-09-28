@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 36: `Vitals::sitting`, the sit emote as replicated state.
 /// 37: admin camera `Orb` datagrams, the camera view in movement datagrams
 /// and the `Teleport` cue.
-pub const VERSION: u32 = 37;
+/// 38: `bsd` and `hug` emote cues, which older clients reject as invalid.
+pub const VERSION: u32 = 38;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
