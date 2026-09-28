@@ -226,6 +226,24 @@ impl EventWorld {
     pub fn pending(&self) -> usize {
         self.pending
     }
+    /// Rows `input` on brick `id` would schedule now, as v20's
+    /// `ProcessInputEvent` counts them against the schedule quota.
+    pub fn activation_count(&self, id: Id, input: &str) -> Result<usize> {
+        self.expansion_count(&[id], input)
+    }
+    /// Scheduled rows from bricks of owner `scope` still waiting to run.
+    pub fn pending_for_scope(&self, scope: u64) -> usize {
+        self.queues
+            .values()
+            .flat_map(|q| q.values())
+            .chain(self.held.values())
+            .filter(|j| {
+                self.bricks
+                    .get(&j.context.source)
+                    .is_some_and(|b| b.owner_scope == scope)
+            })
+            .count()
+    }
     pub fn now_us(&self) -> u64 {
         self.now
     }

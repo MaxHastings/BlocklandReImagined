@@ -1538,3 +1538,105 @@ fn random_brick_color_paints_each_plant_from_v20s_six() {
     assert!(colors.is_subset(&[0, 1, 3, 4, 5, 7].into()), "{colors:?}");
     assert!(colors.len() > 1, "{colors:?}");
 }
+
+#[test]
+fn an_input_past_its_owners_schedule_quota_runs_nothing_and_says_why() {
+    let brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7);
+    let mut s = session(vec![brick], false);
+    s.set_tool_catalog(catalog()).unwrap();
+    let mut settings = bri_admin::ServerSettings::default();
+    settings.per_player.schedules = 10;
+    s.set_server_settings(settings).unwrap();
+    let owner = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let row = |color| EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 1000,
+        target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+        output: "setColor".into(),
+        params: vec![EventValue::Color(color)],
+    };
+    let too_many = |s: &mut Session| {
+        s.take_private_notices().iter().any(|(_, n)| {
+            matches!(n, bri_sim::session::Notice::Center { text, .. }
+                if text.ends_with("Too many events at once!\n(onActivate)"))
+        })
+    };
+    // Eleven rows never fit a quota of ten.
+    s.edit_brick(owner, 1, Edit::Events((0..11).map(|_| row(1)).collect()))
+        .unwrap();
+    s.command(owner, 2, Command::Activate).unwrap();
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.simulation().state().bricks[&1].color, 0);
+    assert!(too_many(&mut s));
+    // Ten fit once; a second click while they wait does not.
+    s.edit_brick(owner, 1, Edit::Events((0..10).map(|_| row(1)).collect()))
+        .unwrap();
+    s.command(owner, 3, Command::Activate).unwrap();
+    s.step().unwrap();
+    assert!(!too_many(&mut s));
+    s.command(owner, 4, Command::Activate).unwrap();
+    s.step().unwrap();
+    assert!(too_many(&mut s));
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.simulation().state().bricks[&1].color, 1);
+}
+
+#[test]
+fn a_full_environment_quota_leaves_a_new_light_and_emitter_off() {
+    let (mut s, owner, id) = setup();
+    // v20 clamps the quota to at least 20: ten other bricks fill it.
+    let mut settings = bri_admin::ServerSettings::default();
+    settings.per_player.environment = 0;
+    s.set_server_settings(settings).unwrap();
+    for i in 0..10u64 {
+        for _ in 0..120 {
+            s.step().unwrap();
+        }
+        let other = plant(&mut s, owner, 10 + i, [-4.5 + i as f32, 0.1, -5.25]);
+        s.edit_brick(owner, other, Edit::Properties(properties()))
+            .unwrap();
+    }
+    aim(&mut s, owner, 30, [0.5, 0.1, -3.25]);
+    inspect(&mut s, owner, 31, InspectMode::Wrench);
+    tool(
+        &mut s,
+        owner,
+        32,
+        ToolAction::SetWrench {
+            brick: id,
+            properties: properties(),
+        },
+    )
+    .unwrap();
+    let brick = &s.simulation().state().bricks[&id];
+    assert_eq!(
+        brick.name.as_deref(),
+        Some("lamp"),
+        "the rest still applies"
+    );
+    assert!(brick.light.is_none());
+    assert!(brick.emitter.as_ref().is_none_or(|e| e.asset.is_none()));
+    // On a LAN server the larger LAN quota has room.
+    s.set_lan_host(true);
+    inspect(&mut s, owner, 33, InspectMode::Wrench);
+    tool(
+        &mut s,
+        owner,
+        34,
+        ToolAction::SetWrench {
+            brick: id,
+            properties: properties(),
+        },
+    )
+    .unwrap();
+    assert!(s.simulation().state().bricks[&id].light.is_some());
+}

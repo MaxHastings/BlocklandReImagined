@@ -854,6 +854,12 @@ impl Session {
         if action == ToolAction::UndoBrick {
             return self.undo_brick(owner);
         }
+        let mut action = action;
+        if let ToolAction::SetWrench { brick, properties } = &mut action
+            && let Some(target) = self.simulation.state().bricks.get(brick)
+        {
+            self.quota_wrench(target, properties);
+        }
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         let id = peer
             .inspection

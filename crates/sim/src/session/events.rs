@@ -17,7 +17,7 @@ const DIGIT_PRINTS: &str = "print/print_letters_default/";
 /// The only player datablock; `changeDatablock` accepts it as a no-op.
 const TICKS_PER_SECOND: u64 = 120;
 
-fn id(index: u64) -> Id {
+pub(super) fn id(index: u64) -> Id {
     Id {
         index,
         generation: 1,
@@ -32,7 +32,7 @@ fn entity(class: Class, index: u64) -> Entity {
 
 #[derive(Default)]
 pub(super) struct Events {
-    world: Option<EventWorld>,
+    pub(super) world: Option<EventWorld>,
     bindings: ev::Bindings,
     sounds: BTreeSet<String>,
     installed: BTreeSet<BrickId>,
@@ -46,6 +46,8 @@ pub(super) struct Events {
     /// Projectiles events spawned, by the owner of the brick whose quota
     /// they count against (`QuotaObject`), newest last.
     pub(super) spawned: BTreeMap<OwnerId, VecDeque<u64>>,
+    /// Items events dropped, likewise, for the item quota.
+    pub(super) dropped: BTreeMap<OwnerId, VecDeque<u64>>,
     diagnostics: VecDeque<String>,
 }
 
@@ -284,6 +286,9 @@ impl Session {
             .iter()
             .filter_map(|(slot, _)| Slot::parse(slot))
             .collect();
+        if self.schedules_exceeded(brick, input, player) {
+            return;
+        }
         self.events.origin += 1;
         let mut trigger = Trigger::new(id(brick), input, self.events.origin);
         if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
@@ -663,6 +668,40 @@ impl EventHost<'_> {
             ),
         }
     }
+    /// Owner of the brick whose event this is: its quota object.
+    fn source_owner(&self, d: &Dispatch) -> Option<OwnerId> {
+        let bricks = &self.session.simulation.state().bricks;
+        bricks.get(&d.source.index).map(|b| b.owner)
+    }
+    fn quota_full(&self, d: &Dispatch, quota: Quota) -> bool {
+        let Some(owner) = self.source_owner(d) else {
+            return false;
+        };
+        let used = match quota {
+            Quota::Environment => self.session.environment_used(owner),
+            Quota::Items => self.session.items_used(owner),
+            Quota::Projectiles => self.session.projectiles_used(owner),
+            Quota::Schedules => return false,
+        };
+        used >= self.session.quota(quota)
+    }
+    fn has_light(&self, brick: BrickId) -> bool {
+        let bricks = &self.session.simulation.state().bricks;
+        bricks.get(&brick).is_some_and(|b| b.light.is_some())
+    }
+    fn has_emitter(&self, brick: BrickId) -> bool {
+        let bricks = &self.session.simulation.state().bricks;
+        bricks
+            .get(&brick)
+            .and_then(|b| b.emitter.as_ref())
+            .is_some_and(|e| e.asset.is_some())
+    }
+    fn has_item(&self, brick: BrickId) -> bool {
+        let bricks = &self.session.simulation.state().bricks;
+        bricks
+            .get(&brick)
+            .is_some_and(|b| b.item_spawn.item.is_some())
+    }
     fn random3(&mut self) -> [f32; 3] {
         let seed = &mut self.session.spawn_seed;
         std::array::from_fn(|_| {
@@ -711,6 +750,28 @@ impl EventHost<'_> {
             BrickOp::Respawn => {
                 self.session.events.respawns.remove(&brick);
                 self.session.respawn_brick(brick)?;
+            }
+            BrickOp::Emitter(Some(_))
+                if !self.has_emitter(brick) && self.quota_full(d, Quota::Environment) =>
+            {
+                return Ok(Apply::Rejected("environment quota is full".into()));
+            }
+            BrickOp::Light(Some(_))
+                if !self.has_light(brick) && self.quota_full(d, Quota::Environment) =>
+            {
+                return Ok(Apply::Rejected("environment quota is full".into()));
+            }
+            BrickOp::Item(Some(_)) if !self.has_item(brick) && self.quota_full(d, Quota::Items) => {
+                return Ok(Apply::Rejected("item quota is full".into()));
+            }
+            BrickOp::SpawnItem { item: Some(_), .. } if self.quota_full(d, Quota::Items) => {
+                return Ok(Apply::Rejected("item quota is full".into()));
+            }
+            BrickOp::SpawnProjectile {
+                projectile: Some(_),
+                ..
+            } if self.quota_full(d, Quota::Projectiles) => {
+                return Ok(Apply::Rejected("projectile quota is full".into()));
             }
             BrickOp::Emitter(emitter) => self.edit(brick, |b| {
                 let direction = b.emitter.as_ref().map_or(0, |e| e.direction);
@@ -798,8 +859,16 @@ impl EventHost<'_> {
                 let Some(item) = item else {
                     return Ok(Apply::Applied);
                 };
-                self.session
-                    .spawn_event_item(item, center + Vec3::Y * 0.5, *velocity)?;
+                let drop =
+                    self.session
+                        .spawn_event_item(item, center + Vec3::Y * 0.5, *velocity)?;
+                if let Some(owner) = self.source_owner(d) {
+                    let dropped = self.session.events.dropped.entry(owner).or_default();
+                    if dropped.len() == 256 {
+                        dropped.pop_front();
+                    }
+                    dropped.push_back(drop);
+                }
             }
             BrickOp::RadiusImpulse {
                 radius,

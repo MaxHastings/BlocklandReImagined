@@ -498,6 +498,7 @@ impl Screen for SaveLoad {
                     core.pop(ScreenId::EscapeMenu);
                 }
             }
+            Err(e) if e == crate::api::LOAD_CANCELED => self.lock(),
             Err(e) => {
                 core.message_ok(self.title(), &format!("Request rejected: {e}"));
                 self.lock();
