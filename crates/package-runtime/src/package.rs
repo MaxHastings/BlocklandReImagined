@@ -449,19 +449,20 @@ impl Catalog {
                         }
                         continue;
                     };
-                    let public = owner.behaviour.as_ref().is_some_and(|b| {
+                    let visible = owner.behaviour.as_ref().is_some_and(|b| {
                         let keys = if binding.player {
                             &b.state.player
                         } else {
                             &b.state.global
                         };
-                        keys.get(&binding.key).is_some_and(|k| k.public)
+                        keys.get(&binding.key)
+                            .is_some_and(|k| k.visible != content::Visible::Server)
                     });
-                    if !public {
+                    if !visible {
                         out.push(
-                            Diagnostic::error("set.hud.binding", format!("`{}` is not a public state key", row.bind))
+                            Diagnostic::error("set.hud.binding", format!("`{}` is not a state key clients receive", row.bind))
                                 .at(at.clone())
-                                .hint("declare it under the owner's behaviour state with \"public\": true"),
+                                .hint("declare it under the owner's behaviour state with \"visible\": \"owner\" (player keys) or \"everyone\""),
                         );
                     }
                 }

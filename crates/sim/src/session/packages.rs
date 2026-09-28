@@ -16,7 +16,7 @@
 use super::*;
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
-    content::{ArgType, ChunkWorld},
+    content::{ArgType, ChunkWorld, Visible},
     ops::{Op, authorize},
     script::{self, Budget, Call, EntityView, PlayerView, Runtime, Snapshot},
     state::{self, Namespace},
@@ -274,8 +274,8 @@ const SERVER_WORK_PER_TICK: i64 = 400_000;
 /// full command), and what refills every second.
 const PLAYER_COMMAND_BURST: i64 = 200_000;
 const PLAYER_COMMAND_WORK: i64 = 400_000;
-/// Bricks one package may destroy in a burst; refills every second.
-const PACKAGE_DESTRUCTION: i64 = 2048;
+/// Bricks one package may place or destroy in a burst; refills every second.
+const PACKAGE_WORLD_EDITS: i64 = 2048;
 /// Chat lines (broadcasts and tells) per package and calling player in a
 /// burst; refills every second, like player chat.
 const PACKAGE_CHAT_LINES: i64 = 8;
@@ -337,7 +337,7 @@ impl<K: Ord + Clone> Allowance<K> {
 struct Shares {
     work: Allowance<String>,
     commands: Allowance<PlayerKey>,
-    destruction: Allowance<String>,
+    edits: Allowance<String>,
     chat: Allowance<(String, Option<PlayerKey>)>,
 }
 impl Shares {
@@ -346,7 +346,7 @@ impl Shares {
         Self {
             work: Allowance::new(Budget::Tick.operations() as i64, share, 1),
             commands: Allowance::new(PLAYER_COMMAND_BURST, PLAYER_COMMAND_WORK, SECOND),
-            destruction: Allowance::new(PACKAGE_DESTRUCTION, PACKAGE_DESTRUCTION, SECOND),
+            edits: Allowance::new(PACKAGE_WORLD_EDITS, PACKAGE_WORLD_EDITS, SECOND),
             chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
         }
     }
@@ -922,6 +922,11 @@ impl Session {
         let tick = self.simulation.state().tick;
         match op {
             Op::RemoveBrick { brick } => self.package_remove_brick(package, brick, None, caller),
+            Op::PlaceBrick {
+                shape,
+                position,
+                color,
+            } => self.package_place_brick(package, &shape, position, color),
             Op::Explode {
                 position,
                 radius,
@@ -1030,6 +1035,50 @@ impl Session {
         host.shares.chat.spend(&origin, tick, 1);
         Ok(())
     }
+    /// Add a world-owned brick through the same load path as a build, so
+    /// the grid, overlap and storage checks all apply.
+    fn package_place_brick(
+        &mut self,
+        package: &str,
+        shape: &str,
+        position: [f32; 3],
+        color: [f32; 4],
+    ) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let origin = package.to_string();
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        ensure!(
+            host.shares.edits.available(&origin, tick) >= 1,
+            "`{package}` used its share of world edits for now"
+        );
+        let state = self.simulation.state();
+        let distance =
+            |c: &[f32; 4]| -> f32 { c.iter().zip(color).map(|(a, b)| (a - b).powi(2)).sum() };
+        let index = state
+            .palette
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))
+            .map(|(i, _)| i)
+            .context("The world has no palette")?;
+        let mut brick = Brick::new(ContentRef::Resolved(shape.into()), position, 0);
+        brick.color = u8::try_from(index)?;
+        let palette = state.palette.clone();
+        let plan =
+            bri_world::build::LoadPlan::batch(state, &palette, vec![brick], self.next_owner)?;
+        let ids = self.simulation.load_build(
+            &Actor {
+                owner: 0,
+                administrator: true,
+                ..Default::default()
+            },
+            plan,
+        )?;
+        self.dirty.extend(ids);
+        let host = self.packages.as_mut().expect("checked");
+        host.shares.edits.spend(&origin, tick, 1);
+        Ok(())
+    }
     /// Remove a brick for good, recording generated voxels as world edits.
     fn package_remove_brick(
         &mut self,
@@ -1073,10 +1122,10 @@ impl Session {
         let origin = package.to_string();
         let host = self.packages.as_mut().context("No packages are enabled")?;
         ensure!(
-            host.shares.destruction.available(&origin, tick) >= 1,
+            host.shares.edits.available(&origin, tick) >= 1,
             "`{package}` destroyed its share of bricks for now"
         );
-        host.shares.destruction.spend(&origin, tick, 1);
+        host.shares.edits.spend(&origin, tick, 1);
         let admin = Actor {
             owner: 0,
             administrator: true,
@@ -1163,7 +1212,7 @@ impl Session {
         let can_destroy = self
             .packages
             .as_mut()
-            .is_some_and(|h| h.shares.destruction.available(&origin, tick) >= 1);
+            .is_some_and(|h| h.shares.edits.available(&origin, tick) >= 1);
         if brick_radius > 0.0 && can_destroy {
             let reach = Vec3::splat(brick_radius);
             let mut hit: Vec<(f32, BrickId)> = self
@@ -1186,7 +1235,7 @@ impl Session {
                 let spent = self
                     .packages
                     .as_mut()
-                    .is_none_or(|h| h.shares.destruction.available(&origin, tick) < 1);
+                    .is_none_or(|h| h.shares.edits.available(&origin, tick) < 1);
                 if spent {
                     break;
                 }
@@ -1689,8 +1738,16 @@ impl Session {
             })
             .unwrap_or_default()
     }
-    /// Public package state for clients.
+    /// Package state every client receives: keys visible to everyone.
     pub fn package_state(&self) -> PackageStateView {
+        self.package_view(None)
+    }
+    /// Package state one client receives: keys visible to everyone, plus
+    /// that player's own keys visible to their owner.
+    pub fn package_state_for(&self, viewer: OwnerId) -> PackageStateView {
+        self.package_view(Some(viewer))
+    }
+    fn package_view(&self, viewer: Option<OwnerId>) -> PackageStateView {
         let Some(host) = self.packages.as_ref() else {
             return PackageStateView::default();
         };
@@ -1702,7 +1759,13 @@ impl Session {
             let public_global: BTreeMap<_, _> = ns
                 .global
                 .iter()
-                .filter(|(k, _)| behaviour.state.global.get(*k).is_some_and(|d| d.public))
+                .filter(|(k, _)| {
+                    behaviour
+                        .state
+                        .global
+                        .get(*k)
+                        .is_some_and(|d| d.visible == Visible::Everyone)
+                })
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             let mut players = BTreeMap::new();
@@ -1710,7 +1773,12 @@ impl Session {
                 if let Some(values) = ns.players.get(&self.player_key(*owner)) {
                     let public: BTreeMap<_, _> = values
                         .iter()
-                        .filter(|(k, _)| behaviour.state.player.get(*k).is_some_and(|d| d.public))
+                        .filter(|(k, _)| {
+                            behaviour.state.player.get(*k).is_some_and(|d| {
+                                d.visible == Visible::Everyone
+                                    || (d.visible == Visible::Owner && viewer == Some(*owner))
+                            })
+                        })
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     if !public.is_empty() {

@@ -373,6 +373,16 @@ fn register_api(engine: &mut Engine) {
         push(Op::RemoveBrick { brick: id(&brick)? })
     });
     engine.register_fn(
+        "place_brick",
+        |shape: &str, x: Dynamic, y: Dynamic, z: Dynamic, r: Dynamic, g: Dynamic, b: Dynamic| {
+            push(Op::PlaceBrick {
+                shape: shape.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                color: [float(&r)?, float(&g)?, float(&b)?, 1.0],
+            })
+        },
+    );
+    engine.register_fn(
         "explode",
         |x: Dynamic,
          y: Dynamic,

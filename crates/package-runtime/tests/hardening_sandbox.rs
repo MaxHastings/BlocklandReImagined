@@ -825,7 +825,7 @@ fn conflicting_hud_keys_are_reported() {
     let server = Spec::server("arcade", vec![]).behaviour(
         json!({ "schema_version": 1, "script": "main.rhai",
                 "commands": [{ "name": "one" }, { "name": "two" }],
-                "state": { "global": { "g": { "default": 0, "public": true } } } }),
+                "state": { "global": { "g": { "default": 0, "visible": "everyone" } } } }),
         "fn cmd_one(p) { } fn cmd_two(p) { }",
     );
     let hud = |id: &'static str, command: &str| {

@@ -9,7 +9,7 @@ pub const MAX_SPAWN_VARS: usize = 16;
 
 /// Every capability a manifest may declare.
 pub const CAPABILITIES: &[&str] = &[
-    // Remove bricks from the world.
+    // Add world-owned bricks to the world and remove them.
     "world.edit",
     // Explosions and direct damage to players and bricks.
     "damage",
@@ -25,6 +25,13 @@ pub const CAPABILITIES: &[&str] = &[
 pub enum Op {
     RemoveBrick {
         brick: u64,
+    },
+    /// Add a world-owned brick of a known shape: an arena, a gate, a board.
+    /// The colour is matched to the nearest colour of the world's palette.
+    PlaceBrick {
+        shape: String,
+        position: [f32; 3],
+        color: [f32; 4],
     },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
@@ -82,7 +89,7 @@ pub enum Op {
 impl Op {
     pub fn capability(&self) -> &'static str {
         match self {
-            Self::RemoveBrick { .. } => "world.edit",
+            Self::RemoveBrick { .. } | Self::PlaceBrick { .. } => "world.edit",
             Self::Explode { .. } | Self::DamagePlayer { .. } => "damage",
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
@@ -100,6 +107,16 @@ impl Op {
         let ok = match self {
             Self::RemoveBrick { .. } | Self::RemoveEntity { .. } | Self::Respawn { .. } => true,
             Self::Teleport { position, .. } => finite(position),
+            Self::PlaceBrick {
+                shape,
+                position,
+                color,
+            } => {
+                !shape.is_empty()
+                    && shape.len() <= 128
+                    && finite(position)
+                    && color.iter().all(|c| (0.0..=1.0).contains(c))
+            }
             Self::Explode {
                 position,
                 radius,
@@ -166,6 +183,7 @@ pub fn authorize(package: &str, capabilities: &[String], op: &Op) -> Result<(), 
 pub fn op_name(op: &Op) -> &'static str {
     match op {
         Op::RemoveBrick { .. } => "remove_brick",
+        Op::PlaceBrick { .. } => "place_brick",
         Op::Explode { .. } => "explode",
         Op::DamagePlayer { .. } => "damage",
         Op::SpawnEntity { .. } => "spawn_entity",

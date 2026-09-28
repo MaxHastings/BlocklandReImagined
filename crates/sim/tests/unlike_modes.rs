@@ -189,8 +189,8 @@ const RACE_BEHAVIOUR: &str = r#"{
       "racing": { "default": false },
       "next": { "default": 0 },
       "started": { "default": 0 },
-      "laps": { "default": 0, "public": true },
-      "best": { "default": -1, "public": true, "persist": true }
+      "laps": { "default": 0, "visible": "everyone" },
+      "best": { "default": -1, "visible": "everyone", "persist": true }
     }
   },
   "on_death": true,
@@ -303,13 +303,13 @@ const TDM_BEHAVIOUR: &str = r#"{
   "commands": [{ "name": "zap", "args": ["int"], "cooldown_ticks": 5 }],
   "state": {
     "player": {
-      "team": { "default": "", "public": true },
-      "kills": { "default": 0, "public": true }
+      "team": { "default": "", "visible": "everyone" },
+      "kills": { "default": 0, "visible": "everyone" }
     },
     "global": {
-      "round": { "default": 1, "public": true },
-      "red": { "default": 0, "public": true },
-      "blue": { "default": 0, "public": true },
+      "round": { "default": 1, "visible": "everyone" },
+      "red": { "default": 0, "visible": "everyone" },
+      "blue": { "default": 0, "visible": "everyone" },
       "joined": { "default": 0 },
       "ends": { "default": 600 }
     }
@@ -454,11 +454,11 @@ const BOARD_BEHAVIOUR: &str = r#"{
   "commands": [{ "name": "sit" }, { "name": "play", "args": ["int"] }],
   "state": {
     "global": {
-      "board": { "default": "---------", "public": true },
+      "board": { "default": "---------", "visible": "everyone" },
       "x": { "default": -1 },
       "o": { "default": -1 },
-      "turn": { "default": "x", "public": true },
-      "winner": { "default": "", "public": true }
+      "turn": { "default": "x", "visible": "everyone" },
+      "winner": { "default": "", "visible": "everyone" }
     }
   }
 }"#;
@@ -552,7 +552,7 @@ const RTS_BEHAVIOUR: &str = r#"{
   ],
   "state": {
     "player": {
-      "units": { "default": 0, "public": true },
+      "units": { "default": 0, "visible": "everyone" },
       "tx": { "default": 0.0 },
       "tz": { "default": 0.0 }
     }
@@ -693,5 +693,163 @@ fn a_strategy_mode_commands_owned_units_by_pointing() {
         units.iter().filter(|u| near(u.position)).count(),
         2,
         "A's two units went to the target, B's stayed: {units:#?}"
+    );
+}
+
+const ARENA_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "arena.rhai",
+  "commands": [{ "name": "build" }, { "name": "sink" }],
+  "state": { "global": { "round": { "default": 0, "visible": "everyone" } } }
+}"#;
+
+/// The round builds a 2 x 2 m floating floor, puts the player on it, and
+/// later sinks it: the world itself is the game's moving part.
+const ARENA_SCRIPT: &str = r#"
+fn cmd_build(player) {
+    for x in 0..4 {
+        for z in 0..4 {
+            place_brick("plate", x * 1.0, 2.1, z * 0.5 - 10.25, 0.9, 0.2, 0.2);
+        }
+    }
+    teleport(player, 1.5, 2.4, -9.5);
+    set("round", get("round") + 1);
+}
+
+fn cmd_sink(player) {
+    explode(1.5, 2.1, -9.5, 0.1, 0.0, 4.0);
+}
+"#;
+
+/// E20 (world model; categories 9, 1). A floor-is-lava round: the mode
+/// builds its arena at round start and removes it later. Nothing about the
+/// world comes from a generator or a player's build.
+#[test]
+fn a_mode_builds_and_sinks_its_own_arena() {
+    let mut s = mode(
+        "arena",
+        &[Package {
+            id: "arena",
+            side: Side::Server,
+            files: &[
+                (
+                    "package.json",
+                    &manifest(
+                        "arena",
+                        &["world.edit", "player", "damage"],
+                        &[
+                            ("behaviour", "arena", "behaviour.json"),
+                            ("script", "arena", "arena.rhai"),
+                        ],
+                    ),
+                ),
+                ("behaviour.json", ARENA_BEHAVIOUR),
+                ("arena.rhai", ARENA_SCRIPT),
+            ],
+        }],
+    );
+    let p = s
+        .join("P".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 5);
+    s.command(p, 1, command("arena", "build", vec![]))
+        .unwrap_or_else(|e| panic!("{e:#} {:#?}", s.package_diagnostics()));
+    assert_eq!(
+        s.simulation().state().bricks.len(),
+        16,
+        "{:#?}",
+        s.package_diagnostics()
+    );
+    steps(&mut s, 60);
+    let on_floor = position(&s, p);
+    assert!(on_floor.y > 2.0, "standing on the arena: {on_floor}");
+    s.command(p, 2, command("arena", "sink", vec![])).unwrap();
+    steps(&mut s, 120);
+    assert!(s.simulation().state().bricks.is_empty());
+    let fallen = position(&s, p);
+    assert!(fallen.y < 0.5, "the floor is gone: {fallen}");
+}
+
+const CARDS_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "cards.rhai",
+  "commands": [{ "name": "deal" }],
+  "state": {
+    "player": { "hand": { "default": "", "visible": "owner" } }
+  }
+}"#;
+
+const CARDS_SCRIPT: &str = r#"
+fn cmd_deal(player) {
+    let n = 0;
+    for p in players() {
+        set_player(p.id, "hand", if n == 0 { "AS KD 7H" } else { "2C 2D 9S" });
+        n += 1;
+    }
+}
+"#;
+
+const CARDS_HUD: &str = r#"{
+  "schema_version": 1, "slot": "hud.overlay", "anchor": "bottom_left",
+  "title": "Your hand", "background": [0.0, 0.0, 0.0, 0.6],
+  "accent": [1.0, 1.0, 1.0, 1.0], "text": [1.0, 1.0, 1.0, 1.0],
+  "rows": [{ "label": "Hand", "bind": "cards:player/hand" }]
+}"#;
+
+/// E21 (UI model; categories 9, 1). A card game with hidden hands: each
+/// player's HUD shows their own hand, and no other player's client may
+/// receive it.
+#[test]
+fn a_card_game_shows_each_player_only_their_own_hand() {
+    let server_manifest = manifest(
+        "cards",
+        &[],
+        &[
+            ("behaviour", "cards", "behaviour.json"),
+            ("script", "cards", "cards.rhai"),
+        ],
+    );
+    let hud_manifest = manifest("cards-ui", &[], &[("hud", "hand", "hand.json")]);
+    let mut s = mode(
+        "cards",
+        &[
+            Package {
+                id: "cards",
+                side: Side::Server,
+                files: &[
+                    ("package.json", &server_manifest),
+                    ("behaviour.json", CARDS_BEHAVIOUR),
+                    ("cards.rhai", CARDS_SCRIPT),
+                ],
+            },
+            Package {
+                id: "cards-ui",
+                side: Side::Client,
+                files: &[("package.json", &hud_manifest), ("hand.json", CARDS_HUD)],
+            },
+        ],
+    );
+    let a = s
+        .join("A".into(), Vec3::new(-2.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = s
+        .join("B".into(), Vec3::new(2.0, 0.05, 0.0), false)
+        .unwrap();
+    s.command(a, 1, command("cards", "deal", vec![])).unwrap();
+    let hands = |viewer| {
+        s.package_state_for(viewer)
+            .packages
+            .get("cards")
+            .map(|ns| ns.players.clone())
+            .unwrap_or_default()
+    };
+    let (seen_by_a, seen_by_b) = (hands(a), hands(b));
+    assert_eq!(seen_by_a.keys().collect::<Vec<_>>(), [&a], "{seen_by_a:?}");
+    assert_eq!(seen_by_a[&a]["hand"], "AS KD 7H");
+    assert_eq!(seen_by_b.keys().collect::<Vec<_>>(), [&b], "{seen_by_b:?}");
+    assert_eq!(seen_by_b[&b]["hand"], "2C 2D 9S");
+    assert!(
+        !s.package_state().packages.contains_key("cards"),
+        "the shared view carries no hand"
     );
 }

@@ -829,15 +829,15 @@ fn private_and_foreign_state_stays_private() {
             "vault",
             &[],
             json!({ "on_join": true, "state": {
-                "global": { "hidden": { "default": 0 }, "count": { "default": 0, "public": true } },
-                "player": { "secret": { "default": 0 }, "shown": { "default": 0, "public": true } } } }),
+                "global": { "hidden": { "default": 0 }, "count": { "default": 0, "visible": "everyone" } },
+                "player": { "secret": { "default": 0 }, "shown": { "default": 0, "visible": "everyone" } } } }),
             "fn on_join(p) { set(\"hidden\", 42); set_player(p, \"secret\", 7); set_player(p, \"shown\", 1); }",
         ),
         Spec::server(
             "peeker",
             &[],
             json!({ "commands": [{ "name": "peek" }], "state": {
-                "global": { "seen": { "default": "none", "public": true } } } }),
+                "global": { "seen": { "default": "none", "visible": "everyone" } } } }),
             "fn cmd_peek(p) { set(\"seen\", `${get(\"hidden\")}/${get_player(p, \"secret\")}/${get(\"count\")}`); }",
         ),
     ]);

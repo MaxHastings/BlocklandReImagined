@@ -7,13 +7,15 @@
 //! policy. What it offers are the general seams a package composes:
 //!
 //! - declared **commands** a client may send (v20's `serverCmd`),
-//! - namespaced, server-owned **state** per player and per server,
+//! - namespaced, server-owned **state** per player and per server, each key
+//!   declaring its audience (`visible`: `server`, `owner` for a player's
+//!   secret such as a hand of cards, or `everyone`),
 //! - **hooks** the engine calls when something happens: `on_join`,
 //!   `on_tick`, and `on_death(victim, killer)` for every death, however
 //!   caused (the engine decides deaths; packages must not have to poll),
 //! - **entities** whose behaviour is a package `think` function,
 //! - a **chunk provider** that generates world chunks on demand,
-//! - typed **operations** (remove brick, explode, spawn entity, move or
+//! - typed **operations** (place or remove a world brick, explode, spawn entity, move or
 //!   respawn a player, ...) that the engine checks against the package's
 //!   declared capabilities in one place ([`ops::authorize`]) before applying
 //!   them,

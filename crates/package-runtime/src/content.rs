@@ -135,15 +135,29 @@ pub struct StateSchema {
 #[serde(deny_unknown_fields)]
 pub struct StateKey {
     pub default: serde_json::Value,
-    /// Replicated to every client. Private keys stay on the server.
+    /// Which clients receive the value. HUD panels may bind only visible
+    /// keys.
     #[serde(default)]
-    pub public: bool,
+    pub visible: Visible,
     /// Saved by the host and restored after a restart.
     #[serde(default = "yes")]
     pub persist: bool,
 }
 fn yes() -> bool {
     true
+}
+/// The audience of a state value: a player's secret (a hand of cards, a
+/// unit's position under fog) is visible to that player alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visible {
+    /// Stays on the server.
+    #[default]
+    Server,
+    /// A player key sent only to the player it belongs to.
+    Owner,
+    /// Sent to every client.
+    Everyone,
 }
 impl Behaviour {
     pub fn validate(&self) -> Result<()> {
@@ -178,6 +192,12 @@ impl Behaviour {
                 "state key `{key}` must be lowercase a-z, 0-9, _"
             );
             crate::state::check_value(&def.default)?;
+        }
+        for (key, def) in &self.state.global {
+            ensure!(
+                def.visible != Visible::Owner,
+                "server-wide key `{key}` has no owner; use \"everyone\" or \"server\""
+            );
         }
         ensure!(
             self.state.player.len() + self.state.global.len() <= 256,
