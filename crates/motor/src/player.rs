@@ -706,6 +706,15 @@ impl Player {
         self.state.jetting = false;
         self.synchronize_pose(physics);
     }
+    /// A seated rider's look. `Player::updateMove` still turns `mHead` while
+    /// mounted, so other players see the rider's head and arms follow the
+    /// mouse pitch and free-look turn in the seat.
+    pub fn look(&mut self, input: &MoveInput) {
+        if input.validate().is_ok() {
+            self.state.pitch = input.pitch;
+            self.state.head_yaw = input.head_yaw;
+        }
+    }
     /// Add an impulse-derived velocity change (weapon knockback).
     pub fn push(&mut self, delta: Vec3) {
         if delta.is_finite() {

@@ -3220,3 +3220,241 @@ window is still unchecked (Max's playtest).
   explosion_debris`, `cargo test -p bri-sim --test vehicles -- --ignored
   pirate_cannon`, `cargo test -p bri-sim --test combat horses`,
   `cargo test -p bri-client --test actor_effects hard_landings`.
+## 2026-09-28 Loading a save over a build skips overlapping bricks
+
+v20's `ServerLoadSaveFile_Tick` plants each loaded brick and deletes it when
+`plant()` fails with an overlap (error 1), stuck (3) or buried (5); the end
+line counts them as not created ("5 / 10 bricks created in ..."). Our load
+now skips loaded bricks that overlap a brick already in the world or earlier
+in the same save, using the same cell rule as planting (`overlaps_world` in
+`simulation.rs`), and the existing end line reports them the same way.
+Stuck and buried skips are not copied.
+
+That check first skipped 43 bricks, all ramp pairs, in five stock saves
+(Arch of Constantine, Jetpuff's Towers, Afghanistan DM, Ice Palace, Sirrus
+Military Compound). The cause was `grid::Bounds::cell` reading a BLB's depth
+slices back to front: the first slice is the BLB's largest y, which the
+converter maps to our smallest z. Symmetric bricks were unaffected. Ramps,
+corners and crests had their empty wedge cells and stud ends at the wrong
+end for overlap and support, so hand planting also refused ramp arrangements
+v20 allows. With the fix, all 37 stock saves load with nothing skipped. Evidence:
+`cargo test -p bri-sim --lib grid` (the slice order against `1x3ramp.blb`'s
+top quad, and two of the stock ramp pairs), `cargo test -p bri-sim --test
+session loading_over_a_build` (two overlapping saves), `cargo test -p bri-sim
+-- --include-ignored` (the stock-save test asserts no brick is skipped),
+`cargo test -p bri-net --test loopback` (its reload test now loads beside
+the first copy). No wire change.
+
+## 2026-09-28 Join trust question for Add-On code
+
+- Tidying the open pull requests (#5, #7-#14) found every one already on
+  main through the gate; the one piece PR #11 left unbuilt was the question
+  a joining player answers before a server's Add-On code runs, so remote
+  code never ran. Now, entering someone else's game whose sandboxed Add-On
+  code is not trusted for that host key asks "<server> wants to run Add-On
+  code" with each Add-On's plain-words capabilities, "Trust and join" and
+  "Leave" (`ClientCode::trust_prompt` / `accept_trust`, `trust_question` in
+  `app.rs`). Trust and join saves the grant to `addon-trust.json` and starts
+  the code; Leave disconnects. Elevated code is not offered (nothing
+  elevated runs yet) and is named in chat instead. The Add-Ons screen gained
+  Forget Trust, which clears every grant, so the prompt's "take this back on
+  the Add-Ons screen" holds. Message boxes widen a button whose label is
+  longer than v20's Yes/No. Asking before the code downloads, and a
+  per-server list, remain (`docs/architecture/client-sandbox.md`). Evidence:
+  `cargo test -p bri-client --lib client_code`, `cargo test -p bri-ui --test
+  runtime_input`.
+
+- 2026-09-28 v20 fidelity, a16 follow-ups (branch `claude/v20-fidelity`, rows
+  18 to 23 of `docs/audits/v20-fidelity.md`). Skis were held sideways: v20's
+  `eulerToMatrix` goes through `MatrixCreateFromEuler`/`QuatF(EulerF)`, the
+  transpose of the `MatrixF(EulerF)` the packs assume (read in OpenMBG's TGE
+  sources), so every signed or two-axis `eulerToMatrix` image was mirrored
+  (`bri_weapons::rotation`, applied at client load). Deploying a ghost brick
+  now fires the grey brick image (Fire swing, `brickTrailEmitter`, blue
+  `brickDeployExplosion`). Held hammer/wand/sword/broom swing again in first
+  person on every Fire entry. The a16 multiplayer crash ("invalid debris
+  collision result") was a gun casing ray starting inside a brick; casings
+  now drop, and every per-frame presentation subsystem absorbs its errors
+  (`CosmeticFaults`) instead of reaching the fatal dialog. Brick break plays
+  once per blast, not per brick. The camera no longer snaps roll at straight
+  up/down (look-at with a switched up vector); first person clamps at v20's
+  exact +-90 degrees and the chase camera's tilt passes vertical. Evidence:
+  `cargo test -p bri-weapons --lib rotation`, `cargo test -p bri-client --lib
+  looking_straight`, `cargo test -p bri-client --lib building`, `cargo test
+  -p bri-client --test world_items a_held_hammer -- --ignored`, `cargo test
+  -p bri-client --lib weapon_debris -- --include-ignored`, `cargo test -p
+  bri-client --lib audio -- --include-ignored`, `cargo test -p bri-sim --test
+  session deploying_a_brick -- --ignored`.
+- 2026-09-28 What other players see (branch `claude/remote-anim`). Max
+  reported three multiplayer gaps. (1) Another player's wrench swing went
+  much too far. Cause: held images were drawn at their highest detail,
+  `detail9999`, the mesh only the holder's first-person view reaches in v20.
+  The wrench, hammer, sword and other tools' `fire` sequences animate only
+  that mesh (`Wrench9999`, `FPhammer9999`), so others saw the item's
+  first-person swing on top of the arm's `wrench`/`armattack` thread. Other
+  players' images (and the holder's own third-person view) now use the
+  largest detail below 9999 (`detail32`/`detail100`), which the swing leaves
+  still, as in v20; the local first-person view is unchanged. The arm
+  threads themselves already matched: a new two-client loopback
+  (`crates/client/tests/remote_poses.rs`) swings the hammer and wrench from
+  each side while looking down and pins the watcher's hand pose to the
+  swinger's own (measured equal to 0.001 rad). (2) A rider's look did not reach
+  others: the server consumed a mounted player's moves for the vehicle but
+  never applied their pitch or free-look head turn, so remote riders sat
+  frozen. `Player::look` now applies them each mounted tick (v20
+  `updateMove` still turns `mHead` while mounted), for every mount.
+  (3) Other players' ghost bricks were invisible (v20 ghosted `tempBrick` to
+  everyone). The client reports its ghost (`Command::GhostBrick`, at most
+  10 per second, removal at once, with its own 30/s budget outside the 60/s
+  action budget); the server keeps it only while its owner lives with bricks
+  in hand and replicates it in `Vitals::ghost`; clients draw others' ghosts
+  translucent in their colour and shape. Protocol 40 -> 41. Evidence:
+  `cargo test -p bri-client --lib -- --ignored others_see_held_tools`,
+  `cargo test -p bri-net --test loopback ghost_bricks look_pitch`,
+  `cargo test -p bri-sim --test vehicles -- --ignored riders_keep`,
+  `cargo test -p bri-client --test remote_poses --release -- --ignored`.
+- 2026-09-28 Duplicator (first impressions 18, branch `claude/duplicator`).
+  Built as two Add-Ons on new engine seams, modelled on the v20 Duplicator
+  Add-On. `packages/duplicator/duplicator` (host rule): `/dup` or
+  `/duplicator` gives the Duplicator; its swing copies the clicked brick and
+  every brick joined to it through studs that the player may build on,
+  never below the clicked brick (so a click on a build's base takes the
+  build, not the baseplate it stands on), up to 2000 bricks.
+  `packages/duplicator/duplicator-tool` (shared): the tool, the stock wand
+  shape coloured blue. Engine mechanisms, with no Duplicator policy in
+  them: `bri_sim::blueprint` (a copy held about a stud-corner pivot at its
+  bottom, so quarter turns keep it on the grid), `Simulation::build_from`
+  and `plant_group` (every plant rule per brick, the world holding up at
+  least one, all or none), `Command::PlaceBlueprint` (minigame build rule,
+  brick limit, plant rate: a copy needs room in the plant window and uses
+  the rest of it, reach), one undo entry per placed copy, script operations
+  `copy_build` (new capability `build`) and `give_item` (`player`), and
+  Add-On tools: a weapon image with `command` runs that Add-On command on
+  `onFire`. The client draws the copy as one translucent ghost while the
+  tool is in hand; the numpad moves (super shift by the copy's size) and
+  turns it, Numpad Enter places it, Numpad 0 puts it away; the ghost turns
+  red when it would overlap or float. Protocol 41 (`Notice::Blueprint`,
+  `Command::PlaceBlueprint`, `Image::command`). Custom games on base maps
+  now run enabled Add-Ons that need no package world and that no game mode
+  claims (`Catalog::for_base_map`), as v20 ran enabled Add-Ons everywhere;
+  the Stress Lab's are all claimed by its mode, so Slate stays plain for
+  it. Playtest builds ship the Duplicator on (`content/addons/`). Copies
+  keep shape, colour, print and FX; names, events, lights, emitters, items,
+  sounds and vehicles stay with the original. Evidence: `cargo test -p
+  bri-sim --test duplicator` (selection and connectivity, turning on the
+  grid, all-or-none planting, trust refusal, one undo, brick limit, plant
+  rate and reach, `/dup` and a real swing through the weapon state
+  machine, Custom runs it), `cargo test -p bri-sim --lib blueprint`,
+  `cargo test -p bri-client --lib a_copied_build`. Not seen in a window:
+  Max's playtest.
+- 2026-09-28 Smooth replicated motion (branch `claude/smoothing`). Max saw
+  the football and soccer ball move at the server's update rate. Audit of
+  what the client drew between host updates: the local player is predicted
+  and remote players interpolate (`motion.rs`); vehicles interpolate, but the
+  driven vehicle popped on each 40 Hz pose; projectiles (thrown and kicked
+  balls included), dropped items and package entities were drawn straight
+  from the 20 Hz reliable deltas, stepping every 50 ms; brick, explosion and
+  shell debris are client-side cosmetics advanced every frame already. New
+  `crates/client/src/ghosts.rs` does what Torque's ghosts did: projectiles and
+  drops fly on the client from their newest update with the host's tick
+  integration, gravity (`gravityMod`, Item gravity 20) and Torque's
+  `Projectile` bounce (reflect, friction, elasticity) against the client's
+  map and bricks; package entities interpolate a jitter-sized delay behind.
+  A disagreeing update keeps the drawn pose where it was and decays the
+  difference (Torque's warp); the stream clock slews rather than jumps.
+  Projectiles fly their whole lifetime from one update, so the host may send
+  a projectile once plus its corrections (for the bandwidth lane). The
+  driven vehicle now warps onto corrected poses too. No protocol change.
+  Evidence: `cargo test -p bri-client --test ghost_smoothing` samples every
+  144 Hz frame of a bouncing ball and a sliding entity on loopback, with
+  80 ms latency plus 60 ms jitter, and with spawn-and-impact updates only:
+  worst frame step at most 1.41x the true motion, no stalled frames, worst
+  error 0.38 units at bounces; the same measure on raw snapshots shows an
+  8.45x step and 435 of 506 frames stalled. `cargo test -p bri-client --lib
+  -- ghosts vehicles`. Remote players' clock (`Motion::observe_clock`) still
+  jumps forward on an early pose; that belongs to the remote-animation lane.
+- 2026-09-28 Pose clock slewing (branch `claude/smoothing`). `Motion`'s
+  server clock snapped forward on every earlier-than-ever pose, hitching
+  remote players and non-driven vehicles under jitter. It now slews at most
+  5% toward its estimate and snaps only past 60 ticks, like `ghosts::Clock`.
+  No protocol change. Evidence: `cargo test -p bri-client --lib
+  server_clock_runs_smoothly_under_jitter` (80 ms + 60 ms jitter, 144 Hz
+  frames): rate within 5%; the snapping clock measured 119% off.
+
+## 2026-09-28 Final touches checked against v20's own files
+
+Max asked why final touches keep slipping through. The cause was that our
+tests checked the code against itself, not against v20. This sweep checks
+against v20's datablocks, scripts and `blocklandv20.exe`. It records the
+evidence in `docs/audits/v20-unread-fields.md` and
+`docs/audits/v20-client-scripts.md`.
+
+- The jet ground dust within 4 units of the ground (exe 0x5ad1b0) and a
+  duplicated tire-spray update: de7b9c4.
+- Name tags are white or the mini-game colour, with an 8-way outline, as
+  `GuiShapeNameHud::drawName` draws them. Raycasting bricks hide them
+  (mask 0x200001d), and they fade from the fog distance: 24b32b1.
+- Opening the brick selector sends the "Bricks" BSD emote everyone sees:
+  862b2da. With building disabled, it only prints so. Emotes from a dead
+  player pass quietly: 00a658e3.
+- All 54 stock item poses and weapon state machines match v20. See
+  `tools/audit_v20_poses.py` and `tests/v20_poses.rs`: a46840d.
+- A headless sweep of every dialog at 1999x800, 1280x720 and 2560x1440
+  (`crates/ui/tests/screen_sweep.rs`). Fixed: Change Map and Server
+  Options cut off at 1440p, the Admin Login stray button, the Mini-Games
+  status row and v20's never-shown Create blocker: d2c53d48.
+- AutoLight on dark maps at each spawn, and a respawned body starts dark:
+  2cf3769f. No favorites auto-buy in a local Tutorial: 00a658e3.
+- Vehicle steering behind `$pref::Input::UseStrafeSteering` and
+  `UseAutoReturnSteering`, recovered from the exe. Protocol 43 adds
+  `Command::SteeringPrefs`: ebffe9ce and 85055680.
+
+Evidence:
+
+- `cargo test -p bri-client --test actor_effects --test v20_client_scripts`
+- `cargo test -p bri-client --test v20_poses -- --ignored`
+- `cargo test -p bri-vehicles --test steering_prefs -- --ignored`
+- `cargo test -p bri-ui --test screen_sweep -- --ignored`
+- `cargo test -p bri-ui`
+- `cargo test -p bri-sim`
+
+Max's playtest will be the first time these are seen in a window.
+
+## 2026-09-28 Pushable knocked-out bricks (client-only, no network)
+
+Max asked for bricks that became rigid bodies (hammer, wands,
+`fakeKillBrick`, brick explosions) to be pushed by players, vehicles and so
+on, "like v20 a bit more modern", then ruled that this motion is cosmetic like
+particles and must never be synced: "dont wanna waste bandwidth" and keep the
+network light for things that matter. A first server-simulated version
+(0d3fe4a, b5bc0dc, protocol 41) was withdrawn on this branch; the protocol,
+server and replication are unchanged from 8874297.
+
+Each client's `BrickDebris` (`crates/client/src/brick_debris.rs`) now takes
+the players and vehicles it draws as kinematic boxes (`BrickDebris::push`,
+nearest 32 within 6 units of debris), projectiles it draws (`shots`: each
+pushes a body it passes once, 0.2 x speed, and flies on), and later blast cues
+(radius > 0.5 shoves debris already lying around). Pushers are kinematic, so
+debris can never move, slow or block a player or vehicle; nothing about debris
+reaches the server, events or any gameplay query. Debris now weighs 5 per
+cubic unit (2x4 brick = 6) and stays solid 3 s, fading over 2 s (was 1.5 +
+2.5). Evidence: `cargo test -p bri-client --lib brick_debris` (walk-in shove
+with the player exactly where the game put it every frame, vehicle ram
+scatters 7+ of 9, resting pile stays within 0.05, shots and blasts, 128 bodies
+plus a 64-player crowd capped at 32 pushers: ~1 ms/frame in debug).
+## 2026-09-28 Pong colours come back
+
+- Using Demo Pong's paddle buttons could leave bricks on the wrong colour.
+  Two clicks in one server tick got the same timestamp, and their relays
+  reached the paddle state machine together. Both relays used the rows as
+  they were before either switched them. Round-robin turns between origins
+  could also run a later click's row before an earlier one's. The event
+  engine now runs every job from one time-ordered queue, as v20 does. Each
+  activation is its own instant inside the tick, and everything it
+  schedules inherits that instant. A `cancelEvents` only reaches rows
+  scheduled by its own instant. Details and tests are in
+  `docs/audits/pong-events.md` ("Colours that stayed changed"). Evidence:
+  `cargo test -p bri-events`, `cargo test -p bri-sim --test pong --
+  --ignored` (the new hammer test fails on the old scheduler),
+  `cargo test -p bri-sim --test events_native -- --ignored`. The event
+  checkpoint gained defaulted fields. No wire change.

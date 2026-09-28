@@ -19,6 +19,7 @@ const IMPORT: &str = "AO_Import";
 const STATUS: &str = "AO_Status";
 const DEFAULTS: &str = "AO_Defaults";
 const DONE: &str = "AO_Done";
+const FORGET_TRUST: &str = "AO_ForgetTrust";
 /// List rows that are group headings, not packages.
 const HEADING: i64 = -1;
 
@@ -117,6 +118,16 @@ impl AddOns {
                 DEFAULTS,
             ),
             DEFAULTS,
+        ));
+        win.children.push(named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(118, 404, 120, 28),
+                "base/client/ui/button1",
+                "Forget Trust",
+                FORGET_TRUST,
+            ),
+            FORGET_TRUST,
         ));
         win.children.push(named(
             button(
@@ -437,6 +448,11 @@ impl Screen for AddOns {
                 // The box shows the host's answer, not the click.
                 self.show_details(core);
             }
+            (FORGET_TRUST, EventKind::Click) => core.message_yes_no(
+                "Forget Trust",
+                "Forget every server you trusted to run Add-On code?",
+                Callback::Request(Box::new(UiAction::ForgetAddOnTrust)),
+            ),
             (DEFAULTS, EventKind::Click) => core.message_yes_no(
                 "Default Add-Ons",
                 // The message box does not wrap; keep it to one line.
@@ -600,19 +616,36 @@ pub struct Mismatch {
 const MM_LIST: &str = "MM_List";
 const MM_OPEN: &str = "MM_OpenAddOns";
 const MM_OK: &str = "MM_Ok";
+const MM_NOTE: &str = "MM_Note";
 
 impl Mismatch {
     pub fn new(core: &Core) -> Self {
         let (mut root, mut win) = dialog("Can't Join", 440, 300);
-        let rows = core.add_on_mismatch.clone().unwrap_or_default().rows;
+        let mismatch = core.add_on_mismatch.clone().unwrap_or_default();
+        let rows = mismatch.rows;
         let mut intro = text(
             "GuiMLTextProfile",
             Rect::new(12, 32, 416, 34),
-            "This server's add-ons don't match yours. Everyone in a game needs the same versions of these:",
+            if mismatch.base_game {
+                "This server's game content doesn't match yours. Everyone in a game needs the same copies of these:"
+            } else {
+                "This server's add-ons don't match yours. Everyone in a game needs the same versions of these:"
+            },
         );
         intro.class = "GuiMLTextCtrl".into();
         win.children.push(named(intro, "MM_Intro"));
-        let mut list_scroll = scroll("MM_Scroll", Rect::new(12, 70, 416, 180));
+        let explained = !mismatch.explanation.is_empty();
+        let list_height = if explained { 100 } else { 180 };
+        if explained {
+            let mut note = text(
+                "GuiMLTextProfile",
+                Rect::new(12, 176, 416, 80),
+                &mismatch.explanation,
+            );
+            note.class = "GuiMLTextCtrl".into();
+            win.children.push(named(note, MM_NOTE));
+        }
+        let mut list_scroll = scroll("MM_Scroll", Rect::new(12, 70, 416, list_height));
         let mut list = named(
             ctrl(
                 "GuiTextListCtrl",
@@ -922,6 +955,27 @@ mod tests {
     }
 
     #[test]
+    fn forget_trust_asks_first_then_clears_every_grant() {
+        let mut ui = ui();
+        ui.apply(UiUpdate::AddOns(view()));
+        let mut s = AddOns::new(&ui.core);
+        ui.drain_actions();
+        s.on_event(
+            &ViewEvent {
+                node: s.view.id(FORGET_TRUST).unwrap(),
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        assert!(ui.drain_actions().is_empty());
+        assert!(ui.core.cmds.iter().any(|c| matches!(
+            c,
+            crate::ui::StackCmd::Message(m)
+                if m.on_yes == Callback::Request(Box::new(UiAction::ForgetAddOnTrust))
+        )));
+    }
+
+    #[test]
     fn old_add_ons_offer_import_instead_of_enabled() {
         let mut ui = ui();
         let mut v = view();
@@ -1063,6 +1117,7 @@ mod tests {
                     yours: "8.0.0".into(),
                 },
             ],
+            ..Default::default()
         }));
         ui.apply(UiUpdate::Connection(ConnectionState::Failed {
             reason: "Your content does not match the server: ...".into(),
@@ -1104,6 +1159,32 @@ mod tests {
         }));
         ui.handle_input(InputEvent::MouseMove { x: 3.0, y: 3.0 });
         assert_eq!(ui.top_id(), ScreenId::MessageBox);
+    }
+
+    #[test]
+    fn identical_versions_are_explained_in_words() {
+        let mut ui = ui();
+        ui.core.add_on_mismatch = Some(crate::api::AddOnMismatch {
+            rows: vec![crate::api::MismatchRow {
+                name: "v20-map-bundle".into(),
+                server: "16.0.0".into(),
+                yours: "16.0.0".into(),
+            }],
+            explanation:
+                "v20-map-bundle has the same version on both computers but different files.".into(),
+            base_game: true,
+        });
+        let s = Mismatch::new(&ui.core);
+        let text = |name: &str| {
+            s.view
+                .node(s.view.id(name).unwrap())
+                .ctrl
+                .text
+                .clone()
+                .unwrap_or_default()
+        };
+        assert!(text("MM_Intro").starts_with("This server's game content"));
+        assert!(text(MM_NOTE).contains("different files"));
     }
 
     #[test]

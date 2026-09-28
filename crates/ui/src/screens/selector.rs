@@ -1,7 +1,7 @@
 //! Native counterparts of BSD_* and PSD_* (v20 client scripts 9472–10500).
 //! Authored windows retain their original art; catalogs build the dynamic grids.
 use super::*;
-use crate::api::{BrickInfo, IconRef, PrintInfo, UiAction};
+use crate::api::{BrickInfo, GameAction, IconRef, PrintInfo, UiAction};
 use crate::input::Chord;
 use crate::models::hud::Outbox;
 use crate::models::selector::{CART_SLOTS, CatalogLayout};
@@ -360,6 +360,9 @@ impl Screen for BrickSelector {
         &mut self.view
     }
     fn on_wake(&mut self, core: &mut Core) {
+        // `BrickSelectorDlg::onWake` sends `serverCmdBSD`, whose "Bricks"
+        // emote rises over the player's head for everyone to see.
+        core.game(GameAction::Emote { name: "bsd".into() });
         core.selector.open();
         core.selector.tab = core.selector.tab.min(self.tabs.len().saturating_sub(1));
         core.hud.boxes_visible = false;
@@ -916,6 +919,11 @@ mod tests {
         let mut s = BrickSelector::new(&ui.core);
         s.on_wake(&mut ui.core);
         assert!(!ui.core.hud.boxes_visible);
+        // `BrickSelectorDlg::onWake`: commandToServer('BSD').
+        assert!(ui.drain_actions().iter().any(|(_, a)| matches!(
+            a,
+            UiAction::Game(GameAction::Emote { name }) if name == "bsd"
+        )));
         click(&mut s, "BSD_Brick0", MouseButton::Left, &mut ui.core);
         click(&mut s, "BSD_Brick0", MouseButton::Left, &mut ui.core);
         assert_eq!(ui.core.selector.cart[0], Some(0)); // double-click event does not add twice

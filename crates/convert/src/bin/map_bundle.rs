@@ -80,6 +80,10 @@ fn main() -> Result<()> {
         at += 1;
     }
     ensure!(!missions.is_empty(), "No mission paths supplied");
+    // The bundle is a shared package whose hash every player must match, so
+    // its map order cannot follow the order a caller happened to list them.
+    missions.sort();
+    missions.dedup();
     ensure!(!output.exists(), "Use a new bundle directory");
     let parent = output
         .parent()

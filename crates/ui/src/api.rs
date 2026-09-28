@@ -586,6 +586,11 @@ pub enum UiAction {
     TrustNewServerIdentity { address: String },
     /// Download a server's Add-Ons the player was asked about.
     ApproveDownload,
+    /// Run the Add-On code the join's trust question showed ("Trust and
+    /// join").
+    TrustAddOnCode,
+    /// Stop trusting every server's Add-On code (Add-Ons screen).
+    ForgetAddOnTrust,
     /// Cancel a pending connection attempt or leave the loading screen.
     CancelConnect,
     /// Leave the game (disconnect, or stop hosting).
@@ -616,6 +621,12 @@ pub enum UiAction {
         args: Vec<String>,
     },
     StartTyping,
+    /// `SteeringPrefsEvent`: `$pref::Input::UseStrafeSteering` and
+    /// `$pref::Input::UseAutoReturnSteering`, sent on joining and on change.
+    SteeringPrefs {
+        strafe: bool,
+        auto_return: bool,
+    },
     StopTyping,
     /// Brick selector DONE: buy all ten slots (brick ids, `None` = empty).
     BuyBricks {
@@ -775,6 +786,13 @@ pub struct Question {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddOnMismatch {
     pub rows: Vec<MismatchRow>,
+    /// What differs, in plain words, when the version numbers alone do not
+    /// say (the same version with different files). Empty otherwise.
+    #[serde(default)]
+    pub explanation: String,
+    /// Some row is part of the base game rather than an Add-On.
+    #[serde(default)]
+    pub base_game: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -968,6 +986,22 @@ pub struct NameTag {
     pub text: String,
     /// Distance fade, 0..=1.
     pub opacity: f32,
+    /// `ShapeBase::setShapeNameColor`: white, or the player's mini-game colour.
+    #[serde(default = "white_name")]
+    pub color: [u8; 3],
+}
+fn white_name() -> [u8; 3] {
+    [255; 3]
+}
+/// The outline `GuiShapeNameHud::drawName` (blocklandv20.exe 0x527630) draws
+/// under a name: white under a dark name (red and green both below 0.3),
+/// otherwise black.
+pub fn name_outline(color: [u8; 3]) -> [u8; 3] {
+    if f32::from(color[0]) / 255.0 < 0.3 && f32::from(color[1]) / 255.0 < 0.3 {
+        [255; 3]
+    } else {
+        [0; 3]
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrustInvitation {

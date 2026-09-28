@@ -34,6 +34,9 @@ pub(super) struct Vehicles {
     fire_held: BTreeMap<OwnerId, bool>,
     /// Look angles last fed to the vehicle, for mouse steering deltas.
     last_look: BTreeMap<OwnerId, (f32, f32)>,
+    /// Players who turned strafe steering or steering auto-return off
+    /// (`SteeringPrefsEvent`); everyone else keeps v20's defaults, on.
+    steering_off: BTreeMap<OwnerId, (bool, bool)>,
     /// Skis spawned by the ski item wait to be boarded (`schedule(250, mountObject)`).
     pending_skis: Vec<(OwnerId, VehicleId, u64)>,
     /// Players riding a tumble vehicle, watched through the corpse camera.
@@ -620,6 +623,15 @@ impl Session {
     /// vehicle everything else minus crouch: jet leaves (`doDismount`, "get
     /// out of the Jeep by pressing Jet"), and jump brakes a wheeled vehicle
     /// (`mBraking = trigger[2]`) or jumps the horse.
+    pub(super) fn set_steering_prefs(&mut self, owner: OwnerId, strafe: bool, auto_return: bool) {
+        if strafe && auto_return {
+            self.vehicles.steering_off.remove(&owner);
+        } else {
+            self.vehicles
+                .steering_off
+                .insert(owner, (!strafe, !auto_return));
+        }
+    }
     pub(super) fn vehicle_input(&mut self, owner: OwnerId, input: MoveInput) -> Result<()> {
         let Some(mount) = self.vehicles.mounted.get(&owner).cloned() else {
             return Ok(());
@@ -666,15 +678,24 @@ impl Session {
             fire,
             ..Default::default()
         };
-        match d.seat_role(mount.seat) {
+        let (strafe_off, auto_return_off) = self
+            .vehicles
+            .steering_off
+            .get(&owner)
+            .copied()
+            .unwrap_or_default();
+        match d.seat_role_for(mount.seat, !strafe_off) {
             SeatRole::Passenger => return Ok(()),
-            SeatRole::StrafeDriver => controls.steer = input.right,
-            SeatRole::MouseDriver => {
+            // The vehicle takes the strafe keys or the mouse turn by the
+            // driver's steering prefs (`VehiclesWorld` steering).
+            SeatRole::StrafeDriver | SeatRole::MouseDriver => {
                 controls.strafe = input.right;
                 controls.look_delta = [
                     wrap(input.yaw - last_yaw),
                     wrap_half(input.pitch - last_pitch),
                 ];
+                controls.strafe_steering_off = strafe_off;
+                controls.auto_return_off = auto_return_off;
             }
             SeatRole::Actor => {
                 controls.strafe = input.right;
@@ -1262,6 +1283,7 @@ impl Session {
                     Notice::Bottom {
                         text: cannon_strength(charge, steps),
                         seconds: 1.0,
+                        hide_bar: true,
                     },
                 ),
                 // The blast is heard from the `initialExplosionProjectile`'s

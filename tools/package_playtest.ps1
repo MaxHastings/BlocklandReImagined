@@ -201,19 +201,32 @@ foreach ($package in @($effective.list.packages)) {
     $selected += [pscustomobject]@{ field = $field; name = $name; path = $directory; files = $files.Count; bytes = [long]$bytes }
 }
 
+# Add-Ons every build ships, turned on (content/addons/<id>): the
+# Duplicator. The Stress Lab ones join them with -StressLab.
+$modSources = @(@{ root = (Join-Path $RepoRoot 'packages/duplicator'); dir = 'addons'; required = $false })
+if ($StressLab) { $modSources += @{ root = (Join-Path $RepoRoot 'packages/stresslab'); dir = 'stresslab'; required = $true } }
 $modPackages = @()
-if ($StressLab) {
-    $modRoot = Join-Path $RepoRoot 'packages/stresslab'
-    foreach ($dir in @(Get-ChildItem -LiteralPath $modRoot -Directory | Sort-Object Name)) {
+foreach ($source in $modSources) {
+    if (-not (Test-Path -LiteralPath $source.root -PathType Container)) {
+        if ($source.required) { throw "No Add-Ons found in $($source.root)" }
+        continue
+    }
+    $found = 0
+    foreach ($dir in @(Get-ChildItem -LiteralPath $source.root -Directory | Sort-Object Name)) {
         $manifestPath = Join-Path $dir.FullName 'package.json'
         if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
         $files = @(Get-PackageFiles $dir.FullName)
-        # Keep in step with bri_package::library::SERVER_KINDS.
-        $side = if (@($manifest.provides | Where-Object { $_.kind -in @('behaviour','script','world','entity','mode') }).Count -gt 0) { 'server' } else { 'client' }
-        $modPackages += [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $dir.FullName; files = $files.Count }
+        # Keep in step with bri_package::library's default side: server
+        # kinds only, client kinds (model, hud) only, else shared.
+        $kinds = @($manifest.provides | ForEach-Object { [string]$_.kind })
+        $side = if (@($kinds | Where-Object { $_ -notin @('behaviour','script','world','entity','mode','archetype') }).Count -eq 0) { 'server' }
+            elseif (@($kinds | Where-Object { $_ -notin @('model','hud') }).Count -eq 0) { 'client' }
+            else { 'shared' }
+        $modPackages += [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $dir.FullName; dir = "$($source.dir)/$($manifest.id)"; files = $files.Count }
+        $found += 1
     }
-    if ($modPackages.Count -eq 0) { throw "No Stress Lab packages found in $modRoot" }
+    if ($source.required -and $found -eq 0) { throw "No Add-Ons found in $($source.root)" }
 }
 
 $docInputs = @(
@@ -258,12 +271,12 @@ try {
     }
     $list = [ordered]@{ schema_version = $effective.list.schema_version; packages = @($effective.list.packages) }
     foreach ($mod in $modPackages) {
-        $destination = Join-Path $packagedContent (Join-Path 'stresslab' $mod.id)
+        $destination = Join-Path $packagedContent $mod.dir
         [IO.Directory]::CreateDirectory($destination) | Out-Null
         foreach ($child in Get-ChildItem -LiteralPath $mod.path -Force) {
             Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
         }
-        $list.packages += [pscustomobject][ordered]@{ id = $mod.id; version = $mod.version; side = $mod.side; dir = "stresslab/$($mod.id)" }
+        $list.packages += [pscustomobject][ordered]@{ id = $mod.id; version = $mod.version; side = $mod.side; dir = $mod.dir }
     }
     $configJson = ConvertTo-Json -InputObject $list -Depth 5
     [IO.File]::WriteAllText((Join-Path $packagedContent 'packages.json'), $configJson + "`n", [Text.UTF8Encoding]::new($false))

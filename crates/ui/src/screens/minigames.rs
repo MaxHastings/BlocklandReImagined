@@ -183,7 +183,7 @@ impl MiniGameScreen {
                 self.set_active("JoinMiniGameGui.clickJoin();",join);
                 self.set_active("JoinMiniGameGui.clickLeave();",core.minigames.active_game.is_some()&&self.request.is_none());
                 self.set_active("JoinMiniGameGui.clickCreate();",(core.minigames.can(crate::models::minigames::Operation::Create)||core.minigames.can(crate::models::minigames::Operation::Configure))&&self.request.is_none());
-                for (name,shown) in [("JMG_JoinBlocker",!join),("JMG_LeaveBlocker",core.minigames.active_game.is_none()),("JMG_CreateBlocker",!core.minigames.can(crate::models::minigames::Operation::Create)&&!core.minigames.can(crate::models::minigames::Operation::Configure))]{if let Some(n)=self.view.id(name){self.view.set_visible(n,shown);}}
+                for (name,shown) in [("JMG_JoinBlocker",!join),("JMG_LeaveBlocker",core.minigames.active_game.is_none()),("JMG_CreateBlocker",false)]{if let Some(n)=self.view.id(name){self.view.set_visible(n,shown);}}
                 self.status(core);
             }
             Kind::Rules=>{
@@ -204,8 +204,13 @@ impl MiniGameScreen {
         let key=match self.kind {Kind::List=>"NativeMiniGameListStatus",Kind::Rules=>"NativeMiniGameRulesStatus",Kind::Invite=>"NativeMiniGameInviteStatus"};
         let status=if !core.minigames.ready{"Waiting for the server's mini-games.".to_string()}else{core.minigames.status.clone()};
         if let Some(n)=self.view.id(key){self.view.set_text(n,&status);}else{
+            // Below the authored window content, inside the window: the
+            // window grows by the row, never past v20's 480-high canvas.
             let parent=window(&self.view).unwrap_or(self.view.root);
-            let mut c=text("GuiTextProfile",Rect::new(12,440,560,24),&status); c.name=Some(key.into());c.class="GuiMLTextCtrl".into();self.view.add(parent,c);
+            let [w,h]=self.view.nodes[parent].ctrl.extent;
+            let grow=26.min((480-h).max(0));
+            self.view.nodes[parent].ctrl.extent[1]=h+grow;
+            let mut c=text("GuiTextProfile",Rect::new(12,h+grow-28,(w-24).max(0),24),&status); c.name=Some(key.into());c.class="GuiMLTextCtrl".into();self.view.add(parent,c);
         }
     }
 }

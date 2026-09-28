@@ -538,6 +538,7 @@ mod tests {
                     casing: String::new(),
                     min_shot_ticks: 0,
                     states: vec![],
+                    command: None,
                 },
             );
             items.insert(

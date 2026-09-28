@@ -946,6 +946,60 @@ fn saves_stream_in_batches_with_v20_load_messages() {
     assert!(done.starts_with("60 / 60 bricks created in 0:00.2"), "{done}");
 }
 #[test]
+fn loading_over_a_build_skips_overlapping_bricks_like_v20() {
+    use bri_world::{Brick, ContentRef, build::SavedBuild};
+    let mut s = session();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let save = |xs: &[f32]| {
+        let mut world = World::new("Build".into(), "source".into(), vec![[0.2, 0.3, 0.4, 1.0]]);
+        for (i, x) in xs.iter().enumerate() {
+            world.bricks.insert(
+                i as u64 + 1,
+                Brick::new(ContentRef::Resolved("plate".into()), [*x, 0.1, -3.25], 1),
+            );
+        }
+        world.next_brick_id = xs.len() as u64 + 1;
+        SavedBuild::capture(&world, false, false).unwrap()
+    };
+    let load = |s: &mut Session, build: SavedBuild, seq| {
+        s.command(
+            host,
+            seq,
+            Command::LoadBuild {
+                build: Box::new(build),
+                ownership: false,
+            },
+        )
+        .unwrap();
+        while s.build_loading() {
+            s.step().unwrap();
+        }
+        s.chat().last().unwrap().text.clone()
+    };
+    let first: Vec<f32> = (0..10).map(|i| 0.5 + i as f32).collect();
+    let done = load(&mut s, save(&first), 1);
+    assert!(done.starts_with("10 / 10 bricks created"), "{done}");
+    // Half of the second save lands on the first, and its last brick
+    // repeats one of its own. v20 plants each loaded brick and deletes the
+    // ones that overlap, reporting them as not created.
+    let mut second: Vec<f32> = (5..15).map(|i| 0.5 + i as f32).collect();
+    second.push(14.5);
+    let done = load(&mut s, save(&second), 2);
+    assert!(done.starts_with("5 / 11 bricks created"), "{done}");
+    let mut xs: Vec<f32> = s
+        .snapshot()
+        .world
+        .bricks
+        .values()
+        .map(|b| b.position[0])
+        .collect();
+    xs.sort_by(f32::total_cmp);
+    let expected: Vec<f32> = (0..15).map(|i| 0.5 + i as f32).collect();
+    assert_eq!(xs, expected, "One brick in each spot");
+}
+#[test]
 fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
     use bri_sim::tutorial::{MAP_ID, TutorialMap, Zone, ZoneKind};
     let zone = |kind, min: Vec3| Zone {
@@ -1606,4 +1660,73 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
         ["\u{E003}Host\u{E002} banned \u{E003}Cat\u{E002} (ID: 03030303) for 5 minutes - \u{E002}\"griefing\""]
     );
     let _ = cat;
+}
+
+#[test]
+#[ignore = "uses converted native weapons pack; headless server only"]
+fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
+    use bri_sim::{presentation::CueKind, session::BrickHand};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content/weapons-pack-009/weapons.json");
+    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let mut s = session();
+    s.set_weapon_pack(pack).unwrap();
+    let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
+    s.command(
+        a,
+        1,
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    // Look down at the floor a few units ahead.
+    for sequence in 1..=30 {
+        s.movement(
+            a,
+            sequence,
+            MoveInput {
+                pitch: -0.6,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    s.take_cues();
+    s.command(a, 2, Command::WeaponTrigger { down: true }).unwrap();
+    s.command(a, 3, Command::WeaponTrigger { down: false }).unwrap();
+    for sequence in 31..=90 {
+        s.movement(
+            a,
+            sequence,
+            MoveInput {
+                pitch: -0.6,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    let cues = s.take_cues();
+    let effects: Vec<String> = cues
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CueKind::WeaponEffect { definition, .. } => Some(definition.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+    let sequences: Vec<String> = cues
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CueKind::WeaponAnimation { sequence, .. } => Some(sequence.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(effects.contains(&"brickdeployexplosion".into()), "{effects:?}");
+    assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
+    assert!(sequences.contains(&"fire".into()), "{sequences:?}");
 }

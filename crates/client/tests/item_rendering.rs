@@ -52,12 +52,13 @@ fn native_models_tints_mounts_icons_and_persistent_pose() -> Result<()> {
         (n == 0).then_some(Mat4::from_translation(Vec3::X * 3.))
     })?;
     assert_ne!(first, third);
-    // Original Ski eyeRotation=eulerToMatrix("90 -90 0"). Engine-family
-    // row matrix sends source +Y to -X, hence native -Z to -X.
+    // Original Ski eyeRotation=eulerToMatrix("90 -90 0"). MatrixCreateFromEuler
+    // goes through QuatF(EulerF), giving Rz*Rx*Ry: the ski's length (source
+    // +Y, native -Z) stands up in first person instead of lying sideways.
     let ski = assets.mount_transform("v20.image.skiweaponimage", true, Mat4::IDENTITY, |_| None)?;
     assert!(
         ski.transform_vector3(-Vec3::Z)
-            .abs_diff_eq(-Vec3::X, 0.00001)
+            .abs_diff_eq(Vec3::Y, 0.00001)
     );
     let left =
         assets.mount_transform("v20.image.lefthandedgunimage", true, Mat4::IDENTITY, |n| {

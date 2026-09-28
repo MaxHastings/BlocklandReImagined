@@ -124,6 +124,13 @@ impl Listing {
                     pending.push(path);
                     continue;
                 }
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(crate::environment::is_os_litter)
+                {
+                    continue;
+                }
                 let relative = path
                     .strip_prefix(dir)?
                     .to_str()

@@ -16,6 +16,8 @@ pub const UNDO_QUEUE_SIZE: usize = 512;
 pub(super) enum UndoEntry {
     /// `PLANT`
     Plant(BrickId),
+    /// A placed copy (`place_blueprint`): one Ctrl+Z takes it all back.
+    Group(Vec<BrickId>),
     /// `COLOR`, from the colour spray cans.
     Color(BrickId, u8),
     /// `COLORFX`, from the colour FX cans.
@@ -28,6 +30,7 @@ pub(super) enum UndoEntry {
 impl UndoEntry {
     fn brick(&self) -> BrickId {
         match *self {
+            Self::Group(ref ids) => ids[0],
             Self::Plant(id)
             | Self::Color(id, _)
             | Self::ColorEffect(id, _)
@@ -64,6 +67,9 @@ impl Session {
         else {
             return Ok(Reply::Undone(None));
         };
+        if let UndoEntry::Group(ids) = entry {
+            return self.undo_group(owner, ids);
+        }
         let id = entry.brick();
         let Some(brick_owner) = self.simulation.state().bricks.get(&id).map(|b| b.owner) else {
             return Ok(Reply::Undone(None));
@@ -77,6 +83,7 @@ impl Session {
             .actor
             .clone();
         let edit = match entry {
+            UndoEntry::Group(_) => unreachable!("undone above"),
             UndoEntry::Plant(_) => {
                 // Only a brick still in the undoer's own brick group.
                 if brick_owner != owner {
@@ -115,5 +122,61 @@ impl Session {
         self.simulation.edit(&actor, id, edit)?;
         self.dirty.insert(id);
         Ok(Reply::Undone(Some(id)))
+    }
+}
+
+impl Session {
+    /// Undo a placed copy: each of its bricks still in the undoer's group
+    /// goes, last placed first. A brick joined to bricks outside the copy
+    /// breaks as one undone plant does (`killBrick`, its chain kill and
+    /// `undoTrustCheck`); the rest simply break, since the copy goes too.
+    fn undo_group(&mut self, owner: OwnerId, ids: Vec<BrickId>) -> Result<Reply> {
+        let tick = self.simulation.state().tick;
+        self.play_thread_three(tick, owner, "undo");
+        let actor = self
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .actor
+            .clone();
+        let copy: BTreeSet<BrickId> = ids.iter().copied().collect();
+        let mut first = None;
+        for &id in ids.iter().rev() {
+            let Some(brick) = self.simulation.state().bricks.get(&id) else {
+                continue;
+            };
+            if brick.owner != owner {
+                continue;
+            }
+            let center = Vec3::from(brick.position);
+            let outside: Vec<OwnerId> = self
+                .simulation
+                .connected_bricks(id)?
+                .into_iter()
+                .filter(|n| !copy.contains(n))
+                .map(|n| self.simulation.state().bricks[&n].owner)
+                .collect();
+            if outside.is_empty() {
+                self.kill_one_brick(&actor, id, super::debris::BrickBlast::pop(center))?;
+                self.close_inspections(id);
+            } else {
+                let untrusting = outside
+                    .into_iter()
+                    .find(|&group| actor.trust_level(group) < level::FULL);
+                if let Some(group) = untrusting
+                    && self.simulation.will_cause_chain_kill(id)?
+                {
+                    let name = self.brick_group_name(group);
+                    self.center_print(
+                        owner,
+                        format!("{name} does not trust you enough to do that."),
+                    );
+                    continue;
+                }
+                self.tool_kill_brick(owner, id)?;
+            }
+            first.get_or_insert(id);
+        }
+        Ok(Reply::Undone(first))
     }
 }

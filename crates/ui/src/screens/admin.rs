@@ -215,8 +215,44 @@ impl AdminScreen {
                 Rect::new(205, 158, 98, 83)
             } else {
                 let h = view.nodes[parent].ctrl.extent[1];
-                view.nodes[parent].ctrl.extent[1] = h + 29;
-                Rect::new(12, h, view.nodes[parent].ctrl.extent[0] - 24, 27)
+                // The status row grows the window, but never past v20's
+                // 640x480 canvas, the smallest the automatic UI scale
+                // leaves (2560x1440 is 853x480): a full-height window takes
+                // the row from its tallest scroll box instead.
+                let over = (h + 29 - 480).max(0);
+                let mut span = (12, view.nodes[parent].ctrl.extent[0] - 24);
+                if over > 0 {
+                    let children = view.nodes[parent].children.clone();
+                    let scroll = children
+                        .iter()
+                        .copied()
+                        .filter(|&c| view.nodes[c].ctrl.class.eq_ignore_ascii_case("GuiScrollCtrl"))
+                        .max_by_key(|&c| view.nodes[c].ctrl.extent[1]);
+                    if let Some(scroll) = scroll {
+                        let bottom =
+                            view.nodes[scroll].ctrl.position[1] + view.nodes[scroll].ctrl.extent[1];
+                        view.nodes[scroll].ctrl.extent[1] -= over;
+                        // Under the box it came from, clear of the buttons.
+                        span = (
+                            view.nodes[scroll].ctrl.position[0],
+                            view.nodes[scroll].ctrl.extent[0],
+                        );
+                        for c in children {
+                            if view.nodes[c].ctrl.position[1] >= bottom {
+                                view.nodes[c].ctrl.position[1] -= over;
+                            }
+                        }
+                    }
+                }
+                // Controls v20 parked below the window (AdminLoginGui's
+                // escape `closer`) stay clipped out of sight.
+                for c in view.nodes[parent].children.clone() {
+                    if view.nodes[c].ctrl.position[1] >= h {
+                        view.nodes[c].ctrl.position[1] += 29 - over;
+                    }
+                }
+                view.nodes[parent].ctrl.extent[1] = h + 29 - over;
+                Rect::new(span.0, h - over, span.1, 27)
             };
             let mut c = text("GuiMLTextProfile", r, "");
             c.class = "GuiMLTextCtrl".into();

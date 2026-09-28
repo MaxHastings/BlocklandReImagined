@@ -36,6 +36,7 @@ mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod tools;
 mod undo;
+mod blueprints;
 mod spray;
 mod packages;
 pub use packages::{
@@ -114,6 +115,12 @@ pub enum Command {
         color: u8,
     },
     Tool(ToolAction),
+    /// Place the copied build this player holds (`Session::copy_build`)
+    /// with its pivot at `position`, turned `quarter_turns`.
+    PlaceBlueprint {
+        position: [f32; 3],
+        quarter_turns: u8,
+    },
     /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
     UseSprayCan {
         color: u8,
@@ -194,11 +201,16 @@ pub enum Command {
     ControlPlayer,
     /// The client's brick inventory state, which only it knows.
     BrickHand(BrickHand),
+    /// The client's unplanted ghost brick moved, or went away.
+    GhostBrick(Option<GhostBrick>),
     /// `serverCmdWand` (`/wand`): hold the player wand.
     Wand,
     /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
     /// being typed in, shown to everyone above the chat.
     Talking(bool),
+    /// `SteeringPrefsEvent`: the client's `$pref::Input::UseStrafeSteering`
+    /// and `$pref::Input::UseAutoReturnSteering` (both on until it says).
+    SteeringPrefs { strafe: bool, auto_return: bool },
     /// A ghost-brick move, which stays client-side; the server only animates
     /// the builder.
     BuildGesture(BuildGesture),
@@ -222,13 +234,14 @@ impl Command {
     pub fn preconditions(&self) -> Preconditions {
         use bri_minigames::BuildAction;
         let (alive, build) = match self {
-            Command::Plant { .. } => (true, Some(BuildAction::Build)),
+            Command::Plant { .. } | Command::PlaceBlueprint { .. } => {
+                (true, Some(BuildAction::Build))
+            }
             Command::UseSprayCan { .. }
             | Command::UseFxCan { .. }
             | Command::EquipTool { .. }
             | Command::Activate
             | Command::ToggleLight
-            | Command::Emote(_)
             | Command::Wand
             | Command::BuildGesture(_) => (true, None),
             // The package's command declaration decides (`while_dead`);
@@ -259,9 +272,41 @@ impl Command {
             | Command::DropPlayerAtCamera(_)
             | Command::ControlPlayer
             | Command::BrickHand(_)
-            | Command::Talking(_) => (false, None),
+            | Command::GhostBrick(_)
+            // v20's emote commands quietly do nothing without a body.
+            | Command::Emote(_)
+            | Command::Talking(_)
+            | Command::SteeringPrefs { .. } => (false, None),
         };
         Preconditions { alive, build }
+    }
+}
+/// A player's unplanted ghost brick (`tempBrick`). v20 ghosted it to every
+/// client: others see it translucent, in its colour and shape, following the
+/// owner's moves and turns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GhostBrick {
+    pub definition: String,
+    pub position: [f32; 3],
+    pub quarter_turns: u8,
+    pub color: u8,
+    pub print: Option<String>,
+}
+impl GhostBrick {
+    pub fn validate(&self) -> Result<()> {
+        let id = |s: &str| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control);
+        ensure!(
+            id(&self.definition)
+                && self.print.as_deref().is_none_or(id)
+                && self
+                    .position
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+                && self.quarter_turns < 4,
+            "Invalid ghost brick"
+        );
+        Ok(())
     }
 }
 /// `ServerCmdShiftBrick`, `ServerCmdSuperShiftBrick` and
@@ -416,6 +461,9 @@ struct Peer {
     /// (`$Pref::Server::MaxBricksPerSecond`).
     plants: u32,
     saves: u32,
+    /// Ghost brick reports this window; they have their own budget so a
+    /// builder moving a ghost never starves real actions.
+    ghost_reports: u32,
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
@@ -436,6 +484,8 @@ struct Peer {
     /// Seated by the sit emote until they move, mount or die. Lasting state,
     /// so it replicates in vitals and late joiners see it.
     sitting: bool,
+    /// The unplanted ghost brick the client last reported (`tempBrick`).
+    ghost: Option<GhostBrick>,
     /// `lastActivateTime` and `activateLevel` for the activate swing.
     last_activate: Option<u64>,
     activate_level: u32,
@@ -490,6 +540,8 @@ pub struct Session {
     notices: VecDeque<String>,
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
+    /// Each player's copied build (`copy_build`), waiting to be placed.
+    blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
     /// lowercase aspect ratio, used for the next brick of that aspect.
     last_prints: BTreeMap<OwnerId, BTreeMap<String, String>>,
@@ -569,6 +621,7 @@ impl Session {
             notices: VecDeque::new(),
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
+            blueprints: BTreeMap::new(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
             bulk_window_tick: 0,
@@ -799,6 +852,7 @@ impl Session {
                 current_color: 0,
                 talking: false,
                 sitting: false,
+                ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -813,6 +867,7 @@ impl Session {
                 chats: 0,
                 plants: 0,
                 saves: 0,
+                ghost_reports: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -887,6 +942,7 @@ impl Session {
         self.last_prints.remove(&owner);
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
+        self.forget_blueprint(owner);
         self.departed.insert(
             owner,
             (
@@ -901,6 +957,7 @@ impl Session {
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
         self.trust_disconnect(owner);
+        self.set_steering_prefs(owner, true, true);
         Ok(())
     }
     /// Call only after the transport authenticates its server-issued resume token.
@@ -987,6 +1044,7 @@ impl Session {
                 current_color: 0,
                 talking: false,
                 sitting: false,
+                ghost: None,
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
@@ -1001,6 +1059,7 @@ impl Session {
                 chats: 0,
                 plants: 0,
                 saves: 0,
+                ghost_reports: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -1195,9 +1254,15 @@ impl Session {
                 peer.chats = 0;
                 peer.plants = 0;
                 peer.saves = 0;
+                peer.ghost_reports = 0;
             }
-            peer.actions = peer.actions.saturating_add(1);
-            ensure!(peer.actions <= 60, "Action command rate exceeded");
+            if matches!(command, Command::GhostBrick(_)) {
+                peer.ghost_reports = peer.ghost_reports.saturating_add(1);
+                ensure!(peer.ghost_reports <= 30, "Ghost brick report rate exceeded");
+            } else {
+                peer.actions = peer.actions.saturating_add(1);
+                ensure!(peer.actions <= 60, "Action command rate exceeded");
+            }
             (peer.combat.alive, peer.combat.player)
         };
         let needs = command.preconditions();
@@ -1299,7 +1364,12 @@ impl Session {
             }
             Command::Emote(name) => {
                 ensure!(EMOTES.contains(&name.as_str()), "Unknown emote");
-                ensure!(peer.combat.alive, "Dead players cannot emote");
+                // Every v20 emote command checks `isObject(%client.player)`
+                // and quietly does nothing without one; the brick selector
+                // sends `/bsd` whenever it opens, dead or alive.
+                if !peer.combat.alive {
+                    return Ok(Reply::Accepted);
+                }
                 if name == "sit" {
                     peer.sitting = true;
                 }
@@ -1416,6 +1486,10 @@ impl Session {
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
             }
+            Command::GhostBrick(ghost) => {
+                self.set_ghost_brick(owner, ghost)?;
+                Ok(Reply::Accepted)
+            }
             Command::BuildGesture(gesture) => {
                 ensure!(peer.combat.alive, "Dead players cannot build");
                 self.play_thread_three(tick, owner, gesture.sequence());
@@ -1444,6 +1518,13 @@ impl Session {
             }
             Command::Talking(talking) => {
                 peer.talking = talking;
+                Ok(Reply::Accepted)
+            }
+            Command::SteeringPrefs {
+                strafe,
+                auto_return,
+            } => {
+                self.set_steering_prefs(owner, strafe, auto_return);
                 Ok(Reply::Accepted)
             }
 
@@ -1572,6 +1653,10 @@ impl Session {
                 Ok(Reply::Activated(hit))
             }
             Command::Tool(action) => self.tool_action(owner, action),
+            Command::PlaceBlueprint {
+                position,
+                quarter_turns,
+            } => self.place_blueprint(owner, position, quarter_turns),
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
@@ -1679,6 +1764,7 @@ impl Session {
                     peer.input = peer.body_input(input);
                 }
                 driving.push((owner, peer.input));
+                peer.player.look(&peer.input);
                 peer.player.hold(&mut self.simulation.physics);
                 continue;
             }

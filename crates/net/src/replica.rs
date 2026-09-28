@@ -87,6 +87,9 @@ fn validate_vitals(
                 && (0.0..=archetypes.highest_max_health()).contains(&v.health)),
         "Invalid player vitals"
     );
+    for ghost in vitals.values().filter_map(|v| v.ghost.as_ref()) {
+        ghost.validate()?;
+    }
     Ok(())
 }
 fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {

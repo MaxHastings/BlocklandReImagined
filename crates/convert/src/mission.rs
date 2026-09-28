@@ -32,7 +32,11 @@ fn transform(p: &BTreeMap<String, String>) -> Result<[f32; 16]> {
     let rotation = if a[3] == 0.0 {
         Quat::IDENTITY
     } else {
-        Quat::from_axis_angle(axis.normalize(), -a[3].to_radians())
+        // `Quat::from_axis_angle` with the portable `libm` sine: the platform
+        // C runtime's can differ in the last bit between machines.
+        let half = -a[3].to_radians() * 0.5;
+        let v = axis.normalize() * libm::sinf(half);
+        Quat::from_xyzw(v.x, v.y, v.z, libm::cosf(half))
     };
     Ok(Mat4::from_scale_rotation_translation(
         Vec3::new(s[0], s[2], s[1]),

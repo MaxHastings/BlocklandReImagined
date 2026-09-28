@@ -33,6 +33,8 @@ pub struct WeaponDebrisDiagnostics {
     pub collision_queries: u64,
     pub bounces: u64,
     pub settled: u64,
+    /// Casings dropped because the collision sweep returned no usable hit.
+    pub invalid_collisions: u64,
     pub capped_frame_time: u64,
 }
 #[derive(Clone, Copy, Debug)]
@@ -542,13 +544,25 @@ impl WeaponDebris {
                     let to = from + body.velocity * dt;
                     self.diagnostics.collision_queries += 1;
                     if let Some(hit) = sweep(from, to) {
-                        ensure!(
-                            hit.fraction.is_finite()
-                                && (0. ..=1.).contains(&hit.fraction)
-                                && hit.normal.is_finite()
-                                && (hit.normal.length_squared() - 1.).abs() < 0.01,
-                            "invalid debris collision result"
-                        );
+                        // A ray that starts inside a brick reports a zero
+                        // normal (normalized to NaN). A cosmetic casing is
+                        // never worth the game: drop it and note it once.
+                        if !(hit.fraction.is_finite()
+                            && (0. ..=1.).contains(&hit.fraction)
+                            && hit.normal.is_finite()
+                            && (hit.normal.length_squared() - 1.).abs() < 0.01)
+                        {
+                            if self.diagnostics.invalid_collisions == 0 {
+                                eprintln!(
+                                    "Weapon debris: dropped a casing on an invalid collision \
+                                     (fraction {}, normal {})",
+                                    hit.fraction, hit.normal
+                                );
+                            }
+                            self.diagnostics.invalid_collisions += 1;
+                            self.bodies.remove(&id);
+                            continue;
+                        }
                         body.position = from.lerp(to, hit.fraction.clamp(0., 1.));
                         let normal = hit.normal.normalize();
                         let vn = body.velocity.dot(normal);
@@ -736,6 +750,29 @@ mod tests {
         world.clear();
         assert_eq!(world.instances().count(), 0);
         assert_eq!(world.cue_cursor(), 0);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires the ignored primary-source weapon-debris pack produced by the importer"]
+    fn a_zero_normal_hit_drops_the_casing_instead_of_failing() -> Result<()> {
+        // a16 multiplayer crash: a casing ejected inside a brick got a hit
+        // whose zero normal normalized to NaN, and advance returned an error
+        // that closed the game.
+        let mut world = WeaponDebris::new(assets()?, WeaponDebrisLimits::default())?;
+        world.cues(&[cue(1)], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
+        world.advance(
+            1. / 60.,
+            |_, _, _| None,
+            |_, _| {
+                Some(DebrisHit {
+                    fraction: 0.,
+                    normal: Vec3::ZERO.normalize(),
+                })
+            },
+        )?;
+        assert_eq!(world.instances().count(), 0);
+        assert_eq!(world.diagnostics.invalid_collisions, 1);
         Ok(())
     }
 

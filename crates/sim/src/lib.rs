@@ -1,5 +1,6 @@
 //! Shared simulation adapters used by solo and multiplayer authority.
 pub mod archetype;
+pub mod blueprint;
 pub mod definitions;
 pub mod ghost;
 pub mod grid;

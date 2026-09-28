@@ -37,7 +37,7 @@ pub fn camera(position: Vec3, target: Vec3) -> Camera {
     }
 }
 pub fn original_world() -> PhysicsWorld {
-    let path = root().join("content/map-bundle-016");
+    let path = root().join("content/map-bundle-017");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path.join("bundle.json")).unwrap()).unwrap();
     let scene_path = std::fs::read_dir(&path)

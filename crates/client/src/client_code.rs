@@ -4,10 +4,12 @@
 //! Code runs only while a game is entered, and only what the player
 //! trusts: in a game this player hosts, their own enabled Add-Ons; on
 //! someone else's server, what `addon-trust.json` grants for exactly that
-//! code. Everything else is listed and skipped. An Add-On that breaks a
-//! budget is stopped with one message; the game carries on.
+//! code. Everything else is listed and skipped, and the player is asked
+//! ([`ClientCode::trust_prompt`]) before any of it runs. An Add-On that
+//! breaks a budget is stopped with one message; the game carries on.
 use bri_client_sandbox::{
-    AddOn, AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, TrustStore,
+    AddOn, AddOnCode, Budgets, FrameInput, Sandbox, Tier, TrustDecision, TrustLevel, TrustPrompt,
+    TrustStore,
     gpu::{Camera, GpuSpeed, LayerRenderer},
     host::Frame,
     trust::{CodeSummary, TRUST_FILE},
@@ -43,6 +45,9 @@ pub struct ClientCode {
     /// This device's measured speed, once calibrated (`Some(None)` when
     /// calibration failed and the low default cap stays).
     speed: Option<Option<GpuSpeed>>,
+    /// The trust question on screen for the server entered, and that
+    /// server's name when it was asked.
+    asking: Option<(Box<TrustPrompt>, String)>,
 }
 
 impl ClientCode {
@@ -118,10 +123,18 @@ impl ClientCode {
                 (Host::Remote(_), None) => None,
             };
             let Some(granted) = granted else {
-                self.messages.push(format!(
-                    "{}'s code is off: you have not trusted this server to run it",
-                    code.name
-                ));
+                let summary = CodeSummary::from(code);
+                self.messages.push(if summary.tier() == Tier::Elevated {
+                    format!(
+                        "{}'s code is off: it asks for more than the sandbox allows",
+                        code.name
+                    )
+                } else {
+                    format!(
+                        "{}'s code is off: you have not trusted this server to run it",
+                        code.name
+                    )
+                });
                 continue;
             };
             match sandbox.start(code, Budgets::default(), granted) {
@@ -141,6 +154,58 @@ impl ClientCode {
     pub fn stop(&mut self) {
         self.running.clear();
         self.started = false;
+        self.asking = None;
+    }
+
+    /// On someone else's server (`server`, its identity key, named `name`),
+    /// the question to ask when some of its Add-Ons' code is not trusted
+    /// yet. Only sandboxed code is asked about: nothing elevated runs in
+    /// this build, so its code stays off with a line in chat instead of
+    /// asking for full trust that would grant nothing.
+    pub fn trust_prompt(
+        &mut self,
+        server: &str,
+        name: &str,
+        state_dir: &Path,
+    ) -> Option<Box<TrustPrompt>> {
+        self.asking = None;
+        if server.is_empty() || self.code.is_empty() {
+            return None;
+        }
+        let store = TrustStore::load(state_dir).unwrap_or_default();
+        let code: Vec<CodeSummary> = self.code.iter().map(CodeSummary::from).collect();
+        let TrustDecision::Ask(prompt) = store.decide(server, name, &code) else {
+            return None;
+        };
+        if prompt.level != TrustLevel::Sandboxed {
+            // `start` already named them in chat.
+            return None;
+        }
+        self.asking = Some((prompt.clone(), name.to_string()));
+        Some(prompt)
+    }
+
+    /// The player chose the trust question's accept: remember exactly what
+    /// it showed and start that code.
+    pub fn accept_trust(&mut self, state_dir: &Path) -> anyhow::Result<()> {
+        let Some((prompt, name)) = self.asking.take() else {
+            return Ok(());
+        };
+        let mut store = TrustStore::load(state_dir)?;
+        store.accept(&prompt, &name);
+        store.save(state_dir)?;
+        self.start(Host::Remote(&prompt.server), state_dir);
+        Ok(())
+    }
+
+    /// Stop trusting every server's Add-On code (the Add-Ons screen's
+    /// Forget Trust). Code already running keeps running until the game is
+    /// left; the next join asks again.
+    pub fn forget_trust(state_dir: &Path) -> anyhow::Result<()> {
+        match std::fs::remove_file(state_dir.join(TRUST_FILE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
     }
 
     /// Run every Add-On's `frame` for the frame rendered at `now` (seconds
@@ -414,6 +479,55 @@ mod tests {
         assert!(code.running().is_empty());
         code.start(Host::Remote(""), state.path());
         assert!(code.running().is_empty());
+    }
+
+    #[test]
+    fn joining_asks_once_and_trust_and_join_starts_the_code() {
+        let (root, set) = sample_set();
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        let prompt = code.trust_prompt(HOST, "Brick Town", state.path()).unwrap();
+        assert_eq!((prompt.accept, prompt.decline), ("Trust and join", "Leave"));
+        assert_eq!(prompt.rows[0].name, "Spinning Cube");
+        assert!(code.running().is_empty());
+
+        code.accept_trust(state.path()).unwrap();
+        assert_eq!(code.running(), ["Spinning Cube"]);
+        let store = TrustStore::load(state.path()).unwrap();
+        assert_eq!(store.servers[HOST].name, "Brick Town");
+        // Trusted as is: the next join does not ask.
+        code.start(Host::Remote(HOST), state.path());
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_none()
+        );
+        assert_eq!(code.running(), ["Spinning Cube"]);
+
+        // Leaving drops an unanswered question; accepting it later does
+        // nothing.
+        ClientCode::forget_trust(state.path()).unwrap();
+        code.start(Host::Remote(HOST), state.path());
+        assert!(
+            code.trust_prompt(HOST, "Brick Town", state.path())
+                .is_some()
+        );
+        code.stop();
+        code.accept_trust(state.path()).unwrap();
+        assert!(code.running().is_empty());
+        assert!(!state.path().join(TRUST_FILE).exists());
+        // Forgetting twice, or with nothing saved, is fine.
+        ClientCode::forget_trust(state.path()).unwrap();
+    }
+
+    #[test]
+    fn a_host_without_an_identity_or_code_asks_nothing() {
+        let (root, set) = sample_set();
+        let mut code = ClientCode::load(&root, &set);
+        let state = tempfile::tempdir().unwrap();
+        assert!(code.trust_prompt("", "Anyone", state.path()).is_none());
+        let mut none = ClientCode::default();
+        assert!(none.trust_prompt(HOST, "Anyone", state.path()).is_none());
     }
 
     #[test]

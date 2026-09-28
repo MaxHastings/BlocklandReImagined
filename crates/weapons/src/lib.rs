@@ -3,6 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod debris;
+pub mod rotation;
 mod merge;
 pub use merge::resource_root;
 pub mod runtime;
@@ -149,6 +150,11 @@ pub struct Image {
     pub casing: String,
     pub min_shot_ticks: u32,
     pub states: Vec<State>,
+    /// An Add-On tool's image: its `onFire` runs this Add-On command
+    /// (`package:command`) for the holder, aimed where they look, instead
+    /// of firing a projectile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
@@ -407,6 +413,19 @@ impl Pack {
             ensure!(
                 image.min_shot_ticks <= 36000 && image.mount_point < 32,
                 "Invalid image mount/timing"
+            );
+            ensure!(
+                image.command.as_deref().is_none_or(|c| {
+                    c.len() <= 128
+                        && c.split_once(':').is_some_and(|(package, command)| {
+                            !package.is_empty()
+                                && !command.is_empty()
+                                && !command.contains(':')
+                                && c.bytes()
+                                    .all(|b| b.is_ascii_alphanumeric() || b"_-:".contains(&b))
+                        })
+                }),
+                "Invalid image command {id}"
             );
             for state in &image.states {
                 ensure!(

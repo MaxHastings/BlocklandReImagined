@@ -261,6 +261,40 @@ impl Session {
         }
     }
 
+    /// Record a client's ghost brick, for the others to see. Only a living
+    /// player with bricks in hand has one; a brick the server does not know
+    /// is refused.
+    pub(super) fn set_ghost_brick(
+        &mut self,
+        owner: OwnerId,
+        ghost: Option<super::GhostBrick>,
+    ) -> Result<()> {
+        if let Some(ghost) = &ghost {
+            ghost.validate()?;
+            let state = self.simulation.state();
+            ensure!(
+                self.simulation.definitions.entries.contains_key(&ghost.definition),
+                "Unknown ghost brick"
+            );
+            ensure!(
+                usize::from(ghost.color) < state.palette.len().max(1),
+                "Invalid ghost brick colour"
+            );
+        }
+        self.peers.get_mut(&owner).context("Unknown connection")?.ghost = ghost;
+        Ok(())
+    }
+
+    /// The ghost brick others see: only while its owner lives with bricks in
+    /// hand and a ghost out.
+    pub(super) fn ghost_brick(&self, owner: OwnerId) -> Option<super::GhostBrick> {
+        let peer = self.peers.get(&owner)?;
+        let hand = peer.tutorial.hand;
+        peer.ghost
+            .clone()
+            .filter(|_| peer.combat.alive && hand.equipped && hand.ghost)
+    }
+
     /// Bricks are in hand on the client.
     pub(super) fn brick_equipped(&self, owner: OwnerId) -> bool {
         self.peers
@@ -1012,6 +1046,7 @@ impl Session {
                             "{TROPHY}{C3} Goal Completed! - Shooting - Time: {time}\n({hit}/{launched} targets hit with {accuracy}% accuracy)"
                         ),
                         seconds: 8.0,
+                        hide_bar: false,
                     },
                 );
                 self.clear_center(owner);
@@ -1183,6 +1218,7 @@ impl Session {
             Notice::Bottom {
                 text: String::new(),
                 seconds: 0.0,
+                hide_bar: false,
             },
         );
         let text = format!(
@@ -1259,6 +1295,7 @@ impl Session {
             Notice::Bottom {
                 text: format!("{TROPHY}{C3} Goal Completed! - {goal} - Time: {time}"),
                 seconds: 3.0,
+                hide_bar: false,
             },
         );
     }

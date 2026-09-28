@@ -534,6 +534,25 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("broadcast", |text: &str| {
         push(Op::Broadcast { text: text.into() })
     });
+    engine.register_fn(
+        "copy_build",
+        |player: Dynamic, brick: Dynamic, limit: i64, above_only: bool, tool: &str| {
+            push(Op::CopyBuild {
+                player: id(&player)?,
+                brick: id(&brick)?,
+                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+                above_only,
+                tool: tool.into(),
+            })
+        },
+    );
+    engine.register_fn("give_item", |player: Dynamic, item: &str, equip: bool| {
+        push(Op::GiveItem {
+            player: id(&player)?,
+            item: item.into(),
+            equip,
+        })
+    });
 }
 
 fn sandbox() -> Engine {

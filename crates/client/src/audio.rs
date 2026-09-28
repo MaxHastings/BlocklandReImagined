@@ -30,6 +30,9 @@ pub struct ClientAudio {
     master: f32,
     mute_in_background: bool,
     focused: bool,
+    /// The last brick explosion heard (tick and origin): its other bricks
+    /// make no further break sound.
+    last_break: Option<(u64, [f32; 3])>,
 }
 /// Attached-sound entity keys for projectiles, apart from other entities.
 fn projectile_entity(id: u64) -> EntityKey {
@@ -100,6 +103,7 @@ impl ClientAudio {
             master: 1.,
             mute_in_background: false,
             focused: true,
+            last_break: None,
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -214,7 +218,18 @@ impl ClientAudio {
             }
             CueKind::Jump => "player.jump",
             CueKind::Plant => "brick.plant",
-            CueKind::BrickKill { .. } => "brick.break",
+            // v20 sends one `BrickBreakSoundEvent` per brick explosion, not
+            // per brick: a blast groups up to 100 bricks
+            // (`startNewBrickExplosion`/`sendBrickExplosion`), heard at the
+            // blast. Its bricks arrive as cues of one tick and origin.
+            CueKind::BrickKill { origin, .. } => {
+                if self.last_break == Some((cue.tick, *origin)) {
+                    return;
+                }
+                self.last_break = Some((cue.tick, *origin));
+                self.trigger("brick.break", Placement::World(*origin));
+                return;
+            }
             CueKind::HammerHit => "tool.hammer.hit",
             CueKind::WrenchHit => "tool.wrench.hit",
             CueKind::Pain { cry: true, .. } => "player.pain_cry",
@@ -450,6 +465,31 @@ mod tests {
         assert_eq!(audio.stats().real_voices, 0);
         assert_eq!(audio.stats().non_finite_samples, 0);
         assert!(audio.warnings.is_empty());
+        // A blast's bricks make one break sound, heard at the blast.
+        let kill = |id: u64, tick: u64, brick: u64| Cue {
+            id,
+            tick,
+            position: [1000., 1., brick as f32],
+            kind: CueKind::BrickKill {
+                brick,
+                definition: bri_world::ContentRef::Resolved("brick".into()),
+                quarter_turns: 0,
+                color: 0,
+                color_effect: 0,
+                shape_effect: 0,
+                print: None,
+                origin: [1000., 1., 0.],
+                force: 1.,
+                radius: 1.,
+            },
+        };
+        let breaks = |audio: &ClientAudio| audio.requested.get("brick.break").copied();
+        for brick in 1..=30 {
+            audio.cue(&kill(brick, 50, brick));
+        }
+        assert_eq!(breaks(&audio), Some(1));
+        audio.cue(&kill(31, 51, 1));
+        assert_eq!(breaks(&audio), Some(2), "the next blast is heard");
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
         Ok(())

@@ -578,7 +578,11 @@ fn pirate_cannon_shows_its_charge_as_a_bottom_print() -> anyhow::Result<()> {
         .take_private_notices()
         .into_iter()
         .filter_map(|(to, n)| match n {
-            Notice::Bottom { text, seconds } if to == owner && seconds == 1.0 => Some(text),
+            Notice::Bottom {
+                text,
+                seconds,
+                hide_bar: true,
+            } if to == owner && seconds == 1.0 => Some(text),
             _ => None,
         })
         .collect();
@@ -657,6 +661,69 @@ fn admin_drop_at_camera_carries_the_ridden_vehicle() -> anyhow::Result<()> {
             rider.feet
         );
     }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native vehicle, weapon and brick packs"]
+fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
+    // `Player::updateMove` still turns `mHead` while mounted: other players
+    // see a rider look up, down and around in any seat.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let look = MoveInput {
+        pitch: 0.6,
+        head_yaw: -1.1,
+        ..Default::default()
+    };
+    let rider = |s: &Session, owner: u64| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap()
+            .0
+    };
+    let check = |s: &mut Session, p: &mut Feeder, what: &str| -> anyhow::Result<()> {
+        assert!(s.mounted(p.owner).is_some(), "{what}: mounted");
+        p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..look }, 5)?;
+        let state = rider(s, p.owner);
+        assert!((state.pitch - 0.6).abs() < 1e-5, "{what}: pitch {}", state.pitch);
+        assert!((state.head_yaw + 1.1).abs() < 1e-5, "{what}: head {}", state.head_yaw);
+        p.feed(s, MoveInput { yaw: rider(s, p.owner).yaw, ..Default::default() }, 5)?;
+        let state = rider(s, p.owner);
+        assert!(state.pitch.abs() < 1e-5 && state.head_yaw.abs() < 1e-5, "{what}: level");
+        Ok(())
+    };
+    for (vehicle, seats) in [
+        (JEEP, &[0u8, 1][..]),
+        ("v20.vehicle.horsearmor", &[0][..]),
+        ("v20.vehicle.tankvehicle", &[0, 1][..]),
+    ] {
+        let (mut s, owner) = session_with(&root, vehicle)?;
+        let mut p = Feeder { owner, sequence: 0 };
+        p.feed(&mut s, MoveInput::default(), 120)?;
+        p.board(&mut s, 0.0)?;
+        for &switch in seats {
+            if switch > 0 {
+                s.switch_seat(owner, 1)?;
+                p.feed(&mut s, MoveInput::default(), 2)?;
+            }
+            let seat = s.mounted(owner).map(|m| m.1);
+            check(&mut s, &mut p, &format!("{vehicle} seat {seat:?}"))?;
+        }
+    }
+    // Skis come from their item, not a spawn brick.
+    let (mut s, owner) = session(&root)?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 60)?;
+    let slot = s.give_item(owner, "v20.weapon.skiitem")?;
+    s.equip_tool(owner, Some(slot))?;
+    p.feed(&mut s, MoveInput::default(), 80)?;
+    for (command, down) in [(100, true), (101, false)] {
+        s.command(owner, command, Command::WeaponTrigger { down })?;
+        p.feed(&mut s, MoveInput::default(), 4)?;
+    }
+    p.feed(&mut s, MoveInput::default(), 40)?;
+    check(&mut s, &mut p, "skis")?;
     Ok(())
 }
 

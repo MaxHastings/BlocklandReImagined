@@ -485,6 +485,7 @@ dependencies = [
  "bri-world",
  "glam 0.33.10",
  "image",
+ "libm",
  "serde",
  "serde_json",
  "sha2",

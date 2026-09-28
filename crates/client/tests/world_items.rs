@@ -393,3 +393,196 @@ fn actual_item_instances_match_independently_baked_world_geometry() -> Result<()
     assert!(empty.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]));
     Ok(())
 }
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
+    // hammerImage loops Fire, CheckFire (0 ticks), Fire while the trigger is
+    // held, so the replicated state reads "Fire" throughout. Each entry's
+    // Fire sequence cue must start the view model's swing over.
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.hammerimage".into(),
+                state: "Fire".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::IDENTITY,
+            mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            velocity: Vec3::ZERO,
+        })
+    };
+    let head = |adapter: &WorldItems| {
+        adapter
+            .mounted_node(7, 0, "v20.image.hammerimage", "FPhammer9999")
+            .unwrap()
+    };
+    let same = |a: Mat4, b: Mat4| a.abs_diff_eq(b, 1e-4);
+    let at = |seconds: f64| WorldItemFrame {
+        seconds,
+        first_person: true,
+        local_owner: Some(7),
+        ..frame()
+    };
+    adapter.sync(&view, at(1.0), pose)?;
+    let start = head(&adapter);
+    adapter.sync(&view, at(1.5), pose)?;
+    let end = head(&adapter);
+    assert!(!same(start, end), "the fire clip moves the head");
+    adapter.sync(&view, at(1.6), pose)?;
+    assert!(same(head(&adapter), end), "one entry swings once");
+    adapter.restart_image_sequence(7, 0, "Fire");
+    adapter.sync(&view, at(1.6), pose)?;
+    assert!(same(head(&adapter), start), "a new entry swings again");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires converted packs and an offscreen GPU adapter"]
+fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> {
+    // a16: "buffer slice can not be empty". spear.dts's `fire` sequence keys
+    // both spear objects invisible while it is thrown, so the posed held
+    // image has no geometry; its shadow draw bound the empty buffers.
+    let (assets, weapons) = packs()?;
+    let gpu = Headless::new()?;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut renderer = SceneRenderer::with_settings(
+        &gpu.device,
+        format,
+        1,
+        Some(bri_render::shadow::ShadowSettings::LOW),
+    );
+    let mut camera =
+        bri_render::scene::Camera::perspective([4., 3., 4.], [0.; 3], 1.0, 1.0, 0.05, 100.0);
+    camera.sun_direction = [0.3, -1.0, 0.0, 0.0];
+    renderer.update_camera(&gpu.queue, &camera);
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                paint: None,
+                image: "v20.image.spearimage".into(),
+                state: "Fire".into(),
+                hand: 0,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::IDENTITY,
+            mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            velocity: Vec3::ZERO,
+        })
+    };
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("thrown spear target"),
+        size: wgpu::Extent3d {
+            width: 64,
+            height: 64,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let color = target.create_view(&Default::default());
+    let depth = bri_render::scene::create_depth(&gpu.device, 64, 64).create_view(&Default::default());
+    // Mid-throw (hidden) and after it (shown again).
+    for seconds in [1.0, 1.05, 1.5] {
+        adapter.sync(
+            &view,
+            WorldItemFrame {
+                seconds,
+                ..frame()
+            },
+            pose,
+        )?;
+        adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+        let draws = adapter.draws();
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.render_shadows(
+            &mut encoder,
+            bri_render::scene::ShadowCasters {
+                scenes: &[],
+                instances: &draws,
+            },
+            bri_render::scene::ShadowCasters {
+                scenes: &[],
+                instances: &draws,
+            },
+        );
+        renderer.render_with_instances(&mut encoder, &color, &depth, &[], &draws, None);
+        gpu.queue.submit([encoder.finish()]);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires converted item and weapon packs"]
+fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
+    // Sticking zeroes the arrow's velocity; it must not flip to point up.
+    let (assets, weapons) = packs()?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let arrow = |velocity: Vec3, age: u32| bri_weapons::Projectile {
+        id: 5,
+        definition: "v20.projectile.arrowprojectile".into(),
+        source: bri_weapons::ActorId(1),
+        position: Vec3::new(0., 2., 0.),
+        velocity,
+        scale: 1.,
+        age,
+        bounced: false,
+        stuck: velocity == Vec3::ZERO,
+        origin: Vec3::ZERO,
+        was_thrown: false,
+        paint: None,
+        heading: None,
+    };
+    let nose = |adapter: &WorldItems| {
+        let (_, t) = adapter
+            .instances()
+            .find(|(id, _)| matches!(id, ItemIdentity::Projectile(5)))
+            .expect("arrow drawn");
+        t.transform.transform_vector3(Vec3::NEG_Z).normalize()
+    };
+    let flying = Vec3::new(30., -5., 0.);
+    let view = |p| WeaponView {
+        projectiles: vec![p],
+        ..Default::default()
+    };
+    adapter.sync(&view(arrow(flying, 10)), frame(), |_| None)?;
+    assert!(nose(&adapter).abs_diff_eq(flying.normalize(), 1e-4));
+    let later = WorldItemFrame {
+        seconds: 1.5,
+        ..frame()
+    };
+    adapter.sync(&view(arrow(Vec3::ZERO, 20)), later, |_| None)?;
+    assert!(
+        nose(&adapter).abs_diff_eq(flying.normalize(), 1e-4),
+        "stuck arrow points along its flight, not up: {}",
+        nose(&adapter)
+    );
+    // A player who joins after it stuck gets the replicated heading.
+    let mut joiner = WorldItems::new(packs()?.0, packs()?.1, WorldItemLimits::default())?;
+    let stuck = bri_weapons::Projectile {
+        heading: Some(flying.normalize()),
+        ..arrow(Vec3::ZERO, 20)
+    };
+    joiner.sync(&view(stuck), later, |_| None)?;
+    assert!(nose(&joiner).abs_diff_eq(flying.normalize(), 1e-4));
+    Ok(())
+}

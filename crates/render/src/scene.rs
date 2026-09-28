@@ -572,9 +572,12 @@ impl SceneData {
             "Scene index out of range"
         );
         for material in &self.materials {
+            // Water and terrain need their uniforms; a temp brick may carry
+            // its flash (`temp_brick_flash`); nothing else has any.
+            let wants = matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain);
             ensure!(
-                material.parameters.is_some()
-                    == matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain)
+                (material.parameters.is_some() == wants
+                    || (material.temp_brick_flash && !wants))
                     && material
                         .parameters
                         .as_ref()
@@ -660,6 +663,34 @@ impl Camera {
             ambient: [0.35, 0.35, 0.35, 0.0],
             fog_color: [0.0; 4],
             atmosphere: [0.0; 4],
+        }
+    }
+    /// A camera looking along `forward` with its own `up`, so a view at or
+    /// past straight up or down keeps its roll (the player camera turns by
+    /// yaw then pitch, as Torque's eye transform does).
+    pub fn oriented(
+        eye: [f32; 3],
+        forward: [f32; 3],
+        up: [f32; 3],
+        aspect: f32,
+        fov_y: f32,
+        near: f32,
+        far: f32,
+    ) -> Self {
+        let forward = Vec3::from(forward).normalize_or_zero();
+        let up = Vec3::from(up).normalize_or_zero();
+        if forward.length_squared() < 0.5
+            || up.length_squared() < 0.5
+            || forward.cross(up).length_squared() < 1e-6
+        {
+            let target = Vec3::from(eye) + forward;
+            return Self::perspective(eye, target.to_array(), aspect, fov_y, near, far);
+        }
+        let view = glam::camera::rh::view::look_to_mat4(Vec3::from(eye), forward, up);
+        let projection = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
+        Self {
+            view_projection: (projection * view).to_cols_array(),
+            ..Self::perspective(eye, [eye[0], eye[1], eye[2] - 1.0], aspect, fov_y, near, far)
         }
     }
     pub fn apply_environment(&mut self, scene: &SceneData) {
@@ -1585,17 +1616,13 @@ impl SceneRenderer {
                 && data.indices.len() as u64 * 4 <= device.limits().max_buffer_size,
             "Shared scene buffer exceeds device limits"
         );
+        // A pose may hide every object (the spear's `fire` sequence while it
+        // is thrown): the placeholder keeps the buffers non-empty, as upload
+        // does, because wgpu panics on slicing an empty buffer.
+        let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("shared-material posed vertices"),
-                contents: bytemuck::cast_slice(&data.vertices),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("shared-material posed indices"),
-                contents: bytemuck::cast_slice(&data.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertices,
+            indices,
             materials: base.materials.clone(),
             material_modes: base.material_modes.clone(),
             material_descriptors: base.material_descriptors.clone(),
@@ -1721,6 +1748,12 @@ impl SceneRenderer {
                     &[crate::shadow::ShadowMaps::caster_offset(index)],
                 );
                 let mut draw = |scene: &GpuScene, buffer: &wgpu::Buffer, range: Range<u32>| {
+                    // A pose can hide every object (the spear's `fire`
+                    // sequence while it is thrown); wgpu panics on slicing
+                    // the empty buffers.
+                    if scene.vertex_count == 0 || scene.index_count == 0 {
+                        return;
+                    }
                     if let Some(bounds) = scene.bounds
                         && !aabb_visible(&planes, bounds)
                     {
@@ -1919,6 +1952,9 @@ impl SceneRenderer {
         pass.set_bind_group(0, &self.camera_group, &[]);
         for draw in order {
             let (scene, batch) = (draw.scene, draw.batch);
+            if scene.vertex_count == 0 || scene.index_count == 0 {
+                continue;
+            }
             let (_, double_sided, background, _) = scene.material_modes[batch.material];
             pass.set_pipeline(
                 &self.pipelines

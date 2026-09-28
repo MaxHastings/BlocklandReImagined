@@ -1023,3 +1023,23 @@ fn sound_captions_show_only_when_turned_on_refresh_and_expire() {
     u.update(3001);
     assert!(u.core.captions.is_empty());
 }
+
+/// v20's `openBSD`: with building disabled it center-prints instead of
+/// opening the brick selector (whose wake would send the /bsd emote).
+#[test]
+fn open_bsd_with_building_disabled_only_says_so() {
+    let mut u = ui();
+    play(&mut u);
+    u.apply(UiUpdate::BuildingAllowed(false));
+    u.core.cmds.clear();
+    assert!(u.core.run_command("openBSD", true));
+    assert!(!u.core.cmds.contains(&bri_ui::ui::StackCmd::Push(ScreenId::BrickSelector)));
+    assert!(u
+        .core
+        .center_print
+        .as_ref()
+        .is_some_and(|(t, _)| t.contains("Building is currently disabled.")));
+    u.apply(UiUpdate::BuildingAllowed(true));
+    assert!(u.core.run_command("openBSD", true));
+    assert!(u.core.cmds.contains(&bri_ui::ui::StackCmd::Push(ScreenId::BrickSelector)));
+}

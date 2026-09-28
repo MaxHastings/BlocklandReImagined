@@ -46,6 +46,8 @@ WINDOW_DAYS = 4
 WINDOW_COMMITS = 200
 UNDO_MIN_LINES = 10
 UNDO_FRACTION = 0.6
+# No single file this large belongs in the repository.
+MAX_BLOB_BYTES = 25 * 2**20
 PROTOCOL_FILE = "crates/net/src/protocol.rs"
 PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
 LOCK_STALE_SECONDS = 10 * 60
@@ -171,6 +173,31 @@ class Blobs:
     def close(self):
         self.process.stdin.close()
         self.process.wait()
+
+
+def oversized_blobs(base, tip):
+    """Files anywhere in base..tip's new history that do not belong in git:
+    any blob over MAX_BLOB_BYTES, or any path inside a target/ folder."""
+    objects = git("rev-list", "--objects", f"{base}..{tip}")
+    process = subprocess.run(
+        ["git", "cat-file", "--batch-check=%(objecttype) %(objectsize) %(objectname)"],
+        input="".join(line.split(" ", 1)[0] + "\n" for line in objects.splitlines()),
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    paths = {}
+    for line in objects.splitlines():
+        name, _, path = line.partition(" ")
+        if path:
+            paths[name] = path
+    found = []
+    for line in process.stdout.splitlines():
+        kind, size, name = line.split(" ", 2)
+        path = paths.get(name, "")
+        if kind != "blob":
+            continue
+        in_target = "/target/" in f"/{path}" and not path.startswith("crates/")
+        if int(size) > MAX_BLOB_BYTES or in_target:
+            found.append(f"{path or name} ({int(size) / 2**20:.1f} MiB)")
+    return found
 
 
 def history_check(base, tip):
@@ -555,6 +582,14 @@ def gate_commit(sha, diff_only):
             "'Gate-Allow-Undo: <path>' to that commit's message.")
         return False
     say("history check ok")
+    heavy = oversized_blobs(base, sha)
+    if heavy:
+        say("refusing: the pushed commits carry build output or very large files:")
+        for line in heavy[:20]:
+            print(f"    {line}")
+        say("Remove them from the commits themselves (not just a later commit); "
+            "history keeps every blob it was given.")
+        return False
     if diff_only:
         return True
     changed = git("diff", "--name-only", base, sha).split()

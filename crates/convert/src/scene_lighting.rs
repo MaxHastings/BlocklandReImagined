@@ -71,11 +71,10 @@ pub fn suns(scene: &Scene) -> Result<Vec<Sun>> {
         let [elevation] = floats(node, "elevation", [35.0])?;
         let yaw = azimuth.clamp(0.0, 359.0).to_radians();
         let pitch = elevation.clamp(-360.0, 360.0).to_radians();
-        let toward = Vec3::new(
-            yaw.sin() * pitch.cos(),
-            yaw.cos() * pitch.cos(),
-            pitch.sin(),
-        );
+        // Portable `libm` trigonometry: imported content must be byte-identical
+        // on every machine, and C runtime sines can differ in the last bit.
+        let (sin, cos) = (libm::sinf, libm::cosf);
+        let toward = Vec3::new(sin(yaw) * cos(pitch), cos(yaw) * cos(pitch), sin(pitch));
         ensure!(toward.is_finite(), "Invalid sun angles");
         let d = -toward.normalize();
         let color = floats(node, "color", [0.7, 0.7, 0.7, 1.0])?;

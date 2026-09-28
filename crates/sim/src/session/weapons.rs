@@ -313,7 +313,19 @@ impl Session {
                     }
                     self.notices.push_back(format!("Weapon runtime: {message}"));
                 }
+                WeaponEvent::ToolFire {
+                    actor,
+                    command: Some(command),
+                    ..
+                } => self.addon_tool_fire(actor.0, &command),
                 WeaponEvent::ToolFire { actor, image, .. } => self.tool_fire(actor.0, &image)?,
+                // `brickDeployProjectile::onCollision` only moves the ghost
+                // (client side here) and never calls the parent that raises
+                // `onProjectileHit`; its explosion still shows.
+                WeaponEvent::Contact { impact }
+                    if impact
+                        .definition
+                        .eq_ignore_ascii_case("v20.projectile.brickdeployprojectile") => {}
                 WeaponEvent::Contact { impact } => {
                     self.spray_player(&impact);
                     if let TargetId::Brick(brick) = impact.target {
@@ -527,9 +539,23 @@ impl Session {
             base.push_str(&format!(" {red}<just:center>NEW RECORD!!!"));
         }
         let text = format!("{prefix} {red}To {color}{receiver} {base}");
-        self.notify(source, Notice::Bottom { text, seconds: 5.0 });
+        self.notify(
+            source,
+            Notice::Bottom {
+                text,
+                seconds: 5.0,
+                hide_bar: false,
+            },
+        );
         let text = format!("{prefix} {red}From {color}{passer} {base}");
-        self.notify(catcher, Notice::Bottom { text, seconds: 5.0 });
+        self.notify(
+            catcher,
+            Notice::Bottom {
+                text,
+                seconds: 5.0,
+                hide_bar: false,
+            },
+        );
     }
     /// `basketballShootImage::onMount`/`onUnMount`: a no-jet Blockhead lining
     /// up a shot becomes `BallShootPlayer` and gets its datablock back after.

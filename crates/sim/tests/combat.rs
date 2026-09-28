@@ -317,3 +317,18 @@ fn anyone_may_ask_for_the_brick_count() {
         "{told:?}"
     );
 }
+
+/// `serverCmdLight` mounts its fxLight on the player object, and a corpse is
+/// that object: the respawned body starts without a light.
+#[test]
+fn a_respawned_body_starts_without_its_light() {
+    let mut s = session();
+    let a = s.join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    s.command(a, 1, Command::ToggleLight).unwrap();
+    assert!(s.vitals()[&a].light);
+    s.command(a, 2, Command::Suicide).unwrap();
+    steps(&mut s, 200);
+    s.command(a, 3, Command::Respawn).unwrap();
+    assert!(s.vitals()[&a].alive);
+    assert!(!s.vitals()[&a].light);
+}

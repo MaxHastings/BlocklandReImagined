@@ -72,6 +72,8 @@ pub struct Vitals {
     pub talking: bool,
     /// Seated by the sit emote.
     pub sitting: bool,
+    /// The unplanted ghost brick others see.
+    pub ghost: Option<super::GhostBrick>,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -98,6 +100,11 @@ pub enum Notice {
     Bottom {
         text: String,
         seconds: f32,
+        /// `bottomPrintBar` hidden: the global `bottomPrint(%client, ...)`
+        /// passes its line count as `hideBar`; `commandToClient` prints and
+        /// `GameConnection::BottomPrint` keep the bar.
+        #[serde(default)]
+        hide_bar: bool,
     },
     /// Invitation from a minigame owner, answered with Accept/Reject.
     Invite {
@@ -135,6 +142,9 @@ pub enum Notice {
     },
     /// `secureClientCmd_ClientTrust` for every player, as this viewer sees them.
     PlayerTrust(BTreeMap<OwnerId, super::PlayerTrust>),
+    /// The build this player copied, to show and place with its tool;
+    /// `None` takes it away.
+    Blueprint(Option<Box<crate::blueprint::Blueprint>>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -336,6 +346,7 @@ impl Session {
                         control: peer.control,
                         talking: peer.talking,
                         sitting: peer.sitting,
+                        ghost: self.ghost_brick(*owner),
                     },
                 )
             })
@@ -921,6 +932,7 @@ impl Session {
                                 mg::MessageKind::Bottom { seconds } => Notice::Bottom {
                                     text: text.clone(),
                                     seconds: f32::from(seconds),
+                                    hide_bar: false,
                                 },
                             };
                             self.notify(owner, notice);
@@ -1064,6 +1076,9 @@ impl Session {
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
             peer.combat.corpse_cleared = false;
+            // `serverCmdLight` mounts its fxLight on the player object, which
+            // stays with the corpse: a new body starts dark.
+            peer.combat.light = false;
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
             peer.inputs.clear();

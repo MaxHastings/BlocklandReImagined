@@ -156,6 +156,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 casing: String::new(),
                 min_shot_ticks: 0,
                 states,
+                command: None,
             },
         );
         items.insert(
@@ -1642,8 +1643,9 @@ fn inventory_seat_and_respawn_requests_are_bounded() {
 }
 
 /// Requests: Suicide; then while dead: Suicide, WeaponTrigger{down},
-/// EquipTool{0}, Emote("love"), Activate, BuildGesture(ShiftUp),
-/// ToggleLight, Respawn (before the respawn delay).
+/// EquipTool{0}, Activate, BuildGesture(ShiftUp), ToggleLight, Respawn
+/// (before the respawn delay), and Emote("bsd"), which v20 ignores quietly
+/// (the brick selector sends it whenever it opens).
 #[test]
 fn dead_players_cannot_act() {
     let mut g = Game::new(tooled());
@@ -1655,7 +1657,6 @@ fn dead_players_cannot_act() {
         Command::Suicide,
         Command::WeaponTrigger { down: true },
         Command::EquipTool { slot: Some(0) },
-        Command::Emote("love".into()),
         Command::Activate,
         Command::BuildGesture(BuildGesture::ShiftUp),
         Command::ToggleLight,
@@ -1663,6 +1664,7 @@ fn dead_players_cannot_act() {
         let label = format!("{command:?}");
         assert!(g.cmd(a, command).is_err(), "{label} accepted while dead");
     }
+    assert!(g.cmd(a, Command::Emote("bsd".into())).is_ok());
     let respawn = g.s.vitals()[&a].respawn_tick;
     if g.s.simulation().state().tick < respawn {
         assert!(g.cmd(a, Command::Respawn).is_err());

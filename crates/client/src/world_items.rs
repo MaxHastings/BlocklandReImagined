@@ -80,12 +80,15 @@ pub struct WorldItemDiagnostics {
 struct ModelKey {
     model: String,
     tint: [u32; 4],
+    /// The holder's own first-person image, drawn at its first-person detail.
+    first_person: bool,
 }
 impl ModelKey {
     fn new(model: &str, tint: [f32; 4]) -> Self {
         Self {
             model: model.into(),
             tint: tint.map(f32::to_bits),
+            first_person: false,
         }
     }
     fn tint(&self) -> [f32; 4] {
@@ -134,6 +137,10 @@ struct AnimationClock {
     started: f64,
     speed: f64,
     frozen: bool,
+    /// The server re-entered a state playing this sequence (a held hammer
+    /// loops Fire, CheckFire, Fire), so the clip starts over even though
+    /// the replicated state name never changed.
+    restart: Option<String>,
 }
 #[derive(Clone)]
 struct MountedPose {
@@ -166,6 +173,10 @@ pub struct WorldItems {
     /// items in first person (Torque `Player::renderObject`); their mount
     /// poses stay for muzzle effects.
     hide_own_first_person: bool,
+    /// Each projectile's last flight direction. A stuck arrow's velocity is
+    /// zero, but it keeps pointing the way it flew into the wall, as v20's
+    /// projectile keeps its last render transform.
+    headings: BTreeMap<u64, Vec3>,
     pub diagnostics: WorldItemDiagnostics,
 }
 
@@ -200,6 +211,7 @@ impl WorldItems {
             last_seconds: None,
             palette: Vec::new(),
             hide_own_first_person: false,
+            headings: BTreeMap::new(),
             diagnostics: Default::default(),
         })
     }
@@ -207,6 +219,7 @@ impl WorldItems {
         self.models.clear();
         self.clocks.clear();
         self.mounted.clear();
+        self.headings.clear();
         self.last_seconds = None;
         self.diagnostics = Default::default();
     }
@@ -325,7 +338,22 @@ impl WorldItems {
                 priority: false,
             });
         }
+        self.headings
+            .retain(|id, _| view.projectiles.iter().any(|p| p.id == *id));
         for projectile in &view.projectiles {
+            let velocity = projectile.velocity;
+            let heading = if velocity.length_squared() > 1e-6 && velocity.is_finite() {
+                *self.headings.entry(projectile.id).or_default() = velocity;
+                velocity
+            } else {
+                // The server sends a stuck projectile's direction, so a
+                // player who never saw it fly still sees it right.
+                projectile
+                    .heading
+                    .filter(|h| h.is_finite())
+                    .or_else(|| self.headings.get(&projectile.id).copied())
+                    .unwrap_or(velocity)
+            };
             let Some(binding) = self
                 .assets
                 .presentation
@@ -378,7 +406,7 @@ impl WorldItems {
                 transform: SceneTransform {
                     transform: Mat4::from_scale_rotation_translation(
                         Vec3::splat(projectile.scale),
-                        projectile_rotation(projectile.velocity),
+                        projectile_rotation(heading),
                         projectile.position,
                     ),
                     tint: [1., 1., 1., alpha],
@@ -465,7 +493,10 @@ impl WorldItems {
             }
             candidates.push(Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
-                model: ModelKey::new(&image.model, image.tint),
+                model: ModelKey {
+                    first_person: local_first,
+                    ..ModelKey::new(&image.model, image.tint)
+                },
                 pose: pose_key,
                 transform: SceneTransform {
                     transform,
@@ -577,6 +608,7 @@ impl WorldItems {
                 started: seconds,
                 speed: 1.,
                 frozen: false,
+                restart: None,
             });
         if clock.image != image || clock.state != state {
             if clock.image != image {
@@ -600,6 +632,15 @@ impl WorldItems {
                     f64::from(clip.duration) / (f64::from(s.ticks) / 120.)
                 });
             }
+        }
+        // `ShapeBase::setImageState` restarts the state's sequence on every
+        // entry.
+        if let Some(restart) = clock.restart.take()
+            && let Some(clip) = clip.filter(|c| c.name.eq_ignore_ascii_case(&restart))
+        {
+            clock.sequence = Some(clip.name.clone());
+            clock.started = seconds;
+            clock.frozen = false;
         }
         let result = clock
             .sequence
@@ -653,7 +694,8 @@ impl WorldItems {
             let mut model = if let Some(model) = cache.remove(&key) {
                 model
             } else {
-                let mesh = self.assets.mesh(&key.model, key.tint())?;
+                let mut mesh = self.assets.mesh(&key.model, key.tint())?;
+                mesh.first_person = key.first_person;
                 if mesh.data.vertices.is_empty() {
                     self.missing(format!("Model {} has no visible geometry", key.model));
                     continue;
@@ -823,6 +865,13 @@ impl WorldItems {
             .collect()
     }
     /// Resolve a named node only on the exact currently mounted image/hand.
+    /// A mounted image entered a state with this `stateSequence` (a
+    /// `WeaponAnimation` cue on the image's thread): start it over.
+    pub fn restart_image_sequence(&mut self, owner: u64, hand: u8, sequence: &str) {
+        if let Some(clock) = self.clocks.get_mut(&(owner, hand)) {
+            clock.restart = Some(sequence.to_owned());
+        }
+    }
     pub fn mounted_node(&self, owner: u64, hand: u8, image: &str, node: &str) -> Result<Mat4> {
         let mounted = self
             .mounted

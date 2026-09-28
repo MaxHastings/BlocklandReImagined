@@ -95,6 +95,24 @@ pub enum Op {
     Broadcast {
         text: String,
     },
+    /// Copy the build at `brick` for `player` to place with `tool`: the
+    /// brick and every brick joined to it that the player may build on,
+    /// with `above_only` none below the brick. More than `limit` bricks is
+    /// refused.
+    CopyBuild {
+        player: u64,
+        brick: u64,
+        limit: u32,
+        above_only: bool,
+        tool: String,
+    },
+    /// Put an item in a player's tool list (unless they carry it) and,
+    /// with `equip`, in their hand.
+    GiveItem {
+        player: u64,
+        item: String,
+        equip: bool,
+    },
 }
 impl Op {
     pub fn capability(&self) -> &'static str {
@@ -108,10 +126,12 @@ impl Op {
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } => "chat",
+            Self::CopyBuild { .. } => "build",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
-            | Self::Control { .. } => "player",
+            | Self::Control { .. }
+            | Self::GiveItem { .. } => "player",
         }
     }
     /// Shape limits, independent of who asks.
@@ -119,6 +139,7 @@ impl Op {
         let finite = |v: &[f32]| v.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.0);
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
+        let item = |t: &str| bri_package::id::is_content_ref(t, Some("weapon"));
         let ok = match self {
             Self::RemoveBrick { .. }
             | Self::RemoveEntity { .. }
@@ -168,6 +189,8 @@ impl Op {
             Self::Steer { direction, .. } => finite(direction),
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
+            Self::CopyBuild { limit, tool, .. } => (1..=10_000).contains(limit) && item(tool),
+            Self::GiveItem { item: id, .. } => item(id),
         };
         if ok {
             Ok(())
@@ -221,5 +244,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Control { .. } => "control",
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
+        Op::CopyBuild { .. } => "copy_build",
+        Op::GiveItem { .. } => "give_item",
     }
 }

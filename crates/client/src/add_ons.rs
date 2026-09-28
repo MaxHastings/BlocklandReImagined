@@ -39,15 +39,6 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// What each capability lets a package do, in a player's words.
-const ALLOWED: &[(&str, &str)] = &[
-    ("world.edit", "change the world's bricks"),
-    ("damage", "hurt players and break bricks"),
-    ("entity", "spawn and move its own creatures and objects"),
-    ("chat", "send chat messages"),
-    ("players", "move and respawn players"),
-];
-
 pub fn view(root: &Path) -> AddOnsView {
     match Library::scan(root) {
         Ok(library) => AddOnsView {
@@ -77,7 +68,31 @@ pub fn mismatch(root: &Path, reason: &str) -> Option<bri_ui::api::AddOnMismatch>
             .and_then(|l| l.get(id))
             .map_or(id.to_string(), |e| e.name().to_string())
     };
+    let base: Vec<String> = bri_package::packages::PackageSet::base()
+        .packages
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    let is_base = |id: &str| base.iter().any(|b| b == id);
+    // Equal version numbers explain nothing: say what differs instead.
+    let same: Vec<&bri_package::environment::RefusedPackage> = refused
+        .iter()
+        .filter(|r| r.server.is_some() && r.server == r.client)
+        .collect();
+    let explanation = match same.as_slice() {
+        [] => String::new(),
+        [r, ..] if is_base(&r.id) => format!(
+            "{} has the same version on both computers but different files.              The base game is imported from each computer's own Blockland v20 folder,              so one copy came from an older build of this game or was changed after              importing. Install both computers from the same game package.",
+            name(&r.id)
+        ),
+        [r, ..] => format!(
+            "{} has the same version on both computers but different files:              one copy was edited or rebuilt without a new version number.              Use the same copy as the host.",
+            name(&r.id)
+        ),
+    };
     Some(bri_ui::api::AddOnMismatch {
+        base_game: refused.iter().any(|r| is_base(&r.id)),
+        explanation,
         rows: refused
             .into_iter()
             .map(|r| bri_ui::api::MismatchRow {
@@ -351,12 +366,7 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
         allowed: info
             .capabilities
             .iter()
-            .map(|c| {
-                ALLOWED
-                    .iter()
-                    .find(|(k, _)| k == c)
-                    .map_or(c.clone(), |(_, words)| words.to_string())
-            })
+            .map(|c| bri_package::capability::describe(c).map_or(c.clone(), str::to_string))
             .collect(),
         problems: e
             .problems
@@ -456,6 +466,26 @@ mod tests {
         assert_eq!(
             (m.rows[0].server.as_str(), m.rows[0].yours.as_str()),
             ("1.0.0", "")
+        );
+        assert!(m.explanation.is_empty() && !m.base_game);
+        // The same version with different files is said in words.
+        let hash = |c: char| c.to_string().repeat(64);
+        let m = mismatch(
+            &root,
+            &format!(
+                "Your content does not match the server: server has v20-map-bundle 16.0.0 ({}), you have v20-map-bundle 16.0.0 ({})",
+                hash('a'),
+                hash('b')
+            ),
+        )
+        .unwrap();
+        assert!(m.base_game);
+        assert!(
+            m.explanation.starts_with(
+                "v20-map-bundle has the same version on both computers but different files."
+            ),
+            "{}",
+            m.explanation
         );
         assert!(mismatch(&root, "Timed out").is_none());
         // An old add-on dropped in Add-Ons is offered for import, last.

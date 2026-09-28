@@ -106,3 +106,30 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
     assert!(gaps.is_empty(), "{} gaps:\n{}", gaps.len(), gaps.join("\n"));
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the converted audio pack"]
+fn cue_sounds_keep_their_v20_descriptions() -> Result<()> {
+    // Profile, then its AudioDescription: 3D reference and max distance
+    // (None is 2D) and volume. The brick sounds are client profiles on
+    // AudioClientClose3d (allClientScripts.cs:143).
+    let bank = SoundBank::load(content("audio-pack-001"), &BankOptions::default())?;
+    for (profile, spatial, gain) in [
+        ("BrickBreak", Some((10.0, 60.0)), 1.0),
+        ("BrickPlant", Some((10.0, 60.0)), 1.0),
+        ("rocketExplodeSound", Some((20.0, 100.0)), 1.0),
+        ("vehicleExplosionSound", Some((20.0, 100.0)), 1.0),
+        ("gunShot1Sound", Some((10.0, 60.0)), 1.0),
+        ("bulletHitSound", Some((10.0, 60.0)), 1.0),
+        ("JumpSound", Some((5.0, 30.0)), 1.0),
+        ("weaponSwitchSound", Some((5.0, 30.0)), 1.0),
+    ] {
+        let playback = &bank.resolve(profile)?.playback;
+        let got = playback
+            .spatial
+            .as_ref()
+            .map(|s| (s.reference_distance, s.max_distance));
+        assert_eq!((got, playback.gain), (spatial, gain), "{profile}");
+    }
+    Ok(())
+}
