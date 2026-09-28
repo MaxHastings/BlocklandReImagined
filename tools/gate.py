@@ -367,7 +367,11 @@ def prepare_worktree(root, sha):
         git("worktree", "add", "--detach", str(worktree), sha)
     else:
         git("checkout", "--detach", "--force", sha, cwd=worktree)
-        git("clean", "-fdq", "-e", "/content", cwd=worktree)
+        git("reset", "-q", "--hard", sha, cwd=worktree)
+        # -x also drops ignored leftovers, keeping the content junction,
+        # test report folders and any stray in-tree target/.
+        git("clean", "-fdxq", "-e", "/content", "-e", "/artifacts", "-e", "/target",
+            cwd=worktree)
     content = worktree / "content"
     if not content.exists():
         source = main_checkout() / "content"
