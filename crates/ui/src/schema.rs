@@ -228,6 +228,17 @@ pub struct UiData {
     /// Avatar part lists (`base/data/shapes/player/*.txt`) and face/decal names.
     #[serde(default)]
     pub avatar: AvatarData,
+    /// HelpDlg's pages (`base/help/*.hfl`), in `sortNumerical` order.
+    #[serde(default)]
+    pub help: Vec<HelpPage>,
+}
+
+/// One help page: its list name (the file's base name, `1. Controls`) and
+/// its text in the ML subset the UI draws.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HelpPage {
+    pub name: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

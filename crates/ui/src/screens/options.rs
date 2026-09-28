@@ -1763,7 +1763,12 @@ mod tests {
             ("GuiSliderCtrl", "SliderGraphicsAnisotropy", "value", ""),
             ("GuiCheckBoxCtrl", "OptPrecipitation", PRECIPITATION, ""),
             ("GuiCheckBoxCtrl", "OptNoobJet", "$pref::Input::noobjet", ""),
-            ("GuiCheckBoxCtrl", "OptVehicleInvert", VEHICLE_MOUSE_INVERT, ""),
+            (
+                "GuiCheckBoxCtrl",
+                "OptVehicleInvert",
+                VEHICLE_MOUSE_INVERT,
+                "",
+            ),
             ("GuiSliderCtrl", DISTANCE_SLIDER, "value", ""),
             (
                 "GuiRadioCtrl",

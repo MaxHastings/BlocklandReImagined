@@ -6,6 +6,7 @@ pub mod addons;
 pub mod admin;
 pub mod avatar;
 pub mod console;
+pub mod help;
 pub mod menus;
 pub mod modes;
 pub mod minigames;
@@ -77,6 +78,8 @@ pub enum ScreenId {
     /// Start Game's Advanced Config (`serverConfigGui` over the saved
     /// `$Pref::Server::*`), before a game is hosted.
     ServerConfig,
+    /// v20 `HelpDlg`: the main menu's Credits button and F1.
+    Help,
 }
 
 pub trait Screen {
@@ -173,6 +176,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::AddOnMismatch => return Box::new(addons::Mismatch::new(core)),
         ScreenId::GameModes => return Box::new(modes::GameModes::new(core)),
         ScreenId::ServerConfig => return Box::new(admin::ServerConfig::new(core)),
+        ScreenId::Help => return Box::new(help::Help::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),

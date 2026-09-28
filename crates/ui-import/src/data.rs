@@ -712,3 +712,72 @@ registerOutputEvent("fxDTSBrick", "setEmitterDirection", "list Up 0 Down 1 North
         assert_eq!(per["helmet"], vec!["none".to_string(), "visor".to_string()]);
     }
 }
+
+/// Windows-1252, the help files' encoding (Torque read them as bytes).
+fn cp1252(bytes: &[u8]) -> String {
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
+        '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}',
+        'ž', 'Ÿ',
+    ];
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80..=0x9f => HIGH[usize::from(b - 0x80)],
+            _ => char::from(b),
+        })
+        .collect()
+}
+
+/// A `.hfl` help page in the ML subset the UI draws. Margins, tab stops,
+/// fonts and colours have no equivalent there and are dropped; links keep
+/// their text but not their (long dead) blockland.us targets; tabs indent.
+pub fn help_text(bytes: &[u8]) -> String {
+    let src = cp1252(bytes).replace('\r', "");
+    let mut out = String::new();
+    let mut rest = src.as_str();
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let Some(end) = tail.find('>') else {
+            out.push_str(tail);
+            rest = "";
+            break;
+        };
+        let tag = tail[1..end].to_ascii_lowercase();
+        if tag == "br" || tag.starts_with("just:") {
+            out.push_str(&tail[..=end]);
+        }
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    out.replace('\t', "    ").trim().to_string()
+}
+
+/// `HelpFileList.sortNumerical(0)`: by the page's leading number.
+pub fn help_order(name: &str) -> (u32, String) {
+    let number = name
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(u32::MAX);
+    (number, name.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    #[test]
+    fn help_pages_keep_text_and_drop_unsupported_markup() {
+        let src = b"<lmargin%:3><font:Arial Bold:16>1. Select\n<lmargin%:10>Press <color:0000FF>B<color:000000> now.\n\t<a:blockland.us/x>Eric</a> \xe9\x93";
+        assert_eq!(
+            help_text(src),
+            "1. Select\nPress B now.\n    Eric \u{e9}\u{201c}"
+        );
+        assert_eq!(help_text(b"<just:center>Hi<br>x"), "<just:center>Hi<br>x");
+        let mut names = vec!["7. Loading", "10. Late", "0. Credits"];
+        names.sort_by_key(|n| help_order(n));
+        assert_eq!(names, ["0. Credits", "7. Loading", "10. Late"]);
+    }
+}
