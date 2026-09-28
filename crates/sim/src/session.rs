@@ -412,6 +412,9 @@ struct Peer {
     window_tick: u64,
     actions: u32,
     chats: u32,
+    /// Bricks planted in the current one-second window
+    /// (`$Pref::Server::MaxBricksPerSecond`).
+    plants: u32,
     saves: u32,
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
@@ -793,6 +796,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                plants: 0,
                 saves: 0,
                 inspection: None,
                 last_activate: None,
@@ -977,6 +981,7 @@ impl Session {
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                plants: 0,
                 saves: 0,
                 inspection: None,
                 last_activate: None,
@@ -1169,6 +1174,7 @@ impl Session {
                 peer.window_tick = tick;
                 peer.actions = 0;
                 peer.chats = 0;
+                peer.plants = 0;
                 peer.saves = 0;
             }
             peer.actions = peer.actions.saturating_add(1);
@@ -1453,12 +1459,23 @@ impl Session {
                 brick.quarter_turns = quarter_turns;
                 brick.color = color;
                 brick.print = default_print.map(ContentRef::Resolved);
+                // `ServerCmdPlantBrick`: the server's brick limit, then the
+                // plant rate for non-administrators, then TooFarDistance.
+                let settings = &self.admin.settings;
+                if self.simulation.state().bricks.len() >= settings.brick_limit as usize
+                    || (!peer.actor.administrator && peer.plants >= settings.bricks_per_second)
+                {
+                    return Err(crate::simulation::PlantFailure::Limit.into());
+                }
                 let builder = Builder {
                     actor: &peer.actor,
                     position: Vec3::from(peer.player.state().feet),
-                    reach: 50.0,
+                    reach: settings.too_far_distance.clamp(0.0, 100.0),
                 };
                 let id = self.simulation.plant(&builder, brick)?;
+                if let Some(peer) = self.peers.get_mut(&owner) {
+                    peer.plants = peer.plants.saturating_add(1);
+                }
                 self.special_planted(owner, id)?;
                 self.dirty.insert(id);
                 self.push_undo(owner, undo::UndoEntry::Plant(id));
@@ -1528,6 +1545,11 @@ impl Session {
                         && !text.chars().any(char::is_control),
                     "Invalid chat message"
                 );
+                // `$Pref::Server::MaxChatLen` cuts a long message.
+                let text: String = text
+                    .chars()
+                    .take(self.admin.settings.max_chat_length as usize)
+                    .collect();
                 let next = self
                     .next_chat
                     .checked_add(1)

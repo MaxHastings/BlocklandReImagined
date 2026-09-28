@@ -32,6 +32,8 @@ pub enum AdminCapability {
     TimeScale,
     /// Admin menu Change Map.
     ChangeMap,
+    /// Server settings (brick limit, plant rate, chat length, reach).
+    HostOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,7 +79,7 @@ pub struct MapListing {
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminSnapshot {
     pub revision: u64,
     pub role: Role,
@@ -85,9 +87,11 @@ pub struct AdminSnapshot {
     pub legacy_lan: bool,
     pub supported: BTreeSet<AdminCapability>,
     pub players: Vec<AdminPlayer>,
+    /// The server settings, for whoever may change them.
+    pub options: Option<bri_admin::ServerSettings>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminReply {
     pub snapshot: AdminSnapshot,
     pub data: AdminData,
@@ -148,6 +152,8 @@ pub(super) struct AdminRuntime {
     passwords: BTreeMap<PasswordSlot, Secret>,
     /// The host installed a map list, so Change Map works.
     pub(super) maps_available: bool,
+    /// Server settings the host applies (v20's `$Pref::Server::*`).
+    pub(super) settings: bri_admin::ServerSettings,
 }
 
 impl AdminRuntime {
@@ -274,13 +280,18 @@ impl AdminRuntime {
         if role == Role::SuperAdmin || self.authority.host_authority(Origin::Connection(id))? {
             supported.insert(AdminCapability::AdminPassword);
         }
+        let host = self.authority.host_authority(Origin::Connection(id))?;
+        if host {
+            supported.insert(AdminCapability::HostOptions);
+        }
         Ok(AdminSnapshot {
             revision: self.revision,
             role,
-            local_host: self.authority.host_authority(Origin::Connection(id))?,
+            local_host: host,
             legacy_lan: false,
             supported,
             players,
+            options: host.then(|| self.settings.clone()),
         })
     }
 
@@ -332,6 +343,7 @@ impl AdminRuntime {
                 | Action::ChangeMap { .. }
                 | Action::SetAdminPassword { .. }
                 | Action::HostSetRole { .. }
+                | Action::HostConfigure { .. }
                 | Action::HostSetPassword {
                     slot: PasswordSlot::Admin | PasswordSlot::SuperAdmin,
                     ..
@@ -598,8 +610,13 @@ impl AdminRuntime {
                     }
                 }
                 Effect::BansChanged | Effect::AutoRolesChanged => changed = true,
-                Effect::Configure(_) => {
-                    anyhow::bail!("Administration setting has no installed host adapter")
+                Effect::Configure(settings) => {
+                    // Applied: brick limit and plant rate (planting), max
+                    // chat length and TooFarDistance. The rest are kept and
+                    // shown as set.
+                    settings.validate()?;
+                    self.settings = settings;
+                    changed = true;
                 }
             }
         }

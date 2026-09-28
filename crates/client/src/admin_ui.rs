@@ -57,6 +57,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Capability::DestructoWand => ui::AdminFeature::Wand,
                 Capability::Spy => ui::AdminFeature::Spy,
                 Capability::ChangeMap => ui::AdminFeature::Maps,
+                Capability::HostOptions => ui::AdminFeature::HostOptions,
                 // Chat commands only; the Admin menu has no buttons for them.
                 Capability::Teleport | Capability::Vehicles | Capability::TimeScale => {
                     return None;
@@ -78,7 +79,70 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 persistent_identity: player.persistent_identity,
             })
             .collect(),
-        options: None,
+        options: snapshot.options.as_ref().map(options),
+    }
+}
+fn quotas(q: &bri_admin::Quotas) -> ui::AdminQuotas {
+    ui::AdminQuotas {
+        schedules: q.schedules,
+        misc: q.misc,
+        projectiles: q.projectiles,
+        items: q.items,
+        environment: q.environment,
+        players: q.players,
+        vehicles: q.vehicles,
+    }
+}
+fn server_quotas(q: &ui::AdminQuotas) -> bri_admin::Quotas {
+    bri_admin::Quotas {
+        schedules: q.schedules,
+        misc: q.misc,
+        projectiles: q.projectiles,
+        items: q.items,
+        environment: q.environment,
+        players: q.players,
+        vehicles: q.vehicles,
+    }
+}
+fn options(s: &bri_admin::ServerSettings) -> ui::AdminOptions {
+    ui::AdminOptions {
+        name: s.name.clone(),
+        port: s.port,
+        max_players: s.max_players,
+        brick_limit: s.brick_limit,
+        bricks_per_second: s.bricks_per_second,
+        max_chat_length: s.max_chat_length,
+        physics_vehicles: s.physics_vehicles,
+        player_vehicles: s.player_vehicles,
+        random_brick_color: s.random_brick_color,
+        chat_filter: s.chat_filter,
+        falling_damage: s.falling_damage,
+        public_domain_timeout_minutes: s.public_domain_timeout_minutes,
+        too_far_distance: s.too_far_distance,
+        per_player: quotas(&s.per_player),
+        lan: quotas(&s.lan),
+    }
+}
+/// The Server Settings dialog's values over the host's current settings
+/// (keeping those the dialog does not show).
+fn settings(o: &ui::AdminOptions, current: &bri_admin::ServerSettings) -> bri_admin::ServerSettings {
+    bri_admin::ServerSettings {
+        name: o.name.clone(),
+        port: o.port,
+        max_players: o.max_players,
+        brick_limit: o.brick_limit,
+        bricks_per_second: o.bricks_per_second,
+        max_chat_length: o.max_chat_length,
+        physics_vehicles: o.physics_vehicles,
+        player_vehicles: o.player_vehicles,
+        random_brick_color: o.random_brick_color,
+        chat_filter: o.chat_filter,
+        falling_damage: o.falling_damage,
+        public_domain_timeout_minutes: o.public_domain_timeout_minutes,
+        too_far_distance: o.too_far_distance,
+        per_player: server_quotas(&o.per_player),
+        lan: server_quotas(&o.lan),
+        ..current.clone()
     }
 }
 
@@ -145,6 +209,18 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
                 password: Secret::new(password.0.clone())?,
             },
         ),
+        ui::AdminAction::ConfigureHost { options } => (
+            Capability::HostOptions,
+            Action::HostConfigure {
+                settings: settings(
+                    options,
+                    snapshot
+                        .options
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Host settings unavailable"))?,
+                ),
+            },
+        ),
         _ => bail!("This administration operation is not connected to gameplay yet"),
     };
     ensure!(
@@ -154,6 +230,7 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
     let allowed = match capability {
         Capability::Login => true,
         Capability::AdminPassword => snapshot.local_host || snapshot.role == Role::SuperAdmin,
+        Capability::HostOptions => snapshot.local_host,
         _ => snapshot.role.is_admin(),
     };
     ensure!(allowed, "Administration permission has changed");
@@ -323,6 +400,7 @@ mod tests {
             ]
             .into(),
             players: vec![],
+            options: None,
         }
     }
     #[test]

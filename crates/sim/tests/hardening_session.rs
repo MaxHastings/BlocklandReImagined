@@ -2176,3 +2176,52 @@ fn players_sharing_a_name_are_numbered() {
     assert_eq!(names[&d], long);
     assert_eq!(names[&e], format!("{} 2", &long[..46]));
 }
+
+/// First impressions 14: the host's Server Settings apply. The brick limit
+/// holds for everyone, the plant rate for non-administrators (v20
+/// `MsgPlantError_Limit` for both), and long chat is cut to the limit.
+#[test]
+fn host_server_settings_limit_bricks_plant_rate_and_chat() {
+    let mut s = plain();
+    let host = s.join("Host".into(), Vec3::new(0.0, 0.05, 6.0), true).unwrap();
+    let guest = s.join("Guest".into(), Vec3::new(4.0, 0.05, 6.0), false).unwrap();
+    let mut seq = BTreeMap::<OwnerId, u64>::new();
+    let mut send = |s: &mut Session, owner: OwnerId, command: Command| {
+        let n = seq.entry(owner).or_default();
+        *n += 1;
+        s.command(owner, *n, command)
+    };
+    let settings = ServerSettings {
+        brick_limit: 4,
+        bricks_per_second: 2,
+        max_chat_length: 5,
+        ..ServerSettings::default()
+    };
+    // Only the host may change them.
+    assert!(send(&mut s, guest, admin(Action::HostConfigure { settings: settings.clone() })).is_err());
+    let Ok(Reply::Admin(reply)) = send(&mut s, host, admin(Action::HostConfigure { settings: settings.clone() })) else {
+        panic!("the host configures")
+    };
+    assert_eq!(reply.snapshot.options, Some(settings));
+    let plant = |x: f32| Command::Plant {
+        definition: "plate".into(),
+        position: [x + 0.5, 0.1, -3.25],
+        quarter_turns: 0,
+        color: 0,
+    };
+    let limit = |r: anyhow::Result<Reply>| {
+        r.unwrap_err().downcast_ref::<bri_sim::simulation::PlantFailure>().copied()
+            == Some(bri_sim::simulation::PlantFailure::Limit)
+    };
+    assert!(send(&mut s, guest, plant(0.0)).is_ok());
+    assert!(send(&mut s, guest, plant(2.0)).is_ok());
+    assert!(limit(send(&mut s, guest, plant(4.0))), "third plant in a second");
+    for _ in 0..121 {
+        s.step().unwrap();
+    }
+    assert!(send(&mut s, guest, plant(4.0)).is_ok());
+    assert!(send(&mut s, host, plant(6.0)).is_ok());
+    assert!(limit(send(&mut s, host, plant(8.0))), "the server's brick limit");
+    assert!(send(&mut s, guest, Command::Chat("hello there".into())).is_ok());
+    assert_eq!(s.chat().last().unwrap().text, "hello");
+}

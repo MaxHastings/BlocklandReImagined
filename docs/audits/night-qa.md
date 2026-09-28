@@ -232,7 +232,7 @@ loading, hosting and joining are night QA's and are not covered here.
 | 11 | Two-player failure closed (`claude/map-fixes`); the KNOWN-ISSUES drift is fixed (this branch). Offering the Tutorial on first launch: open. |
 | 12 | Closed: v20's own Advanced "Max Draw Distance" slider (110 to 1000, `$pref::visibleDistanceMax`) is shown again and caps the map's visible distance and fog, which also shortens terrain streaming (`max_draw_distance_slider_saves_the_cap`). Frame cap and presets were already on main. |
 | 13 | Text size, colourblind and subtitle options: open. |
-| 14 | Join passwords: hidden (release default in `orthogonality.md`). Brick limits: open. |
+| 14 | Join passwords: hidden (release default in `orthogonality.md`). Brick limits: closed. Admin > Server Settings applies the brick limit (everyone) and bricks per second (non-administrators), both refused with v20's limit icon, plus max chat length and TooFarDistance; the other settings are kept and shown (`host_server_settings_limit_bricks_plant_rate_and_chat`, protocol 38). |
 | 15 | Duplicate names: closed (this branch): a second "Blockhead" joins as "Blockhead 2" (`players_sharing_a_name_are_numbered`). A name prompt on first run: open. |
 | 16 | Closed (this branch): `bri-server ... resume ...` continues from the newest autosave or shutdown save in its state folder (`newest_world`). |
 | 17 | Closed on main: the main menu and `--version` show the build's version. |
