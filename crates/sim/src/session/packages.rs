@@ -1289,7 +1289,14 @@ impl Session {
                             1 => "Copied 1 brick".to_string(),
                             n => format!("Copied {n} bricks"),
                         };
-                        self.notify(player, Notice::Bottom { text, seconds: 2.0, hide_bar: false });
+                        self.notify(
+                            player,
+                            Notice::Bottom {
+                                text,
+                                seconds: 2.0,
+                                hide_bar: false,
+                            },
+                        );
                     }
                     Err(error) => self.center_print(player, format!("{error:#}")),
                 }
@@ -1850,7 +1857,12 @@ impl Session {
                 // Also the nearest movable object before the brick, reported
                 // beside it: a script aiming at bricks sees what it did.
                 let object = self
-                    .aim_object(owner, eye, direction, hit.as_ref().map_or(reach, |h| h.distance))
+                    .aim_object(
+                        owner,
+                        eye,
+                        direction,
+                        hit.as_ref().map_or(reach, |h| h.distance),
+                    )
                     .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
                     .map(|(object, at, distance)| script::AimObject {
                         object,

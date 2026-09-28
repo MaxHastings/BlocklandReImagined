@@ -5,7 +5,9 @@
 ;;   (field.wgsl) and sparks orbiting it (spark.wgsl);
 ;; - charging a throw: a swelling orb at the muzzle with sparks drawn in;
 ;; - a throw or punt: a shockwave ring (ring.wgsl) and a spray of sparks
-;;   where it struck, and a smaller ring at the muzzle.
+;;   where it struck, and a smaller ring at the muzzle;
+;; - sounds for each, placed where they happen: grab, drop, charge, launch
+;;   and punt (made by tools/make_showcase_sounds.py).
 ;;
 ;; Everything comes from what the game already knows (`world.read`):
 ;; where players and vehicles are drawn, and each player's `beam` from the
@@ -27,7 +29,7 @@
 ;;            +0 id  +4 in use  +8 shots  +12 shots known  +16 charging
 ;;            +20 charge start  +24 last shot time  +28 shot centre xyz
 ;;            +40 shot direction xyz  +52 shot radius  +56 seen this frame
-;;            +60 muzzle at the shot xyz
+;;            +60 muzzle at the shot xyz  +72 what was held last frame
 ;;   32768  mesh vertices being built (32 bytes each)
 ;;   65536  mesh indices being built
 (module
@@ -41,6 +43,7 @@
   (import "bri" "players" (func $players (param i32 i32) (result i32)))
   (import "bri" "vehicles" (func $vehicles (param i32 i32) (result i32)))
   (import "bri" "state_num" (func $state_num (param i32 i32 i32 i32 i32 i32) (result f32)))
+  (import "bri" "sound_at" (func $sound_at (param i32 i32 f32 f32 f32 f32) (result i32)))
   (memory (export "memory") 2)
 
   (global $tube (mut i32) (i32.const 0))
@@ -66,6 +69,11 @@
   (data (i32.const 128) "gravity-gun")
   (data (i32.const 144) "beam")
   (data (i32.const 160) "gravity gun effects ready")
+  (data (i32.const 192) "client/sounds/grab.wav")
+  (data (i32.const 224) "client/sounds/drop.wav")
+  (data (i32.const 256) "client/sounds/charge.wav")
+  (data (i32.const 288) "client/sounds/launch.wav")
+  (data (i32.const 320) "client/sounds/punt.wav")
 
   ;; ---- Meshes ----
 
@@ -295,6 +303,12 @@
     (call $state_num (i32.const 128) (i32.const 11) (i32.const 144) (i32.const 4)
       (local.get $player) (local.get $index)))
 
+  ;; Play one of the sounds (by its string's address and length) there.
+  (func $sound (param $name i32) (param $len i32) (param $volume f32)
+               (param $x f32) (param $y f32) (param $z f32)
+    (drop (call $sound_at (local.get $name) (local.get $len) (local.get $volume)
+      (local.get $x) (local.get $y) (local.get $z))))
+
   (func $clamp01 (param $x f32) (result f32)
     (f32.min (f32.const 1) (f32.max (f32.const 0) (local.get $x))))
 
@@ -308,7 +322,7 @@
     (local $lx f32) (local $ly f32) (local $lz f32)
     (local $rx f32) (local $rz f32) (local $rl f32)
     (local $mx f32) (local $my f32) (local $mz f32)
-    (local $charge f32) (local $age f32)
+    (local $charge f32) (local $age f32) (local $shot i32)
     (global.set $players_n (call $players (i32.const 2048) (i32.const 64)))
     (global.set $vehicles_n (call $vehicles (i32.const 8192) (i32.const 256)))
     ;; Slots not seen this frame belong to players who left.
@@ -360,11 +374,14 @@
         (local.set $mz (f32.add (local.get $ez)
           (f32.add (f32.mul (local.get $lz) (f32.const 0.9)) (f32.mul (local.get $rz) (f32.const 0.35)))))
 
-        ;; Charging: remember when it began.
+        ;; Charging: remember when it began, and whine as it builds.
         (if (f32.gt (local.get $charging) (f32.const 0.5))
           (then
             (if (f32.eq (f32.load offset=16 (local.get $slot)) (f32.const 0))
-              (then (f32.store offset=20 (local.get $slot) (local.get $t))))
+              (then
+                (f32.store offset=20 (local.get $slot) (local.get $t))
+                (call $sound (i32.const 256) (i32.const 24) (f32.const 0.8)
+                  (local.get $mx) (local.get $my) (local.get $mz))))
             (f32.store offset=16 (local.get $slot) (f32.const 1)))
           (else (f32.store offset=16 (local.get $slot) (f32.const 0))))
 
@@ -373,7 +390,9 @@
         (if (f32.eq (f32.load offset=12 (local.get $slot)) (f32.const 0))
           (then
             (f32.store offset=8 (local.get $slot) (local.get $shots))
+            (f32.store offset=72 (local.get $slot) (local.get $held))
             (f32.store offset=12 (local.get $slot) (f32.const 1))))
+        (local.set $shot (i32.const 0))
         (if (f32.ne (local.get $shots) (f32.load offset=8 (local.get $slot)))
           (then
             (if (call $locate (local.get $shot_kind) (local.get $shot_id))
@@ -388,8 +407,22 @@
                 (f32.store offset=52 (local.get $slot) (global.get $or))
                 (f32.store offset=60 (local.get $slot) (local.get $mx))
                 (f32.store offset=64 (local.get $slot) (local.get $my))
-                (f32.store offset=68 (local.get $slot) (local.get $mz))))
+                (f32.store offset=68 (local.get $slot) (local.get $mz))
+                ;; A throw of what was held booms; a punt knocks.
+                (if (f32.gt (f32.load offset=72 (local.get $slot)) (f32.const 0.5))
+                  (then (call $sound (i32.const 288) (i32.const 24) (f32.const 1)
+                    (global.get $ox) (global.get $oy) (global.get $oz)))
+                  (else (call $sound (i32.const 320) (i32.const 22) (f32.const 0.9)
+                    (global.get $ox) (global.get $oy) (global.get $oz))))))
+            (local.set $shot (i32.const 1))
             (f32.store offset=8 (local.get $slot) (local.get $shots))))
+        ;; Let go without a throw: the hum falls away.
+        (if (i32.and
+              (i32.and (f32.gt (f32.load offset=72 (local.get $slot)) (f32.const 0.5))
+                       (f32.lt (local.get $held) (f32.const 0.5)))
+              (i32.eqz (local.get $shot)))
+          (then (call $sound (i32.const 224) (i32.const 22) (f32.const 0.7)
+            (local.get $mx) (local.get $my) (local.get $mz))))
 
         (local.set $charge (f32.const 0))
         (if (f32.gt (local.get $charging) (f32.const 0.5))
@@ -403,6 +436,10 @@
               (f32.gt (local.get $held) (f32.const 0.5))
               (call $locate (local.get $held) (local.get $held_id)))
           (then
+            ;; Caught: the beam takes hold with a rising hum.
+            (if (f32.lt (f32.load offset=72 (local.get $slot)) (f32.const 0.5))
+              (then (call $sound (i32.const 192) (i32.const 22) (f32.const 0.9)
+                (global.get $ox) (global.get $oy) (global.get $oz))))
             ;; The soft outer glow...
             (call $param (i32.const 0) (local.get $mx) (local.get $my) (local.get $mz) (f32.const 0.45))
             (call $param (i32.const 1) (global.get $ox) (global.get $oy) (global.get $oz) (local.get $charge))
@@ -470,6 +507,7 @@
               (f32.load offset=48 (local.get $slot)) (f32.const 16))
             (call $orange (f32.const 1))
             (call $draw (global.get $sparks) (global.get $m_spark))))
+        (f32.store offset=72 (local.get $slot) (local.get $held))
         (br $each_player)))
     ;; Free the slots of players no longer here.
     (local.set $i (i32.const 0))

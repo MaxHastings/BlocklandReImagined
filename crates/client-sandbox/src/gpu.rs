@@ -446,9 +446,7 @@ impl LayerRenderer {
         for (i, draw) in frame.draws.iter().enumerate() {
             let uniform = DrawUniform {
                 model: draw.model,
-                params: draw
-                    .params
-                    .unwrap_or(layer.materials[draw.material].params),
+                params: draw.params.unwrap_or(layer.materials[draw.material].params),
             };
             let at = i * DRAW_STRIDE as usize;
             bytes[at..at + std::mem::size_of::<DrawUniform>()]

@@ -385,12 +385,24 @@ pub struct Layer {
 pub struct Frame {
     pub draws: Vec<Draw>,
     pub triangles: u64,
-    /// Sound files (from the Add-On) and volume.
-    pub sounds: Vec<(String, f32)>,
+    /// Sounds to play (from the Add-On's own files).
+    pub sounds: Vec<Sound>,
     /// Messages to the Add-On's server script.
     pub outbox: Vec<Vec<u8>>,
     pub log: Vec<String>,
     log_bytes: usize,
+}
+
+/// One sound an Add-On asked for this frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sound {
+    /// One of the files its `client.sounds` lists.
+    pub name: String,
+    /// 0 to 1.
+    pub volume: f32,
+    /// Where in the world it plays (fading with distance), or `None` for
+    /// the player's ears.
+    pub at: Option<[f32; 3]>,
 }
 
 /// What the engine tells an Add-On each frame.
@@ -602,6 +614,36 @@ fn floats(bytes: &[u8]) -> Vec<f32> {
 fn text(caller: &mut Host<'_>, ptr: i32, len: i32, max: usize) -> wasmtime::Result<String> {
     let bytes = read(caller, ptr, len, max)?;
     String::from_utf8(bytes).map_err(|_| misuse(caller, "text that is not UTF-8"))
+}
+
+/// Queue one of the Add-On's sounds; past the frame's allowance it is
+/// dropped (-1), since sounds are cosmetic.
+fn queue_sound(
+    caller: &mut Host<'_>,
+    ptr: i32,
+    len: i32,
+    volume: f32,
+    at: Option<[f32; 3]>,
+) -> wasmtime::Result<i32> {
+    let name = text(caller, ptr, len, 256)?;
+    if !caller.data().sounds.contains(&name) {
+        return Err(misuse(caller, format!("no sound `{name}` in this Add-On")));
+    }
+    let limit = caller.data().budgets.sounds_per_frame;
+    let frame = &mut caller.data_mut().frame;
+    if frame.sounds.len() >= limit {
+        return Ok(-1);
+    }
+    frame.sounds.push(Sound {
+        name,
+        volume: if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        at,
+    });
+    Ok(0)
 }
 
 /// Queue one draw, with the material's parameters or its own (16 floats at
@@ -901,27 +943,24 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             m,
             "sound_play",
             |mut caller: Host<'_>, ptr: i32, len: i32, volume: f32| -> wasmtime::Result<i32> {
-                let name = text(&mut caller, ptr, len, 256)?;
-                if !caller.data().sounds.contains(&name) {
-                    return Err(misuse(
-                        &mut caller,
-                        format!("no sound `{name}` in this Add-On"),
-                    ));
+                queue_sound(&mut caller, ptr, len, volume, None)
+            },
+        )?;
+        linker.func_wrap(
+            m,
+            "sound_at",
+            |mut caller: Host<'_>,
+             ptr: i32,
+             len: i32,
+             volume: f32,
+             x: f32,
+             y: f32,
+             z: f32|
+             -> wasmtime::Result<i32> {
+                if ![x, y, z].iter().all(|v| v.is_finite() && v.abs() <= 1.0e6) {
+                    return Err(misuse(&mut caller, "a place that is not a finite number"));
                 }
-                let limit = caller.data().budgets.sounds_per_frame;
-                let frame = &mut caller.data_mut().frame;
-                if frame.sounds.len() >= limit {
-                    return Ok(-1); // Dropped, not fatal: sounds are cosmetic.
-                }
-                frame.sounds.push((
-                    name,
-                    if volume.is_finite() {
-                        volume.clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    },
-                ));
-                Ok(0)
+                queue_sound(&mut caller, ptr, len, volume, Some([x, y, z]))
             },
         )?;
     }
@@ -972,10 +1011,7 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
             m,
             "players",
             |mut caller: Host<'_>, ptr: i32, capacity: i32| -> wasmtime::Result<i32> {
-                let records = caller
-                    .data()
-                    .world
-                    .player_records(capacity.max(0) as usize);
+                let records = caller.data().world.player_records(capacity.max(0) as usize);
                 let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
                 write(&mut caller, ptr, &bytes)?;
                 Ok((records.len() / crate::world::PLAYER_RECORD) as i32)

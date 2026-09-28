@@ -22,7 +22,13 @@ struct Running {
     addon: AddOn,
     renderer: Option<LayerRenderer>,
     frame: Frame,
+    /// Its sound files, decoded when it started.
+    sounds: std::collections::BTreeMap<String, Arc<bri_audio::SoundAsset>>,
 }
+
+/// A sound an Add-On asked for: the clip, where it plays (`None` at the
+/// player's ears) and its volume.
+pub type AddOnSound = (Arc<bri_audio::SoundAsset>, Option<[f32; 3]>, f32);
 
 /// Who runs the game being entered, for the trust decision.
 pub enum Host<'a> {
@@ -49,6 +55,8 @@ pub struct ClientCode {
     /// The trust question on screen for the server entered, and that
     /// server's name when it was asked.
     asking: Option<(Box<TrustPrompt>, String)>,
+    /// Sounds the last frames asked for, for the game to play.
+    sounds: Vec<AddOnSound>,
 }
 
 impl ClientCode {
@@ -139,11 +147,33 @@ impl ClientCode {
                 continue;
             };
             match sandbox.start(code, Budgets::default(), granted) {
-                Ok(addon) => self.running.push(Running {
-                    addon,
-                    renderer: None,
-                    frame: Frame::default(),
-                }),
+                Ok(addon) => {
+                    let mut sounds = std::collections::BTreeMap::new();
+                    for (name, bytes) in &code.sound_files {
+                        let extension = name.rsplit('.').next().unwrap_or_default();
+                        // Heard fully within 10 units, gone by 90.
+                        match bri_audio::SoundAsset::decoded(
+                            &format!("{}:{name}", code.id),
+                            bytes,
+                            extension,
+                            10.0,
+                            90.0,
+                        ) {
+                            Ok(asset) => {
+                                sounds.insert(name.clone(), Arc::new(asset));
+                            }
+                            Err(e) => self
+                                .messages
+                                .push(format!("{}: {name} does not play: {e}", code.name)),
+                        }
+                    }
+                    self.running.push(Running {
+                        addon,
+                        renderer: None,
+                        frame: Frame::default(),
+                        sounds,
+                    })
+                }
                 Err(reason) => self
                     .messages
                     .push(format!("{} stopped: {reason}", code.name)),
@@ -151,9 +181,15 @@ impl ClientCode {
         }
     }
 
+    /// Sounds Add-Ons asked for since the last call.
+    pub fn take_sounds(&mut self) -> Vec<AddOnSound> {
+        std::mem::take(&mut self.sounds)
+    }
+
     /// Stop everything, when the game is left.
     pub fn stop(&mut self) {
         self.running.clear();
+        self.sounds.clear();
         self.started = false;
         self.asking = None;
     }
@@ -236,6 +272,7 @@ impl ClientCode {
         self.last = Some(now);
         self.time += dt;
         let messages = &mut self.messages;
+        let sounds = &mut self.sounds;
         self.running.retain_mut(|r| {
             let input = FrameInput {
                 time: self.time,
@@ -250,6 +287,13 @@ impl ClientCode {
                 Ok(frame) => {
                     for line in &frame.log {
                         messages.push(format!("{name}: {line}"));
+                    }
+                    for sound in &frame.sounds {
+                        if let Some(asset) = r.sounds.get(&sound.name)
+                            && sounds.len() < 64
+                        {
+                            sounds.push((asset.clone(), sound.at, sound.volume));
+                        }
                     }
                     r.frame = frame.clone();
                     true
@@ -470,7 +514,12 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         code.start(Host::Local, state.path());
         assert_eq!(code.running(), ["Spinning Cube"]);
-        code.run_frame(0.0, glam::Vec3::new(10.0, 2.0, 5.0), glam::Vec3::X, Default::default());
+        code.run_frame(
+            0.0,
+            glam::Vec3::new(10.0, 2.0, 5.0),
+            glam::Vec3::X,
+            Default::default(),
+        );
         let placed = code.running[0].frame.draws[0].model;
         // Three units ahead of where the camera was.
         assert_eq!([placed[12], placed[14]], [13.0, 5.0]);

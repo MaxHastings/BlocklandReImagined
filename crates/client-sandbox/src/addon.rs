@@ -28,6 +28,8 @@ pub const MANIFEST_FILE: &str = "package.json";
 pub const MAX_MODULE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SHADERS: usize = 64;
 pub const MAX_SOUNDS: usize = 256;
+/// Largest sound file an Add-On may carry.
+pub const MAX_SOUND_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 struct PackageJson {
@@ -61,6 +63,8 @@ pub struct AddOnCode {
     pub capabilities: BTreeSet<Capability>,
     pub shaders: Vec<Shader>,
     pub sounds: Vec<String>,
+    /// Each sound file's bytes, read when the Add-On loads.
+    pub sound_files: Vec<(String, Vec<u8>)>,
     /// SHA-256 over everything that can run or be run: the module, every
     /// shader and the declared capabilities. Trust is remembered against it.
     pub code_hash: String,
@@ -170,9 +174,30 @@ impl AddOnCode {
                     .push(Diagnostic::error(e.code, e.message).at(format!("{}/{file}", json.id))),
             }
         }
+        let mut sound_files = Vec::new();
         for sound in &client.sounds {
-            if let Err(mut e) = check_path(dir, sound) {
-                problems.append(&mut e);
+            match check_path(dir, sound) {
+                Err(mut e) => problems.append(&mut e),
+                Ok(path) => {
+                    let lower = sound.to_ascii_lowercase();
+                    let bytes = std::fs::read(&path).unwrap_or_default();
+                    if !(lower.ends_with(".wav") || lower.ends_with(".ogg")) {
+                        problems.push(
+                            Diagnostic::error("client.sound", "sounds are .wav or .ogg files")
+                                .at(format!("{}/{sound}", json.id)),
+                        );
+                    } else if bytes.is_empty() || bytes.len() > MAX_SOUND_BYTES {
+                        problems.push(
+                            Diagnostic::error(
+                                "client.sound",
+                                format!("a sound file is 1 byte to {MAX_SOUND_BYTES} bytes"),
+                            )
+                            .at(format!("{}/{sound}", json.id)),
+                        );
+                    } else {
+                        sound_files.push((sound.clone(), bytes));
+                    }
+                }
             }
         }
         for c in &capabilities {
@@ -197,6 +222,7 @@ impl AddOnCode {
             capabilities,
             shaders,
             sounds: client.sounds,
+            sound_files,
             code_hash: hex(&hash.finalize()),
         }))
     }

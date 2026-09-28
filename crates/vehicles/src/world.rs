@@ -1513,8 +1513,8 @@ impl VehiclesWorld {
                             };
                             let hit = p.solver_manifolds().iter().find_map(|m| {
                                 let speed = v.previous_velocity.dot(m.data.normal) * outward;
-                                (m.data.num_active_contacts() > 0 && speed >= smash.speed)
-                                    .then(|| {
+                                (m.data.num_active_contacts() > 0 && speed >= smash.speed).then(
+                                    || {
                                         // The surface under the body's centre,
                                         // along the contact normal.
                                         let reach = (Vec3::from_array(d.bounds_max)
@@ -1522,9 +1522,11 @@ impl VehiclesWorld {
                                         .min_element()
                                             * 0.5
                                             * v.spawn.scale;
-                                        let point = b.translation() + m.data.normal * outward * reach;
+                                        let point =
+                                            b.translation() + m.data.normal * outward * reach;
                                         (point, speed)
-                                    })
+                                    },
+                                )
                             });
                             if let Some((point, speed)) = hit
                                 && let Some(collider) = world.colliders.get(other)

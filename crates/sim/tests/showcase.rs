@@ -179,7 +179,11 @@ impl Game {
     fn new() -> Self {
         let mut s = Session::new(
             Simulation::new(
-                World::new("Showcase".into(), "showcase".into(), vec![[1.0; 4], [0.6; 4]]),
+                World::new(
+                    "Showcase".into(),
+                    "showcase".into(),
+                    vec![[1.0; 4], [0.6; 4]],
+                ),
                 definitions(),
                 vec![
                     ColliderBuilder::cuboid(200.0, 0.5, 200.0)
@@ -208,7 +212,12 @@ impl Game {
     fn join_verified(&mut self, name: &str, at: Vec3, key: u8) -> OwnerId {
         let owner = self
             .s
-            .join_verified(name.into(), at, false, Some(bri_admin::Principal([key; 32])))
+            .join_verified(
+                name.into(),
+                at,
+                false,
+                Some(bri_admin::Principal([key; 32])),
+            )
             .unwrap();
         self.looks.insert(owner, MoveInput::default());
         owner
@@ -327,10 +336,9 @@ fn the_gravity_gun_grabs_holds_swings_and_drops_a_vehicle() {
     let mut g = Game::new();
     let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
     g.s.give_tool(host, GUN, true).unwrap();
-    let crate_ = g
-        .s
-        .spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -9.0), 0.0, Vec3::ZERO)
-        .unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -9.0), 0.0, Vec3::ZERO)
+            .unwrap();
     g.steps(60);
     // Right click, the tool's jet command, grabs what the player looks at.
     g.jet(host);
@@ -339,9 +347,15 @@ fn the_gravity_gun_grabs_holds_swings_and_drops_a_vehicle() {
     g.steps(180);
     let eye = g.feet(host) + Vec3::Y * 2.0;
     let (at, _) = g.vehicle(crate_).unwrap();
-    assert!(at.z < -3.0 && at.z > -6.5, "dragged in and held ahead: {at}");
+    assert!(
+        at.z < -3.0 && at.z > -6.5,
+        "dragged in and held ahead: {at}"
+    );
     assert!(at.y > 0.8, "held off the ground: {at}");
-    assert!((at.x).abs() < 0.8 && (at.y - eye.y).abs() < 2.0, "{at} vs eye {eye}");
+    assert!(
+        (at.x).abs() < 0.8 && (at.y - eye.y).abs() < 2.0,
+        "{at} vs eye {eye}"
+    );
     // Turning a quarter to the right swings it round with the view.
     g.look(host, std::f32::consts::FRAC_PI_2, 0.0);
     g.steps(240);
@@ -353,7 +367,10 @@ fn the_gravity_gun_grabs_holds_swings_and_drops_a_vehicle() {
     g.steps(240);
     assert_eq!(g.beam(host)[..2], [0, 0]);
     let (at, v) = g.vehicle(crate_).unwrap();
-    assert!(at.y < 1.3 && v.length() < 0.5, "dropped and resting: {at} {v}");
+    assert!(
+        at.y < 1.3 && v.length() < 0.5,
+        "dropped and resting: {at} {v}"
+    );
 }
 
 #[test]
@@ -362,10 +379,9 @@ fn a_charged_throw_flies_farther_than_a_tap() {
         let mut g = Game::new();
         let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
         g.s.give_tool(host, GUN, true).unwrap();
-        let crate_ = g
-            .s
-            .spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
-            .unwrap();
+        let crate_ =
+            g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+                .unwrap();
         g.steps(30);
         g.jet(host);
         assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)));
@@ -384,8 +400,14 @@ fn a_charged_throw_flies_farther_than_a_tap() {
     let (tap, tap_z) = throw(2);
     let (full, full_z) = throw(100);
     assert!(tap > 15.0, "even a tap throws: {tap}");
-    assert!(full > tap * 2.0, "a full charge throws much harder: {full} vs {tap}");
-    assert!(full_z < tap_z - 10.0, "and much farther: {full_z} vs {tap_z}");
+    assert!(
+        full > tap * 2.0,
+        "a full charge throws much harder: {full} vs {tap}"
+    );
+    assert!(
+        full_z < tap_z - 10.0,
+        "and much farther: {full_z} vs {tap_z}"
+    );
 }
 
 #[test]
@@ -396,10 +418,9 @@ fn a_thrown_heavy_vehicle_kills_in_a_minigame_and_credits_the_thrower() {
     g.minigame(a, &[b]);
     // A minigame hands out its own loadout; the gun is given again.
     g.s.give_tool(a, GUN, true).unwrap();
-    let crate_ = g
-        .s
-        .spawn_vehicle_at(a, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
-        .unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(a, CRATE, Vec3::new(0.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+            .unwrap();
     g.steps(30);
     g.package(a, "gravity-gun", "grab").unwrap();
     assert_eq!(g.s.held_by(a), Some(ObjectRef::Vehicle(crate_)));
@@ -431,10 +452,9 @@ fn outside_minigames_trust_decides_what_the_gun_may_move() {
     g.package(a, "gravity-gun", "grab").unwrap();
     assert_eq!(g.s.held_by(a), None);
     // ...nor his crate.
-    let bobs = g
-        .s
-        .spawn_vehicle_at(b, CRATE, Vec3::new(4.0, 1.0, -6.0), 0.0, Vec3::ZERO)
-        .unwrap();
+    let bobs =
+        g.s.spawn_vehicle_at(b, CRATE, Vec3::new(4.0, 1.0, -6.0), 0.0, Vec3::ZERO)
+            .unwrap();
     g.steps(60);
     g.look(a, 0.58, 0.0);
     g.steps(15);
@@ -505,7 +525,10 @@ fn rolled_steel_balls_roll_on_and_each_player_keeps_three() {
     g.steps(360);
     let (at, v) = g.vehicle(ball).unwrap();
     assert!(at.z < -15.0, "it rolled on: {at}");
-    assert!((at.y - 1.25).abs() < 0.1, "a true sphere of radius 1.25 on the floor: {at}");
+    assert!(
+        (at.y - 1.25).abs() < 0.1,
+        "a true sphere of radius 1.25 on the floor: {at}"
+    );
     assert!(v.length() > 1.0, "still rolling after three seconds: {v}");
     // Three more: the oldest makes way.
     for _ in 0..3 {
@@ -566,8 +589,14 @@ fn a_fast_steel_ball_breaks_bricks_under_rocket_rules() {
     g.steps(30);
     // Every wall stands across its own lane, 10 units ahead of its ball.
     let fire = |g: &mut Game, owner: OwnerId, lane: f32, speed: f32| {
-        g.s.spawn_vehicle_at(owner, BALL, Vec3::new(lane, 1.3, -4.0), 0.0, Vec3::new(0.0, 0.0, -speed))
-            .unwrap()
+        g.s.spawn_vehicle_at(
+            owner,
+            BALL,
+            Vec3::new(lane, 1.3, -4.0),
+            0.0,
+            Vec3::new(0.0, 0.0, -speed),
+        )
+        .unwrap()
     };
     // Outside minigames a ball breaks its owner's bricks only, as a
     // rocket does.
@@ -577,7 +606,10 @@ fn a_fast_steel_ball_breaks_bricks_under_rocket_rules() {
     fire(&mut g, a, 24.0, 25.0);
     g.steps(120);
     assert_eq!(standing(&g, &bobs), bobs.len(), "Bravo's wall is safe");
-    assert!(standing(&g, &alphas) < alphas.len(), "Alpha's own wall breaks");
+    assert!(
+        standing(&g, &alphas) < alphas.len(),
+        "Alpha's own wall breaks"
+    );
     // In a minigame with brick damage, a member's hard hit knocks out the
     // minigame's bricks (its owner's, by v20's default)...
     g.minigame(a, &[b]);
@@ -588,8 +620,15 @@ fn a_fast_steel_ball_breaks_bricks_under_rocket_rules() {
     fire(&mut g, b, 16.0, 5.0);
     g.steps(360);
     let knocked = fast.len() - standing(&g, &fast);
-    assert!(knocked >= 2, "a 25 u/s ball broke {knocked} bricks in a minigame");
-    assert_eq!(standing(&g, &slow), slow.len(), "a slow ball breaks nothing");
+    assert!(
+        knocked >= 2,
+        "a 25 u/s ball broke {knocked} bricks in a minigame"
+    );
+    assert_eq!(
+        standing(&g, &slow),
+        slow.len(),
+        "a slow ball breaks nothing"
+    );
 }
 
 #[test]
@@ -599,8 +638,14 @@ fn a_steel_ball_shoves_players_aside_and_only_hurts_in_minigames() {
     let b = g.join("Bravo", Vec3::new(0.0, 0.05, -12.0));
     g.steps(30);
     let before = g.feet(b);
-    g.s.spawn_vehicle_at(a, BALL, Vec3::new(0.0, 1.3, -3.0), 0.0, Vec3::new(0.0, 0.0, -18.0))
-        .unwrap();
+    g.s.spawn_vehicle_at(
+        a,
+        BALL,
+        Vec3::new(0.0, 1.3, -3.0),
+        0.0,
+        Vec3::new(0.0, 0.0, -18.0),
+    )
+    .unwrap();
     let mut bowled = false;
     for _ in 0..120 {
         g.steps(1);
@@ -608,7 +653,11 @@ fn a_steel_ball_shoves_players_aside_and_only_hurts_in_minigames() {
     }
     assert!(bowled, "bowled over into a tumble");
     g.steps(60);
-    assert!(g.feet(b).distance(before) > 3.0, "shoved aside: {}", g.feet(b));
+    assert!(
+        g.feet(b).distance(before) > 3.0,
+        "shoved aside: {}",
+        g.feet(b)
+    );
     assert_eq!(g.s.vitals()[&b].health, 100.0, "no harm outside minigames");
     // In a minigame the same roll hurts, credited to the ball's owner.
     g.minigame(a, &[b]);

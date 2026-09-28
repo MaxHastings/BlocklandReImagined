@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::bank::SoundBank;
+use crate::bank::{SoundAsset, SoundBank};
 use crate::command::{AudioEvent, Command, EntityKey, Placement, SoundHandle, VolumeControl};
 use crate::engine::{Engine, EngineConfig, SharedStats};
 use crate::error::AudioError;
@@ -208,6 +208,24 @@ impl AudioRuntime {
         gain_scale: f32,
     ) -> Result<SoundHandle, AudioError> {
         let asset = self.bank.resolve(sound)?.clone();
+        let handle = self.alloc_handle();
+        self.send(Command::Play {
+            handle,
+            asset,
+            placement,
+            gain_scale,
+        })?;
+        Ok(handle)
+    }
+
+    /// Play a sound that is not in the bank: an Add-On's own clip,
+    /// decoded by [`crate::bank::SoundAsset::decoded`].
+    pub fn play_asset(
+        &mut self,
+        asset: Arc<SoundAsset>,
+        placement: Placement,
+        gain_scale: f32,
+    ) -> Result<SoundHandle, AudioError> {
         let handle = self.alloc_handle();
         self.send(Command::Play {
             handle,

@@ -442,8 +442,7 @@ impl ActorEffects {
                         "Player splash emitter unavailable: {PLAYER_SPLASH_RING}"
                     ));
                 }
-                self.froth.entry(*actor).or_default().bubble_left =
-                    bri_sim::water::BUBBLE_SECONDS;
+                self.froth.entry(*actor).or_default().bubble_left = bri_sim::water::BUBBLE_SECONDS;
             }
             CueKind::WeaponEffect { definition, .. } => {
                 if let Some(spec) = self
@@ -536,7 +535,10 @@ impl ActorEffects {
             }
             keep && world.is_active(*handle)
         });
-        for s in sprays.iter().filter(|s| s.rate > 0.0 && s.position.is_finite()) {
+        for s in sprays
+            .iter()
+            .filter(|s| s.rate > 0.0 && s.position.is_finite())
+        {
             let transform = SourceTransform {
                 position: s.position,
                 ..Default::default()
@@ -586,7 +588,10 @@ impl ActorEffects {
                     self.world.update_source(h, transform)?;
                     self.world.update_options(h, options)?;
                 }
-                None => match self.world.start_emitter(JET_GROUND_EMITTER, transform, options) {
+                None => match self
+                    .world
+                    .start_emitter(JET_GROUND_EMITTER, transform, options)
+                {
                     Ok(h) => {
                         self.jet_dust.insert((d.actor, d.foot), h);
                     }
@@ -632,7 +637,13 @@ impl ActorEffects {
                 sync_liquid_source(&mut self.world, slot, emitter, foam, rate)?;
             }
             let bubbles = (froth.bubble_left > 0.0).then_some((s.feet, bubble_color));
-            sync_liquid_source(&mut self.world, &mut froth.bubbles, PLAYER_BUBBLES, bubbles, 1.0)?;
+            sync_liquid_source(
+                &mut self.world,
+                &mut froth.bubbles,
+                PLAYER_BUBBLES,
+                bubbles,
+                1.0,
+            )?;
         }
         Ok(())
     }
@@ -798,7 +809,10 @@ impl ActorEffects {
     /// the amplitude scales by the speed past 10 over `minImpactSpeed`.
     pub fn ground_impact(&mut self, speed: f32, min_impact_speed: f32, seed: u64) {
         const MIN_SPEED: f32 = 10.0;
-        if speed.is_nan() || speed <= MIN_SPEED || min_impact_speed <= 0.0 || self.shakes.len() >= 32
+        if speed.is_nan()
+            || speed <= MIN_SPEED
+            || min_impact_speed <= 0.0
+            || self.shakes.len() >= 32
         {
             return;
         }

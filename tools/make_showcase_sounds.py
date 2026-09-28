@@ -1,0 +1,153 @@
+"""Write the showcase Add-Ons' sounds: short synthesized effects, original
+and generated here, so they carry no one else's rights.
+
+Outputs 16-bit mono WAV at 22050 Hz:
+  packages/showcase/gravity-gun-fx/client/sounds/
+    grab.wav    the beam catching something: a rising hum with a zing
+    drop.wav    letting go: the hum falling away
+    charge.wav  charging a throw: a whine climbing for three quarters of a second
+    launch.wav  a throw: a deep thump, a snap and a whoosh
+    punt.wav    a punt: a shorter, lighter thump
+  packages/showcase/steel-ball-fx/client/sounds/
+    clank.wav   steel striking something: a bell-like ring of inharmonic partials
+    thud.wav    the ball's weight landing: a low knock
+
+Run it again after changing the recipes below; the Add-Ons' tests check the
+files are there, and the game decodes them when the Add-On starts. Only the
+Python standard library is used, with a fixed seed, so the output is the
+same every run.
+"""
+import math
+import random
+import struct
+import wave
+from pathlib import Path
+
+RATE = 22050
+ROOT = Path(__file__).resolve().parent.parent / 'packages' / 'showcase'
+rng = random.Random(20260928)
+
+
+def lowpass(samples, cutoff):
+    a = 1.0 - math.exp(-2 * math.pi * cutoff / RATE)
+    out, y = [], 0.0
+    for x in samples:
+        y += a * (x - y)
+        out.append(y)
+    return out
+
+
+def noise(seconds):
+    return [rng.uniform(-1, 1) for _ in range(int(seconds * RATE))]
+
+
+def sweep(seconds, f0, f1, shape=lambda p: math.sin(p)):
+    out, phase = [], 0.0
+    n = int(seconds * RATE)
+    for i in range(n):
+        f = f0 * (f1 / f0) ** (i / n)
+        phase += 2 * math.pi * f / RATE
+        out.append(shape(phase))
+    return out
+
+
+def envelope(samples, attack, decay):
+    n = len(samples)
+    out = []
+    for i, x in enumerate(samples):
+        t = i / RATE
+        a = min(1.0, t / attack) if attack > 0 else 1.0
+        out.append(x * a * math.exp(-t / decay))
+    return out
+
+
+def mix(*tracks):
+    n = max(len(t) for t, _ in tracks)
+    out = [0.0] * n
+    for track, gain in tracks:
+        for i, x in enumerate(track):
+            out[i] += x * gain
+    return out
+
+
+def fade_out(samples, seconds=0.03):
+    n = int(seconds * RATE)
+    for i in range(min(n, len(samples))):
+        samples[-1 - i] *= i / n
+    return samples
+
+
+def write(path, samples, peak=0.85):
+    top = max(1e-6, max(abs(x) for x in samples))
+    scale = peak / top
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(b''.join(struct.pack('<h', int(max(-1, min(1, x * scale)) * 32767)) for x in samples))
+
+
+def saw(p):
+    return 2 * ((p / (2 * math.pi)) % 1.0) - 1
+
+
+def gravity_gun():
+    out = ROOT / 'gravity-gun-fx' / 'client' / 'sounds'
+    hum = envelope(sweep(0.45, 90, 190), 0.01, 0.16)
+    zing = envelope(sweep(0.45, 1300, 2100), 0.005, 0.06)
+    crackle = envelope(lowpass(noise(0.45), 3000), 0.002, 0.05)
+    write(out / 'grab.wav', fade_out(mix((hum, 1.0), (zing, 0.25), (crackle, 0.35))))
+
+    fall = envelope(sweep(0.35, 230, 75), 0.005, 0.12)
+    hiss = envelope(lowpass(noise(0.35), 1500), 0.005, 0.08)
+    write(out / 'drop.wav', fade_out(mix((fall, 1.0), (hiss, 0.3))), peak=0.6)
+
+    n = int(0.8 * RATE)
+    whine, phase = [], 0.0
+    for i in range(n):
+        t = i / RATE
+        f = 280 * (4.0 ** (t / 0.8)) * (1 + 0.02 * math.sin(2 * math.pi * 11 * t))
+        phase += 2 * math.pi * f / RATE
+        grow = min(1.0, t / 0.7)
+        whine.append((0.7 * math.sin(phase) + 0.3 * saw(phase * 0.5)) * grow * grow)
+    buzz = [x * min(1.0, i / n * 1.3) for i, x in enumerate(lowpass(noise(0.8), 2500))]
+    write(out / 'charge.wav', fade_out(mix((whine, 1.0), (buzz, 0.12))), peak=0.55)
+
+    thump = envelope(sweep(0.7, 70, 32), 0.002, 0.14)
+    snap = envelope(lowpass(noise(0.7), 5000), 0.001, 0.02)
+    whoosh = envelope([x * math.sin(math.pi * min(1, i / (0.5 * RATE))) for i, x in
+                       enumerate(lowpass(noise(0.7), 900))], 0.02, 0.25)
+    zap = envelope(sweep(0.7, 2600, 500, saw), 0.003, 0.08)
+    write(out / 'launch.wav', fade_out(mix((thump, 1.0), (snap, 0.5), (whoosh, 0.45), (zap, 0.15))), peak=0.95)
+
+    thump = envelope(sweep(0.4, 95, 45), 0.002, 0.08)
+    snap = envelope(lowpass(noise(0.4), 4000), 0.001, 0.015)
+    write(out / 'punt.wav', fade_out(mix((thump, 1.0), (snap, 0.45))), peak=0.8)
+
+
+def steel_ball():
+    out = ROOT / 'steel-ball-fx' / 'client' / 'sounds'
+    f0 = 330.0
+    partials = [(1.0, 1.0, 0.55), (2.76, 0.6, 0.35), (5.40, 0.35, 0.2), (8.93, 0.2, 0.12), (13.34, 0.1, 0.07)]
+    n = int(1.2 * RATE)
+    ring = [0.0] * n
+    for ratio, gain, decay in partials:
+        f = f0 * ratio
+        for i in range(n):
+            t = i / RATE
+            ring[i] += gain * math.sin(2 * math.pi * f * t) * math.exp(-t / decay)
+    click = envelope(lowpass(noise(1.2), 6000), 0.0005, 0.006)
+    knock = envelope(sweep(1.2, 120, 70), 0.001, 0.05)
+    write(out / 'clank.wav', fade_out(mix((ring, 0.6), (click, 0.6), (knock, 0.7))), peak=0.8)
+
+    body = envelope(sweep(0.5, 80, 45), 0.002, 0.09)
+    grit = envelope(lowpass(noise(0.5), 700), 0.002, 0.05)
+    write(out / 'thud.wav', fade_out(mix((body, 1.0), (grit, 0.5))), peak=0.85)
+
+
+if __name__ == '__main__':
+    gravity_gun()
+    steel_ball()
+    for path in sorted(ROOT.glob('*/client/sounds/*.wav')):
+        print(path.relative_to(ROOT), path.stat().st_size)

@@ -425,8 +425,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         }
         let rotation = source_rotation(&field(d, "rotation"));
         if rotation.is_none() {
-            pack.diagnostics
-                .push(format!("{} rotation is not a literal Euler or axis rotation", d.name));
+            pack.diagnostics.push(format!(
+                "{} rotation is not a literal Euler or axis rotation",
+                d.name
+            ));
         }
         let id = native_id("image", &d.name);
         pack.images.insert(
@@ -816,7 +818,10 @@ AddDamageType(\"Radius\", '<bitmap:base/client/ui/ci/bomb> %1', '%2 <bitmap:base
     #[test]
     fn rotations_accept_euler_and_principal_axis_literals() {
         assert_eq!(source_rotation(""), Some([0.0; 3]));
-        assert_eq!(source_rotation("eulerToMatrix( \"0 35 90\" )"), Some([0.0, 35.0, 90.0]));
+        assert_eq!(
+            source_rotation("eulerToMatrix( \"0 35 90\" )"),
+            Some([0.0, 35.0, 90.0])
+        );
         assert_eq!(source_rotation("1 0 0 -90"), Some([-90.0, 0.0, 0.0]));
         assert_eq!(source_rotation("0 0 -1 180"), Some([0.0, 0.0, -180.0]));
         assert_eq!(source_rotation("1 1 0 45"), None);

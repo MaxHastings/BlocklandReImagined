@@ -212,7 +212,9 @@ impl Session {
         let Some(peer) = self.peers.get(&mover) else {
             return false;
         };
-        if !peer.combat.alive || self.teleport_lockout(mover, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
+        if !peer.combat.alive
+            || self.teleport_lockout(mover, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
+        {
             return false;
         }
         match target {
@@ -252,7 +254,9 @@ impl Session {
                     None => {
                         owner == 0
                             || owner == mover
-                            || peer.actor.trusted(owner, bri_world::authority::trust::BUILD)
+                            || peer
+                                .actor
+                                .trusted(owner, bri_world::authority::trust::BUILD)
                     }
                 }
             }
@@ -284,9 +288,7 @@ impl Session {
             .map(|v| super::vehicles::VEHICLE_TAG | u128::from(v.0));
         let predicate = |_: ColliderHandle, c: &Collider| {
             let tag = c.user_data >> 64;
-            (1..=3).contains(&tag)
-                && c.user_data != own_body
-                && Some(c.user_data) != ridden
+            (1..=3).contains(&tag) && c.user_data != own_body && Some(c.user_data) != ridden
         };
         let shape = Ball::new(0.35);
         let (handle, hit) = self
@@ -381,8 +383,13 @@ impl Session {
                 let velocity = Vec3::from(velocity);
                 match self.ridden(player) {
                     // Already tumbling: fling the tumble.
-                    Some(v) if self.vehicles.mounted_family(player) == Some(veh::Family::Tumble) => {
-                        self.push_object(ObjectRef::Vehicle(v.0), velocity - self.object_velocity(target).unwrap_or_default())?;
+                    Some(v)
+                        if self.vehicles.mounted_family(player) == Some(veh::Family::Tumble) =>
+                    {
+                        self.push_object(
+                            ObjectRef::Vehicle(v.0),
+                            velocity - self.object_velocity(target).unwrap_or_default(),
+                        )?;
                     }
                     Some(_) => anyhow::bail!("A seated player cannot tumble"),
                     None => {
@@ -461,7 +468,13 @@ impl Session {
                 // Add-On vehicles count toward the server's vehicle limits.
                 if let Err(text) = self.vehicle_room(owner.unwrap_or(0), &definition) {
                     if let Some(owner) = owner {
-                        self.notify(owner, Notice::Center { text: text.clone(), seconds: 2.0 });
+                        self.notify(
+                            owner,
+                            Notice::Center {
+                                text: text.clone(),
+                                seconds: 2.0,
+                            },
+                        );
                     }
                     anyhow::bail!("{}", text.trim_start_matches('\u{E000}'));
                 }
@@ -470,7 +483,13 @@ impl Session {
                     rotation: glam::Quat::from_rotation_y(-yaw).to_array(),
                 };
                 let id = self
-                    .spawn_transient(owner.unwrap_or(0), &definition, transform, Vec3::from(velocity), 1.0)
+                    .spawn_transient(
+                        owner.unwrap_or(0),
+                        &definition,
+                        transform,
+                        Vec3::from(velocity),
+                        1.0,
+                    )
                     .with_context(|| format!("`{definition}` could not spawn there"))?;
                 self.movables.spawned.insert(id.0, package.to_string());
                 if let Some(owner) = owner {
@@ -508,9 +527,7 @@ impl Session {
                 Ok(())
             }
             ObjectRef::Vehicle(v) => {
-                let current = self
-                    .object_velocity(target)
-                    .context("No such vehicle")?;
+                let current = self.object_velocity(target).context("No such vehicle")?;
                 let world = self.vehicles.world.as_mut().context("No vehicles")?;
                 world.set_velocity(
                     &mut self.simulation.physics,
@@ -539,9 +556,11 @@ impl Session {
         let holds: Vec<(OwnerId, Hold)> =
             self.movables.holds.iter().map(|(p, h)| (*p, *h)).collect();
         for (player, hold) in holds {
-            let aim = self.peers.get(&player).filter(|p| p.combat.alive).map(|p| {
-                (p.player.eye(), p.player.state().forward())
-            });
+            let aim = self
+                .peers
+                .get(&player)
+                .filter(|p| p.combat.alive)
+                .map(|p| (p.player.eye(), p.player.state().forward()));
             let keep = aim.is_some()
                 && !self.vehicles.is_mounted(player)
                 && (!recheck || self.may_move(player, hold.target));
@@ -616,7 +635,8 @@ impl Session {
         let source = self
             .mover_credit(ObjectRef::Vehicle(vehicle))
             .unwrap_or(owner);
-        if !self.peers.contains_key(&source) || !self.simulation.state().bricks.contains_key(&brick) {
+        if !self.peers.contains_key(&source) || !self.simulation.state().bricks.contains_key(&brick)
+        {
             return Ok(());
         }
         let direct = bri_weapons::BrickImpact {
@@ -657,7 +677,10 @@ impl Session {
         yaw: f32,
         velocity: Vec3,
     ) -> Result<u64> {
-        ensure!(position.is_finite() && yaw.is_finite() && velocity.is_finite(), "Invalid vehicle spawn");
+        ensure!(
+            position.is_finite() && yaw.is_finite() && velocity.is_finite(),
+            "Invalid vehicle spawn"
+        );
         let transform = veh::Transform {
             position: position.to_array(),
             rotation: glam::Quat::from_rotation_y(-yaw).to_array(),

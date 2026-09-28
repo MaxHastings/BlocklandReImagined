@@ -137,26 +137,35 @@ impl Snapshot {
     pub fn object(&self, object: ObjectRef) -> Option<ObjectView> {
         match object {
             ObjectRef::Vehicle(_) => self.objects.iter().find(|o| o.object == object).cloned(),
-            ObjectRef::Player(id) => self.players.iter().find(|p| p.id == id).map(|p| ObjectView {
-                object,
-                definition: String::new(),
-                position: p.position,
-                velocity: p.velocity,
-                mass: crate::ops::PLAYER_MASS,
-                radius: 1.3,
-                owner: Some(id),
-                package: String::new(),
-            }),
-            ObjectRef::Entity(id) => self.entities.iter().find(|e| e.id == id).map(|e| ObjectView {
-                object,
-                definition: e.kind.clone(),
-                position: e.position,
-                velocity: [0.0; 3],
-                mass: crate::ops::PLAYER_MASS,
-                radius: 1.3,
-                owner: None,
-                package: String::new(),
-            }),
+            ObjectRef::Player(id) => self
+                .players
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| ObjectView {
+                    object,
+                    definition: String::new(),
+                    position: p.position,
+                    velocity: p.velocity,
+                    mass: crate::ops::PLAYER_MASS,
+                    radius: 1.3,
+                    owner: Some(id),
+                    package: String::new(),
+                }),
+            ObjectRef::Entity(id) => {
+                self.entities
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| ObjectView {
+                        object,
+                        definition: e.kind.clone(),
+                        position: e.position,
+                        velocity: [0.0; 3],
+                        mass: crate::ops::PLAYER_MASS,
+                        radius: 1.3,
+                        owner: None,
+                        package: String::new(),
+                    })
+            }
         }
     }
 }
@@ -746,7 +755,9 @@ fn register_physics(engine: &mut Engine) {
                 let centre = [float(&x)?, float(&y)?, float(&z)?];
                 let radius = float(&radius)?;
                 let near = |p: [f32; 3]| {
-                    (p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2) + (p[2] - centre[2]).powi(2)
+                    (p[0] - centre[0]).powi(2)
+                        + (p[1] - centre[1]).powi(2)
+                        + (p[2] - centre[2]).powi(2)
                         <= radius * radius
                 };
                 let players = i
@@ -808,11 +819,14 @@ fn register_physics(engine: &mut Engine) {
     });
     engine.register_fn(
         "spawn_vehicle",
-        |definition: &str, x: Dynamic, y: Dynamic, z: Dynamic, yaw: Dynamic, velocity: Array, owner: Dynamic| {
-            let v = velocity
-                .iter()
-                .map(float)
-                .collect::<Fallible<Vec<f32>>>()?;
+        |definition: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         yaw: Dynamic,
+         velocity: Array,
+         owner: Dynamic| {
+            let v = velocity.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
             let [vx, vy, vz] = v[..] else {
                 return fail("velocity is [x, y, z]");
             };

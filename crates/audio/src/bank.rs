@@ -53,6 +53,55 @@ pub struct SoundAsset {
     pub data: ClipData,
 }
 
+/// Most bytes one clip from outside the bank may have (an Add-On's sound).
+pub const MAX_DECODED_CLIP_BYTES: usize = 8 * 1024 * 1024;
+
+impl SoundAsset {
+    /// A world sound from a WAV or Ogg Vorbis clip that is not in the bank
+    /// (an Add-On's own), fully decoded: heard at full volume within
+    /// `reference_distance` and fading out by `max_distance`, on the
+    /// effects channel.
+    pub fn decoded(
+        id: &str,
+        bytes: &[u8],
+        extension: &str,
+        reference_distance: f32,
+        max_distance: f32,
+    ) -> Result<Self, String> {
+        if bytes.len() > MAX_DECODED_CLIP_BYTES {
+            return Err(format!(
+                "{} bytes is more than a sound may have ({MAX_DECODED_CLIP_BYTES})",
+                bytes.len()
+            ));
+        }
+        let extension = match extension.to_ascii_lowercase().as_str() {
+            "wav" => "wav",
+            "ogg" => "ogg",
+            other => return Err(format!("`.{other}` is not a WAV or Ogg Vorbis sound")),
+        };
+        let (clip, _) = crate::decode::decode_all(bytes, Some(extension))?;
+        if clip.frames() == 0 || clip.duration_seconds() > 30.0 {
+            return Err("a sound must last between a moment and 30 seconds".into());
+        }
+        Ok(Self {
+            id: Arc::from(id),
+            name: Arc::from(id),
+            playback: crate::schema::Playback {
+                gain: 1.0,
+                pitch: 1.0,
+                looping: false,
+                spatial: Some(crate::schema::Spatial {
+                    reference_distance,
+                    max_distance,
+                }),
+                channel: 2,
+                bus: crate::schema::Bus::Effects,
+            },
+            data: ClipData::Pcm(Arc::new(clip)),
+        })
+    }
+}
+
 /// Options for [`SoundBank::load`].
 #[derive(Debug, Clone)]
 pub struct BankOptions {

@@ -144,7 +144,10 @@ struct ContentParts {
     world_items: crate::world_items::WorldItems,
 }
 impl ContentParts {
-    fn build(content: &ClientContent, effects_pack: Arc<bri_fx_runtime::EffectsPack>) -> Result<Self> {
+    fn build(
+        content: &ClientContent,
+        effects_pack: Arc<bri_fx_runtime::EffectsPack>,
+    ) -> Result<Self> {
         let weapon_pack = Arc::new(content.weapons.pack.clone());
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
@@ -275,8 +278,7 @@ fn prepare_map(
     );
     mirror.attach_terrain(native_map.terrain.clone())?;
     mirror.set_breakables(&native_map.breakables);
-    let mut building =
-        crate::building::Building::new(definitions, native_map.colliders)?;
+    let mut building = crate::building::Building::new(definitions, native_map.colliders)?;
     building.set_breakables(&native_map.breakables);
     building.attach_terrain(native_map.terrain);
     building.set_catalog(selected)?;
@@ -289,12 +291,8 @@ fn prepare_map(
                 .collect(),
         )?;
     }
-    let foliage = crate::foliage::PreparedFoliage::load(
-        &paths.foliage,
-        &map,
-        &building,
-        &native_map.waters,
-    )?;
+    let foliage =
+        crate::foliage::PreparedFoliage::load(&paths.foliage, &map, &building, &native_map.waters)?;
     Ok(Prepared {
         foliage,
         map_id: map,
@@ -534,14 +532,20 @@ enum HostNotice {
     Reach(bri_net::reach::Report),
     /// LAN host: the invite on the home network.
     Lan { invite: String },
-    Firewall { status: crate::firewall::Status, port: u16 },
+    Firewall {
+        status: crate::firewall::Status,
+        port: u16,
+    },
 }
 
 /// What the Join Server list found: LAN games and the saved servers, each
 /// probed over its game port.
 struct JoinList {
     lan: Vec<(SocketAddr, bri_net::discovery::Beacon)>,
-    saved: Vec<(crate::servers::SavedServer, Result<bri_net::client::Probe, String>)>,
+    saved: Vec<(
+        crate::servers::SavedServer,
+        Result<bri_net::client::Probe, String>,
+    )>,
 }
 
 /// Put `text` on the system clipboard.
@@ -605,20 +609,37 @@ impl App {
     /// Enable mod packages from another root than the content root (tools
     /// and tests); replaces the packages loaded at startup. Their worlds
     /// join the Start Game list.
-    pub fn enable_packages(&mut self, root: &std::path::Path, set: &bri_package::packages::PackageSet) -> Result<()> {
+    pub fn enable_packages(
+        &mut self,
+        root: &std::path::Path,
+        set: &bri_package::packages::PackageSet,
+    ) -> Result<()> {
         let (client, problems) = crate::packages::load_set(root, set, false);
-        ensure!(problems.is_empty(), "{}", problems.join("
-"));
+        ensure!(
+            problems.is_empty(),
+            "{}",
+            problems.join(
+                "
+"
+            )
+        );
         let (server, problems) = crate::packages::load_set(root, set, true);
-        ensure!(problems.is_empty(), "{}", problems.join("
-"));
+        ensure!(
+            problems.is_empty(),
+            "{}",
+            problems.join(
+                "
+"
+            )
+        );
         self.content.maps.retain(|m| !m.id.contains(':'));
         if let Some(catalog) = &server {
             let worlds = crate::packages::world_maps(catalog, &self.content.maps);
             self.content.maps.extend(worlds);
         }
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
-        self.ui.apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
+        self.ui
+            .apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
         self.package_catalog = client;
         self.server_packages = server;
         self.client_code = crate::client_code::ClientCode::load(root, set);
@@ -643,7 +664,10 @@ impl App {
     /// from the one loaded) bricks, weapons, items and vehicles. Only between
     /// games; a game in progress keeps what it started with.
     pub fn apply_packages(&mut self, set: &bri_package::packages::PackageSet) -> Result<()> {
-        ensure!(self.attempt.is_none(), "Leave the game before changing Add-Ons");
+        ensure!(
+            self.attempt.is_none(),
+            "Leave the game before changing Add-Ons"
+        );
         let root = self.content.paths.root.clone();
         if *set != self.content.paths.packages {
             let content = ClientContent::load_packages(&root, set)?;
@@ -673,8 +697,10 @@ impl App {
         }
         self.saves = crate::saves::Store::new(&self.state_dir, &self.content);
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
-        self.ui.apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
-        self.ui.apply(UiUpdate::Datablocks(self.content.datablocks.clone()));
+        self.ui
+            .apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
+        self.ui
+            .apply(UiUpdate::Datablocks(self.content.datablocks.clone()));
         self.package_catalog = client;
         self.server_packages = server;
         self.client_code = crate::client_code::ClientCode::load(&root, set);
@@ -683,7 +709,11 @@ impl App {
     }
     /// Package HUD panels and keys from the latest replicated state.
     fn update_package_hud(&mut self) {
-        let view = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| a.view.as_ref());
+        let view = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| a.view.as_ref());
         let Some(view) = view else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
@@ -695,11 +725,15 @@ impl App {
             return;
         };
         let binds = &self.ui.core.binds;
-        let (panels, keys) = crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
-            binds
-                .command_for_key(bri_ui::input::Key::Letter(letter), bri_ui::input::Modifiers::NONE)
-                .is_some()
-        });
+        let (panels, keys) =
+            crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
+                binds
+                    .command_for_key(
+                        bri_ui::input::Key::Letter(letter),
+                        bri_ui::input::Modifiers::NONE,
+                    )
+                    .is_some()
+            });
         self.ui.core.package_panels = panels;
         self.ui.core.package_keys = keys;
     }
@@ -730,19 +764,21 @@ impl App {
         }
         // The engine explosion operation looks like v20's rocket blast.
         let cue = match &cue.kind {
-            bri_sim::presentation::CueKind::Explosion { radius, .. } => bri_sim::presentation::Cue {
-                kind: bri_sim::presentation::CueKind::WeaponEffect {
-                    source: bri_weapons::TargetId::Map(0),
-                    definition: "rocketexplosion".into(),
-                    node: String::new(),
-                    seconds: 0.,
-                    image: None,
-                    hand: None,
-                    direction: None,
-                    scale: (radius / 4.).clamp(0.5, 3.),
-                },
-                ..cue
-            },
+            bri_sim::presentation::CueKind::Explosion { radius, .. } => {
+                bri_sim::presentation::Cue {
+                    kind: bri_sim::presentation::CueKind::WeaponEffect {
+                        source: bri_weapons::TargetId::Map(0),
+                        definition: "rocketexplosion".into(),
+                        node: String::new(),
+                        seconds: 0.,
+                        image: None,
+                        hand: None,
+                        direction: None,
+                        scale: (radius / 4.).clamp(0.5, 3.),
+                    },
+                    ..cue
+                }
+            }
             _ => cue,
         };
         self.actor_effects.cue(&cue);
@@ -898,9 +934,10 @@ impl App {
                 .iter()
                 .filter(|(owner, _)| {
                     **owner != view.owner
-                        && view.vitals.get(owner).is_some_and(|v| {
-                            v.control == bri_sim::session::ControlObject::Camera
-                        })
+                        && view
+                            .vitals
+                            .get(owner)
+                            .is_some_and(|v| v.control == bri_sim::session::ControlObject::Camera)
                 })
                 .map(|(owner, orb)| (*owner, Vec3::from(orb.eye)))
                 .collect(),
@@ -1162,7 +1199,9 @@ impl App {
     }
     /// A body's posed node in the world, as drawn this frame.
     pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {
-        self.avatars.get(&owner)?.world_node(&self.avatar_assets, name)
+        self.avatars
+            .get(&owner)?
+            .world_node(&self.avatar_assets, name)
     }
     pub fn building(&self) -> Option<&crate::building::Building> {
         self.building.as_ref()
@@ -1289,7 +1328,9 @@ impl App {
         }
         ui.apply(UiUpdate::Maps(content.maps.clone()));
         ui.core.music_tracks = content.music.iter().map(|(_, name)| name.clone()).collect();
-        ui.apply(UiUpdate::GameModes(crate::packages::modes(server_packages.as_ref())));
+        ui.apply(UiUpdate::GameModes(crate::packages::modes(
+            server_packages.as_ref(),
+        )));
         let backgrounds = content
             .ui_pack
             .data
@@ -1632,13 +1673,20 @@ impl App {
         first_person_eye: Vec3,
     ) -> Result<(Vec3, f32, f32)> {
         let look = |yaw: f32, pitch: f32| {
-            Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos())
+            Vec3::new(
+                yaw.sin() * pitch.cos(),
+                pitch.sin(),
+                -yaw.cos() * pitch.cos(),
+            )
         };
         let (yaw, pitch) = controls.camera_angles();
         // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
         let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         let pos = controls.camera_pos();
-        let mounted = view.vitals.get(&view.owner).is_some_and(|v| v.mounted.is_some());
+        let mounted = view
+            .vitals
+            .get(&view.owner)
+            .is_some_and(|v| v.mounted.is_some());
         if controls.observer().is_some() || pos == 0.0 {
             let eye = camera_eye(
                 controls,
@@ -1678,9 +1726,13 @@ impl App {
             chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
             look(yaw, pitch),
             Some(
-                chase.map_or(view.archetypes.resolve(local.archetype).look.camera_distance, |(distance, ..)| {
-                    distance
-                }) * pos,
+                chase.map_or(
+                    view.archetypes
+                        .resolve(local.archetype)
+                        .look
+                        .camera_distance,
+                    |(distance, ..)| distance,
+                ) * pos,
             ),
         )?;
         let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
@@ -1706,8 +1758,7 @@ impl App {
             })
             .cloned()
             .collect();
-        mount_meshes
-            .retain(|id, _| horses.iter().any(|h| h.id == *id));
+        mount_meshes.retain(|id, _| horses.iter().any(|h| h.id == *id));
         for info in horses {
             let Some(frame) = vehicles.frame(info.id).cloned() else {
                 continue;
@@ -1746,12 +1797,10 @@ impl App {
                 dead: info.destroyed,
                 ..Default::default()
             };
-            mount_meshes.get_mut(&info.id).unwrap().pose_with_animation(
-                avatar_assets,
-                &state,
-                animation_time,
-                &input,
-            )?;
+            mount_meshes
+                .get_mut(&info.id)
+                .unwrap()
+                .pose_with_animation(avatar_assets, &state, animation_time, &input)?;
         }
         Ok(())
     }
@@ -2030,7 +2079,8 @@ impl App {
         // What runs: the chosen game mode's Add-Ons, or (Custom) every
         // enabled Add-On that fits the map. A package world stands on its
         // environment map; the packages then generate the ground.
-        let hosted = crate::packages::hosted(self.server_packages.as_ref(), &map, game_mode.as_deref())?;
+        let hosted =
+            crate::packages::hosted(self.server_packages.as_ref(), &map, game_mode.as_deref())?;
         let map = hosted.map;
         ensure!(
             self.content.maps.iter().any(|m| m.id == map),
@@ -2041,7 +2091,10 @@ impl App {
         let base_map = hosted.base_map;
         let package_world = hosted.catalog;
         let package_save = package_world.as_ref().map(|_| {
-            self.state_dir.join("packages").join(format!("{}.save.json", hosted.save_key.replace([':', '/'], "-")))
+            self.state_dir.join("packages").join(format!(
+                "{}.save.json",
+                hosted.save_key.replace([':', '/'], "-")
+            ))
         });
         // Admin Change Map choices (the Tutorial has its own entry point).
         let map_list: Vec<_> = self
@@ -2132,7 +2185,11 @@ impl App {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })
             .await??;
-            reporting.begin(bri_progress::Stage::LoadingMap, bri_progress::Unit::Steps, None);
+            reporting.begin(
+                bri_progress::Stage::LoadingMap,
+                bri_progress::Unit::Steps,
+                None,
+            );
             let permit = load_limit.acquire_owned().await?;
             let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
@@ -2213,7 +2270,11 @@ impl App {
                 })
                 .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
-            reporting.begin(bri_progress::Stage::StartingServer, bri_progress::Unit::Steps, None);
+            reporting.begin(
+                bri_progress::Stage::StartingServer,
+                bri_progress::Unit::Steps,
+                None,
+            );
             // Tests set BRI_TEST_HOST_PORT so a hosted test game never takes
             // the port of a real game running on this machine.
             let port = std::env::var("BRI_TEST_HOST_PORT")
@@ -2249,7 +2310,10 @@ impl App {
                 let world = catalog.world().is_some();
                 let generated = session.install_packages(catalog, save)?;
                 if world {
-                    ensure!(!generated.is_empty(), "The package world generated no ground to stand on");
+                    ensure!(
+                        !generated.is_empty(),
+                        "The package world generated no ground to stand on"
+                    );
                     spawn_points = generated;
                 }
                 if let Some(dir) = package_save.as_ref().and_then(|p| p.parent()) {
@@ -2473,17 +2537,16 @@ impl App {
             let saved_key = pin_key.clone();
             let saved = match route.key {
                 Some(_) => None,
-                None => tokio::task::spawn_blocking(move || {
-                    read_small_json::<BTreeMap<String, Vec<u8>>>(&pins)
-                        .and_then(|pins| pins.get(&saved_key).cloned())
-                })
-                .await?,
+                None => {
+                    tokio::task::spawn_blocking(move || {
+                        read_small_json::<BTreeMap<String, Vec<u8>>>(&pins)
+                            .and_then(|pins| pins.get(&saved_key).cloned())
+                    })
+                    .await?
+                }
             };
-            let (pin, had_pin) = crate::servers::join_pin(
-                route.key,
-                saved,
-                lan_hosts.get(&address.to_string()),
-            );
+            let (pin, had_pin) =
+                crate::servers::join_pin(route.key, saved, lan_hosts.get(&address.to_string()));
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })
@@ -2588,7 +2651,11 @@ impl App {
                 LOADABLE_MAPS.contains(&map.as_str()),
                 "Server map has no supported native render bundle yet"
             );
-            reporting.begin(bri_progress::Stage::LoadingMap, bri_progress::Unit::Steps, None);
+            reporting.begin(
+                bri_progress::Stage::LoadingMap,
+                bri_progress::Unit::Steps,
+                None,
+            );
             let permit = load_limit.acquire_owned().await?;
             let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
                 let _permit = permit;
@@ -3105,7 +3172,9 @@ impl App {
             }
             _ => false,
         };
-        if !showing || (a.entered && !a.reloading && snapshot.stage != bri_progress::Stage::ReceivingWorld) {
+        if !showing
+            || (a.entered && !a.reloading && snapshot.stage != bri_progress::Stage::ReceivingWorld)
+        {
             return;
         }
         let preview = self
@@ -3219,8 +3288,11 @@ impl App {
                     a.map_failure = Some(failed_rx);
                     // v20 shows the loading GUI while the new mission loads.
                     a.reloading = true;
-                    a.progress
-                        .begin(bri_progress::Stage::LoadingMap, bri_progress::Unit::Steps, None);
+                    a.progress.begin(
+                        bri_progress::Stage::LoadingMap,
+                        bri_progress::Unit::Steps,
+                        None,
+                    );
                     self.ui.apply_session(
                         a.id,
                         UiUpdate::Connection(ConnectionState::Loading {
@@ -3316,13 +3388,11 @@ impl App {
                             text,
                             seconds,
                             hide_bar,
-                        } => {
-                            UiUpdate::BottomPrint {
-                                text: print_markup(&self.ui.core.binds, &text),
-                                seconds,
-                                hide_bar,
-                            }
-                        }
+                        } => UiUpdate::BottomPrint {
+                            text: print_markup(&self.ui.core.binds, &text),
+                            seconds,
+                            hide_bar,
+                        },
                         bri_sim::session::Notice::Abilities(abilities) => {
                             self.abilities = abilities;
                             continue;
@@ -3381,8 +3451,11 @@ impl App {
                             name,
                         } => {
                             let path = self.state_dir.join("trust-list.json");
-                            let saved = crate::trust_list::TrustList::load(&path)
-                                .update(&principal, level, &plain_chat(&name));
+                            let saved = crate::trust_list::TrustList::load(&path).update(
+                                &principal,
+                                level,
+                                &plain_chat(&name),
+                            );
                             if let Err(error) = saved {
                                 UiUpdate::Chat {
                                     text: plain_chat(&format!("{error:#}")),
@@ -3424,8 +3497,9 @@ impl App {
             // automatically a few times; the host gives the player their
             // owner number, and so their bricks, back.
             let id = a.id;
-            let rejoin = (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
-                .then(|| a.name.clone());
+            let rejoin =
+                (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
+                    .then(|| a.name.clone());
             if let Some(address) = rejoin
                 && self.reconnects < MAX_RECONNECTS
             {
@@ -3453,17 +3527,18 @@ impl App {
                     }
                 }
             }
-            if a.identity_changed.load(std::sync::atomic::Ordering::Relaxed) {
+            if a.identity_changed
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 let question = self.identity_question(&a.name);
-                self.ui.apply_session(id, UiUpdate::FailureQuestion(question));
+                self.ui
+                    .apply_session(id, UiUpdate::FailureQuestion(question));
             }
             if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
                 self.ui.apply_session(id, UiUpdate::AddOnMismatch(mismatch));
             }
-            self.ui.apply_session(
-                id,
-                UiUpdate::Connection(ConnectionState::Failed { reason }),
-            );
+            self.ui
+                .apply_session(id, UiUpdate::Connection(ConnectionState::Failed { reason }));
             self.disconnect();
             return Ok(());
         }
@@ -3527,18 +3602,12 @@ impl App {
                         && bri_sim::session::BRICK_HAND_IMAGES.contains(&image.image.as_str())
                 })
             }));
-            building.set_held_image(
-                view.weapons
-                    .images
-                    .get(&view.owner)
-                    .is_some_and(|images| {
-                        images.iter().any(|image| {
-                            image.hand == 0
-                                && !bri_sim::session::BRICK_HAND_IMAGES
-                                    .contains(&image.image.as_str())
-                        })
-                    }),
-            );
+            building.set_held_image(view.weapons.images.get(&view.owner).is_some_and(|images| {
+                images.iter().any(|image| {
+                    image.hand == 0
+                        && !bri_sim::session::BRICK_HAND_IMAGES.contains(&image.image.as_str())
+                })
+            }));
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view)
             && let Some(inventory) = view.tools.get(&view.owner)
@@ -3593,8 +3662,7 @@ impl App {
                 })
             });
             let due = self.ghost_report.as_ref().is_none_or(|(sent, at)| {
-                *sent != ghost
-                    && (ghost.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
+                *sent != ghost && (ghost.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
             });
             if due
                 && a.worker
@@ -3799,7 +3867,10 @@ impl App {
             // A game this player hosts runs their own Add-Ons' code; someone
             // else's server runs only code the player trusted for its host
             // key (never its address, which another host can take over).
-            let server = a.view.as_ref().map_or_else(String::new, |v| v.host_key.clone());
+            let server = a
+                .view
+                .as_ref()
+                .map_or_else(String::new, |v| v.host_key.clone());
             self.client_code.start(
                 if a.local {
                     crate::client_code::Host::Local
@@ -3825,7 +3896,9 @@ impl App {
             // whose lessons hand out the bricks.
             let tutorial = a.local
                 && a.view.as_ref().is_some_and(|v| {
-                    v.world.map_id.eq_ignore_ascii_case(bri_sim::tutorial::MAP_ID)
+                    v.world
+                        .map_id
+                        .eq_ignore_ascii_case(bri_sim::tutorial::MAP_ID)
                 });
             if !tutorial {
                 self.ui.apply_session(a.id, UiUpdate::FirstSpawn);
@@ -3893,7 +3966,12 @@ impl App {
             {
                 while let Ok(notice) = router.try_recv() {
                     for (text, confirm) in self.host_notice(notice) {
-                        self.ui.apply_session(a.id, UiUpdate::Chat { text: format!("\u{E006}{}", plain_chat(&text)) });
+                        self.ui.apply_session(
+                            a.id,
+                            UiUpdate::Chat {
+                                text: format!("\u{E006}{}", plain_chat(&text)),
+                            },
+                        );
                         if let Some(update) = confirm {
                             self.ui.apply_session(a.id, update);
                         }
@@ -3974,7 +4052,8 @@ impl App {
             _ => false,
         };
         if unsaved != self.ui.core.unsaved_changes {
-            self.ui.apply_session(a.id, UiUpdate::UnsavedChanges(unsaved));
+            self.ui
+                .apply_session(a.id, UiUpdate::UnsavedChanges(unsaved));
         }
     }
 }
@@ -4111,7 +4190,11 @@ fn camera_eye(
 /// exactly +-90 degrees) or past it (the chase camera adds `cameraTilt`)
 /// keeps turning with the yaw instead of snapping to a fixed roll.
 fn view_basis(yaw: f32, pitch: f32) -> (Vec3, Vec3, Vec3) {
-    let forward = Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos());
+    let forward = Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        -yaw.cos() * pitch.cos(),
+    );
     let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
     (forward, right, right.cross(forward))
 }
@@ -4136,7 +4219,12 @@ fn trust_question(prompt: &bri_client_sandbox::TrustPrompt) -> bri_ui::api::Ques
         .collect();
     bri_ui::api::Question {
         title: plain_chat(&prompt.title),
-        text: format!("{}\n\n{}\n\n{}", prompt.body, rows.join("\n"), prompt.footer),
+        text: format!(
+            "{}\n\n{}\n\n{}",
+            prompt.body,
+            rows.join("\n"),
+            prompt.footer
+        ),
         yes: prompt.accept.into(),
         no: prompt.decline.into(),
         on_yes: Box::new(UiAction::TrustAddOnCode),
@@ -4379,7 +4467,11 @@ fn caption(cue: &bri_sim::presentation::Cue, listener: Option<Vec3>) -> Option<&
         K::WeaponSound { .. } => "[Weapon fire]",
         K::Death { .. } => "[Death cry]",
         K::Pain { cry: true, .. } => "[Cry of pain]",
-        K::Water { entered: true, speed, .. } if *speed > 4.0 => "[Splash]",
+        K::Water {
+            entered: true,
+            speed,
+            ..
+        } if *speed > 4.0 => "[Splash]",
         K::BrickKill { .. } => "[Bricks breaking]",
         K::Teleport { .. } => "[Teleport]",
         K::Emote { name, .. } if name == "alarm" => "[Alarm]",
@@ -4396,7 +4488,11 @@ fn rider_input(
     input: bri_sim::player::MoveInput,
     mounted: bool,
 ) -> bri_sim::player::MoveInput {
-    if mounted { input } else { abilities.apply(input) }
+    if mounted {
+        input
+    } else {
+        abilities.apply(input)
+    }
 }
 /// A ghost the server would refuse, before `v20_temp_brick` brightens it.
 const BLOCKED_GHOST: [f32; 4] = [0.6, 0.05, 0.05, 1.0];
@@ -4600,10 +4696,7 @@ impl PlatformApp for App {
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
                     Some((
-                        d.seat_role_for(
-                            usize::from(seat),
-                            steering_prefs(&self.ui.core.prefs).0,
-                        ),
+                        d.seat_role_for(usize::from(seat), steering_prefs(&self.ui.core.prefs).0),
                         forward.x.atan2(-forward.z),
                         forward.y.clamp(-1.0, 1.0).asin(),
                         seat_yaw,
@@ -4683,8 +4776,7 @@ impl PlatformApp for App {
                             )
                             .and_then(|(mesh, s)| mesh.world_node(&self.avatar_assets, &s.node))
                         {
-                            let (_, node_rotation, position) =
-                                node.to_scale_rotation_translation();
+                            let (_, node_rotation, position) = node.to_scale_rotation_translation();
                             feet = position;
                             rotation = node_rotation;
                         }
@@ -4706,10 +4798,14 @@ impl PlatformApp for App {
                         );
                     }
                 }
-                self.vehicles
-                    .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
+                self.vehicles.prepare(
+                    &mut self.vehicle_assets,
+                    &view.vehicles,
+                    &view.world.palette,
+                );
                 for (model, transform, tint) in self.explosion_debris.models() {
-                    self.vehicle_assets.push_source_model(model, transform, tint);
+                    self.vehicle_assets
+                        .push_source_model(model, transform, tint);
                 }
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
@@ -4724,16 +4820,20 @@ impl PlatformApp for App {
                             .pack
                             .images
                             .get(&mounted.image)
-                            .and_then(|image| {
-                                image.states.iter().find(|s| s.name == mounted.state)
-                            })
+                            .and_then(|image| image.states.iter().find(|s| s.name == mounted.state))
                             .map(|state| state.sound.as_str())
                             .filter(|sound| !sound.is_empty() && self.audio.is_looping(sound));
                         if let Some(sound) = sound {
                             let eye = Vec3::from(player.feet)
                                 + Vec3::Y
-                                    * view.archetypes.tuning(player.archetype, player.scale).stand_eye;
-                            loops.insert((*owner, mounted.hand), (sound.to_string(), eye.to_array()));
+                                    * view
+                                        .archetypes
+                                        .tuning(player.archetype, player.scale)
+                                        .stand_eye;
+                            loops.insert(
+                                (*owner, mounted.hand),
+                                (sound.to_string(), eye.to_array()),
+                            );
                         }
                     }
                 }
@@ -4836,7 +4936,8 @@ impl PlatformApp for App {
             // LAN favourites and saved favourites lead the list.
             servers.sort_by_key(|s| !s.favorite);
             saved_rows.sort_by_key(|s| !s.favorite);
-            let (favorites, rest): (Vec<_>, Vec<_>) = saved_rows.into_iter().partition(|s| s.favorite);
+            let (favorites, rest): (Vec<_>, Vec<_>) =
+                saved_rows.into_iter().partition(|s| s.favorite);
             let mut list = favorites;
             list.extend(servers);
             list.extend(rest);
@@ -4852,7 +4953,8 @@ impl PlatformApp for App {
             let (title, text) = match result {
                 Ok(()) => (
                     "Windows Firewall",
-                    "Blockland ReImagined can now accept friends through Windows Firewall.".to_string(),
+                    "Blockland ReImagined can now accept friends through Windows Firewall."
+                        .to_string(),
                 ),
                 Err(reason) => ("Windows Firewall", reason),
             };
@@ -4947,7 +5049,8 @@ impl PlatformApp for App {
                     .get(owner)
                     .unwrap_or(&self.avatar_assets.package.defaults);
                 // `HorseArmor` players draw horse.dts.
-                let horse = player.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
+                let horse =
+                    player.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
                 if self
                     .avatars
                     .get(owner)
@@ -5001,23 +5104,23 @@ impl PlatformApp for App {
                 let dead = view.vitals.get(owner).is_some_and(|v| !v.alive);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
-                let look_limits = view
-                    .vitals
-                    .get(owner)
-                    .and_then(|v| v.mounted)
-                    .and_then(|(vehicle, seat)| {
-                        let info = view.vehicles.get(&vehicle)?;
-                        let d = self.vehicle_assets.definition(&info.definition)?;
-                        if d.seat_role(usize::from(seat)) == SeatRole::Gunner
-                            && d.attachment_mount.is_some()
-                        {
-                            return self
-                                .vehicle_assets
-                                .definition("v20.vehicle.tankturretplayer")
-                                .map(|t| t.look_limits);
-                        }
-                        Some(d.look_limits)
-                    });
+                let look_limits =
+                    view.vitals
+                        .get(owner)
+                        .and_then(|v| v.mounted)
+                        .and_then(|(vehicle, seat)| {
+                            let info = view.vehicles.get(&vehicle)?;
+                            let d = self.vehicle_assets.definition(&info.definition)?;
+                            if d.seat_role(usize::from(seat)) == SeatRole::Gunner
+                                && d.attachment_mount.is_some()
+                            {
+                                return self
+                                    .vehicle_assets
+                                    .definition("v20.vehicle.tankturretplayer")
+                                    .map(|t| t.look_limits);
+                            }
+                            Some(d.look_limits)
+                        });
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
@@ -5102,12 +5205,17 @@ impl PlatformApp for App {
             // v20 tints the screen with the liquid the camera is in, and
             // colours player splashes and froth with the liquid they touch.
             self.ui
-                .apply(UiUpdate::Underwater(bri_sim::water::screen_tints(&liquids, eye)));
+                .apply(UiUpdate::Underwater(bri_sim::water::screen_tints(
+                    &liquids, eye,
+                )));
             self.actor_effects.set_liquids(liquids);
             let (local_view_yaw, local_view_pitch) = self.controls.view_angles();
             self.world_items.set_palette(&view.world.palette);
             self.world_items.set_render_my_items(
-                self.ui.core.prefs.bool_or("$pref::Player::renderMyItems", true),
+                self.ui
+                    .core
+                    .prefs
+                    .bool_or("$pref::Player::renderMyItems", true),
             );
             self.weapon_effects.set_palette(&view.world.palette);
             let items = self.world_items.sync(
@@ -5168,7 +5276,11 @@ impl PlatformApp for App {
                 // Show Jets in First Person (`$pref::Player::renderMyJets`,
                 // off in v20): one's own jets only show in third person.
                 (!third_person
-                    && !self.ui.core.prefs.bool_or("$pref::Player::renderMyJets", false))
+                    && !self
+                        .ui
+                        .core
+                        .prefs
+                        .bool_or("$pref::Player::renderMyJets", false))
                 .then_some(view.owner),
                 // `fxLight::TestLOS` casts from the camera to the flare,
                 // ignoring the player carrying it.
@@ -5181,7 +5293,8 @@ impl PlatformApp for App {
                     Some((hit.distance, hit.normal))
                 },
             );
-            self.cosmetic_faults.absorb("player and vehicle effects", actors);
+            self.cosmetic_faults
+                .absorb("player and vehicle effects", actors);
             self.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {
@@ -5227,26 +5340,31 @@ impl PlatformApp for App {
                     .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity))
             });
             self.cosmetic_faults.absorb("gun casings", queued);
-            let moved = self
-                .weapon_shells
-                .advance(game_elapsed.as_secs_f32(), eject, |from, to| {
-                    let delta = to - from;
-                    let length = delta.length();
-                    if length < 1e-5 {
-                        return None;
-                    }
-                    let hit = building.target(from, delta / length, length).ok()??;
-                    Some(crate::weapon_debris::DebrisHit {
-                        fraction: (hit.distance / length).clamp(0., 1.),
-                        normal: hit.normal.normalize_or(Vec3::Y),
-                    })
-                });
+            let moved =
+                self.weapon_shells
+                    .advance(game_elapsed.as_secs_f32(), eject, |from, to| {
+                        let delta = to - from;
+                        let length = delta.length();
+                        if length < 1e-5 {
+                            return None;
+                        }
+                        let hit = building.target(from, delta / length, length).ok()??;
+                        Some(crate::weapon_debris::DebrisHit {
+                            fraction: (hit.distance / length).clamp(0., 1.),
+                            normal: hit.normal.normalize_or(Vec3::Y),
+                        })
+                    });
             self.cosmetic_faults.absorb("gun casings", moved);
             self.audio
                 .sync_projectiles(&weapons.projectiles, &self.content.weapons.pack);
             let kills = std::mem::take(&mut self.brick_kills);
             let thrown = self.brick_debris.cues(&kills, building);
-            if self.cosmetic_faults.absorb("brick debris", thrown).unwrap_or(0) > 0 {
+            if self
+                .cosmetic_faults
+                .absorb("brick debris", thrown)
+                .unwrap_or(0)
+                > 0
+            {
                 // Newly dead bricks are not hidden bricks to reveal.
                 self.hidden_uploaded = None;
             }
@@ -5603,10 +5721,14 @@ impl PlatformApp for App {
                     let version = self.ui.core.version.clone();
                     let text = match crate::perf::save_capture(&dir, &self.ui.core, &version) {
                         Ok(path) => {
-                            bri_console::echo(format!("Performance capture saved: {}", path.display()));
+                            bri_console::echo(format!(
+                                "Performance capture saved: {}",
+                                path.display()
+                            ));
                             format!(
                                 "Performance capture saved: {}",
-                                path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into())
+                                path.file_name()
+                                    .map_or_else(String::new, |n| n.to_string_lossy().into())
                             )
                         }
                         Err(error) => format!("Performance capture failed: {error:#}"),
@@ -5848,32 +5970,32 @@ impl PlatformApp for App {
                         }
                         Ok(Some(command)) => Some(command),
                         Ok(None) => match name.to_ascii_lowercase().as_str() {
-                        "suicide" | "kill" => Some(Command::Suicide),
-                        "light" => Some(Command::ToggleLight),
-                        "clearcheckpoint" => Some(Command::ClearCheckpoint),
-                        "treasurestatus" => Some(Command::TreasureStatus),
-                        "wand" => Some(Command::Wand),
-                        // `serverCmdRet`: back from `/spy` to one's own body.
-                        "ret" => Some(Command::ControlPlayer),
-                        // `serverCmdWtf` and `serverCmdZombie` repeat
-                        // `/confusion` and `/hug`.
-                        "wtf" => Some(Command::Emote("confusion".into())),
-                        "zombie" => Some(Command::Emote("hug".into())),
-                        "sit" | "love" | "hate" | "alarm" | "confusion" | "bsd" | "hug" => {
-                            Some(Command::Emote(name.to_ascii_lowercase()))
-                        }
-                        // Every other slash command goes to the host, which
-                        // runs the Add-On command of that name, or answers
-                        // that there is none (v20's `/x` calls `serverCmdX`).
-                        _ => Some(Command::Package(bri_sim::session::PackageCommand {
-                            package: String::new(),
-                            command: name.clone(),
-                            args: args
-                                .iter()
-                                .cloned()
-                                .map(bri_sim::session::PackageArg::String)
-                                .collect(),
-                        })),
+                            "suicide" | "kill" => Some(Command::Suicide),
+                            "light" => Some(Command::ToggleLight),
+                            "clearcheckpoint" => Some(Command::ClearCheckpoint),
+                            "treasurestatus" => Some(Command::TreasureStatus),
+                            "wand" => Some(Command::Wand),
+                            // `serverCmdRet`: back from `/spy` to one's own body.
+                            "ret" => Some(Command::ControlPlayer),
+                            // `serverCmdWtf` and `serverCmdZombie` repeat
+                            // `/confusion` and `/hug`.
+                            "wtf" => Some(Command::Emote("confusion".into())),
+                            "zombie" => Some(Command::Emote("hug".into())),
+                            "sit" | "love" | "hate" | "alarm" | "confusion" | "bsd" | "hug" => {
+                                Some(Command::Emote(name.to_ascii_lowercase()))
+                            }
+                            // Every other slash command goes to the host, which
+                            // runs the Add-On command of that name, or answers
+                            // that there is none (v20's `/x` calls `serverCmdX`).
+                            _ => Some(Command::Package(bri_sim::session::PackageCommand {
+                                package: String::new(),
+                                command: name.clone(),
+                                args: args
+                                    .iter()
+                                    .cloned()
+                                    .map(bri_sim::session::PackageArg::String)
+                                    .collect(),
+                            })),
                         },
                     };
                     match command {
@@ -5938,8 +6060,7 @@ impl PlatformApp for App {
                     }
                     result
                 }
-                UiAction::ClosePrintSelector
-                | UiAction::CancelWrench { .. } => Ok(()),
+                UiAction::ClosePrintSelector | UiAction::CancelWrench { .. } => Ok(()),
                 UiAction::TrustInvite { target, level } => {
                     self.command(id, Command::TrustInvite { target, level }, action.clone())
                 }
@@ -5991,26 +6112,37 @@ impl PlatformApp for App {
                     }),
                 UiAction::QueryLan => {
                     let (send, receive) = mpsc::sync_channel(1);
-                    let saved = crate::servers::SavedServers::load(&self.state_dir.join("servers.json"));
+                    let saved =
+                        crate::servers::SavedServers::load(&self.state_dir.join("servers.json"));
                     let pins: BTreeMap<String, Vec<u8>> =
-                        read_small_json(&self.state_dir.join("trusted-hosts.json")).unwrap_or_default();
+                        read_small_json(&self.state_dir.join("trusted-hosts.json"))
+                            .unwrap_or_default();
                     self.runtime.spawn(async move {
                         let broadcast = [bri_net::discovery::broadcast()];
-                        let lan = bri_net::discovery::query(&broadcast, Duration::from_millis(1200));
+                        let lan =
+                            bri_net::discovery::query(&broadcast, Duration::from_millis(1200));
                         // Every saved server is asked at once over its game
                         // port; a probe never pins anything.
                         let probes = saved.servers.into_iter().map(|server| {
                             let pin = pins.get(&server.address).cloned();
                             async move {
                                 let probe = async {
-                                    let target = bri_net::invite::JoinTarget::parse(server.target())?;
+                                    let target =
+                                        bri_net::invite::JoinTarget::parse(server.target())?;
                                     let route = target.resolve().await?;
                                     let pin = match (route.key, pin) {
                                         (Some(key), _) => HostPin::Key(key),
-                                        (None, Some(certificate)) => HostPin::Certificate(certificate),
+                                        (None, Some(certificate)) => {
+                                            HostPin::Certificate(certificate)
+                                        }
                                         (None, None) => HostPin::FirstUse,
                                     };
-                                    bri_net::client::probe(route.address, &pin, Duration::from_secs(2)).await
+                                    bri_net::client::probe(
+                                        route.address,
+                                        &pin,
+                                        Duration::from_secs(2),
+                                    )
+                                    .await
                                 }
                                 .await
                                 .map_err(|error| probe_failure(&error));
@@ -6044,10 +6176,13 @@ impl PlatformApp for App {
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
                     let started = if self.add_on_import.is_some() {
-                        Err(anyhow::anyhow!("Another add-on is importing; wait for it to finish."))
+                        Err(anyhow::anyhow!(
+                            "Another add-on is importing; wait for it to finish."
+                        ))
                     } else {
-                        crate::add_ons::importer()
-                            .and_then(|importer| crate::add_ons::start_import(&root, row, &importer))
+                        crate::add_ons::importer().and_then(|importer| {
+                            crate::add_ons::start_import(&root, row, &importer)
+                        })
                     };
                     match started {
                         Ok(receiver) => {
@@ -6114,7 +6249,8 @@ impl PlatformApp for App {
                 UiAction::AllowFirewall { port } => {
                     let (send, receive) = mpsc::sync_channel(1);
                     std::thread::spawn(move || {
-                        let _ = send.send(crate::firewall::allow(port).map_err(|e| format!("{e:#}")));
+                        let _ =
+                            send.send(crate::firewall::allow(port).map_err(|e| format!("{e:#}")));
                     });
                     self.firewall_fix = Some(receive);
                     Ok(())
@@ -6128,9 +6264,7 @@ impl PlatformApp for App {
                         None => Ok(()),
                     }
                 }
-                _ => Err(anyhow::anyhow!(
-                    "This isn't available yet."
-                )),
+                _ => Err(anyhow::anyhow!("This isn't available yet.")),
             };
             self.answer(id, result);
         }
@@ -6257,8 +6391,7 @@ impl PlatformApp for App {
         if std::mem::take(&mut self.gpu_restart)
             || bri_render::color::color_vision() != vision
             || self.renderer.as_ref().is_some_and(|r| {
-                r.samples() != self.graphics.samples
-                    || r.shadow_settings() != self.graphics.shadows
+                r.samples() != self.graphics.samples || r.shadow_settings() != self.graphics.shadows
             })
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
@@ -6428,21 +6561,19 @@ impl PlatformApp for App {
             };
             // A brick this client cannot draw shows nothing.
             let gpu = match (&self.meshes, &self.materials) {
-                (Some(meshes), Some(materials)) => {
-                    crate::world_scene::build_world_scene_materials(
-                        &world,
-                        meshes,
-                        100_000,
-                        Some(materials),
-                    )
-                    .ok()
-                    .filter(|data| !data.indices.is_empty())
-                    .map(|mut data| {
-                        translucent_ghost(&mut data, &ghost_look);
-                        renderer.upload(frame.device, frame.queue, &data)
-                    })
-                    .transpose()?
-                }
+                (Some(meshes), Some(materials)) => crate::world_scene::build_world_scene_materials(
+                    &world,
+                    meshes,
+                    100_000,
+                    Some(materials),
+                )
+                .ok()
+                .filter(|data| !data.indices.is_empty())
+                .map(|mut data| {
+                    translucent_ghost(&mut data, &ghost_look);
+                    renderer.upload(frame.device, frame.queue, &data)
+                })
+                .transpose()?,
                 _ => None,
             };
             self.remote_ghosts.insert(*owner, (ghost.clone(), gpu));
@@ -6658,6 +6789,13 @@ impl PlatformApp for App {
             };
             self.client_code
                 .run_frame(self.animation_time, eye, forward, world);
+            for (asset, at, volume) in self.client_code.take_sounds() {
+                let placement = match at {
+                    Some(at) => bri_audio::Placement::World(bri_audio::Vec3::from(at)),
+                    None => bri_audio::Placement::Listener,
+                };
+                self.audio.play_asset(asset, placement, volume);
+            }
             self.client_code.prepare(
                 frame.device,
                 frame.queue,
@@ -6745,8 +6883,10 @@ impl PlatformApp for App {
             .map(|color| color.create_view(&Default::default()));
         let world_target = multisampled.as_ref().unwrap_or(frame.target);
         let [r, g, b, a] = scene.clear_color.map(f64::from);
-        if let (Some(gpu), Some(view)) = (self.gpu_scene.as_mut(), self.attempt.as_ref().and_then(|a| a.view.as_ref()))
-            && self.gpu_broken != view.broken_shapes
+        if let (Some(gpu), Some(view)) = (
+            self.gpu_scene.as_mut(),
+            self.attempt.as_ref().and_then(|a| a.view.as_ref()),
+        ) && self.gpu_broken != view.broken_shapes
         {
             // Smashed shapes stop drawing (`renderWhenDestroyed = 0`); only a
             // new mission restores them, with a fresh upload.
@@ -6763,7 +6903,11 @@ impl PlatformApp for App {
         if let Some(ghost) = &self.ghost_gpu {
             scenes.push(ghost);
         }
-        scenes.extend(self.remote_ghosts.values().filter_map(|(_, gpu)| gpu.as_ref()));
+        scenes.extend(
+            self.remote_ghosts
+                .values()
+                .filter_map(|(_, gpu)| gpu.as_ref()),
+        );
         if let Some(hidden) = &self.hidden_gpu {
             scenes.push(hidden);
         }
@@ -6890,7 +7034,9 @@ impl PlatformApp for App {
     }
 }
 /// Wait for every future (a small join_all, to avoid a dependency).
-async fn futures_join_all<F: std::future::Future + Send + 'static>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
+async fn futures_join_all<F: std::future::Future + Send + 'static>(
+    futures: impl IntoIterator<Item = F>,
+) -> Vec<F::Output>
 where
     F::Output: Send + 'static,
 {
@@ -6972,9 +7118,15 @@ mod tests {
             ..Default::default()
         };
         let riding = super::rider_input(no_jet, pressed, true);
-        assert!(riding.jet && riding.jump, "dismount and horse jump reach the mount");
+        assert!(
+            riding.jet && riding.jump,
+            "dismount and horse jump reach the mount"
+        );
         let walking = super::rider_input(no_jet, pressed, false);
-        assert!(!walking.jet && !walking.jump, "the lesson's limits still hold on foot");
+        assert!(
+            !walking.jet && !walking.jump,
+            "the lesson's limits still hold on foot"
+        );
         assert_eq!(walking.forward, 1.0);
     }
     #[test]
@@ -7024,7 +7176,10 @@ mod tests {
     }
     #[test]
     fn saved_pins_are_keyed_by_the_typed_host() {
-        assert_eq!(super::target_host("play.example.com:28000"), "play.example.com");
+        assert_eq!(
+            super::target_host("play.example.com:28000"),
+            "play.example.com"
+        );
         assert_eq!(super::target_host("[2001:db8::1]:28000"), "2001:db8::1");
         assert_eq!(super::target_host("203.0.113.10:28001"), "203.0.113.10");
     }
@@ -7202,7 +7357,8 @@ mod tests {
         assert_eq!(app.content.item_physics.bounds.len(), 21);
         app.ui.core.request(UiAction::HostGame {
             map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
-            mode: ServerMode::SinglePlayer, game_mode: None,
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
             max_players: 1,
             server_name: "Weapon catalog test".into(),
             password: String::new(),
@@ -7355,7 +7511,7 @@ mod tests {
             owner,
             vec![bri_sim::session::MountedImage {
                 paint: None,
-image: "v20.image.gunimage".into(),
+                image: "v20.image.gunimage".into(),
                 state: "Fire".into(),
                 hand: 0,
             }],
@@ -7541,8 +7697,7 @@ image: "v20.image.gunimage".into(),
             particles: vec![],
             lights: vec![],
         };
-        let (combined, deferred) =
-            super::combine_effect_frames(world, [weapon, actor], Vec3::ZERO);
+        let (combined, deferred) = super::combine_effect_frames(world, [weapon, actor], Vec3::ZERO);
         assert_eq!(combined.particles[0].texture, 2);
         assert_eq!(combined.particles[1].texture, 7);
         assert_eq!(combined.lights.len(), bri_render::scene::MAX_POINT_LIGHTS);

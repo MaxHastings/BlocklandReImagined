@@ -491,7 +491,9 @@ impl Pack {
                     && image.commands.states.iter().all(|(script, c)| {
                         !script.is_empty()
                             && script.len() <= 64
-                            && script.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                            && script
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
                             && is_image_command(c)
                     })
                     && image.commands.jet.as_deref().is_none_or(is_image_command),

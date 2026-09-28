@@ -96,7 +96,25 @@ fn the_steel_ball_shine_draws_each_steel_ball_and_nothing_else() {
     );
     assert_eq!(params[1], [0.0, 0.0, 0.0, 1.0], "unturned");
     let turned = drawn.draws[1].params.unwrap();
-    assert_eq!(turned[1], ball(4, 3.0, 1.0).rotation, "turned as the ball rolls");
+    assert_eq!(
+        turned[1],
+        ball(4, 3.0, 1.0).rotation,
+        "turned as the ball rolls"
+    );
+    assert!(drawn.sounds.is_empty(), "nothing hit anything yet");
+    // Next frame the first ball has stopped dead against something: it
+    // clanks where it is.
+    let mut hit = ball(3, -3.0, 0.0);
+    hit.velocity = [-12.0, 0.0, 0.0];
+    let struck = Arc::new(World {
+        vehicles: vec![hit, ball(4, 3.0, 1.0)],
+        ..Default::default()
+    });
+    let heard = addon.frame(frame(0.05, &struck)).unwrap().sounds.clone();
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!(heard[0].name, "client/sounds/clank.wav");
+    assert_eq!(heard[0].at, Some([-3.0, 1.25, 0.0]));
+    assert!(heard[0].volume > 0.5);
     // No balls, nothing drawn.
     let empty = Arc::new(World::default());
     assert!(addon.frame(frame(0.1, &empty)).unwrap().draws.is_empty());
@@ -129,7 +147,11 @@ fn the_steel_ball_renders_offscreen() {
         let i = ((y * images[0].width + x) * 4) as usize;
         images[0].pixels[i..i + 4].to_vec()
     };
-    assert_ne!(at(200, 180), background, "the left ball is drawn on {adapter}");
+    assert_ne!(
+        at(200, 180),
+        background,
+        "the left ball is drawn on {adapter}"
+    );
     assert_ne!(images[0].pixels, images[1].pixels, "it rolls");
 }
 
@@ -160,7 +182,10 @@ fn beam(world: &mut World, player: u64, beam: [i64; 6]) {
         .entry("gravity-gun".into())
         .or_insert_with(AddOnState::default)
         .players
-        .insert(player, [("beam".to_string(), serde_json::json!(beam))].into());
+        .insert(
+            player,
+            [("beam".to_string(), serde_json::json!(beam))].into(),
+        );
 }
 
 // ---- Gravity Gun Effects ----
@@ -200,34 +225,88 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
     let (code, mut addon) = start("gravity-gun-fx");
     assert_eq!(code.name, "Gravity Gun Effects");
     let draws = |addon: &mut AddOn, t: f32, world: World| {
-        addon.frame(frame(t, &Arc::new(world))).unwrap().draws.clone()
+        addon
+            .frame(frame(t, &Arc::new(world)))
+            .unwrap()
+            .draws
+            .clone()
     };
     // Nobody holds anything: nothing drawn.
-    assert!(draws(&mut addon, 0.0, gun_world([0, 0, 0, 0, 0, 0], [0.0, 2.0, -5.0])).is_empty());
-    // Holding the crate: two beam passes, the bubble, the orbiting sparks.
-    let held = draws(&mut addon, 0.1, gun_world([1, 7, 0, 0, 0, 0], [0.0, 2.0, -5.0]));
+    assert!(
+        draws(
+            &mut addon,
+            0.0,
+            gun_world([0, 0, 0, 0, 0, 0], [0.0, 2.0, -5.0])
+        )
+        .is_empty()
+    );
+    // Holding the crate: two beam passes, the bubble, the orbiting sparks,
+    // and the grab heard at the crate.
+    let grabbed = addon
+        .frame(frame(
+            0.1,
+            &Arc::new(gun_world([1, 7, 0, 0, 0, 0], [0.0, 2.0, -5.0])),
+        ))
+        .unwrap()
+        .clone();
+    let held = grabbed.draws.clone();
     assert_eq!(held.len(), 4, "{held:#?}");
+    assert_eq!(grabbed.sounds.len(), 1);
+    assert_eq!(grabbed.sounds[0].name, "client/sounds/grab.wav");
+    assert_eq!(grabbed.sounds[0].at, Some([0.0, 2.0, -5.0]));
     let beam_params = held[0].params.unwrap();
-    assert_eq!(&beam_params[1][..3], &[0.0, 2.0, -5.0], "the beam ends at the crate");
+    assert_eq!(
+        &beam_params[1][..3],
+        &[0.0, 2.0, -5.0],
+        "the beam ends at the crate"
+    );
     assert!(
         beam_params[0][2] < -0.5 && beam_params[0][0] > 0.2,
         "it starts at the gun, ahead and to the right: {:?}",
         beam_params[0]
     );
     // Charging adds the orb and the sparks drawn into it.
-    let charging = draws(&mut addon, 0.2, gun_world([1, 7, 1, 0, 0, 0], [0.0, 2.0, -5.0]));
+    let charging = draws(
+        &mut addon,
+        0.2,
+        gun_world([1, 7, 1, 0, 0, 0], [0.0, 2.0, -5.0]),
+    );
     assert_eq!(charging.len(), 6);
-    // The throw: the beam goes, a shockwave and sparks mark it...
-    let thrown = draws(&mut addon, 0.6, gun_world([0, 0, 0, 1, 1, 7], [0.0, 2.0, -5.0]));
+    // The throw: the beam goes, a shockwave and sparks mark it, and it
+    // booms (not the drop's fall-away)...
+    let launched = addon
+        .frame(frame(
+            0.6,
+            &Arc::new(gun_world([0, 0, 0, 1, 1, 7], [0.0, 2.0, -5.0])),
+        ))
+        .unwrap()
+        .clone();
+    let names: Vec<&str> = launched.sounds.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["client/sounds/launch.wav"]);
+    let thrown = launched.draws.clone();
     assert_eq!(thrown.len(), 3, "{thrown:#?}");
     let ring = thrown[0].params.unwrap();
     assert_eq!(&ring[0][..3], &[0.0, 2.0, -5.0], "where the crate was");
     // ...and fade out.
-    assert!(draws(&mut addon, 1.5, gun_world([0, 0, 0, 1, 1, 7], [0.0, 2.0, -25.0])).is_empty());
+    assert!(
+        draws(
+            &mut addon,
+            1.5,
+            gun_world([0, 0, 0, 1, 1, 7], [0.0, 2.0, -25.0])
+        )
+        .is_empty()
+    );
     // A player seen for the first time with shots already fired shows no
     // stale burst.
     let (_, mut fresh) = start("gravity-gun-fx");
-    assert!(draws(&mut fresh, 0.0, gun_world([0, 0, 0, 5, 1, 7], [0.0, 2.0, -5.0])).is_empty());
+    assert!(
+        draws(
+            &mut fresh,
+            0.0,
+            gun_world([0, 0, 0, 5, 1, 7], [0.0, 2.0, -5.0])
+        )
+        .is_empty()
+    );
 }
 
 /// Needs a GPU: renders holding, charging and a throw to PNGs.
@@ -241,7 +320,10 @@ fn the_gravity_gun_renders_offscreen() {
         } else if t < 2.0 {
             ([1, 7, 1, 0, 0, 0], [0.4, 2.2, -4.5])
         } else {
-            ([0, 0, 0, 1, 1, 7], [0.4 , 2.6 + (t - 2.0) * 2.0, -4.5 - (t - 2.0) * 30.0])
+            (
+                [0, 0, 0, 1, 1, 7],
+                [0.4, 2.6 + (t - 2.0) * 2.0, -4.5 - (t - 2.0) * 30.0],
+            )
         };
         Arc::new(gun_world(state, at))
     };
@@ -264,7 +346,10 @@ fn the_gravity_gun_renders_offscreen() {
             .filter(|p| *p != background.as_slice())
             .count()
     };
-    println!("lit pixels per frame on {adapter}: {:?}", (0..images.len()).map(lit).collect::<Vec<_>>());
+    println!(
+        "lit pixels per frame on {adapter}: {:?}",
+        (0..images.len()).map(lit).collect::<Vec<_>>()
+    );
     assert!(lit(1) > 2000, "the beam and bubble show");
     assert!(lit(3) > lit(1), "charging adds the orb");
     assert!(lit(5) > 500, "the throw's shockwave shows");

@@ -135,7 +135,7 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
         "mesh_create" | "material_create" | "material_set" | "material_blend" | "draw"
         | "draw_with" | "camera" | "environment" => Some(Capability::RenderLayer),
         "shader" => Some(Capability::RenderShader),
-        "sound_play" => Some(Capability::Audio),
+        "sound_play" | "sound_at" => Some(Capability::Audio),
         "key_down" => Some(Capability::InputFocused),
         "send" | "recv" => Some(Capability::NetMessage),
         "players" | "vehicles" | "vehicle_kind" | "state_num" | "local_player" => {

@@ -22,12 +22,12 @@ mod debris;
 mod events;
 mod quotas;
 use quotas::Quota;
-mod admin_world;
 mod admin_players;
-mod trust;
-mod map_change;
+mod admin_world;
 mod inventory;
+mod map_change;
 mod special;
+mod trust;
 mod tutorial;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod vehicles;
@@ -36,16 +36,12 @@ pub use vehicles::{VehicleInfo, VehiclePose};
 mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
-mod tools;
-mod undo;
 mod blueprints;
 mod movables;
-mod spray;
 mod packages;
-pub use packages::{
-    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand, PackageSave,
-    PackageStateView, PackageStats, WorldSave,
-};
+mod spray;
+mod tools;
+mod undo;
 pub use admin::{
     AdminBrickGroup, AdminCall, AdminCapability, AdminData, AdminPlayer, AdminReply, AdminSnapshot,
     MapListing, disconnect_message,
@@ -55,6 +51,10 @@ pub use combat::{
     DEATH_PROJECTILE, MAX_HEALTH, MiniGameRequest, MiniGameView, Notice, SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
+pub use packages::{
+    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
+    PackageSave, PackageStateView, PackageStats, WorldSave,
+};
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
 /// the same `playThread(1, armReadyBoth)`).
@@ -64,8 +64,8 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use tools::{InspectMode, ToolAction, ToolCatalog};
-pub use undo::UNDO_QUEUE_SIZE;
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
+pub use undo::UNDO_QUEUE_SIZE;
 
 /// Queued inputs above which the server simulates extra ticks to catch up.
 const INPUT_TARGET: usize = 6;
@@ -213,7 +213,10 @@ pub enum Command {
     Talking(bool),
     /// `SteeringPrefsEvent`: the client's `$pref::Input::UseStrafeSteering`
     /// and `$pref::Input::UseAutoReturnSteering` (both on until it says).
-    SteeringPrefs { strafe: bool, auto_return: bool },
+    SteeringPrefs {
+        strafe: bool,
+        auto_return: bool,
+    },
     /// A ghost-brick move, which stays client-side; the server only animates
     /// the builder.
     BuildGesture(BuildGesture),
@@ -828,7 +831,11 @@ impl Session {
             }
         };
         if let Some(record) = record {
-            let known = self.simulation.state().owner_of(&record.principal).is_some();
+            let known = self
+                .simulation
+                .state()
+                .owner_of(&record.principal)
+                .is_some();
             if returning.is_some() || !known {
                 self.simulation.claim_owner(owner, record)?;
             }
@@ -1766,8 +1773,7 @@ impl Session {
         let tick = self.simulation.state().tick;
         // Abandoned builds turn public on the minute (v20 checked every
         // five, with each server post).
-        if self.admin.settings.public_domain_timeout_minutes > 0 && tick.is_multiple_of(60 * 120)
-        {
+        if self.admin.settings.public_domain_timeout_minutes > 0 && tick.is_multiple_of(60 * 120) {
             self.refresh_trust();
         }
         self.stop_talking(tick);
@@ -1874,7 +1880,8 @@ impl Session {
                 let speed = Vec3::from(state.velocity).length();
                 let moved = Vec3::from(state.feet) != before;
                 if let Some(crossing) =
-                    peer.water.step(deepest.map_or(0.0, |(_, c)| c), speed, moved)
+                    peer.water
+                        .step(deepest.map_or(0.0, |(_, c)| c), speed, moved)
                 {
                     // The splash sits on the surface at `pos.z + height * coverage`.
                     let surface = deepest.map_or(state.feet[1], |(i, _)| liquids[i].max[1]);

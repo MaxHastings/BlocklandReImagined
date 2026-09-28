@@ -289,7 +289,7 @@ the `client` section of the Add-On's own `package.json`:
 ```
 
 Capabilities have tiers: `render.layer`, `render.shader`, `audio`,
-`input.focused` and `net.message` are sandboxed (the player trusts the
+`input.focused`, `net.message` and `world.read` are sandboxed (the player trusts the
 server once); `net.http` and `files.addon_folder` are elevated (a separate,
 stronger per-Add-On choice); `native` (a native plugin) is elevated too,
 needs the server's name typed on the prompt, and does not run yet. A package with client code travels like any other

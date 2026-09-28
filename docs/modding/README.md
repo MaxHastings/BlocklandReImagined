@@ -13,6 +13,9 @@ yet.
 | A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
 | A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
 | A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
+| A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
+| A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
+| Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows (section 6) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see section 6 |
@@ -136,11 +139,44 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(p, amount)`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`: `build` |
+| | | `push`, `tumble`, `hold`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 
-A value from `players()` is a map with `id`, `name`, `x`, `y`, `z`, `alive`
-and `admin`.
+A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
+feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
+unit direction they look), `vx`, `vy`, `vz` and `item` (the id of the item
+in their hand, or `""`).
+
+**Moving things** (`physics`). Players, vehicles (every loose physics body:
+jeeps, balls, the tumble of a knocked-down player) and package entities
+are *objects*, named by a string: `"player:3"`, `"vehicle:12"`,
+`"entity:7"`. `object(ref)` is a map with `ref`, `kind`, `id`,
+`definition`, `x`, `y`, `z` (its middle), `vx`, `vy`, `vz`, `speed`,
+`mass`, `radius`, `owner` and `spawner` (the Add-On that spawned it);
+`objects()` lists every vehicle and `objects_near(x, y, z, r)` everything
+near a point. A command with `aim_reach` also reports the nearest object in
+front of the brick it hit: `aim().object`, `aim().object_distance` and
+`aim().movable`, whether the caller may move it.
+
+| Operation | Does |
+|---|---|
+| `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). |
+| `tumble(player, vx, vy, vz, by)` | Knocks a player off their feet into a tumble, flying at that velocity. |
+| `hold(player, ref, distance)` | Keeps `ref` floating `distance` (0.5 to 32) ahead of the player's eye, where they look, every tick until let go. Heavy things lag and sag. One hold per player; taking something another player holds ends their hold. |
+| `let_go(player)`, `held(player)` | Ends the hold; what they hold, or `()`. |
+| `spawn_vehicle(def, x, y, z, yaw, [vx, vy, vz], owner)` | A vehicle of this Add-On or one it depends on, belonging to `owner` (or `()`). Counts toward the server's vehicle limits; at most 64 per Add-On. |
+| `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned. |
+
+The engine, not the script, decides who may move what: a player may move
+another player when their minigame lets them hurt that player, or,
+outside minigames, when that player trusts them to build; a vehicle when
+its minigame lets them damage it, or, outside minigames, when they could
+ride it; entities always. A hold is checked again as it goes and ends when
+the rules stop allowing it, the holder dies, sits down or leaves, or the
+object is dragged too far. What a push, tumble or hold moves is credited to
+`by` (the caller, by default) for five seconds: a vehicle that then runs
+someone over, or smashes bricks, does it as that player.
 
 `give_item(p, item, equip)` puts a weapon or tool in the player's tool list
 (unless they carry it already) and, with `equip`, in their hand.
@@ -224,6 +260,22 @@ and no projectile. Its `onFire` state then runs that command of your rule
 Add-On for the holder, with `aim()` resolved where they look (declare
 `aim_reach` on the command). The Duplicator's `duplicator-tool` does this.
 
+More moments can run commands through the image's `commands`:
+
+```json
+"commands": {
+  "states": { "oncharge": "gravity-gun:charge", "onfire": "gravity-gun:fire" },
+  "jet": "gravity-gun:grab"
+}
+```
+
+`states` maps a state's `script` (lowercase) to a command, run as the
+image enters that state: a state with `"down"` to a charging state whose
+`"up"` leads to the firing state gives a press-and-hold charge.
+`jet` runs when the holder presses jet (the right mouse button) with the
+tool in hand, as v20's `onTrigger` slot 4 did; players who can jet still
+jet. The Gravity Gun's `gravity-gun-tool` uses all three.
+
 Keys of `damage_types` and `explosions` are their `name` in lowercase, and
 a projectile names its damage type as `$DamageType::<name>`. Everyone in a
 game needs the same weapons, so give the Add-On to the people you play
@@ -247,18 +299,37 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
 | `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
 | `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
-| `bricks`, `vehicles` | everyone | written by Import Add-On (section 7) | |
+| `bricks`, `vehicles` | everyone | written by Import Add-On (section 7), or a `vehicles.json` you write | `packages/showcase/steel-ball-kit` |
 | `texture`, `block` | everyone | a PNG for block faces (up to 1024 px a side); textures or flipbooks per face with named states | `crates/sim/tests/blocks.rs` |
 
 Entities may spawn only their own Add-On's entity kinds.
+
+**Vehicles you write.** A vehicle is any loose physics body: a `vehicles`
+Add-On's `assets/vehicles.json` holds definitions (the format Import Add-On
+writes; `tools/make_steel_ball_assets.py` writes the Steel Ball's). The
+`Ball` family is a true sphere of the definition's size; a definition with
+no seats cannot be mounted. Two fields exist for Add-Ons: `"smash": {
+"speed", "radius", "max_volume", "force" }` breaks bricks it strikes at
+`speed` or faster, under the same rules a rocket's hit follows (a minigame's
+brick damage, ownership outside minigames); `"shove": true` bowls players
+over into a tumble instead of stopping against them. Every vehicle can be
+placed from a vehicle spawn brick and spawned by a rule (`spawn_vehicle`).
 
 **Client code.** An Add-On may also carry code that runs on players'
 machines: a WebAssembly module and WGSL shaders, declared in a `client`
 section of its `package.json` and run in a sandbox, for presentation only.
 Start from [`spinning-cube`](../../packages/samples/spinning-cube), which
-draws a cube with its own shader. Its capabilities (`render.layer`,
-`render.shader`, `audio`, `input.focused`, `net.message`) need the player
-to trust the server once; `net.http` and `files.addon_folder` need a
+draws a cube with its own shader, then [`steel-ball-fx`](../../packages/showcase/steel-ball-fx)
+(one shader drawn over every vehicle of a kind) and
+[`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) (beams, a force
+field and GPU particle systems driven by a rule's public state). With
+`world.read`, code sees what the player's own screen shows: where players
+and vehicles are drawn and the server's public Add-On state; `draw_with`
+gives a draw its own shader parameters and `material_blend` makes glowing
+(additive) or see-through layers; with `audio`, `sound_at` plays one of
+its own `.wav` or `.ogg` files where something happens. Its capabilities (`render.layer`,
+`render.shader`, `audio`, `input.focused`, `net.message`, `world.read`)
+need the player to trust the server once; `net.http` and `files.addon_folder` need a
 separate, stronger choice per Add-On. The format is in
 [packages.md](../architecture/packages.md) ("Client code"), and the
 sandbox's host API, budgets and checks in
