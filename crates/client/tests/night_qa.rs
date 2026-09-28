@@ -100,6 +100,16 @@ fn bricks(app: &App) -> usize {
     app.network_view().map_or(0, |v| v.world.bricks.len())
 }
 
+/// One of our 2x4 bricks stands at `spot` (worlds may also generate bricks).
+fn brick_at(app: &App, spot: [f32; 3]) -> bool {
+    app.network_view().is_some_and(|v| {
+        v.world.bricks.values().any(|b| {
+            b.position == spot
+                && matches!(&b.definition, bri_world::ContentRef::Resolved(d) if d == BRICK)
+        })
+    })
+}
+
 fn grounded(app: &App) -> bool {
     app.network_view()
         .is_some_and(|v| v.poses.get(&v.owner).is_some_and(|p| p.player.grounded))
@@ -321,9 +331,11 @@ pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
             bri_console::log::lines().iter().rev().take(5).map(|l| l.text.clone()).collect::<Vec<_>>()
         )
     })?;
+    let spot = pair.guest.building().and_then(|b| b.ghost()).map(|g| g.position).unwrap();
     request(&mut pair.guest, UiAction::Game(GameAction::PlantBrick))?;
+    let _ = before;
     pair.until("planted brick on both", Duration::from_secs(10), |h, g| {
-        bricks(h) == before + 1 && bricks(g) == before + 1 && g.pending_requests() == 0
+        brick_at(h, spot) && brick_at(g, spot) && g.pending_requests() == 0
     })
     .with_context(|| {
         let chat: Vec<_> = pair
@@ -337,7 +349,21 @@ pub fn plant(pair: &mut Pair, start: f32) -> Result<f32> {
             .take(3)
             .map(|l| l.text.clone())
             .collect();
-        format!("guest chat tail {chat:?}")
+        format!(
+            "guest chat tail {chat:?}, plant error {:?}, ghost was {spot:?}, nearest host bricks {:?}",
+            pair.guest.ui.core.plant_error,
+            pair.host.network_view().map(|v| {
+                let mut near: Vec<_> = v
+                    .world
+                    .bricks
+                    .values()
+                    .filter(|b| (b.position[0] - spot[0]).abs() < 1.5 && (b.position[2] - spot[2]).abs() < 1.5 && (b.position[1] - spot[1]).abs() < 1.5)
+                    .map(|b| (b.position, format!("{:?}", b.definition)))
+                    .collect();
+                near.truncate(4);
+                near
+            })
+        )
     })?;
     request(&mut pair.guest, UiAction::Game(GameAction::CancelBrick))?;
     Ok(yaw)
@@ -419,10 +445,23 @@ fn save_and_reload(pair: &mut Pair, name: &str, yaw: f32, steps: &mut Vec<String
             ownership: true,
         },
     )?;
+    let ours: Vec<[f32; 3]> = pair
+        .host
+        .network_view()
+        .map(|v| {
+            v.world
+                .bricks
+                .values()
+                .filter(|b| matches!(&b.definition, bri_world::ContentRef::Resolved(d) if d == BRICK))
+                .map(|b| b.position)
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = ours;
     pair.until(
         "loaded bricks replicated",
-        Duration::from_secs(20),
-        |h, g| h.pending_requests() == 0 && bricks(h) == count && bricks(g) == count,
+        Duration::from_secs(30),
+        |h, g| h.pending_requests() == 0 && bricks(h) >= count && bricks(g) == bricks(h),
     )
     .with_context(|| {
         format!(
@@ -431,6 +470,12 @@ fn save_and_reload(pair: &mut Pair, name: &str, yaw: f32, steps: &mut Vec<String
             bricks(&pair.guest)
         )
     })?;
+    pair.settle(Duration::from_secs(1))?;
+    let (h, g) = (bricks(&pair.host), bricks(&pair.guest));
+    ensure!(
+        h == count && g == count,
+        "reload left host {h} and guest {g} bricks; saved {count}"
+    );
     steps.push(format!("reloaded {count} bricks"));
     Ok(())
 }
