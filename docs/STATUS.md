@@ -6,9 +6,9 @@ coordinator's morning notes and the docs linked below. It summarises; the
 linked docs are the evidence. Where sources disagreed, a note says which one
 this page followed.
 
-Main is `84f9ac9` (protocol 36). The a14 build was made from it:
-`dist\BlocklandReImagined-alpha-2026-09-28-a14` on Max's PC, `--version`
-"2026-09-28-a14 (84f9ac9b1)".
+Main is `f95d273` (protocol 36). Max played a14, built from `84f9ac9`
+(`dist\BlocklandReImagined-alpha-2026-09-28-a14` on his PC). a15 is being
+built from `f95d273`.
 
 ## What this is
 
@@ -24,7 +24,7 @@ in engine crates. One rule per concept, with no opt-in lists for properties
 that should be universal. See
 [architecture/platform-principles.md](architecture/platform-principles.md).
 
-Current phase: feature freeze. Max's playtest of a14 matters most; work until
+Current phase: feature freeze. Max's playtest of a15 matters most; work until
 then is bugs, first impressions, robustness, and modder docs.
 
 ## Decisions already made
@@ -67,7 +67,7 @@ home until then.
 | 2 | A modder gets from zero to an Add-On with the guide; v20 imports work | Partly. The rewritten guide is on main. Night QA imported a v20 weapon with the button and a brick pack with `bri-import-addon.exe`, and played both in a hosted game. Not covered: a guest joining a host that runs imported Add-Ons. |
 | 3 | Reported bugs fixed; the gate has zero known failures | Partly. `tools/gate-known-failures.toml` lists no failures, only tests the gate can't run. Night-QA findings A to E below are still open. |
 | 4 | A 1 h multi-player soak with save and reload | **Done.** Four players for 3608 s on Slate over LAN: no disconnects, every save and reload exact, 120 Hz held, 694 to 726 MB, zero warnings. The night-QA doc counts 4 of 4 reloads; the coordinator's note says 5. |
-| 5 | A home test, then a small group playtest | Waiting on Max with a14. |
+| 5 | A home test, then a small group playtest | Max started on a14; a15 is next. |
 
 ### First-impressions items
 
@@ -93,14 +93,14 @@ headless, so anything that needs a real window was not checked.
 | 14 | Join passwords and brick limits not applied | Open: passwords are one of the choices for Max. |
 | 15 | Name prompt; duplicate names | **Open.** No prompt; guests join as "Blockhead". |
 | 16 | Dedicated server persistence | `bri-server` autosaves (PR #5); resume not checked. |
-| 17 | Version, updates, debug symbols | On main via PR #15 and in a14's `--version`; the menu corner not checked in a window. |
+| 17 | Version, updates, debug symbols | On main via PR #15; a14's `--version` shows it; the menu corner not checked in a window. |
 | 18 | Brick search, duplicator | **Open.** Neither exists. |
 | 19 | Input options | **Open.** No hold or toggle choice for crouch, walk or jet; no gamepad. |
 | 20 | Music slider, live preview | Pass. |
 
-## What a14 carries
+## What's on main
 
-Everything in memory's overnight plan landed on main:
+a14 carries all of this (main `84f9ac9`):
 
 - **a13's contents:** PR #1, the stress campaign (games download a server's
   Add-Ons on join), the shadow fix, the sandbox fixes, Add-On weapon ids,
@@ -120,8 +120,9 @@ Everything in memory's overnight plan landed on main:
   recursion can't crash the game, a hostile host can't hang a join, trust
   covers only what the prompt showed, and a LAN listing can't override a
   saved pin.
-- **Consistency audit fixes, two batches:** 25 findings fixed on main (a
-  26th, #32, is staged), each listed with its commit in [audits/orthogonality.md](audits/orthogonality.md).
+- **Consistency audit fixes, two batches:** 25 findings fixed in a14
+  (26 on main with #32 below), each listed with its commit in
+  [audits/orthogonality.md](audits/orthogonality.md).
   Among them: one save snapshot, one build gate, one water query, one game
   clock for visuals, the tick survives a failing system, Add-On bricks
   plantable after hosting, joining or Change Map (`8f9f418`), firing from the
@@ -133,26 +134,30 @@ Everything in memory's overnight plan landed on main:
 - **Revived water feel** (`5721b96`): v20's splash, exit-sound, zone and
   swimmer rules, an underwater tint, froth and bubbles.
 
-## Staged, not landed
+## Landed after a14, in a15
 
-These wait for the gate lock, which a hung `bri-crash` capture test child
-holds. Max needs to stop PID 34048 on the PC.
-
-- Audit `22ef5fb`, `b69158d`, `f0ac0a1`: joining picks the spawn the way a
-  respawn does.
-- Camera revive `fe239ff`: v20's hammer and wand eye reach, keyboard turn
-  rate.
-- Night-QA harness, and `f7a96f7`: a refused empty-hands click stays quiet
-  instead of printing "No weapon image equipped".
-- The fix for the `bri-crash` stderr drain that hung.
+- Audit #32: joining picks the spawn the way a respawn does
+  (`56f7964`).
+- Camera revive: the first-person eye at v20's Eye node, v20's third-person
+  camera and zoom ramp, keyboard turn speed, hammer and wand reach from the
+  Eye node (`8118df4` to `3faffcd`).
+- Night QA: the harness, its findings doc, and a refused click stays out of
+  the bottom print instead of showing "No weapon image equipped"
+  (`fb45617`).
+- Draining the stderr tee can no longer hang the exit (`7a3d604`); it held
+  the gate lock this morning until Max stopped it.
 
 Not revived yet: `revive/chat-emotes` and `revive/admin-orb` (not on main).
 
-## Open findings from night QA
+## Open findings
 
-Full list in
-[audits/night-qa.md](https://github.com/MaxHastings/BlocklandReImagined/blob/claude/night-qa/docs/audits/night-qa.md)
-(branch `claude/night-qa`, head `49ce6a4`). The map and mode matrix passed
+From Max's a14 play:
+
+- **Turning the Stress Lab Add-Ons off in the Add-Ons menu leaves the
+  Stress Lab HUD in game.** A PC thread is on it.
+
+From night QA, full list in
+[audits/night-qa.md](audits/night-qa.md). The map and mode matrix passed
 10 of 15.
 
 - **A. The Slopes:** the first brick near spawn is refused as Buried.
@@ -161,10 +166,12 @@ Full list in
 - **C. Stress Lab Strata:** a guest can't build on the generated ground, and
   sees no plant-error icon. Needs a decision (below).
 - **D. The Stress Lab HUD shows on every map** with the shipped Add-Ons.
-- **E. Slate Sea and Slate Storm:** bricks land on the seabed, out of hammer
-  reach.
+- **E. Stress Lab Strata saves include the generated ground,** so loading
+  one stacks about 15 000 bricks on the regenerated world.
+- **Slate Sea and Slate Storm** (from the matrix): bricks land on the
+  seabed, out of hammer reach.
 
-The doc also lists smaller ones: Strata saves include the generated ground,
+The doc also lists smaller ones:
 Slate's ground missing in offscreen captures, the Import button has no v20
 reference for shared sounds, the guest loading screen, and no hint on
 Connect to IP.
@@ -176,8 +183,8 @@ Connect to IP.
   and 37.
 - [audits/red-team.md](audits/red-team.md): hostile Add-Ons, hosts and
   clients; what's fixed and what isn't.
-- [audits/night-qa.md](https://github.com/MaxHastings/BlocklandReImagined/blob/claude/night-qa/docs/audits/night-qa.md):
-  on its branch until it lands.
+- [audits/night-qa.md](audits/night-qa.md): overnight headless QA of a13,
+  with the map and mode matrix, the soak and the new-player screens.
 - [audits/first-impressions.md](audits/first-impressions.md),
   [audits/platform-door-closers.md](audits/platform-door-closers.md),
   [audits/engine-foundations.md](audits/engine-foundations.md),
@@ -233,8 +240,7 @@ From night QA:
 
 ## Things only Max can do
 
-- Stop PID 34048 on the PC so the staged batch can land.
-- Play a14, then a small group playtest.
+- Play a15, then a small group playtest.
 - Try a build on a weaker PC.
 - Publish GitHub Releases, so the update check has something to find.
 - Buy a code-signing certificate, if wanted. Optional; signing is already
