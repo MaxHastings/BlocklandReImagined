@@ -6,6 +6,7 @@
     python tools/gate.py --install-hook  install the shared pre-push hook
     python tools/gate.py --hook ...      (called by the pre-push hook)
     python tools/gate.py --history-range BASE TIP   (history check only; CI)
+    python tools/gate.py --ci-test       content-free tests only (CI)
 
 Checks, cheapest first, on the exact commit being pushed:
   1. the commit already contains the latest origin/main (rebase first)
@@ -27,6 +28,7 @@ Commits made by `git revert` ("Revert ...") are allowed automatically.
 """
 import argparse
 import contextlib
+import json
 import os
 from pathlib import Path
 import re
@@ -477,6 +479,57 @@ def push_main():
     return False
 
 
+def ci_test():
+    """Run every test binary except targets that need generated v20 content.
+
+    GitHub runners have no v20 content. Those targets are listed as
+    [[ci_skip_target]] in tools/gate-known-failures.toml; the local gate still
+    runs them all.
+    """
+    top = Path(git("rev-parse", "--show-toplevel").strip())
+    data = tomllib.loads((top / "tools" / "gate-known-failures.toml").read_text(encoding="utf-8"))
+    skipped = {entry["target"] for entry in data.get("ci_skip_target", [])}
+    build = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run",
+                            "--message-format=json-render-diagnostics"],
+                           cwd=top, stdout=subprocess.PIPE, text=True, errors="replace")
+    if build.returncode:
+        return False
+    binaries = []
+    for line in build.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if message.get("reason") != "compiler-artifact" or not message.get("executable"):
+            continue
+        if not message["profile"].get("test"):
+            continue
+        package_id = message["package_id"]
+        package = (package_id.rsplit("#", 1)[1].split("@")[0] if "#" in package_id
+                   else package_id.split()[0])
+        target = message["target"]
+        label = f"{package}/{'lib' if 'lib' in target['kind'] else target['name']}"
+        cwd = Path(message["manifest_path"]).parent
+        binaries.append((label, message["executable"], cwd))
+    unknown = skipped - {label for label, _, _ in binaries}
+    if unknown:
+        say(f"ci_skip_target entries match no test target: {', '.join(sorted(unknown))}")
+        return False
+    failed = []
+    for label, executable, cwd in sorted(binaries):
+        if label in skipped:
+            say(f"skipping {label} (needs generated content)")
+            continue
+        say(f"running {label}")
+        if subprocess.run([executable], cwd=cwd).returncode:
+            failed.append(label)
+    if failed:
+        say(f"failing test targets: {', '.join(failed)}")
+        return False
+    say("all content-free test targets passed")
+    return True
+
+
 def hook(stdin):
     ok = True
     for line in stdin.read().splitlines():
@@ -530,6 +583,8 @@ def main():
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--install-hook", action="store_true")
     parser.add_argument("--diff-only", action="store_true")
+    parser.add_argument("--ci-test", action="store_true",
+                        help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--push", action="store_true",
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
@@ -546,6 +601,8 @@ def main():
                 print(f"    {problem}")
             say("history check " + ("FAILED" if problems else "ok"))
             return 1 if problems else 0
+        if args.ci_test:
+            return 0 if ci_test() else 1
         if args.push:
             return 0 if push_main() else 1
         if args.hook is not None:

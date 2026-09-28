@@ -39,3 +39,27 @@ reason = "Needs a real UPnP router on the LAN."
 [[skip]]
 test = "world_checkpoint_wire_cost"
 reason = "Benchmark; needs BRI_BENCH_WORLD."
+
+# Test targets GitHub Actions skips because they load generated v20 content,
+# which the runner cannot have. The local gate still runs them. Prefer
+# #[ignore = "requires generated ... content"] on individual tests; list a
+# whole target here only when all of it needs content. Format:
+# "<package>/<test target>", or "<package>/lib" for unit tests.
+
+[[ci_skip_target]]
+target = "bri-client/brick_fx"
+
+[[ci_skip_target]]
+target = "bri-client/item_rendering"
+
+[[ci_skip_target]]
+target = "bri-sim/tools"
+
+[[ci_skip_target]]
+target = "bri-vehicles/flying_jeep"
+
+[[ci_skip_target]]
+target = "bri-vehicles/native"
+
+[[ci_skip_target]]
+target = "bri-weapons/runtime"

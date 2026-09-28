@@ -1,5 +1,6 @@
 # Content-free checks. Tests that need the generated v20 content are
-# #[ignore]d here and run in the local push gate (tools/gate.py).
+# #[ignore]d or listed as ci_skip_target in tools/gate-known-failures.toml;
+# the local push gate (tools/gate.py) runs them all.
 name: ci
 
 on:
@@ -41,4 +42,4 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --workspace --locked --no-fail-fast
+        run: python tools/gate.py --ci-test
