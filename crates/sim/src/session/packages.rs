@@ -296,8 +296,11 @@ struct TickView {
 
 /// Script operations per tick the server gives package work it runs itself
 /// (thinks, `on_tick`, generation), split evenly between packages with
-/// scripts. About 16 ms of script time.
-const SERVER_WORK_PER_TICK: i64 = 400_000;
+/// scripts. About 8 ms of script time on a desktop (one 120 Hz tick); a
+/// slow machine takes two or three times that, still under the six-tick
+/// stall bound. A single call may run past it (a `Tick` or `Generate` call
+/// has 400k operations); the package then repays the debt over later ticks.
+const SERVER_WORK_PER_TICK: i64 = 200_000;
 /// Most script operations one player's commands may use in a burst (one
 /// full command), and what refills every second.
 const PLAYER_COMMAND_BURST: i64 = 200_000;
