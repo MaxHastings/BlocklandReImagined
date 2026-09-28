@@ -644,6 +644,12 @@ impl Player {
         let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
         physics.bodies[self.body].set_next_kinematic_position(pose);
     }
+    /// Put the body at the current state at once, for a collision world that
+    /// is queried but never stepped (prediction's copies of other players).
+    pub fn place_now(&self, physics: &mut PhysicsWorld) {
+        let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
+        physics.bodies[self.body].set_position(pose, true);
+    }
     /// The eye on the crouch thread, the height the camera shows.
     pub fn eye(&self) -> Vec3 {
         let fraction = self.crouch.eye_fraction(crate::crouch::CROUCH_SECONDS);

@@ -250,6 +250,9 @@ pub struct Predictor {
     sequence: u64,
     acknowledged: u64,
     server_tick: Option<u64>,
+    /// Other players' bodies at their latest poses: the motor bumps into
+    /// and pushes off them as it does on the host.
+    others: BTreeMap<u64, Player>,
 }
 impl Predictor {
     /// Begin predicting from an authoritative state (normally the join pose).
@@ -269,6 +272,7 @@ impl Predictor {
             sequence: 0,
             acknowledged: 0,
             server_tick: None,
+            others: BTreeMap::new(),
         })
     }
     pub fn state(&self) -> &PlayerState {
@@ -308,6 +312,43 @@ impl Predictor {
         candidates: impl IntoIterator<Item = BrickId>,
     ) -> Result<bool> {
         self.world.sync_changes(bricks, candidates)
+    }
+    /// Mirror the other players the host collides with (alive and on foot)
+    /// at these states; anyone left out stops colliding.
+    pub fn set_others<'a>(
+        &mut self,
+        states: impl IntoIterator<Item = &'a PlayerState>,
+    ) -> Result<()> {
+        let own = self.player.state().owner;
+        let mut seen = BTreeSet::new();
+        for state in states {
+            if state.owner == own || !seen.insert(state.owner) {
+                continue;
+            }
+            let tuning = self.archetypes.tuning(state.archetype, state.scale);
+            let physics = &mut self.world.physics;
+            match self.others.get_mut(&state.owner) {
+                Some(other) => other.restore(physics, state.clone(), tuning)?,
+                None => {
+                    let other = Player::attach(physics, state.clone(), tuning)?;
+                    self.others.insert(state.owner, other);
+                }
+            }
+            self.others[&state.owner].place_now(&mut self.world.physics);
+        }
+        let gone: Vec<_> = self
+            .others
+            .keys()
+            .filter(|owner| !seen.contains(*owner))
+            .copied()
+            .collect();
+        for owner in gone {
+            if let Some(other) = self.others.remove(&owner) {
+                other.despawn(&mut self.world.physics);
+            }
+        }
+        self.world.physics.detect_collisions(&(), &());
+        Ok(())
     }
     /// Advance one fixed tick. Returns the input's sequence number, which the
     /// caller sends on the movement channel, and the local motion events.

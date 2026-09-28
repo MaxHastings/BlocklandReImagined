@@ -187,6 +187,17 @@ impl Motion {
             }
         }
         self.remotes.retain(|owner, _| view.poses.contains_key(owner));
+        // The host's motor collides with every other living body; corpses
+        // are sensors there.
+        if let Some(predictor) = &mut self.predictor {
+            predictor.set_others(
+                self.remotes
+                    .iter()
+                    .filter(|(owner, _)| view.vitals.get(owner).is_none_or(|v| v.alive))
+                    .filter_map(|(_, history)| history.back())
+                    .map(|pose| &pose.player),
+            )?;
+        }
         Ok(())
     }
     fn observe_clock(&mut self, tick: u64) {

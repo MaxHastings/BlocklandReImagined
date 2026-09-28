@@ -100,6 +100,45 @@ fn prediction_matches_server_under_delay_loss_and_redundancy() {
 }
 
 #[test]
+fn prediction_bumps_into_other_players_like_the_host() {
+    let mut session = server();
+    let a = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = session
+        .join("b".into(), Vec3::new(0.0, 0.05, -3.0), false)
+        .unwrap();
+    let state = |session: &Session, owner| {
+        session
+            .motion_states()
+            .into_iter()
+            .find(|(s, _)| s.owner == owner)
+            .unwrap()
+            .0
+    };
+    let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+    let mut prediction = Predictor::new(mirror, state(&session, a), Default::default()).unwrap();
+    // Walk straight at the other player, in lockstep with the host.
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    let mut worst = 0.0_f32;
+    for tick in 1..=240_u64 {
+        prediction.set_others([&state(&session, b)]).unwrap();
+        let (sequence, _) = prediction.step(walk).unwrap();
+        session.movement(a, sequence, walk).unwrap();
+        session.movement(b, tick, MoveInput::default()).unwrap();
+        session.step().unwrap();
+        let host = Vec3::from(state(&session, a).feet);
+        worst = worst.max(host.distance(Vec3::from(prediction.state().feet)));
+    }
+    // The host stopped the walker at the other body; so did the prediction.
+    assert!(Vec3::from(state(&session, a).feet).z > -3.0);
+    assert!(worst < 0.05, "prediction walked {worst} past the host");
+}
+
+#[test]
 fn server_input_queue_ignores_duplicates_and_bounds_rate() {
     let mut session = server();
     let owner = session.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
