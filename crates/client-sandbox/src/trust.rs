@@ -71,6 +71,22 @@ pub struct Grant {
     pub capabilities: Vec<String>,
 }
 
+impl Grant {
+    /// Whether this grant covers `code`: the same code hash, a level for its
+    /// tier, and no capability the prompt did not show. The hash alone is
+    /// not enough, because the prompt is built from what the server says
+    /// about its code before it downloads: a server could name the real
+    /// hash while listing fewer capabilities than the code declares.
+    fn covers(&self, code: &CodeSummary) -> bool {
+        self.code_hash == code.code_hash
+            && self.level.covers(code.tier())
+            && code
+                .capabilities
+                .iter()
+                .all(|c| self.capabilities.iter().any(|shown| shown == c.name()))
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerTrust {
@@ -174,7 +190,7 @@ impl TrustStore {
             .filter_map(|c| {
                 let grant = granted.and_then(|s| s.addons.get(&c.id));
                 match grant {
-                    Some(g) if g.code_hash == c.code_hash && g.level.covers(c.tier()) => None,
+                    Some(g) if g.covers(c) => None,
                     Some(g) => Some((c, g.code_hash != c.code_hash)),
                     None => Some((c, false)),
                 }
@@ -232,8 +248,7 @@ impl TrustStore {
     /// player saw. The host refuses to start anything else.
     pub fn granted(&self, server: &str, code: &CodeSummary) -> Option<TrustLevel> {
         let grant = self.servers.get(server)?.addons.get(&code.id)?;
-        (grant.code_hash == code.code_hash && grant.level.covers(code.tier()))
-            .then_some(grant.level)
+        grant.covers(code).then_some(grant.level)
     }
 }
 
