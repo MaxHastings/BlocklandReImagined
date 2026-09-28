@@ -1,7 +1,19 @@
 //! One weapons pack built from every package that provides weapons: the
 //! base game's pack first, then each other package in `packages.json` order.
 //! Systems keep taking a single `Pack`; only loading changes.
-use crate::Pack;
+use crate::{Pack, Resource};
+use std::path::{Path, PathBuf};
+
+/// The directory a resource's `native_file` is relative to: its package's,
+/// when the pack was merged, else the pack's own `root`. Base packages sit
+/// directly under the content root, so a package directory resolves beside
+/// `root`.
+pub fn resource_root(root: &Path, resource: &Resource) -> PathBuf {
+    match &resource.package {
+        Some(dir) => root.parent().unwrap_or(root).join(dir),
+        None => root.to_path_buf(),
+    }
+}
 
 impl Pack {
     /// Adds `parts`, each with the content-root-relative directory of its
@@ -21,12 +33,14 @@ impl Pack {
                 notes: &mut Vec<String>,
             ) {
                 for (key, value) in from {
-                    if into.contains_key(&key) {
-                        notes.push(format!(
-                            "{dir}: {what} {key} is already declared; kept the earlier one"
-                        ));
-                    } else {
-                        into.insert(key, value);
+                    match into.entry(key) {
+                        std::collections::btree_map::Entry::Occupied(e) => notes.push(format!(
+                            "{dir}: {what} {} is already declared; kept the earlier one",
+                            e.key()
+                        )),
+                        std::collections::btree_map::Entry::Vacant(e) => {
+                            e.insert(value);
+                        }
                     }
                 }
             }

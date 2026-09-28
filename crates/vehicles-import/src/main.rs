@@ -113,6 +113,7 @@ fn main() -> Result<()> {
             }
             assets.push(Asset {
                 source_sha256: r["source_sha256"].as_str().context("source hash")?.into(),
+                package: None,
                 virtual_path: v.into(),
                 path: path.clone(),
                 sha256: hash(&bytes),
@@ -135,6 +136,7 @@ fn main() -> Result<()> {
             let path = format!("textures/{}.{}", hash(bytes), ext);
             assets.push(Asset {
                 source_sha256: hash(bytes),
+                package: None,
                 virtual_path: v.clone(),
                 path: path.clone(),
                 sha256: hash(bytes),

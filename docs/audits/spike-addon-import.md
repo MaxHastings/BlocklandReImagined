@@ -96,6 +96,26 @@ single-pack APIs, so the change is at load time and not in the simulation.
 Steps a to c need no protocol change, no save migration and no new runtime.
 Each is testable headless with the samples this spike already imports.
 
+**Progress (2026-09-28).** Steps a to e are built.
+- The host, a client-hosted game and joining clients merge weapons (with item
+  presentation and drop bounds), vehicles and brick catalogs from
+  `packages.json` (`docs/architecture/packages.md`, "Content from several
+  packages").
+- The importer writes `presentation.json`, `item-physics.json` and a loadable
+  `brick-catalog/`. It gives unconverted models a placeholder cube, and
+  declares the `weapons`, `vehicles` and `bricks` runtime kinds.
+- `crates/addon-import/tests/hosted.rs` hosts the real Sawn-off Shotgun and
+  Blocko Car beside the base game on Slate, through the same setup
+  `bri-server` runs. The shotgun fires its pellet, the vanilla gun still
+  fires, and a player walks into the spawned car, mounts it and drives it
+  more than 5 units. The synthetic package's brick loads into a hosted world.
+- `crates/client/tests/addon_packages.rs` loads the same packages the way the
+  client does, without a window: item presentation, HUD icons, explosion
+  shapes, the shotgun's model and the car's models.
+- Still open: imported bricks in the brick selector, and merging sounds and
+  effects. Maxwell's interactive playtest, picking up and firing the shotgun
+  and driving the car, is the proof still owed for step e.
+
 **Not in scope.** Behaviour hooks (seams 5 to 8), downloading packages, and
 the vanilla id rename.
 

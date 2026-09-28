@@ -22,26 +22,88 @@ pub struct WeaponContent {
     aliases: BTreeMap<String, String>,
     fingerprint: String,
     manifest_sha256: String,
+    /// Items of the base weapons package; others come from merged packages.
+    base_items: std::collections::BTreeSet<String>,
+}
+/// Packages beside a kind's base package that provide it too: every listed
+/// package without a role whose directory holds `assets/<file>`, in
+/// `packages.json` order, as (content-root-relative dir, absolute dir).
+pub fn kind_providers(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+    file: &str,
+) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
+        let dir = bri_package::packages::package_dir(content_root, entry)?.join("assets");
+        if dir.join(file).is_file() {
+            out.push((format!("{}/assets", entry.dir), dir));
+        }
+    }
+    Ok(out)
+}
+/// [`kind_providers`] of brick catalogs, as (package dir, catalog dir).
+pub fn brick_catalog_providers(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<(String, PathBuf)>> {
+    Ok(kind_providers(content_root, packages, "brick-catalog/stock-catalog.json")?
+        .into_iter()
+        .map(|(dir, abs)| (dir, abs.join("brick-catalog")))
+        .collect())
+}
+fn read_weapons(root: &Path) -> Result<(PathBuf, Vec<u8>, bri_weapons::Pack)> {
+    let manifest = contained(root, "weapons.json")?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&manifest)?
+        .take(WEAPON_INDEX_LIMIT + 1)
+        .read_to_end(&mut bytes)?;
+    let pack = bri_weapons::Pack::from_json(&bytes)?;
+    ensure!(
+        pack.resources.len() <= 4096,
+        "Weapon resource budget exceeded"
+    );
+    Ok((manifest, bytes, pack))
 }
 impl WeaponContent {
     pub fn load(root: &Path) -> Result<Self> {
+        Self::load_with(root, &[])
+    }
+    /// The base weapons package at `root` merged with `extras` (see
+    /// [`kind_providers`]). Without extras this is exactly [`Self::load`].
+    pub fn load_with(root: &Path, extras: &[(String, PathBuf)]) -> Result<Self> {
         let root = root.canonicalize()?;
-        let manifest = contained(&root, "weapons.json")?;
-        let mut bytes = Vec::new();
-        std::fs::File::open(&manifest)?
-            .take(WEAPON_INDEX_LIMIT + 1)
-            .read_to_end(&mut bytes)?;
-        let pack = bri_weapons::Pack::from_json(&bytes)?;
-        ensure!(
-            pack.resources.len() <= 4096,
-            "Weapon resource budget exceeded"
-        );
+        let (manifest, bytes, pack) = read_weapons(&root)?;
+        let base_items = pack.items.keys().cloned().collect();
         let mut files = BTreeMap::from([("weapons.json".into(), manifest)]);
+        let mut expected = BTreeMap::from([(
+            "weapons.json".into(),
+            format!("{:x}", Sha256::digest(&bytes)),
+        )]);
         let mut total = bytes.len() as u64;
-        for resource in &pack.resources {
+        let mut parts = Vec::new();
+        for (dir, abs) in extras {
+            let abs = abs.canonicalize()?;
+            let (manifest, part_bytes, part) = read_weapons(&abs)?;
+            let key = format!("{dir}/weapons.json");
+            expected.insert(key.clone(), format!("{:x}", Sha256::digest(&part_bytes)));
+            files.insert(key, manifest);
+            total += part_bytes.len() as u64;
+            parts.push((dir.clone(), abs, part));
+        }
+        let resources = pack
+            .resources
+            .iter()
+            .map(|r| (None, root.clone(), r))
+            .chain(parts.iter().flat_map(|(dir, abs, part)| {
+                part.resources.iter().map(move |r| (Some(dir.clone()), abs.clone(), r))
+            }))
+            .collect::<Vec<_>>();
+        for (dir, root, resource) in resources {
             if let Some(name) = &resource.native_file {
                 ensure!(name != "weapons.json", "Reserved weapon resource filename");
-                if files.contains_key(name) {
+                let key = dir.map_or(name.clone(), |d| format!("{d}/{name}"));
+                if files.contains_key(&key) {
                     continue; // Shared source resources may bind the same native file.
                 }
                 let path = contained(&root, name)?;
@@ -57,15 +119,15 @@ impl WeaponContent {
                     total <= WEAPON_TOTAL_LIMIT,
                     "Weapon total byte budget exceeded"
                 );
-                files.insert(name.clone(), path);
+                files.insert(key, path);
             }
         }
-        // The bounded read above supplied the actual parsed definitions. Require
+        let (mut pack, notes) =
+            pack.merge(parts.into_iter().map(|(dir, _, part)| (dir, part)).collect());
+        pack.diagnostics.extend(notes.into_iter().map(|n| format!("merge: {n}")));
+        pack.validate()?;
+        // The bounded reads above supplied the actual parsed definitions. Require
         // identical bytes during hashing so a replacement cannot mix snapshots.
-        let expected = BTreeMap::from([(
-            "weapons.json".into(),
-            format!("{:x}", Sha256::digest(&bytes)),
-        )]);
         let fingerprint = hash_files_bounded(
             b"BRI_WEAPONS_V1\0",
             files,
@@ -110,6 +172,7 @@ impl WeaponContent {
             aliases,
             fingerprint,
             manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
+            base_items,
         })
     }
 
@@ -197,6 +260,52 @@ fn bounded_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 impl ItemPhysicsContent {
+    /// [`Self::load`] plus the drop bounds other weapon packages provide in
+    /// `assets/item-physics.json`, bound to their own `weapons.json` by the
+    /// `presentation.json` beside it. `extras` are [`kind_providers`] of
+    /// `weapons.json`; a package without these files keeps no drop bounds.
+    pub fn load_with(
+        root: &Path,
+        weapons: &WeaponContent,
+        extras: &[(String, PathBuf)],
+    ) -> Result<Self> {
+        let mut content = Self::load(root, weapons)?;
+        let mut hash = Sha256::new();
+        hash.update(&content.fingerprint);
+        for (dir, abs) in extras {
+            let abs = abs.canonicalize()?;
+            if !abs.join("item-physics.json").is_file() {
+                continue;
+            }
+            let manifest_bytes = bounded_bytes(&contained(&abs, "presentation.json")?, WEAPON_INDEX_LIMIT)?;
+            let physics_bytes = bounded_bytes(&contained(&abs, "item-physics.json")?, 2 * 1024 * 1024)?;
+            let weapons_bytes = bounded_bytes(&contained(&abs, "weapons.json")?, WEAPON_INDEX_LIMIT)?;
+            let manifest: PhysicsManifest = serde_json::from_slice(&manifest_bytes)?;
+            let physics: PhysicsCatalog = serde_json::from_slice(&physics_bytes)?;
+            ensure!(
+                manifest.schema_version == 2
+                    && physics.schema_version == 1
+                    && manifest.weapons_sha256 == format!("{:x}", Sha256::digest(&weapons_bytes))
+                    && manifest.item_physics_sha256 == format!("{:x}", Sha256::digest(&physics_bytes)),
+                "{dir}: item physics does not match its weapons pack"
+            );
+            for (id, bounds) in physics.items {
+                bounds.validate()?;
+                ensure!(
+                    weapons.pack.items.contains_key(&id) && !content.bounds.contains_key(&id),
+                    "{dir}: item physics for unknown or already bound item {id}"
+                );
+                content.bounds.insert(id, bounds);
+            }
+            hash.update(dir.as_bytes());
+            hash.update(Sha256::digest(&manifest_bytes));
+            hash.update(Sha256::digest(&physics_bytes));
+        }
+        if !extras.is_empty() {
+            content.fingerprint = format!("{:x}", hash.finalize());
+        }
+        Ok(content)
+    }
     pub fn load(root: &Path, weapons: &WeaponContent) -> Result<Self> {
         let root = root.canonicalize()?;
         let manifest_path = contained(&root, "presentation.json")?;
@@ -221,12 +330,14 @@ impl ItemPhysicsContent {
             manifest.models.len() <= 1024 && manifest.textures.len() <= 4096,
             "Item presentation resource budget exceeded"
         );
+        // Presentation covers the base package's items; merged packages'
+        // items have none yet (docs/audits/spike-addon-import.md, step e).
         ensure!(
-            physics.items.len() == weapons.item_choices.len()
+            physics.items.len() == weapons.base_items.len()
                 && manifest.items.len() == physics.items.len(),
             "Item physics catalog coverage mismatch"
         );
-        for (id, _) in &weapons.item_choices {
+        for id in &weapons.base_items {
             let bounds = physics
                 .items
                 .get(id)

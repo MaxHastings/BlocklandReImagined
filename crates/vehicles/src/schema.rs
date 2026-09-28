@@ -22,6 +22,10 @@ pub struct Asset {
     pub sha256: String,
     pub kind: String,
     pub source_sha256: String,
+    /// Content-root-relative directory of the package holding `path`, set
+    /// when packs from several packages are merged; None is this pack's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evidence {

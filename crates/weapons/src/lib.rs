@@ -3,6 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 mod merge;
+pub use merge::resource_root;
 pub mod runtime;
 pub use runtime::*;
 /// 3 adds explosion vertical impulse and per-type vehicle damage scale.

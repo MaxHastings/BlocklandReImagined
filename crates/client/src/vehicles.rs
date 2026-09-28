@@ -65,11 +65,25 @@ fn posed(
 impl VehicleAssets {
     /// Load every declared model with its folder-local material textures.
     pub fn load(root: &Path) -> Result<Self> {
+        Self::load_with(root, &[])
+    }
+    /// [`Self::load`] for the base pack merged with other packages' vehicles
+    /// (`content_identity::kind_providers`).
+    pub fn load_with(root: &Path, extras: &[(String, std::path::PathBuf)]) -> Result<Self> {
         let root = root.canonicalize()?;
-        let pack = Pack::load(root.join("vehicles.json"))?;
+        let mut parts = Vec::new();
+        for (dir, abs) in extras {
+            parts.push((dir.clone(), Pack::load(abs.join("vehicles.json"))?));
+        }
+        let (pack, _) = Pack::load(root.join("vehicles.json"))?.merge(parts);
         let mut textures: BTreeMap<String, SceneImage> = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "texture") {
-            let bytes = crate::items::checked_read(&root, &asset.path, &asset.sha256, 16 << 20)?;
+            let bytes = crate::items::checked_read(
+                &bri_vehicles::asset_root(&root, asset),
+                &asset.path,
+                &asset.sha256,
+                16 << 20,
+            )?;
             let image = image::load_from_memory(&bytes)?.to_rgba8();
             textures.insert(
                 asset.virtual_path.to_ascii_lowercase(),
@@ -99,7 +113,12 @@ impl VehicleAssets {
         let mut models = BTreeMap::new();
         let mut looks = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
-            let bytes = crate::items::checked_read(&root, &asset.path, &asset.sha256, 32 << 20)?;
+            let bytes = crate::items::checked_read(
+                &bri_vehicles::asset_root(&root, asset),
+                &asset.path,
+                &asset.sha256,
+                32 << 20,
+            )?;
             let shape: Shape = serde_json::from_slice(&bytes)?;
             shape.validate()?;
             let folder = asset
