@@ -468,9 +468,13 @@ impl Client {
         let datagram_connection = connection.clone();
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
-                if let Ok(datagram) = codec::decode_datagram::<Datagram>(&bytes) {
-                    let _ = events.try_send(match datagram {
+                let Ok(items) = codec::decode_datagram::<Vec<Datagram>>(&bytes) else {
+                    continue;
+                };
+                for item in items {
+                    let _ = events.try_send(match item {
                         Datagram::Pose(pose) => Incoming::Pose(pose),
+                        Datagram::Remote(pose) => Incoming::Pose(pose.into_pose()),
                         Datagram::Vehicle(pose) => Incoming::Vehicle(pose),
                         Datagram::Orb(orb) => Incoming::Orb(orb),
                     });

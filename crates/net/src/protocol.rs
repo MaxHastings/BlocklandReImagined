@@ -17,7 +17,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 41: `Command::GhostBrick` and `Vitals::ghost`, so others see a ghost brick.
 /// 42: copied builds (`Notice::Blueprint`, `Command::PlaceBlueprint`) and
 /// Add-On tool images (`Image::command`).
-pub const VERSION: u32 = 42;
+/// 43: compact, batched state datagrams; other players' poses as
+/// `RemotePose`; still items sent only to settle and keep alive; empty world
+/// updates at 10 Hz with absent fields left out.
+pub const VERSION: u32 = 43;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -28,6 +31,11 @@ pub const MAX_MOVEMENT_BATCH: usize = 48;
 pub const MAX_DATAGRAM: usize = 1100;
 /// Server ticks between unreliable pose broadcasts (40 Hz at 120 Hz).
 pub const POSE_INTERVAL: u64 = 3;
+/// Server ticks between world updates (20 Hz).
+pub const UPDATE_INTERVAL: u64 = 6;
+/// Server ticks between world updates that carry nothing but the tick
+/// (10 Hz), which clients' respawn countdowns and item fades read.
+pub const HEARTBEAT_INTERVAL: u64 = 12;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ResumeToken(pub [u8; 32]);
 impl std::fmt::Debug for ResumeToken {
@@ -229,10 +237,14 @@ impl Movement {
         Ok(())
     }
 }
-/// Unreliable state datagrams from the host.
+/// Items of the unreliable state datagrams from the host. A datagram is an
+/// array of them ([`crate::codec::pack_datagrams`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Datagram {
+    /// This client's own pose: what its prediction reconciles with.
     Pose(Pose),
+    /// Another player's pose.
+    Remote(RemotePose),
     Vehicle(bri_sim::session::VehiclePose),
     Orb(Orb),
 }
@@ -248,6 +260,64 @@ pub struct Pose {
     pub tick: u64,
     pub acknowledged_input: u64,
     pub player: PlayerState,
+}
+/// Another player's pose: what drawing them needs, without the state only
+/// their own prediction uses (jump timers, jet energy, the input they were
+/// acknowledged up to).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemotePose {
+    pub tick: u64,
+    pub owner: OwnerId,
+    pub feet: [f32; 3],
+    pub velocity: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub head_yaw: f32,
+    pub grounded: bool,
+    pub crouched: bool,
+    pub jetting: bool,
+    pub archetype: bri_sim::archetype::ArchetypeId,
+    pub scale: f32,
+}
+impl RemotePose {
+    pub fn of(tick: u64, p: &PlayerState) -> Self {
+        Self {
+            tick,
+            owner: p.owner,
+            feet: p.feet,
+            velocity: p.velocity,
+            yaw: p.yaw,
+            pitch: p.pitch,
+            head_yaw: p.head_yaw,
+            grounded: p.grounded,
+            crouched: p.crouched,
+            jetting: p.jetting,
+            archetype: p.archetype,
+            scale: p.scale,
+        }
+    }
+    /// As a pose, with the owner-only state at its defaults.
+    pub fn into_pose(self) -> Pose {
+        Pose {
+            tick: self.tick,
+            acknowledged_input: 0,
+            player: PlayerState {
+                owner: self.owner,
+                feet: self.feet,
+                velocity: self.velocity,
+                yaw: self.yaw,
+                pitch: self.pitch,
+                head_yaw: self.head_yaw,
+                grounded: self.grounded,
+                crouched: self.crouched,
+                jetting: self.jetting,
+                jump: Default::default(),
+                archetype: self.archetype,
+                scale: self.scale,
+                energy: bri_sim::player::PlayerTuning::default().max_energy,
+            },
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PublicWorld {
@@ -306,6 +376,10 @@ pub struct Checkpoint {
     /// Enabled packages' state as this client sees it: keys visible to
     /// everyone, plus its own owner-visible keys in a welcome.
     pub package_state: bri_sim::session::PackageStateView,
+    /// How fast each falling projectile drops per tick, by definition, for
+    /// coasting projectiles between updates.
+    #[serde(default)]
+    pub projectile_falls: BTreeMap<String, f32>,
 }
 impl Checkpoint {
     /// Everything but the bricks, plus an O(1) snapshot of the authoritative
@@ -340,6 +414,7 @@ impl Checkpoint {
             world_bricks: world.bricks.len() as u64,
             entities: session.package_entities(),
             package_state: session.package_state(),
+            projectile_falls: session.projectile_falls(),
         };
         (checkpoint, world.bricks.clone())
     }
@@ -430,26 +505,152 @@ pub fn poses(session: &Session) -> Vec<Pose> {
         .collect()
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Fields with nothing to say are left out of the encoding.
 pub struct Delta {
-    pub weapons: Option<bri_sim::session::WeaponView>,
-    pub tools: Option<BTreeMap<OwnerId, bri_sim::session::ToolInventory>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weapons: Option<WeaponDelta>,
+    /// Inventories that changed, by owner; players who left drop out with
+    /// `names`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cues: Vec<bri_sim::presentation::Cue>,
     pub dropped_cues: u64,
     pub base: u64,
     pub cursor: u64,
     pub tick: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bricks: BTreeMap<BrickId, Option<Brick>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub names: Option<BTreeMap<OwnerId, String>>,
-    pub avatars: Option<BTreeMap<OwnerId, bri_content::avatar::Appearance>>,
+    /// Appearances that changed, by owner.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub palette: Option<Vec<[f32; 4]>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chat: Vec<ChatLine>,
-    pub vitals: Option<BTreeMap<OwnerId, bri_sim::session::Vitals>>,
+    /// Vitals that changed, by owner.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minigames: Option<Vec<bri_sim::session::MiniGameView>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vehicles: Option<Vec<bri_sim::session::VehicleInfo>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broken_shapes: Option<BTreeSet<u32>>,
     /// Package entities, when any moved or changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<Vec<bri_sim::session::EntityInfo>>,
+}
+impl Delta {
+    /// Nothing changed but the tick (and the cursor).
+    pub fn is_empty(&self) -> bool {
+        let Self {
+            weapons,
+            tools,
+            cues,
+            dropped_cues: _,
+            base: _,
+            cursor: _,
+            tick: _,
+            bricks,
+            names,
+            avatars,
+            palette,
+            chat,
+            vitals,
+            minigames,
+            vehicles,
+            time_scale,
+            broken_shapes,
+            entities,
+        } = self;
+        weapons.is_none()
+            && tools.is_empty()
+            && cues.is_empty()
+            && bricks.is_empty()
+            && names.is_none()
+            && avatars.is_empty()
+            && palette.is_none()
+            && chat.is_empty()
+            && vitals.is_empty()
+            && minigames.is_none()
+            && vehicles.is_none()
+            && time_scale.is_none()
+            && broken_shapes.is_none()
+            && entities.is_none()
+    }
+}
+/// What changed in the weapons view. Projectiles fly on every client by
+/// [`bri_weapons::coast`]; the host only sends the ones that appeared or
+/// left their coasted flight (a bounce, a stick, a hit).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WeaponDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_items: Option<Vec<bri_sim::item_spawners::StaticItem>>,
+    /// Held images that changed, by owner; an empty list unmounts them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub images: BTreeMap<OwnerId, Vec<bri_sim::session::MountedImage>>,
+    /// Projectiles as the host has them now: new, or corrected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projectiles: Vec<bri_weapons::Projectile>,
+    /// Projectiles that are gone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drops: Option<Vec<bri_weapons::Drop>>,
+}
+/// Most ticks one update coasts projectiles: a host that stalls longer has
+/// removed or corrected them by the time it sends again.
+pub const MAX_COAST_TICKS: u64 = 1200;
+/// Coast every projectile of `view` over `ticks`, as clients and the host's
+/// record of them both do between updates.
+pub fn coast_projectiles(
+    view: &mut bri_sim::session::WeaponView,
+    falls: &BTreeMap<String, f32>,
+    ticks: u64,
+) {
+    for p in &mut view.projectiles {
+        let fall = falls.get(&p.definition).copied().unwrap_or(0.0);
+        for _ in 0..ticks.min(MAX_COAST_TICKS) {
+            bri_weapons::coast(p, fall);
+        }
+    }
+}
+impl WeaponDelta {
+    /// Apply to a view already coasted to this update's tick.
+    pub fn apply(&self, view: &mut bri_sim::session::WeaponView) -> anyhow::Result<()> {
+        let mut ids = BTreeSet::new();
+        anyhow::ensure!(
+            self.projectiles.len() <= bri_weapons::MAX_PROJECTILES
+                && self.removed.len() <= bri_weapons::MAX_PROJECTILES
+                && self.images.len() <= 64
+                && self.projectiles.iter().all(|p| ids.insert(p.id)),
+            "Invalid weapons update"
+        );
+        if let Some(items) = &self.static_items {
+            view.static_items = items.clone();
+        }
+        for (owner, images) in &self.images {
+            if images.is_empty() {
+                view.images.remove(owner);
+            } else {
+                view.images.insert(*owner, images.clone());
+            }
+        }
+        let removed: BTreeSet<_> = self.removed.iter().collect();
+        view.projectiles
+            .retain(|p| !ids.contains(&p.id) && !removed.contains(&p.id));
+        view.projectiles.extend(self.projectiles.iter().cloned());
+        view.projectiles.sort_by_key(|p| p.id);
+        if let Some(drops) = &self.drops {
+            view.drops = drops.clone();
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {

@@ -13,5 +13,7 @@ pub mod protocol;
 pub mod reach;
 pub mod replica;
 pub mod server;
+pub mod stream;
+pub mod traffic;
 pub mod upnp;
 mod tick_clock;

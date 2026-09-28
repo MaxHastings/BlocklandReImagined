@@ -1,4 +1,9 @@
-use crate::{admin_store::AdminStore, codec, protocol::*};
+use crate::{
+    admin_store::AdminStore,
+    codec,
+    protocol::*,
+    traffic::{Kind, Traffic},
+};
 use anyhow::{Context, Result, ensure};
 use bri_admin::Principal;
 use bri_sim::session::Session;
@@ -143,6 +148,8 @@ pub struct ServerHandle {
     listing: Arc<std::sync::Mutex<Listing>>,
     /// The host's own performance, refreshed about once a second.
     pub perf: Arc<Mutex<ServerPerf>>,
+    /// What the host has sent, by kind.
+    pub traffic: Arc<Traffic>,
     discovery: Option<tokio::task::JoinHandle<()>>,
     router: Option<RouterPorts>,
     stop: Option<oneshot::Sender<()>>,
@@ -348,13 +355,17 @@ enum Frame {
 }
 /// Encode a world transfer off the authority loop. Every peer given the
 /// returned frame writes the transfer at that point in its stream.
-fn encode_transfer(transfer: WorldTransfer) -> Frame {
+fn encode_transfer(transfer: WorldTransfer, traffic: Arc<Traffic>, recipients: usize) -> Frame {
     let (ready, frames) = watch::channel(None);
     tokio::task::spawn_blocking(move || {
         let encoded = transfer
             .encode()
             .map(Arc::from)
             .map_err(|error| format!("{error:#}"));
+        if let Ok(frames) = &encoded {
+            let frames: &Arc<[Vec<u8>]> = frames;
+            traffic.add(Kind::World, frames.iter().map(Vec::len).sum(), recipients);
+        }
         let _ = ready.send(Some(encoded));
     });
     Frame::Pending(frames)
@@ -399,6 +410,7 @@ impl Outbox {
 struct Peer {
     connection: Connection,
     out: Outbox,
+    traffic: Arc<Traffic>,
     generation: usize,
     /// May send bulk requests (administrators); read by the connection task.
     bulk: Arc<AtomicBool>,
@@ -412,9 +424,12 @@ impl Peer {
         }
     }
     /// Encode and queue a message for this peer only.
-    fn send_message(&self, message: &Message) {
+    fn send_message(&self, kind: Kind, message: &Message) {
         match codec::encode(message) {
-            Ok(bytes) => self.send(Frame::Ready(Arc::new(bytes))),
+            Ok(bytes) => {
+                self.traffic.add(kind, bytes.len(), 1);
+                self.send(Frame::Ready(Arc::new(bytes)))
+            }
             Err(error) => {
                 eprintln!("Server could not encode a message: {error:#}");
                 self.connection.close(2_u32.into(), b"Host state exceeds transfer budget");
@@ -425,11 +440,13 @@ impl Peer {
 /// Encode once and queue for every peer. A message that cannot be encoded
 /// disconnects the peers (their replicas would diverge) but never stops the
 /// host: one oversized world or report must not end the server for everyone.
-fn broadcast<'a>(peers: impl IntoIterator<Item = &'a Peer>, message: &Message) {
+fn broadcast<'a>(peers: impl IntoIterator<Item = &'a Peer>, kind: Kind, message: &Message) {
     match codec::encode(message) {
         Ok(bytes) => {
+            let size = bytes.len();
             let frame = Frame::Ready(Arc::new(bytes));
             for peer in peers {
+                peer.traffic.add(kind, size, 1);
                 peer.send(frame.clone());
             }
         }
@@ -553,9 +570,11 @@ fn start_configured(
         max_players: max_players as u32,
     }));
     let perf = Arc::new(Mutex::new(ServerPerf::default()));
+    let traffic = Arc::new(Traffic::default());
     let task = tokio::spawn(run(
         players.clone(),
         perf.clone(),
+        traffic.clone(),
         listing.clone(),
         endpoint,
         session,
@@ -574,6 +593,7 @@ fn start_configured(
         players,
         listing,
         perf,
+        traffic,
         discovery: None,
         router: None,
         stop: Some(stop_tx),
@@ -932,8 +952,42 @@ fn send_package_views(
     for (owner, peer) in peers {
         let view = session.package_state_for(*owner);
         if sent.get(owner) != Some(&view) {
-            peer.send_message(&Message::PackageState(view.clone()));
+            peer.send_message(Kind::Package, &Message::PackageState(view.clone()));
             sent.insert(*owner, view);
+        }
+    }
+}
+/// Encode each state item once, then pack what each peer should get into as
+/// few datagrams as fit.
+fn send_state(
+    peers: &BTreeMap<OwnerId, Peer>,
+    traffic: &Traffic,
+    items: Vec<(Datagram, crate::stream::Audience)>,
+) {
+    let encoded: Vec<_> = items
+        .into_iter()
+        .filter_map(|(item, audience)| {
+            let kind = match item {
+                Datagram::Pose(_) | Datagram::Remote(_) => Kind::Pose,
+                Datagram::Vehicle(_) => Kind::Vehicle,
+                Datagram::Orb(_) => Kind::Orb,
+            };
+            match codec::encode_datagram_item(&item) {
+                Ok(bytes) => Some((kind, audience, bytes)),
+                Err(error) => {
+                    eprintln!("Server dropped a state datagram: {error:#}");
+                    None
+                }
+            }
+        })
+        .collect();
+    for (owner, peer) in peers {
+        let mine = encoded.iter().filter(|(_, audience, _)| audience.includes(*owner));
+        for (kind, _, bytes) in mine.clone() {
+            traffic.add(*kind, bytes.len(), 1);
+        }
+        for datagram in codec::pack_datagrams(mine.map(|(_, _, bytes)| bytes.as_slice())) {
+            let _ = peer.connection.send_datagram(datagram.into());
         }
     }
 }
@@ -942,7 +996,7 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
         peer.bulk
             .store(session.is_administrator(*owner), Ordering::Relaxed);
         match session.admin_state(*owner) {
-            Ok(snapshot) => peer.send_message(&Message::AdminSnapshot(snapshot)),
+            Ok(snapshot) => peer.send_message(Kind::Admin, &Message::AdminSnapshot(snapshot)),
             Err(error) => {
                 eprintln!("Server could not build an admin snapshot: {error:#}");
                 peer.connection.close(2_u32.into(), b"Administration state unavailable");
@@ -954,6 +1008,7 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
 async fn run(
     players: Arc<std::sync::atomic::AtomicU32>,
     perf: Arc<Mutex<ServerPerf>>,
+    traffic: Arc<Traffic>,
     listing: Arc<std::sync::Mutex<Listing>>,
     endpoint: Endpoint,
     mut session: Session,
@@ -979,7 +1034,8 @@ async fn run(
     let mut names = BTreeMap::new();
     let mut avatars = BTreeMap::new();
     let mut tools = BTreeMap::new();
-    let mut weapons = bri_sim::session::WeaponView::default();
+    let mut weapons = crate::stream::WeaponStream::default();
+    weapons.reset(session.weapon_view(), session.simulation().state().tick, session.projectile_falls());
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
     let mut entities = session.package_entities();
@@ -990,6 +1046,8 @@ async fn run(
     let mut time_scale = session.time_scale();
     let mut broken_shapes = session.broken_shapes();
     let mut last_chat = 0;
+    let mut state_stream = crate::stream::StateStream::default();
+    let mut sent_dropped_cues = session.dropped_cues();
     let mut step_errors = 0_u64;
     let mut spawn_points = options.spawn_points.clone();
     let (map_tx, mut map_rx) = mpsc::channel::<(OwnerId, Result<Session>)>(1);
@@ -1049,10 +1107,10 @@ async fn run(
                     session.adopt(old,admin)?;
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
-                    names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
+                    names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
                     palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
-                    let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks});
+                    let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks},traffic.clone(),peers.len());
                     for peer in peers.values(){peer.send(transfer.clone());}
                     package_views.clear();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
@@ -1086,10 +1144,10 @@ async fn run(
                     // O(1) on the loop; the world is chunked and encoded off it.
                     let (mut checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
-                    let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks});
+                    let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks},traffic.clone(),1);
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
-                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,bulk});package_views.insert(owner,view);Ok(owner)
+                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.insert(owner,view);Ok(owner)
                 })();
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
@@ -1101,8 +1159,8 @@ async fn run(
                     let result=session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")});
                     if result.is_err(){rejected+=1;}
                     match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {
-                        Ok(bytes)=>peer.send(Frame::Ready(Arc::new(bytes))),
-                        Err(error)=>peer.send_message(&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
+                        Ok(bytes)=>{traffic.add(Kind::Reply,bytes.len(),1);peer.send(Frame::Ready(Arc::new(bytes)))},
+                        Err(error)=>peer.send_message(Kind::Reply,&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
                     }
                     for target in session.take_admin_disconnects(){
                         let message=session.take_admin_disconnect_message(target);
@@ -1138,20 +1196,16 @@ async fn run(
             if let Err(error)=stepped{step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
             let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
-                let datagrams=poses(&session).into_iter().map(Datagram::Pose).chain(session.vehicle_poses().into_iter().map(Datagram::Vehicle)).chain(session.camera_orbs().into_iter().map(|(owner,eye)|Datagram::Orb(Orb{tick,owner,eye})));
-                for datagram in datagrams {
-                    let bytes:bytes::Bytes=match codec::encode_datagram(&datagram){Ok(bytes)=>bytes.into(),Err(error)=>{eprintln!("Server dropped a state datagram: {error:#}");continue}};
-                    for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone());}
-                }
+                send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs()));
             }
-            if tick.is_multiple_of(6) {
+            if tick.is_multiple_of(UPDATE_INTERVAL) {
                 let mut bricks=BTreeMap::new();for id in session.take_dirty(){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
-                let current_avatars=session.avatars();let changed_avatars=if avatars!=current_avatars{avatars=current_avatars;Some(avatars.clone())}else{None};
-                let current_tools=session.tool_inventories();let changed_tools=if tools!=current_tools{tools=current_tools;Some(tools.clone())}else{None};
-                let current_weapons=session.weapon_view();let changed_weapons=if weapons!=current_weapons{weapons=current_weapons;Some(weapons.clone())}else{None};
+                let changed_avatars=crate::stream::changed_entries(&mut avatars,session.avatars());
+                let changed_tools=crate::stream::changed_entries(&mut tools,session.tool_inventories());
+                let changed_weapons=weapons.delta(&session.weapon_view(),tick);
                 let current_palette=&session.simulation().state().palette;let changed_palette=if &palette!=current_palette{palette=current_palette.clone();Some(palette.clone())}else{None};
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
-                let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
+                let changed_vitals=crate::stream::changed_entries(&mut vitals,session.vitals());
                 let current_entities=session.package_entities();let changed_entities=if entities!=current_entities{entities=current_entities;Some(entities.clone())}else{None};
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
@@ -1159,9 +1213,15 @@ async fn run(
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,entities:changed_entities}));cursor=next;
+                let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,entities:changed_entities};
+                // An update with nothing in it only moves the clients' clock.
+                // Clients coast projectiles on each update's tick, so they keep 20 Hz.
+                if !delta.is_empty() || dropped_cues!=sent_dropped_cues || weapons.in_flight() || tick.is_multiple_of(HEARTBEAT_INTERVAL) {
+                    sent_dropped_cues=dropped_cues;
+                    broadcast(peers.values(),Kind::Update,&Message::Update(delta));cursor=next;
+                }
                 send_package_views(&session,&peers,&mut package_views);
-                for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(&Message::Notice(notice));}}
+                for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}}
             }
             }
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)

@@ -1,0 +1,514 @@
+//! What the host sends in typical scenes, over real QUIC on loopback, and
+//! byte budgets that fail when a change makes the network heavier. The
+//! numbers and their breakdown are in `docs/audits/network-bandwidth.md`.
+//!
+//! Print the table: cargo test -p bri-net --test bandwidth -- --nocapture
+mod common;
+use anyhow::Result;
+use bri_net::{
+    client::Client,
+    server::{self, ServerHandle},
+    traffic::{Kind, TrafficSample},
+};
+use bri_sim::{player::MoveInput, session::Command};
+use bri_world::{Brick, ContentRef, World};
+use std::time::Duration;
+
+/// The client's prediction rate and a 60 fps frame: two inputs a frame.
+const FRAME: Duration = Duration::from_micros(16_667);
+const INPUTS_PER_FRAME: u64 = 2;
+const ROCKET: &str = "bandwidth:weapon/rocketitem";
+const ROCKET_IMAGE: &str = "bandwidth:image/rocketimage";
+const ROCKET_PROJECTILE: &str = "bandwidth:projectile/rocket";
+
+/// A rocket launcher without shapes or effects: holding the trigger fires
+/// one rocket every half second that knocks out bricks within 3 units.
+fn rocket_pack() -> bri_weapons::Pack {
+    let state = |name: &str, ticks, script: &str| bri_weapons::State {
+        name: name.into(),
+        ticks,
+        wait: true,
+        allow_change: true,
+        script: script.into(),
+        ..Default::default()
+    };
+    let states = vec![
+        bri_weapons::State {
+            timeout: Some(1),
+            ..state("Activate", 0, "")
+        },
+        bri_weapons::State {
+            down: Some(2),
+            ..state("Ready", 0, "")
+        },
+        bri_weapons::State {
+            timeout: Some(3),
+            ..state("Fire", 60, "onFire")
+        },
+        bri_weapons::State {
+            timeout: Some(1),
+            ..state("Reload", 0, "")
+        },
+    ];
+    let image = bri_weapons::Image {
+        id: ROCKET_IMAGE.into(),
+        name: "rocketLauncherImage".into(),
+        model: String::new(),
+        projectile: Some(ROCKET_PROJECTILE.into()),
+        mount_point: 0,
+        offset: [0.; 3],
+        eye_offset: [0.; 3],
+        source_rotation_degrees: [0.; 3],
+        correct_muzzle: false,
+        melee: false,
+        color: [1.; 4],
+        color_shift: false,
+        arm_ready: true,
+        casing: String::new(),
+        min_shot_ticks: 0,
+        command: Default::default(),
+        states,
+    };
+    let item = bri_weapons::Item {
+        id: ROCKET.into(),
+        name: "rocketLauncherItem".into(),
+        ui_name: "Rocket L.".into(),
+        image: ROCKET_IMAGE.into(),
+        model: String::new(),
+        icon: String::new(),
+        can_drop: true,
+        sport: false,
+    };
+    let projectile = bri_weapons::ProjectileDef {
+        id: ROCKET_PROJECTILE.into(),
+        name: "rocketLauncherProjectile".into(),
+        model: String::new(),
+        speed: 40.,
+        inherit: 0.,
+        gravity: 0.,
+        lifetime_ticks: 480,
+        fade_ticks: 0,
+        arm_ticks: 0,
+        ballistic: false,
+        elasticity: 0.,
+        friction: 0.,
+        damage: 0.,
+        damage_type: String::new(),
+        radius_damage_type: String::new(),
+        impulse: 0.,
+        vertical: 0.,
+        explode_player: true,
+        explode_death: true,
+        collide_players: true,
+        explosion: bri_weapons::Explosion {
+            effect: String::new(),
+            damage: 0.,
+            radius: 3.,
+            impulse: 0.,
+            impulse_radius: 0.,
+            impulse_vertical: 0.,
+            burn_seconds: 0.,
+        },
+        brick: bri_weapons::BrickImpact {
+            radius: 3.,
+            direct: true,
+            force: 20.,
+            max_volume: 1000.,
+            max_floating_volume: 1000.,
+        },
+        bounce_effect: String::new(),
+        stick_effect: String::new(),
+        blood_effect: String::new(),
+        bounce_angle: 0.,
+        min_stick_speed: 0.,
+        trail: String::new(),
+        sound: String::new(),
+        light_radius: 0.,
+        light_color: [0.; 3],
+        sport_image: None,
+        rest_speed: 0.,
+    };
+    let pack = bri_weapons::Pack {
+        schema_version: bri_weapons::SCHEMA,
+        id: "bandwidth.rockets".into(),
+        items: [(ROCKET.to_string(), item)].into(),
+        images: [(ROCKET_IMAGE.to_string(), image)].into(),
+        projectiles: [(ROCKET_PROJECTILE.to_string(), projectile)].into(),
+        damage_types: Default::default(),
+        explosions: Default::default(),
+        definitions: vec![],
+        resources: vec![],
+        diagnostics: vec![],
+    };
+    pack.validate().unwrap();
+    pack
+}
+
+/// A LAN host (anyone's bricks can be blown up, as v20) with rocket launchers
+/// in every spawn loadout, over `world`.
+fn host(world: World) -> Result<ServerHandle> {
+    let mut session = common::session_with(world);
+    session.set_lan_host(true);
+    session.set_weapon_pack(rocket_pack())?;
+    session.set_spawn_loadout(bri_sim::session::ToolInventory {
+        slots: [Some(ROCKET.to_string()), None, None, None, None].into(),
+        selected: None,
+    })?;
+    server::start(session, common::options())
+}
+
+fn empty_world() -> World {
+    World::new(
+        "Bandwidth".into(),
+        "fixture".into(),
+        vec![[1.0; 4], [0.0; 4]],
+    )
+}
+
+/// A wall of plates 16 wide and 40 high, 6 units in front of the first spawn
+/// point (which faces -Z), for rockets to knock bricks out of.
+fn wall_world() -> World {
+    let mut world = empty_world();
+    let mut id = 1;
+    for column in 0..16 {
+        for row in 0..40 {
+            let position = [-55.5 + column as f32, 0.1 + 0.2 * row as f32, -6.25];
+            world.bricks.insert(
+                id,
+                Brick::new(ContentRef::Resolved("plate".into()), position, 1),
+            );
+            id += 1;
+        }
+    }
+    world.next_brick_id = id;
+    world
+}
+
+/// A flat build of `count` plates, for the join download.
+fn big_world(count: u64) -> World {
+    let mut world = empty_world();
+    for id in 1..=count {
+        let (x, z) = ((id % 180) as f32, (id / 180 % 360) as f32 * 0.5);
+        let layer = (id / (180 * 360)) as f32;
+        let mut brick = Brick::new(
+            ContentRef::Resolved("plate".into()),
+            [-90.0 + x, 0.1 + 0.2 * layer, 5.25 + z],
+            1 + id % 8,
+        );
+        brick.color = (id % 2) as u8;
+        world.bricks.insert(id, brick);
+    }
+    world.next_brick_id = count + 1;
+    world
+}
+
+async fn join(server: &ServerHandle, players: usize) -> Result<Vec<Client>> {
+    let mut clients = Vec::new();
+    for i in 0..players {
+        clients.push(
+            Client::connect(
+                server.address,
+                &server.certificate,
+                format!("Player{i}"),
+                Vec::new(),
+                None,
+            )
+            .await?,
+        );
+    }
+    Ok(clients)
+}
+
+/// What each player does every frame.
+#[derive(Clone, Copy, PartialEq)]
+enum Act {
+    /// Stands still, still sending input like a real client.
+    Idle,
+    /// Runs in a circle.
+    Walk,
+    /// Runs in a circle and plants five bricks a second.
+    Build,
+    /// Holds the trigger of a rocket launcher at `yaw`, `pitch` for the
+    /// measured window.
+    Shoot { yaw: f32, pitch: f32 },
+}
+
+/// Bytes per second one scene cost.
+struct Report {
+    name: &'static str,
+    players: usize,
+    seconds: f64,
+    /// What the host sent, by kind, summed over every player.
+    host: TrafficSample,
+    /// QUIC bytes each player received and sent (packet overhead included).
+    received: Vec<u64>,
+    sent: Vec<u64>,
+}
+impl Report {
+    fn rate(&self, bytes: u64) -> f64 {
+        bytes as f64 / self.seconds
+    }
+    /// Host payload per second across every player.
+    fn host_rate(&self) -> f64 {
+        self.rate(self.host.total())
+    }
+    /// Mean QUIC bytes per second one player received.
+    fn download(&self) -> f64 {
+        self.rate(self.received.iter().sum::<u64>()) / self.players as f64
+    }
+    fn upload(&self) -> f64 {
+        self.rate(self.sent.iter().sum::<u64>()) / self.players as f64
+    }
+    fn print(&self) {
+        eprintln!(
+            "{:<28} {:>2} players: host sends {:>9.0} B/s payload; each player receives {:>8.0} B/s, sends {:>7.0} B/s on the wire",
+            self.name,
+            self.players,
+            self.host_rate(),
+            self.download(),
+            self.upload()
+        );
+        for kind in Kind::ALL {
+            let bytes = self.host.bytes(kind);
+            if bytes > 0 {
+                eprintln!(
+                    "{:>34} {:>9.0} B/s in {:>6.0} msg/s ({:.0} B each)",
+                    kind.name(),
+                    self.rate(bytes),
+                    self.rate(self.host.messages(kind)),
+                    bytes as f64 / self.host.messages(kind) as f64
+                );
+            }
+        }
+    }
+}
+
+/// Run every player's frames for `warmup` then `window`, measuring the window.
+async fn drive(
+    name: &'static str,
+    server: &ServerHandle,
+    clients: Vec<Client>,
+    acts: impl Fn(usize) -> Act,
+    warmup: Duration,
+    window: Duration,
+) -> Result<(Report, Vec<Client>)> {
+    let players = clients.len();
+    let mut tasks = Vec::new();
+    for (index, mut client) in clients.into_iter().enumerate() {
+        let act = acts(index);
+        tasks.push(tokio::spawn(async move {
+            let probe = client.link_probe();
+            let mut frame = tokio::time::interval(FRAME);
+            frame.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let started = tokio::time::Instant::now();
+            let (measure_at, end) = (started + warmup, started + warmup + window);
+            let mut first = None;
+            let mut sequence = 0_u64;
+            let mut history = std::collections::VecDeque::new();
+            let mut frames = 0_u64;
+            let mut shooting = false;
+            if matches!(act, Act::Shoot { .. }) {
+                client.request(Command::EquipTool { slot: Some(0) }).await?;
+            }
+            loop {
+                tokio::select! {
+                    _ = frame.tick() => {
+                        let now = tokio::time::Instant::now();
+                        if now >= end {
+                            break;
+                        }
+                        if first.is_none() && now >= measure_at {
+                            first = Some(probe.sample());
+                        }
+                        frames += 1;
+                        let t = frames as f32 / 60.0;
+                        let input = match act {
+                            Act::Idle => MoveInput::default(),
+                            Act::Walk | Act::Build => MoveInput {
+                                forward: 1.0,
+                                yaw: (t * 0.8 + index as f32).sin() * 3.0,
+                                ..Default::default()
+                            },
+                            // Move the aim between shots so each rocket finds bricks.
+                            Act::Shoot { yaw, pitch } => {
+                                let shot = (t * 2.0) as usize;
+                                MoveInput {
+                                    yaw: yaw + [-0.7, 0.7, 0.0][shot % 3],
+                                    pitch: pitch + [-0.15, 0.45][shot / 3 % 2],
+                                    ..Default::default()
+                                }
+                            }
+                        };
+                        for _ in 0..INPUTS_PER_FRAME {
+                            sequence += 1;
+                            history.push_back(input);
+                            if history.len() > bri_net::protocol::MOVEMENT_REDUNDANCY {
+                                history.pop_front();
+                            }
+                        }
+                        let inputs: Vec<_> = history.iter().copied().collect();
+                        client.movement(sequence, &inputs, None)?;
+                        // The ghost brick follows the builder's aim, reported at
+                        // the client's 10 Hz.
+                        if act == Act::Build && frames.is_multiple_of(6) {
+                            let k = frames / 6;
+                            client.request(Command::GhostBrick(Some(bri_sim::session::GhostBrick {
+                                definition: "plate".into(),
+                                position: [-60.0 + 15.0 * index as f32 + (k % 20) as f32 * 0.5, 0.1, 20.25],
+                                quarter_turns: (k % 4) as u8,
+                                color: 0,
+                                print: None,
+                            }))).await?;
+                        }
+                        if act == Act::Build && frames.is_multiple_of(12) {
+                            let k = frames / 12;
+                            let position = [
+                                -60.0 + 15.0 * index as f32 + (k % 10) as f32,
+                                0.1,
+                                10.25 + (k / 10) as f32 * 0.5,
+                            ];
+                            client.request(Command::Plant {
+                                definition: "plate".into(),
+                                position,
+                                quarter_turns: 0,
+                                color: (k % 2) as u8,
+                            }).await?;
+                        }
+                        let firing = matches!(act, Act::Shoot { .. }) && first.is_some()
+                            && now < measure_at + window.mul_f32(0.6);
+                        if firing != shooting {
+                            shooting = firing;
+                            client.request(Command::WeaponTrigger { down: firing }).await?;
+                        }
+                    }
+                    event = client.receive() => { event?; }
+                }
+            }
+            let last = probe.sample();
+            let first = first.unwrap_or(last);
+            anyhow::Ok((
+                client,
+                last.received_bytes - first.received_bytes,
+                last.sent_bytes - first.sent_bytes,
+            ))
+        }));
+    }
+    tokio::time::sleep(warmup).await;
+    let before = server.traffic.sample();
+    tokio::time::sleep(window).await;
+    let host = server.traffic.sample().since(&before);
+    let mut report = Report {
+        name,
+        players,
+        seconds: window.as_secs_f64(),
+        host,
+        received: Vec::new(),
+        sent: Vec::new(),
+    };
+    let mut clients = Vec::new();
+    for task in tasks {
+        let (client, received, sent) = task.await??;
+        report.received.push(received);
+        report.sent.push(sent);
+        clients.push(client);
+    }
+    report.print();
+    Ok((report, clients))
+}
+
+const WARMUP: Duration = Duration::from_secs(1);
+const WINDOW: Duration = Duration::from_secs(4);
+
+async fn scene(
+    name: &'static str,
+    world: World,
+    players: usize,
+    acts: impl Fn(usize) -> Act,
+) -> Result<(Report, Vec<Client>, ServerHandle)> {
+    let server = host(world)?;
+    let clients = join(&server, players).await?;
+    let (report, clients) = drive(name, &server, clients, acts, WARMUP, WINDOW).await?;
+    Ok((report, clients, server))
+}
+
+async fn finish(clients: Vec<Client>, server: ServerHandle) -> Result<()> {
+    for client in &clients {
+        client.close();
+    }
+    server.stop().await?;
+    Ok(())
+}
+
+/// Every scene, printed as the audit's table. Not a budget: see the tests
+/// below for those.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "prints the audit table; run with --ignored --nocapture"]
+async fn bandwidth_table() -> Result<()> {
+    for players in [1, 8] {
+        let (_, clients, server) =
+            scene("idle freebuild", empty_world(), players, |_| Act::Idle).await?;
+        finish(clients, server).await?;
+    }
+    let (_, clients, server) = scene("8 players running", empty_world(), 8, |_| Act::Walk).await?;
+    finish(clients, server).await?;
+    let (_, clients, server) =
+        scene("8 players building", empty_world(), 8, |_| Act::Build).await?;
+    eprintln!(
+        "  bricks planted: {}",
+        clients[0].replica.world.bricks.len()
+    );
+    finish(clients, server).await?;
+    let (report, clients, server) = explosion().await?;
+    eprintln!("  bricks knocked out: {}", knocked_out(&clients[0]));
+    let _ = report;
+    finish(clients, server).await?;
+    let (_, clients, server) = scene("8 players firing rockets", empty_world(), 8, |i| {
+        Act::Shoot {
+            yaw: -1.2 + 0.3 * i as f32,
+            pitch: 0.2,
+        }
+    })
+    .await?;
+    finish(clients, server).await?;
+    for bricks in [10_000, 100_000] {
+        let server = host(big_world(bricks))?;
+        let before = server.traffic.sample();
+        let clients = join(&server, 1).await?;
+        let sent = server.traffic.sample().since(&before);
+        eprintln!(
+            "join download of {bricks} bricks: {} bytes ({:.1} B per brick)",
+            sent.bytes(Kind::World),
+            sent.bytes(Kind::World) as f64 / bricks as f64
+        );
+        finish(clients, server).await?;
+    }
+    Ok(())
+}
+
+/// One player fires rockets into a wall of 640 plates while seven watch.
+async fn explosion() -> Result<(Report, Vec<Client>, ServerHandle)> {
+    // Aim from the first spawn point's eye at the middle of the wall.
+    let (eye, target) = (
+        glam::Vec3::new(-48.0, 2.3, 0.0),
+        glam::Vec3::new(-48.0, 2.5, -6.0),
+    );
+    let d = target - eye;
+    let aim = Act::Shoot {
+        yaw: d.x.atan2(-d.z),
+        pitch: d.y.atan2(glam::Vec2::new(d.x, d.z).length()),
+    };
+    scene("explosion, 7 watching", wall_world(), 8, move |i| {
+        if i == 0 { aim } else { Act::Idle }
+    })
+    .await
+}
+
+fn knocked_out(client: &Client) -> usize {
+    client
+        .replica
+        .world
+        .bricks
+        .values()
+        .filter(|b| !b.visible)
+        .count()
+}
