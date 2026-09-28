@@ -27,6 +27,16 @@ const BRICK: &str = "v20/brick/brick2x4data";
 /// How far below the horizon the guest aims to build and hammer.
 const DOWN: f32 = 1.0;
 
+/// The QA runs need their environment; without it (the push gate, a plain
+/// `cargo test --include-ignored`) they skip instead of failing.
+fn qa_env(vars: &[&str]) -> bool {
+    let missing: Vec<_> = vars.iter().filter(|v| std::env::var_os(v).is_none()).collect();
+    if !missing.is_empty() {
+        eprintln!("night QA needs {missing:?}; skipped");
+    }
+    missing.is_empty()
+}
+
 fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     app.tick(elapsed)?;
     app.ui.update(elapsed.as_millis() as u64);
@@ -1068,6 +1078,9 @@ fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
 #[test]
 #[ignore = "scratch content with v20 add-ons, loopback UDP and an offscreen GPU; no window"]
 fn imported_v20_add_ons_play() -> Result<()> {
+    if !qa_env(&["BRI_IMPORT_ROOT", "BRI_IMPORTER", "BRI_QA_OUT"]) {
+        return Ok(());
+    }
     let root = PathBuf::from(std::env::var_os("BRI_IMPORT_ROOT").context("BRI_IMPORT_ROOT")?);
     let importer = PathBuf::from(std::env::var_os("BRI_IMPORTER").context("BRI_IMPORTER")?);
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("import");
@@ -1338,6 +1351,9 @@ fn mounted(app: &App) -> bool {
 #[test]
 #[ignore = "packaged content, loopback UDP 28000/28050; an hour long; no window"]
 fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
+    if !qa_env(&["BRI_CONTENT_ROOT", "BRI_QA_OUT"]) {
+        return Ok(());
+    }
     let content = PathBuf::from(std::env::var_os("BRI_CONTENT_ROOT").context("BRI_CONTENT_ROOT")?);
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("soak");
     let _ = std::fs::remove_dir_all(&out);
@@ -1643,6 +1659,9 @@ fn soak_save_reload(s: &mut Soaker, t: Duration) -> Result<String> {
 #[test]
 #[ignore = "packaged content and a loopback server; no window"]
 fn stress_lab_single_player_build_save_reload() -> Result<()> {
+    if !qa_env(&["BRI_CONTENT_ROOT", "BRI_QA_OUT"]) {
+        return Ok(());
+    }
     let content = PathBuf::from(std::env::var_os("BRI_CONTENT_ROOT").context("BRI_CONTENT_ROOT")?);
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("strata");
     let _ = std::fs::remove_dir_all(&out);
@@ -1716,6 +1735,9 @@ fn stress_lab_single_player_build_save_reload() -> Result<()> {
 #[test]
 #[ignore = "packaged content and a loopback server; no window"]
 fn plant_probe_single_player() -> Result<()> {
+    if !qa_env(&["BRI_CONTENT_ROOT", "BRI_QA_OUT"]) {
+        return Ok(());
+    }
     let content = PathBuf::from(std::env::var_os("BRI_CONTENT_ROOT").context("BRI_CONTENT_ROOT")?);
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("probe");
     let _ = std::fs::remove_dir_all(&out);
