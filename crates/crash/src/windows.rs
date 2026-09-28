@@ -74,8 +74,68 @@ pub(crate) fn flush() {
     }
 }
 
+/// One minidump for the dump thread to write.
+struct DumpJob {
+    info: usize,
+    thread: u32,
+    path: std::path::PathBuf,
+    done: std::sync::mpsc::Sender<io::Result<()>>,
+}
+
+static DUMPER: std::sync::Mutex<Option<std::sync::mpsc::Sender<DumpJob>>> =
+    std::sync::Mutex::new(None);
+
+/// How long a crashing thread waits for its minidump. MiniDumpWriteDump
+/// suspends every other thread, and one of them may hold a lock the dump
+/// needs; under load that hung about one crash in ten. Past this wait the
+/// report is written without the dump and the process exits.
+const DUMP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The dump thread, started before any crash so the crash filter never has
+/// to write the dump on the crashing thread itself.
+fn start_dumper() -> io::Result<()> {
+    let (send, receive) = std::sync::mpsc::channel::<DumpJob>();
+    std::thread::Builder::new()
+        .name("bri-dump".into())
+        .spawn(move || {
+            while let Ok(job) = receive.recv() {
+                // SAFETY: the crashing thread keeps `info` alive while it waits.
+                let result = unsafe {
+                    write_minidump(&job.path, job.info as *const EXCEPTION_POINTERS, job.thread)
+                };
+                let _ = job.done.send(result);
+            }
+        })?;
+    *DUMPER.lock().unwrap_or_else(|e| e.into_inner()) = Some(send);
+    Ok(())
+}
+
+/// Write the crash's minidump from the dump thread, waiting at most
+/// `DUMP_WAIT`.
+fn dump(path: &std::path::Path, info: *const EXCEPTION_POINTERS) -> io::Result<()> {
+    // SAFETY: no preconditions.
+    let thread = unsafe { GetCurrentThreadId() };
+    let sender = DUMPER.lock().ok().and_then(|g| g.clone());
+    let Some(sender) = sender else {
+        // SAFETY: the filter's own exception, on this thread.
+        return unsafe { write_minidump(path, info, thread) };
+    };
+    let (done, wait) = std::sync::mpsc::channel();
+    sender
+        .send(DumpJob {
+            info: info as usize,
+            thread,
+            path: path.to_path_buf(),
+            done,
+        })
+        .map_err(|_| io::Error::other("the dump thread has stopped"))?;
+    wait.recv_timeout(DUMP_WAIT)
+        .unwrap_or_else(|_| Err(io::Error::other("the minidump did not finish in time")))
+}
+
 pub(crate) fn install(log: File) -> io::Result<()> {
     tee_stderr(log)?;
+    start_dumper()?;
     // SAFETY: registers a process-wide filter with a matching signature.
     unsafe { SetUnhandledExceptionFilter(Some(on_native_crash)) };
     Ok(())
@@ -138,7 +198,7 @@ unsafe extern "system" fn on_native_crash(info: *const EXCEPTION_POINTERS) -> i3
         let code = unsafe { info.as_ref() }
             .and_then(|i| unsafe { i.ExceptionRecord.as_ref() })
             .map(|r| (r.ExceptionCode as u32, r.ExceptionAddress as usize));
-        let written = unsafe { write_minidump(&dump, info) };
+        let written = self::dump(&dump, info);
         let report = dump.with_extension("txt");
         if let Ok(mut file) = File::create(&report) {
             let _ = writeln!(
@@ -165,7 +225,11 @@ unsafe extern "system" fn on_native_crash(info: *const EXCEPTION_POINTERS) -> i3
 
 /// # Safety
 /// `info` must be the pointers handed to an exception filter (or null).
-unsafe fn write_minidump(path: &std::path::Path, info: *const EXCEPTION_POINTERS) -> io::Result<()> {
+unsafe fn write_minidump(
+    path: &std::path::Path,
+    info: *const EXCEPTION_POINTERS,
+    thread: u32,
+) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
     // SAFETY: NUL-terminated path; a new file we close below.
@@ -186,8 +250,7 @@ unsafe fn write_minidump(path: &std::path::Path, info: *const EXCEPTION_POINTERS
     // SAFETY: takes ownership so the handle closes on every path.
     let owned = unsafe { File::from_raw_handle(file as RawHandle) };
     let exception = MINIDUMP_EXCEPTION_INFORMATION {
-        // SAFETY: no preconditions.
-        ThreadId: unsafe { GetCurrentThreadId() },
+        ThreadId: thread,
         ExceptionPointers: info as *mut EXCEPTION_POINTERS,
         ClientPointers: 0,
     };
