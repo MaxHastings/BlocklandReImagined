@@ -29,10 +29,14 @@ fn load_side(root: &Path, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
 }
 /// Mod packages of `set` whose directories are under `root`.
 pub fn load_set(root: &Path, set: &bri_package::packages::PackageSet, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
-    match Catalog::load(root, set, server) {
-        Ok(catalog) if catalog.packages.is_empty() => (None, Vec::new()),
-        Ok(catalog) => (Some(Arc::new(catalog)), Vec::new()),
-        Err(problems) => (None, problems.iter().map(ToString::to_string).collect()),
+    // One broken Add-On is left out (and reported) rather than turning off
+    // every other Add-On's HUD, rules and modes.
+    let (catalog, problems) = Catalog::load_skipping(root, set, server);
+    let problems = problems.iter().map(ToString::to_string).collect();
+    if catalog.packages.is_empty() {
+        (None, problems)
+    } else {
+        (Some(Arc::new(catalog)), problems)
     }
 }
 

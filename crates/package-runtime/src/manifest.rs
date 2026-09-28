@@ -38,6 +38,10 @@ pub struct Manifest {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provide>,
+    /// Sandboxed client code (`docs/architecture/client-sandbox.md`), read
+    /// and checked by `bri-client-sandbox`, not by the runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<serde_json::Value>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

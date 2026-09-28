@@ -339,6 +339,35 @@ impl Catalog {
             Err(problems)
         }
     }
+    /// Load what can run: a package with problems, and every package that
+    /// needs it, is left out and its problems returned, so one bad Add-On
+    /// does not turn off the others. Deterministic, so a host and its
+    /// clients leave out the same packages from the same files.
+    pub fn load_skipping(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
+        let mut set = set.clone();
+        let mut skipped = Vec::new();
+        loop {
+            let (catalog, problems) = Self::inspect(root, &set, server);
+            if problems.is_empty() {
+                return (catalog, skipped);
+            }
+            let owner = |d: &Diagnostic| {
+                let at = d.location.as_deref()?;
+                set.packages
+                    .iter()
+                    .filter(|e| at.starts_with(&format!("{}/", e.id)))
+                    .max_by_key(|e| e.id.len())
+                    .map(|e| e.id.clone())
+            };
+            let bad: BTreeSet<String> = problems.iter().filter_map(owner).collect();
+            skipped.extend(problems);
+            if bad.is_empty() {
+                // Problems no package owns: run nothing rather than guess.
+                return (Self::default(), skipped);
+            }
+            set.packages.retain(|e| !bad.contains(&e.id));
+        }
+    }
     /// Load for reporting: every package that could be read, even with
     /// problems, and every problem once. Never run a catalog with problems.
     pub fn inspect(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
