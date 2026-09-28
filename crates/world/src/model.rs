@@ -310,6 +310,12 @@ pub struct World {
     /// unclaimed (imported or anonymous builds).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub owners: BTreeMap<OwnerId, OwnerRecord>,
+    /// Bricks this server has no definition for (a removed package, an
+    /// add-on brick in an imported save). They are not in the world, but they
+    /// are kept exactly and saved again, so nothing is lost when the content
+    /// comes back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unloaded: Vec<Brick>,
 }
 
 pub const MAX_OWNERS: usize = 65_536;
@@ -367,6 +373,7 @@ impl World {
             source_sha256: None,
             source_encoding: None,
             owners: BTreeMap::new(),
+            unloaded: Vec::new(),
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -396,14 +403,14 @@ impl World {
             "Invalid world palette"
         );
         ensure!(
-            self.bricks.len() <= MAX_BRICKS && !self.bricks.contains_key(&0),
+            self.bricks.len() + self.unloaded.len() <= MAX_BRICKS && !self.bricks.contains_key(&0),
             "Invalid brick IDs/count"
         );
         ensure!(
             self.next_brick_id > self.bricks.keys().next_back().copied().unwrap_or(0),
             "Brick ID would be reused"
         );
-        for b in self.bricks.values() {
+        for b in self.bricks.values().chain(&self.unloaded) {
             b.validate(self.palette.len())?;
         }
         ensure!(

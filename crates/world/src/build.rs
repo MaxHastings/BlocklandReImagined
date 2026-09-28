@@ -75,7 +75,7 @@ impl SavedBuild {
     }
     pub fn capture(world: &World, events: bool, ownership: bool) -> Result<Self> {
         let mut world = world.clone();
-        crate::update_bricks(&mut world.bricks, |brick| {
+        let strip = |brick: &mut Brick| {
             if !events {
                 brick.events.clear();
             }
@@ -87,13 +87,19 @@ impl SavedBuild {
                 (events || !tag.eq_ignore_ascii_case("+-EVENT"))
                     && (ownership || !tag.eq_ignore_ascii_case("+-OWNER"))
             });
-        });
+        };
+        crate::update_bricks(&mut world.bricks, strip);
+        world.unloaded.iter_mut().for_each(strip);
         if !ownership {
             world.owners.clear();
         } else {
             // Only the owners whose bricks are saved travel with the build.
-            let used: std::collections::BTreeSet<OwnerId> =
-                world.bricks.values().map(|b| b.owner).collect();
+            let used: std::collections::BTreeSet<OwnerId> = world
+                .bricks
+                .values()
+                .chain(&world.unloaded)
+                .map(|b| b.owner)
+                .collect();
             world.owners.retain(|owner, _| used.contains(owner));
         }
         let result = Self::new(world);
@@ -185,14 +191,14 @@ impl LoadPlan {
             target
                 .bricks
                 .len()
-                .checked_add(build.world.bricks.len())
+                .checked_add(build.world.bricks.len() + build.world.unloaded.len())
                 .is_some_and(|n| n <= crate::MAX_BRICKS),
             "Loaded build exceeds world brick limit"
         );
-        ensure!(!build.world.bricks.is_empty(), "Build contains no bricks");
+        ensure!(!(build.world.bricks.is_empty() && build.world.unloaded.is_empty()), "Build contains no bricks");
         let next_id = target
             .next_brick_id
-            .checked_add(build.world.bricks.len() as u64)
+            .checked_add((build.world.bricks.len() + build.world.unloaded.len()) as u64)
             .context("Brick IDs exhausted")?;
         target
             .revision
@@ -218,7 +224,10 @@ impl LoadPlan {
         let mut new_owners = BTreeMap::new();
         let mut next_owner = next_owner;
         let mut bricks = BTreeMap::new();
-        for (offset, mut brick) in build.world.bricks.into_iter().map(|(_, b)| b).enumerate() {
+        // Bricks the source world could not place are offered again: this
+        // server may have their definitions.
+        let saved = build.world.bricks.into_iter().map(|(_, b)| b);
+        for (offset, mut brick) in saved.chain(build.world.unloaded).enumerate() {
             brick.color = colors[brick.color as usize];
             for event in &mut brick.events {
                 for value in &mut event.params {

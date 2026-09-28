@@ -2476,3 +2476,31 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
 - Evidence: `cargo test -p bri-ui --lib`, `-p bri-sim --lib --test session`,
   `-p bri-client --lib`, `-p bri-net --lib`; clippy `-D warnings` on those
   four crates with `--all-targets`.
+
+- 2026-09-27 Avatars are saved by part name (door-closer P0). `Appearance`
+  stored parts as positions in the avatar pack's lists, and the settings
+  file's `$pref::Avatar::*` values did the same, so adding or reordering a
+  part changed everyone's avatar. Parts are now named (`hat: "helmet"`,
+  `accent: "visor"`) in the wire `Appearance`, replicated avatars and the
+  settings file; the editor maps names to its list positions only for
+  display. v20 keeps an accent's position when the hat changes, and so do we.
+  The avatar pack file is unchanged: its defaults stay positions in its own
+  lists and are named on load. v20 prefs are named once on import. A saved
+  part the pack no longer has falls back to the pack default. Protocol 33.
+  Evidence: `cargo test -p bri-ui --lib avatar -- --include-ignored`,
+  `cargo test -p bri-client --lib avatar -- --include-ignored`,
+  `cargo test -p bri-net --test loopback avatar -- --include-ignored`.
+
+- 2026-09-27 Missing brick definitions no longer refuse a whole world or
+  build (door-closer P0). `Simulation::new` and `preflight_load` failed on the
+  first brick with an unknown or unresolved definition, so a v20 save with
+  one add-on brick, or a world after a package was removed, did not load at
+  all. Such bricks now move to `World.unloaded`: not placed or replicated,
+  kept exactly, saved again with the world and with builds, and offered again
+  when a build is loaded on a server that has them. Loading says what it
+  skipped ("1 bricks were not loaded because this server does not have their
+  definitions: 1 missing. They are kept and saved with the world.") in chat,
+  in map-load pending objects and in `bri-server`'s log. Geometry errors in
+  placeable bricks still refuse the load atomically. No protocol change.
+  Evidence: `cargo test -p bri-world -p bri-sim` (updated
+  `build_load_keeps_unknown_bricks_aside_and_preserves_existing_players`).

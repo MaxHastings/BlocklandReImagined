@@ -147,7 +147,21 @@ Ranked by impact on getting problems fixed, with status:
    Window thread.
 3. An in-game frame profiler and debug overlays (frame time, CPU and GPU
    spans, net stats) as console commands.
-4. Recorded-input playback tests for GUI and input flows.
+4. **Recorded-input playback: done.** `bri_client::playback` records what
+   the platform delivered, frame by frame (each tick's elapsed time and the
+   input before it), as JSON lines: run the game with
+   `BRI_RECORD_INPUT=<file>`. `replay` feeds a recording to the real App in
+   the platform's order (input, UI clock, tick, window commands) with no
+   window, GPU or OS input; `Script` authors the same frames from control
+   names (`click`, `hold`, `press`, `wait`). `tests/input_playback.rs` goes
+   from a first launch through the default-controls dialog, Start Game and
+   the mission list to walking with W and opening the Escape menu using only
+   clicks and keys, then round-trips its own recording.
+   Also landed from the first-impressions audit: the game opens on
+   double-click with the content beside it, release builds have no console,
+   startup and fatal errors show a dialog with an Open logs folder choice, a
+   main-thread panic says so before closing, and a crash nobody saw is
+   reported once on the next launch (`tests/launch.rs`).
 5. **Net soak tests: done, and they found a real problem.**
    `bri_net::impair::ImpairedLink` is a UDP relay that adds latency, jitter
    (so reordering), loss and duplication both ways, with a seeded pattern so a

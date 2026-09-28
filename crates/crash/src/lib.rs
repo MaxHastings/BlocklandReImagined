@@ -19,8 +19,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod dialog;
 #[cfg(windows)]
 mod windows;
+pub use dialog::{alert, summarize};
+/// The dialog title players see.
+pub const PRODUCT: &str = "Blockland ReImagined";
 
 pub const KEEP_SESSIONS: usize = 20;
 pub const KEEP_CRASHES: usize = 10;
@@ -32,13 +36,19 @@ const LOG_TAIL: usize = 200;
 pub struct Capture {
     pub directory: PathBuf,
     pub session_log: PathBuf,
+    /// A crash report from the previous run nobody has been shown yet.
+    pub previous_crash: Option<PathBuf>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
 struct State {
     directory: PathBuf,
     session_log: PathBuf,
+    previous_crash: Option<PathBuf>,
     program: String,
+    /// Show a dialog when the main thread panics (a desktop game, not a
+    /// server or test).
+    dialogs: std::sync::atomic::AtomicBool,
     /// Serializes crash reports from panics on several threads at once.
     writing: Mutex<()>,
 }
@@ -55,8 +65,10 @@ pub fn install(program: &str, candidates: &[PathBuf]) -> io::Result<Capture> {
         .find(|dir| writable(dir))
         .cloned()
         .ok_or_else(|| io::Error::other("No writable log directory"))?;
+    let previous_crash = unseen_crash(&directory);
     rotate(&directory, "session-", KEEP_SESSIONS.saturating_sub(1))?;
     rotate(&directory, "crash-", KEEP_CRASHES)?;
+    rotate(&directory, "seen-", KEEP_CRASHES)?;
     let stamp = timestamp(SystemTime::now());
     let session_log = unique(&directory, &format!("session-{stamp}"), "log");
     let mut log = OpenOptions::new()
@@ -72,7 +84,9 @@ pub fn install(program: &str, candidates: &[PathBuf]) -> io::Result<Capture> {
     let state = State {
         directory: directory.clone(),
         session_log: session_log.clone(),
+        previous_crash: previous_crash.clone(),
         program: program.into(),
+        dialogs: std::sync::atomic::AtomicBool::new(false),
         writing: Mutex::new(()),
     };
     if STATE.set(state).is_err() {
@@ -84,15 +98,80 @@ pub fn install(program: &str, candidates: &[PathBuf]) -> io::Result<Capture> {
     drop(log);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if let Some(state) = STATE.get() {
-            let _ = state.write_panic(info);
+        if let Some(state) = STATE.get()
+            && let Ok(report) = state.write_panic(info)
+            && std::thread::current().name() == Some("main")
+            && state.dialogs.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // The main thread is going down with the game: say so now.
+            acknowledge(&report);
+            alert(
+                &format!("{PRODUCT} stopped unexpectedly"),
+                &format!(
+                    "{PRODUCT} ran into a problem and has to close.\n\nA crash report was saved as {}.",
+                    report.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                Some(&state.directory),
+            );
         }
         previous(info);
     }));
     Ok(Capture {
         directory,
         session_log,
+        previous_crash,
     })
+}
+
+/// A windowed (GUI subsystem) build has no console. Started from a
+/// terminal, write to that terminal; double-clicked, do nothing.
+pub fn attach_parent_console() {
+    #[cfg(windows)]
+    windows::attach_parent_console();
+}
+
+/// Desktop games tell the player about a crash with a dialog; servers and
+/// tools leave it to the report.
+pub fn enable_dialogs() {
+    if let Some(state) = STATE.get() {
+        state
+            .dialogs
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Mark a crash report as shown, so the next launch does not show it again.
+pub fn acknowledge(report: &Path) {
+    if let (Some(dir), Some(stem)) = (report.parent(), report.file_stem()) {
+        let _ = File::create(dir.join(format!("seen-{}", stem.to_string_lossy())));
+    }
+}
+
+/// The newest crash report written during the latest session that has not
+/// been shown to the player. Session and report names embed sortable UTC
+/// times, so "during" is a string comparison.
+fn unseen_crash(dir: &Path) -> Option<PathBuf> {
+    let names: Vec<String> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let started = names
+        .iter()
+        .filter_map(|n| n.strip_prefix("session-"))
+        .map(|n| n.trim_end_matches(".log").to_string())
+        .max()?;
+    names
+        .iter()
+        .filter_map(|n| n.strip_prefix("crash-").map(|stamp| (n, stamp)))
+        .filter(|(n, stamp)| {
+            n.ends_with(".txt")
+                && stamp.trim_end_matches(".txt") >= started.as_str()
+                && !names.contains(&format!("seen-{}", n.trim_end_matches(".txt")))
+        })
+        .map(|(n, _)| n)
+        .max()
+        .map(|n| dir.join(n))
 }
 
 /// Candidate log directories for a game: next to the executable first (so
@@ -114,6 +193,7 @@ impl State {
         Capture {
             directory: self.directory.clone(),
             session_log: self.session_log.clone(),
+            previous_crash: self.previous_crash.clone(),
         }
     }
     fn write_panic(&self, info: &std::panic::PanicHookInfo<'_>) -> io::Result<PathBuf> {
@@ -241,6 +321,26 @@ mod tests {
             .collect();
         assert_eq!(names.iter().filter(|n| n.starts_with("session-")).count(), 20);
         assert!(names.iter().any(|n| n.starts_with("crash-")), "other kinds untouched");
+    }
+
+    #[test]
+    fn only_an_unseen_crash_from_the_last_session_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let touch = |name: &str| File::create(dir.path().join(name)).unwrap();
+        touch("session-20260101-000000.log");
+        touch("crash-20251231-235959.txt"); // before the last session
+        assert_eq!(unseen_crash(dir.path()), None);
+        touch("crash-20260101-000500.txt");
+        touch("crash-20260101-000500.dmp");
+        assert_eq!(
+            unseen_crash(dir.path()),
+            Some(dir.path().join("crash-20260101-000500.txt"))
+        );
+        acknowledge(&dir.path().join("crash-20260101-000500.txt"));
+        assert_eq!(unseen_crash(dir.path()), None, "shown once");
+        touch("session-20260102-000000.log");
+        touch("crash-20260101-000600.txt"); // an older session's crash
+        assert_eq!(unseen_crash(dir.path()), None);
     }
 
     #[test]

@@ -266,14 +266,31 @@ pub enum ParamValue {
     PaintColor(u32),
 }
 
+/// The avatar part keys of `$pref::Avatar::*`.
+pub const AVATAR_PART_KEYS: [&str; 12] = [
+    "Hat",
+    "Accent",
+    "Pack",
+    "SecondPack",
+    "Chest",
+    "Hip",
+    "LArm",
+    "RArm",
+    "LHand",
+    "RHand",
+    "LLeg",
+    "RLeg",
+];
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AvatarPrefs {
-    /// `$pref::Avatar::*` values by short name in the v20 formats: part
-    /// indices (`Hat`, `Accent`, `Pack`, `SecondPack`, `Chest`, `Hip`,
-    /// `LArm`…) as integers into the pack's part lists, `FaceName`/`DecalName`
-    /// as file base names, colours (`HatColor`, `HeadColor`, `TorsoColor`…)
-    /// as `"r g b a"` 0..1 floats.
+    /// `$pref::Avatar::*` values by short name: parts (`Hat`, `Accent`,
+    /// `Pack`, `SecondPack`, `Chest`, `Hip`, `LArm`…) by the lowercase name of
+    /// the chosen part (`helmet`, `visor`), never a position in the pack's
+    /// lists; `FaceName`/`DecalName` as file base names; colours (`HatColor`,
+    /// `HeadColor`, `TorsoColor`…) as `"r g b a"` 0..1 floats. `FaceColor` and
+    /// `DecalColor` are v20's image-list frames, re-derived from the names.
     pub values: BTreeMap<String, String>,
     pub symmetry: bool,
     pub lan_name: String,
@@ -297,10 +314,29 @@ impl AvatarPrefs {
             .unwrap_or_else(|| k.to_string());
         self.values.insert(key, v.into());
     }
-    pub fn index(&self, k: &str) -> usize {
-        self.get(k)
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .map_or(0, |v| v.max(0.0) as usize)
+    /// The chosen part's name for `k` (`Hat` -> `helmet`), empty when unset.
+    pub fn part(&self, k: &str) -> &str {
+        self.get(k).unwrap_or_default()
+    }
+    /// v20 prefs store parts as positions in the pack's lists; name them.
+    /// Values that are already names are kept.
+    pub fn name_parts(&mut self, data: &crate::schema::AvatarData) {
+        let position = |v: &str| v.trim().parse::<f64>().ok().map(|i| i.max(0.0) as usize);
+        for key in AVATAR_PART_KEYS.iter().filter(|k| **k != "Accent") {
+            if let Some(index) = self.get(key).and_then(position) {
+                let list = data.parts.get(&key.to_ascii_lowercase());
+                let name = list.and_then(|l| l.get(index).or(l.first()));
+                self.set(key, name.map_or("none".into(), |n| n.to_ascii_lowercase()));
+            }
+        }
+        if let Some(index) = self.get("Accent").and_then(position) {
+            let hat = self.part("Hat").to_ascii_lowercase();
+            let name = data.accents_allowed.get(&hat).and_then(|l| l.get(index));
+            self.set(
+                "Accent",
+                name.map_or("none".into(), |n| n.to_ascii_lowercase()),
+            );
+        }
     }
     pub fn color(&self, k: &str) -> [f32; 4] {
         let v: Vec<f32> = self
@@ -319,8 +355,13 @@ impl AvatarPrefs {
     pub fn set_color(&mut self, k: &str, c: [f32; 4]) {
         self.set(k, format!("{} {} {} {}", c[0], c[1], c[2], c[3]));
     }
-    /// Stock defaults from the pack's `$pref::Avatar::*` / `$pref::Player::*`.
-    pub fn from_prefs(p: &crate::prefs::Prefs, pack_prefs: &BTreeMap<String, String>) -> Self {
+    /// Stock defaults from the pack's `$pref::Avatar::*` / `$pref::Player::*`,
+    /// with v20's part positions named from `data`.
+    pub fn from_prefs(
+        p: &crate::prefs::Prefs,
+        pack_prefs: &BTreeMap<String, String>,
+        data: &crate::schema::AvatarData,
+    ) -> Self {
         let mut a = AvatarPrefs::default();
         for k in pack_prefs.keys() {
             let low = k.to_ascii_lowercase();
@@ -335,6 +376,7 @@ impl AvatarPrefs {
         a.lan_name = p.str_or("$pref::Player::LANName", "Blockhead").to_string();
         a.clan_prefix = p.str_or("$Pref::Player::ClanPrefix", "").to_string();
         a.clan_suffix = p.str_or("$Pref::Player::ClanSuffix", "").to_string();
+        a.name_parts(data);
         a
     }
 }

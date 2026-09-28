@@ -383,6 +383,9 @@ impl ContentPaths {
         };
         let breakables = native.breakables;
         let mut pending_objects = native.pending_objects;
+        pending_objects.extend(bri_sim::simulation::unloaded_summary(
+            &simulation.state().unloaded,
+        ));
         if unresolved_items > 0 {
             pending_objects.push(format!(
                 "{unresolved_items} unresolved brick item references retained"

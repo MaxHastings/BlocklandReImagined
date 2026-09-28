@@ -895,7 +895,8 @@ impl Ui {
             settings.keyboard_type = crate::binds::DEFAULT_KEYBOARD;
         }
         if settings.avatar.values.is_empty() {
-            settings.avatar = AvatarPrefs::from_prefs(&prefs, &pack.data.data.prefs);
+            settings.avatar =
+                AvatarPrefs::from_prefs(&prefs, &pack.data.data.prefs, &pack.data.data.avatar);
         }
         let mut core = Core {
             pack: pack.clone(),
