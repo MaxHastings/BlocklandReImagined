@@ -132,6 +132,12 @@ pub enum Event {
     /// The host changed to this map.
     MapChanged(String),
 }
+/// Room in the UI event queue. Replies (at most `MAX_PENDING` in flight) and
+/// a failure always fit: presentation cues and notices use only what is left.
+const EVENT_QUEUE: usize = 256;
+const MAX_PENDING: usize = 64;
+const REPLY_ROOM: usize = MAX_PENDING + 2;
+const RESERVED_EVENTS: usize = REPLY_ROOM + 32;
 struct Request {
     id: u64,
     command: Command,
@@ -163,7 +169,7 @@ impl Worker {
         let (requests, rx) = mpsc::channel(64);
         let (movement, movement_rx) = mpsc::channel(32);
         let (view_tx, view) = watch::channel(None);
-        let (events_tx, events) = mpsc::channel(128);
+        let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
         let (stop, mut stopped) = oneshot::channel();
         let probes = Arc::new(std::sync::OnceLock::new());
         let probes_tx = probes.clone();
@@ -205,7 +211,11 @@ impl Worker {
                 }
                 Err(error)=>Err(error),
             };
-            if let Err(error)=result { let _=events_tx.try_send(Event::Failed(format!("{error:#}"))); }
+            // Wait for room: a full queue must not swallow why the game ended.
+            if let Err(error)=result {
+                let failed=events_tx.send(Event::Failed(format!("{error:#}")));
+                let _=tokio::time::timeout(Duration::from_secs(5),failed).await;
+            }
         });
         Self {
             probes,
@@ -235,6 +245,8 @@ impl Worker {
     }
     /// Queue a redundant input datagram (newest sequence, recent inputs).
     /// A full queue drops it; the next datagram repeats these inputs anyway.
+    /// A stopped worker drops it too: its `Event::Failed` (or the closed
+    /// event queue) tells the game why, where the player can read it.
     pub fn movement(
         &self,
         newest: u64,
@@ -244,12 +256,8 @@ impl Worker {
         for input in &inputs {
             input.validate()?;
         }
-        match self.movement.try_send((newest, inputs, camera)) {
-            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                anyhow::bail!("Network worker stopped")
-            }
-        }
+        let _ = self.movement.try_send((newest, inputs, camera));
+        Ok(())
     }
     pub fn cancel(&mut self) {
         if let Some(stop) = self.stop.take() {
@@ -339,6 +347,8 @@ async fn run(
         .context("UI event queue closed")?;
     let mut pending = BTreeMap::<u64, (u64, std::time::Instant)>::new();
     let mut cue_drops = client.replica.dropped_cues;
+    // Cues dropped here because the UI fell behind.
+    let mut local_drops = 0_u64;
     let mut clock = tokio::time::interval(Duration::from_millis(250));
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Inputs held until MOVEMENT_GAP has passed since the last datagram.
@@ -350,7 +360,9 @@ async fn run(
     // no extra datagram.
     let mut send = |client: &mut Client, (newest, mut inputs): (u64, Vec<MoveInput>), camera| {
         let unsent = newest.saturating_sub(sent_newest) as usize;
-        let excess = inputs.len().saturating_sub(unsent.max(bri_net::protocol::MOVEMENT_REDUNDANCY));
+        let excess = inputs
+            .len()
+            .saturating_sub(unsent.max(bri_net::protocol::MOVEMENT_REDUNDANCY));
         inputs.drain(..excess);
         sent_newest = sent_newest.max(newest);
         client.movement(newest, &inputs, camera)
@@ -382,7 +394,7 @@ async fn run(
             }
             request=requests.recv()=>{
                 let Some(request)=request else { return Ok(()) };
-                ensure!(pending.len()<64,"Too many pending server commands");
+                ensure!(pending.len()<MAX_PENDING,"Too many pending server commands");
                 let sequence=tokio::time::timeout(Duration::from_secs(10),client.request_with_aim(request.command,request.aim)).await.context("Server request write timed out")??;
                 pending.insert(sequence,(request.id,std::time::Instant::now()));
             }
@@ -394,9 +406,17 @@ async fn run(
                     }
                     ClientEvent::Updated {world_changed,changed_bricks,palette_changed}=>{
                         let cues=client.replica.take_cues();
-                        if !cues.is_empty() || client.replica.dropped_cues!=cue_drops {
-                            cue_drops=client.replica.dropped_cues;
-                            events.try_send(Event::Presentation{cues,dropped:client.replica.dropped_cues}).context("Client presentation queue is full or closed")?;
+                        let dropped=client.replica.dropped_cues.saturating_add(local_drops);
+                        if !cues.is_empty() || dropped!=cue_drops {
+                            // Effects the UI has no room for are dropped and
+                            // counted, as the host drops its own excess; they
+                            // never take the room replies need.
+                            if events.capacity()>RESERVED_EVENTS {
+                                cue_drops=dropped;
+                                events.try_send(Event::Presentation{cues,dropped}).context("Client presentation queue is full or closed")?;
+                            } else {
+                                local_drops=local_drops.saturating_add(cues.len() as u64);
+                            }
                         }
                         if world_changed {
                             world.revision+=1;
@@ -416,7 +436,11 @@ async fn run(
                         publish(client,&world,checkpoint_cue_cursor,view);
                         events.try_send(Event::MapChanged(client.replica.world.map_id.clone())).context("UI event queue is full or closed")?;
                     }
-                    ClientEvent::Notice(notice)=>events.try_send(Event::Notice(notice)).context("UI notice queue is full or closed")?,
+                    // A flood of notices ("Too many events at once!") drops
+                    // the excess rather than the connection.
+                    ClientEvent::Notice(notice)=>if events.capacity()>REPLY_ROOM {
+                        events.try_send(Event::Notice(notice)).context("UI notice queue is full or closed")?
+                    },
                 }
             }
         }

@@ -117,6 +117,16 @@ impl MinigamesWorld {
             .admin = admin;
         Ok(())
     }
+    pub fn rename(&mut self, player: PlayerId, name: String) -> Result<(), Error> {
+        if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+            return Err(Error::InvalidSettings);
+        }
+        self.players
+            .get_mut(&player)
+            .ok_or(Error::StalePlayer)?
+            .name = name;
+        Ok(())
+    }
     pub fn disconnect(&mut self, player: PlayerId) -> Result<Vec<Effect>, Error> {
         self.player(player)?;
         if self.next_life > u64::MAX - MAX_PLAYERS as u64 {

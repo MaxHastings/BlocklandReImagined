@@ -1731,3 +1731,40 @@ fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
     assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
     assert!(sequences.contains(&"fire".into()), "{sequences:?}");
 }
+
+#[test]
+fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
+    let mut s = session();
+    let a = s.join("Blockhead".into(), Vec3::Y, false).unwrap();
+    let b = s.join("blockhead".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    let c = s.join("Blockhead".into(), Vec3::new(8., 1., 0.), false).unwrap();
+    let names = s.names();
+    assert_eq!(names[&a], "Blockhead");
+    assert_eq!(names[&b], "blockhead 2");
+    assert_eq!(names[&c], "Blockhead 3");
+
+    assert!(matches!(
+        s.command(b, 1, Command::SetName("  Builder  ".into())).unwrap(),
+        Reply::Accepted
+    ));
+    assert_eq!(s.names()[&b], "Builder");
+    assert!(
+        s.chat()
+            .iter()
+            .any(|l| l.owner == 0 && l.text == "blockhead 2 is now known as Builder.")
+    );
+    // Taking someone else's name is numbered; keeping your own is a no-op.
+    s.command(c, 1, Command::SetName("builder".into())).unwrap();
+    assert_eq!(s.names()[&c], "builder 2");
+    let lines = s.chat().len();
+    s.command(c, 2, Command::SetName("builder".into())).unwrap();
+    assert_eq!(s.names()[&c], "builder 2");
+    assert_eq!(s.chat().len(), lines);
+    assert!(s.command(a, 1, Command::SetName("   ".into())).is_err());
+    assert!(s.command(a, 2, Command::SetName("x".repeat(49))).is_err());
+    assert_eq!(s.names()[&a], "Blockhead");
+
+    // The freed name is available again.
+    let d = s.join("Blockhead".into(), Vec3::new(12., 1., 0.), false).unwrap();
+    assert_eq!(s.names()[&d], "Blockhead 2");
+}

@@ -24,6 +24,7 @@ if sys.version_info < (3, 9):
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import regenerate_content as regen  # noqa: E402
+import shipped_addons  # noqa: E402
 
 REPO = regen.REPO
 
@@ -159,6 +160,14 @@ def main():
         regen.fail(f'{v20} is not a Blockland v20 folder: it needs base/, Add-Ons/ and saves/.')
     remember_v20(content, v20)
     regen.regenerate(v20, content, regen.STEPS, keep_stale=args.keep_stale, force=args.rebuild)
+    # The imported Add-Ons releases ship turned on (the Stunt Plane) need
+    # their original archives, which only some machines have.
+    archive = pathlib.Path(os.environ.get('BRI_ADDON_ARCHIVE') or shipped_addons.DEFAULT_ARCHIVE)
+    if archive.is_dir():
+        shipped_addons.build(content, archive, v20, shipped_addons.CORE)
+    else:
+        print(f'\nSkipped the shipped Add-Ons (tools/shipped-addons.json): no archive folder at {archive}. '
+              'Set BRI_ADDON_ARCHIVE to build them; releases need them.')
     client = REPO / 'target' / 'release' / ('bri-client' + regen.EXE)
     print('\nSetup complete. Start the game with:')
     print(f'  "{client}" --run "{content}"')

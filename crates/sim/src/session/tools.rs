@@ -413,9 +413,10 @@ impl Session {
                         // v20's hammer silently leaves any brick whose loss
                         // would strand others (`willCauseChainKill`), before
                         // it checks trust. Tutorial `noBreak` bricks survive.
+                        // `indestructable` spawn bricks do not: that flag
+                        // only stops explosions.
                         if !self.simulation.will_cause_chain_kill(id)?
                             && self.trusted_brick_edit(owner, id, level::FULL)
-                            && self.tool_may_destroy(owner, id)
                             && !self.tutorial_protects(id)
                         {
                             // `fxDTSBrick::onToolBreak` runs its rows before
@@ -474,7 +475,6 @@ impl Session {
                     TargetId::Brick(id) => {
                         // Tutorial `noBreak` bricks survive tools.
                         if self.trusted_brick_edit(owner, id, level::YOU)
-                            && self.tool_may_destroy(owner, id)
                             && !self.tutorial_protects(id)
                         {
                             // `fxDTSBrick::onToolBreak` runs its rows before
@@ -643,12 +643,6 @@ impl Session {
     }
 
     /// A tool destroying a brick (`killBrick`): debris pops away from the hit.
-    fn tool_may_destroy(&self, owner: OwnerId, id: BrickId) -> bool {
-        self.peers
-            .get(&owner)
-            .is_some_and(|peer| self.simulation.destructible_by(&peer.actor, id))
-    }
-
     pub(super) fn tool_kill_brick(&mut self, owner: OwnerId, id: BrickId) -> Result<()> {
         let actor = copy_actor(&self.peers.get(&owner).context("Unknown connection")?.actor);
         let center = Vec3::from(self.simulation.state().bricks[&id].position);
