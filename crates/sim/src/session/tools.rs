@@ -24,9 +24,7 @@ pub enum InspectMode {
 )]
 pub enum ToolAction {
     /// Open the events dialog over the brick the wrench last hit.
-    Inspect {
-        mode: InspectMode,
-    },
+    Inspect { mode: InspectMode },
     SetPrint {
         brick: BrickId,
         print: Option<String>,
@@ -44,9 +42,7 @@ pub enum ToolAction {
     /// `serverCmdUndoBrick` (Ctrl+Z).
     UndoBrick,
     /// Vehicle spawn wrench `< Respawn >`.
-    RespawnVehicle {
-        brick: BrickId,
-    },
+    RespawnVehicle { brick: BrickId },
 }
 
 /// Server-configured bindings, never supplied by a remote player. An empty
@@ -244,7 +240,9 @@ pub const ADMIN_WAND_IMAGE: &str = "v20.image.adminwandimage";
 /// and the FX cans' `<fx>PaintProjectile::onCollision`).
 fn paint_edit(definition: &str, paint: Option<u8>) -> Option<Edit> {
     let name = definition.strip_prefix("v20.projectile.")?;
-    let color_effects = ["flat", "pearl", "chrome", "glow", "blink", "swirl", "rainbow"];
+    let color_effects = [
+        "flat", "pearl", "chrome", "glow", "blink", "swirl", "rainbow",
+    ];
     if let Some(index) = color_effects
         .iter()
         .position(|fx| name.strip_suffix("paintprojectile") == Some(fx))
@@ -300,7 +298,12 @@ impl Session {
         if let Edit::Events(rows) = &edit {
             self.validate_event_rows(rows)?;
         }
-        let brick = self.simulation.state().bricks.get(&id).context("Unknown brick")?;
+        let brick = self
+            .simulation
+            .state()
+            .bricks
+            .get(&id)
+            .context("Unknown brick")?;
         self.tool_catalog.validate_edit(brick, &edit)?;
         self.item_spawners
             .validate_edit(self.simulation.state(), id, &edit)?;
@@ -411,8 +414,13 @@ impl Session {
                 self.tool_sound("hammerHitSound", hit.position);
                 match hit.target {
                     TargetId::Brick(id) => {
-                        // Tutorial `noBreak` bricks survive tools.
-                        if self.trusted_brick_edit(owner, id, level::FULL) && !self.tutorial_protects(id) {
+                        // v20's hammer silently leaves any brick whose loss
+                        // would strand others (`willCauseChainKill`), before
+                        // it checks trust. Tutorial `noBreak` bricks survive.
+                        if !self.simulation.will_cause_chain_kill(id)?
+                            && self.trusted_brick_edit(owner, id, level::FULL)
+                            && !self.tutorial_protects(id)
+                        {
                             // `fxDTSBrick::onToolBreak` runs its rows before
                             // `killBrick` removes the brick and its program.
                             self.fire_input(id, "onToolBreak", Some(owner));
@@ -454,7 +462,9 @@ impl Session {
                 match hit.target {
                     TargetId::Brick(id) => {
                         // Tutorial `noBreak` bricks survive tools.
-                        if self.trusted_brick_edit(owner, id, level::YOU) && !self.tutorial_protects(id) {
+                        if self.trusted_brick_edit(owner, id, level::YOU)
+                            && !self.tutorial_protects(id)
+                        {
                             // `fxDTSBrick::onToolBreak` runs its rows before
                             // `killBrick` removes the brick and its program.
                             self.fire_input(id, "onToolBreak", Some(owner));
@@ -484,8 +494,8 @@ impl Session {
                 if !self.peers[&owner].actor.administrator {
                     return Ok(());
                 }
-                let Some(hit) = self.tool_ray(owner, start, dir, 500.0 * scale, Reach::Melee)?
-                else {
+                let range = (500.0 * scale).min(Simulation::MAX_TARGET_DISTANCE);
+                let Some(hit) = self.tool_ray(owner, start, dir, range, Reach::Melee)? else {
                     return Ok(());
                 };
                 self.tool_explosion(
@@ -605,7 +615,7 @@ impl Session {
         }
         allowed
     }
-    fn brick_group_name(&self, owner: OwnerId) -> String {
+    pub(super) fn brick_group_name(&self, owner: OwnerId) -> String {
         if let Some(peer) = self.peers.get(&owner) {
             peer.name.clone()
         } else if let Some((name, ..)) = self.departed.get(&owner) {

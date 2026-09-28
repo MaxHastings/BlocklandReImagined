@@ -11,11 +11,6 @@
 # Baseline on main, 2026-09-27.
 
 [[failure]]
-test = "app_flow.rs::native_host_cancel_rehost_chat_compositor_disconnect_and_settings"
-owner = "Hammer rules and Destructo Wand"
-reason = "Times out waiting for 'authoritative plant undo removes render/query brick' since d8b8bb4."
-
-[[failure]]
 test = "vehicle_render.rs::stock_vehicles_render_with_wheels_and_paint"
 owner = "unassigned"
 reason = "v20.vehicle.horsearmor draws 0 pixels."
