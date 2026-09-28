@@ -763,6 +763,7 @@ impl Session {
         );
         // A fresh join replaces the dropped connection it took the number from.
         self.departed.remove(&owner);
+        self.enter_world(owner)?;
         if !is_bot {
             self.announce(owner, "connected.", "ClientJoinSound");
         }
@@ -915,6 +916,7 @@ impl Session {
             },
         );
         self.departed.remove(&owner);
+        self.enter_world(owner)?;
         self.announce(owner, "connected.", "ClientJoinSound");
         self.refresh_trust();
         self.packages_joined(owner);

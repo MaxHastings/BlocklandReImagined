@@ -1060,14 +1060,55 @@ impl Session {
         Ok(())
     }
 
+    /// `GameConnection::spawnPlayer` on joining: the same spawn choice as a
+    /// respawn and the same spawn effect. The host's map drop point stands
+    /// when nothing better applies.
+    pub(super) fn enter_world(&mut self, owner: OwnerId) -> Result<()> {
+        let choice = self.spawn_choice(owner);
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        let mut feet = Vec3::from(peer.player.state().feet);
+        if let Some((at, yaw)) = choice {
+            peer.player
+                .teleport(&mut self.simulation.physics, at, yaw)?;
+            feet = at;
+        }
+        let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+        let _ = self
+            .weapons
+            .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
+        Ok(())
+    }
+
     /// Minigame spawn bricks per `MiniGameSO::pickSpawnPoint`, then the
     /// player's own spawn bricks outside minigames, then the map drop points.
     fn pick_spawn(&mut self, owner: OwnerId) -> (Vec3, f32) {
+        if let Some(choice) = self.spawn_choice(owner) {
+            return choice;
+        }
+        let word = self.next_spawn_word();
+        let points = &self.spawn_points;
+        if points.is_empty() {
+            return (Vec3::new(0.0, 1.0, 0.0), 0.0);
+        }
+        (points[(word % points.len() as u64) as usize], 0.0)
+    }
+
+    fn next_spawn_word(&mut self) -> u64 {
+        self.spawn_seed = self
+            .spawn_seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.spawn_seed
+    }
+
+    /// Where this player should appear, if anywhere more specific than a map
+    /// drop point: a bot's home, a checkpoint, or a spawn brick.
+    fn spawn_choice(&mut self, owner: OwnerId) -> Option<(Vec3, f32)> {
         if let Some(home) = self.bot_home(owner) {
-            return (home, 0.0);
+            return Some((home, 0.0));
         }
         if let Some(checkpoint) = self.checkpoint_spawn(owner) {
-            return checkpoint;
+            return Some(checkpoint);
         }
         let world = self.simulation.state();
         let spawn_bricks: Vec<_> = world
@@ -1078,11 +1119,7 @@ impl Session {
             })
             .map(|(id, b)| (*id, b.owner))
             .collect();
-        self.spawn_seed = self
-            .spawn_seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let word = self.spawn_seed;
+        let word = self.next_spawn_word();
         let chosen = self.peers.get(&owner).and_then(|peer| {
             if self
                 .minigames
@@ -1111,15 +1148,9 @@ impl Session {
                 (!own.is_empty()).then(|| own[(word % own.len() as u64) as usize])
             }
         });
-        if let Some(brick) = chosen.and_then(|id| world.bricks.get(&id)) {
-            let yaw = -f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2;
-            return (Vec3::from(brick.position) + Vec3::Y * 0.1, yaw);
-        }
-        let points = &self.spawn_points;
-        if points.is_empty() {
-            return (Vec3::new(0.0, 1.0, 0.0), 0.0);
-        }
-        (points[(word % points.len() as u64) as usize], 0.0)
+        let brick = chosen.and_then(|id| self.simulation.state().bricks.get(&id))?;
+        let yaw = -f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2;
+        Some((Vec3::from(brick.position) + Vec3::Y * 0.1, yaw))
     }
 
     /// Per tick: rule clock, corpse timeouts and falling damage.

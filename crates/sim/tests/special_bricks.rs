@@ -16,6 +16,7 @@ const TELEDOOR: &str = "v20/brick/brickteledoordata";
 const CHEST: &str = "v20/brick/bricktreasurechestdata";
 const CHEST_OPEN: &str = "v20/brick/bricktreasurechestopendata";
 const WATER: &str = "v20/brick/brick8xwaterdata";
+const SPAWN: &str = "v20/brick/brickspawnpointdata";
 
 struct Harness {
     s: Session,
@@ -143,6 +144,25 @@ fn checkpoint_sets_the_respawn_point() -> anyhow::Result<()> {
     h.command(Command::ClearCheckpoint)?;
     h.run(MoveInput::default(), 10)?;
     assert!(h.feet().distance(Vec3::new(0.25, 0.05, 0.25)) < 1.0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the converted native brick catalog"]
+fn returning_players_appear_where_a_respawn_would_put_them() -> anyhow::Result<()> {
+    let mut h = Harness::new()?;
+    let spawn = h.plant(SPAWN, 10, 10, 0)?;
+    let center = Vec3::from(h.s.simulation().state().bricks[&spawn].position);
+    // Rejoining offers the map drop point; the player's own spawn brick
+    // wins, exactly as it does for a respawn.
+    h.s.disconnect(h.owner)?;
+    h.s.resume(h.owner, Vec3::new(-20.0, 0.05, -20.0))?;
+    h.run(MoveInput::default(), 10)?;
+    let feet = h.feet();
+    assert!(
+        Vec3::new(feet.x - center.x, 0.0, feet.z - center.z).length() < 1.0,
+        "rejoined at {feet}, spawn brick {center}"
+    );
     Ok(())
 }
 
