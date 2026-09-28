@@ -4771,7 +4771,7 @@ impl PlatformApp for App {
                 .view
                 .as_ref()
                 .and_then(|v| v.vitals.get(&v.owner))
-                .is_some_and(|v| v.mounted.is_some());
+                .is_some_and(|v| v.mounted.is_some() || v.ride.is_some());
             let input = if alive {
                 rider_input(self.abilities, self.controls.movement(), mounted)
             } else {
@@ -4820,7 +4820,10 @@ impl PlatformApp for App {
                 let driving = vitals.is_some_and(|v| {
                     matches!(v.control, bri_sim::session::ControlObject::Entity(_))
                 });
-                self.motion.set_mounted(mounted.is_some() || driving);
+                // A player riding another player shows the host's pose too.
+                let ride = vitals.and_then(|v| v.ride);
+                self.motion
+                    .set_mounted(mounted.is_some() || ride.is_some() || driving);
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
@@ -4905,6 +4908,14 @@ impl PlatformApp for App {
                         self.mount_heading = Some(heading);
                     }
                 }
+                // On another player, a passenger faces the seat like one on a
+                // vehicle; the first seat of a bot mount turns it instead.
+                if let Some(ride) = ride.filter(|r| !r.steers)
+                    && let Some(heading) = self.motion.presented().get(&ride.mount).map(|m| m.yaw)
+                {
+                    self.controls.set_seat_yaw(Some(heading));
+                    self.mount_heading = Some(heading);
+                }
                 Self::pose_mounts(
                     &mut self.mount_meshes,
                     &self.avatar_assets,
@@ -4960,6 +4971,51 @@ impl PlatformApp for App {
                             *owner == view.owner,
                         );
                     }
+                }
+                // Players riding players sit on the mount's mount node,
+                // rising and falling with its gait (`mountObject`).
+                for (owner, vitals) in &view.vitals {
+                    let Some(ride) = vitals.ride else {
+                        continue;
+                    };
+                    let Some(mount) = self.motion.presented().get(&ride.mount).cloned() else {
+                        continue;
+                    };
+                    let Some(point) = view
+                        .archetypes
+                        .resolve(mount.archetype)
+                        .mount_points
+                        .get(usize::from(ride.seat))
+                    else {
+                        continue;
+                    };
+                    let body = glam::Quat::from_rotation_y(-mount.yaw);
+                    let (feet, rotation) = match self
+                        .avatars
+                        .get(&ride.mount)
+                        .and_then(|mesh| mesh.model_node(&self.avatar_assets, &point.node))
+                    {
+                        Some(node) => {
+                            let (_, turn, offset) = node.to_scale_rotation_translation();
+                            (
+                                Vec3::from(mount.feet) + body * offset * mount.scale,
+                                body * turn,
+                            )
+                        }
+                        None => (
+                            point.seat(Vec3::from(mount.feet), mount.yaw, mount.scale),
+                            body,
+                        ),
+                    };
+                    self.rider_rotations.insert(*owner, rotation);
+                    self.motion.override_presented(
+                        *owner,
+                        feet,
+                        Some(mount.yaw),
+                        rotation * Vec3::Y,
+                        Vec3::from(mount.velocity),
+                        *owner == view.owner,
+                    );
                 }
                 self.vehicles.prepare(
                     &mut self.vehicle_assets,
@@ -5308,11 +5364,26 @@ impl PlatformApp for App {
                                     let d = self.vehicle_assets.definition(&info.definition)?;
                                     Some(d.seats.get(usize::from(seat))?.pose == "sit")
                                 })
+                                .unwrap_or(false)
+                            // A mount point's `mountThread`.
+                            || view
+                                .vitals
+                                .get(owner)
+                                .and_then(|v| v.ride)
+                                .and_then(|ride| {
+                                    let mount = presented.get(&ride.mount)?;
+                                    let kind = view.archetypes.resolve(mount.archetype);
+                                    Some(kind.mount_points.get(usize::from(ride.seat))?.pose == "sit")
+                                })
                                 .unwrap_or(false)),
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.
-                    tick_state: if view.vitals.get(owner).is_some_and(|v| v.mounted.is_some()) {
+                    tick_state: if view
+                        .vitals
+                        .get(owner)
+                        .is_some_and(|v| v.mounted.is_some() || v.ride.is_some())
+                    {
                         Some(bri_sim::player::PlayerState {
                             velocity: [0.0; 3],
                             grounded: true,

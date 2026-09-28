@@ -217,7 +217,7 @@ impl Session {
         let Some(distance) = self.world_ray(start, dir, WARP_RANGE) else {
             return Ok(());
         };
-        if self.vehicles.is_mounted(admin) {
+        if self.seated(admin) {
             self.eject(admin);
         }
         let peer = self.peers.get_mut(&admin).context("Unknown player")?;

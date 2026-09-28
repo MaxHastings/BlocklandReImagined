@@ -4216,3 +4216,46 @@ with the downloaded Add-On, the other two named in chat;
 --test add_on_fallbacks`, and the ignored
 `add_on_join::a_guest_joins_a_host_running_every_repository_add_on`
 (host with every repository Add-On, the showcase ones included).
+## 2026-09-28 Riding horse players (branch `claude/project-thread-c06rfc`)
+
+Max's a19 playtest: the Horse Ray turned him into a horse and the other
+player could not get on. Only horse bots (vehicles) were mountable; nothing
+mounted a player.
+
+v20 rules, from `Armor::onCollision`, `onMount`, `doDismount`,
+`onNewDataBlock`, `onDisabled` (allGameScripts-Vanilla.cs 8840-9160) and
+Vehicle_Horse/Weapon_Horse_Ray: a `canRide` player whose feet are more than
+0.2 over a `rideable` player with `numMountPoints > 0` takes its first free
+mount node, `$Game::MinMountTime` after leaving any mount. HorseArmor has one
+seat, `mountNode[0] = 2` (`mount2`), `mountThread` root. The horse's own
+client keeps control; the rider is a passenger who looks around, uses tools
+and leaves with jet (2.2 up, else 3 up/down/sideways, times the mount's
+scale). A mount without a client (a Horse-Rayed bot) is steered by the rider
+in its first seat. Permission: a player has no spawn brick, so only
+`miniGameCanUse` counts (anyone outside minigames, same-minigame players
+inside); a bot asks its spawn brick owner like its vehicles. Death,
+disconnect, respawn, a body without seats and `canRide` loss put riders down.
+
+Made data, not a Horse case: `Archetype::mount_points` (node, rest position,
+pose), v20's horse from its shape; package archetypes declare
+`mount_points`. Server `session/riding.rs` seats, follows, dismounts and
+cleans up; riders are sensors like vehicle riders. Replicated as
+`Vitals::ride` (mount, seat, steers); protocol 49. Clients show the host's
+rider pose on the mount's animated node, lock a passenger's facing to the
+mount, and leave riders out of prediction's other players.
+
+Players never quite touch (each closes half its gap per tick), so a rider
+counts as touching within 0.1; at 0.05 a rider landing on a walking horse
+slid off without mounting.
+
+Add-On `PlayerData` is still not importable (addon-import), so Add-On
+player types with mount fields wait on that importer.
+
+Evidence: `cargo test -p bri-sim --test unlike_modes` (riding a horse player,
+the horse's prediction matching the host, jet dismount, cleanup on body
+change/death/rider death/disconnect, two-seat package mount, minigame
+refusal); with content, `cargo test -p bri-sim --test vehicles --
+--include-ignored` (horse seat equals horse.dts `mount2`; a Horse-Rayed bot
+ridden and steered east). Also `cargo test` for bri-sim, bri-motor,
+bri-package-runtime, bri-net, bri-client; clippy clean. Not seen in a
+window: how mounting and riding feel needs Max's playtest.

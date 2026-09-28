@@ -27,7 +27,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// avatars; `WeaponDelta` with coasted projectiles; `EntityDelta`.
 /// 47: `Notice::MusicTracks`, the host's Music Files for a joiner's wrench.
 /// 48: `PlayerState::tick`: players move on v20's 32 ms ticks.
-pub const VERSION: u32 = 49;
+/// 49: `Vitals::ride` and `Archetype::mount_points`: players ride
+/// rideable players.
+/// 50: `Hello::accept_differences`: a join after downloading the server's
+/// Add-Ons is let in without what it could not get.
+pub const VERSION: u32 = 50;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

@@ -450,6 +450,16 @@ fn archetype(
     if let Some(v) = def.can_ride {
         archetype.can_ride = v;
     }
+    if let Some(points) = &def.mount_points {
+        archetype.mount_points = points
+            .iter()
+            .map(|m| crate::archetype::MountPoint {
+                node: m.node.clone(),
+                position: m.position,
+                pose: m.pose.clone(),
+            })
+            .collect();
+    }
     if let Some(v) = &def.model {
         archetype.look.model = v.clone();
     }
@@ -1201,7 +1211,7 @@ impl Session {
                 };
                 ensure!(peer.combat.alive, "Only living players can drive");
                 ensure!(
-                    !self.vehicles.is_mounted(player),
+                    !self.seated(player),
                     "A seated player cannot drive an entity"
                 );
                 let host = self.packages.as_mut().context("No packages are enabled")?;
