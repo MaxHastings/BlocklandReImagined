@@ -50,6 +50,25 @@ impl Session {
         blast: BrickBlast,
     ) -> Result<()> {
         let stranded = self.simulation.stranded_by(brick)?;
+        self.kill_brick_with(actor, brick, blast, stranded)
+    }
+    /// `killBrick` without the chain kill, for package rules that remove
+    /// their own bricks (a mined voxel has no map ground to hang from).
+    pub(super) fn kill_lone_brick(
+        &mut self,
+        actor: &Actor,
+        brick: BrickId,
+        blast: BrickBlast,
+    ) -> Result<()> {
+        self.kill_brick_with(actor, brick, blast, Vec::new())
+    }
+    fn kill_brick_with(
+        &mut self,
+        actor: &Actor,
+        brick: BrickId,
+        blast: BrickBlast,
+        stranded: Vec<BrickId>,
+    ) -> Result<()> {
         let cue = self.brick_kill_cue(brick, blast)?;
         self.simulation.remove(actor, brick)?;
         self.dirty.insert(brick);

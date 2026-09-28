@@ -24,7 +24,16 @@ fn definitions() -> Definitions {
         id: CUBE.into(),
         footprint_studs: [4, 4],
         height_plates: 10,
-        attachment_rows: vec!["bbbb".into(); 4],
+        // v20's solid 4x cube: studs on top, tubes below, per stud row.
+        attachment_rows: (0..4)
+            .flat_map(|_| {
+                (0..10).map(|y| match y {
+                    0 => "uuuu".into(),
+                    9 => "dddd".into(),
+                    _ => "xxxx".into(),
+                })
+            })
+            .collect(),
         collision_boxes: vec![],
         needs_external_collision: false,
         coverage: None,
