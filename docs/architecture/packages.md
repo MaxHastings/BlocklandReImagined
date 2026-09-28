@@ -191,9 +191,11 @@ Rules:
   strings, so this needs no protocol or save change. The join check already
   requires identical `shared` packages on both sides.
 
-Not merged yet: imported bricks do not appear in the brick selector, because
-the selector's icons come from the UI pack. Imported sounds and effects are
-not merged either.
+Imported bricks join the brick menu under the category and subcategory they
+declare, with icons from the package's `brick-catalog/brick-icons.json`
+(`install_package_bricks` in `crates/client/src/content.rs`). A brick
+without a stored icon shows none. Imported sounds and effects are not merged
+yet.
 
 ## Enabling and disabling packages
 

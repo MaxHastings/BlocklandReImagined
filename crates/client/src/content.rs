@@ -516,6 +516,10 @@ impl ClientContent {
                 icon: IconRef::Pack(icon),
             });
         }
+        for (dir, catalog_dir) in &paths.brick_extras {
+            install_package_bricks(&mut schema, &mut bricks, catalog_dir)
+                .with_context(|| format!("Loading bricks of {dir}"))?;
+        }
         let effects: Library = read_json(
             &file(&paths.effects, "effects.json", INDEX_LIMIT)?,
             INDEX_LIMIT,
@@ -863,6 +867,55 @@ fn install_death_icons(
                 source: resource.path.clone(),
             },
         );
+    }
+    Ok(())
+}
+/// Another package's selectable bricks join the brick menu under the
+/// category and subcategory they declare, with the icons the package stores
+/// beside its catalog (`brick-icons.json`, written by `bri-import-addon`).
+fn install_package_bricks(
+    schema: &mut UiPack,
+    bricks: &mut Vec<BrickInfo>,
+    catalog_dir: &Path,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Icons {
+        icons: BTreeMap<String, bri_ui::schema::ImageEntry>,
+    }
+    let catalog: Catalog = read_json(&file(catalog_dir, "stock-catalog.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
+    let icons = if catalog_dir.join("brick-icons.json").is_file() {
+        read_json::<Icons>(&file(catalog_dir, "brick-icons.json", INDEX_LIMIT)?, INDEX_LIMIT)?.icons
+    } else {
+        BTreeMap::new()
+    };
+    for entry in catalog.bricks.iter().filter(|b| b.selectable()) {
+        let icon = match icons.get(&entry.icon_source) {
+            Some(image) => {
+                let path = file(catalog_dir, &image.file, INDEX_LIMIT)?;
+                let bytes = fs::read(&path)?;
+                ensure!(
+                    format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
+                    "Brick icon checksum mismatch: {}",
+                    entry.id
+                );
+                schema.images.insert(
+                    entry.icon_source.clone(),
+                    bri_ui::schema::ImageEntry {
+                        file: path.to_string_lossy().into_owned(),
+                        ..image.clone()
+                    },
+                );
+                IconRef::Pack(entry.icon_source.clone())
+            }
+            None => IconRef::None,
+        };
+        bricks.push(BrickInfo {
+            id: entry.id.clone(),
+            ui_name: entry.display_name.clone(),
+            category: entry.category.clone(),
+            subcategory: entry.subcategory.clone(),
+            icon,
+        });
     }
     Ok(())
 }

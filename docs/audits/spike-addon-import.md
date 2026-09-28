@@ -112,8 +112,9 @@ Each is testable headless with the samples this spike already imports.
 - `crates/client/tests/addon_packages.rs` loads the same packages the way the
   client does, without a window: item presentation, HUD icons, explosion
   shapes, the shotgun's model and the car's models.
-- Still open: imported bricks in the brick selector, and merging sounds and
-  effects. Maxwell's interactive playtest, picking up and firing the shotgun
+- Imported bricks show in the brick menu under the category they declare,
+  with their own icons.
+- Still open: merging sounds and effects. Maxwell's interactive playtest, picking up and firing the shotgun
   and driving the car, is the proof still owed for step e.
 
 **Not in scope.** Behaviour hooks (seams 5 to 8), downloading packages, and

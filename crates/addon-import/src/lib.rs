@@ -1842,6 +1842,7 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
         })
         .collect();
     let (mut bricks, mut resolved, mut bodies) = (vec![], vec![], vec![]);
+    let mut icons = serde_json::Map::new();
     for entry in catalog.bricks {
         let Some(rel) = meshes.get(&entry.mesh_id) else {
             continue;
@@ -1860,6 +1861,41 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
         let file = rel.trim_start_matches("bricks/").to_owned();
         cx.write(&format!("assets/brick-catalog/{file}"), &bytes)?;
         resolved.push(json!({ "id": entry.id, "native_mesh": file }));
+        // The brick menu's icon, stored beside the catalog.
+        let icon = entry.icon_source.clone();
+        if !icon.is_empty() && !icons.contains_key(&icon) {
+            let found = ["", ".png", ".jpg"]
+                .iter()
+                .find_map(|e| cx.src.get(&format!("{icon}{e}")).cloned());
+            let dims = found.as_ref().and_then(|f| {
+                image::ImageReader::new(std::io::Cursor::new(&f.bytes))
+                    .with_guessed_format()
+                    .ok()?
+                    .into_dimensions()
+                    .ok()
+            });
+            match (found, dims) {
+                (Some(f), Some((width, height))) => {
+                    let ext = f
+                        .path
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("png")
+                        .to_ascii_lowercase();
+                    let digest = hash(&f.bytes);
+                    let name = format!("icons/{}.{ext}", &digest[..24]);
+                    cx.write(&format!("assets/brick-catalog/{name}"), &f.bytes)?;
+                    icons.insert(
+                        icon,
+                        json!({ "file": name, "sha256": digest, "width": width, "height": height, "source": f.path }),
+                    );
+                }
+                _ => cx.report.diagnostics.push(format!(
+                    "brick {}: icon {icon} not found; the menu shows no icon",
+                    entry.id
+                )),
+            }
+        }
         bricks.push(entry);
     }
     if bricks.is_empty() {
@@ -1877,6 +1913,10 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
     cx.write(
         &format!("{dir}/catalog-audit.json"),
         &serde_json::to_vec_pretty(&json!({ "resolved_meshes": resolved }))?,
+    )?;
+    cx.write(
+        &format!("{dir}/brick-icons.json"),
+        &serde_json::to_vec_pretty(&json!({ "schema_version": 1, "icons": icons }))?,
     )?;
     let library = bri_content::collision::CollisionLibrary {
         schema_version: 1,

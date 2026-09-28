@@ -74,6 +74,23 @@ fn client_loads_imported_packages_beside_the_base_game() {
         .unwrap();
     assert!(content.item_physics.bounds.contains_key("weapon_synthetic_blaster:weapon/blasteritem"));
     bri_client::explosion_shapes::ExplosionShapes::load(&content.weapons.pack, &paths.weapons).unwrap();
+    // The imported brick is in the brick menu under the category it declares,
+    // with its own icon.
+    let pad = content
+        .bricks
+        .iter()
+        .find(|b| b.id == "weapon_synthetic_blaster:brick/brickblasterpaddata")
+        .expect("imported brick in the brick menu");
+    assert_eq!((pad.category.as_str(), pad.subcategory.as_str(), pad.ui_name.as_str()), ("Special", "Synthetic", "Blaster Pad"));
+    let bri_ui::api::IconRef::Pack(icon) = &pad.icon else {
+        panic!("imported brick has no icon: {:?}", pad.icon);
+    };
+    assert!(content.ui_pack.has_image(icon));
+    let pixels = content
+        .ui_pack
+        .pixels(&bri_ui::pack::TexKey::Image(icon.clone()))
+        .expect("the icon decodes");
+    let _ = pixels;
     if real {
         assert!(ids.contains(&"weapon_shotgun:weapon/shotgunitem"));
         let shotgun = items

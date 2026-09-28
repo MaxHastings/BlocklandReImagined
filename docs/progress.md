@@ -2553,5 +2553,7 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
     more than 5 units. An imported brick loads into a hosted world.
   - `crates/client/tests/addon_packages.rs`: the client-side load of the same
     packages, including the shotgun model and the car assets.
-  Open: imported bricks in the brick selector, sounds and effects, and
+  Imported bricks also show in the brick menu under the category they
+  declare, with icons the importer stores in `brick-catalog/brick-icons.json`
+  (`crates/client/tests/addon_packages.rs`). Open: sounds and effects, and
   Maxwell's interactive playtest.
