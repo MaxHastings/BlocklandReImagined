@@ -4181,6 +4181,58 @@ this machine and checks its fields, wheels, threads and that it holds height
 on lift at 45), `cargo test -p bri-client --lib threads_pick`. Not seen in a
 window: the propeller and how the plane and carpet feel need Max's playtest.
 
+## 2026-09-28 Brick debris limit in Options (branch `claude/project-thread-76ojrm`)
+
+Max wanted more knocked-out brick debris, with each player choosing how much
+physics their PC takes. v20's Graphics pane already had a Physics Quality
+section (`OPT_PhysicsQuality0..4`, `$pref::PhysicsQuality`, stock default 1
+High) that this client hid. It is shown again beside Shadow Quality and sets
+the debris limit, stored as v20's own `$pref::Physics::MaxBricks`:
+
+| Physics Quality | Off | Low | Medium | High (default) | Best |
+|---|---|---|---|---|---|
+| Debris bricks at once | 0 | 128 | 256 | 512 | 2048 |
+
+The console's `maxdebris` sets any other limit, 0 to 4096; Options then shows
+no radio selected and keeps it. Off throws nothing: bricks still die and
+vanish. Still client-only, nothing sent, no protocol change.
+
+A CPU budget keeps a weak PC from hitching: the client times its debris work
+each frame (cues, pushes, physics), learns what one moving brick costs on
+this PC (skipping the frame that threw them, which pays for the spawn), and
+keeps only as many as 6 ms pays for. Two frames running over 6 ms, the oldest
+beyond that go. A disconnect keeps what it learned. Bricks removed early
+(over the limit or the budget) no longer pop: they stop colliding and fade
+over 0.35 s where they were heading, unless no frame drew them yet. Also
+fixed: every brick one blast killed re-shoved the debris already flying, so
+a 40-brick blast pushed older debris 40 times, to top speed.
+
+`debris_probe` now costs a big blast at each limit in this thread's CPU
+cycles (`QueryThreadCycleTime`, converted with the run's thread CPU time),
+not wall clock, with work counts (bodies, moving, touching pairs, solid
+surroundings). Golden Gate at its middle, 4.2 GHz, 6 ms budget; "budgeted"
+is a second blast after the first taught the budget:
+
+- Stock rocket (radius 5, 38 bricks): 1-2 ms peak, 0.3-0.5 ms average, any
+  limit.
+- 1024 bricks in one blast: Low 5.6 ms peak / 1.7 ms average over the first
+  second; Medium 7.3 / 2.9; High 9.6 / 5.3; Best raw 20 / 10.4, budgeted
+  12.7 / 5.6 holding 868.
+- 4096 bricks: High 12.7 / 4.2; Best raw 32 / 17.2 (2048 bodies, 3248
+  touching pairs), budgeted 14.9 / 5.8 holding 767; 4096 raw 89 / 51,
+  budgeted 16.2 / 5.9 holding 933.
+
+About 7-10 us per moving brick per frame here, 2 physics steps (120 Hz).
+The first blast of a session can still hitch once at Best on a slow PC,
+before anything is learned.
+
+Evidence: `cargo test -p bri-client --lib brick_debris` (13 passed; new:
+limit and Off, learned budget and shedding, fade-out ghosts, one shove per
+blast), `cargo test -p bri-ui --lib options` (Physics Quality radios, Done,
+console value), clippy on bri-client and bri-ui clean, offscreen
+`ui_runtime_probe` render of the Graphics pane, `cargo run --release -p
+bri-client --bin debris_probe -- <content> <report.json>`. Not seen in a
+window: how blasts look and feel at each preset is Max's playtest.
 ## 2026-09-28 Riding horse players (branch `claude/project-thread-c06rfc`)
 
 Max's a19 playtest: the Horse Ray turned him into a horse and the other

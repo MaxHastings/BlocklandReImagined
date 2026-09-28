@@ -5628,6 +5628,13 @@ impl PlatformApp for App {
             self.cosmetic_faults.absorb("gun casings", moved);
             self.audio
                 .sync_projectiles(&weapons.projectiles, &self.content.weapons.pack);
+            // Physics Quality (or the console's maxdebris) picks the limit.
+            let limit = bri_ui::screens::options::debris_limit(&self.ui.core.prefs);
+            if limit != self.brick_debris.limit() {
+                self.brick_debris.set_limit(limit);
+            }
+            // What debris costs this frame, so a PC it outgrows keeps less.
+            let debris_started = std::time::Instant::now();
             let kills = std::mem::take(&mut self.brick_kills);
             let thrown = self.brick_debris.cues(&kills, building);
             if self
@@ -5692,6 +5699,7 @@ impl PlatformApp for App {
                 .brick_debris
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
+            self.brick_debris.spent(debris_started.elapsed());
             self.brick_fades
                 .advance(game_elapsed.as_secs_f32(), &self.chunks_left_out);
             // The avatar/image shell and sequence playback APIs are still a host

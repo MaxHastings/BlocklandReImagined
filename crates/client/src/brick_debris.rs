@@ -13,8 +13,10 @@
 //! projectiles and later blasts push the bodies, one way only: pushers are
 //! kinematic, so debris can never slow, block or move them.
 //!
-//! Like v20's `$Physics::maxBricks`, only a bounded number of bodies are
-//! alive at once; the oldest make way for new ones.
+//! Like v20's `$pref::Physics::MaxBricks`, only a bounded number of bodies
+//! are alive at once; the oldest make way for new ones. The player picks the
+//! bound with Options' Physics Quality, and when debris work outgrows its
+//! share of the frame the client keeps fewer until it recovers.
 use crate::building::Building;
 use crate::world_chunks::BrickPalette;
 use anyhow::{Context, Result, ensure};
@@ -25,10 +27,28 @@ use bri_world::{BrickId, ContentRef};
 use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::Duration;
 
-/// v20's default `$pref::Physics::MaxBricks` is 100; leave room for a few
-/// overlapping explosions.
-pub const MAX_BODIES: usize = 128;
+/// The limit a player who never chose gets: v20's default Physics Quality,
+/// High (see [`bri_ui::screens::options::debris_limit`]).
+pub const DEFAULT_LIMIT: usize = bri_ui::screens::options::PHYSICS_LIMITS[1] as usize;
+/// The highest limit `$pref::Physics::MaxBricks` may ask for.
+pub const MAX_LIMIT: usize = bri_ui::screens::options::MAX_BRICKS_RANGE.1 as usize;
+/// Debris work per frame (cues, pushes and physics) the client aims to stay
+/// under: a third of a 60 Hz frame. The client learns what a moving body
+/// costs on this PC and keeps no more than fit; above it for two frames
+/// running, the oldest bodies go early.
+pub const BUDGET: Duration = Duration::from_millis(6);
+/// The budget never sheds below this many bodies.
+const SHED_FLOOR: usize = 32;
+/// Frames with fewer moving bodies than this say little about their cost.
+const SAMPLE_FLOOR: usize = 16;
+/// How fast the learned cost follows each frame's.
+const LEARN_RATE: f64 = 0.2;
+/// Seconds a body removed early (over the limit or the budget) takes to
+/// fade out. It stops colliding and drifts on, so it costs nothing and
+/// never pops out of sight.
+const GHOST_SECONDS: f32 = 0.35;
 /// Fixed physics step, like the rest of the game.
 const STEP: f32 = bri_physics::FIXED_DT;
 /// Steps per frame before debris time is dropped instead of catching up.
@@ -101,6 +121,24 @@ struct Body {
     look: Look,
     age: f32,
 }
+impl Body {
+    /// How opaque the body is at its age.
+    fn fade(&self) -> f32 {
+        1.0 - ((self.age - SOLID_SECONDS) / FADE_SECONDS).clamp(0.0, 1.0)
+    }
+}
+
+/// A body removed early, fading out where it was heading.
+struct Ghost {
+    look: Look,
+    position: Vec3,
+    rotation: Quat,
+    velocity: Vec3,
+    spin: Vec3,
+    /// Opacity when it was removed.
+    fade: f32,
+    left: f32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Static {
@@ -114,10 +152,27 @@ pub struct BrickDebrisDiagnostics {
     pub duplicates: u64,
     /// Cues for bricks this client has no definition for.
     pub unknown: u64,
-    /// Oldest bodies removed early to stay within `MAX_BODIES`.
+    /// Oldest bodies removed early to stay within the limit.
     pub evicted: u64,
+    /// Oldest bodies removed early because debris outgrew its budget.
+    pub shed: u64,
+    /// Kills that left no debris: Physics Quality Off, or the budget has
+    /// no room right now.
+    pub skipped: u64,
     pub dropped_steps: u64,
     pub projectile_hits: u64,
+}
+
+/// Debris physics work at one moment (see [`BrickDebris::work`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DebrisWork {
+    pub bodies: usize,
+    /// Bodies still moving; sleeping ones cost almost nothing.
+    pub awake: usize,
+    /// Map bricks and terrain patches made solid around moving bodies.
+    pub statics: usize,
+    /// Collider pairs in contact, which the solver works through each step.
+    pub touching: usize,
 }
 
 /// A player or vehicle as this client draws it this frame: a box that
@@ -161,6 +216,18 @@ pub struct BrickDebris {
     shots: BTreeMap<u64, Vec3>,
     /// (projectile, cue) pairs already pushed.
     struck: BTreeSet<(u64, u64)>,
+    /// The player's limit (Physics Quality or `$pref::Physics::MaxBricks`).
+    limit: usize,
+    /// The limit the budget allows right now; at most `limit`.
+    room: usize,
+    /// Frames in a row over budget.
+    over: u32,
+    /// Learned seconds of debris work per moving body per frame on this PC.
+    per_body: Option<f64>,
+    /// Bodies were thrown this frame: its cost is the spawn, not the
+    /// tumbling, so it teaches nothing.
+    threw: bool,
+    ghosts: Vec<Ghost>,
     pub diagnostics: BrickDebrisDiagnostics,
 }
 
@@ -186,12 +253,101 @@ impl BrickDebris {
             pushers: BTreeMap::new(),
             shots: BTreeMap::new(),
             struck: BTreeSet::new(),
+            limit: DEFAULT_LIMIT,
+            room: DEFAULT_LIMIT,
+            over: 0,
+            per_body: None,
+            threw: false,
+            ghosts: Vec::new(),
             diagnostics: Default::default(),
         }
     }
-    /// Forget everything (disconnect, new server).
+    /// Forget everything (disconnect, new server). The limit and what
+    /// debris costs on this PC stay.
     pub fn clear(&mut self) {
+        let (limit, per_body) = (self.limit, self.per_body);
         *self = Self::new();
+        self.per_body = per_body;
+        self.set_limit(limit);
+    }
+    /// Keep at most `limit` bodies (clamped to [`MAX_LIMIT`]); extra bodies
+    /// go now, oldest first.
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit.min(MAX_LIMIT);
+        self.over = 0;
+        self.fit_room();
+        self.diagnostics.evicted += self.evict_to(self.limit);
+    }
+    /// Room for as many bodies as the budget pays for, within the limit.
+    fn fit_room(&mut self) {
+        let fit = self.per_body.map_or(usize::MAX, |p| {
+            ((BUDGET.as_secs_f64() / p) as usize).max(SHED_FLOOR)
+        });
+        self.room = fit.min(self.limit);
+    }
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+    /// How many bodies the budget allows right now.
+    pub fn room(&self) -> usize {
+        self.room
+    }
+    /// What this frame's debris work cost. It teaches the client what a
+    /// moving body costs on this PC, so later blasts keep only as many as
+    /// [`BUDGET`] pays for. Over budget two frames running, the oldest
+    /// bodies beyond that go early.
+    pub fn spent(&mut self, cost: Duration) {
+        let moving = self
+            .bodies
+            .values()
+            .filter(|b| !self.world.bodies[b.handle].is_sleeping())
+            .count();
+        let threw = std::mem::take(&mut self.threw);
+        if moving >= SAMPLE_FLOOR && !threw {
+            let sample = cost.as_secs_f64() / moving as f64;
+            self.per_body = Some(
+                self.per_body
+                    .map_or(sample, |p| p + (sample - p) * LEARN_RATE),
+            );
+            self.fit_room();
+        }
+        if cost <= BUDGET {
+            self.over = 0;
+            return;
+        }
+        self.over += 1;
+        if self.over >= 2 {
+            self.over = 0;
+            self.diagnostics.shed += self.evict_to(self.room);
+        }
+    }
+    /// Remove the oldest bodies until at most `keep` remain; returns how
+    /// many went. Bodies already seen fade out as ghosts; ones killed and
+    /// removed before a frame drew them just go.
+    fn evict_to(&mut self, keep: usize) -> u64 {
+        let mut gone = 0;
+        while self.bodies.len() > keep {
+            let (_, oldest) = self.bodies.pop_first().expect("bodies over the limit");
+            let rb = &self.world.bodies[oldest.handle];
+            if oldest.age > 0.0 && self.ghosts.len() < self.limit {
+                self.ghosts.push(Ghost {
+                    position: Vec3::from_array(rb.translation().to_array()),
+                    rotation: Quat::from_array(rb.rotation().to_array()),
+                    velocity: Vec3::from_array(rb.linvel().to_array()),
+                    spin: Vec3::from_array(rb.angvel().to_array()),
+                    fade: oldest.fade(),
+                    left: GHOST_SECONDS,
+                    look: oldest.look,
+                });
+            }
+            self.world.remove_body_with_colliders(oldest.handle, true);
+            gone += 1;
+        }
+        gone
+    }
+    /// Bodies fading out after being removed early.
+    pub fn ghosts(&self) -> usize {
+        self.ghosts.len()
     }
     pub fn len(&self) -> usize {
         self.bodies.len()
@@ -212,6 +368,9 @@ impl BrickDebris {
         building: &Building,
     ) -> Result<usize> {
         let mut spawned = 0;
+        // One blast kills many bricks, one cue each: it shoves the debris
+        // already flying once, not once per brick it killed.
+        let mut last_blast = None;
         for cue in cues {
             let CueKind::BrickKill {
                 brick,
@@ -243,12 +402,18 @@ impl BrickDebris {
             };
             self.dead.insert(*brick);
             // A big blast also shoves the debris already flying around it.
-            if *radius > 0.5 {
+            let blast = (*origin, *force, *radius);
+            if *radius > 0.5 && last_blast != Some(blast) {
                 self.blast(Vec3::from(*origin), *force, *radius);
             }
+            last_blast = Some(blast);
             // The dead brick must never hold up its own debris.
             if let Some(Some(handle)) = self.statics.remove(&Static::Brick(*brick)) {
                 self.world.remove_collider(handle);
+            }
+            if self.room == 0 {
+                self.diagnostics.skipped += 1;
+                continue;
             }
             let look = Look {
                 definition: definition.clone(),
@@ -270,6 +435,7 @@ impl BrickDebris {
             );
             self.diagnostics.accepted += 1;
             spawned += 1;
+            self.threw = true;
         }
         Ok(spawned)
     }
@@ -286,11 +452,7 @@ impl BrickDebris {
         force: f32,
         radius: f32,
     ) {
-        while self.bodies.len() >= MAX_BODIES {
-            let (_, oldest) = self.bodies.pop_first().expect("bodies at capacity");
-            self.world.remove_body_with_colliders(oldest.handle, true);
-            self.diagnostics.evicted += 1;
-        }
+        self.diagnostics.evicted += self.evict_to(self.room - 1);
         let mut rng = Seeded::new(id);
         let offset = center - origin;
         let distance = offset.length();
@@ -343,6 +505,12 @@ impl BrickDebris {
     /// Advance debris by `dt` seconds against the current surroundings.
     pub fn advance(&mut self, dt: f32, building: &Building) -> Result<()> {
         ensure!(dt.is_finite() && dt >= 0.0, "Invalid debris frame time");
+        for ghost in &mut self.ghosts {
+            ghost.position += ghost.velocity * dt;
+            ghost.rotation = (Quat::from_scaled_axis(ghost.spin * dt) * ghost.rotation).normalize();
+            ghost.left -= dt;
+        }
+        self.ghosts.retain(|g| g.left > 0.0);
         if self.bodies.is_empty() {
             self.accumulator = 0.0;
             self.clear_statics();
@@ -621,19 +789,45 @@ impl BrickDebris {
     }
     /// World transform and fade of every body, by look.
     pub fn instances(&self) -> impl Iterator<Item = (&Look, SceneTransform)> {
-        self.bodies.values().map(|body| {
+        let bodies = self.bodies.values().map(|body| {
             let rb = &self.world.bodies[body.handle];
             let rotation = Quat::from_array(rb.rotation().to_array());
             let translation = Vec3::from_array(rb.translation().to_array());
-            let fade = 1.0 - ((body.age - SOLID_SECONDS) / FADE_SECONDS).clamp(0.0, 1.0);
             (
                 &body.look,
                 SceneTransform {
                     transform: Mat4::from_rotation_translation(rotation, translation),
-                    tint: [1.0, 1.0, 1.0, fade],
+                    tint: [1.0, 1.0, 1.0, body.fade()],
                 },
             )
-        })
+        });
+        let ghosts = self.ghosts.iter().map(|g| {
+            (
+                &g.look,
+                SceneTransform {
+                    transform: Mat4::from_rotation_translation(g.rotation, g.position),
+                    tint: [1.0, 1.0, 1.0, g.fade * (g.left / GHOST_SECONDS).clamp(0.0, 1.0)],
+                },
+            )
+        });
+        bodies.chain(ghosts)
+    }
+    /// What the physics has to chew on right now, for probes.
+    pub fn work(&self) -> DebrisWork {
+        DebrisWork {
+            bodies: self.bodies.len(),
+            awake: self
+                .bodies
+                .values()
+                .filter(|b| !self.world.bodies[b.handle].is_sleeping())
+                .count(),
+            statics: self.statics.values().filter(|h| h.is_some()).count(),
+            touching: self
+                .world
+                .contact_pairs()
+                .filter(|p| p.has_any_active_contact())
+                .count(),
+        }
     }
     /// Body centers, for tests and diagnostics.
     pub fn positions(&self) -> Vec<Vec3> {
@@ -727,8 +921,11 @@ impl DebrisModels {
             if model.gpu.is_none() {
                 continue;
             }
-            if model.instances.is_none() && !model.transforms.is_empty() {
-                model.instances = Some(GpuInstances::new(device, MAX_BODIES)?);
+            // Room for this look's bodies, grown in steps as the limit allows.
+            let wanted = model.transforms.len();
+            if wanted > 0 && model.instances.as_ref().is_none_or(|i| i.capacity() < wanted) {
+                let capacity = wanted.next_power_of_two().clamp(64, MAX_LIMIT);
+                model.instances = Some(GpuInstances::new(device, capacity)?);
             }
             if let Some(instances) = &mut model.instances {
                 instances.update(queue, &model.transforms)?;
@@ -1139,13 +1336,11 @@ mod tests {
             })
             .collect();
         let mut debris = BrickDebris::new();
+        debris.set_limit(128);
         debris.cues(&cues, &building).unwrap();
-        assert_eq!(debris.len(), MAX_BODIES);
-        assert_eq!(debris.diagnostics.evicted, (500 - MAX_BODIES) as u64);
-        let start = std::time::Instant::now();
+        assert_eq!(debris.len(), 128);
+        assert_eq!(debris.diagnostics.evicted, 500 - 128);
         run(&mut debris, &building, 1.0);
-        let elapsed = start.elapsed();
-        eprintln!("{MAX_BODIES} debris bodies, 60 frames: {elapsed:?}");
         // A crowd around the blast: only the nearest few dozen push.
         let crowd: Vec<_> = (0..64)
             .map(|i| {
@@ -1155,22 +1350,133 @@ mod tests {
                 )
             })
             .collect();
-        let start = std::time::Instant::now();
         for _ in 0..60 {
             debris.push(&crowd);
             debris.advance(1.0 / 60.0, &building).unwrap();
             assert!(debris.pushers.len() <= MAX_PUSHERS);
         }
-        eprintln!(
-            "{} debris bodies, {} pushers, 60 frames: {:?}",
-            debris.len(),
-            debris.pushers.len(),
-            start.elapsed()
-        );
         // A long hitch drops debris time instead of spiralling.
         debris.advance(5.0, &building).unwrap();
         assert!(debris.diagnostics.dropped_steps > 0);
         assert!(debris.positions().iter().all(|p| p.is_finite()));
+    }
+
+    fn blast(n: u64, first: u64, radius: f32) -> Vec<Cue> {
+        (0..n)
+            .map(|i| {
+                let p = [(i % 10) as f32 * 1.05, 0.3 + (i / 100) as f32 * 0.6, -((i / 10 % 10) as f32)];
+                kill(first + i, first + i, p, [4.5, 0.0, -4.5], 40.0, radius)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_player_picks_the_limit_and_off_leaves_no_debris() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        assert_eq!(debris.limit(), DEFAULT_LIMIT);
+        debris.cues(&blast(300, 1, 8.0), &building).unwrap();
+        assert_eq!(debris.len(), 300);
+        // Lowering the limit mid-blast removes the oldest bodies now.
+        debris.set_limit(100);
+        assert_eq!(debris.len(), 100);
+        assert_eq!(debris.diagnostics.evicted, 200);
+        // Off: bricks still die (and stay hidden), with nothing thrown.
+        debris.set_limit(0);
+        assert!(debris.is_empty());
+        let kills = blast(50, 1000, 8.0);
+        assert_eq!(debris.cues(&kills, &building).unwrap(), 0);
+        assert!(debris.is_empty() && debris.is_dead(1000));
+        assert_eq!(debris.diagnostics.skipped, 50);
+        // The limit survives a disconnect.
+        debris.clear();
+        assert_eq!(debris.limit(), 0);
+        debris.set_limit(usize::MAX);
+        assert_eq!(debris.limit(), MAX_LIMIT);
+    }
+
+    #[test]
+    fn debris_learns_what_this_pc_pays_for_and_sheds_the_oldest_over_budget() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris.set_limit(1024);
+        debris.cues(&blast(400, 1, 8.0), &building).unwrap();
+        // The frame that threw them pays for the throw: it teaches nothing,
+        // and one slow frame alone sheds nothing.
+        debris.spent(BUDGET * 5);
+        assert_eq!((debris.room(), debris.len()), (1024, 400));
+        // 400 moving bodies at twice the budget: this PC pays for 200, and
+        // a second slow frame running sheds the oldest beyond that.
+        debris.spent(BUDGET * 2);
+        assert_eq!(debris.room(), 200);
+        assert_eq!(debris.len(), 200);
+        assert_eq!(debris.diagnostics.shed, 200);
+        // The oldest went, fading: the newest cue is still here.
+        assert!(debris.bodies.contains_key(&400) && !debris.bodies.contains_key(&1));
+        assert!(debris.ghosts() == 0, "never drawn, so nothing to fade");
+        // The next blast keeps only what fits from the start.
+        debris.cues(&blast(300, 1000, 8.0), &building).unwrap();
+        assert_eq!(debris.len(), 200);
+        // Never below the floor, however slow.
+        for _ in 0..30 {
+            debris.spent(BUDGET * 1000);
+        }
+        assert_eq!(debris.len(), SHED_FLOOR);
+        // Cheap frames teach it the PC has room again, up to the limit.
+        for _ in 0..60 {
+            debris.spent(BUDGET / 1000);
+        }
+        assert_eq!(debris.room(), 1024);
+        // A disconnect keeps what it learned about this PC.
+        debris.spent(BUDGET * 1000);
+        let room = debris.room();
+        debris.clear();
+        assert_eq!(debris.room(), room);
+        // Few moving bodies teach nothing.
+        debris.set_limit(500);
+        debris.cues(&blast(10, 5000, 8.0), &building).unwrap();
+        debris.spent(BUDGET / 1000);
+        debris.spent(BUDGET / 1000);
+        assert_eq!(debris.room(), room);
+    }
+
+    #[test]
+    fn bodies_removed_early_fade_out_instead_of_popping() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris.set_limit(100);
+        debris.cues(&blast(100, 1, 8.0), &building).unwrap();
+        // Killed and pushed out in the same batch: never drawn, just gone.
+        debris.cues(&blast(20, 1000, 8.0), &building).unwrap();
+        assert_eq!((debris.len(), debris.ghosts()), (100, 0));
+        run(&mut debris, &building, 0.1);
+        // Seen bodies over the limit fade where they were heading.
+        debris.cues(&blast(30, 2000, 8.0), &building).unwrap();
+        assert_eq!((debris.len(), debris.ghosts()), (100, 30));
+        assert_eq!(debris.instances().count(), 130);
+        debris.advance(GHOST_SECONDS / 2.0, &building).unwrap();
+        let ghost = debris.instances().last().unwrap().1.tint[3];
+        assert!(ghost > 0.3 && ghost < 0.7, "half faded: {ghost}");
+        debris.advance(GHOST_SECONDS, &building).unwrap();
+        assert_eq!(debris.ghosts(), 0);
+    }
+
+    #[test]
+    fn one_blast_shoves_older_debris_once_not_once_per_brick() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris.cues(&[lying(1, [3.0, 0.3, 0.0])], &building).unwrap();
+        run(&mut debris, &building, 0.5);
+        // 40 bricks killed by one weak blast next to the lying brick.
+        let cues: Vec<_> = (0..40)
+            .map(|i| kill(10 + i, 10 + i, [-(i as f32), 0.3, 5.0], [2.0, 0.3, 0.0], 4.0, 4.0))
+            .collect();
+        debris.cues(&cues, &building).unwrap();
+        let rb = &debris.world.bodies[debris.bodies[&1].handle];
+        let speed = Vec3::from_array(rb.linvel().to_array()).length();
+        // 4 force * 0.5 * falloff 0.75: one shove, not forty.
+        assert!(speed < 2.0, "shoved {speed} units/s");
+        assert!(speed > 1.0, "not shoved: {speed}");
     }
 
     #[test]

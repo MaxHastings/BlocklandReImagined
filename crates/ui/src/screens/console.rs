@@ -260,6 +260,8 @@ pub fn registry(core: &Core) -> Registry<Core> {
     let (lo, hi) = super::options::CHAT_LINES_RANGE;
     r.cvar("chatlines", super::options::CHAT_LINES, Kind::Int { min: lo, max: hi }, "Chat lines shown.");
     r.cvar("shadows", "$pref::ShadowQuality", Kind::Int { min: 0, max: 4 }, "Shadow quality: 0 best .. 4 off.");
+    let (lo, hi) = super::options::MAX_BRICKS_RANGE;
+    r.cvar("maxdebris", super::options::MAX_BRICKS, Kind::Int { min: lo, max: hi }, "Knocked-out bricks tumbling at once; 0 for none (Physics Quality sets it).");
     r.cvar("antialiasing", "$pref::Video::AntiAliasing", Kind::Bool, "Multisample anti-aliasing.");
     r.cvar("anisotropy", "$pref::OpenGL::anisotropy", Kind::Float { min: 0.0, max: 1.0 }, "Anisotropic filtering, 0..1.");
     r.cvar("precipitation", "$pref::precipitationOn", Kind::Bool, "Rain and snow.");
