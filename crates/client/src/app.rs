@@ -5306,7 +5306,7 @@ mod tests {
     fn small_state_files_update_in_place() {
         let dir = std::env::temp_dir().join(format!("bri-recent-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("recent-servers.json");
+        let file = dir.join("state.json");
         for address in ["a.example.com", "b.example.com", "A.example.com"] {
             super::update_small_json(&file, |list: &mut Vec<String>| {
                 list.retain(|a| !a.eq_ignore_ascii_case(address));
