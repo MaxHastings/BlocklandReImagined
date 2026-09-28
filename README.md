@@ -8,7 +8,7 @@ Making an Add-On? Start with [Making Add-Ons](docs/modding/README.md).
 ## Setup
 
 You need a Blockland v20 install (the folder with `base/`, `Add-Ons/` and
-`saves/`), Python 3.9+ and git. Then, on Windows, macOS or Linux:
+`saves/`), Python 3.9+ and git. The game runs on Windows only. Then:
 
 ```sh
 git clone https://github.com/MaxHastings/BlocklandReImagined.git
@@ -17,19 +17,20 @@ python tools/bootstrap.py --v20 "/path/to/Blockland v20"
 ```
 
 It checks the toolchain and prints the exact install command for anything
-missing (Rust, Pillow, a .NET SDK off Windows, ALSA headers on Linux), then
+missing (such as Rust or Pillow), then
 decompiles the v20 scripts with a pinned tool, generates every content pack into
 `content/`, builds the client and validates it with `bri-client --check`. The
 v20 folder is only read. Run the same command again after pulling; it rebuilds
 only what changed. When it finishes it prints the command that starts the game.
 See [content regeneration](docs/content-regeneration.md) for what each step does.
 
-The first Windows **core building playtest**, `2026-09-27-01`, is packaged. It includes the
-native menus/maps, player movement, building/tools, supported brick events,
-save/load and basic direct-IP multiplayer. It is not the complete vanilla alpha:
-combat, vehicles, minigames and remaining fidelity/streaming are unfinished.
-See [playtest instructions](docs/PLAYTEST.md), [known issues](docs/KNOWN-ISSUES.md),
-and [the current playtest gate](docs/playtest-contract.md).
+Playtest builds are packaged for Windows. They carry the v20 menus and maps,
+building and tools, wrench events, weapons, vehicles, mini-games, bots,
+save/load, direct-IP multiplayer and Add-Ons. [docs/STATUS.md](docs/STATUS.md)
+names the current build and what is open. See
+[playtest instructions](docs/PLAYTEST.md), [known issues](docs/KNOWN-ISSUES.md),
+[what v20 features are still missing](docs/audits/v20-parity.md) and
+[the playtest gate](docs/playtest-contract.md).
 See [the alpha contract](docs/alpha-contract.md),
 [implementation plan](docs/implementation-plan.md), and
 [progress/evidence](docs/progress.md).

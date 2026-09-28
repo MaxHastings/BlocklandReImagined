@@ -9,18 +9,15 @@ flows are blockers: please report them. The items below are known gaps.
 - **Terrain:** terrain streams without bounds; distance LOD and detail/bump
   texturing are still missing.
 - **Vehicles:** physics is a native adaptation, not Torque-exact; driving feel
-  needs your judgment. The tank turret barrel may be oriented incorrectly.
-  Vehicle burning/splash emitters and wreck models are not drawn yet.
-- **Weapon icons:** kill messages use the base death icons, not each weapon's
-  own icon.
+  needs your judgment.
 - **Bots:** simple steering without path finding; they can get stuck on
   complex builds. They only fight inside the brick owner's minigame.
-- **Emotes:** play their sound (alarm) and the sit pose; the floating emote
-  images are not drawn yet.
 - **Special map behavior:** some map-specific objects are not implemented.
   The Tutorial's triggers and lessons work; it runs single player only.
-- **Admin:** host/admin roles, bans and basic moderation work; the complete
-  original Admin/SuperAdmin tool set does not.
+- **Admin:** the Admin menu (kick, ban, unban, clear bricks, change map,
+  server settings), the wand, the F7/F8 camera and v20's admin chat commands
+  work. Every v20 feature still missing, from menus to chat commands, is
+  listed in `docs/audits/v20-parity.md`.
 - **Visuals:** lighting, shadows, some materials, water and sky effects are not
   final.
 - **Platform:** Windows only.

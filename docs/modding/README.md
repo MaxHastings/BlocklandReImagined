@@ -233,6 +233,18 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 
 Entities may spawn only their own Add-On's entity kinds.
 
+**Client code.** An Add-On may also carry code that runs on players'
+machines: a WebAssembly module and WGSL shaders, declared in a `client`
+section of its `package.json` and run in a sandbox, for presentation only.
+Start from [`spinning-cube`](../../packages/samples/spinning-cube), which
+draws a cube with its own shader. Its capabilities (`render.layer`,
+`render.shader`, `audio`, `input.focused`, `net.message`) need the player
+to trust the server once; `net.http` and `files.addon_folder` need a
+separate, stronger choice per Add-On. The format is in
+[packages.md](../architecture/packages.md) ("Client code"), and the
+sandbox's host API, budgets and checks in
+[client-sandbox.md](../architecture/client-sandbox.md).
+
 ## 7. Old v20 Add-Ons and new bricks
 
 Put an old Blockland Add-On (a `.zip` or a folder with `server.cs`) in the
@@ -273,14 +285,12 @@ the longer form for other shapes.
 
 This guide changes in the same change as these land.
 
-- **Chat commands**: players typing `/gift 1` to send an Add-On's
-  commands, with arguments.
 - **Brick authoring without v20 files**: a native brick format you write
   directly.
 - **Drawing blocks**: `block` and `texture` content (per-face textures,
   flipbooks and states a script switches with `set_block_state`) load,
   save and replicate, but the renderer does not draw block faces yet.
-- **Sandboxed client code**: Add-Ons that send players WebAssembly and
-  shaders, run in a sandbox, after the player agrees to trust the server.
-  The `spinning-cube` sample and the `client` section in
-  [packages.md](../architecture/packages.md) show the design.
+- **Asking players to trust client code on join**: client code (section 6)
+  runs in games you host; on someone else's server it runs only for code
+  the player has already trusted, and the join-screen prompt that asks is
+  not built yet.
