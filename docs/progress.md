@@ -2440,6 +2440,24 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Evidence: `cargo test -p bri-package -p bri-net -p bri-world -p bri-sim`,
   new loopback `join_refusal_names_each_differing_shared_package`,
   `tools/tests/Test-PlaytestPackaging.ps1`, `Test-PlaytestLauncher.ps1`.
+## 2026-09-28 Stress Lab: gameplay from packages (protocol 32)
+
+- Package-defined gameplay seams: `bri-package-runtime` (mod package loading,
+  Rhai sandbox, `ops::authorize` capability gate), `session/packages.rs`
+  (package commands, namespaced durable state, entities, chunked world
+  provider, `Session::explode`), `Checkpoint`/`Delta` `entities` and
+  `package_state`, the UI's `hud.overlay` slot and package keys, client box
+  models, hosting package worlds from Start Game. Design:
+  `docs/architecture/package-runtime.md`.
+- The Stress Lab (`packages/stresslab`, five CC0 packages: generated world,
+  creeper, creeper model, mining economy, miner HUD) uses only those seams.
+- Evidence: `bri-package-runtime` tests, `bri-sim --test packages`,
+  `bri-stresslab` loopback and workflow tests, `bri-client --test
+  stresslab_flow -- --ignored` (offscreen, also against a packaged release),
+  soak `docs/stress-lab/soak-8x120.json` (8 clients, 120 s, 0 dropped ticks,
+  replicas agree). Handoff and labels: `docs/stress-lab/HANDOFF.md`.
+- Open: join mismatch naming waits on door-closers' Hello wiring; see the
+  handoff's next steps.
 
 ## 2026-09-28 — first-impressions audit and three robustness fixes
 

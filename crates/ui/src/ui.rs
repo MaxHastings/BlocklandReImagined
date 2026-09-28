@@ -220,6 +220,10 @@ pub struct Core {
     pub trust_invite: Option<crate::api::TrustInvitation>,
     /// Other players' names this frame (`GuiShapeNameHud`).
     pub name_tags: Vec<crate::api::NameTag>,
+    /// HUD panels of enabled packages this frame (the `hud.overlay` slot).
+    pub package_panels: Vec<crate::api::PackagePanel>,
+    /// Keys package HUDs bind to package commands. Base game binds win.
+    pub package_keys: Vec<crate::api::PackageKey>,
     pub server_name: String,
     pub max_players: u32,
     pub center_print: Option<(String, Option<u64>)>,
@@ -931,6 +935,8 @@ impl Ui {
             minigames: MiniGameUiState::default(),
             trust_invite: None,
             name_tags: Vec::new(),
+            package_panels: Vec::new(),
+            package_keys: Vec::new(),
             server_name: String::new(),
             max_players: 0,
             center_print: None,
@@ -1757,6 +1763,18 @@ impl Ui {
             .command_for_key(key, mods)
             .map(str::to_string)
         else {
+            // Keys the base game leaves unbound may belong to a package HUD.
+            if let Key::Letter(letter) = key
+                && mods == Modifiers::NONE
+                && let Some(k) = self.core.package_keys.iter().find(|k| k.key == letter)
+            {
+                let action = GameAction::Package {
+                    package: k.package.clone(),
+                    command: k.command.clone(),
+                };
+                self.core.game(action);
+                self.flush();
+            }
             return;
         };
         // NoShiftMoveMap: while a wrench dialog or the chat input is open,

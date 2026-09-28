@@ -869,8 +869,12 @@ impl Session {
     pub fn chat(&self) -> Vec<ChatLine> {
         self.chat.iter().cloned().collect()
     }
+    /// Replication takes the changed bricks. Gameplay systems that reconcile
+    /// against changes early in a tick keep the ones they have not seen yet.
     pub fn take_dirty(&mut self) -> BTreeSet<BrickId> {
-        std::mem::take(&mut self.dirty)
+        let dirty = std::mem::take(&mut self.dirty);
+        self.remember_unreconciled_vehicles(&dirty);
+        dirty
     }
     pub fn take_notices(&mut self) -> Vec<String> {
         self.notices.drain(..).collect()

@@ -21,7 +21,7 @@ fn price(key) {
 }
 
 fn on_join(player) {
-    tell(player, "Stress Lab: F mines what you aim at, G sells your ore for Bits.");
+    tell(player, "Stress Lab: H mines what you aim at, G sells your ore for Bits.");
 }
 
 fn cmd_mine(player) {

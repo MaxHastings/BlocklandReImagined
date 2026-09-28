@@ -208,6 +208,13 @@ pub struct ChunkWorld {
     /// Seed when the server owner gives none.
     #[serde(default)]
     pub seed: i64,
+    /// A base-game map whose sky, light and ground the world stands on,
+    /// until packages can provide environments of their own.
+    #[serde(default = "default_environment")]
+    pub environment: String,
+}
+fn default_environment() -> String {
+    "v20/add-ons/map_slate/slate.mis".into()
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

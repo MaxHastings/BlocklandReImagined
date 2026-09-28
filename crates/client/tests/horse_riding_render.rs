@@ -31,19 +31,53 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     app.ui.update(dt.as_millis() as u64);
     pump(app)
 }
+/// Wait for `ready`, budgeted in the host's game time rather than wall time:
+/// fail after `GAME_BUDGET` of server ticks, or when nothing advances (no
+/// server tick, no connection change) for `STALL` of wall time. A loaded
+/// machine (a cold build, the gate running other suites) runs the host more
+/// slowly; a wall-clock deadline turned that into spurious failures.
+const GAME_BUDGET: u64 = 30 * 120;
+const STALL: Duration = Duration::from_secs(90);
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
     let start = Instant::now();
     let mut previous = start;
+    let tick = |a: &App| a.network_view().map(|v| v.tick);
+    let first_tick = tick(app);
+    let mut last_progress = start;
+    let mut last_seen = (tick(app), format!("{:?}", app.ui.core.conn));
     loop {
         let now = Instant::now();
         step(app, now.duration_since(previous))?;
         previous = now;
         if ready(app) {
+            eprintln!(
+                "{what}: {:.1} s wall, {} game ticks",
+                start.elapsed().as_secs_f32(),
+                tick(app).zip(first_tick).map_or(0, |(t, f)| t.saturating_sub(f))
+            );
             return Ok(());
         }
+        let seen = (tick(app), format!("{:?}", app.ui.core.conn));
+        if seen != last_seen {
+            last_seen = seen;
+            last_progress = now;
+        }
+        let game = tick(app)
+            .zip(first_tick)
+            .map_or(0, |(t, f)| t.saturating_sub(f));
         ensure!(
-            start.elapsed() < Duration::from_secs(45),
-            "Timed out waiting for {what}: {:?}",
+            game < GAME_BUDGET,
+            "{what} did not happen within {} s of game time: {:?}; bricks (position, vehicle) {:?}; player {:?}; chat {:?}",
+            GAME_BUDGET / 120,
+            app.ui.core.conn,
+            app.network_view().map(|v| v.world.bricks.values().map(|b| (b.position, b.vehicle.is_some())).collect::<Vec<_>>()),
+            app.local_motion().map(|(p, _)| p.feet),
+            app.network_view().map(|v| v.chat.iter().map(|c| c.text.clone()).collect::<Vec<_>>())
+        );
+        ensure!(
+            now.duration_since(last_progress) < STALL,
+            "Stalled waiting for {what} (no host progress for {} s): {:?}",
+            STALL.as_secs(),
             app.ui.core.conn
         );
         thread::sleep(Duration::from_millis(10));

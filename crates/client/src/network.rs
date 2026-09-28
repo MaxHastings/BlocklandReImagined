@@ -16,6 +16,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub struct Connected {
     pub client: Client,
     pub host: Option<ServerHandle>,
+    /// Where a hosted package world saves its state and edits on shutdown.
+    pub package_save: Option<std::path::PathBuf>,
 }
 #[derive(Clone)]
 pub struct View {
@@ -45,6 +47,10 @@ pub struct View {
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     pub rtt_ms: u32,
+    /// Entities of the server's packages.
+    pub entities: Arc<BTreeMap<u64, bri_sim::session::EntityInfo>>,
+    /// Public state of the server's packages.
+    pub package_state: Arc<bri_sim::session::PackageStateView>,
 }
 /// Brick ids each replica world revision changed, so consumers can update in
 /// proportion to a change instead of comparing every brick. Bounded: a
@@ -149,7 +155,12 @@ impl Worker {
                     if let Some(host)=connection.host.take() {
                         // Stop the host even when dispatch failed or the UI cancelled.
                         // A host persistence adapter consumes its final world later.
-                        let _=host.stop().await;
+                        if let Ok(report)=host.stop().await
+                            && let (Some(path),Some(save))=(connection.package_save.take(),report.packages)
+                            && let Err(error)=save.encode().and_then(|bytes|bri_files::replace(&path,&bytes).map_err(Into::into))
+                        {
+                            eprintln!("Could not save the package world: {error:#}");
+                        }
                     }
                     result
                 }
@@ -239,6 +250,8 @@ fn publish(
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         rtt_ms: client.rtt().as_millis().min(u128::from(u32::MAX)) as u32,
+        entities: Arc::new(client.replica.entities.clone()),
+        package_state: Arc::new(client.replica.package_state.clone()),
     }));
 }
 async fn run(

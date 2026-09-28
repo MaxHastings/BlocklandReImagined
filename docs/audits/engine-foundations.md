@@ -148,7 +148,17 @@ Ranked by impact on getting problems fixed, with status:
 3. An in-game frame profiler and debug overlays (frame time, CPU and GPU
    spans, net stats) as console commands.
 4. Recorded-input playback tests for GUI and input flows.
-5. Net soak tests with simulated latency, jitter and loss.
+5. **Net soak tests: done, and they found a real problem.**
+   `bri_net::impair::ImpairedLink` is a UDP relay that adds latency, jitter
+   (so reordering), loss and duplication both ways, with a seeded pattern so a
+   failure replays (`BRI_SOAK_SEED`). `crates/net/tests/soak.rs` runs two
+   real clients through a bad Wi-Fi link (60 ms + up to 40 ms each way, 5%
+   loss, 1% duplicates) moving every tick and chatting, for `BRI_SOAK_SECONDS`
+   (default 10). It exposed that Quinn's default Cubic congestion control
+   reads random loss as congestion: reliable replies stalled 3 to 8 s and
+   replicas fell seconds behind. The transport now uses BBR; the same link
+   answers every command within about 0.3 to 0.6 s across seeds. Other threads
+   can wrap any loopback test's host address in an `ImpairedLink`.
 6. A benchmark map with a frame-time budget checked on each build.
 7. A dependency-aware content build that rebuilds stale packs.
 
