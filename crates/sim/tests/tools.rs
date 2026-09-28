@@ -1516,3 +1516,25 @@ fn hammer_leaves_indestructible_bricks_without_failing_the_tick() {
     swing(&mut s, owner, 3, 0).unwrap();
     assert_eq!(bricks(&s), vec![sturdy]);
 }
+
+#[test]
+fn random_brick_color_paints_each_plant_from_v20s_six() {
+    let mut s = session(vec![], false);
+    s.set_server_settings(bri_admin::ServerSettings {
+        random_brick_color: true,
+        bricks_per_second: 1000,
+        ..Default::default()
+    })
+    .unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(-3.0, 0.05, 0.0), false)
+        .unwrap();
+    let colors: std::collections::BTreeSet<u8> = (0..24)
+        .map(|i| {
+            let id = plant(&mut s, owner, i + 1, [i as f32 + 0.5, 0.1, -2.25]);
+            s.simulation().state().bricks[&id].color
+        })
+        .collect();
+    assert!(colors.is_subset(&[0, 1, 3, 4, 5, 7].into()), "{colors:?}");
+    assert!(colors.len() > 1, "{colors:?}");
+}
