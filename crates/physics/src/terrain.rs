@@ -325,10 +325,21 @@ pub fn body_foci(physics: &PhysicsWorld, policy: BodyFocusPolicy) -> Vec<Focus> 
         let p = body.translation();
         let v = body.linvel();
         let speed = v.length();
+        let radius = policy.margin + extent + speed * policy.lookahead;
         out.push(Focus {
             center: Vec3::new(p.x, p.y, p.z),
-            radius: policy.margin + extent + speed * policy.lookahead,
+            radius,
         });
+        // A kinematic body's target pose is where its motor put it. A world
+        // that is queried but never stepped (client prediction) never moves
+        // the body there, so cover the target too.
+        let next = body.next_position().translation;
+        if body.is_kinematic() && next != p {
+            out.push(Focus {
+                center: Vec3::new(next.x, next.y, next.z),
+                radius,
+            });
+        }
     }
     out
 }

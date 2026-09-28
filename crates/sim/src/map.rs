@@ -630,6 +630,54 @@ mod tests {
         Ok(())
     }
 
+    /// A joined client predicts in a collision mirror that is queried but
+    /// never stepped, so its kinematic body keeps its join pose while the
+    /// motor walks on. Terrain must still stream under the walker, or a
+    /// client that roams far from where it joined falls through the ground.
+    #[test]
+    fn predicted_players_stand_on_terrain_far_from_where_they_joined() -> Result<()> {
+        let field = field(true);
+        let (x, z) = (100.0, 100.0);
+        let ground = field.height(x, z).unwrap();
+        let state = {
+            let mut scratch = bri_physics::new_world();
+            let player = Player::spawn(
+                &mut scratch,
+                1,
+                Vec3::new(x, ground + 0.5, z),
+                PlayerTuning::default(),
+            )?;
+            player.state().clone()
+        };
+        let mut mirror = crate::prediction::CollisionMirror::new(
+            crate::definitions::Definitions::default(),
+            Vec::new(),
+            Vec::new(),
+        );
+        mirror.attach_terrain(vec![field.clone()])?;
+        let mut predictor = crate::prediction::Predictor::new(mirror, state, Default::default())?;
+        for _ in 0..120 {
+            predictor.step(MoveInput::default())?;
+        }
+        let start = Vec3::from(predictor.state().feet);
+        assert!(predictor.state().grounded, "{:?}", predictor.state());
+        // 7 units a second at 120 ticks: 800 units, across several of the
+        // 512-unit tiles.
+        for _ in 0..14_000 {
+            predictor.step(MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            })?;
+        }
+        let feet = Vec3::from(predictor.state().feet);
+        // Well past the tiles loaded around the join point (160-unit body
+        // margin plus hysteresis).
+        assert!(feet.distance(start) > 700.0, "{feet} vs {start}");
+        let ground = field.height(feet.x, feet.z).unwrap();
+        assert!((feet.y - ground).abs() < 0.5, "{feet} over ground {ground}");
+        Ok(())
+    }
+
     #[test]
     fn non_repeating_terrain_has_no_collision_outside_its_block() -> Result<()> {
         let field = field(false);

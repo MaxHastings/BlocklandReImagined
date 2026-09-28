@@ -4077,3 +4077,19 @@ the passenger camera does not tilt or roll with the seat (v20's does; our
 view has no roll). Evidence: `cargo test -p bri-client --lib vehicle_camera`.
 Not seen in a window: needs Max's playtest in a Jeep, driving and as a
 passenger.
+
+## 2026-09-28 Joined players no longer fall through far terrain
+
+Max reported clients far from the host (on Slopes) falling through the floor.
+Cause: terrain collision streams in 512-unit tiles around every moving
+body's position. A joined client predicts its own movement in a collision
+mirror that is queried but never stepped, so its kinematic body never
+reaches the pose the motor sets and stays at the join point. Past the tiles
+loaded around that point (about 700 units on Slopes-size tiles) the
+prediction had no ground and fell, fighting every server correction. The
+host was unaffected because its world steps. Fix: `body_foci` also covers a
+kinematic body's target pose (`crates/physics/src/terrain.rs`). No protocol
+change. Evidence: `cargo test -p bri-sim --lib
+predicted_players_stand_on_terrain_far_from_where_they_joined` fell to
+y = -3782 at 800 units before the fix and stands on the ground after it;
+`cargo test -p bri-physics -p bri-sim`.
