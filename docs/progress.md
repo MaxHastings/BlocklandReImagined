@@ -4364,3 +4364,36 @@ brick and colour, keep Demo Pong's events and stay unchanged on disk;
 clippy on the four crates. An offscreen render of Load Bricks shows the
 button fitting beside the ownership box. Not seen in a window: Max's
 playtest of dropping saves in and loading them.
+
+## 2026-09-28 Guests hammer their own spawn bricks (branch `claude/project-thread-7p7umh`)
+
+Playtest a20 (5b476a991): an Internet guest placed a vehicle spawn, set it to
+the Blockhead Bot, and could not hammer the brick back; the host could.
+
+- Cause: v20 flags the Spawn Point and Vehicle Spawn datablocks
+  `indestructable = 1`, and our `Simulation::remove` refused such bricks for
+  anyone but an administrator (the hammer and wand asked the same rule
+  first). The host is Super Admin, so only guests hit it. In v20 the flag
+  only keeps explosions off a brick: `hammerImage::onHitObject` asks the
+  chain kill and trust, nothing else, and `killBrick` removes any brick.
+  Undoing a planted spawn brick failed the same way for guests.
+- Fix: removal no longer checks the flag; the hammer and player wand no
+  longer ask it. Explosions (`ProjectileData::onExplode` path) and the chain
+  kill still skip indestructible bricks, as before.
+- Ruled out with the loopback test: the brick's owner is the guest, not the
+  host or the map; it stays theirs after they leave and rejoin with the same
+  identity; the swing lands on the brick once the bot walks off (a swing at
+  the bot itself hits the player, as in v20). The client does no hammer
+  prediction. Killing the brick takes its bot or vehicle with it, like
+  `fxDTSBrick::onDeath`, through the existing reconcile.
+
+Evidence: `cargo test -p bri-net --test loopback
+a_guest_hammers_their_own_bot_spawn_brick_after_rejoining` (host plus guest
+over QUIC with default trust; failed before the fix with the brick still
+standing, passes after, and the bot leaves with the brick);
+`cargo test -p bri-sim --test tools
+builders_hammer_and_undo_their_own_indestructible_bricks` (replaces the test
+that asserted the old rule); with content, `cargo test -p bri-sim --test
+vehicles a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it
+-- --ignored` (stock Vehicle Spawn and Jeep, non-admin guest); full
+`cargo test -p bri-sim -p bri-net`. Not seen in a window: Max's playtest.
