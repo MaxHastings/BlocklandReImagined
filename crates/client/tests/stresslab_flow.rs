@@ -204,9 +204,15 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper() -> Result<()
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let state = artifact.join(format!("state-{stamp}"));
     std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+    // BRI_STRESSLAB_CONTENT checks a packaged release's content root, whose
+    // packages.json enables the Stress Lab; otherwise this checkout's
+    // packages are enabled over its content.
+    let packaged = std::env::var_os("BRI_STRESSLAB_CONTENT").map(std::path::PathBuf::from);
+    let mut app = App::load(packaged.as_deref().unwrap_or(&workspace.join("content")), &state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
-    app.enable_packages(&workspace.join("packages/stresslab"), &package_set())?;
+    if packaged.is_none() {
+        app.enable_packages(&workspace.join("packages/stresslab"), &package_set())?;
+    }
     ensure!(app.content.maps.iter().any(|m| m.id == WORLD), "Start Game lists the package world");
     let gpu = Headless::new()?;
     let mut ui_renderer = UiRenderer::new(&gpu.device, &gpu.queue);
