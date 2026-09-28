@@ -27,6 +27,7 @@ Allowing an intentional undo: add a trailer line to the commit message,
 Commits made by `git revert` ("Revert ...") are allowed automatically.
 """
 import argparse
+import concurrent.futures
 import contextlib
 import json
 import os
@@ -49,6 +50,8 @@ PROTOCOL_FILE = "crates/net/src/protocol.rs"
 PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
 LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
+TEST_JOBS = 8
+DOC_SUFFIXES = (".md",)
 
 
 class GateError(Exception):
@@ -331,7 +334,8 @@ def known_failures(worktree):
         return {}, []
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     failures = {entry["test"]: entry for entry in data.get("failure", [])}
-    return failures, [entry["test"] for entry in data.get("skip", [])]
+    skips = [entry["test"] for entry in data.get("skip", []) + data.get("nightly", [])]
+    return failures, skips
 
 
 def parse_failures(log):
@@ -435,8 +439,17 @@ def full_gate(sha, root):
             return False
         known, skips = known_failures(worktree)
         skip_args = [arg for name in skips for arg in ("--skip", name)]
-        run_step("test", ["cargo", "test", "--workspace", "--locked", "--no-fail-fast",
-                          "--", "--include-ignored", *skip_args], worktree, log, env)
+        say(f"test: {TEST_JOBS} test binaries at a time, --include-ignored")
+        test_started = time.time()
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write("\n===== test =====\n")
+        binaries = test_binaries(worktree, env)
+        if binaries is None:
+            print(tail(log, "===== test ====="))
+            say("a test target failed to compile")
+            return False
+        run_binaries(binaries, ["--include-ignored", *skip_args], log, TEST_JOBS)
+        say(f"test: ran {len(binaries)} binaries in {time.time() - test_started:.0f}s")
         if not tree_intact(worktree, sha):
             return False
         failed, compile_error = parse_failures(log)
@@ -509,6 +522,10 @@ def gate_commit(sha, diff_only):
     say("history check ok")
     if diff_only:
         return True
+    changed = git("diff", "--name-only", base, sha).split()
+    if changed and all(path.endswith(DOC_SUFFIXES) for path in changed):
+        say(f"only documentation changed ({len(changed)} files); skipping build and tests")
+        return True
     return full_gate(sha, gate_root())
 
 
@@ -541,21 +558,16 @@ def push_main():
     return False
 
 
-def ci_test():
-    """Run every test binary except targets that need generated v20 content.
+def test_binaries(top, env=None):
+    """Build every test target and list (label, executable, cwd, header).
 
-    GitHub runners have no v20 content. Those targets are listed as
-    [[ci_skip_target]] in tools/gate-known-failures.toml; the local gate still
-    runs them all.
-    """
-    top = Path(git("rev-parse", "--show-toplevel").strip())
-    data = tomllib.loads((top / "tools" / "gate-known-failures.toml").read_text(encoding="utf-8"))
-    skipped = {entry["target"] for entry in data.get("ci_skip_target", [])}
+    label is "<package>/<target>" ("lib" for unit tests); header mimics the
+    "Running ..." line cargo test prints, which parse_failures reads."""
     build = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run",
                             "--message-format=json-render-diagnostics"],
-                           cwd=top, stdout=subprocess.PIPE, text=True, errors="replace")
+                           cwd=top, stdout=subprocess.PIPE, text=True, errors="replace", env=env)
     if build.returncode:
-        return False
+        return None
     binaries = []
     for line in build.stdout.splitlines():
         try:
@@ -570,15 +582,60 @@ def ci_test():
         package = (package_id.rsplit("#", 1)[1].split("@")[0] if "#" in package_id
                    else package_id.split()[0])
         target = message["target"]
-        label = f"{package}/{'lib' if 'lib' in target['kind'] else target['name']}"
         cwd = Path(message["manifest_path"]).parent
-        binaries.append((label, message["executable"], cwd))
-    unknown = skipped - {label for label, _, _ in binaries}
+        try:
+            source = Path(target["src_path"]).relative_to(cwd).as_posix()
+        except ValueError:
+            source = target["src_path"]
+        unit = "lib" in target["kind"] or "bin" in target["kind"]
+        header = f"     Running {'unittests ' if unit else ''}{source} ({message['executable']})"
+        label = f"{package}/{'lib' if 'lib' in target['kind'] else target['name']}"
+        binaries.append((label, message["executable"], cwd, header))
+    return binaries
+
+
+def run_binaries(binaries, args, log, jobs):
+    """Run test binaries in parallel, appending each one's output to log in
+    order. Returns True when every binary passed."""
+    def one(entry):
+        label, executable, cwd, header = entry
+        started = time.time()
+        result = subprocess.run([executable, *args], cwd=cwd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors="replace")
+        return header, result.stdout, result.returncode, time.time() - started, label
+
+    ok = True
+    slowest = []
+    with concurrent.futures.ThreadPoolExecutor(jobs) as pool, \
+            open(log, "a", encoding="utf-8", errors="replace") as handle:
+        for header, output, code, seconds, label in pool.map(one, binaries):
+            handle.write(f"{header}\n{output}\n")
+            ok = ok and code == 0
+            slowest.append((seconds, label))
+    slowest.sort(reverse=True)
+    say("slowest test binaries: " + ", ".join(f"{label} {secs:.0f}s" for secs, label in slowest[:3]))
+    return ok
+
+
+def ci_test():
+    """Run every test binary except targets that need generated v20 content.
+
+    GitHub runners have no v20 content. Those targets are listed as
+    [[ci_skip_target]] in tools/gate-known-failures.toml; the local gate still
+    runs them all.
+    """
+    top = Path(git("rev-parse", "--show-toplevel").strip())
+    data = tomllib.loads((top / "tools" / "gate-known-failures.toml").read_text(encoding="utf-8"))
+    skipped = {entry["target"] for entry in data.get("ci_skip_target", [])}
+    binaries = test_binaries(top)
+    if binaries is None:
+        return False
+    unknown = skipped - {label for label, _, _, _ in binaries}
     if unknown:
         say(f"ci_skip_target entries match no test target: {', '.join(sorted(unknown))}")
         return False
     failed = []
-    for label, executable, cwd in sorted(binaries):
+    for label, executable, cwd, _ in sorted(binaries):
         if label in skipped:
             say(f"skipping {label} (needs generated content)")
             continue
