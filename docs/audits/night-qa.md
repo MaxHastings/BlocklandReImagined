@@ -237,7 +237,7 @@ loading, hosting and joining are night QA's and are not covered here.
 | 16 | Closed (this branch): `bri-server ... resume ...` continues from the newest autosave or shutdown save in its state folder (`newest_world`). |
 | 17 | Closed on main: the main menu and `--version` show the build's version. |
 | 18 | Brick search: closed. The brick selector has a Search box above the grid; results from every tab replace the grid while it has text, and clicking a tab ends the search (`search_shows_results_that_add_to_the_cart_and_a_tab_ends_it`). Duplicator: open. |
-| 19 | Toggle crouch: closed. Options > Controls has "Toggle crouch (press once)"; off by default, so Crouch is held as in v20 (`toggle_crouch_flips_on_each_press_and_ignores_release`). Mouse 4 and 5: closed, they bind like any button (`side_mouse_buttons_bind_by_torque_name`). Gamepad: open. |
+| 19 | Toggle crouch: closed. Options > Controls has "Toggle crouch (press once)"; off by default, so Crouch is held as in v20 (`toggle_crouch_flips_on_each_press_and_ignores_release`). Mouse 4 and 5: closed, they bind like any button (`side_mouse_buttons_bind_by_torque_name`). Gamepad: closed. A connected pad drives the same commands as the keyboard while playing: left stick moves, right stick looks, A jumps, B crouches, X walks, right trigger fires, left trigger jets, Start opens the Escape menu (`crates/client/src/gamepad.rs`, `sticks_and_buttons_map_to_the_keyboard_commands`; new dependency `gilrs`). Building and menus still need keyboard and mouse; not tried on a real pad. |
 | 20 | Closed (pass). |
 
 Also fixed on this branch: `docs/PLAYTEST.md` said Tab shows scores; it is

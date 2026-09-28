@@ -380,6 +380,7 @@ struct Runner {
     gpu_losses: Vec<Instant>,
     /// `BRI_RECORD_INPUT=<file>`: every input and tick, for replay tests.
     recorder: Option<crate::playback::Recorder>,
+    gamepads: crate::gamepad::Gamepads,
     window: Option<Arc<Window>>,
     graphics: Option<Graphics>,
     focused: bool,
@@ -418,6 +419,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
     let windowed = PhysicalSize::new(config.size.0, config.size.1);
     let mut runner = Runner {
         gpu_losses: Vec::new(),
+        gamepads: crate::gamepad::Gamepads::new(),
         recorder: std::env::var_os("BRI_RECORD_INPUT").and_then(|path| {
             crate::playback::Recorder::create(std::path::Path::new(&path))
                 .map_err(|error| bri_console::warn(format!("{error:#}")))
@@ -1306,10 +1308,10 @@ impl ApplicationHandler for Runner {
             self.last_tick = now;
             let working = Instant::now();
             // Avoid minutes of UI repeat catch-up after suspension/debug pauses.
-            self.config
-                .app
-                .ui_mut()
-                .update(elapsed.as_millis().min(250) as u64);
+            let dt_ms = elapsed.as_millis().min(250) as u64;
+            self.gamepads
+                .poll(self.config.app.ui_mut(), dt_ms, self.focused);
+            self.config.app.ui_mut().update(dt_ms);
             if let Some(recorder) = &mut self.recorder
                 && let Err(error) = recorder.frame(elapsed)
             {
