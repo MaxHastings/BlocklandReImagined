@@ -40,7 +40,7 @@ pub const MAX_SCAN_DEPTH: usize = 3;
 pub const MAX_SCAN_DIRS: usize = 4096;
 /// Content kinds that only the server reads. A discovered package that
 /// provides nothing else defaults to `server`.
-pub const SERVER_KINDS: &[&str] = &["behaviour", "script", "world", "entity"];
+pub const SERVER_KINDS: &[&str] = &["behaviour", "script", "world", "entity", "mode"];
 /// Content kinds only clients draw. A discovered package that provides
 /// nothing else defaults to `client`; any other package to `shared`.
 pub const CLIENT_KINDS: &[&str] = &["model", "hud"];
