@@ -3,6 +3,22 @@ use crate::interior::Interior;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+/// A `Sun`'s light direction, pointing away from the sun in Torque's Z-up
+/// space, from its `azimuth` and `elevation` in degrees (`Sun::packUpdate`
+/// with `MathUtils::getVectorFromAngles`). Missions also carry a `direction`
+/// field, but it is a stale dynamic field the engine never reads. The trig is
+/// passed in so the importer can use portable sines.
+pub fn sun_direction(
+    azimuth: f32,
+    elevation: f32,
+    sin: fn(f32) -> f32,
+    cos: fn(f32) -> f32,
+) -> Vec3 {
+    let yaw = azimuth.clamp(0.0, 359.0).to_radians();
+    let pitch = elevation.clamp(-360.0, 360.0).to_radians();
+    -Vec3::new(sin(yaw) * cos(pitch), cos(yaw) * cos(pitch), sin(pitch)).normalize()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Scene {
     pub schema_version: u32,
@@ -184,5 +200,30 @@ mod tests {
         // Nothing under the spawn: the map stays put.
         scene.nodes[0].transform[12] = 100.0;
         assert_eq!(scene.floor_lift(|_| Some(&interior)), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod sun_tests {
+    use super::sun_direction;
+    use glam::Vec3;
+
+    #[test]
+    fn sun_angles_point_the_light_away_from_the_sun() {
+        // Slate Sea: azimuth 315, elevation 45; its stale `direction` field
+        // says 0.577 0.577 -0.577 instead.
+        let d = sun_direction(315.0, 45.0, f32::sin, f32::cos);
+        assert!(
+            (d - Vec3::new(0.5, -0.5, -0.70710677)).length() < 1e-5,
+            "{d}"
+        );
+        // Bedroom Dark's field points straight up; its sun is overhead.
+        let d = sun_direction(250.0, 90.0, f32::sin, f32::cos);
+        assert!((d - Vec3::NEG_Z).length() < 1e-5, "{d}");
+        // Out-of-range azimuths clamp to Torque's 0..359.
+        assert_eq!(
+            sun_direction(400.0, 30.0, f32::sin, f32::cos),
+            sun_direction(359.0, 30.0, f32::sin, f32::cos)
+        );
     }
 }
