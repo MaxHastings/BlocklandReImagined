@@ -638,6 +638,23 @@ impl View {
         justify: Option<Justify>,
         color: Option<Rgba>,
     ) {
+        self.draw_text_outlined(pack, dl, id, r, text, justify, color, true);
+    }
+
+    /// `draw_text_in`, with the profile's `doFontOutline` only when
+    /// `outline` (Blockland outlines labels and chat, not list rows).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_outlined(
+        &self,
+        pack: &Pack,
+        dl: &mut DrawList,
+        id: NodeId,
+        r: Rect,
+        text: &str,
+        justify: Option<Justify>,
+        color: Option<Rgba>,
+        outline: bool,
+    ) {
         let Some(style) = self.style(pack, id) else {
             return;
         };
@@ -666,7 +683,7 @@ impl View {
                 y as f32,
                 line,
                 color,
-                style.font_outline,
+                style.font_outline.filter(|_| outline),
                 &style.font_colors,
             );
             y += font.line_height();
@@ -1329,8 +1346,19 @@ impl View {
                 }
                 let next = cols.get(c + 1).copied().unwrap_or(r.w);
                 let cell = Rect::new(r.x + x + 2, row.y, (next - x - 2).max(0), rh);
+                // Join Server's ServerListProfile sets doFontOutline (black
+                // on black), but v20's text lists drew rows without it.
                 if dl.push_clip(cell) {
-                    self.draw_text_in(pack, dl, id, cell, field, Some(Justify::Left), None);
+                    self.draw_text_outlined(
+                        pack,
+                        dl,
+                        id,
+                        cell,
+                        field,
+                        Some(Justify::Left),
+                        None,
+                        false,
+                    );
                     dl.pop_clip();
                 }
             }

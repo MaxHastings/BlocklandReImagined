@@ -273,3 +273,39 @@ fn credits_and_f1_open_the_help_pages() {
     u.update(0);
     assert!(u.screen(ScreenId::Help).is_some());
 }
+
+#[test]
+fn server_list_rows_are_drawn_without_the_profile_outline() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
+    let Ok(pack) = Pack::load(&dir) else {
+        return;
+    };
+    let pack = Rc::new(pack);
+    let glyphs = |servers: usize| {
+        let mut u = ui(&pack);
+        u.core.servers = (0..servers)
+            .map(|i| bri_ui::api::ServerInfo {
+                address: format!("10.0.0.{i}:28000"),
+                name: "Maxs Server".into(),
+                password: false,
+                dedicated: false,
+                ping_ms: Some(9),
+                players: 1,
+                max_players: 8,
+                bricks: 0,
+                map: "Bedroom".into(),
+                favorite: false,
+            })
+            .collect();
+        u.core.push(ScreenId::JoinServer);
+        u.update(0);
+        let v = u.screen(ScreenId::JoinServer).unwrap().view();
+        let mut dl = bri_ui::draw::DrawList::new(bri_ui::geom::Rect::new(0, 0, 1024, 768));
+        v.draw(&pack, &mut dl);
+        dl.cmds.len()
+    };
+    // "Maxs Server" "9" "1" "/" "8" "0" "Bedroom": 23 glyphs. ServerListProfile's
+    // doFontOutline would draw each five times.
+    let row = glyphs(1) - glyphs(0);
+    assert!(row < 23 * 2, "{row} draws for one row");
+}
