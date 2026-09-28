@@ -103,6 +103,10 @@ struct Attempt {
     /// Hosts: a load or map change is still rebuilding the world until this
     /// time; its changes are not the player's unsaved work.
     settling: Option<std::time::Instant>,
+    /// What the host start, join or map change is doing, for the loading
+    /// screen; the network client reports its part into the same one.
+    progress: bri_progress::Progress,
+    progress_seen: u64,
 }
 struct PendingAction {
     action: UiAction,
@@ -1540,7 +1544,7 @@ impl App {
                     .iter()
                     .find(|m| m.id == map)
                     .map_or(IconRef::None, |m| m.preview.clone()),
-                phase: LoadPhase::LoadingObjects,
+                status: "LOADING".into(),
                 progress: 0.0,
             }),
         );
@@ -1551,12 +1555,16 @@ impl App {
             .iter()
             .map(|(id, _)| id.clone())
             .collect();
+        let progress = bri_progress::Progress::new();
+        progress.set_subject(&map);
+        let reporting = progress.clone();
         let worker = Worker::start(self.runtime.handle(), async move {
             let identity_file = state_dir.join("client.identity");
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })
             .await??;
+            reporting.begin(bri_progress::Stage::LoadingMap, bri_progress::Unit::Steps, None);
             let permit = load_limit.acquire_owned().await?;
             let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
@@ -1641,6 +1649,7 @@ impl App {
                 })
                 .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
+            reporting.begin(bri_progress::Stage::StartingServer, bri_progress::Unit::Steps, None);
             let bind = if single {
                 "127.0.0.1:0"
             } else {
@@ -1713,7 +1722,7 @@ impl App {
             if internet {
                 host.open_router_ports(router_tx);
             }
-            let client = Client::connect_with_identity(
+            let client = Client::connect_reporting(
                 address,
                 &host.certificate,
                 player,
@@ -1721,6 +1730,7 @@ impl App {
                 None,
                 Some(host.host_token.clone()),
                 &native_identity,
+                reporting,
             )
             .await?;
             Ok(Connected {
@@ -1749,6 +1759,8 @@ impl App {
             reloading: false,
             saved_revision: None,
             settling: None,
+            progress,
+            progress_seen: 0,
         });
         Ok(())
     }
@@ -1798,6 +1810,8 @@ impl App {
                 text: format!("Connecting to {address}…"),
             }),
         );
+        let progress = bri_progress::Progress::new();
+        let reporting = progress.clone();
         let worker = Worker::start(self.runtime.handle(), async move {
             let certificate = match known {
                 Some(certificate) => certificate,
@@ -1837,7 +1851,7 @@ impl App {
                 identity_paths.environment()
             })
             .await??;
-            let client = Client::connect_with_identity(
+            let client = Client::connect_reporting(
                 address,
                 &certificate,
                 player,
@@ -1845,6 +1859,7 @@ impl App {
                 None,
                 None,
                 &native_identity,
+                reporting.clone(),
             )
             .await?;
             // Remember the host's certificate for later direct joins.
@@ -1866,6 +1881,7 @@ impl App {
                 LOADABLE_MAPS.contains(&map.as_str()),
                 "Server map has no supported native render bundle yet"
             );
+            reporting.begin(bri_progress::Stage::LoadingMap, bri_progress::Unit::Steps, None);
             let permit = load_limit.acquire_owned().await?;
             let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
                 let _permit = permit;
@@ -1899,6 +1915,8 @@ impl App {
             reloading: false,
             saved_revision: None,
             settling: None,
+            progress,
+            progress_seen: 0,
         });
         Ok(())
     }
@@ -2295,6 +2313,47 @@ impl App {
         };
         self.answer(request.id, result);
     }
+    /// Put the load's progress on screen: the loading screen for a host
+    /// start, a join once the host has named its map, and a map change once
+    /// the new world starts arriving. Nothing changes once in game.
+    fn show_progress(&mut self, a: &mut Attempt) {
+        let snapshot = a.progress.snapshot();
+        if snapshot.revision == a.progress_seen {
+            return;
+        }
+        a.progress_seen = snapshot.revision;
+        let Some(map) = a.progress.subject() else {
+            return;
+        };
+        let showing = match &self.ui.core.conn {
+            ConnectionState::Connecting { .. } | ConnectionState::Loading { .. } => true,
+            // A map change: the host's new world has started to arrive.
+            ConnectionState::InGame { .. } => {
+                a.reloading
+                    || (snapshot.stage == bri_progress::Stage::ReceivingWorld
+                        && self.scene_map.as_deref() != Some(map.as_str()))
+            }
+            _ => false,
+        };
+        if !showing || (a.entered && !a.reloading && snapshot.stage != bri_progress::Stage::ReceivingWorld) {
+            return;
+        }
+        let preview = self
+            .content
+            .maps
+            .iter()
+            .find(|m| m.id == map)
+            .map_or(IconRef::None, |m| m.preview.clone());
+        self.ui.apply_session(
+            a.id,
+            UiUpdate::Connection(ConnectionState::Loading {
+                map,
+                preview,
+                status: snapshot.status(),
+                progress: snapshot.fraction(),
+            }),
+        );
+    }
     fn poll_network(&mut self) -> Result<()> {
         let Some(mut a) = self.attempt.take() else {
             return Ok(());
@@ -2306,6 +2365,7 @@ impl App {
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
         }
+        self.show_progress(&mut a);
         let mut failed = None;
         while let Ok(event) = a.worker.events.try_recv() {
             match event {
@@ -2340,6 +2400,8 @@ impl App {
                     a.map_failure = Some(failed_rx);
                     // v20 shows the loading GUI while the new mission loads.
                     a.reloading = true;
+                    a.progress
+                        .begin(bri_progress::Stage::LoadingMap, bri_progress::Unit::Steps, None);
                     self.ui.apply_session(
                         a.id,
                         UiUpdate::Connection(ConnectionState::Loading {
@@ -2350,7 +2412,7 @@ impl App {
                                 .iter()
                                 .find(|m| m.id == map)
                                 .map_or(IconRef::None, |m| m.preview.clone()),
-                            phase: LoadPhase::LoadingObjects,
+                            status: "LOADING".into(),
                             progress: 0.0,
                         }),
                     );
@@ -2517,6 +2579,9 @@ impl App {
             failed = Some("Connection worker stopped".into());
         }
         if let Some(reason) = failed {
+            if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
+                self.ui.apply_session(a.id, UiUpdate::AddOnMismatch(mismatch));
+            }
             self.ui.apply_session(
                 a.id,
                 UiUpdate::Connection(ConnectionState::Failed { reason }),
@@ -2535,6 +2600,11 @@ impl App {
             return Ok(());
         }
         if let Ok(prepared) = a.scene.try_recv() {
+            a.progress.begin(
+                bri_progress::Stage::LoadingGraphics,
+                bri_progress::Unit::Steps,
+                None,
+            );
             if self.cpu_scene.is_some() {
                 // A map change: renderers keep per-map sky and terrain state,
                 // so rebuild them for the new map like a fresh join.
@@ -4440,6 +4510,17 @@ impl PlatformApp for App {
                     });
                     Ok(())
                 }
+                UiAction::RequestAddOns => {
+                    let view = crate::add_ons::view(&self.content.paths.root);
+                    self.ui.apply(UiUpdate::AddOns(view));
+                    Ok(())
+                }
+                UiAction::SetAddOnEnabled { ref id, enabled } => {
+                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+                        .map(|view| self.ui.apply(UiUpdate::AddOns(view)))
+                }
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
+                    .map(|view| self.ui.apply(UiUpdate::AddOns(view))),
                 UiAction::Console { ref line } => {
                     let mut out = bri_console::Output::default();
                     let unknown = crate::console::registry().exec(self, line, &mut out);

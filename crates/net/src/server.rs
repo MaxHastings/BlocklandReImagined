@@ -48,8 +48,8 @@ fn check_packages(
         .partition(|m| m.blocks_join());
     ensure!(
         blocking.is_empty(),
-        "Your content does not match the server: {}",
-        bri_package::environment::describe(&blocking)
+        "{}",
+        bri_package::environment::refusal(&blocking)
     );
     Ok(cosmetic)
 }

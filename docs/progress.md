@@ -2449,6 +2449,37 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `package_state`, the UI's `hud.overlay` slot and package keys, client box
   models, hosting package worlds from Start Game. Design:
   `docs/architecture/package-runtime.md`.
+- 2026-09-27 Hammer, wand and Destructo Wand rules match v20. The admin
+  Destructo Wand (`/magicWand`) never worked: its 500-unit reach exceeded the
+  150-unit brick-targeting limit, so every swing errored. Targeting now allows
+  `Simulation::MAX_TARGET_DISTANCE` (2000). The hammer now follows
+  `hammerImage::onHitObject`: it silently refuses any brick for which
+  `willCauseChainKill` is true, before the trust check. Decoded from the exe
+  (console method at 0x6df8f0 -> 0x540720, distance-to-ground invalidation at
+  0x540180): true when removing the brick leaves any brick joined to it by
+  studs, up or down, with no stud path to a grounded brick. A brick on top
+  that is also held up elsewhere does not block the hammer.
+  `Simulation::stranded_by`/`will_cause_chain_kill` implement this. The root
+  test approximates v20's plant-time probe (ray from the brick top to 0.1
+  below its bottom finds map floor, or terrain) until the placement audit's
+  cached `grounded()` lands; the Tutorial's layouts sit 0.006 into the floor. `killBrick` (wands, admin wand, undo) now
+  chain-kills: stranded bricks break with it, all at once rather than v20's
+  staggered wave, and indestructible bricks are skipped. This is vanilla brick
+  destruction, which the contract keeps. Undoing a plant that would strand
+  bricks runs v20's `undoTrustCheck` (Full group trust with every up/down
+  neighbour, no admin bypass). Not changed: `Actor::trusted`'s administrator
+  bypass (v20's `getTrustLevel` has none, so v20 admins cannot hammer or wand
+  strangers' bricks online) and `stackBL_ID` (the stack starter may hammer or
+  wand bricks others placed on their stack). Evidence: `cargo test -p bri-sim`
+  (`hammer_only_breaks_bricks_that_hold_nothing_up`,
+  `hammer_breaks_a_brick_whose_load_is_still_held_up_elsewhere`,
+  `wand_breaks_anywhere_and_the_stranded_bricks_above_die_with_it`,
+  `undoing_a_plant_that_holds_up_untrusting_bricks_is_refused`,
+  `admin_destructo_wand_breaks_bricks_from_afar`), `cargo test -p bri-client
+  --lib tutorial_hammer -- --ignored` (every Tutorial layout brick can be
+  hammered, top first) and `cargo test -p bri-client --test app_flow --
+  --ignored`. app_flow now undoes twice: since the undo parity work, the first
+  Ctrl+Z reverts the Letters/B print and the second breaks the plant, as in v20.
 - The Stress Lab (`packages/stresslab`, five CC0 packages: generated world,
   creeper, creeper model, mining economy, miner HUD) uses only those seams.
 - Evidence: `bri-package-runtime` tests, `bri-sim --test packages`,
@@ -2530,3 +2561,22 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `a_host_autosaves_on_its_timer_and_returns_its_final_world`,
   `leaving_a_host_with_unsaved_changes_asks_about_them_first`, and the
   transport test now checks the final world is kept.
+
+- 2026-09-28 In-game Add-Ons manager, first slice (`docs/architecture/mod-manager.md`,
+  player research in `docs/research/mod-manager-expectations.md`). Players see
+  one word, "Add-Ons"; "package" stays internal. `bri_package::library` scans
+  the content root: `packages.json` is the enabled list, a disabled package's
+  exact entry moves to `packages-disabled.json`, and unlisted directories with
+  a `package.json` are discovered as disabled. Enabling pulls in dependencies
+  first, disabling takes dependents, base `v20-*` packages stay on, and
+  refusals (missing or wrong-version dependency, newer API, role conflict,
+  unreadable manifest, missing folder) are named diagnostics. The main menu
+  gains an Add-Ons button opening a native dialog (grouped list, search,
+  details with what it adds, where it runs, what it needs and what it may do,
+  Enabled box, Defaults). A native join screen shows a server's missing
+  add-ons with byte progress and Cancel
+  (`ConnectionState::DownloadingPackages`). No wire change. Evidence:
+  `cargo test -p bri-package library`, `cargo test -p bri-ui --lib addons`,
+  `cargo test -p bri-client --lib add_ons`, all content-free. Open: toggles
+  take effect once multi-pack loading and door-closers' join wiring read
+  `packages.json`; the join screen needs PR #1's `fetch_missing` call.
