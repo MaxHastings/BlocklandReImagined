@@ -71,6 +71,11 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 30 | HoverVehicle | No v20 content uses it | Not implemented | Not needed |
 | 35 | Barrel pitch motion | The `look` thread is set every frame to `(mHead.x + pi/2) / pi` (`Player::updateLookAnimation`, 0x5A53B0), independent of `min/maxLookAngle`, so the barrel points exactly where the gunner looks and moves continuously; the controlling client poses it from its own head pitch | Model baked at 13 poses spread over the look limits, so the barrel moved in ~10 degree steps, didn't match the aim, and waited for the server | Fixed: the barrel is drawn as its own part posed from the clip at any pitch; the local gunner's barrel follows their own look |
 | 36 | Shell spawn point | Tank: `getSlotTransform(1)`, the posed `mount1` node on the barrel; Cannon: `getEyeTransform()`, the posed `eye` node. Direction is `getMuzzleVector`: with no image in the slot, Player::getMuzzleTransform (0x5A6EE0) returns the body facing tipped by the head pitch | Rest-pose muzzle turned about the turret's yaw pivot (Tank) or the model origin (Turret, Cannon), so shells left from beside or below the barrel | Fixed: `Pack::load` samples the muzzle node along the look clip and shots start at the posed barrel mouth |
+| 37 | Flying wheeled Add-Ons | Blockland's thrust, lift and wing forces run in every `WheeledVehicle::updateForces` (0x5746a0); a datablock flies by setting `forwardThrust`, `lift`, `maxForwardVel` and the surfaces (the Stunt Plane, Kaje and Ephialtes) | Only the stock Flying Wheeled Jeep's own family got them; an imported plane drove as a car | Fixed: schema 6 `wheeled_flight`, set by the importer when any flying field is nonzero |
+| 38 | Wheel steering and drive | `WheeledVehicleData::onAdd` (recovered core scripts) picks steering and driven wheels by count: 3 wheels steer the nose and drive the rear pair; a vehicle's own `onAdd` overrides with `setWheelSteering`/`setWheelPowered` | Imports used the Jeep's front-two-steer rule for every count | Fixed: the table, plus the Add-On's own `onAdd` calls |
+| 39 | Model animations | `playThread(slot, sequence)` and `setThreadDir` from script, such as the Stunt Plane's propeller switching `propslow`/`propfast` at speed 5 | Vehicles drew their rest pose; no way to say a sequence plays | Fixed: schema 6 `threads` with rate and speed range; the client poses the moved parts from the server tick |
+| 40 | FlyingVehicle surfaces | `FlyingVehicle::updateForces` (0x568770) is stock Torque: `horizontalSurfaceForce`/`verticalSurfaceForce` damp the sideways and roof velocity directly | Multiplied by speed as well, so the carpet stiffened with speed | Fixed |
+| 41 | DTS sequences | An empty trigger list may keep a stale start index | The reader rejected it, so the Stunt Plane model failed to convert | Fixed: empty ranges skip the bounds check |
 
 ## How the fixes work
 
@@ -123,11 +128,11 @@ registered at 0x5703ea). Each tick, after the stock tire and jet forces:
   triggers before the vehicle sees the move, so `jetForce` never applies.
   Space brakes (trigger 2). The datablock sets no engine or jet sound.
 
-The pack carries these fields only in `authored`, which the runtime reads.
+Schema 6 carries these fields as `wheeled_flight` and `steering`; a vehicle with `wheeled_flight` gets them whatever its name, so imported Add-Ons such as the Stunt Plane fly the same way.
 `tests/flying_jeep.rs` covers takeoff at 40, climbing on mouse down, level
 flight, turning and rolling right, stall and landing on the wheels.
 
-**Data.** vehicles-pack-011 (schema 5) adds the chase camera and seated look
+**Data.** Schema 6 types the wheeled flying and steering fields and adds animation `threads`; `Pack::load` upgrades schema 5 packs. vehicles-pack-011 (schema 5) adds the chase camera and seated look
 limits on top of vehicles-pack-010 (schema 4), which added `strafe_steering`, `look_pitch`
 and `underwater_speeds` and the FlyingVehicle sphere inertia.
 weapons-pack-008 (schema 3) adds `Explosion::impulse_vertical` and

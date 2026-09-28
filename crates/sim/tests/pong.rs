@@ -153,6 +153,15 @@ impl Pong {
             !notices.iter().any(|n| n.starts_with("Weapon runtime")),
             "{notices:?}"
         );
+        // Every brick the host keeps is one a client accepts: its paint and
+        // each event colour index the palette. Reported crash: "Invalid
+        // replicated brick 76: Event color outside palette" during Pong.
+        let state = self.s.simulation().state();
+        for (id, brick) in &state.bricks {
+            brick
+                .validate(state.palette.len())
+                .map_err(|e| anyhow::anyhow!("brick {id} at tick {}: {e:#}", state.tick))?;
+        }
         Ok(())
     }
     fn click(&mut self, brick: u64) {

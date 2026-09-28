@@ -63,67 +63,17 @@ pub struct Controls {
 /// `WheeledVehicle::updateCollision` (0x572303) wrecks a vehicle whose body
 /// collides while none of its first three wheels touches the ground.
 const WRECK_WHEELS: usize = 3;
-/// Blockland's flying forces on `WheeledVehicle` (blocklandv20.exe
-/// `WheeledVehicle::updateForces` 0x5746a0, fields registered at 0x5703ea).
-/// The pack keeps these fields only in `authored`, so they are read there.
-struct WheeledFlight {
-    max_forward: f32,
-    max_reverse: f32,
-    horizontal_surface: f32,
-    vertical_surface: f32,
-    stall: f32,
-    /// `isSled` (0x5703ea, datablock +0x378): the surfaces bite only while
-    /// wheel 0 touches the ground (0x57565f).
-    sled: bool,
-    /// `steeringUseAutoReturn` (default on), `steeringAutoReturnRate` (0.9)
-    /// and `steeringAutoReturnMaxSpeed` (10), from the data constructor.
-    auto_return: Option<(f32, f32)>,
-    /// `steeringStrafeSteeringRate` (default 0.1, 0x5716dc): the steering a
-    /// held strafe key adds per 32 ms tick.
-    strafe_rate: f32,
-}
 /// v20 caps the flying lift at 4000 whatever the datablock says (0x575382).
 const WHEELED_LIFT_CAP: f32 = 4000.;
 /// v20 rescales a wheeled vehicle faster than 200 to 199 (0x575bd5).
 const WHEELED_SPEED_CAP: f32 = 200.;
-impl WheeledFlight {
-    fn of(d: &Definition) -> Self {
-        let number = |key: &str, default: f32| {
-            d.authored
-                .get(key)
-                .and_then(|v| v.trim().parse::<f32>().ok())
-                .unwrap_or(default)
-        };
-        let flag = |key: &str, default: bool| {
-            d.authored
-                .get(key)
-                .map_or(default, |v| !matches!(v.trim(), "0" | "false" | ""))
-        };
-        let auto_return = flag("steeringuseautoreturn", true);
-        Self {
-            max_forward: number("maxforwardvel", 0.),
-            max_reverse: number("maxreversevel", 0.),
-            horizontal_surface: number("horizontalsurfaceforce", 0.),
-            vertical_surface: number("verticalsurfaceforce", 0.),
-            stall: number("stallspeed", 0.),
-            sled: flag("issled", false),
-            auto_return: auto_return.then(|| {
-                (
-                    number("steeringautoreturnrate", 0.9),
-                    number("steeringautoreturnmaxspeed", 10.),
-                )
-            }),
-            strafe_rate: number("steeringstrafesteeringrate", 0.1),
-        }
-    }
-    /// How much the control surfaces bite: none below `stallSpeed`, full at
-    /// `stallSpeed + maxForwardVel`.
-    fn bite(&self, speed: f32) -> f32 {
-        if self.max_forward > 0. {
-            ((speed - self.stall) / self.max_forward).clamp(0., 1.)
-        } else {
-            0.
-        }
+/// How much the control surfaces bite: none below `stallSpeed`, full at
+/// `stallSpeed + maxForwardVel`.
+fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
+    if f.max_forward_vel > 0. {
+        ((speed - f.stall_speed) / f.max_forward_vel).clamp(0., 1.)
+    } else {
+        0.
     }
 }
 impl Controls {
@@ -931,12 +881,7 @@ impl VehiclesWorld {
         }
         let amount = if matches!(
             d.family,
-            Family::Wheeled
-                | Family::FlyingWheeled
-                | Family::Flying
-                | Family::Ball
-                | Family::Skis
-                | Family::Tumble
+            Family::Wheeled | Family::Flying | Family::Ball | Family::Skis | Family::Tumble
         ) {
             amount / v.spawn.scale
         } else {
@@ -1172,10 +1117,7 @@ impl VehiclesWorld {
             // around (Player::updateMove 0x5b2e89). FlyingVehicle damps the
             // steering below maxAutoSpeed.
             let strafe_mode = d.strafe_steering && !c.strafe_steering_off;
-            let wheeled = matches!(
-                d.family,
-                Family::Wheeled | Family::FlyingWheeled | Family::Skis
-            );
+            let wheeled = matches!(d.family, Family::Wheeled | Family::Skis);
             let driver = matches!(
                 d.seat_role(0),
                 SeatRole::MouseDriver | SeatRole::StrafeDriver
@@ -1191,7 +1133,7 @@ impl VehiclesWorld {
                     } else {
                         0.
                     };
-                    [key * WheeledFlight::of(d).strafe_rate * 25. / 96., 0.]
+                    [key * d.steering.strafe_rate * 25. / 96., 0.]
                 } else {
                     c.look_delta
                 };
@@ -1213,9 +1155,13 @@ impl VehiclesWorld {
                 // `steeringUseAutoReturn`, a move with no yaw returns both
                 // axes by rate x throttle share (`move->y`, so steering holds
                 // with the throttle released).
+                let (rate, max) = (
+                    d.steering.auto_return_rate,
+                    d.steering.auto_return_max_speed,
+                );
                 if wheeled
+                    && d.steering.auto_return
                     && !c.auto_return_off
-                    && let Some((rate, max)) = WheeledFlight::of(d).auto_return
                     && turn[0] == 0.
                     && max > 0.
                 {
@@ -1316,10 +1262,7 @@ impl VehiclesWorld {
                 );
                 // Wheeled vehicles also take `torque -= angMomentum * mDrag`,
                 // which decays spin at `drag` per second whatever the inertia.
-                if matches!(
-                    d.family,
-                    Family::Wheeled | Family::FlyingWheeled | Family::Skis | Family::Ball
-                ) {
+                if matches!(d.family, Family::Wheeled | Family::Skis | Family::Ball) {
                     let spin = b.angvel() * (1. - drag * FIXED_DT).max(0.);
                     b.set_angvel(spin, true);
                 }
@@ -1328,10 +1271,9 @@ impl VehiclesWorld {
                 match d.family {
                     // Skis are a WheeledVehicle with frictionless NothingTires:
                     // only Blockland's flying forces move and turn them.
-                    Family::Wheeled | Family::FlyingWheeled | Family::Skis => {
+                    Family::Wheeled | Family::Skis => {
                         v.steering = steer * d.max_steering;
-                        if matches!(d.family, Family::FlyingWheeled | Family::Skis) {
-                            let f = WheeledFlight::of(d);
+                        if let Some(f) = &d.wheeled_flight {
                             // Speed along the nose, either way (0x575208).
                             let speed = speed.abs();
                             let mut force = Vec3::ZERO;
@@ -1341,15 +1283,15 @@ impl VehiclesWorld {
                                 force += forward * d.energy.jet_force;
                             }
                             // Thrust only below the speed limit for its way.
-                            if c.throttle > 0. && speed < f.max_forward {
+                            if c.throttle > 0. && speed < f.max_forward_vel {
                                 force += forward * (c.throttle * d.thrust);
-                            } else if c.throttle < 0. && speed < f.max_reverse {
+                            } else if c.throttle < 0. && speed < f.max_reverse_vel {
                                 force += forward * (c.throttle * d.reverse_thrust);
                             }
                             // Lift along the roof, truncated to a whole number
                             // and capped whatever the pitch or stall.
                             force += up * (d.lift * speed).trunc().clamp(0., WHEELED_LIFT_CAP);
-                            let bite = f.bite(speed);
+                            let bite = bite(f, speed);
                             // Squared mouse steering over maxSteeringAngle;
                             // a positive pitch (mouse up with v20's default
                             // vehicle mouse invert) dips the nose.
@@ -1365,8 +1307,9 @@ impl VehiclesWorld {
                             // sled's (skis) grip only with wheel 0 down.
                             if !f.sled || wheel0_contact {
                                 let air = velocity.length() * bite;
-                                force -= right * (right.dot(velocity) * air * f.horizontal_surface)
-                                    + up * (up.dot(velocity) * air * f.vertical_surface);
+                                force -= right
+                                    * (right.dot(velocity) * air * f.horizontal_surface_force)
+                                    + up * (up.dot(velocity) * air * f.vertical_surface_force);
                             }
                             b.add_force(force, true);
                             if velocity.length() > WHEELED_SPEED_CAP {
@@ -1375,10 +1318,16 @@ impl VehiclesWorld {
                             }
                         }
                     }
+                    // FlyingVehicle::updateForces (blocklandv20.exe 0x568770,
+                    // stock Torque): every force and torque is along the
+                    // craft's own axes, so it climbs where its nose points.
                     Family::Flying => {
                         let f = d.flight.as_ref().expect("validated flight settings");
                         let speed = velocity.length();
                         let desired = f.hover_height * v.spawn.scale;
+                        // getHeight (0x568420): height above hover height in
+                        // tenths of the 10-unit ray, at most 1 with nothing
+                        // below, so the roof jet holds 90% of the weight up high.
                         let normalized_height =
                             (hover_distance.unwrap() - desired) / (10. * v.spawn.scale);
                         let support = if normalized_height > 0. {
@@ -1396,8 +1345,10 @@ impl VehiclesWorld {
                                 true,
                             );
                         }
-                        force -= right * (speed * right.dot(velocity) * f.horizontal_surface_force)
-                            + up * (speed * up.dot(velocity) * f.vertical_surface_force);
+                        // Damping surfaces: straight on the sideways and roof
+                        // velocity, not scaled by speed as the wheeled ones are.
+                        force -= right * (right.dot(velocity) * f.horizontal_surface_force)
+                            + up * (up.dot(velocity) * f.vertical_surface_force);
                         force += forward * (c.throttle * d.thrust) + right * (c.strafe * d.thrust);
                         if v.jetting {
                             force += if c.throttle > 0. {
@@ -2028,16 +1979,14 @@ fn prepare_spawn(
         // WheeledVehicle::updateForces: container drag (the datablock's
         // `drag`) on momentum, and `rotationalDrag` plus that drag on
         // angular momentum.
-        Family::FlyingWheeled | Family::Skis => d.drag / d.mass.max(0.01),
+        _ if d.wheeled_flight.is_some() => d.drag / d.mass.max(0.01),
         _ => d.drag * 0.05,
     })
-    .angular_damping(
-        if matches!(d.family, Family::FlyingWheeled | Family::Skis) {
-            d.angular_drag + d.drag
-        } else {
-            d.angular_drag
-        },
-    )
+    .angular_damping(if d.wheeled_flight.is_some() {
+        d.angular_drag + d.drag
+    } else {
+        d.angular_drag
+    })
     .ccd_enabled(true);
     if d.is_actor() {
         builder = builder.can_sleep(false);

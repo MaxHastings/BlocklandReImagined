@@ -37,6 +37,9 @@ pub struct VehicleAssets {
     /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
     /// by the model's asset path.
     looks: BTreeMap<String, LookRig>,
+    /// Models whose definitions play animation threads (a propeller), keyed
+    /// by the model's asset path.
+    threads: BTreeMap<String, ThreadRig>,
     /// Model asset paths by lower-case source path (`add-ons/vehicle_jeep/jeeptire.dts`).
     sources: BTreeMap<String, String>,
 }
@@ -48,6 +51,57 @@ struct LookRig {
     clip: Animation,
     /// Model key, node, and the inverse of the node's transform in that model.
     parts: Vec<(String, usize, Mat4)>,
+}
+
+/// A model whose `Definition::threads` animate it: the objects on nodes
+/// those sequences move are drawn apart and posed each frame.
+struct ThreadRig {
+    shape: Shape,
+    /// The model's sequences the threads name, by lower-case name.
+    clips: BTreeMap<String, Animation>,
+    /// Model key, node, and the inverse of the node's rest transform.
+    parts: Vec<(String, usize, Mat4)>,
+}
+
+/// Draws of the moving parts of a model with animation threads, `seconds`
+/// into the game, for a vehicle moving at `speed`. Of each slot's threads
+/// the first whose speed range holds `speed` plays, at its rate.
+fn threaded(
+    rig: &ThreadRig,
+    threads: &[bri_vehicles::schema::AnimationThread],
+    speed: f32,
+    seconds: f64,
+    transform: Mat4,
+) -> Vec<(String, Mat4)> {
+    let mut layers = Vec::new();
+    for slot in 0..4 {
+        let Some(t) = threads.iter().find(|t| t.slot == slot && t.matches(speed)) else {
+            continue;
+        };
+        let Some(clip) = rig.clips.get(&t.sequence.to_ascii_lowercase()) else {
+            continue;
+        };
+        // Whole loops are dropped in f64 so the phase keeps its precision
+        // however long the game runs.
+        let time = seconds * f64::from(t.rate);
+        let time = if clip.looping && clip.duration > 0.0 {
+            time.rem_euclid(f64::from(clip.duration))
+        } else {
+            time
+        };
+        layers.push(bri_content::animation::Layer {
+            animation: clip,
+            time: time as f32,
+            weight: 1.0,
+        });
+    }
+    let Ok(pose) = bri_content::animation::sample_layers(&rig.shape, &layers) else {
+        return Vec::new();
+    };
+    rig.parts
+        .iter()
+        .map(|(key, node, inverse)| (key.clone(), transform * pose.nodes[*node] * *inverse))
+        .collect()
 }
 
 /// Draws of a model at `transform`: the model itself plus, for a gunner
@@ -82,7 +136,10 @@ impl VehicleAssets {
         let mut parts = Vec::new();
         for (dir, abs) in extras {
             let part = Pack::load(abs.join("vehicles.json")).with_context(|| {
-                format!("Add-On {}: vehicles.json", bri_package::library::add_on_label(abs, dir))
+                format!(
+                    "Add-On {}: vehicles.json",
+                    bri_package::library::add_on_label(abs, dir)
+                )
             })?;
             parts.push((dir.clone(), part));
         }
@@ -145,6 +202,7 @@ impl VehicleAssets {
             .collect();
         let mut models = BTreeMap::new();
         let mut looks = BTreeMap::new();
+        let mut threads = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
             let shape = crate::items::checked_read(
                 &bri_vehicles::asset_root(&root, asset),
@@ -207,10 +265,78 @@ impl VehicleAssets {
                 Ok(())
             };
             let Some(look) = look else {
+                let rest = bri_content::animation::sample(&shape, None, 0.0)?;
+                // The sequences this model's definitions play by themselves.
+                let mut clips = BTreeMap::new();
+                for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
+                    for t in &d.threads {
+                        if let Some(clip) = shape
+                            .animations
+                            .iter()
+                            .find(|a| a.name.eq_ignore_ascii_case(&t.sequence))
+                        {
+                            clips.insert(t.sequence.to_ascii_lowercase(), clip.clone());
+                        }
+                    }
+                }
+                let mut moving = std::collections::BTreeSet::new();
+                for clip in clips.values() {
+                    for step in 1..=8 {
+                        let other = bri_content::animation::sample(
+                            &shape,
+                            Some(clip),
+                            clip.duration * step as f32 / 8.0,
+                        )?;
+                        for (i, object) in shape.objects.iter().enumerate() {
+                            if let Some(node) = object.node
+                                && !other.nodes[node].abs_diff_eq(rest.nodes[node], 1e-5)
+                                && object.meshes.iter().all(|m| {
+                                    shape
+                                        .meshes
+                                        .get(*m)
+                                        .and_then(Option::as_ref)
+                                        .is_none_or(|m| m.skin.is_none())
+                                })
+                            {
+                                moving.insert((node, i));
+                            }
+                        }
+                    }
+                }
+                let only = |keep: &dyn Fn(usize) -> bool| {
+                    let mut part = bri_content::animation::sample(&shape, None, 0.0)?;
+                    for (i, v) in part.visibility.iter_mut().enumerate() {
+                        if !keep(i) {
+                            *v = 0.0;
+                        }
+                    }
+                    anyhow::Ok(part)
+                };
                 insert(
                     asset.path.clone(),
-                    &bri_content::animation::sample(&shape, None, 0.0)?,
+                    &only(&|i| !moving.iter().any(|(_, o)| *o == i))?,
                 )?;
+                if !moving.is_empty() {
+                    let mut parts = Vec::new();
+                    let nodes: std::collections::BTreeSet<usize> =
+                        moving.iter().map(|(n, _)| *n).collect();
+                    for node in nodes {
+                        let key = format!("{}#thread{node}", asset.path);
+                        insert(
+                            key.clone(),
+                            &only(&|i| shape.objects[i].node == Some(node))?,
+                        )?;
+                        parts.push((key, node, rest.nodes[node].inverse()));
+                    }
+                    threads.insert(
+                        asset.path.clone(),
+                        ThreadRig {
+                            shape: shape.clone(),
+                            clips,
+                            parts,
+                        },
+                    );
+                }
                 continue;
             };
             // Objects on nodes the clip moves are drawn apart and posed each
@@ -268,7 +394,11 @@ impl VehicleAssets {
                 },
             );
         }
-        for d in pack.definitions.iter().filter(|d| !models.contains_key(&d.model)) {
+        for d in pack
+            .definitions
+            .iter()
+            .filter(|d| !models.contains_key(&d.model))
+        {
             let asset = pack.assets.iter().find(|a| a.path == d.model);
             // An Add-On model that failed to load is already logged.
             if asset.and_then(|a| a.package.as_ref()).is_some() {
@@ -276,7 +406,11 @@ impl VehicleAssets {
             }
             match d.id.split_once(':') {
                 Some((add_on, _)) => {
-                    crate::cosmetic::add_on_fault(add_on, &d.model, "the vehicle's model is missing");
+                    crate::cosmetic::add_on_fault(
+                        add_on,
+                        &d.model,
+                        "the vehicle's model is missing",
+                    );
                 }
                 None => anyhow::bail!("Vehicle {} model is missing", d.id),
             }
@@ -291,6 +425,7 @@ impl VehicleAssets {
             pack,
             models,
             looks,
+            threads,
             sources,
         })
     }
@@ -349,6 +484,8 @@ pub struct ClientVehicles {
     history: BTreeMap<u64, VecDeque<VehiclePose>>,
     frames: BTreeMap<u64, VehicleFrame>,
     driven: Option<Warp>,
+    /// Server ticks at the last update: the clock animation threads run on.
+    clock: f64,
 }
 /// How far the driven vehicle is drawn from its extrapolated newest pose:
 /// a disagreeing pose shifts the path, and the difference decays instead of
@@ -391,7 +528,12 @@ impl ClientVehicles {
             }
         }
         self.frames.clear();
-        if self.driven.as_ref().is_some_and(|w| Some(w.vehicle) != driven) {
+        self.clock = server_tick.unwrap_or(self.clock);
+        if self
+            .driven
+            .as_ref()
+            .is_some_and(|w| Some(w.vehicle) != driven)
+        {
             self.driven = None;
         }
         for (id, history) in &self.history {
@@ -538,6 +680,14 @@ impl ClientVehicles {
                 }
             };
             push(&d.model, body, tint);
+            if let Some(rig) = assets.threads.get(&d.model) {
+                let speed = frame.velocity.length();
+                for (model, transform) in
+                    threaded(rig, &d.threads, speed, self.clock / TICK_RATE, body)
+                {
+                    push(&model, transform, tint);
+                }
+            }
             for (i, wheel) in d.wheels.iter().enumerate() {
                 let suspension = frame
                     .wheel_suspension
@@ -712,6 +862,92 @@ mod tests {
             let rolled = wheel_transform(&tire(x), 0.3, 0.2, 0.0).transform_vector3(Vec3::Y);
             assert!(rolled.z < -0.1, "forward spin must carry the top forward");
         }
+    }
+    /// A propeller whose `slow` and `fast` sequences turn it a quarter turn
+    /// per frame over one second and a quarter second.
+    fn propeller() -> ThreadRig {
+        let quarter =
+            |i: usize| Quat::from_rotation_z(i as f32 * std::f32::consts::FRAC_PI_2).to_array();
+        let clip = |name: &str, duration: f32| Animation {
+            name: name.into(),
+            frames: 4,
+            duration,
+            looping: true,
+            additive: false,
+            priority: 0,
+            nodes: vec![bri_content::shape::NodeTrack {
+                node: "prop".into(),
+                rotations: (0..4).map(quarter).collect(),
+                translations: vec![],
+                scales: vec![],
+                scale_rotations: vec![],
+            }],
+            objects: vec![],
+            ground_translations: vec![],
+            ground_rotations: vec![],
+            triggers: vec![],
+        };
+        let node = |name: &str, parent| bri_content::shape::Node {
+            name: name.into(),
+            parent,
+            translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+        ThreadRig {
+            shape: Shape {
+                schema_version: 1,
+                id: "plane".into(),
+                nodes: vec![node("root", None), node("prop", Some(0))],
+                objects: vec![],
+                details: vec![],
+                meshes: vec![],
+                materials: vec![],
+                animations: vec![],
+            },
+            clips: [("slow", 1.0), ("fast", 0.25)]
+                .into_iter()
+                .map(|(n, d)| (n.to_string(), clip(n, d)))
+                .collect(),
+            parts: vec![("plane#thread1".into(), 1, Mat4::IDENTITY)],
+        }
+    }
+    #[test]
+    fn threads_pick_their_sequence_by_speed_and_play_at_their_rate() {
+        use bri_vehicles::schema::AnimationThread;
+        let rig = propeller();
+        let thread =
+            |sequence: &str, min: Option<f32>, max: Option<f32>, rate: f32| AnimationThread {
+                slot: 0,
+                sequence: sequence.into(),
+                rate,
+                min_speed: min,
+                max_speed: max,
+            };
+        let blade = |threads: &[AnimationThread], speed: f32, seconds: f64| {
+            let draws = threaded(&rig, threads, speed, seconds, Mat4::IDENTITY);
+            assert_eq!(draws.len(), 1);
+            let tip = draws[0].1.transform_vector3(Vec3::X);
+            tip.y.atan2(tip.x).to_degrees().round()
+        };
+        let switch = [
+            thread("slow", None, Some(5.0), 1.0),
+            thread("fast", Some(5.0), None, 1.0),
+        ];
+        // Slow below speed 5: a quarter turn a quarter second in.
+        assert_eq!(blade(&switch, 0.0, 0.25), 90.0);
+        // Fast from speed 5: a whole turn by then, a quarter an eighth later.
+        assert_eq!(blade(&switch, 5.0, 0.25), 0.0);
+        assert_eq!(blade(&switch, 30.0, 0.3125), 90.0);
+        // Twice the rate, and a negative rate turning it backwards.
+        assert_eq!(blade(&[thread("slow", None, None, 2.0)], 0.0, 0.125), 90.0);
+        assert_eq!(blade(&[thread("slow", None, None, -1.0)], 0.0, 0.25), -90.0);
+        // Hours in, the phase is still exact.
+        assert_eq!(blade(&switch, 0.0, 36_000.25), 90.0);
+        // No thread matches: the blade rests.
+        assert_eq!(
+            blade(&[thread("fast", Some(5.0), None, 1.0)], 0.0, 0.25),
+            0.0
+        );
     }
     #[test]
     #[ignore = "requires the converted native vehicle pack; CPU only"]

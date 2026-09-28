@@ -33,6 +33,11 @@ fn collect<T>(count: usize, mut read: impl FnMut() -> Result<T>) -> Result<Vec<T
     (0..count).map(|_| read()).collect()
 }
 fn subset<T: Clone>(data: &[T], start: usize, count: usize) -> Result<Vec<T>> {
+    // An empty range's start is not checked: exporters leave stale starts on
+    // empty lists (the Stunt Plane's `propfast` has no triggers at index 4).
+    if count == 0 {
+        return Ok(vec![]);
+    }
     let end = start.checked_add(count).context("Range overflow")?;
     Ok(data
         .get(start..end)
@@ -772,7 +777,11 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
         .collect::<Vec<_>>();
     let mut animations = Vec::new();
     for s in sequences {
-        animations.push(lower_sequence(s, &node_names, &pools, &mut provenance)?);
+        let label = s.name.clone();
+        animations.push(
+            lower_sequence(s, &node_names, &pools, &mut provenance)
+                .with_context(|| format!("Sequence {label}"))?,
+        );
     }
     let shape = Shape {
         schema_version: 1,
