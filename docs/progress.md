@@ -3109,3 +3109,16 @@ real integrated GPU; needs a weaker PC.
   --test pong -- --ignored` (rally, points each side, win, reset, paddle
   state machine), `--test events_native -- --ignored`, `cargo test -p
   bri-events -p bri-weapons -p bri-sim`, clippy on those.
+- 2026-09-28 floor placement follows v20's nearest plate plane. Max recalled
+  v20 never refusing an ordinary floor placement. Ours could: the client lifted
+  a brick to the first non-penetrating plane (up to 0.198 above the floor) and
+  the authority's support probe only reaches 0.1 below a brick, so floors more
+  than half a plate above a plane got a Float refusal. The client now rests
+  map-floor placements on the nearest plane, and the authority allows
+  `FLOOR_DIP` (0.1) into upward-facing map surfaces only, matching v20's stock
+  layouts (Town dips 0.084, a Bedroom shelf 0.062, Pirate World 0.034). This
+  supersedes the earlier "never relax collision validation" note for floors;
+  walls, ceilings and moving entities keep zero allowance. Evidence:
+  `-p bri-client --lib building::`, `-p bri-sim` (all targets, content linked),
+  `--test stock_saves_native -- --ignored` now re-plants every stock brick
+  resting on a map floor (within half a plate) with no Buried/Float refusal.

@@ -12,6 +12,11 @@ use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
+/// How far a brick may dip into an upward-facing map floor. Map floors need
+/// not lie on the plate lattice; v20 rests bricks on the nearest plane, so its
+/// stock layouts dip up to half a plate in (Kitchen's Town 0.084, a Bedroom
+/// shelf 0.062, Pirate World 0.034) and it never refuses such a placement.
+pub const FLOOR_DIP: f32 = 0.1;
 /// Why a brick could not be planted. Clients show the original plant-error
 /// icons for these rather than a generic rejection message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -743,9 +748,9 @@ fn validate_placement(
     }
     let placement = pose(brick);
     // Some authored hulls extend below their logical build grid (the stock pine
-    // tree by 0.014544 units). Preserve that hull for physics, but allow precisely
-    // its below-grid extent at an upward-facing map surface. Do not inflate a
-    // general penetration tolerance or apply this allowance to moving entities.
+    // tree by 0.014544 units). Preserve that hull for physics, but allow its
+    // below-grid extent, plus FLOOR_DIP, at an upward-facing map surface only.
+    // Walls, ceilings and moving entities get no allowance.
     let local_bottom = definition.shape.compute_local_aabb().mins.y;
     let authored_below_grid =
         (-(definition.mesh.height_plates as f32) * 0.1 - local_bottom).max(0.0);
@@ -772,7 +777,7 @@ fn validate_placement(
         .map_err(|_| anyhow::anyhow!("Unsupported obstacle/brick collision pair"))?
         {
             let allowance = if obstacle.user_data == MAP_TAG && contact.normal2.y > 0.7 {
-                authored_below_grid
+                FLOOR_DIP + authored_below_grid
             } else {
                 0.0
             };

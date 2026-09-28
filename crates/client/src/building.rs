@@ -1098,16 +1098,14 @@ impl Building {
                     .cloned()
                     .map(ContentRef::Resolved);
                 snap(&mut brick, &definition.mesh);
-                // Map surfaces need not lie on the brick lattice (Bedroom's
-                // carpet is one example). Choose the first non-penetrating
-                // plate plane, within the native authority's one-plate support
-                // distance. Do not relax authoritative collision validation.
+                // Map surfaces need not lie on the brick lattice (a raised
+                // Bedroom surface is at 354.062). Like v20, rest on the plate
+                // plane nearest the floor: at most half a plate above it
+                // (still supported) or into it (the authority's floor
+                // allowance). v20's stock saves sit this way on every map.
                 if hit.brick.is_none() {
-                    if hit.normal.y > 0.9
-                        && brick.position[1] - height * 0.5 < hit.position.y - 0.002
-                    {
-                        brick.position[1] =
-                            ((hit.position.y - 0.002) / 0.2).ceil() * 0.2 + height * 0.5;
+                    if hit.normal.y > 0.9 {
+                        brick.position[1] = (hit.position.y / 0.2).round() * 0.2 + height * 0.5;
                     } else if hit.normal.y < -0.9
                         && brick.position[1] + height * 0.5 > hit.position.y + 0.002
                     {
@@ -1435,26 +1433,30 @@ mod tests {
     }
 
     #[test]
-    fn map_surface_between_grid_planes_never_deploys_inside_floor() {
-        let mut b = controller();
-        b.map = PhysicsWorld::new();
-        b.map.insert_collider(
-            ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(0.0, -0.412, 0.0)),
-            None,
-        );
-        b.map.detect_collisions(&(), &());
-        b.ui_action(
-            &UiAction::InstantUseBrick {
-                brick: "plate".into(),
-            },
-            &player(),
-        )
-        .unwrap();
-        b.ui_action(&fire(), &player()).unwrap();
-        let ghost = b.ghost().unwrap();
-        let bottom = ghost.position[1] - 0.1;
-        assert!(bottom >= 0.088 && bottom - 0.088 < 0.2);
-        Bounds::new(ghost, &b.definitions.entries["plate"].mesh).unwrap();
+    fn map_floor_between_grid_planes_deploys_onto_the_nearest_plane() {
+        // Floor tops 0.088 above a plane (Bedroom's carpet, before its map is
+        // lifted) and 0.15 above one: v20 rests on the nearer plane.
+        for (top, bottom) in [(0.088, 0.0), (0.15, 0.2), (0.012, 0.0)] {
+            let mut b = controller();
+            b.map = PhysicsWorld::new();
+            b.map.insert_collider(
+                ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(0.0, top - 0.5, 0.0)),
+                None,
+            );
+            b.map.detect_collisions(&(), &());
+            b.ui_action(
+                &UiAction::InstantUseBrick {
+                    brick: "plate".into(),
+                },
+                &player(),
+            )
+            .unwrap();
+            b.ui_action(&fire(), &player()).unwrap();
+            let ghost = b.ghost().unwrap();
+            let got = ghost.position[1] - 0.1;
+            assert!((got - bottom).abs() < 1e-4, "floor {top}: bottom {got}");
+            Bounds::new(ghost, &b.definitions.entries["plate"].mesh).unwrap();
+        }
     }
 
     #[test]

@@ -21,7 +21,7 @@ fn floor_gaps(
     map: &Simulation,
     world: &World,
     definitions: &Definitions,
-) -> Result<Vec<(f32, f32)>> {
+) -> Result<Vec<(f32, f32, bri_world::Brick)>> {
     let mut gaps = vec![];
     for brick in world.bricks.values() {
         let height = definitions.get(brick)?.mesh.height_plates as f32 * 0.2;
@@ -31,7 +31,7 @@ fn floor_gaps(
             continue;
         };
         if hit.normal.y > 0.9 {
-            gaps.push((hit.position.y, bottom - hit.position.y));
+            gaps.push((hit.position.y, bottom - hit.position.y, brick.clone()));
         }
     }
     Ok(gaps)
@@ -92,7 +92,7 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
             )?;
             maps.insert(map_id.clone(), (native, map));
         }
-        let (native, map) = &maps[&map_id];
+        let (native, map) = maps.get_mut(&map_id).unwrap();
         let count = world.bricks.len();
         let loaded = Simulation::new(world.clone(), definitions.clone(), native.colliders.clone())
             .with_context(|| format!("{source}: load"))?;
@@ -102,8 +102,41 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
             "{source}: unloaded bricks"
         );
         let gaps = floor_gaps(map, &world, &definitions)?;
-        let flush = gaps.iter().filter(|(_, g)| g.abs() < 0.003).count();
-        let deepest = gaps.iter().map(|(_, g)| *g).fold(0.0f32, f32::min);
+        // Placed again by hand, every brick resting on the map floor (within
+        // half a plate, as v20 rests them) plants: no Buried or Float refusal.
+        let owner = bri_world::authority::Actor {
+            owner: 1,
+            ..Default::default()
+        };
+        let mut refused = std::collections::BTreeMap::<String, usize>::new();
+        for (_, gap, brick) in gaps.iter().filter(|(_, g, _)| g.abs() <= 0.1 + 1e-4) {
+            let builder = bri_sim::simulation::Builder {
+                actor: &owner,
+                position: Vec3::from(brick.position) + Vec3::Y * 2.0,
+                reach: 1000.0,
+            };
+            let mut brick = brick.clone();
+            brick.owner = 1;
+            brick.color = 0;
+            brick.print = None;
+            brick.name = None;
+            match map.plant(&builder, brick) {
+                Ok(id) => map.remove(&owner, id)?,
+                Err(error) => {
+                    *refused
+                        .entry(format!("{error} (gap {gap:.3})"))
+                        .or_default() += 1;
+                }
+            }
+        }
+        assert!(
+            refused
+                .keys()
+                .all(|k| !k.contains("buried") && !k.contains("floating")),
+            "{source}: {refused:?}"
+        );
+        let flush = gaps.iter().filter(|(_, g, _)| g.abs() < 0.003).count();
+        let deepest = gaps.iter().map(|(_, g, _)| *g).fold(0.0f32, f32::min);
         eprintln!(
             "{source}: {count} bricks load; {} over the map floor, {flush} flush, deepest dip {deepest:.3}",
             gaps.len()
@@ -112,8 +145,8 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
             // The reported gap: nothing over the carpet hovers above it.
             let carpet: Vec<_> = gaps
                 .iter()
-                .filter(|(floor, _)| (floor - 286.4).abs() < 1e-3)
-                .map(|(_, g)| *g)
+                .filter(|(floor, _, _)| (floor - 286.4).abs() < 1e-3)
+                .map(|(_, g, _)| *g)
                 .collect();
             assert!(
                 carpet.iter().all(|g| g.abs() < 0.003 || *g > 0.19),
