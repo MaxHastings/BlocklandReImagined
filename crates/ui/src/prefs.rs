@@ -85,6 +85,10 @@ impl Prefs {
             .or_else(|| self.values.get(&n))
             .map(|(k, _)| k.as_str())
     }
+    /// Whether the user set `key` (as opposed to a stock default or nothing).
+    pub fn is_set(&self, key: &str) -> bool {
+        self.values.contains_key(&norm(key))
+    }
     pub fn reset(&mut self, key: &str) {
         self.values.remove(&norm(key));
     }

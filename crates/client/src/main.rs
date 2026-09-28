@@ -131,6 +131,7 @@ fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
         size: display.size,
         fullscreen: display.fullscreen,
         vsync: display.vsync,
+        max_fps: display.max_fps,
         app: Box::new(app),
     })
 }

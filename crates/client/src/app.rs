@@ -3381,6 +3381,9 @@ impl PlatformApp for App {
     fn ui(&self) -> &Ui {
         &self.ui
     }
+    fn focus_changed(&mut self, focused: bool) {
+        self.audio.set_focused(focused);
+    }
     fn ui_mut(&mut self) -> &mut Ui {
         &mut self.ui
     }
@@ -4148,6 +4151,9 @@ impl PlatformApp for App {
                     continue;
                 }
                 UiAction::SaveSettings(value) => {
+                    platform.push(PlatformCommand::FrameLimit(
+                        settings::startup_display(&value).max_fps,
+                    ));
                     settings::save(&self.state_dir.join("settings.json"), &value).and_then(|()| {
                         self.audio.apply_settings(&value);
                         self.graphics = crate::graphics::Graphics::from_settings(&value);

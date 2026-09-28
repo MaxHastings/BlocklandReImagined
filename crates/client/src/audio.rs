@@ -3,6 +3,7 @@
 use anyhow::Result;
 use bri_audio::*;
 use bri_sim::presentation::{Cue, CueKind};
+use bri_ui::screens::options::{MUSIC_VOLUME, MUTE_IN_BACKGROUND, volume};
 use bri_ui::{api::Settings, prefs::Prefs};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -25,6 +26,10 @@ pub struct ClientAudio {
     image_loops: BTreeMap<(u64, u8), (String, SoundHandle)>,
     /// Projectile `sound` loops keyed by projectile id.
     projectiles: BTreeSet<u64>,
+    /// The player's master volume, before any background mute.
+    master: f32,
+    mute_in_background: bool,
+    focused: bool,
 }
 /// Attached-sound entity keys for projectiles, apart from other entities.
 fn projectile_entity(id: u64) -> EntityKey {
@@ -92,6 +97,9 @@ impl ClientAudio {
             music: BTreeMap::new(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
+            master: 1.,
+            mute_in_background: false,
+            focused: true,
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -106,18 +114,18 @@ impl ClientAudio {
     }
     pub fn apply_settings(&mut self, settings: &Settings) {
         self.prefs = Prefs::new(&BTreeMap::new(), &settings.prefs);
+        self.master = volume(&self.prefs, "$pref::Audio::masterVolume");
+        self.mute_in_background = self.prefs.bool_or(MUTE_IN_BACKGROUND, false);
+        self.apply_master();
         for (key, channel) in [
-            ("$pref::Audio::masterVolume", "master"),
             ("$pref::Audio::channelVolume1", "shell"),
             ("$pref::Audio::channelVolume2", "sim"),
+            (MUSIC_VOLUME, "music"),
         ] {
-            let value = self.prefs.f32_or(key, 1.);
-            let value = if value.is_finite() {
-                value.clamp(0., 1.)
-            } else {
-                1.
-            };
-            let result = self.runtime.apply_ui_volume(channel, value).map(|_| ());
+            let result = self
+                .runtime
+                .apply_ui_volume(channel, volume(&self.prefs, key))
+                .map(|_| ());
             self.record(result);
         }
         let result = self
@@ -125,11 +133,29 @@ impl ClientAudio {
             .set_music_enabled(self.prefs.bool_or("$pref::Audio::PlayMusic", true));
         self.record(result);
     }
+    /// The master gain the player chose, silenced while the game is in the
+    /// background when they asked for that.
+    fn apply_master(&mut self) {
+        let muted = self.mute_in_background && !self.focused;
+        let value = if muted { 0. } else { self.master };
+        let result = self.runtime.apply_ui_volume("master", value).map(|_| ());
+        self.record(result);
+    }
+    /// The game window gained or lost focus.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+        self.apply_master();
+    }
     pub fn set_volume(&mut self, channel: &str, value: f32) -> Result<()> {
         anyhow::ensure!(
             value.is_finite() && (0.0..=1.).contains(&value),
             "Invalid audio volume"
         );
+        if channel == "master" {
+            self.master = value;
+            self.apply_master();
+            return Ok(());
+        }
         anyhow::ensure!(
             self.runtime.apply_ui_volume(channel, value)?,
             "Unknown audio channel"
