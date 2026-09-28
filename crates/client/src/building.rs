@@ -64,6 +64,8 @@ pub struct Building {
     /// The server shows an image in this player's right hand (for example
     /// a ball picked up without a tool slot), so fire goes to its trigger.
     held_image: bool,
+    /// The server shows the grey brick (`brickImage`) in this player's hand.
+    held_brick: bool,
     fire_request: u64,
     tool_catalog_installed: bool,
     latest_equipment_request: u64,
@@ -110,6 +112,7 @@ impl Building {
             active_tool: None,
             weapon_fire_down: false,
             held_image: false,
+            held_brick: false,
             fire_request: 0,
             tool_catalog_installed: false,
             latest_equipment_request: 0,
@@ -448,6 +451,10 @@ impl Building {
     /// Replicated right-hand image for the local player.
     pub fn set_held_image(&mut self, held: bool) {
         self.held_image = held;
+    }
+    /// Replicated grey brick in the local player's right hand.
+    pub fn set_held_brick(&mut self, held: bool) {
+        self.held_brick = held;
     }
 
     /// A map change builds a new controller; the player keeps the bricks
@@ -1115,6 +1122,13 @@ impl Building {
         let command = match &self.equipment {
             Equipment::Brick(id) => {
                 self.selectable(id)?;
+                // The click also fires `brickImage`, as in v20: its Fire
+                // state swings the brick and streams `brickTrailEmitter`,
+                // and `brickDeployProjectile` puffs where it lands.
+                if self.held_brick && !self.weapon_fire_down {
+                    self.weapon_fire_down = true;
+                    out.commands.push(Command::WeaponTrigger { down: true });
+                }
                 let eye = self.archetypes.eye(player);
                 let Some(hit) = self.target(eye, player.forward(), DEPLOY_REACH)? else {
                     return Ok(());
@@ -1431,6 +1445,30 @@ mod tests {
         b.ghost = Some(plate(0.3));
         assert!(!b.ghost_blocked(), "on top of it");
     }
+    #[test]
+    fn deploying_with_the_grey_brick_in_hand_also_fires_its_image() {
+        let mut b = controller();
+        buy(&mut b);
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.set_held_brick(true);
+        let fired = b.ui_action(&fire(), &player()).unwrap().unwrap();
+        assert!(b.ghost().is_some(), "the ghost still deploys locally");
+        assert!(matches!(
+            fired.commands[..],
+            [Command::WeaponTrigger { down: true }]
+        ));
+        let release = UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down: false,
+        });
+        let released = b.ui_action(&release, &player()).unwrap().unwrap();
+        assert!(matches!(
+            released.commands[..],
+            [Command::WeaponTrigger { down: false }]
+        ));
+    }
+
     #[test]
     fn ghost_deploy_shift_rotate_plant_stays_local_and_body_relative() {
         let mut b = controller();

@@ -1607,3 +1607,72 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
     );
     let _ = cat;
 }
+
+#[test]
+#[ignore = "uses converted native weapons pack; headless server only"]
+fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
+    use bri_sim::{presentation::CueKind, session::BrickHand};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../content/weapons-pack-009/weapons.json");
+    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let mut s = session();
+    s.set_weapon_pack(pack).unwrap();
+    let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
+    s.command(
+        a,
+        1,
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    // Look down at the floor a few units ahead.
+    for sequence in 1..=30 {
+        s.movement(
+            a,
+            sequence,
+            MoveInput {
+                pitch: -0.6,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    s.take_cues();
+    s.command(a, 2, Command::WeaponTrigger { down: true }).unwrap();
+    s.command(a, 3, Command::WeaponTrigger { down: false }).unwrap();
+    for sequence in 31..=90 {
+        s.movement(
+            a,
+            sequence,
+            MoveInput {
+                pitch: -0.6,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    let cues = s.take_cues();
+    let effects: Vec<String> = cues
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CueKind::WeaponEffect { definition, .. } => Some(definition.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+    let sequences: Vec<String> = cues
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CueKind::WeaponAnimation { sequence, .. } => Some(sequence.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(effects.contains(&"brickdeployexplosion".into()), "{effects:?}");
+    assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
+    assert!(sequences.contains(&"fire".into()), "{sequences:?}");
+}

@@ -314,6 +314,13 @@ impl Session {
                     self.notices.push_back(format!("Weapon runtime: {message}"));
                 }
                 WeaponEvent::ToolFire { actor, image, .. } => self.tool_fire(actor.0, &image)?,
+                // `brickDeployProjectile::onCollision` only moves the ghost
+                // (client side here) and never calls the parent that raises
+                // `onProjectileHit`; its explosion still shows.
+                WeaponEvent::Contact { impact }
+                    if impact
+                        .definition
+                        .eq_ignore_ascii_case("v20.projectile.brickdeployprojectile") => {}
                 WeaponEvent::Contact { impact } => {
                     self.spray_player(&impact);
                     if let TargetId::Brick(brick) = impact.target {

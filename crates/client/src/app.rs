@@ -3393,6 +3393,12 @@ impl App {
             a.view = a.worker.view.borrow_and_update().clone();
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
+            building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
+                images.iter().any(|image| {
+                    image.hand == 0
+                        && bri_sim::session::BRICK_HAND_IMAGES.contains(&image.image.as_str())
+                })
+            }));
             building.set_held_image(
                 view.weapons
                     .images
