@@ -586,11 +586,17 @@ fn check(pack: &Rc<Pack>, sc: &Scenario, print: bool) -> Vec<String> {
         let observed = run(pack, sc, Some((key, text)));
         if print {
             match &observed {
-                Ok((after, _)) => println!(
-                    "{} | {key} | {class} | {:?}",
-                    sc.name,
-                    changed(&baseline, after).keys().collect::<Vec<_>>()
-                ),
+                Ok((after, _)) => {
+                    let paths = changed(&baseline, after);
+                    println!("{} | {key} | {class} | {:?}", sc.name, paths.keys().collect::<Vec<_>>());
+                    if std::env::var_os("BRI_FIELD_FLOW_VALUES").is_some() {
+                        let mut was = BTreeMap::new();
+                        leaves(&baseline, String::new(), &mut was);
+                        for (p, v) in &paths {
+                            println!("    {p}: {:?} -> {v}", was.get(p).map(text_of));
+                        }
+                    }
+                }
                 Err(e) => println!("{} | {key} | {class} | ERROR {e}", sc.name),
             }
         }
@@ -807,6 +813,52 @@ fn open_wrench(u: &mut Ui, variant: WrenchVariant) {
     u.update(0);
 }
 
+/// The events dialog of a brick with one finished row, opened from the
+/// wrench's Events button with every stock event supported.
+fn open_events(u: &mut Ui) {
+    open_wrench(u, WrenchVariant::Normal);
+    let tables = u.core.pack.data.data.event_tables.clone();
+    let inputs: Vec<&str> = tables.inputs.iter().map(|i| i.name.as_str()).collect();
+    let outputs: Vec<(&str, &str)> = tables
+        .outputs
+        .iter()
+        .map(|o| (o.class.as_str(), o.name.as_str()))
+        .collect();
+    u.apply(UiUpdate::Events(EventCatalog::from_capabilities(
+        &tables, &inputs, &outputs,
+    )));
+    u.apply(UiUpdate::Colorset(vec![PaintDivision {
+        name: "Standard".into(),
+        colors: vec![
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+        ],
+    }]));
+    u.update(0);
+    click(
+        u,
+        ScreenId::Wrench(WrenchVariant::Normal),
+        "canvas.pushDialog(WrenchEventsDlg);",
+    );
+    answer_all(u);
+    u.apply(UiUpdate::OpenEvents {
+        brick: 42,
+        rows: vec![EventRow::Editable(EventLine {
+            enabled: true,
+            delay_ms: 0,
+            input: "onActivate".into(),
+            target: "Self".into(),
+            named_target: None,
+            output: "setColor".into(),
+            params: vec![ParamValue::PaintColor(1)],
+        })],
+        named_targets: vec!["door".into()],
+        allow_named: true,
+    });
+    u.update(0);
+}
+
 fn minigame_state(u: &mut Ui) {
     let caps = MiniGameCapabilities {
         list: true,
@@ -932,6 +984,17 @@ fn bricks(u: &mut Ui) {
 const SINGLE_PLAYER: &str =
     "single player greys the server options out behind SM_OptionsBlocker, as v20";
 const COPY: &str = "Copy keeps this field for the next brick wrenched; see copy_locks_keep_their_own_field";
+
+const UNFINISHED: &str = "a row without an output is not sent; see an_events_row_built_by_clicks";
+const ROW_DROPPED: &[&str] = &[
+    "actions.SendEvents.rows[0].Editable.delay_ms",
+    "actions.SendEvents.rows[0].Editable.enabled",
+    "actions.SendEvents.rows[0].Editable.input",
+    "actions.SendEvents.rows[0].Editable.named_target",
+    "actions.SendEvents.rows[0].Editable.output",
+    "actions.SendEvents.rows[0].Editable.params[0].PaintColor",
+    "actions.SendEvents.rows[0].Editable.target",
+];
 
 fn scenarios() -> Vec<Scenario> {
     use Expect::*;
@@ -1371,6 +1434,33 @@ fn scenarios() -> Vec<Scenario> {
             rows: None,
         },
         Scenario {
+            name: "Events",
+            open: open_events,
+            screen: ScreenId::WrenchEvents,
+            submit: Some("wrenchEventsDlg.send();"),
+            confirm: &[],
+            expect: &[
+                ("WrenchLock_Events", NotSent(COPY)),
+                ("WrenchEvent_0_enabled", Sent(&["actions.SendEvents.rows[0].Editable.enabled"])),
+                ("WrenchEvent_0_delay", Sent(&["actions.SendEvents.rows[0].Editable.delay_ms"])),
+                // A new input or target clears the rest of the row, which is
+                // then not sent until an output is picked again (v20
+                // createTargetList/createOutputList, send skips it).
+                ("WrenchEvent_0_input", Sent(ROW_DROPPED)),
+                ("WrenchEvent_0_target", Sent(ROW_DROPPED)),
+                ("WrenchEvent_0_output", Sent(&[
+                    "actions.SendEvents.rows[0].Editable.output",
+                    "actions.SendEvents.rows[0].Editable.params[0].List",
+                    "actions.SendEvents.rows[0].Editable.params[0].PaintColor",
+                ])),
+                ("WrenchEvent_0_param0", Sent(&["actions.SendEvents.rows[0].Editable.params[0].PaintColor"])),
+                ("WrenchEvent_1_enabled", NotSent(UNFINISHED)),
+                ("WrenchEvent_1_delay", NotSent(UNFINISHED)),
+                ("WrenchEvent_1_input", NotSent(UNFINISHED)),
+            ],
+            rows: None,
+        },
+        Scenario {
             name: "Admin login",
             open: |u| {
                 in_game(u, false, false);
@@ -1686,4 +1776,52 @@ fn copy_locks_keep_their_own_field() {
         }
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+/// Pick `entry` from a dropdown by clicking it open and typing to filter,
+/// as a player does.
+fn pick(u: &mut Ui, screen: ScreenId, popup: &str, entry: &str) -> Result<(), String> {
+    try_click(u, screen, popup)?;
+    type_text(u, entry);
+    press(u, Key::Return, Modifiers::NONE);
+    let v = view(u, screen);
+    let n = v.id(popup).ok_or_else(|| format!("{popup} is gone"))?;
+    match v.selected_text(n) {
+        Some(t) if t == entry => Ok(()),
+        other => Err(format!("{popup} shows {other:?} after picking {entry:?}")),
+    }
+}
+
+/// A new events row built only by clicks sends what was picked, and the
+/// row it was built from stays as it was.
+#[test]
+fn an_events_row_built_by_clicks() {
+    let Some(pack) = pack() else { return };
+    let mut u = new_ui(&pack);
+    open_events(&mut u);
+    u.drain_actions();
+    let screen = ScreenId::WrenchEvents;
+    for (popup, entry) in [
+        ("WrenchEvent_1_input", "onPlayerTouch"),
+        ("WrenchEvent_1_target", "Player"),
+        ("WrenchEvent_1_output", "Kill"),
+    ] {
+        pick(&mut u, screen, popup, entry).unwrap();
+    }
+    let delay = view(&u, screen).id("WrenchEvent_1_delay").unwrap();
+    replace_text(&mut u, screen, delay, "250").unwrap();
+    click(&mut u, screen, "wrenchEventsDlg.send();");
+    let sent = snapshot(&mut u);
+    let rows = &sent["actions"]["SendEvents"]["rows"];
+    assert_eq!(
+        rows[0]["Editable"],
+        serde_json::json!({"enabled": true, "delay_ms": 0, "input": "onActivate", "target": "Self",
+            "named_target": null, "output": "setColor", "params": [{"PaintColor": 1}]})
+    );
+    assert_eq!(
+        rows[1]["Editable"],
+        serde_json::json!({"enabled": true, "delay_ms": 250, "input": "onPlayerTouch", "target": "Player",
+            "named_target": null, "output": "Kill", "params": []}),
+        "{sent:#}"
+    );
 }
