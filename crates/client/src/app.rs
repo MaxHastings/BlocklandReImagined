@@ -3334,6 +3334,12 @@ impl App {
                             self.abilities = abilities;
                             continue;
                         }
+                        bri_sim::session::Notice::TempBrickColor(color) => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.set_random_color(color);
+                            }
+                            continue;
+                        }
                         bri_sim::session::Notice::Sound(profile) => {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
@@ -5790,6 +5796,20 @@ impl PlatformApp for App {
                         continue;
                     }
                     result
+                }
+                // `serverCmdClearInventory`: the brick cart empties. Ours is
+                // kept here, so it empties as Buy Bricks with ten empty slots.
+                UiAction::ChatCommand { ref name, .. }
+                    if name.eq_ignore_ascii_case("clearinventory") =>
+                {
+                    let clear = UiAction::BuyBricks {
+                        slots: vec![None; 10],
+                    };
+                    match self.handle_building(id, &clear) {
+                        Ok(true) => continue,
+                        Ok(false) => Err(anyhow::anyhow!("Not connected")),
+                        Err(error) => Err(error),
+                    }
                 }
                 UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
                     match self.invite.clone() {

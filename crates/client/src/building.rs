@@ -86,6 +86,9 @@ pub struct Building {
     tool_catalog_installed: bool,
     latest_equipment_request: u64,
     paint: u8,
+    /// Random Brick Color's colour for the next brick, shown on the ghost
+    /// until a paint is picked.
+    random_color: Option<u8>,
     palette_len: usize,
     ghost: Option<Brick>,
     /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
@@ -136,6 +139,7 @@ impl Building {
             tool_catalog_installed: false,
             latest_equipment_request: 0,
             paint: 0,
+            random_color: None,
             palette_len: 0,
             ghost: None,
             copy: None,
@@ -473,6 +477,18 @@ impl Building {
     fn copy_in_hand(&mut self) -> Option<&mut CopyGhost> {
         self.active_copy()?;
         self.copy.as_mut()
+    }
+    /// `tempBrick.setColor` under Random Brick Color: the host's colour for
+    /// the next brick, shown on the ghost.
+    pub fn set_random_color(&mut self, color: u8) {
+        if usize::from(color) >= self.palette_len {
+            return;
+        }
+        self.random_color = Some(color);
+        if let Some(ghost) = &mut self.ghost {
+            ghost.color = color;
+            self.ghost_generation = self.ghost_generation.wrapping_add(1);
+        }
     }
     pub fn ghost_generation(&self) -> u64 {
         self.ghost_generation
@@ -1068,6 +1084,7 @@ impl Building {
                     "Color outside world palette"
                 );
                 self.paint = *color as u8;
+                self.random_color = None;
                 self.equipment = Equipment::Paint(self.paint);
                 self.active_tool = None;
                 out.commands.push(Command::UseSprayCan { color: self.paint });
@@ -1227,7 +1244,7 @@ impl Building {
                 .get(id)
                 .cloned()
                 .map(ContentRef::Resolved);
-            brick.color = self.paint;
+            brick.color = self.random_color.unwrap_or(self.paint);
             // Preserve the ghost's anchored centre, re-snapping only where a
             // changed footprint/height requires a different parity lattice.
             snap(&mut brick, &self.definitions.entries[id].mesh);
@@ -1272,7 +1289,7 @@ impl Building {
                 } else {
                     -0.05
                 };
-                brick.color = self.paint;
+                brick.color = self.random_color.unwrap_or(self.paint);
                 brick.print = self
                     .default_prints
                     .get(id)
@@ -1564,6 +1581,24 @@ mod tests {
             .unwrap();
         new.ui_action(&fire(), &player()).unwrap();
         assert_eq!(new.ghost().map(|g| g.color), Some(1));
+    }
+
+    #[test]
+    fn random_brick_colors_ghost_shows_the_next_colour_until_a_paint_is_picked() {
+        let mut b = controller();
+        buy(&mut b);
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.ui_action(&fire(), &player()).unwrap();
+        assert_eq!(b.ghost().map(|g| g.color), Some(0));
+        b.set_random_color(1);
+        assert_eq!(b.ghost().map(|g| g.color), Some(1));
+        b.ui_action(&UiAction::UseSprayCan { color: 0 }, &player())
+            .unwrap();
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.ui_action(&fire(), &player()).unwrap();
+        assert_eq!(b.ghost().map(|g| g.color), Some(0));
     }
 
     #[test]

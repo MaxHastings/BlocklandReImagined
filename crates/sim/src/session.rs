@@ -462,6 +462,9 @@ struct Peer {
     /// Bricks planted in the current one-second window
     /// (`$Pref::Server::MaxBricksPerSecond`).
     plants: u32,
+    /// The colour Random Brick Color gave this builder's temp brick after
+    /// their last plant, until they pick a paint.
+    random_color: Option<u8>,
     saves: u32,
     /// Ghost brick reports this window; they have their own budget so a
     /// builder moving a ghost never starves real actions.
@@ -868,6 +871,7 @@ impl Session {
                 actions: 0,
                 chats: 0,
                 plants: 0,
+                random_color: None,
                 saves: 0,
                 ghost_reports: 0,
                 inspection: None,
@@ -1060,6 +1064,7 @@ impl Session {
                 actions: 0,
                 chats: 0,
                 plants: 0,
+                random_color: None,
                 saves: 0,
                 ghost_reports: 0,
                 inspection: None,
@@ -1564,20 +1569,13 @@ impl Session {
                 brick.quarter_turns = quarter_turns;
                 brick.color = color;
                 brick.print = default_print.map(ContentRef::Resolved);
-                // `$Pref::Server::RandomBrickColor`: the brick tool colours
-                // each brick from six of the palette's first eight, not the
-                // builder's paint (`getRandom(5)` in `BrickImage::onFire`).
-                let palette = self.simulation.state().palette.len();
-                let choices: Vec<u8> = [0, 1, 3, 4, 5, 7]
-                    .into_iter()
-                    .filter(|&c| usize::from(c) < palette)
-                    .collect();
-                if self.admin.settings.random_brick_color && !choices.is_empty() {
-                    self.spawn_seed = self
-                        .spawn_seed
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1442695040888963407);
-                    brick.color = choices[(self.spawn_seed >> 33) as usize % choices.len()];
+                // `$Pref::Server::RandomBrickColor`: a brick takes its temp
+                // brick's colour, which each plant sets to one of six of the
+                // palette's first eight (`getRandom(5)` in
+                // `serverCmdPlantBrick`); the first takes the builder's paint.
+                let random = self.admin.settings.random_brick_color;
+                if random && let Some(temp) = peer.random_color {
+                    brick.color = temp;
                 }
                 // `ServerCmdPlantBrick`: the server's brick limit, then the
                 // plant rate for non-administrators, then TooFarDistance.
@@ -1596,6 +1594,22 @@ impl Session {
                 if let Some(peer) = self.peers.get_mut(&owner) {
                     peer.plants = peer.plants.saturating_add(1);
                 }
+                let palette = self.simulation.state().palette.len();
+                let choices: Vec<u8> = [0, 1, 3, 4, 5, 7]
+                    .into_iter()
+                    .filter(|&c| usize::from(c) < palette)
+                    .collect();
+                if random && !choices.is_empty() {
+                    self.spawn_seed = self
+                        .spawn_seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let next = choices[(self.spawn_seed >> 33) as usize % choices.len()];
+                    if let Some(peer) = self.peers.get_mut(&owner) {
+                        peer.random_color = Some(next);
+                    }
+                    self.notify(owner, Notice::TempBrickColor(next));
+                }
                 self.special_planted(owner, id)?;
                 self.dirty.insert(id);
                 self.push_undo(owner, undo::UndoEntry::Plant(id));
@@ -1606,6 +1620,9 @@ impl Session {
             }
             Command::UseSprayCan { color } => {
                 self.use_spray_can(owner, tools::SPRAY_CAN_IMAGE, Some(color))?;
+                if let Some(peer) = self.peers.get_mut(&owner) {
+                    peer.random_color = None;
+                }
                 Ok(Reply::Accepted)
             }
             Command::UseFxCan { fx } => {

@@ -1529,12 +1529,23 @@ fn random_brick_color_paints_each_plant_from_v20s_six() {
     let owner = s
         .join("Builder".into(), Vec3::new(-3.0, 0.05, 0.0), false)
         .unwrap();
-    let colors: std::collections::BTreeSet<u8> = (0..24)
-        .map(|i| {
-            let id = plant(&mut s, owner, i + 1, [i as f32 + 0.5, 0.1, -2.25]);
-            s.simulation().state().bricks[&id].color
-        })
-        .collect();
+    // Each plant gives the temp brick its next colour, shown on the ghost
+    // and taken by the next brick; the first takes the builder's paint.
+    let mut next = None;
+    let mut colors = std::collections::BTreeSet::new();
+    for i in 0..24 {
+        let id = plant(&mut s, owner, i + 1, [i as f32 + 0.5, 0.1, -2.25]);
+        let color = s.simulation().state().bricks[&id].color;
+        assert_eq!(color, next.unwrap_or(0), "brick {i}");
+        next = s
+            .take_private_notices()
+            .into_iter()
+            .find_map(|(to, n)| match n {
+                bri_sim::session::Notice::TempBrickColor(c) if to == owner => Some(c),
+                _ => None,
+            });
+        colors.insert(next.expect("a next colour"));
+    }
     assert!(colors.is_subset(&[0, 1, 3, 4, 5, 7].into()), "{colors:?}");
     assert!(colors.len() > 1, "{colors:?}");
 }

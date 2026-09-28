@@ -142,6 +142,9 @@ pub enum Notice {
     },
     /// `secureClientCmd_ClientTrust` for every player, as this viewer sees them.
     PlayerTrust(BTreeMap<OwnerId, super::PlayerTrust>),
+    /// `tempBrick.setColor` under Random Brick Color: the colour the
+    /// player's next brick takes, shown on their ghost.
+    TempBrickColor(u8),
     /// The build this player copied, to show and place with its tool;
     /// `None` takes it away.
     Blueprint(Option<Box<crate::blueprint::Blueprint>>),
