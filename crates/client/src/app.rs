@@ -143,6 +143,7 @@ struct ContentParts {
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    explosion_debris: crate::explosion_debris::ExplosionDebris,
     tool_ui: crate::tool_ui::ToolUi,
     item_assets: Arc<crate::items::ItemAssets>,
     item_ui: crate::item_ui::ItemUi,
@@ -154,6 +155,7 @@ impl ContentParts {
         let weapon_pack = Arc::new(content.weapons.pack.clone());
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
+        let explosion_debris = crate::explosion_debris::ExplosionDebris::new(&weapon_pack);
         let actor_effects = crate::actor_effects::ActorEffects::new(
             effects_pack.clone(),
             weapon_pack.clone(),
@@ -231,6 +233,7 @@ impl ContentParts {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            explosion_debris,
             tool_ui,
             item_assets,
             item_ui,
@@ -373,6 +376,8 @@ pub struct App {
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
+    explosion_debris: crate::explosion_debris::ExplosionDebris,
     /// Ejected gun casings (`stateEjectShell`) and their GPU model.
     weapon_shells: crate::weapon_debris::WeaponDebris,
     shell_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
@@ -634,6 +639,7 @@ impl App {
             self.weapon_effects = parts.weapon_effects;
             self.actor_effects = parts.actor_effects;
             self.explosion_shapes = parts.explosion_shapes;
+            self.explosion_debris = parts.explosion_debris;
             self.tool_ui = parts.tool_ui;
             self.item_assets = parts.item_assets;
             self.item_ui = parts.item_ui;
@@ -724,6 +730,7 @@ impl App {
         };
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
+        self.explosion_debris.cue(&cue);
         if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
             && self.brick_kills.len() < bri_sim::presentation::MAX_CUES
         {
@@ -881,6 +888,7 @@ impl App {
         self.weapon_effects.reset(checkpoint_cursor);
         self.actor_effects.reset(checkpoint_cursor);
         self.explosion_shapes.reset(checkpoint_cursor);
+        self.explosion_debris.reset(checkpoint_cursor);
         self.weapon_shells.reset(checkpoint_cursor);
         self.weapon_cues
             .retain(|(cue, _)| cue.id > checkpoint_cursor);
@@ -1211,6 +1219,7 @@ impl App {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            explosion_debris,
             tool_ui,
             item_assets,
             item_ui,
@@ -1292,6 +1301,7 @@ impl App {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            explosion_debris,
             weapon_shells,
             shell_gpu: None,
             weapon_cues: VecDeque::new(),
@@ -1439,6 +1449,7 @@ impl App {
         self.weapon_effects.reset(0);
         self.actor_effects.reset(0);
         self.explosion_shapes.reset(0);
+        self.explosion_debris.reset(0);
         self.weapon_shells.clear();
         self.weapon_cues.clear();
         self.weapon_animation_cues.clear();
@@ -4383,6 +4394,9 @@ impl PlatformApp for App {
                 }
                 self.vehicles
                     .prepare(&mut self.vehicle_assets, &view.vehicles, &view.world.palette);
+                for (model, transform, tint) in self.explosion_debris.models() {
+                    self.vehicle_assets.push_source_model(model, transform, tint);
+                }
                 let presented = self.motion.presented();
                 let mut loops = BTreeMap::new();
                 for (owner, images) in &view.weapons.images {
@@ -4785,6 +4799,8 @@ impl PlatformApp for App {
                 &view.weapons,
                 game_elapsed.as_secs_f32(),
             )?;
+            self.actor_effects
+                .update_debris_trails(&self.explosion_debris.trails())?;
             Self::update_actor_effects(
                 &mut self.actor_effects,
                 &self.avatar_assets,
@@ -4802,6 +4818,19 @@ impl PlatformApp for App {
                 },
             )?;
             self.explosion_shapes.advance(game_elapsed.as_secs_f32());
+            self.explosion_debris
+                .advance(game_elapsed.as_secs_f32(), |from, to| {
+                    let delta = to - from;
+                    let length = delta.length();
+                    if length < 1e-5 {
+                        return None;
+                    }
+                    let hit = building.target(from, delta / length, length).ok()??;
+                    Some(crate::weapon_debris::DebrisHit {
+                        fraction: (hit.distance / length).clamp(0., 1.),
+                        normal: hit.normal.normalize(),
+                    })
+                });
             let shells: Vec<_> = self
                 .weapon_effects
                 .take_host_requests()

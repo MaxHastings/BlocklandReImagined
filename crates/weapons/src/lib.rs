@@ -2,6 +2,7 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+pub mod debris;
 mod merge;
 pub use merge::resource_root;
 pub mod runtime;

@@ -224,6 +224,8 @@ pub struct ActorEffects {
     froth: BTreeMap<u64, Froth>,
     /// Tire emitters by (vehicle, wheel).
     tires: BTreeMap<(u64, usize), EffectHandle>,
+    /// Explosion debris trail emitters by (piece, emitter slot).
+    debris_trails: BTreeMap<(u64, u8), EffectHandle>,
     liquids: Vec<bri_sim::water::TintedWater>,
     orbs: BTreeMap<u64, EffectHandle>,
     /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
@@ -249,6 +251,7 @@ impl ActorEffects {
             lights: BTreeMap::new(),
             froth: BTreeMap::new(),
             tires: BTreeMap::new(),
+            debris_trails: BTreeMap::new(),
             liquids: Vec::new(),
             orbs: BTreeMap::new(),
             orb_eyes: Vec::new(),
@@ -290,6 +293,7 @@ impl ActorEffects {
         self.lights.clear();
         self.froth.clear();
         self.tires.clear();
+        self.debris_trails.clear();
         self.orbs.clear();
         self.orb_eyes.clear();
         self.cursor = checkpoint_cursor;
@@ -432,6 +436,38 @@ impl ActorEffects {
     /// neither mounting nor death here.
     /// Keep one emitter per spraying wheel; wheels that stop let their
     /// particles drain.
+    /// Keep one trail emitter on each explosion debris piece; a piece's
+    /// trail drains when the piece is gone (`deleteWhenEmpty`).
+    pub fn update_debris_trails(
+        &mut self,
+        trails: &[crate::explosion_debris::Trail],
+    ) -> Result<()> {
+        let world = &mut self.world;
+        self.debris_trails.retain(|key, handle| {
+            let keep = trails.iter().any(|t| t.key == *key) && world.is_active(*handle);
+            if !keep {
+                world.stop(*handle, StopMode::Drain);
+            }
+            keep
+        });
+        for t in trails.iter().filter(|t| t.transform.position.is_finite()) {
+            match self.debris_trails.get(&t.key) {
+                Some(&h) => self.world.update_source(h, t.transform)?,
+                None => match self.world.start_emitter(
+                    &t.emitter,
+                    t.transform,
+                    SourceOptions::default(),
+                ) {
+                    Ok(h) => {
+                        self.debris_trails.insert(t.key, h);
+                    }
+                    Err(_) => self.note(format!("Debris trail unavailable: {}", t.emitter)),
+                },
+            }
+        }
+        Ok(())
+    }
+
     pub fn update_tires(&mut self, sprays: &[TireSpray]) -> Result<()> {
         let world = &mut self.world;
         self.tires.retain(|key, handle| {

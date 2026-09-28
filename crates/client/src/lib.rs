@@ -13,6 +13,7 @@ pub mod content;
 pub mod controls;
 pub use bri_sim::crouch;
 pub mod effects;
+pub mod explosion_debris;
 pub mod explosion_shapes;
 pub mod firewall;
 pub mod foliage;

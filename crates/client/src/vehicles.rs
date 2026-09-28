@@ -31,6 +31,8 @@ pub struct VehicleAssets {
     /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
     /// by the model's asset path.
     looks: BTreeMap<String, LookRig>,
+    /// Model asset paths by lower-case source path (`add-ons/vehicle_jeep/jeeptire.dts`).
+    sources: BTreeMap<String, String>,
 }
 
 /// A gunner model split into its fixed part and the parts its `look` clip
@@ -232,14 +234,39 @@ impl VehicleAssets {
                 d.id
             );
         }
+        let sources = pack
+            .assets
+            .iter()
+            .filter(|a| a.kind == "model" && models.contains_key(&a.path))
+            .map(|a| (a.virtual_path.to_ascii_lowercase(), a.path.clone()))
+            .collect();
         Ok(Self {
             pack,
             models,
             looks,
+            sources,
         })
     }
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         self.pack.definitions.iter().find(|d| d.id == id)
+    }
+    /// Whether the pack converted the model at this source path.
+    pub fn has_source_model(&self, source: &str) -> bool {
+        self.sources.contains_key(&source.to_ascii_lowercase())
+    }
+    /// Draw the model converted from `source` this frame (after `prepare`),
+    /// such as explosion debris. False when the pack lacks it.
+    pub fn push_source_model(&mut self, source: &str, transform: Mat4, tint: [f32; 4]) -> bool {
+        let Some(path) = self.sources.get(&source.to_ascii_lowercase()) else {
+            return false;
+        };
+        match self.models.get_mut(path) {
+            Some(model) if transform.is_finite() => {
+                model.transforms.push(SceneTransform { transform, tint });
+                true
+            }
+            _ => false,
+        }
     }
 }
 
