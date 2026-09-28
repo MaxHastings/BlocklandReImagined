@@ -172,7 +172,7 @@ fn call(function: &str, budget: Budget) -> Call<'_> {
         aim: None,
         entity: None,
         state: Namespace::default(),
-        entity_vars: BTreeMap::new(),
+        entity_vars: Default::default(),
     }
 }
 /// Run `function` from `script` and time it.

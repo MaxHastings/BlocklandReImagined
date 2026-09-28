@@ -90,16 +90,20 @@ pub struct Call<'a> {
     /// The entity a `think` call is for.
     pub entity: Option<u64>,
     pub state: Namespace,
-    /// Package-local variables of the package's entities.
-    pub entity_vars: BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+    /// Package-local variables of the package's entities, shared by every
+    /// call in a tick; a call's writes come back in its [`Outcome`].
+    pub entity_vars: Arc<EntityVars>,
 }
+/// Each entity's package-local variables.
+pub type EntityVars = BTreeMap<u64, BTreeMap<String, serde_json::Value>>;
 /// One call's results. Only produced when the call succeeded.
 #[derive(Debug)]
 pub struct Outcome {
     pub returned: Dynamic,
     pub ops: Vec<Op>,
     pub state: Namespace,
-    pub entity_vars: BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+    /// The complete variables of each entity the call wrote to.
+    pub entity_vars: EntityVars,
     pub output: Vec<String>,
 }
 
@@ -109,7 +113,9 @@ struct Invocation {
     aim: Option<Aim>,
     entity: Option<u64>,
     state: Namespace,
-    entity_vars: BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+    entity_vars: Arc<EntityVars>,
+    /// Entities this call wrote, with all their variables.
+    written: EntityVars,
     ops: Vec<Op>,
     output: Vec<String>,
 }
@@ -341,8 +347,9 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("entity_get", |entity: Dynamic, key: &str| {
         with(|i| {
             let e = id(&entity)?;
-            Ok(i.entity_vars
+            Ok(i.written
                 .get(&e)
+                .or_else(|| i.entity_vars.get(&e))
                 .and_then(|m| m.get(key))
                 .map_or(Dynamic::UNIT, to_dynamic))
         })
@@ -352,11 +359,18 @@ fn register_api(engine: &mut Engine) {
         |entity: Dynamic, key: &str, value: Dynamic| {
             with(|i| {
                 let e = id(&entity)?;
-                if !i.entity_vars.contains_key(&e) {
-                    return fail(format!("entity {e} does not belong to this package"));
+                if !i.written.contains_key(&e) {
+                    let Some(vars) = i.entity_vars.get(&e) else {
+                        return fail(format!("entity {e} does not belong to this package"));
+                    };
+                    let vars = vars.clone();
+                    i.written.insert(e, vars);
                 }
                 let v = to_json(&value)?;
-                i.entity_vars.entry(e).or_default().insert(key.into(), v);
+                i.written
+                    .get_mut(&e)
+                    .expect("inserted above")
+                    .insert(key.into(), v);
                 Ok(())
             })
         },
@@ -640,6 +654,7 @@ impl Runtime {
                 entity: call.entity,
                 state: call.state,
                 entity_vars: call.entity_vars,
+                written: BTreeMap::new(),
                 ops: Vec::new(),
                 output: Vec::new(),
             })
@@ -663,7 +678,7 @@ impl Runtime {
                 returned,
                 ops: invocation.ops,
                 state: invocation.state,
-                entity_vars: invocation.entity_vars,
+                entity_vars: invocation.written,
                 output: invocation.output,
             }),
             Err(e) => {

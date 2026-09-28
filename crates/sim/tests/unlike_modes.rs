@@ -853,3 +853,186 @@ fn a_card_game_shows_each_player_only_their_own_hand() {
         "the shared view carries no hand"
     );
 }
+
+const MOON_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "moon.rhai",
+  "on_join": true
+}"#;
+
+/// Every player on this server moves under a sixth of normal gravity.
+const MOON_SCRIPT: &str = r#"
+fn on_join(player) {
+    set_movement(player, #{ gravity: 0.17 });
+}
+"#;
+
+/// E22 (player/control model; category 9). A low-gravity mode: how players
+/// move is the mode. Movement is predicted on every client from the
+/// player's datablock, and datablocks are a closed engine enum
+/// (`PlayerType`), so a package can choose among v20's seven but never
+/// describe its own. Open finding W11.
+#[test]
+#[ignore = "finding W11: movement profiles are a closed engine enum; a package cannot define one"]
+fn a_low_gravity_mode_changes_how_players_move() {
+    let behaviour_manifest = manifest(
+        "moon",
+        &["player"],
+        &[
+            ("behaviour", "moon", "behaviour.json"),
+            ("script", "moon", "moon.rhai"),
+        ],
+    );
+    let mut s = mode(
+        "moon",
+        &[Package {
+            id: "moon",
+            side: Side::Server,
+            files: &[
+                ("package.json", &behaviour_manifest),
+                ("behaviour.json", MOON_BEHAVIOUR),
+                ("moon.rhai", MOON_SCRIPT),
+            ],
+        }],
+    );
+    let p = s
+        .join("P".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 10);
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:#?}",
+        s.package_diagnostics()
+    );
+    s.movement(
+        p,
+        1,
+        MoveInput {
+            jump: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut peak = 0.0_f32;
+    for _ in 0..240 {
+        s.step().unwrap();
+        peak = peak.max(position(&s, p).y);
+    }
+    assert!(
+        peak > 5.0,
+        "a moon jump rises well above a normal one: {peak}"
+    );
+}
+
+const SWARM_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "swarm.rhai",
+  "commands": [{ "name": "fill", "admin": true }]
+}"#;
+
+fn swarm_kind(kind: &str) -> String {
+    format!(
+        r#"{{ "schema_version": 1, "name": "{kind}", "model": "swarm-look:model/ant",
+             "think": "think", "think_interval": 1, "speed": 0.5, "scale": 0.4,
+             "health": 5.0, "max_alive": 256 }}"#
+    )
+}
+
+/// 1000 ants, each thinking every tick with some real work (a small
+/// neighbourhood scan), more than one tick's share of script work.
+const SWARM_SCRIPT: &str = r#"
+fn cmd_fill(player) {
+    let kinds = ["swarm:entity/a", "swarm:entity/b", "swarm:entity/c", "swarm:entity/d"];
+    for k in 0..4 {
+        for i in 0..250 {
+            let n = k * 250 + i;
+            spawn_entity(kinds[k], (n % 32) * 3.0 - 48.0, 0.1, (n / 32) * 3.0 - 48.0, #{ thoughts: 0 });
+        }
+    }
+}
+
+fn think(ant) {
+    let me = me();
+    let sum = 0;
+    for i in 0..300 { sum += i; }
+    entity_set(me.id, "thoughts", entity_get(me.id, "thoughts") + 1);
+    steer(me.id, 1.0, 0.0, false);
+}
+"#;
+
+const SWARM_MODEL: &str = r#"{
+  "schema_version": 1,
+  "boxes": [{ "center": [0.0, 0.2, 0.0], "size": [0.3, 0.3, 0.3], "color": [0.1, 0.1, 0.1, 1.0] }]
+}"#;
+
+/// E23 (entity/behaviour model; categories 9, 6). A thousand agents that
+/// all want to think every tick. The package's share of script work is
+/// less than they ask for, so thinking is rationed: every agent must still
+/// think, in turn, and none may starve.
+#[test]
+fn a_thousand_agents_all_get_to_think() {
+    let kinds: Vec<String> = ["a", "b", "c", "d"].iter().map(|k| swarm_kind(k)).collect();
+    let behaviour_manifest = manifest(
+        "swarm",
+        &["entity"],
+        &[
+            ("behaviour", "swarm", "behaviour.json"),
+            ("script", "swarm", "swarm.rhai"),
+            ("entity", "a", "a.json"),
+            ("entity", "b", "b.json"),
+            ("entity", "c", "c.json"),
+            ("entity", "d", "d.json"),
+        ],
+    );
+    let look_manifest = manifest("swarm-look", &[], &[("model", "ant", "ant.json")]);
+    let mut s = mode(
+        "swarm",
+        &[
+            Package {
+                id: "swarm",
+                side: Side::Server,
+                files: &[
+                    ("package.json", &behaviour_manifest),
+                    ("behaviour.json", SWARM_BEHAVIOUR),
+                    ("swarm.rhai", SWARM_SCRIPT),
+                    ("a.json", &kinds[0]),
+                    ("b.json", &kinds[1]),
+                    ("c.json", &kinds[2]),
+                    ("d.json", &kinds[3]),
+                ],
+            },
+            Package {
+                id: "swarm-look",
+                side: Side::Client,
+                files: &[("package.json", &look_manifest), ("ant.json", SWARM_MODEL)],
+            },
+        ],
+    );
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 60.0), true)
+        .unwrap();
+    s.command(admin, 1, command("swarm", "fill", vec![]))
+        .unwrap();
+    assert_eq!(
+        s.package_entities().len(),
+        1000,
+        "{:#?}",
+        s.package_diagnostics()
+    );
+    let start = std::time::Instant::now();
+    steps(&mut s, 120);
+    let took = start.elapsed();
+    let starved = s
+        .package_entity_vars()
+        .into_iter()
+        .filter(|(_, vars)| vars.get("thoughts").and_then(|t| t.as_i64()).unwrap_or(0) == 0)
+        .count();
+    assert_eq!(
+        starved, 0,
+        "{starved} of 1000 agents never thought in 120 ticks"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(30),
+        "120 ticks of a 1000-agent swarm took {took:?}"
+    );
+}

@@ -264,6 +264,15 @@ pub(super) struct PackageHost {
     hooks_due: BTreeSet<String>,
     /// Hooks paused after failing, until the given tick.
     hooks_paused: BTreeMap<String, u64>,
+    /// While the engine runs a tick's package work, every call shares one
+    /// view of the world taken at its start, so a call costs what it does,
+    /// not the size of the world (stress campaign W12).
+    view: Option<TickView>,
+}
+
+struct TickView {
+    snapshot: Arc<Snapshot>,
+    vars: BTreeMap<String, Arc<script::EntityVars>>,
 }
 
 /// Script operations per tick the server gives package work it runs itself
@@ -430,6 +439,7 @@ impl Session {
             state_bytes,
             hooks_due: BTreeSet::new(),
             hooks_paused: BTreeMap::new(),
+            view: None,
         }));
         let Some(view) = self
             .packages
@@ -558,7 +568,7 @@ impl Session {
                 aim: None,
                 entity: None,
                 state: Namespace::default(),
-                entity_vars: BTreeMap::new(),
+                entity_vars: Default::default(),
             };
             let package = world.package.clone();
             let outcome = host
@@ -640,6 +650,32 @@ impl Session {
         match self.peers.get(&owner).and_then(|p| p.principal) {
             Some(principal) => PlayerKey::principal(&principal.0),
             None => PlayerKey::session(owner),
+        }
+    }
+    fn package_vars(&self, package: &str) -> script::EntityVars {
+        self.packages
+            .as_ref()
+            .map(|h| {
+                h.entities
+                    .iter()
+                    .filter(|(_, e)| e.package == package)
+                    .map(|(id, e)| (*id, e.vars.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    fn tick_view(&self) -> TickView {
+        let mut vars: BTreeMap<String, script::EntityVars> = BTreeMap::new();
+        if let Some(h) = self.packages.as_ref() {
+            for (id, e) in &h.entities {
+                vars.entry(e.package.clone())
+                    .or_default()
+                    .insert(*id, e.vars.clone());
+            }
+        }
+        TickView {
+            snapshot: Arc::new(self.package_snapshot()),
+            vars: vars.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
         }
     }
     fn package_snapshot(&self) -> Snapshot {
@@ -736,18 +772,28 @@ impl Session {
         aim: Option<script::Aim>,
         entity: Option<u64>,
     ) -> std::result::Result<(), Diagnostic> {
-        let snapshot = Arc::new(self.package_snapshot());
+        let shared = self
+            .packages
+            .as_ref()
+            .and_then(|h| h.view.as_ref())
+            .map(|v| {
+                (
+                    v.snapshot.clone(),
+                    v.vars.get(package).cloned().unwrap_or_default(),
+                )
+            });
+        let (snapshot, entity_vars) = match shared {
+            Some(shared) => shared,
+            None => (
+                Arc::new(self.package_snapshot()),
+                Arc::new(self.package_vars(package)),
+            ),
+        };
         let Some(host) = self.packages.as_mut() else {
             return Err(Diagnostic::error("package.none", "No packages are enabled"));
         };
         let state = host.store.namespace(package).cloned().unwrap_or_default();
         let input = state.clone();
-        let entity_vars = host
-            .entities
-            .iter()
-            .filter(|(_, e)| e.package == package)
-            .map(|(id, e)| (*id, e.vars.clone()))
-            .collect();
         let call = Call {
             function,
             args,
@@ -1515,13 +1561,19 @@ impl Session {
             .map(|(id, _)| id.clone())
             .collect();
         host.hooks_due.extend(hooks);
-        let due: Vec<(u64, String, String)> = host
+        // Longest-waiting first, so thinks a package's share could not fit
+        // this tick go first next tick and no entity starves.
+        let mut due: Vec<(u64, u64, String, String)> = host
             .entities
             .iter()
             .filter(|(_, e)| tick >= e.next_think)
-            .map(|(id, e)| (*id, e.package.clone(), e.think.clone()))
+            .map(|(id, e)| (e.next_think, *id, e.package.clone(), e.think.clone()))
             .collect();
-        for (id, package, think) in due {
+        due.sort_unstable_by_key(|d| (d.0, d.1));
+        let view = self.tick_view();
+        let snapshot = view.snapshot.clone();
+        self.packages.as_mut().expect("checked").view = Some(view);
+        for (_, id, package, think) in due {
             // Past its share this tick, a package's thinks wait (and yield to
             // its due hook); they are not dropped.
             let host = self.packages.as_mut().expect("checked");
@@ -1529,21 +1581,17 @@ impl Session {
             {
                 continue;
             }
-            let Some(view) = self
-                .package_snapshot()
-                .entities
-                .into_iter()
-                .find(|e| e.id == id)
-            else {
+            let Ok(at) = snapshot.entities.binary_search_by_key(&id, |e| e.id) else {
                 continue;
             };
+            let view = &snapshot.entities[at];
             if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
                 e.next_think = tick + e.interval;
             }
             let result = self.run_package(
                 &package,
                 &think,
-                vec![script::entity_map(&view)],
+                vec![script::entity_map(view)],
                 Budget::Think,
                 None,
                 None,
@@ -1558,6 +1606,7 @@ impl Session {
                 }
             }
         }
+        self.packages.as_mut().expect("checked").view = None;
         let liquids = self.simulation.liquids();
         let mut fallen = Vec::new();
         if let Some(host) = self.packages.as_mut() {
@@ -1719,6 +1768,18 @@ impl Session {
 
     pub fn packages_enabled(&self) -> bool {
         self.packages.is_some()
+    }
+    /// Each package entity's variables (tests, tools).
+    pub fn package_entity_vars(&self) -> Vec<(u64, BTreeMap<String, serde_json::Value>)> {
+        self.packages
+            .as_ref()
+            .map(|h| {
+                h.entities
+                    .iter()
+                    .map(|(id, e)| (*id, e.vars.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
     pub fn package_entities(&self) -> Vec<EntityInfo> {
         self.packages

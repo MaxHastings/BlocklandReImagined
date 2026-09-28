@@ -60,7 +60,7 @@ fn call<'a>(function: &'a str, args: Vec<Dynamic>, snapshot: &Arc<Snapshot>) -> 
         aim: None,
         entity: None,
         state: Namespace::default(),
-        entity_vars: BTreeMap::new(),
+        entity_vars: Default::default(),
     }
 }
 
@@ -211,12 +211,12 @@ fn creeper_chases_then_fuses_then_explodes() {
         let mut c = call("think", vec![entity_map(&me)], &snapshot);
         c.entity = Some(9);
         c.budget = Budget::Think;
-        c.entity_vars = vars.clone();
+        c.entity_vars = Arc::new(vars.clone());
         c.state = state.clone();
         let out = runtime
             .call("stresslab-creeper", c)
             .unwrap_or_else(|e| panic!("{e}"));
-        *vars = out.entity_vars;
+        vars.extend(out.entity_vars);
         *state = out.state;
         out.ops
     };

@@ -39,3 +39,8 @@ reason = "Needs a real UPnP router on the LAN."
 [[skip]]
 test = "world_checkpoint_wire_cost"
 reason = "Benchmark; needs BRI_BENCH_WORLD."
+
+[[failure]]
+test = "unlike_modes.rs::a_low_gravity_mode_changes_how_players_move"
+owner = "Mod platform stress campaign"
+reason = "Open finding W11 (docs/stress-lab/weakness-ledger.md): movement profiles are the closed PlayerType enum, so a package cannot define low gravity. Kept as the replayable evidence until datablocks become data."
