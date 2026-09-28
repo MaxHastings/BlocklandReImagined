@@ -106,7 +106,7 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
         session()?,
         ServerOptions {
             bind: "127.0.0.1:0".parse()?,
-            content_id: "soak".into(),
+            environment: bri_package::environment::Environment::empty(),
             spawn_points: vec![Vec3::new(0.0, 0.05, 0.0), Vec3::new(3.0, 0.05, 0.0)],
             certificate: None,
             map_loader: None,
@@ -116,7 +116,7 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
     let mut players = Vec::new();
     for name in ["Alpha", "Bravo"] {
         let client =
-            Client::connect(link.address, &server.certificate, name.into(), "soak".into(), None)
+            Client::connect(link.address, &server.certificate, name.into(), Vec::new(), None)
                 .await?;
         players.push(Player {
             client,
