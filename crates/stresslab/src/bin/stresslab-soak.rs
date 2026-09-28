@@ -84,7 +84,7 @@ async fn drive(mut client: Client, yaw: f32, seconds: f32) -> Result<(Client, u6
                 if history.len() > bri_net::protocol::MOVEMENT_REDUNDANCY {
                     history.remove(0);
                 }
-                client.movement(sequence, &history)?;
+                client.movement(sequence, &history, None)?;
                 sequence += 1;
                 if pending.is_none() && tick.is_multiple_of(24) {
                     let aim = Some(ActionAim { yaw, pitch: -0.9 });

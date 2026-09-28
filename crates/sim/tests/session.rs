@@ -1420,3 +1420,90 @@ fn sitting_is_replicated_state_that_moving_ends() {
     walk(&mut s, owner, 1, 30);
     assert!(!s.vitals()[&owner].sitting);
 }
+
+#[test]
+fn drop_player_at_camera_lands_at_the_camera_like_v20() {
+    use bri_admin::{Action, Request};
+    use bri_sim::presentation::CueKind;
+    use bri_sim::session::{CameraView, ControlObject};
+    let mut s = session();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(4.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    let f8 = || Command::Admin(Request::new(Action::DropCameraAtPlayer));
+    assert!(s.command(guest, 1, Command::DropPlayerAtCamera(None)).is_err());
+    // F8: the camera starts at the eye and everyone else sees its orb there.
+    let standing = body(&s, admin);
+    // `getEyePoint() - getPosition()` at the body's facing when F7 is
+    // pressed: the Eye node's height and its lead ahead of the body.
+    let offset = standing.eye(&bri_sim::player::PlayerTuning::default()) - Vec3::from(standing.feet);
+    let eye_height = offset.y;
+    s.command(admin, 1, f8()).unwrap();
+    assert_eq!(s.camera_orbs().len(), 1);
+    assert!((s.camera_orbs()[0].1[1] - (standing.feet[1] + eye_height)).abs() < 1e-4);
+    let high = CameraView {
+        eye: [5.0, 20.0, 3.0],
+        yaw: 1.0,
+        pitch: 0.3,
+    };
+    s.camera_report(admin, high).unwrap();
+    assert_eq!(s.camera_orbs(), vec![(admin, high.eye)]);
+    s.take_cues();
+    // F7 in the air: `serverCmdDropPlayerAtCamera` sets the feet to the
+    // camera minus that offset, lead included.
+    s.command(admin, 2, Command::DropPlayerAtCamera(None)).unwrap();
+    let dropped = body(&s, admin);
+    assert!(
+        Vec3::from(dropped.feet).distance(Vec3::new(5.0, 20.0, 3.0) - offset) < 1e-3,
+        "{:?}",
+        dropped.feet
+    );
+    assert!((dropped.yaw - 1.0).abs() < 1e-6);
+    assert_eq!(s.vitals()[&admin].control, ControlObject::Player);
+    assert!(s.camera_orbs().is_empty(), "the orb goes with the camera");
+    assert!(s.take_cues().iter().any(|c| matches!(
+        c.kind,
+        CueKind::Teleport { actor, player: true, .. } if actor == admin
+    )));
+    // Reports from the body do not move the camera.
+    s.camera_report(admin, CameraView { eye: [50.0; 3], ..high }).unwrap();
+    // Closer to the ground than the eye's height: the feet stand on it.
+    s.command(admin, 3, f8()).unwrap();
+    let low = CameraView {
+        eye: [2.0, 1.0, -2.0],
+        yaw: -0.5,
+        pitch: -0.2,
+    };
+    // The ray runs from the camera along -offset and the feet go where it
+    // meets the ground (y = 0).
+    let ground = |s: &Session| {
+        let b = body(s, admin);
+        let offset = b.eye(&bri_sim::player::PlayerTuning::default()) - Vec3::from(b.feet);
+        low.eye() - offset * (low.eye[1] / offset.y)
+    };
+    let expected = ground(&s);
+    s.command(admin, 4, Command::DropPlayerAtCamera(Some(low))).unwrap();
+    let landed = body(&s, admin);
+    assert!(
+        Vec3::from(landed.feet).distance(expected) < 1e-3,
+        "{:?} {expected:?}",
+        landed.feet
+    );
+    // F7 without flying goes back to where the camera was left.
+    walk(&mut s, admin, 1, 60);
+    let expected = ground(&s);
+    s.command(admin, 5, Command::DropPlayerAtCamera(None)).unwrap();
+    assert!(Vec3::from(body(&s, admin).feet).distance(expected) < 1e-3);
+    // A dead administrator respawns at once.
+    s.command(admin, 6, Command::Suicide).unwrap();
+    assert!(!s.is_alive(admin));
+    s.command(admin, 7, Command::DropPlayerAtCamera(None)).unwrap();
+    assert!(s.is_alive(admin));
+    assert_eq!(s.vitals()[&admin].control, ControlObject::Player);
+}

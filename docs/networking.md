@@ -58,6 +58,12 @@ The runtime dependency graph contains no Torque readers.
 - Movement datagrams carry separately sequenced intent. The motor runs at 120 Hz;
   snapshots and reliable world updates run at 20 Hz. Input expiry stops unattended
   movement after 60 simulation ticks.
+- While an admin, spy or death camera has control, movement datagrams also
+  carry the client's camera view (eye, yaw, pitch). The server keeps it as the
+  connection's camera transform: `DropPlayerAtCamera` (F7) lands there, and
+  free cameras stream to everyone as unreliable `Orb` datagrams with the poses,
+  so other players see the v20 `cameraImage` glow. The worst-case codec test
+  bounds both within the 1,100-byte datagram budget.
 - Clients reject replication gaps and invalid deltas before mutating their world.
   Remote pose history ignores older ticks and interpolates yaw across its seam.
 - Local prediction reuses the player motor, retains at most240 unacknowledged

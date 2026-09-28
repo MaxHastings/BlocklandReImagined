@@ -4,7 +4,7 @@ use bri_identity::ClientIdentity;
 use bri_progress::{Progress, Stage, Unit};
 use bri_sim::{
     player::MoveInput,
-    session::{Command, Reply},
+    session::{CameraView, Command, Reply},
 };
 use bri_world::OwnerId;
 use sha2::Digest;
@@ -18,6 +18,7 @@ enum Incoming {
     Reliable(Box<Message>),
     Pose(Pose),
     Vehicle(bri_sim::session::VehiclePose),
+    Orb(Orb),
     Closed(String),
 }
 #[derive(Debug)]
@@ -30,6 +31,7 @@ pub enum ClientEvent {
     },
     Pose(OwnerId),
     Vehicle(u64),
+    Orb(OwnerId),
     Reply {
         sequence: u64,
         result: Result<Reply, bri_sim::session::Rejection>,
@@ -408,6 +410,7 @@ impl Client {
                     let _ = events.try_send(match datagram {
                         Datagram::Pose(pose) => Incoming::Pose(pose),
                         Datagram::Vehicle(pose) => Incoming::Vehicle(pose),
+                        Datagram::Orb(orb) => Incoming::Orb(orb),
                     });
                 }
             }
@@ -435,7 +438,12 @@ impl Client {
     /// repeat recent history and absorb isolated losses. A slow frame that ran
     /// more ticks than one datagram carries is split into several, oldest
     /// first, so no input is skipped.
-    pub fn movement(&mut self, newest: u64, inputs: &[MoveInput]) -> Result<()> {
+    pub fn movement(
+        &mut self,
+        newest: u64,
+        inputs: &[MoveInput],
+        camera: Option<CameraView>,
+    ) -> Result<()> {
         ensure!(
             inputs.len() <= MAX_MOVEMENT_BATCH && newest >= inputs.len() as u64,
             "Invalid movement batch"
@@ -451,6 +459,7 @@ impl Client {
                 version: VERSION,
                 newest: newest - (inputs.len() - end) as u64,
                 inputs: inputs[start..end].to_vec(),
+                camera,
             };
             movement.validate()?;
             datagrams.push(codec::encode_datagram(&movement)?);
@@ -486,7 +495,7 @@ impl Client {
                         }
                         _ => anyhow::bail!("Unexpected message during a map transfer"),
                     },
-                    Incoming::Pose(_) | Incoming::Vehicle(_) => {}
+                    Incoming::Pose(_) | Incoming::Vehicle(_) | Incoming::Orb(_) => {}
                     Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
                 }
                 continue;
@@ -546,6 +555,11 @@ impl Client {
                     let id = pose.id;
                     self.replica.vehicle_pose(pose)?;
                     Ok(ClientEvent::Vehicle(id))
+                }
+                Incoming::Orb(orb) => {
+                    let owner = orb.owner;
+                    self.replica.orb(orb)?;
+                    Ok(ClientEvent::Orb(owner))
                 }
                 Incoming::Closed(reason) => anyhow::bail!("Connection closed: {reason}"),
             };

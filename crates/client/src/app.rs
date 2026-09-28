@@ -357,6 +357,9 @@ pub struct App {
     chase_lag: Vec3,
     /// This frame's seat rotation for every mounted player.
     rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
+    /// Where the admin, spy or death camera was last drawn from, reported
+    /// to the server as the camera's transform.
+    observer_eye: Option<Vec3>,
     /// The tumble vehicle the local player last started riding.
     tumble: Option<u64>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
@@ -701,6 +704,20 @@ impl App {
             })
             .collect();
         actor_effects.update_water(elapsed, &swimmers)?;
+        // Other admins' free cameras; the controller does not see its own
+        // (`firstPersonParticles = 0`).
+        actor_effects.set_orbs(
+            view.orbs
+                .iter()
+                .filter(|(owner, _)| {
+                    **owner != view.owner
+                        && view.vitals.get(owner).is_some_and(|v| {
+                            v.control == bri_sim::session::ControlObject::Camera
+                        })
+                })
+                .map(|(owner, orb)| (*owner, Vec3::from(orb.eye)))
+                .collect(),
+        );
         actor_effects.advance(elapsed, pose, &jets, &burning, &lights)
     }
     fn reset_weapon_effect_session(&mut self, session: RequestId, checkpoint_cursor: u64) {
@@ -1252,6 +1269,7 @@ impl App {
             mount_heading: None,
             chase_lag: Vec3::ZERO,
             rider_rotations: BTreeMap::new(),
+            observer_eye: None,
             tumble: None,
             music_world: None,
             net_graph: None,
@@ -1634,6 +1652,23 @@ impl App {
                 .map(|p| view.archetypes.eye(&p.player))
         });
         self.controls.follow(control, view.owner, eye);
+    }
+    /// The camera in control, as the server's `%client.Camera` transform:
+    /// the free camera's position, or where the orbit camera was drawn from.
+    fn camera_view(&self) -> Option<bri_sim::session::CameraView> {
+        let observer = self.controls.observer()?;
+        let eye = match observer.mode {
+            crate::controls::ObserverMode::Free(position) => position,
+            crate::controls::ObserverMode::Orbit(_) | crate::controls::ObserverMode::Drive(_) => {
+                self.observer_eye?
+            }
+        };
+        let view = bri_sim::session::CameraView {
+            eye: eye.to_array(),
+            yaw: observer.yaw,
+            pitch: observer.pitch,
+        };
+        view.validate().ok().map(|()| view)
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -3948,7 +3983,7 @@ impl PlatformApp for App {
                 input,
                 bri_net::protocol::MOVEMENT_REDUNDANCY,
             )? {
-                a.worker.movement(newest, inputs)?;
+                a.worker.movement(newest, inputs, self.camera_view())?;
             }
             if let Some(view) = &a.view {
                 let vitals = view.vitals.get(&view.owner);
@@ -4444,6 +4479,7 @@ impl PlatformApp for App {
                 pitch.sin(),
                 -yaw.cos() * pitch.cos(),
             );
+            self.observer_eye = self.controls.observer().map(|_| eye);
             listener = bri_audio::Listener {
                 position: eye.to_array(),
                 forward: forward.to_array(),
@@ -4920,17 +4956,19 @@ impl PlatformApp for App {
                     }
                 }
                 UiAction::Game(GameAction::DropPlayerAtCamera) => {
-                    match self.controls.free_camera() {
-                        Some(eye) => {
+                    // `serverCmdDropPlayerAtCamera`: the server moves the
+                    // body, or the vehicle it rides, to the camera (where it
+                    // was last left when none is flying), or respawns.
+                    match self.network_view() {
+                        Some(view) if view.administrator => {
+                            let camera = self.camera_view();
                             // The body arrives facing the camera's heading.
-                            let (yaw, _) = self.controls.camera_angles();
-                            self.controls.yaw = yaw;
+                            if let Some(camera) = camera {
+                                self.controls.yaw = camera.yaw;
+                            }
                             let result = self.command(
                                 id,
-                                Command::DropPlayerAt {
-                                    eye: eye.to_array(),
-                                    yaw,
-                                },
+                                Command::DropPlayerAtCamera(camera),
                                 action.clone(),
                             );
                             if result.is_ok() {
@@ -4938,7 +4976,7 @@ impl PlatformApp for App {
                             }
                             result
                         }
-                        None => Ok(()),
+                        _ => Ok(()),
                     }
                 }
                 UiAction::Game(GameAction::NextSeat | GameAction::PrevSeat) => {

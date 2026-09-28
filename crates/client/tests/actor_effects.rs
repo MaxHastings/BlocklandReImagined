@@ -100,6 +100,9 @@ fn effects() -> Arc<EffectsPack> {
                 emitter("v20/emitter/playerfoamemitter", 0.),
                 emitter("v20/emitter/playerbubbleemitter", 0.),
                 emitter("v20/emitter/playersplash", 0.3),
+                emitter("v20/emitter/cameraemittera", 0.),
+                emitter("v20/emitter/playerteleportemittera", 0.),
+                emitter("v20/emitter/playerteleportemitterb", 0.),
             ],
         },
         Manifest {
@@ -473,5 +476,55 @@ fn player_lights_shine_and_flare_at_the_hand_until_switched_off() -> Result<()> 
     assert_eq!(fx.light_count(), 0);
     assert!(fx.world().snapshot(&camera).lights.is_empty());
     assert!(fx.diagnostics.messages.is_empty(), "{:?}", fx.diagnostics.messages);
+    Ok(())
+}
+
+#[test]
+fn teleports_sparkle_briefly_and_camera_orbs_follow_the_stream() -> Result<()> {
+    let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+    let back = |a| matches!(a, Anchor::Actor { actor: 7, mount: 2 }).then_some(Mat4::IDENTITY);
+    fx.cue(&cue(
+        1,
+        CueKind::Teleport {
+            actor: 7,
+            scale: 1.0,
+            player: true,
+        },
+    ));
+    assert_eq!(fx.image_count(), 1, "PlayerTeleportImage takes the emote slot");
+    fx.advance(0.1, back, &[], &[], &[])?;
+    assert!(fx.world().particle_count() > 0);
+    assert!(fx.world().source_count() >= 1);
+    for _ in 0..28 {
+        fx.advance(0.1, back, &[], &[], &[])?;
+    }
+    assert_eq!(fx.image_count(), 1, "the sparkle lasts 3 seconds");
+    for _ in 0..3 {
+        fx.advance(0.1, back, &[], &[], &[])?;
+    }
+    assert_eq!(fx.image_count(), 0, "PlayerTeleportImage::onDone unmounts");
+    assert_eq!(fx.world().source_count(), 0, "the 150 ms burst is finite");
+    // A vehicle bursts without the image.
+    fx.cue(&cue(
+        2,
+        CueKind::Teleport {
+            actor: 7,
+            scale: 3.0,
+            player: false,
+        },
+    ));
+    assert_eq!(fx.image_count(), 0);
+    fx.set_orbs(vec![(8, Vec3::new(1., 2., 3.))]);
+    fx.advance(0.1, back, &[], &[], &[])?;
+    fx.advance(0.1, back, &[], &[], &[])?;
+    assert_eq!(fx.orb_count(), 1);
+    fx.set_orbs(Vec::new());
+    fx.advance(0.1, back, &[], &[], &[])?;
+    assert_eq!(fx.orb_count(), 0, "the orb goes with the camera");
+    assert!(
+        fx.diagnostics.messages.is_empty(),
+        "{:?}",
+        fx.diagnostics.messages
+    );
     Ok(())
 }

@@ -1,6 +1,6 @@
 use bri_sim::{
     player::{MoveInput, PlayerState},
-    session::{ChatLine, Command, Reply, Session},
+    session::{CameraView, ChatLine, Command, Reply, Session},
 };
 use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 35: player archetypes, control targets, block looks, per-viewer package
 /// state (`PackageState`), typed package refusals and package downloads.
 /// 36: `Vitals::sitting`, the sit emote as replicated state.
-pub const VERSION: u32 = 36;
+/// 37: admin camera `Orb` datagrams, the camera view in movement datagrams
+/// and the `Teleport` cue.
+pub const VERSION: u32 = 37;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -192,6 +194,8 @@ pub struct Movement {
     pub newest: u64,
     /// Consecutive prediction-tick inputs, oldest first.
     pub inputs: Vec<MoveInput>,
+    /// The camera the client flies or orbits while one has control.
+    pub camera: Option<CameraView>,
 }
 impl Movement {
     /// Callers validate first; the arithmetic cannot overflow for any
@@ -213,6 +217,9 @@ impl Movement {
                 && self.newest >= self.inputs.len() as u64,
             "Invalid movement datagram"
         );
+        if let Some(camera) = &self.camera {
+            camera.validate()?;
+        }
         Ok(())
     }
 }
@@ -221,6 +228,14 @@ impl Movement {
 pub enum Datagram {
     Pose(Pose),
     Vehicle(bri_sim::session::VehiclePose),
+    Orb(Orb),
+}
+/// Where an admin's free camera is: its `cameraImage` orb, seen by others.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Orb {
+    pub tick: u64,
+    pub owner: OwnerId,
+    pub eye: [f32; 3],
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pose {

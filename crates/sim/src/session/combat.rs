@@ -429,7 +429,9 @@ impl Session {
         let (Some(s), Some(t)) = (self.peers.get(&source), self.peers.get(&target)) else {
             return false;
         };
-        if !t.combat.alive {
+        if !t.combat.alive
+            || self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
+        {
             return false;
         }
         let Ok(source) = self.minigames.projectile_source(s.combat.player) else {

@@ -17,7 +17,7 @@ mod breakables;
 mod build_load;
 mod combat;
 mod control;
-pub use control::ControlObject;
+pub use control::{CameraView, ControlObject};
 mod debris;
 mod events;
 mod admin_world;
@@ -180,12 +180,10 @@ pub enum Command {
     },
     /// `TrustListUpload`: the client's saved trust list, sent after joining.
     TrustList(Vec<TrustEntry>),
-    /// Admin `dropPlayerAtCamera`: move the player to the free camera's eye
-    /// and return control to it.
-    DropPlayerAt {
-        eye: [f32; 3],
-        yaw: f32,
-    },
+    /// Admin `dropPlayerAtCamera` (F7): the body, or the vehicle it rides,
+    /// goes to the camera and takes control back. Carries the client's camera
+    /// at the key press while one is flying or orbiting.
+    DropPlayerAtCamera(Option<CameraView>),
     /// `setControlObject(player)`: leave the admin free or spy camera.
     ControlPlayer,
     /// The client's brick inventory state, which only it knows.
@@ -252,7 +250,7 @@ impl Command {
             | Command::DemoteTrust { .. }
             | Command::UnIgnore { .. }
             | Command::TrustList(_)
-            | Command::DropPlayerAt { .. }
+            | Command::DropPlayerAtCamera(_)
             | Command::ControlPlayer
             | Command::BrickHand(_)
             | Command::Talking(_) => (false, None),
@@ -416,6 +414,10 @@ struct Peer {
     combat: combat::Combat,
     special: special::Progress,
     control: ControlObject,
+    /// `%client.Camera`'s last transform; `None` until a camera is used.
+    camera: Option<CameraView>,
+    /// `%client.lastF8Time`: when an admin teleport last moved this player.
+    last_drop_tick: Option<u64>,
     tutorial: tutorial::Progress,
     /// `%client.isTalking`.
     talking: bool,
@@ -738,6 +740,8 @@ impl Session {
                 combat,
                 special: Default::default(),
                 control: ControlObject::Player,
+                camera: None,
+                last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
                 talking: false,
@@ -892,6 +896,8 @@ impl Session {
                 combat,
                 special: Default::default(),
                 control: ControlObject::Player,
+                camera: None,
+                last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
                 talking: false,
@@ -1247,30 +1253,8 @@ impl Session {
                 self.team_chat(owner, &name, &text)?;
                 Ok(Reply::Accepted)
             }
-            Command::DropPlayerAt { eye, yaw } => {
-                ensure!(peer.actor.administrator, "Only administrators can do that");
-                ensure!(peer.combat.alive, "You are dead");
-                ensure!(!self.vehicles.is_mounted(owner), "Leave the vehicle first");
-                let eye = Vec3::from(eye);
-                ensure!(
-                    eye.is_finite() && eye.abs().max_element() < 1_000_000.0 && yaw.is_finite(),
-                    "Invalid camera position"
-                );
-                let feet = eye - Vec3::Y * peer.player.tuning().stand_eye;
-                peer.player
-                    .teleport(&mut self.simulation.physics, feet, yaw)?;
-                peer.inputs.clear();
-                peer.control = ControlObject::Player;
-                // `serverCmdDropPlayerAtCamera` costs a point inside minigames.
-                let player = peer.combat.player;
-                if self
-                    .minigames
-                    .player(player)
-                    .is_ok_and(|p| p.game.is_some())
-                    && let Ok(effects) = self.minigames.event_score(player, -1, true)
-                {
-                    self.apply_minigame_effects(effects)?;
-                }
+            Command::DropPlayerAtCamera(view) => {
+                self.drop_player_at_camera(owner, view)?;
                 Ok(Reply::Accepted)
             }
             Command::ControlPlayer => {
@@ -1427,6 +1411,9 @@ impl Session {
                 };
                 let eye = peer.player.eye();
                 self.play_thread_three(tick, owner, swing);
+                if self.teleport_lockout(owner, admin_players::TELEPORT_PICKUP_LOCK_MS, true) {
+                    return Ok(Reply::Activated(None));
+                }
                 let brick_distance = self
                     .simulation
                     .target(eye, direction, 5.0)?

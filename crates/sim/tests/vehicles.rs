@@ -553,3 +553,68 @@ fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun() -> anyho
     );
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the converted native vehicle and brick packs"]
+fn admin_drop_at_camera_carries_the_ridden_vehicle() -> anyhow::Result<()> {
+    use bri_admin::{Action, Request};
+    use bri_sim::{
+        presentation::CueKind,
+        session::{CameraView, ControlObject},
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for vehicle in [JEEP, "v20.vehicle.horsearmor"] {
+        let (mut s, owner) = session_with(&root, vehicle)?;
+        let mut p = Feeder { owner, sequence: 0 };
+        p.feed(&mut s, MoveInput::default(), 120)?;
+        p.board(&mut s, 0.0)?;
+        p.feed(&mut s, MoveInput::default(), 30)?;
+        assert!(s.mounted(owner).is_some(), "{vehicle}");
+        s.command(
+            owner,
+            100,
+            Command::Admin(Request::new(Action::DropCameraAtPlayer)),
+        )?;
+        let camera = CameraView {
+            eye: [30.0, 6.0, 20.0],
+            yaw: std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+        };
+        s.take_cues();
+        s.command(owner, 101, Command::DropPlayerAtCamera(Some(camera)))?;
+        assert!(s.mounted(owner).is_some(), "{vehicle}: still riding");
+        assert_eq!(s.control(owner), Some(ControlObject::Player));
+        assert!(s.take_cues().iter().any(|c| matches!(
+            c.kind,
+            CueKind::Teleport { player: false, .. }
+        )));
+        // The client turns its look to the camera's heading with the drop.
+        let look = MoveInput {
+            yaw: camera.yaw,
+            ..Default::default()
+        };
+        p.feed(&mut s, look, 1)?;
+        let pose = &s.vehicle_poses()[0];
+        assert!(
+            Vec3::from(pose.position).distance(Vec3::from(camera.eye)) < 0.1,
+            "{vehicle}: {:?}",
+            pose.position
+        );
+        assert!((pose_heading(pose.rotation) - camera.yaw).abs() < 0.01);
+        assert!(Vec3::from(pose.velocity).length() < 0.5, "stopped");
+        // The rider comes along in the seat.
+        p.feed(&mut s, look, 2)?;
+        let rider = s
+            .motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap()
+            .0;
+        assert!(
+            Vec3::from(rider.feet).distance(Vec3::from(camera.eye)) < 4.0,
+            "{vehicle}: {:?}",
+            rider.feet
+        );
+    }
+    Ok(())
+}

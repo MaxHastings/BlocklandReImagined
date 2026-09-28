@@ -148,6 +148,11 @@ impl Session {
             self.weapons.image_state(ActorId(owner), 0).is_some(),
             "No weapon image equipped"
         );
+        if down
+            && self.teleport_lockout(owner, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false)
+        {
+            return Ok(());
+        }
         let queue = self.weapon_triggers.entry(owner).or_default();
         if queue.len() >= 32 {
             ensure!(!down, "Weapon trigger queue full");

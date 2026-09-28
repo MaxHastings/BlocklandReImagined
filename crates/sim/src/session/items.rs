@@ -139,6 +139,8 @@ impl Session {
             let actor = ActorId(owner);
             let contact = crate::player::item_bounds(&peer.player);
             let game = self.game_of(owner);
+            let locked =
+                self.teleport_lockout(owner, super::admin_players::TELEPORT_PICKUP_LOCK_MS, true);
             for (projectile, source, bounds) in &balls {
                 // `sportIsInSameMinigame`: both in one game or both outside.
                 if bounds.overlaps(&contact) && self.game_of(source.0) == game {
@@ -147,7 +149,7 @@ impl Session {
             }
             for id in self.item_spawners.contacts(contact) {
                 let item = &self.item_spawners.items[&id];
-                if tick < item.available_at {
+                if locked || tick < item.available_at {
                     continue;
                 }
                 let sport = self
@@ -176,11 +178,14 @@ impl Session {
             for id in dynamic.query(contact) {
                 // Another peer can have consumed this candidate earlier this tick.
                 if self.weapons.is_ball_drop(id) {
+                    if locked {
+                        continue;
+                    }
                     let source = self.weapons.drops().find(|d| d.id == id).map(|d| d.source);
                     if source.is_some_and(|s| s.0 == 0 || self.game_of(s.0) == game) {
                         let _ = self.weapons.pickup_ball(actor, id);
                     }
-                } else if self.weapons.pickup(actor, id).is_ok() {
+                } else if !locked && self.weapons.pickup(actor, id).is_ok() {
                     self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
                 }
             }

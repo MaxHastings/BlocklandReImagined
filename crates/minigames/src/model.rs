@@ -411,8 +411,9 @@ pub enum Command {
     Respawn {
         actor: PlayerId,
     },
-    /// The host gives `target` a new life now, alive or dead (a package's
-    /// round reset). Only the host constructs it.
+    /// The host gives `target` a new life now, alive or dead: a package's
+    /// round reset, or `serverCmdDropPlayerAtCamera` on a dead administrator
+    /// (`spawnPlayer` without the respawn wait). Only the host constructs it.
     ForceRespawn {
         target: PlayerId,
     },

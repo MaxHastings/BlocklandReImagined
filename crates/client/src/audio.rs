@@ -241,6 +241,8 @@ impl ClientAudio {
                 self.profile("rocketExplodeSound", Placement::World(cue.position));
                 return;
             }
+            // PlayerTeleportExplosion has no `soundProfile`.
+            CueKind::Teleport { .. } => return,
             CueKind::VehicleSound { sound, .. } => {
                 if sound.contains('.') {
                     self.trigger(sound, Placement::World(cue.position));

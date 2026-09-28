@@ -7,7 +7,7 @@ use bri_net::{
 };
 use bri_sim::{
     player::MoveInput,
-    session::{ChatLine, Command, Reply},
+    session::{CameraView, ChatLine, Command, Reply},
 };
 use bri_world::OwnerId;
 use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
@@ -58,6 +58,8 @@ pub struct View {
     pub archetypes: Arc<bri_sim::archetype::Archetypes>,
     /// Add-On packages downloaded from this server (models, HUD panels).
     pub mods: Arc<bri_package_runtime::Catalog>,
+    /// Admin free-camera orbs by owner (`cameraImage`).
+    pub orbs: BTreeMap<OwnerId, bri_net::protocol::Orb>,
     pub rtt_ms: u32,
     /// Entities of the server's packages.
     pub entities: Arc<BTreeMap<u64, bri_sim::session::EntityInfo>>,
@@ -137,7 +139,7 @@ struct Request {
 }
 pub struct Worker {
     requests: mpsc::Sender<Request>,
-    movement: mpsc::Sender<(u64, Vec<MoveInput>)>,
+    movement: mpsc::Sender<(u64, Vec<MoveInput>, Option<CameraView>)>,
     pub view: watch::Receiver<Option<View>>,
     pub events: mpsc::Receiver<Event>,
     stop: Option<oneshot::Sender<()>>,
@@ -221,11 +223,16 @@ impl Worker {
     }
     /// Queue a redundant input datagram (newest sequence, recent inputs).
     /// A full queue drops it; the next datagram repeats these inputs anyway.
-    pub fn movement(&self, newest: u64, inputs: Vec<MoveInput>) -> Result<()> {
+    pub fn movement(
+        &self,
+        newest: u64,
+        inputs: Vec<MoveInput>,
+        camera: Option<CameraView>,
+    ) -> Result<()> {
         for input in &inputs {
             input.validate()?;
         }
-        match self.movement.try_send((newest, inputs)) {
+        match self.movement.try_send((newest, inputs, camera)) {
             Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 anyhow::bail!("Network worker stopped")
@@ -293,6 +300,7 @@ fn publish(
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),
         mods: world.mods.clone(),
+        orbs: client.replica.orbs.clone(),
         rtt_ms: client.rtt().as_millis().min(u128::from(u32::MAX)) as u32,
         entities: Arc::new(client.replica.entities.clone()),
         package_state: Arc::new(client.replica.package_state.clone()),
@@ -302,7 +310,7 @@ async fn run(
     client: &mut Client,
     mods: Arc<bri_package_runtime::Catalog>,
     mut requests: mpsc::Receiver<Request>,
-    mut movement: mpsc::Receiver<(u64, Vec<MoveInput>)>,
+    mut movement: mpsc::Receiver<(u64, Vec<MoveInput>, Option<CameraView>)>,
     view: &watch::Sender<Option<View>>,
     events: &mpsc::Sender<Event>,
 ) -> Result<()> {
@@ -327,8 +335,8 @@ async fn run(
                 ensure!(pending.values().all(|(_,at)|at.elapsed()<Duration::from_secs(10)),"Server request timed out");
             }
             batch=movement.recv()=>{
-                let Some((newest,inputs))=batch else { return Ok(()) };
-                client.movement(newest,&inputs)?;
+                let Some((newest,inputs,camera))=batch else { return Ok(()) };
+                client.movement(newest,&inputs,camera)?;
             }
             request=requests.recv()=>{
                 let Some(request)=request else { return Ok(()) };
@@ -355,7 +363,7 @@ async fn run(
                         }
                         publish(client,&world,checkpoint_cue_cursor,view);
                     }
-                    ClientEvent::Pose(_)|ClientEvent::Vehicle(_)=>publish(client,&world,checkpoint_cue_cursor,view),
+                    ClientEvent::Pose(_)|ClientEvent::Vehicle(_)|ClientEvent::Orb(_)=>publish(client,&world,checkpoint_cue_cursor,view),
                     ClientEvent::AdminSnapshot(_)=>publish(client,&world,checkpoint_cue_cursor,view),
                     // The loading screen comes up from bri-progress; the replica swaps on MapChanged.
                     ClientEvent::MapChanging{..}=>{}

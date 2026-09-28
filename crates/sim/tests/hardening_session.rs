@@ -1306,10 +1306,11 @@ fn players_cannot_load_builds_teleport_change_maps_or_time() {
     assert!(
         g.cmd(
             guest,
-            Command::DropPlayerAt {
+            Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
                 eye: [50.0, 50.0, 50.0],
                 yaw: 0.0,
-            }
+                pitch: 0.0,
+            }))
         )
         .is_err()
     );
@@ -1383,18 +1384,26 @@ fn administrator_requests_are_still_validated() {
         [0.0, -1e9, 0.0],
     ] {
         assert!(
-            g.cmd(host, Command::DropPlayerAt { eye, yaw: 0.0 })
-                .is_err(),
+            g.cmd(
+                host,
+                Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+                    eye,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                }))
+            )
+            .is_err(),
             "{eye:?}"
         );
     }
     assert!(
         g.cmd(
             host,
-            Command::DropPlayerAt {
+            Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
                 eye: [1.0, 3.0, 1.0],
-                yaw: f32::NAN
-            }
+                yaw: f32::NAN,
+                pitch: 0.0,
+            }))
         )
         .is_err()
     );

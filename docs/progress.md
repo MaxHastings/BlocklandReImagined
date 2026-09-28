@@ -3014,3 +3014,25 @@ real integrated GPU; needs a weaker PC.
   with player names, as in v20 (c:5890). Evidence: new
   `crosshair_shows_only_in_first_person_and_hides_with_names`,
   `cargo test -p bri-ui`, `cargo check -p bri-client`.
+
+- 2026-09-27 Admin camera (F8/F7) matches v20 (`serverCmdDropCameraAtPlayer`,
+  `serverCmdDropPlayerAtCamera`, `cameraImage`, `Player/Vehicle::teleportEffect`
+  in the recovered allGameScripts.cs). The server now keeps each connection's
+  camera transform, reported with the client's moves. F7 puts the eye at the
+  camera unless the ground is closer than eye height (then the feet stand on
+  it); without F8 it goes back to where the camera was left; a rider's vehicle
+  (jeep, horse) takes the camera transform and stops instead; a dead admin
+  respawns at once (new minigame `AdminRespawn`). In a minigame F7 costs a
+  point and sets `lastF8Time`: weapons fire and damage nothing for 3 s, and
+  with weapon damage on, pickups and activation wait 5 s. Free cameras stream
+  as `Orb` datagrams (protocol VERSION 24) so other players see the
+  CameraEmitterA glow; the owner does not (`firstPersonParticles = 0`). F7,
+  /find, /fetch and /warp play PlayerTeleportEmitterA for 150 ms and a
+  player's 3 s PlayerTeleportImage back sparkle (emitters from
+  effects-pass-004, no pack change; PlayerTeleportExplosion has no sound).
+  Not matched: explosion scale (vehicle bursts are player-sized) because the
+  effects runtime has no source scale. Evidence: `cargo test -p bri-sim`
+  (session, combat, `vehicles -- --include-ignored admin_drop`),
+  `cargo test -p bri-client --test actor_effects`, net codec worst case.
+  Needs Max's playtest: F8 orb seen from a second client, F7 on foot, in a
+  jeep and on a horse.

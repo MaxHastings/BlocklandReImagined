@@ -110,6 +110,8 @@ impl Session {
                     combat,
                     special: Default::default(),
                     control: ControlObject::Player,
+                    camera: None,
+                    last_drop_tick: None,
                     tutorial: Default::default(),
                     input: MoveInput::default(),
                     inputs: VecDeque::new(),

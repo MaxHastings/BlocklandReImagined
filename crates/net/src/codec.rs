@@ -261,6 +261,11 @@ mod tests {
             version: VERSION,
             newest: u64::MAX,
             inputs: vec![input; MOVEMENT_REDUNDANCY],
+            camera: Some(bri_sim::session::CameraView {
+                eye: [-999_999.9; 3],
+                yaw: -std::f32::consts::PI,
+                pitch: -std::f32::consts::FRAC_PI_2,
+            }),
         };
         let bytes = encode_datagram(&movement).unwrap();
         let pose = Datagram::Pose(Pose {
@@ -300,7 +305,12 @@ mod tests {
             encode_datagram(&pose).unwrap().len(),
             encode_datagram(&vehicle).unwrap().len()
         );
-        for datagram in [pose, vehicle] {
+        let orb = Datagram::Orb(Orb {
+            tick: u64::MAX,
+            owner: u64::MAX,
+            eye: [f32::MAX; 3],
+        });
+        for datagram in [pose, vehicle, orb] {
             let bytes = encode_datagram(&datagram).unwrap();
             assert_eq!(decode_datagram::<Datagram>(&bytes).unwrap(), datagram);
         }

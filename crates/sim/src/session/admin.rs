@@ -517,7 +517,7 @@ impl AdminRuntime {
                             session.admin_time_scale(actor_owner, scale)?
                         }
                         GameplayCommand::DropCameraAtPlayer => {
-                            session.set_control(actor_owner, ControlObject::Camera)?;
+                            session.drop_camera_at_player(actor_owner)?;
                         }
                         other => {
                             anyhow::bail!("Administration action is not implemented: {other:?}")

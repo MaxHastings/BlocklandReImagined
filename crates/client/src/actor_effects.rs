@@ -1,6 +1,7 @@
 //! Cosmetic player and vehicle effects: emote, pain and burn images on the
 //! head (their original image state emitters), jet exhaust, vehicle burning,
-//! water splashes, vehicle weapon smoke and `serverCmdLight` player lights. Driven by reliable presentation
+//! water splashes, vehicle weapon smoke, `serverCmdLight` player lights, admin
+//! teleports and camera orbs. Driven by reliable presentation
 //! cues and the presented poses; no gameplay authority.
 use anyhow::Result;
 use bri_fx_runtime::{
@@ -17,6 +18,14 @@ use std::{
 const MAX_MESSAGES: usize = 64;
 const TICK_SECONDS: f32 = 1.0 / bri_weapons::TICK_HZ as f32;
 const JET_EMITTER: &str = "v20/emitter/playerjetemitter";
+/// `cameraImage`: its two states re-emit CameraEmitterA every 50 ms, so the
+/// admin camera glows for as long as it is mounted.
+const CAMERA_EMITTER: &str = "v20/emitter/cameraemittera";
+/// PlayerTeleportExplosion: `emitter[0]` for its 150 ms `lifetimeMS`.
+const TELEPORT_BURST: &str = "v20/emitter/playerteleportemittera";
+const TELEPORT_BURST_SECONDS: f32 = 0.15;
+/// `$BackSlot`, where PlayerTeleportImage mounts.
+const BACK_SLOT: u32 = 2;
 const VEHICLE_BURN_EMITTER: &str = "v20/emitter/vehicleburnemitter";
 /// `vehicleSplash` (SplashData): its two finite emitters.
 const VEHICLE_SPLASH: [&str; 2] = [
@@ -156,6 +165,9 @@ pub struct ActorEffects {
     lights: BTreeMap<u64, EffectHandle>,
     froth: BTreeMap<u64, Froth>,
     liquids: Vec<bri_sim::water::TintedWater>,
+    orbs: BTreeMap<u64, EffectHandle>,
+    /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
+    orb_eyes: Vec<(u64, Vec3)>,
     cursor: u64,
     pub diagnostics: Diagnostics,
 }
@@ -177,6 +189,8 @@ impl ActorEffects {
             lights: BTreeMap::new(),
             froth: BTreeMap::new(),
             liquids: Vec::new(),
+            orbs: BTreeMap::new(),
+            orb_eyes: Vec::new(),
             cursor: 0,
             diagnostics: Diagnostics::default(),
         })
@@ -196,6 +210,14 @@ impl ActorEffects {
     pub fn light_count(&self) -> usize {
         self.lights.len()
     }
+    pub fn orb_count(&self) -> usize {
+        self.orbs.len()
+    }
+    /// Other admins' free cameras (`cameraImage` on the Observer camera):
+    /// owner and eye. They glow from the next `advance` until replaced.
+    pub fn set_orbs(&mut self, orbs: Vec<(u64, Vec3)>) {
+        self.orb_eyes = orbs;
+    }
     /// A new session starts after its checkpoint; earlier one-shots never replay.
     pub fn reset(&mut self, checkpoint_cursor: u64) {
         self.world.teardown();
@@ -206,6 +228,8 @@ impl ActorEffects {
         self.burning.clear();
         self.lights.clear();
         self.froth.clear();
+        self.orbs.clear();
+        self.orb_eyes.clear();
         self.cursor = checkpoint_cursor;
     }
     fn note(&mut self, message: String) {
@@ -245,6 +269,28 @@ impl ActorEffects {
             }
             CueKind::Burn { actor, seconds } => {
                 self.mount_player(*actor, "PlayerBurnImage", Some(*seconds));
+            }
+            // `teleportEffect`: the explosion where the player or vehicle
+            // arrived, and on a player `emote(PlayerTeleportImage, 1)`.
+            CueKind::Teleport { actor, player, .. } => {
+                let at = SourceTransform {
+                    position: Vec3::from(cue.position),
+                    ..Default::default()
+                };
+                let started = self
+                    .world
+                    .start_emitter(TELEPORT_BURST, at, SourceOptions::default())
+                    .and_then(|h| self.world.set_remaining_lifetime(h, TELEPORT_BURST_SECONDS));
+                if started.is_err() {
+                    self.note(format!("Teleport emitter unavailable: {TELEPORT_BURST}"));
+                }
+                if *player {
+                    let anchor = Anchor::Actor {
+                        actor: *actor,
+                        mount: BACK_SLOT,
+                    };
+                    self.mount(Slot::Player(*actor), anchor, teleport_image(), None);
+                }
             }
             CueKind::VehicleEffect {
                 vehicle,
@@ -691,6 +737,19 @@ impl ActorEffects {
                 }
             }
         }
+        // Other admins' free cameras (`cameraImage` on the Observer camera).
+        let wanted: BTreeMap<u64, SourceTransform> = self
+            .orb_eyes
+            .iter()
+            .map(|(owner, eye)| {
+                let t = SourceTransform {
+                    position: *eye,
+                    ..Default::default()
+                };
+                (*owner, t)
+            })
+            .collect();
+        sync_sources(world, &mut self.orbs, &wanted, CAMERA_EMITTER)?;
         world.advance(dt, Vec3::ZERO)?;
         Ok(())
     }
@@ -746,6 +805,51 @@ fn sync_liquid_source(
         None => *slot = world.start_emitter(emitter, transform, options).ok(),
     }
     Ok(())
+}
+
+/// PlayerTeleportImage: `Ready` for 0.01 s, then `FireA` runs
+/// playerTeleportEmitterB for 3 s, then `Done` unmounts it.
+fn teleport_image() -> bri_weapons::Image {
+    let ticks = |seconds: f32| (seconds * bri_weapons::TICK_HZ as f32).round() as u32;
+    bri_weapons::Image {
+        id: bri_weapons::native_id("image", "PlayerTeleportImage"),
+        name: "PlayerTeleportImage".into(),
+        model: "base/data/shapes/empty.dts".into(),
+        projectile: None,
+        mount_point: BACK_SLOT,
+        offset: [0.0; 3],
+        eye_offset: [0.0; 3],
+        source_rotation_degrees: [0.0; 3],
+        correct_muzzle: false,
+        melee: false,
+        color: [1.0; 4],
+        color_shift: false,
+        arm_ready: false,
+        casing: String::new(),
+        min_shot_ticks: 0,
+        states: vec![
+            bri_weapons::State {
+                name: "Ready".into(),
+                ticks: ticks(0.01),
+                timeout: Some(1),
+                ..Default::default()
+            },
+            bri_weapons::State {
+                name: "FireA".into(),
+                ticks: ticks(3.0),
+                wait: true,
+                timeout: Some(2),
+                emitter: "playerTeleportEmitterB".into(),
+                emitter_seconds: 3.0,
+                ..Default::default()
+            },
+            bri_weapons::State {
+                name: "Done".into(),
+                script: "onDone".into(),
+                ..Default::default()
+            },
+        ],
+    }
 }
 
 /// Keep one continuous emitter per key; removed keys drain.

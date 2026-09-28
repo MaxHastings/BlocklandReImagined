@@ -221,3 +221,29 @@ fn add_on_blasts_obey_the_minigame_like_weapon_blasts() {
     s.explode(at(&s, b), 4.0, 50.0, 0.0, "test", None).unwrap();
     assert!(s.vitals()[&b].health < 100.0);
 }
+
+#[test]
+fn admin_drop_at_camera_costs_a_point_and_respawns_at_once_in_minigames() {
+    let mut s = session();
+    let a = s.join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
+    s.command(
+        a,
+        1,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings::default(),
+        }),
+    )
+    .unwrap();
+    steps(&mut s, 10);
+    s.command(a, 2, Command::DropPlayerAtCamera(None)).unwrap();
+    assert_eq!(s.vitals()[&a].score, -1, "serverCmdDropPlayerAtCamera: incScore(-1)");
+    s.command(a, 3, Command::Suicide).unwrap();
+    assert!(!s.is_alive(a));
+    // `spawnPlayer` directly: no waiting out the minigame respawn time, and
+    // no point lost for the respawn itself.
+    let score = s.vitals()[&a].score;
+    s.command(a, 4, Command::DropPlayerAtCamera(None)).unwrap();
+    assert!(s.is_alive(a));
+    assert_eq!(s.vitals()[&a].score, score);
+}

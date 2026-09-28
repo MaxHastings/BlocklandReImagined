@@ -790,6 +790,38 @@ impl VehiclesWorld {
         }
         Ok(())
     }
+    /// Host-authorized `setTransform` followed by `setVelocity("0 0 0")` and
+    /// `setAngularVelocity("0 0 0")`, as admin teleports move a ridden
+    /// vehicle. Actor mounts keep only the heading, like `Player::setTransform`.
+    pub fn set_transform(
+        &mut self,
+        world: &mut PhysicsWorld,
+        id: VehicleId,
+        transform: &Transform,
+    ) -> Result<()> {
+        ensure!(
+            transform
+                .position
+                .iter()
+                .chain(transform.rotation.iter())
+                .all(|x| x.is_finite())
+                && transform.position.iter().all(|x| x.abs() <= 1_000_000.)
+                && (Quat::from_array(transform.rotation).length_squared() - 1.).abs() < 0.001,
+            "invalid transform"
+        );
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        if let Some(actor) = &mut v.actor {
+            let (feet, yaw) = feet_and_yaw(transform);
+            actor.teleport(world, feet, yaw)?;
+        } else {
+            let body = &mut world.bodies[v.body];
+            body.set_position(pose(transform), true);
+            body.set_linvel(Vec3::ZERO, true);
+            body.set_angvel(Vec3::ZERO, true);
+        }
+        v.previous_velocity = Vec3::ZERO;
+        Ok(())
+    }
     /// Script onWreck equivalent; root starts deathVehicle and clears weapon ski state.
     pub fn wreck_skis(&mut self, world: &mut PhysicsWorld, id: VehicleId) -> Result<()> {
         let v = self.instances.get(&id).context("unknown vehicle")?;

@@ -1764,7 +1764,7 @@ fn send_inputs(client: &mut Client, inputs: &[MoveInput]) -> Result<u64> {
         .enumerate()
     {
         let newest = first + (i * bri_net::protocol::MOVEMENT_REDUNDANCY + chunk.len()) as u64 - 1;
-        client.movement(newest, chunk)?;
+        client.movement(newest, chunk, None)?;
     }
     Ok(first + inputs.len() as u64 - 1)
 }

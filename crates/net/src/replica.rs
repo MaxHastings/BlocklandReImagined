@@ -20,6 +20,8 @@ pub struct Replica {
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
+    /// Admin free cameras by owner, while their orbs stream.
+    pub orbs: BTreeMap<OwnerId, Orb>,
     pub time_scale: f32,
     /// Scene nodes of smashed map shapes.
     pub broken_shapes: BTreeSet<u32>,
@@ -152,6 +154,7 @@ impl Replica {
                 .into_iter()
                 .map(|p| (p.id, p))
                 .collect(),
+            orbs: BTreeMap::new(),
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
             archetypes: checkpoint.archetypes.into(),
@@ -347,6 +350,21 @@ impl Replica {
             .is_none_or(|old| old.tick < pose.tick)
         {
             self.vehicle_poses.insert(pose.id, pose);
+        }
+        Ok(())
+    }
+    pub fn orb(&mut self, orb: Orb) -> Result<()> {
+        ensure!(
+            orb.eye.iter().all(|n| n.is_finite()),
+            "Invalid camera orb"
+        );
+        if self.names.contains_key(&orb.owner)
+            && self
+                .orbs
+                .get(&orb.owner)
+                .is_none_or(|old| old.tick < orb.tick)
+        {
+            self.orbs.insert(orb.owner, orb);
         }
         Ok(())
     }

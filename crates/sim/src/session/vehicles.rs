@@ -213,6 +213,41 @@ impl Session {
             .map(|m| (m.vehicle.0, m.seat as u8))
     }
 
+    /// Admin teleports of a rider (`dropPlayerAtCamera`, `/fetch`, `/find`)
+    /// move the root mount instead and stop it. Returns where
+    /// `Vehicle::teleportEffect` plays and its scale: the scale times the
+    /// world box height over 2.65 (so the vehicle's scale counts twice).
+    pub(super) fn teleport_mount(
+        &mut self,
+        owner: OwnerId,
+        position: Vec3,
+        rotation: glam::Quat,
+    ) -> Result<Option<(Vec3, f32)>> {
+        let Some(mount) = self.vehicles.mounted.get(&owner) else {
+            return Ok(None);
+        };
+        let vehicle = mount.vehicle;
+        let world = self.vehicles.world.as_mut().context("No vehicle world")?;
+        let definition = world.definition_of(vehicle).context("Unknown vehicle")?;
+        let height = definition.bounds_max[1] - definition.bounds_min[1];
+        world.set_transform(
+            &mut self.simulation.physics,
+            vehicle,
+            &veh::Transform {
+                position: position.to_array(),
+                rotation: rotation.normalize().to_array(),
+            },
+        )?;
+        let scale = world
+            .snapshot(&self.simulation.physics)
+            .vehicles
+            .into_iter()
+            .find(|v| v.id == vehicle)
+            .map_or(1.0, |v| v.scale);
+        self.follow_seats()?;
+        Ok(Some((position, scale * scale * height / 2.65)))
+    }
+
     /// Spawn transform above a vehicle spawn brick, facing the brick's front.
     fn spawn_transform(&self, brick: &Brick, definition: &veh::Definition) -> veh::Transform {
         let yaw = -f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2;

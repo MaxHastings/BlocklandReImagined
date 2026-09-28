@@ -1058,7 +1058,7 @@ async fn run(
                     }
                 }
             },
-            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}}},
+            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},
         }},
         _=ticker.tick()=>{
             players.store(peers.len() as u32,std::sync::atomic::Ordering::Relaxed);
@@ -1069,7 +1069,7 @@ async fn run(
             if let Err(error)=session.step(){step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
             let tick=session.simulation().state().tick;
             if tick.is_multiple_of(POSE_INTERVAL) {
-                let datagrams=poses(&session).into_iter().map(Datagram::Pose).chain(session.vehicle_poses().into_iter().map(Datagram::Vehicle));
+                let datagrams=poses(&session).into_iter().map(Datagram::Pose).chain(session.vehicle_poses().into_iter().map(Datagram::Vehicle)).chain(session.camera_orbs().into_iter().map(|(owner,eye)|Datagram::Orb(Orb{tick,owner,eye})));
                 for datagram in datagrams {
                     let bytes:bytes::Bytes=match codec::encode_datagram(&datagram){Ok(bytes)=>bytes.into(),Err(error)=>{eprintln!("Server dropped a state datagram: {error:#}");continue}};
                     for peer in peers.values(){let _=peer.connection.send_datagram(bytes.clone());}
