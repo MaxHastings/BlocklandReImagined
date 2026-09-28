@@ -345,6 +345,15 @@ def known_failures(worktree):
     return failures, skips
 
 
+def port_bound_targets(worktree):
+    """Test targets that host on fixed ports ([[port_bound]] entries)."""
+    path = worktree / "tools" / "gate-known-failures.toml"
+    if not path.exists():
+        return set()
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    return {entry["target"] for entry in data.get("port_bound", [])}
+
+
 def parse_failures(log):
     text = Path(log).read_text(encoding="utf-8", errors="replace")
     section = text[text.rfind("===== test ====="):]
@@ -471,7 +480,8 @@ def full_gate(sha, root):
             print(tail(log, "===== test ====="))
             say("a test target failed to compile")
             return False
-        run_binaries(binaries, ["--include-ignored", *skip_args], log, TEST_JOBS)
+        run_binaries(binaries, ["--include-ignored", *skip_args], log, TEST_JOBS,
+                     port_bound_targets(worktree))
         say(f"test: ran {len(binaries)} binaries in {time.time() - test_started:.0f}s")
         if not tree_intact(worktree, sha):
             return False
@@ -617,13 +627,14 @@ def test_binaries(top, env=None):
     return binaries
 
 
-def run_binaries(binaries, args, log, jobs):
+def run_binaries(binaries, args, log, jobs, exclusive=()):
     """Run test binaries in parallel, appending each one's output to log in
     listing order. Returns True when every binary passed.
 
     Whole-app and GPU test binaries wait on wall-clock timeouts, so at most
     HEAVY_JOBS of them run at once, in their own pool; the rest share the
-    remaining jobs."""
+    remaining jobs. Targets in `exclusive` bind fixed ports (a hosted game's
+    UDP 28000/28050), so they run one at a time in a pool of their own."""
     def one(entry):
         label, executable, cwd, header = entry
         started = time.time()
@@ -634,9 +645,15 @@ def run_binaries(binaries, args, log, jobs):
     def is_heavy(label):
         return label.startswith(HEAVY_PREFIXES) and not label.endswith("/lib")
 
-    with concurrent.futures.ThreadPoolExecutor(HEAVY_JOBS) as heavy, \
+    def pool_for(label):
+        if label in exclusive:
+            return alone
+        return heavy if is_heavy(label) else light
+
+    with concurrent.futures.ThreadPoolExecutor(1) as alone, \
+            concurrent.futures.ThreadPoolExecutor(HEAVY_JOBS) as heavy, \
             concurrent.futures.ThreadPoolExecutor(max(1, jobs - HEAVY_JOBS)) as light:
-        futures = [(heavy if is_heavy(b[0]) else light).submit(one, b) for b in binaries]
+        futures = [pool_for(b[0]).submit(one, b) for b in binaries]
         results = [future.result() for future in futures]
     ok = True
     with open(log, "a", encoding="utf-8", errors="replace") as handle:

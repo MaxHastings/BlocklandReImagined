@@ -43,3 +43,13 @@ target = "bri-vehicles/native"
 
 [[ci_skip_target]]
 target = "bri-weapons/runtime"
+
+# Test targets that host a game on the fixed ports (UDP 28000/28050). The gate
+# runs them one at a time, after one another, instead of in parallel. Format:
+# "<package>/<test target>".
+
+[[port_bound]]
+target = "bri-client/multiplayer"
+
+[[port_bound]]
+target = "bri-client/release_smoke"
