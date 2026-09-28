@@ -2988,3 +2988,16 @@ real integrated GPU; needs a weaker PC.
 - Evidence: `cargo test -p bri-package -p bri-package-runtime`,
   `-p bri-sim --test addon_run`; clippy `-D warnings` on those targets; every
   command in the guide run as written against copies of the samples.
+- 2026-09-28 red team of Add-On client code and hosting
+  (`docs/audits/red-team.md`, branch `claude/red-team-o8nvo2`). Fixed with a
+  test each: idle or spoofed connections taking every server slot (QUIC
+  retry, four unjoined connections per address), Add-On recursion
+  overflowing the game's main-thread stack (wasm stack 256 KiB), trust
+  grants covering capabilities the prompt never showed, Add-On trust keyed
+  by typed address instead of host key, LAN listings overriding saved pins
+  (joining and starring), a join hung by a host that allows no streams, and
+  shader cost undercounting large values. Open, ranked in the audit: one
+  player holding the shared request budget, silent pin replacement after
+  "identity changed", PR #1's 4 GB unprompted download, unverified host
+  names. Evidence: `cargo test -p bri-client-sandbox`, `-p bri-net`,
+  `-p bri-client --lib`, clippy `-D warnings` on those three (Linux).
