@@ -14,7 +14,7 @@
     { "label": "Blocks mined", "bind": "stresslab-economy:player/mined" }
   ],
   "keys": [
-    { "key": "F", "label": "Mine", "package": "stresslab-economy", "command": "mine" },
+    { "key": "H", "label": "Mine", "package": "stresslab-economy", "command": "mine" },
     { "key": "G", "label": "Sell ore", "package": "stresslab-economy", "command": "sell_all" }
   ]
 }

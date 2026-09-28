@@ -16,6 +16,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub struct Connected {
     pub client: Client,
     pub host: Option<ServerHandle>,
+    /// Where a hosted package world saves its state and edits on shutdown.
+    pub package_save: Option<std::path::PathBuf>,
 }
 #[derive(Clone)]
 pub struct View {
@@ -153,7 +155,12 @@ impl Worker {
                     if let Some(host)=connection.host.take() {
                         // Stop the host even when dispatch failed or the UI cancelled.
                         // A host persistence adapter consumes its final world later.
-                        let _=host.stop().await;
+                        if let Ok(report)=host.stop().await
+                            && let (Some(path),Some(save))=(connection.package_save.take(),report.packages)
+                            && let Err(error)=save.encode().and_then(|bytes|bri_files::replace(&path,&bytes).map_err(Into::into))
+                        {
+                            eprintln!("Could not save the package world: {error:#}");
+                        }
                     }
                     result
                 }

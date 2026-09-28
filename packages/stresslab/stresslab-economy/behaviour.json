@@ -2,7 +2,7 @@
   "schema_version": 1,
   "script": "economy.rhai",
   "commands": [
-    { "name": "mine", "aim_reach": 8.0, "cooldown_ticks": 18 },
+    { "name": "mine", "aim_reach": 8.0, "cooldown_ticks": 12 },
     { "name": "sell", "args": ["string"] },
     { "name": "sell_all" }
   ],

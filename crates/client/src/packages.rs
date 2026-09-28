@@ -14,11 +14,22 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 /// The client-side packages listed in the content root's `packages.json`.
 /// Problems are reported, not fatal: the base game still runs.
 pub fn load(root: &Path) -> (Option<Arc<Catalog>>, Vec<String>) {
+    load_side(root, false)
+}
+/// Every package a host would run, server-side ones included.
+pub fn load_server(root: &Path) -> (Option<Arc<Catalog>>, Vec<String>) {
+    load_side(root, true)
+}
+fn load_side(root: &Path, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
     let set = match bri_package::packages::PackageSet::load_root(root) {
         Ok(set) => set,
         Err(error) => return (None, vec![format!("{error:#}")]),
     };
-    match Catalog::load(root, &set, false) {
+    load_set(root, &set, server)
+}
+/// Mod packages of `set` whose directories are under `root`.
+pub fn load_set(root: &Path, set: &bri_package::packages::PackageSet, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
+    match Catalog::load(root, set, server) {
         Ok(catalog) if catalog.packages.is_empty() => (None, Vec::new()),
         Ok(catalog) => (Some(Arc::new(catalog)), Vec::new()),
         Err(problems) => (None, problems.iter().map(ToString::to_string).collect()),
@@ -40,6 +51,25 @@ fn show(value: Option<&serde_json::Value>) -> String {
         Some(other) => other.to_string().chars().take(24).collect(),
     }
 }
+/// Start Game entries for the world providers a host can run, standing on
+/// their environment map (whose preview they borrow).
+pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_ui::api::MapInfo> {
+    catalog
+        .packages
+        .values()
+        .flat_map(|p| p.worlds.iter().map(move |(id, w)| (p, id, w)))
+        .filter_map(|(p, id, w)| {
+            let base = maps.iter().find(|m| m.id == w.environment)?;
+            Some(bri_ui::api::MapInfo {
+                id: id.clone(),
+                name: p.manifest.name.clone(),
+                description: format!("{} (package {} {})", p.manifest.description, p.id(), p.manifest.version),
+                preview: base.preview.clone(),
+            })
+        })
+        .collect()
+}
+
 /// HUD panels and keys for `viewer`, values read from replicated state.
 /// `taken` says whether the base game already binds a letter; such keys
 /// are dropped (the base game's binds win).
@@ -199,9 +229,9 @@ mod tests {
         assert_eq!(p.rows[0], ("Bits".into(), "125".into(), [252, 209, 77, 255]));
         assert_eq!(p.rows[2].1, "3");
         assert_eq!(p.rows[1].1, "-", "no coal value yet");
-        // G is taken by a base-game bind here, so only F is offered.
-        assert_eq!(keys.iter().map(|k| k.key).collect::<Vec<_>>(), ['f']);
-        assert_eq!(p.keys, vec![('f', "Mine".to_string())]);
+        // G is taken by a base-game bind here, so only H is offered.
+        assert_eq!(keys.iter().map(|k| k.key).collect::<Vec<_>>(), ['h']);
+        assert_eq!(p.keys, vec![('h', "Mine".to_string())]);
     }
 
     #[test]

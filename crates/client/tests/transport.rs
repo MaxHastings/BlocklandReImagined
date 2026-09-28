@@ -43,6 +43,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
             Ok(Connected {
                 client,
                 host: Some(host),
+                package_save: None,
             })
         });
         ensure!(

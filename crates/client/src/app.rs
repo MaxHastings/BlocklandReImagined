@@ -238,6 +238,8 @@ pub struct App {
     debris_models: crate::brick_debris::DebrisModels,
     /// Client-side mod packages (HUD panels, models) from `packages.json`.
     package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
+    /// Every enabled package including server behaviour, for hosting.
+    server_packages: Option<Arc<bri_package_runtime::Catalog>>,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
     /// Non-rendering bricks, drawn only while a building tool is out, and
@@ -330,6 +332,43 @@ pub struct App {
     file_jobs: crate::saves::Jobs,
 }
 impl App {
+    /// Enable mod packages from another root than the content root (tools
+    /// and tests); replaces the packages loaded at startup. Their worlds
+    /// join the Start Game list.
+    pub fn enable_packages(&mut self, root: &std::path::Path, set: &bri_package::packages::PackageSet) -> Result<()> {
+        let (client, problems) = crate::packages::load_set(root, set, false);
+        ensure!(problems.is_empty(), "{}", problems.join("
+"));
+        let (server, problems) = crate::packages::load_set(root, set, true);
+        ensure!(problems.is_empty(), "{}", problems.join("
+"));
+        self.content.maps.retain(|m| !m.id.contains(':'));
+        if let Some(catalog) = &server {
+            let worlds = crate::packages::world_maps(catalog, &self.content.maps);
+            self.content.maps.extend(worlds);
+        }
+        self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
+        self.package_catalog = client;
+        self.server_packages = server;
+        Ok(())
+    }
+    /// Package HUD panels and keys from the latest replicated state.
+    fn update_package_hud(&mut self) {
+        let view = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| a.view.as_ref());
+        let (Some(catalog), Some(view)) = (&self.package_catalog, view) else {
+            self.ui.core.package_panels.clear();
+            self.ui.core.package_keys.clear();
+            return;
+        };
+        let binds = &self.ui.core.binds;
+        let (panels, keys) = crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
+            binds
+                .command_for_key(bri_ui::input::Key::Letter(letter), bri_ui::input::Modifiers::NONE)
+                .is_some()
+        });
+        self.ui.core.package_panels = panels;
+        self.ui.core.package_keys = keys;
+    }
     fn queue_weapon_cue(&mut self, cue: bri_sim::presentation::Cue) {
         if matches!(
             cue.kind,
@@ -743,6 +782,7 @@ impl App {
         let absolute_state_dir = std::path::absolute(state_dir)?;
         let state_dir = absolute_state_dir.as_path();
         let content = ClientContent::load(content_root)?;
+        let mut content = content;
         let package_catalog = {
             let (catalog, problems) = crate::packages::load(&content.paths.root);
             for problem in problems {
@@ -750,6 +790,18 @@ impl App {
             }
             catalog
         };
+        // Worlds that packages provide are hosted like maps.
+        let server_packages = {
+            let (catalog, problems) = crate::packages::load_server(&content.paths.root);
+            for problem in problems {
+                eprintln!("Package problem (hosting): {problem}");
+            }
+            catalog
+        };
+        if let Some(catalog) = &server_packages {
+            let worlds = crate::packages::world_maps(catalog, &content.maps);
+            content.maps.extend(worlds);
+        }
         let foliage = crate::foliage::ClientFoliage::load(&content.paths.foliage)?;
         let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
         let effects = crate::effects::WorldEffects::new(effects_pack.clone(), Default::default())?;
@@ -897,6 +949,7 @@ impl App {
             brick_debris: Default::default(),
             debris_models: Default::default(),
             package_catalog,
+            server_packages,
             package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_gpu: None,
@@ -1396,6 +1449,16 @@ impl App {
         );
         let paths = self.content.paths.clone();
         let paths_for_maps = paths.clone();
+        // A package world stands on its environment map; the packages then
+        // generate the ground and bring their gameplay.
+        let package_world = self
+            .server_packages
+            .clone()
+            .and_then(|c| c.world().filter(|(_, id, _)| **id == map).map(|(_, _, w)| w.environment.clone()).map(|base| (c, base)));
+        let base_map = package_world.as_ref().map_or_else(|| map.clone(), |(_, base)| base.clone());
+        let package_save = package_world.as_ref().map(|_| {
+            self.state_dir.join("packages").join(format!("{}.save.json", map.replace([':', '/'], "-")))
+        });
         // Admin Change Map choices (the Tutorial has its own entry point).
         let map_list: Vec<_> = self
             .content
@@ -1478,8 +1541,8 @@ impl App {
                         &weapons,
                     )?;
                     physics_snapshot.ensure_same(&item_physics)?;
-                    let loaded = paths.load_map(&map, None)?;
-                    let visual = load_map_bundle(&paths.map_bundle, &map)?;
+                    let loaded = paths.load_map(&base_map, None)?;
+                    let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack =
@@ -1523,7 +1586,7 @@ impl App {
                     let waters = loaded.simulation.waters.clone();
                     let foliage = crate::foliage::PreparedFoliage::load(
                         &paths.foliage,
-                        &map,
+                        &base_map,
                         &building,
                         &waters,
                     )?;
@@ -1531,7 +1594,7 @@ impl App {
                         loaded,
                         Prepared {
                             foliage,
-                            map_id: map.clone(),
+                            map_id: base_map.clone(),
                             waters,
                             scene: visual.scene,
                             terrain: visual.terrain.into_iter().map(Arc::new).collect(),
@@ -1570,8 +1633,19 @@ impl App {
                 event_sounds,
                 maps: map_list,
             };
-            let spawn_points = loaded.spawn_points.clone();
+            let mut spawn_points = loaded.spawn_points.clone();
             let mut session = setup.session(loaded)?;
+            if let Some((catalog, _)) = package_world {
+                let save = match package_save.as_ref().map(std::fs::read) {
+                    Some(Ok(bytes)) => Some(bri_sim::session::PackageSave::decode(&bytes)?),
+                    _ => None,
+                };
+                spawn_points = session.install_packages(catalog, save)?;
+                ensure!(!spawn_points.is_empty(), "The package world generated no ground to stand on");
+                if let Some(dir) = package_save.as_ref().and_then(|p| p.parent()) {
+                    std::fs::create_dir_all(dir)?;
+                }
+            }
             session.set_admin_passwords(admin, super_admin)?;
             let map_loader: server::MapLoader = {
                 let paths = paths_for_maps.clone();
@@ -1618,6 +1692,7 @@ impl App {
             Ok(Connected {
                 client,
                 host: Some(host),
+                package_save,
             })
         });
         self.attempt = Some(Attempt {
@@ -1761,7 +1836,7 @@ impl App {
             })
             .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
-            Ok(Connected { client, host: None })
+            Ok(Connected { client, host: None, package_save: None })
         });
         self.attempt = Some(Attempt {
             id,
@@ -3148,6 +3223,7 @@ impl PlatformApp for App {
         self.animation_time += game_elapsed.as_secs_f64().min(0.25);
         self.poll_network()?;
         self.poll_files();
+        self.update_package_hud();
         let alive = self.local_alive();
         self.follow_control();
         self.controls.fly(elapsed.as_secs_f32());
@@ -4701,16 +4777,6 @@ impl PlatformApp for App {
         };
         for terrain in &mut self.gpu_terrain {
             terrain.update(frame.queue, eye, fog_end.max(1.))?;
-        }
-        if let Some(catalog) = &self.package_catalog {
-            let binds = &self.ui.core.binds;
-            let (panels, keys) = crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
-                binds
-                    .command_for_key(bri_ui::input::Key::Letter(letter), bri_ui::input::Modifiers::NONE)
-                    .is_some()
-            });
-            self.ui.core.package_panels = panels;
-            self.ui.core.package_keys = keys;
         }
         self.ui.core.name_tags = name_tags(
             view,
