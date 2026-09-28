@@ -919,6 +919,14 @@ impl Options {
             previewed: false,
         };
         s.native_layout();
+        // v20 let Options be resized, but its panes' sizing flags only push
+        // their sections down; the tabs' fitted layout (native_layout) is
+        // for the authored size, so this window keeps it.
+        if let Some(n) = window(&s.view) {
+            for field in ["resizeWidth", "resizeHeight"] {
+                s.view.nodes[n].ctrl.fields.insert(field.into(), "0".into());
+            }
+        }
         // Duplicate authored names occur throughout Options. Preference identity
         // is the variable on each node, never the last matching widget name.
         for n in s.view.walk().collect::<Vec<_>>() {

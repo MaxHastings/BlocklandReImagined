@@ -15,6 +15,9 @@ pub type NodeId = usize;
 /// Window skin piece indices (Torque GuiWindowCtrl bitmap array).
 mod win {
     pub const CLOSE: usize = 0;
+    pub const MAXIMIZE: usize = 3;
+    pub const NORMAL: usize = 6;
+    pub const MINIMIZE: usize = 9;
     pub const TOP_LEFT: usize = 12;
     pub const TOP_RIGHT: usize = 13;
     pub const TOP: usize = 14;
@@ -67,6 +70,12 @@ pub struct NodeState {
     pub row_height: i32,
     /// How far the player dragged this window from its laid-out place.
     pub moved: (i32, i32),
+    /// How much the player widened and heightened this window.
+    pub resized: (i32, i32),
+    /// Maximized to fill its parent (`canMaximize`).
+    pub maximized: bool,
+    /// Minimized to its title bar of this height (`canMinimize`).
+    pub minimized: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +190,9 @@ pub struct View {
     scroll_drag: Option<(NodeId, i32, i32, i32)>,
     /// Window being dragged by its title bar: (window, last mouse x, y).
     window_drag: Option<(NodeId, i32, i32)>,
+    /// Window being resized by its right and/or bottom edge: (window, last
+    /// mouse x, y, width, height).
+    window_resize: Option<(NodeId, i32, i32, bool, bool)>,
     last_click: Option<(NodeId, u64)>,
     pub time_ms: u64,
     canvas: (i32, i32),
@@ -188,6 +200,9 @@ pub struct View {
     pub mouse: (i32, i32),
     close_hot: bool,
 }
+
+/// How close to a resizable window's right or bottom edge a press resizes it.
+const RESIZE_EDGE: i32 = 6;
 
 /// `r` moved as little as possible to lie inside `within` (its top-left
 /// corner stays visible when it is the larger).
@@ -226,6 +241,7 @@ impl View {
             popup: None,
             scroll_drag: None,
             window_drag: None,
+            window_resize: None,
             last_click: None,
             time_ms: 0,
             canvas: (640, 480),
@@ -255,6 +271,9 @@ impl View {
                 frame: 0,
                 row_height: 16,
                 moved: (0, 0),
+                resized: (0, 0),
+                maximized: false,
+                minimized: None,
             },
             ctrl,
             parent,
@@ -457,9 +476,18 @@ impl View {
                 (parent_rect.w, parent_rect.h),
             );
             let mut abs = r.offset(parent_rect.x, parent_rect.y);
-            let moved = self.nodes[k].state.moved;
-            if moved != (0, 0) {
+            let (moved, resized) = (self.nodes[k].state.moved, self.nodes[k].state.resized);
+            if resized != (0, 0) {
+                abs.w = (abs.w + resized.0).min(parent_rect.w);
+                abs.h = (abs.h + resized.1).min(parent_rect.h);
+            }
+            if moved != (0, 0) || resized != (0, 0) {
                 abs = keep_inside(abs.offset(moved.0, moved.1), parent_rect);
+            }
+            if self.nodes[k].state.maximized {
+                abs = parent_rect;
+            } else if let Some(title) = self.nodes[k].state.minimized {
+                abs.h = title;
             }
             if is_scroll {
                 abs = abs.offset(0, -scroll_y);
@@ -1138,6 +1166,18 @@ impl View {
             let (c, cw, ch) = p(win::CLOSE + state);
             self.piece(dl, img, c, self.close_rect(id, cw, ch));
         }
+        // Maximize and minimize, left of the close box; each shows Normal
+        // (restore) while the window is in its state.
+        for (field, slot, on, piece) in [
+            ("canMaximize", 1, n.state.maximized, win::MAXIMIZE),
+            ("canMinimize", 2, n.state.minimized.is_some(), win::MINIMIZE),
+        ] {
+            if n.ctrl.field(field) == Some("1") {
+                let (c, cw, ch) = p(if on { win::NORMAL } else { piece });
+                let r = self.title_button(id, slot);
+                self.piece(dl, img, c, Rect::new(r.x, r.y, cw, ch));
+            }
+        }
         let title = self.text_of(id);
         if let Some(f) = style.font.as_deref().and_then(|f| Font::get(pack, f)) {
             let x = r.x + style.text_offset[0] + 4;
@@ -1176,6 +1216,28 @@ impl View {
         moved.0 += to.x - r.x;
         moved.1 += to.y - r.y;
         self.relayout();
+    }
+
+    /// Grow or shrink a window by (dw, dh). It never shrinks below its
+    /// authored size, so the dialog's own layout keeps its room, nor grows
+    /// past its parent (the screen); its children follow their sizing flags.
+    fn resize_window(&mut self, id: NodeId, dw: i32, dh: i32) {
+        let r = self.nodes[id].rect;
+        let parent = self.nodes[id]
+            .parent
+            .map_or(Rect::new(0, 0, self.canvas.0, self.canvas.1), |p| {
+                self.nodes[p].rect
+            });
+        let resized = &mut self.nodes[id].state.resized;
+        resized.0 = (resized.0 + dw).clamp(0, (parent.right() - r.x - r.w + resized.0).max(0));
+        resized.1 = (resized.1 + dh).clamp(0, (parent.bottom() - r.y - r.h + resized.1).max(0));
+        self.relayout();
+    }
+
+    /// Title bar box `slot` from the right: 0 close, 1 maximize, 2 minimize.
+    fn title_button(&self, id: NodeId, slot: i32) -> Rect {
+        let r = self.nodes[id].rect;
+        Rect::new(r.right() - 20 - slot * 18, r.y + 3, 16, 16)
     }
 
     fn close_rect(&self, id: NodeId, cw: i32, ch: i32) -> Rect {
@@ -1697,6 +1759,7 @@ impl View {
         self.hover = None;
         self.scroll_drag = None;
         self.window_drag = None;
+        self.window_resize = None;
         self.close_hot = false;
     }
 
@@ -1716,6 +1779,11 @@ impl View {
         if let Some((id, lx, ly)) = self.window_drag {
             self.drag_window(id, x - lx, y - ly);
             self.window_drag = Some((id, x, y));
+            return;
+        }
+        if let Some((id, lx, ly, w, h)) = self.window_resize {
+            self.resize_window(id, if w { x - lx } else { 0 }, if h { y - ly } else { 0 });
+            self.window_resize = Some((id, x, y, w, h));
             return;
         }
         if let Some((id, MouseButton::Left)) = self.pressed
@@ -1781,11 +1849,24 @@ impl View {
         let class = self.nodes[t].ctrl.class.clone();
         // GuiWindowCtrl::onMouseDown: a press on the title bar, off the close
         // box, drags the window (`canMove`).
-        if class == "GuiWindowCtrl"
+        // GuiWindowCtrl::onMouseDown: its right and bottom edges resize it
+        // (`resizeWidth`, `resizeHeight`); the title bar, off the close
+        // box, drags it (`canMove`).
+        let edges = (class == "GuiWindowCtrl" && b == MouseButton::Left).then(|| {
+            let r = self.nodes[t].rect;
+            let c = &self.nodes[t].ctrl;
+            (
+                c.field("resizeWidth") == Some("1") && x >= r.right() - RESIZE_EDGE,
+                c.field("resizeHeight") == Some("1") && y >= r.bottom() - RESIZE_EDGE,
+            )
+        });
+        if let Some((w, h)) = edges.filter(|(w, h)| *w || *h) {
+            self.window_resize = Some((t, x, y, w, h));
+        } else if class == "GuiWindowCtrl"
             && b == MouseButton::Left
             && self.nodes[t].ctrl.field("canMove") != Some("0")
             && y < self.nodes[t].rect.y + self.title_height(pack, t)
-            && !self.close_rect(t, 16, 16).contains(x, y)
+            && !(0..3).any(|slot| self.title_button(t, slot).contains(x, y))
         {
             self.window_drag = Some((t, x, y));
         }
@@ -1871,6 +1952,7 @@ impl View {
         self.mouse = (x, y);
         self.scroll_drag = None;
         self.window_drag = None;
+        self.window_resize = None;
         if let Some(mut open) = self.popup {
             // Press-drag-release over a row picks it, like Torque's list.
             let items = self.nodes[open.node].state.items.len();
@@ -1901,6 +1983,29 @@ impl View {
                     node: p,
                     kind: EventKind::Close,
                 });
+            }
+            ("GuiWindowCtrl", MouseButton::Left)
+                if self.nodes[p].ctrl.field("canMaximize") == Some("1")
+                    && self.title_button(p, 1).contains(x, y) =>
+            {
+                let s = &mut self.nodes[p].state;
+                s.maximized = !s.maximized;
+                s.minimized = None;
+                self.relayout();
+            }
+            ("GuiWindowCtrl", MouseButton::Left)
+                if self.nodes[p].ctrl.field("canMinimize") == Some("1")
+                    && self.title_button(p, 2).contains(x, y) =>
+            {
+                let title = self.title_height(_pack, p);
+                let s = &mut self.nodes[p].state;
+                s.minimized = if s.minimized.is_some() {
+                    None
+                } else {
+                    Some(title + 4)
+                };
+                s.maximized = false;
+                self.relayout();
             }
             ("GuiCheckBoxCtrl", MouseButton::Left) => {
                 let v = !self.bool_value(p);
