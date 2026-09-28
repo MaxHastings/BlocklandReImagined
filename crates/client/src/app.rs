@@ -6264,7 +6264,7 @@ impl PlatformApp for App {
                     .ok()
                     .filter(|data| !data.indices.is_empty())
                     .map(|mut data| {
-                        translucent_ghost(&mut data, &ghost_look);
+                        translucent_ghost(&mut data);
                         renderer.upload(frame.device, frame.queue, &data)
                     })
                     .transpose()?
