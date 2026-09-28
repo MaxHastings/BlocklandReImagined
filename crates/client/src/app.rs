@@ -3670,7 +3670,9 @@ impl PlatformApp for App {
             }
         }
         let mut listener = bri_audio::Listener::default();
-        // `setTimeScale` slows or speeds the whole game, not the interface.
+        // `setTimeScale` slows or speeds the whole game, not the interface:
+        // every in-world visual advances by `game_elapsed`; only the UI,
+        // camera easing and audio mixing use wall time.
         let scale = self
             .attempt
             .as_ref()
@@ -4055,7 +4057,7 @@ impl PlatformApp for App {
                 &mut self.weapon_animation_cues,
                 &mut self.weapon_animation_drops,
                 view,
-                elapsed.as_secs_f32(),
+                game_elapsed.as_secs_f32(),
             );
             self.avatars
                 .retain(|owner, _| view.poses.contains_key(owner));
@@ -4177,7 +4179,7 @@ impl PlatformApp for App {
                 )?;
             }
             self.effects.sync(view.world.clone(), meshes)?;
-            self.foliage.advance(elapsed);
+            self.foliage.advance(game_elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.
             let (yaw, pitch) = self.controls.camera_angles();
             let forward = Vec3::new(
@@ -4258,7 +4260,7 @@ impl PlatformApp for App {
                 &mut self.weapon_cues,
                 &self.world_items,
                 &view.weapons,
-                elapsed.as_secs_f32(),
+                game_elapsed.as_secs_f32(),
             )?;
             Self::update_actor_effects(
                 &mut self.actor_effects,
@@ -4268,7 +4270,7 @@ impl PlatformApp for App {
                 &self.vehicle_assets,
                 view,
                 presented,
-                elapsed.as_secs_f32(),
+                game_elapsed.as_secs_f32(),
                 // `fxLight::TestLOS` casts from the camera to the flare,
                 // ignoring the player carrying it.
                 |at| {
@@ -4276,7 +4278,7 @@ impl PlatformApp for App {
                         && building.effect_visible(bri_world::BrickId::MAX, eye, at)?)
                 },
             )?;
-            self.explosion_shapes.advance(elapsed.as_secs_f32());
+            self.explosion_shapes.advance(game_elapsed.as_secs_f32());
             let shells: Vec<_> = self
                 .weapon_effects
                 .take_host_requests()
@@ -4298,7 +4300,7 @@ impl PlatformApp for App {
                     .map_or(Vec3::ZERO, |p| Vec3::from(p.velocity))
             })?;
             self.weapon_shells
-                .advance(elapsed.as_secs_f32(), eject, |from, to| {
+                .advance(game_elapsed.as_secs_f32(), eject, |from, to| {
                     let delta = to - from;
                     let length = delta.length();
                     if length < 1e-5 {
@@ -4318,17 +4320,19 @@ impl PlatformApp for App {
                 self.hidden_uploaded = None;
             }
             self.brick_debris
-                .advance(elapsed.as_secs_f32().min(0.25), building)?;
+                .advance(game_elapsed.as_secs_f32().min(0.25), building)?;
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
-            self.effects
-                .advance(elapsed.as_secs_f32(), eye, Vec3::ZERO, |id, from, to| {
-                    building.effect_visible(id, from, to)
-                })?;
+            self.effects.advance(
+                game_elapsed.as_secs_f32(),
+                eye,
+                Vec3::ZERO,
+                |id, from, to| building.effect_visible(id, from, to),
+            )?;
             let right = forward.cross(Vec3::Y).normalize();
             self.weather.advance(
-                elapsed.as_secs_f32(),
+                game_elapsed.as_secs_f32(),
                 bri_weather::CameraState {
                     position: eye,
                     forward,
