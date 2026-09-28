@@ -410,6 +410,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-bls"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-content",
+ "bri-events",
+ "bri-world",
+ "glam 0.33.10",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "bri-chaos"
 version = "0.1.0"
 dependencies = [
@@ -522,6 +536,7 @@ name = "bri-convert"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-bls",
  "bri-content",
  "bri-events",
  "bri-world",
