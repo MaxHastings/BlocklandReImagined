@@ -161,6 +161,8 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
     let line = font.line_height().max(1);
     let pad = 6;
     let mut offsets = [0_i32; 4];
+    // Below the net graph and performance overlay when they show.
+    let top_right = crate::screens::perf::top_right_bottom(pack, core);
     for panel in &core.package_panels {
         let hints: String = panel
             .keys
@@ -179,7 +181,7 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
         let slot = panel.anchor as usize;
         let (x, top) = match panel.anchor {
             PanelAnchor::TopLeft => (8, 8 + offsets[slot]),
-            PanelAnchor::TopRight => (w - pw - 8, 8 + offsets[slot] + if core.net_graph.is_some() { 24 } else { 0 }),
+            PanelAnchor::TopRight => (w - pw - 8, top_right + offsets[slot]),
             PanelAnchor::BottomLeft => (8, h - ph - 120 - offsets[slot]),
             PanelAnchor::BottomRight => (w - pw - 8, h - ph - 120 - offsets[slot]),
         };
@@ -401,15 +403,6 @@ fn hud(core: &Core) -> View {
             "MM_LeftProfile",
             Rect::new(4, rect.bottom() - 18, 27, 18),
             "VVV",
-        );
-    }
-    if let Some(text) = &core.net_graph {
-        fill(&mut v, Rect::new(w - 220, 4, 216, 20), [0, 0, 0, 128]);
-        markup(
-            &mut v,
-            Rect::new(w - 216, 6, 212, 18),
-            text,
-            "BlockChatTextProfile",
         );
     }
     v.layout(w, h);

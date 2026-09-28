@@ -77,6 +77,13 @@ pub trait PlatformApp {
     fn render_scene(&mut self, _frame: &mut RenderContext<'_>) -> Result<bool> {
         Ok(false)
     }
+    /// Whether to time frames (the performance overlay is showing). While
+    /// false, no GPU timestamps are written and `frame_timed` is not called.
+    fn wants_frame_timing(&self) -> bool {
+        false
+    }
+    /// A presented frame's timing.
+    fn frame_timed(&mut self, _timing: crate::perf::FrameTiming) {}
 }
 
 pub struct RenderContext<'a> {
@@ -99,6 +106,9 @@ struct Graphics {
     present_modes: Vec<wgpu::PresentMode>,
     renderer: UiRenderer,
     reconfigure: bool,
+    /// Created the first time frames are timed; None inside when the GPU
+    /// has no timestamps.
+    frame_timer: Option<Option<crate::perf::GpuFrameTimer>>,
     device_lost: Arc<Mutex<Option<String>>>,
     /// Kept to rebuild the GPU after a device loss without an event loop.
     display: winit::event_loop::OwnedDisplayHandle,
@@ -256,6 +266,7 @@ impl Graphics {
             present_modes: caps.present_modes,
             renderer,
             reconfigure: false,
+            frame_timer: None,
             device_lost,
             display,
         })
@@ -392,6 +403,9 @@ struct Runner {
     windowed: PhysicalSize<u32>,
     error: Option<anyhow::Error>,
     screenshot: Option<(std::path::PathBuf, bool)>,
+    /// Main-thread work since the last presented frame (update and pump).
+    frame_cpu: Duration,
+    last_present: Option<Instant>,
 }
 
 /// Launch only from an explicitly requested interactive execution path. This
@@ -431,6 +445,8 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         windowed,
         error: None,
         screenshot: None,
+        frame_cpu: Duration::ZERO,
+        last_present: None,
     };
     let event_loop = EventLoop::new().context("creating the native event loop")?;
     event_loop
@@ -755,6 +771,8 @@ impl Runner {
         if g.reconfigure || (g.config.width, g.config.height) != (size.width, size.height) {
             g.resize(size);
         }
+        let timing = self.config.app.wants_frame_timing();
+        let acquiring = Instant::now();
         let surface = match g.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -780,12 +798,27 @@ impl Runner {
                 bail!("GPU validation failed while acquiring the native surface")
             }
         };
+        let acquired = Instant::now();
         let target = surface.texture.create_view(&Default::default());
         let mut encoder = g
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("bri-client frame"),
             });
+        if !timing {
+            g.frame_timer = None;
+        }
+        let timer = if timing {
+            let (device, queue) = (&g.device, &g.queue);
+            g.frame_timer
+                .get_or_insert_with(|| crate::perf::GpuFrameTimer::new(device, queue))
+                .as_mut()
+        } else {
+            None
+        };
+        if let Some(timer) = timer {
+            timer.begin(&mut encoder);
+        }
         let scene = self.config.app.render_scene(&mut RenderContext {
             device: &g.device,
             queue: &g.queue,
@@ -828,6 +861,9 @@ impl Runner {
             )),
             _ => None,
         };
+        if let Some(Some(timer)) = &mut g.frame_timer {
+            timer.end(&mut encoder);
+        }
         g.queue.submit([encoder.finish()]);
         if let Some((path, capture)) = scene_capture.or(hud_capture) {
             let saved = capture.save(&g.device, &path);
@@ -845,7 +881,23 @@ impl Runner {
             });
         }
         window.pre_present_notify();
+        let presenting = Instant::now();
         g.queue.present(surface);
+        let now = Instant::now();
+        let frame = self.last_present.replace(now).map(|at| now.duration_since(at));
+        let cpu = std::mem::take(&mut self.frame_cpu);
+        if timing && let Some(frame) = frame {
+            let gpu = match &mut g.frame_timer {
+                Some(Some(timer)) => timer.collect(&g.device),
+                _ => None,
+            };
+            self.config.app.frame_timed(crate::perf::FrameTiming {
+                frame,
+                cpu: cpu + presenting.duration_since(acquired),
+                wait: acquired.duration_since(acquiring) + now.duration_since(presenting),
+                gpu,
+            });
+        }
         Ok(())
     }
 }
@@ -1252,6 +1304,7 @@ impl ApplicationHandler for Runner {
             }
             let elapsed = now.saturating_duration_since(self.last_tick);
             self.last_tick = now;
+            let working = Instant::now();
             // Avoid minutes of UI repeat catch-up after suspension/debug pauses.
             self.config
                 .app
@@ -1272,6 +1325,7 @@ impl ApplicationHandler for Runner {
                 self.fail(event_loop, e);
                 return;
             }
+            self.frame_cpu += working.elapsed();
             if let Some(w) = &self.window
                 && !self.occluded
                 && self.graphics.is_some()

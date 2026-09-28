@@ -472,7 +472,11 @@ pub struct App {
     /// The tumble vehicle the local player last started riding.
     tumble: Option<u64>,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
-    net_graph: Option<(std::time::Instant, u32)>,
+    /// Connection samples for the net graph and the expanded overlay.
+    net_sampler: crate::perf::NetSampler,
+    /// When the performance overlay's slower figures are next refreshed.
+    perf_stats_due: std::time::Instant,
+    gpu_name: String,
     frame_stats: crate::console::FrameStats,
     /// Minute-by-minute frame times for the session log (player sessions).
     frame_log: Option<crate::quality::FrameLog>,
@@ -1357,7 +1361,9 @@ impl App {
             observer_eye: None,
             tumble: None,
             music_world: None,
-            net_graph: None,
+            net_sampler: Default::default(),
+            perf_stats_due: std::time::Instant::now(),
+            gpu_name: String::new(),
             frame_stats: Default::default(),
             frame_log: None,
             update_check: None,
@@ -1686,28 +1692,60 @@ impl App {
         }
         Ok(())
     }
-    fn update_net_graph(&mut self) {
-        let Some((since, frames)) = self.net_graph.as_mut() else {
-            return;
-        };
-        *frames += 1;
-        let elapsed = since.elapsed().as_secs_f32();
-        if elapsed < 0.5 {
+    /// Feed the net graph and performance overlay while they show; nothing
+    /// is sampled while both are hidden.
+    fn update_perf(&mut self) {
+        let wants_net = self.ui.core.net_graph.is_some() || self.ui.core.perf.wants_net();
+        let wants_stats = self.ui.core.perf.visible();
+        if !wants_net && !wants_stats {
+            self.net_sampler.reset();
             return;
         }
-        let fps = *frames as f32 / elapsed;
-        *since = std::time::Instant::now();
-        *frames = 0;
-        let text = match self.network_view() {
-            Some(view) => format!(
-                "FPS {:.0}   Ping {} ms   Players {}",
-                fps,
-                view.rtt_ms,
-                view.names.len()
-            ),
-            None => format!("FPS {fps:.0}"),
+        let now = std::time::Instant::now();
+        let probes = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| a.worker.probes.get())
+            .cloned();
+        let ghosts = self
+            .network_view()
+            .map_or(0, |v| v.poses.len() + v.vehicles.len() + v.entities.len());
+        match probes.as_ref().filter(|_| wants_net) {
+            Some(p) => {
+                if let Some(sample) = self.net_sampler.sample(now, &p.link, ghosts) {
+                    self.ui.apply(UiUpdate::NetSample(sample));
+                }
+            }
+            None => self.net_sampler.reset(),
+        }
+        if !wants_stats || now < self.perf_stats_due {
+            return;
+        }
+        self.perf_stats_due = now + Duration::from_millis(500);
+        let memory = crate::perf::process_memory();
+        let view = self.network_view();
+        let server = probes.as_ref().and_then(|p| p.host.as_ref()).map(|host| {
+            let p = host.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            bri_ui::models::perf::ServerStats {
+                ticks_per_second: p.ticks_per_second,
+                tick_ms_mean: p.tick_ms_mean,
+                tick_ms_max: p.tick_ms_max,
+                script_ms: p.script_ms,
+            }
+        });
+        let stats = bri_ui::models::perf::PerfStats {
+            bricks: view.map(|v| v.world.bricks.len()),
+            players: view.map(|v| v.names.len()),
+            vehicles: view.map(|v| v.vehicles.len()),
+            entities: view.map(|v| v.entities.len()),
+            memory_bytes: memory.map(|m| m.0),
+            private_bytes: memory.map(|m| m.1),
+            remote_server: probes.as_ref().is_some_and(|p| p.host.is_none()),
+            server,
+            gpu: self.gpu_name.clone(),
         };
-        self.ui.apply(UiUpdate::NetGraph(Some(text)));
+        self.ui.apply(UiUpdate::PerfStats(stats));
     }
     /// Seated where v20's `armor::onTrigger` fires the mount's gun instead
     /// of tools: the Tank turret and the pirate cannon.
@@ -4100,6 +4138,12 @@ impl PlatformApp for App {
     fn focus_changed(&mut self, focused: bool) {
         self.audio.set_focused(focused);
     }
+    fn wants_frame_timing(&self) -> bool {
+        self.ui.core.perf.visible()
+    }
+    fn frame_timed(&mut self, timing: crate::perf::FrameTiming) {
+        self.ui.apply(UiUpdate::PerfFrame(timing.sample()));
+    }
     fn ui_mut(&mut self) -> &mut Ui {
         &mut self.ui
     }
@@ -4370,7 +4414,7 @@ impl PlatformApp for App {
             }
         }
         self.update_combat_presentation();
-        self.update_net_graph();
+        self.update_perf();
         if let Some((request, _, receiver)) = &self.add_on_import
             && let Ok(result) = receiver.try_recv()
         {
@@ -5082,14 +5126,24 @@ impl PlatformApp for App {
                     platform.push(PlatformCommand::ToggleFullscreen);
                     continue;
                 }
-                UiAction::Game(GameAction::ToggleNetGraph) => {
-                    self.net_graph = match self.net_graph {
-                        Some(_) => {
-                            self.ui.apply(UiUpdate::NetGraph(None));
-                            None
+                UiAction::Game(GameAction::SavePerfCapture) => {
+                    let dir = self.state_dir.join("captures");
+                    let version = self.ui.core.version.clone();
+                    let text = match crate::perf::save_capture(&dir, &self.ui.core, &version) {
+                        Ok(path) => {
+                            bri_console::echo(format!("Performance capture saved: {}", path.display()));
+                            format!(
+                                "Performance capture saved: {}",
+                                path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into())
+                            )
                         }
-                        None => Some((std::time::Instant::now(), 0)),
+                        Err(error) => format!("Performance capture failed: {error:#}"),
                     };
+                    self.ui.apply(UiUpdate::BottomPrint {
+                        text,
+                        seconds: 3.0,
+                        hide_bar: false,
+                    });
                     Ok(())
                 }
                 UiAction::Game(GameAction::ToggleBuildMacroRecording) => {
@@ -5584,6 +5638,7 @@ impl PlatformApp for App {
             self.auto_quality = false;
             self.pick_quality(&device.adapter_info());
         }
+        self.gpu_name = device.adapter_info().name;
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);

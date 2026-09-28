@@ -3174,3 +3174,21 @@ shooter's F8 drop in a minigame. v20 ignores brick hits for 3 s after F8, and
 `blow_up_bricks` now does too. Evidence: `cargo test -p bri-sim --test
 brick_damage -- --include-ignored` (8 tests; the F8 test fails without the
 fix). No wire change.
+## 2026-09-28 Net graph and performance overlay
+
+The v20 net graph is now its own screen again. Ctrl+N (rebindable as
+"Toggle NetGraph") draws `NetGraphGui`'s six 200-sample plots and labels at
+their authored places in the converted `NetGraph*Profile` styles. It
+replaces the one-line FPS/ping text. The data is QUIC's own counters through
+`bri_net::client::LinkProbe`. There is also a new performance overlay: F3
+cycles compact, expanded and off, and Ctrl+F3 saves a JSON capture to
+`captures/`. It shows FPS, a frame-time graph and the CPU, GPU and wait
+split (GPU from timestamps around the frame's encoder). Hosts also see the
+server's tick time, per-Add-On script time, world counts and memory. There
+is no protocol change, so server figures are host-only. Nothing is drawn or
+sampled while hidden. Details, sources and the tradeoffs are in
+[audits/net-graph.md](audits/net-graph.md). Evidence: `cargo test -p bri-ui
+--test net_graph`, `cargo test -p bri-ui --lib perf`, `cargo test -p
+bri-client --lib perf::`, `cargo test -p bri-net --lib perf_window`, and
+offscreen renders from the ignored `overlays_render_offscreen`. A live game
+window is still unchecked (Max's playtest).

@@ -1073,7 +1073,7 @@ impl Options {
     fn refresh_binds(&mut self, core: &Core) {
         if let Some(n) = self.view.id("OptRemapList") {
             let mut rows = Vec::new();
-            for (i, r) in core.pack.data.data.remap.iter().enumerate() {
+            for (i, r) in core.remap.iter().enumerate() {
                 if let Some(division) = &r.division {
                     rows.push((format!("   {division}"), -(i as i64) - 1));
                 }
@@ -1503,7 +1503,7 @@ impl Remap {
     fn prompt(&mut self, core: &Core) {
         let name = self
             .index
-            .and_then(|i| core.pack.data.data.remap.get(i))
+            .and_then(|i| core.remap.get(i))
             .map(|r| r.name.as_str())
             .unwrap_or("No control selected");
         self.set_text(format!("REMAP \"{name}\""));
@@ -1586,9 +1586,6 @@ impl Remap {
             }
             RemapOutcome::Conflict { other } => {
                 let name = core
-                    .pack
-                    .data
-                    .data
                     .remap
                     .iter()
                     .find(|r| r.command.eq_ignore_ascii_case(&other))
@@ -2474,13 +2471,8 @@ mod tests {
         let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
         let mut ui = fixture();
         ui.core.pack = pack.clone();
-        ui.core.remap_commands = pack
-            .data
-            .data
-            .remap
-            .iter()
-            .map(|r| r.command.clone())
-            .collect();
+        ui.core.remap = crate::binds::remap_entries(&pack.data.data);
+        ui.core.remap_commands = ui.core.remap.iter().map(|r| r.command.clone()).collect();
         ui.core.prefs = Prefs::new(&pack.data.data.prefs, &Default::default());
         ui.core.save_context = Some(("Bedroom".into(), crate::api::IconRef::None));
         ui.core.save_maps = vec!["Bedroom".into()];

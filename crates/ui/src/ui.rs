@@ -213,6 +213,8 @@ pub struct Core {
     pub prefs: Prefs,
     pub binds: BindMap,
     pub globals: BindMap,
+    /// The Options remap list ([`crate::binds::remap_entries`]).
+    pub remap: Vec<crate::schema::RemapEntry>,
     pub remap_commands: Vec<String>,
     pub remap_target: Option<usize>,
     pub remap_all: bool,
@@ -279,7 +281,10 @@ pub struct Core {
     pub whiteout: f32,
     /// `GameRenderFilters`' liquid tints for the camera, drawn in order.
     pub underwater: Vec<[f32; 4]>,
-    pub net_graph: Option<String>,
+    /// `NetGraphGui` while it is on the canvas (`toggleNetGraph`).
+    pub net_graph: Option<crate::models::perf::NetGraph>,
+    /// The performance overlay (not in v20).
+    pub perf: crate::models::perf::PerfOverlay,
     pub lagging: bool,
     pub shape_names: bool,
     /// The camera is a player's or vehicle's first-person eye.
@@ -522,6 +527,14 @@ impl Core {
         self.settings.brick_favorites = self.selector.favorites.clone();
         let s = Box::new(self.settings.clone());
         self.request(UiAction::SaveSettings(s));
+    }
+    /// `NetGraph::toggleNetGraph`: add `NetGraphGui` to the canvas, or
+    /// remove it (and its history).
+    pub fn toggle_net_graph(&mut self) {
+        self.net_graph = match self.net_graph {
+            Some(_) => None,
+            None => Some(Default::default()),
+        };
     }
     pub fn in_game(&self) -> bool {
         matches!(self.conn, ConnectionState::InGame { .. })
@@ -785,7 +798,9 @@ impl Core {
             "dodofscreenshot" => self.game(GameAction::Screenshot {
                 kind: ScreenshotKind::DepthOfField,
             }),
-            "togglenetgraph" => self.game(GameAction::ToggleNetGraph),
+            "togglenetgraph" => self.toggle_net_graph(),
+            "toggleperfoverlay" => self.perf.cycle(),
+            "saveperfcapture" => self.game(GameAction::SavePerfCapture),
             "togglefullscreen();" => self.game(GameAction::ToggleFullscreen),
             "togglebuildmacrorecording" => self.game(GameAction::ToggleBuildMacroRecording),
             "playbackbuildmacro" => self.game(GameAction::PlayBackBuildMacro),
@@ -979,8 +994,13 @@ impl Ui {
         });
         let prefs = Prefs::new(&defaults, &settings.prefs);
         let platform = cfg.platform;
+        let remap = crate::binds::remap_entries(&pack.data.data);
         let binds = match &settings.binds {
-            Some(b) => BindMap { entries: b.clone() },
+            Some(b) => {
+                let mut binds = BindMap { entries: b.clone() };
+                binds.add_missing_extras(&remap);
+                binds
+            }
             None => BindMap::defaults(
                 &pack.data.data,
                 crate::binds::DEFAULT_MOUSE,
@@ -1006,13 +1026,7 @@ impl Ui {
             crate::screens::options::chat_lines(&prefs),
             prefs.i64_or("$Pref::Chat::LineTime", 6500).clamp(0, 30000),
         );
-        let remap_commands = pack
-            .data
-            .data
-            .remap
-            .iter()
-            .map(|r| r.command.clone())
-            .collect();
+        let remap_commands = remap.iter().map(|r| r.command.clone()).collect();
         let mut settings = settings;
         if settings.binds.is_none() {
             settings.mouse_type = crate::binds::DEFAULT_MOUSE;
@@ -1031,6 +1045,7 @@ impl Ui {
             prefs,
             binds,
             globals,
+            remap,
             remap_commands,
             remap_target: None,
             remap_all: false,
@@ -1079,6 +1094,7 @@ impl Ui {
             whiteout: 0.0,
             underwater: Vec::new(),
             net_graph: None,
+            perf: Default::default(),
             lagging: false,
             shape_names: true,
             first_person: true,
@@ -1498,7 +1514,20 @@ impl Ui {
                 c.bottom_print = None;
             }
             UiUpdate::PlantError(e) => c.plant_error = Some((e, c.time_ms + 800)),
-            UiUpdate::NetGraph(text) => c.net_graph = text,
+            UiUpdate::NetSample(sample) => {
+                if let Some(graph) = &mut c.net_graph {
+                    graph.add(sample);
+                }
+                if c.perf.wants_net() {
+                    c.perf.net = Some(sample);
+                }
+            }
+            UiUpdate::PerfFrame(frame) => c.perf.push_frame(frame),
+            UiUpdate::PerfStats(stats) => {
+                if c.perf.visible() {
+                    c.perf.stats = stats;
+                }
+            }
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
@@ -2067,6 +2096,7 @@ impl Ui {
         for d in &self.dialogs {
             d.draw(pack, &mut dl, &self.core);
         }
+        crate::screens::perf::draw(pack, &mut dl, &self.core);
         dl
     }
 

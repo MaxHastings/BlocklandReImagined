@@ -158,8 +158,16 @@ pub fn registry(core: &Core) -> Registry<Core> {
         out.echo(format!("{} map(s).", maps.len()));
         Ok(())
     });
-    r.command("netgraph", "", "Toggle the FPS and ping display.", |core, _, _| {
-        core.game(GameAction::ToggleNetGraph);
+    r.command("netgraph", "", "Toggle the net graph (ping, loss and bandwidth).", |core, _, _| {
+        core.toggle_net_graph();
+        Ok(())
+    });
+    r.command("perf", "", "Cycle the performance overlay: compact, expanded, off.", |core, _, _| {
+        core.perf.cycle();
+        Ok(())
+    });
+    r.command("perfcapture", "", "Save the performance overlay's recent history to a file.", |core, _, _| {
+        core.game(GameAction::SavePerfCapture);
         Ok(())
     });
     r.command("screenshot", "", "Save a screenshot.", |core, _, _| {

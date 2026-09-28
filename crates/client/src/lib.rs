@@ -25,6 +25,7 @@ pub mod mods;
 pub mod motion;
 pub mod network;
 pub mod packages;
+pub mod perf;
 pub mod platform;
 pub mod playback;
 pub mod quality;
