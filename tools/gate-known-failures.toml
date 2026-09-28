@@ -53,3 +53,6 @@ target = "bri-client/multiplayer"
 
 [[port_bound]]
 target = "bri-client/release_smoke"
+
+[[port_bound]]
+target = "bri-client/night_qa"
