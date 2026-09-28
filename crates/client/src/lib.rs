@@ -40,6 +40,7 @@ pub mod settings;
 pub mod tool_ui;
 pub mod trust_list;
 pub mod updates;
+pub mod vehicle_camera;
 pub mod vehicles;
 pub mod weapon_debris;
 pub mod weapon_effects;

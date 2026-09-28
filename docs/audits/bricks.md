@@ -96,6 +96,19 @@ install was modified.
    translucent bricks hide each other. We sort back to front, which looks
    better; left as an intentional modern improvement.
 9. **Extents grow by 0.0012 (fixed with 2).** Tiny, but part of the geometry.
+10. **TOP texture turned with the brick (fixed 2026-09-28).** The grid-brick
+    emitter turns TOP UVs (texture slot 0 only) by the brick's angle ID:
+    `(v,-u)`, `(u,v)`, `(-v,u)`, `(-u,-v)` for angles 0..3 (cases
+    0x52f7fc, 0x52f947, 0x52fa8f, 0x52fc0f of jump table 0x531810). Every
+    brick's studs therefore share one world-aligned bevel, lit edge toward
+    the same side. We drew datablock UVs, so bricks at other angles showed
+    other lit edges and packed builds read as pinwheels at stud corners.
+    `SceneData::append_validated_brick_with_fx` now applies the table, taking
+    the angle from the placement's quarter turn; the reference renderer does
+    the same. Evidence: `world_scene` unit test (constant world-space TOP
+    gradient at all four angles) and the `tops` audit scene (every angle,
+    1x1, 1x2, 2x2; 0.85/255 against the reference). The matrix path used for
+    bricks with 0x25d/0x25e set was not traced.
 
 Prints, ramps, corners, wedges, crests and rounds use authored BLB UVs; the
 side-by-side below shows them matching (letters read correctly, not mirrored).
