@@ -185,7 +185,12 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     eprintln!("hosted Stress Lab: {} bricks", app.network_view().map_or(0, |v| v.world.bricks.len()));
     leave(&mut app)?;
 
-    // A second client joins a LAN-visible host over loopback.
+    // A second client joins a LAN-visible host over loopback. Another
+    // session may hold the game ports: BRI_SMOKE_NO_JOIN skips this part.
+    if std::env::var_os("BRI_SMOKE_NO_JOIN").is_some() {
+        eprintln!("loopback join skipped (BRI_SMOKE_NO_JOIN)");
+        return Ok(());
+    }
     host(&mut app, SLATE, None, ServerMode::Internet)?;
     let mut guest = load(&root, "Guesty")?;
     guest.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
