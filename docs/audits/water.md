@@ -1,4 +1,4 @@
-# What v20 does to a player in water
+# What v20's water does
 
 Audit of 2026-09-27. Sources: `Brick_Large_Cubes/server.cs` in the vanilla
 reference (the water brick zone), `allGameScripts.cs` (the player datablock),
@@ -85,8 +85,78 @@ New from this audit:
 Jumping and fall damage have no other water-specific code in v20; drag and
 buoyancy slow falls, and impact damage uses the collision speed as before.
 
+## Map water rendering (audit of 2026-09-28)
+
+Sources: `blocklandv20.exe` again (capstone, read-only), the pinned OpenMBG
+`fluidRender.cc`, `fluidQuadTree.cc`, `fluidSupport.cc` and `waterBlock.cc`
+(commit `9c5673f9`), the four Slate missions and their map previews. The
+user's report was Slate Sea: the sand floor showed over the sea in a notched
+band and the sea was bright turquoise in visible square tiles.
+
+- **Draw order.** Torque sorts a WaterBlock as a plane
+  (`SceneRenderImage::Plane`), not a point. Our water strips sorted by their
+  centres, so Sea's opaque sand layer (a second WaterBlock at -0.24, 9 under
+  the sea) drew over the sea wherever its strip centre was farther away.
+  Water now sorts as planes: farthest plane first, everything beyond a plane
+  before it (`scene::translucent_order`).
+- **Depth masks without terrain.** `GenerateDepthTextures` (0x4bfde0)
+  returns at once when there is no TerrainBlock, and `GBitmap::allocateBitmap`
+  (0x506e50) fills new bitmaps with 0xFF. So on every Slate map both the
+  surface and the shore masks are opaque white: the sea is an opaque shore
+  pass (`TessShore` 60, one 512 px `TSwater1` tile per 34 units), not the
+  `MaxAlpha` surface alone. With a terrain, an empty square writes
+  0x00FFFFFF: no water there.
+- **Specular.** The depth-mapped path runs `CalcVertSpecular`: the vertex
+  colour is `specularColor x pow(half.up, specularPower)` and the pass adds
+  it at that alpha under the depth mask. Sea authors 0.7 0.6 0.55 0.9 at
+  power 0.7, which is what turns its water pale; the missing pass is why ours
+  was saturated turquoise. Defaults are white and power 6 (constructor at
+  0x4bfb40). No stock mission sets `specularMaskTex`, so the unit binds no
+  texture and passes the colour through.
+- **Plain path.** Without `UseDepthMask` (Storm's sea, Tutorial's pools)
+  `fluid::Render` (0x4a6cf0) texgens fluid space at `TessSurface / 48` per
+  unit, draws two passes at `surfaceOpacity` with the fixed 8 s drift, and
+  ignores `Distort*` and `Flow*`. Storm's sea is therefore 28% over its dirt.
+- **Repeats.** Texture coordinates continue across repeated copies; the 30
+  degree second pass had a seam at every 2048-unit copy edge.
+- `MinAlpha`/`MaxAlpha`/`DepthGradient` travel as 8-bit floats
+  (`packUpdate`, 0x4c0789), so Sea's `MaxAlpha` 10 wraps. It does not matter
+  without a terrain.
+
+Not changed: the Sun's live direction. The renderer lights maps from the
+Sun's stale `direction` field, while v20 (and our lighting bake) use
+`azimuth`/`elevation`; the specular highlight inherits that. It affects every
+map's shading and shadows, so it is split out as its own task.
+
+## Coverage
+
+`Water::coverage` returned 0.99999994 for a body wholly under water on about
+half the ticks, from rounding in `(top - bottom) / height`. The forced crouch
+tests `>= 1`, so a swimmer rising from Slate Sea's floor flipped between the
+crouch and root poses every tick: the glitchy rise. Torque's `waterFind`
+gives exactly 1 when the water's top is above the body's; ours now does too.
+
+## Items and vehicles
+
+- **Items.** Every stock `ItemData` (tools, weapons, keys, skis, balls) has
+  `density 0.2` and no `drag`. `Item::updateVelocity` adds buoyancy of
+  density ratio x coverage (from 10%) against gravity 20, with no drag, so a
+  dropped item floats a fifth under and bobs. Dropped items now do; other
+  items' `onEnterLiquid` callbacks are empty in stock scripts.
+- **Vehicles.** `WheeledVehicle::updateForces` and FlyingVehicle's apply
+  `buoyancy x gravity x mass` up and `linVelocity x mDrag`, where `mDrag` is
+  `drag x viscosity x coverage` and is not scaled by mass. Wheeled vehicles
+  also take `torque -= angMomentum x mDrag`, which stops a spin within a few
+  ticks. Ours used a made-up `mass x coverage x 1.5` drag (seven times v20's
+  for the jeep) and no spin damping. Player-type mounts already use the
+  player motor.
+- **Projectiles** have no `splash` or `waterExplosion` in stock scripts and
+  their collision masks exclude water, so they pass through unchanged.
+
 ## Gaps
 
+- The client extrapolates a dropped item with plain gravity between host
+  updates; in water that is corrected every update.
 - `onFakeDeath` and `disappear` deactivate the zone in v20. Here a fake-killed
   or disappeared water brick stays swimmable: the brick state has no flag that
   tells a deactivated zone from a water brick with rendering turned off.

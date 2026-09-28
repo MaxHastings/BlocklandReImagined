@@ -147,6 +147,19 @@ pub enum ContactResponse {
     Bounce(f32),
     Redirect { vector: Vec3, normalized: bool },
 }
+/// The liquid holding a box: how much of the box it covers and the
+/// liquid's density and viscosity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Liquid {
+    pub coverage: f32,
+    pub density: f32,
+    pub viscosity: f32,
+}
+/// `density` of every stock v20 `ItemData` (tools, weapons, keys, skis and
+/// balls). `drag` is never set, so items feel no liquid drag.
+pub const ITEM_DENSITY: f32 = 0.2;
+/// `Item::mGravity`.
+const ITEM_GRAVITY: f32 = 20.0;
 /// Adapter must sweep the entire segment, including thin native map and brick colliders.
 /// Radius results use closest bounds distance, deterministic target order, and the given cap.
 /// Permissions and visibility are authoritative host decisions; no numeric ID grants access.
@@ -182,6 +195,11 @@ pub trait Query {
         self.can_affect(source, target)
     }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool;
+    /// The liquid covering most of the axis-aligned box standing on `bottom`
+    /// and `height` tall, if any.
+    fn liquid(&mut self, _bottom: Vec3, _height: f32) -> Option<Liquid> {
+        None
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
@@ -944,13 +962,24 @@ impl WeaponsWorld {
             if d.velocity.length_squared() < 0.000001 {
                 continue;
             }
-            d.velocity.y -= 20.0 / 120.0;
             let shape = self.item_bounds.get(&d.item).map(|b| {
                 let min = Vec3::from(b.min) * d.scale;
                 let max = Vec3::from(b.max) * d.scale;
                 (d.rotation * ((min + max) * 0.5), (max - min) * 0.5)
             });
             let (offset, half) = shape.unwrap_or((Vec3::ZERO, Vec3::ZERO));
+            // `Item::updateVelocity` with `ShapeBase::updateContainer`: from
+            // 10% coverage, buoyancy is density ratio times coverage against
+            // gravity, so a density-0.2 item floats a fifth under.
+            let rise = shape
+                .and_then(|_| {
+                    let extent = ItemBounds::lowest(half, d.rotation);
+                    let bottom = d.position + offset - Vec3::Y * extent;
+                    q.liquid(bottom, extent * 2.0)
+                })
+                .filter(|l| l.coverage >= 0.1 && l.density.is_finite())
+                .map_or(0.0, |l| l.density / ITEM_DENSITY * l.coverage.min(1.0));
+            d.velocity.y -= ITEM_GRAVITY * (1.0 - rise) / 120.0;
             let start = d.position + offset;
             let end = start + d.velocity / 120.0;
             let filter = Filter {

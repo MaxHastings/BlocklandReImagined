@@ -1,7 +1,7 @@
 //! Weapon queries against the same native collision world used by players.
 use crate::simulation::{Simulation, hit_normal};
 use bri_weapons::{
-    ActorId, ContactResponse, Filter, Hit, Nearby, ProjectileContact, Query, TargetId,
+    ActorId, ContactResponse, Filter, Hit, Liquid, Nearby, ProjectileContact, Query, TargetId,
 };
 use glam::{Quat, Vec3};
 use rapier3d::parry::query::ShapeCastOptions;
@@ -89,6 +89,14 @@ impl WeaponQuery<'_> {
 }
 
 impl Query for WeaponQuery<'_> {
+    fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
+        let (water, coverage) = self.simulation.liquid_at(bottom.to_array(), height)?;
+        Some(Liquid {
+            coverage,
+            density: water.density,
+            viscosity: water.viscosity,
+        })
+    }
     fn on_contact(&mut self, contact: &ProjectileContact) -> ContactResponse {
         match contact.target {
             TargetId::Brick(brick) => self

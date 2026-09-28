@@ -3553,3 +3553,30 @@ particles beyond the debris/weapon paths, and `.bls` text import.
   longer lists the join trust prompt as unbuilt; only elevated client code
   is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
   packaging test needs Windows (not run in the cloud).
+
+
+## 2026-09-28 Water audit against v20
+
+- Max's Slate Sea screenshot: sand showing over the sea in a raised, notched
+  band, and bright turquoise water in visible square tiles. Slate Sea's sea
+  sits 9 units over the slate on an opaque sand WaterBlock; our water strips
+  sorted by centre, so sand strips drew over the sea. Water now sorts as
+  planes, as Torque's WaterBlocks do.
+- From `blocklandv20.exe` (details in `docs/audits/water.md`): with no
+  terrain the depth masks keep GBitmap's 0xFF fill, so the Slate maps draw an
+  opaque shore pass; the depth-mapped path adds the authored specular
+  highlight that makes Sea pale; the plain path (Storm, Tutorial) texgens at
+  TessSurface/48 per unit without distortion. Texture coordinates continue
+  across repeated copies.
+- The glitchy rise to the surface: full coverage rounded to 0.99999994 on
+  alternate ticks, flipping the forced underwater crouch every tick.
+  `Water::coverage` now returns exactly 1 for a body wholly under.
+- Dropped items float (every stock ItemData: density 0.2, no drag); vehicle
+  water drag is `drag x viscosity x coverage` unscaled by mass, and wheeled
+  vehicles' spin decays at that rate, as `WheeledVehicle::updateForces`.
+- Split out: the live Sun direction uses the stale `direction` field instead
+  of azimuth/elevation (all maps' shading, and the water highlight).
+- Evidence: `cargo test -p bri-render -p bri-content -p bri-sim -p
+  bri-weapons -p bri-vehicles -p bri-client`; offscreen `scene_snapshot`
+  renders of Sea, Storm, Desert and Slopes compared with the map previews.
+  No wire protocol change. Needs a visible check by Max (see the thread).

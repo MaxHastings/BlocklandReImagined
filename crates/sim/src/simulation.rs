@@ -631,6 +631,20 @@ impl Simulation {
             self.index.bounds(id),
         ))
     }
+    /// The liquid covering the most of a box standing on `feet`, as
+    /// `bri_content::water::submersion` picks it, without copying the list.
+    pub fn liquid_at(
+        &self,
+        feet: [f32; 3],
+        height: f32,
+    ) -> Option<(&bri_content::water::Water, f32)> {
+        self.waters
+            .iter()
+            .chain(self.brick_waters.values())
+            .map(|w| (w, w.coverage(feet, height)))
+            .filter(|(_, coverage)| *coverage > 0.0)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
     /// Map liquids plus water bricks, for the player motor.
     pub fn liquids(&self) -> Vec<bri_content::water::Water> {
         self.waters
