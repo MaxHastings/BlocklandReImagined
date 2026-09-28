@@ -356,6 +356,7 @@ impl RemotePose {
                 archetype: self.archetype,
                 scale: self.scale,
                 energy: bri_sim::player::PlayerTuning::default().max_energy,
+                tick: Default::default(),
             },
         }
     }
