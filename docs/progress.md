@@ -3744,3 +3744,26 @@ bandwidth lane's one-sound-per-100-bricks grouping (300b1530) as the only
 break-sound rule; a 250-brick blast is now one sound. Evidence: `cargo test
 -p bri-client --lib audio -- --include-ignored`, `cargo test -p bri-sim
 --test tools --test brick_damage -- --include-ignored` green.
+## 2026-09-28 Standalone BlocklandReImagined.exe
+
+- Max asked for one exe he can drop anywhere and run. New crate
+  `crates/launcher` builds `BlocklandReImagined.exe`: the packager appends
+  the release zip to it; on start it checks the zip's SHA-256, unpacks it
+  into `%LOCALAPPDATA%\BlocklandReImagined\Game` and runs the game there with
+  that per-user folder as its state folder. Settings, saves and Add-Ons stay
+  per user, never beside the exe. Same exe again: reuses the install. New
+  version: base files replaced, player files and package choices carried
+  across, old game still running: asks the player to close it.
+- `package_playtest.ps1` now also writes `<release>.zip` (forward-slash
+  entries; Windows PowerShell's `CreateFromDirectory` writes backslashes)
+  and `<release>-standalone\BlocklandReImagined.exe`, and verifies the exe
+  (`-VerifyStandalone`). `-NoStandalone` skips it. The launcher must be built
+  beside bri-client: `cargo build --release -p bri-launcher`.
+  `package_playtest.sh` (Linux) is unchanged.
+- Evidence: `cargo test -p bri-launcher` (first run, reuse, upgrade keeping
+  Add-Ons and choices, damaged payload); clippy -D warnings;
+  `Test-PlaytestPackaging.ps1` (zip, exe, damaged exe refused); the real
+  packager on a16's exe and content: 3261 files, 86 MB zip, 87 MB exe,
+  verified; `release_smoke standalone_exe_unpacks_per_user_and_starts_the_game`
+  with `BRI_STANDALONE_EXE` passed (4.4 s first unpack, `--check` passed from
+  the install). Not covered: a signed exe, and an interactive start (Max's).

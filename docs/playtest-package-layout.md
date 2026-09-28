@@ -68,6 +68,36 @@ Final assembly requires root's exact executable hash and an explicit package
 version. The generated directory and its content remain ignored; only the
 packager, launcher/trust helpers, and this layout documentation are source.
 
+## Zip and standalone exe
+
+Beside the folder the packager writes `BlocklandReImagined-alpha-<version>.zip`
+(the folder under its own name, forward-slash entries) and
+`BlocklandReImagined-alpha-<version>-standalone/BlocklandReImagined.exe`: the
+launcher (`crates/launcher`, built with
+`cargo build --release -p bri-launcher`) with that zip appended, then the
+zip's SHA-256, its length and the magic `BRISFX01`. Pass `-NoStandalone` to
+skip the exe. `-VerifyStandalone <exe>` checks the payload hash and verifies
+the release inside it against its manifest; the packager runs it on every
+exe it writes. A code signature is added after the footer, and both the
+launcher and the verifier skip it.
+
+The exe needs no install, admin rights or other files. On start it unpacks
+into `%LOCALAPPDATA%\BlocklandReImagined\Game` (the folder the game already
+keeps settings, saves and identity in, which is also the state folder it
+runs with) and runs `Gameri-client.exe` from there. A later start with
+the same exe reuses the install; a different version replaces the base
+files and carries across every file the player added (`content\Add-Ons`,
+imported Add-Ons, `packages-disabled.json`, `logs`), keeping the Add-Ons
+they turned on and the optional packages they turned off. If the older game
+is still running the upgrade stops and asks the player to close it.
+`--extract-only` installs and prints the folder; other arguments go to the
+game. `BRI_STANDALONE_ROOT` replaces the per-user folder, for tests.
+
+The release smoke (`crates/client/tests/release_smoke.rs`) checks the exe
+when `BRI_STANDALONE_EXE` names one: it unpacks into a scratch folder,
+keeps a dropped Add-On across a second start, and the game passes `--check`
+from the install.
+
 ## Release version and signing
 
 A release build carries its version. Set `BRI_VERSION` to the package version
