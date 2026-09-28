@@ -194,6 +194,71 @@ impl std::fmt::Display for Mismatch {
     }
 }
 
+/// How a join refused for differing shared packages begins.
+pub const REFUSAL: &str = "Your content does not match the server: ";
+
+/// The refusal text for `blocking` mismatches: [`REFUSAL`] and
+/// [`describe`]. [`parse_refusal`] reads it back.
+pub fn refusal(blocking: &[Mismatch]) -> String {
+    format!("{REFUSAL}{}", describe(blocking))
+}
+
+/// One package named in a refusal: its id, the server's version and the
+/// joining player's version (`None` where that side lacks it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefusedPackage {
+    pub id: String,
+    pub server: Option<String>,
+    pub client: Option<String>,
+}
+
+/// Read back a refusal written by [`refusal`], anywhere in `text` (error
+/// chains put context in front of it). `None` when `text` is not one.
+pub fn parse_refusal(text: &str) -> Option<Vec<RefusedPackage>> {
+    let rest = &text[text.find(REFUSAL)? + REFUSAL.len()..];
+    // `id version (hash)`, as `PackageRef` displays.
+    fn package(text: &str) -> Option<(String, String)> {
+        let mut words = text.trim().split(' ');
+        let (id, version, hash) = (words.next()?, words.next()?, words.next()?);
+        (hash.starts_with('(') && hash.ends_with(')') && words.next().is_none())
+            .then(|| (id.to_string(), version.to_string()))
+    }
+    let mut out = Vec::new();
+    for line in rest.trim_end().split("; ") {
+        let row = if let Some(p) = line.strip_prefix("server has ") {
+            if let Some(server) = p.strip_suffix(", you do not") {
+                let (id, v) = package(server)?;
+                RefusedPackage {
+                    id,
+                    server: Some(v),
+                    client: None,
+                }
+            } else {
+                let (server, client) = p.split_once(", you have ")?;
+                let (id, sv) = package(server)?;
+                let (_, cv) = package(client)?;
+                RefusedPackage {
+                    id,
+                    server: Some(sv),
+                    client: Some(cv),
+                }
+            }
+        } else {
+            let client = line
+                .strip_prefix("you have ")?
+                .strip_suffix(", the server does not")?;
+            let (id, v) = package(client)?;
+            RefusedPackage {
+                id,
+                server: None,
+                client: Some(v),
+            }
+        };
+        out.push(row);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// One line per mismatch, for a join rejection or a warning.
 pub fn describe(mismatches: &[Mismatch]) -> String {
     mismatches
@@ -331,5 +396,50 @@ mod tests {
         fs::write(dir.join("sub/b.bin"), b"124").unwrap();
         assert_ne!(hash_dir(&dir).unwrap().0, first);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn refusals_read_back_package_by_package() {
+        let r = |id: &str, version: &str, hash: char| PackageRef {
+            id: id.into(),
+            version: version.into(),
+            side: Side::Shared,
+            hash: hash.to_string().repeat(64),
+            size: 1,
+        };
+        let text = format!(
+            "Joining 127.0.0.1: {}",
+            refusal(&[
+                Mismatch::Missing(r("creeper", "1.0.0", 'a')),
+                Mismatch::Different {
+                    server: r("v20-weapons", "9.0.0", 'b'),
+                    client: r("v20-weapons", "8.0.0", 'c')
+                },
+                Mismatch::Extra(r("zombies", "2.0.0", 'd')),
+            ])
+        );
+        let rows = parse_refusal(&text).unwrap();
+        let v = |s: &str| Some(s.to_string());
+        assert_eq!(
+            rows,
+            [
+                RefusedPackage {
+                    id: "creeper".into(),
+                    server: v("1.0.0"),
+                    client: None
+                },
+                RefusedPackage {
+                    id: "v20-weapons".into(),
+                    server: v("9.0.0"),
+                    client: v("8.0.0")
+                },
+                RefusedPackage {
+                    id: "zombies".into(),
+                    server: None,
+                    client: v("2.0.0")
+                },
+            ]
+        );
+        assert!(parse_refusal("Connection timed out").is_none());
     }
 }

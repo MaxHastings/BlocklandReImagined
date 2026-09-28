@@ -144,6 +144,15 @@ Where it is used:
   listed here like any other package; `bri-package-runtime` loads their
   manifests from the same list.
 
+## Turning packages on and off
+
+`packages.json` is also the enabled list. A disabled package's exact entry
+moves to `packages-disabled.json` in the same content root (same schema), and
+package directories holding a `package.json` that neither file lists are
+discovered as disabled. `bri_package::library` owns scanning, dependency
+planning and atomic rewrites; loaders only read `packages.json`. The in-game
+Add-Ons screen is built on it: see [`mod-manager.md`](mod-manager.md).
+
 ## Per-package manifests (`package.json`)
 
 The mod platform lane defines the manifest a mod package carries inside its

@@ -1,5 +1,6 @@
 //! Native application boundary. No Torque readers or desktop automation.
 pub mod actor_effects;
+pub mod add_ons;
 pub mod admin_ui;
 pub mod app;
 pub mod audio;

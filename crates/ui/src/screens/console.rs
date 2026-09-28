@@ -114,7 +114,9 @@ pub fn registry(core: &Core) -> Registry<Core> {
         use crate::api::ConnectionState as C;
         match core.conn {
             C::InGame { .. } => core.request(UiAction::Disconnect),
-            C::Connecting { .. } | C::Loading { .. } => core.request(UiAction::CancelConnect),
+            C::Connecting { .. } | C::Loading { .. } | C::DownloadingPackages(_) => {
+                core.request(UiAction::CancelConnect)
+            }
             C::Idle | C::Failed { .. } => return Err("Not connected.".into()),
         };
         Ok(())

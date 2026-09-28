@@ -142,6 +142,10 @@ pub enum Callback {
     MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
     /// `TrustInviteGui.ignore()`.
     IgnoreTrust { from: u64 },
+    /// Turn a package on or off once the player confirmed what else changes.
+    AddOn { id: String, enabled: bool },
+    /// Turn off every add-on outside the base game.
+    DefaultAddOns,
 }
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
@@ -205,6 +209,10 @@ pub struct Core {
     pub save_maps: Vec<String>,
     pub save_files: Vec<SaveFileInfo>,
     pub save_context: Option<(String, IconRef)>,
+    /// Installed packages for the Add-Ons screen (host-prepared text).
+    pub add_ons: crate::api::AddOnsView,
+    /// Differing add-ons behind the last refused join (Can't Join dialog).
+    pub add_on_mismatch: Option<crate::api::AddOnMismatch>,
     // live state
     pub conn: ConnectionState,
     pub hud: HudModel,
@@ -925,6 +933,8 @@ impl Ui {
             save_maps: Vec::new(),
             save_files: Vec::new(),
             save_context: None,
+            add_ons: Default::default(),
+            add_on_mismatch: None,
             conn: ConnectionState::Idle,
             hud: HudModel::default(),
             chat,
@@ -1236,6 +1246,7 @@ impl Ui {
                     ConnectionState::Idle | ConnectionState::Failed { .. } => ScreenId::MainMenu,
                     ConnectionState::Connecting { .. } => self.content.id(),
                     ConnectionState::Loading { .. } => ScreenId::Loading,
+                    ConnectionState::DownloadingPackages(_) => ScreenId::PackageDownload,
                     ConnectionState::InGame { .. } => ScreenId::Play,
                 };
                 if let ConnectionState::InGame {
@@ -1270,7 +1281,11 @@ impl Ui {
                     c.pop(ScreenId::Connecting);
                 }
                 if let Some(r) = failed {
-                    c.message_ok("Connection Failed", &r);
+                    if c.add_on_mismatch.is_some() {
+                        c.push(ScreenId::AddOnMismatch);
+                    } else {
+                        c.message_ok("Connection Failed", &r);
+                    }
                 }
             }
             UiUpdate::Maps(m) => c.maps = m,
@@ -1427,6 +1442,8 @@ impl Ui {
             }
             UiUpdate::SaveContext { map, preview } => c.save_context = Some((map, preview)),
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
+            UiUpdate::AddOns(view) => c.add_ons = view,
+            UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
             UiUpdate::DisplayModes(modes) => c.display_modes = Some(modes),
             UiUpdate::DisplayChanged {
                 resolution,
