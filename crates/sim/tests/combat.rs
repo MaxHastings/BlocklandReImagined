@@ -183,3 +183,41 @@ fn minigame_loadout_may_repeat_an_item_like_v20() {
     assert_eq!(slots[0], hammer);
     assert_eq!(slots[1], hammer);
 }
+
+#[test]
+fn add_on_blasts_obey_the_minigame_like_weapon_blasts() {
+    let mut s = session();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let b = s
+        .join("Bravo".into(), Vec3::new(20.0, 0.05, 0.0), true)
+        .unwrap();
+    steps(&mut s, 30);
+    s.command(
+        a,
+        1,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings::default(),
+        }),
+    )
+    .unwrap();
+    // Past spawn protection.
+    steps(&mut s, 320);
+    let at = |s: &Session, owner| {
+        let (state, _) = s
+            .motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap();
+        Vec3::from(state.feet) + Vec3::Y
+    };
+    // Alpha's minigame keeps Bravo, outside it, out of Alpha's blasts.
+    s.explode(at(&s, b), 4.0, 50.0, 0.0, "test", Some(a))
+        .unwrap();
+    assert_eq!(s.vitals()[&b].health, 100.0);
+    // A blast nobody set off still hurts.
+    s.explode(at(&s, b), 4.0, 50.0, 0.0, "test", None).unwrap();
+    assert!(s.vitals()[&b].health < 100.0);
+}

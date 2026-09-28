@@ -1369,8 +1369,8 @@ impl Session {
         }
     }
     /// The one explosion operation: damage players within `radius` (full at
-    /// the centre, none at the edge), damage package entities the same way,
-    /// and destroy bricks within `brick_radius`.
+    /// the centre, none at the edge) whom the caller may hurt, damage package
+    /// entities the same way, and destroy bricks within `brick_radius`.
     pub fn explode(
         &mut self,
         center: Vec3,
@@ -1394,6 +1394,9 @@ impl Session {
                 let d = (Vec3::from(p.player.state().feet) + Vec3::Y).distance(center);
                 (d < radius).then(|| (*owner, damage * (1.0 - d / radius)))
             })
+            // A player's blast obeys the minigame's radius damage rule, as
+            // their weapons' blasts do.
+            .filter(|(owner, _)| caller.is_none_or(|c| self.can_damage_player(c, *owner, true)))
             .collect();
         for (owner, amount) in victims {
             self.damage_player(
