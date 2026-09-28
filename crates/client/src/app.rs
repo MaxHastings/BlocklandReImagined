@@ -4837,7 +4837,7 @@ impl PlatformApp for App {
                     }
                     let result = self.host(
                         id,
-                        "v20/add-ons/map_tutorial/tutorial.mis".into(),
+                        bri_sim::tutorial::MAP_ID.into(),
                         ServerMode::SinglePlayer,
                         None,
                         1,
@@ -6091,7 +6091,7 @@ mod tests {
         assert_eq!(app.ui.core.hud.tools.len(), 5);
         assert_eq!(
             app.ui.core.hud.tools[2].as_ref().unwrap().id,
-            bri_weapons::CORE_TOOLS[2]
+            bri_weapons::PRINTER
         );
         assert!(matches!(
             app.ui.core.hud.tools[2].as_ref().unwrap().icon,
@@ -6195,7 +6195,7 @@ image: "v20.image.gunimage".into(),
                 .weapons
                 .drops
                 .iter()
-                .any(|d| d.item == bri_weapons::CORE_TOOLS[1])
+                .any(|d| d.item == bri_weapons::WRENCH)
         );
         let dropped = app.network_view().unwrap().weapons.drops.last().unwrap().id;
         assert!(

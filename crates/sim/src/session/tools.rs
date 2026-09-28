@@ -848,11 +848,11 @@ impl Session {
     pub(super) fn tool_action(&mut self, owner: OwnerId, action: ToolAction) -> Result<Reply> {
         let required = match &action {
             ToolAction::UndoBrick => None,
-            ToolAction::SetPrint { .. } => Some(bri_weapons::CORE_TOOLS[2]),
+            ToolAction::SetPrint { .. } => Some(bri_weapons::PRINTER),
             ToolAction::Inspect { .. }
             | ToolAction::SetWrench { .. }
             | ToolAction::SetEvents { .. }
-            | ToolAction::RespawnVehicle { .. } => Some(bri_weapons::CORE_TOOLS[1]),
+            | ToolAction::RespawnVehicle { .. } => Some(bri_weapons::WRENCH),
         };
         if let Some(required) = required {
             inventory::require_equipment(&self.weapons, owner, Some(required))?;

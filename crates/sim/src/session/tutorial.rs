@@ -8,7 +8,7 @@
 //! respawning at the start restarts the tutorial.
 use super::*;
 use crate::tutorial::{TutorialMap, Zone, ZoneKind};
-use bri_weapons::ActorId;
+use bri_weapons::{ActorId, PRINTER, WRENCH};
 
 /// Tutorial triggers tick every 50 ms (`tickPeriodMS`) at 120 ticks/s.
 const PERIOD: u64 = 6;
@@ -25,8 +25,6 @@ const TROPHY: &str = "<bitmap:base/client/ui/CI/trophy>";
 /// The completion dialog counts 18 goals (Secrets included).
 const GOAL_COUNT: u32 = 18;
 
-const WRENCH: &str = bri_weapons::CORE_TOOLS[1];
-const PRINTER: &str = bri_weapons::CORE_TOOLS[2];
 const GUN: &str = "v20.weapon.gunitem";
 const HAMMER_IMAGE: &str = "v20.image.hammerimage";
 const WRENCH_IMAGE: &str = "v20.image.wrenchimage";

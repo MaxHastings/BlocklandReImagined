@@ -98,9 +98,9 @@ impl Building {
             selected_slot: None,
             equipment: Equipment::None,
             tool_catalog: [
-                tool(bri_weapons::CORE_TOOLS[0], "Hammer", "hammer"),
-                tool(bri_weapons::CORE_TOOLS[1], "Wrench", "wrench"),
-                tool(bri_weapons::CORE_TOOLS[2], "Printer", "printer"),
+                tool(bri_weapons::HAMMER, "Hammer", "hammer"),
+                tool(bri_weapons::WRENCH, "Wrench", "wrench"),
+                tool(bri_weapons::PRINTER, "Printer", "printer"),
             ]
             .into_iter()
             .map(|t| (t.id.clone(), t))
@@ -483,10 +483,10 @@ impl Building {
                         .and_then(Option::as_ref)
                         .is_some_and(|id| match equipment {
                             Equipment::Weapon(expected) => id == expected,
-                            Equipment::Hammer => id == bri_weapons::CORE_TOOLS[0],
-                            Equipment::Wrench => id == bri_weapons::CORE_TOOLS[1],
-                            Equipment::Printer => id == bri_weapons::CORE_TOOLS[2],
-                            Equipment::Wand => id == bri_weapons::CORE_TOOLS[3],
+                            Equipment::Hammer => id == bri_weapons::HAMMER,
+                            Equipment::Wrench => id == bri_weapons::WRENCH,
+                            Equipment::Printer => id == bri_weapons::PRINTER,
+                            Equipment::Wand => id == bri_weapons::WAND,
                             _ => false,
                         })
                 })
@@ -1716,7 +1716,7 @@ mod tests {
         ToolInventory {
             slots: vec![
                 Some("v20.weapon.gunitem".into()),
-                Some(bri_weapons::CORE_TOOLS[0].into()),
+                Some(bri_weapons::HAMMER.into()),
                 Some("v20.weapon.bowitem".into()),
                 None,
                 None,

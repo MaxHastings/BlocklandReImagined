@@ -684,9 +684,7 @@ mod tests {
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
         assert_eq!(
             world.bricks[&1].item_spawn.item,
-            Some(bri_world::ContentRef::Resolved(
-                bri_weapons::CORE_TOOLS[0].into()
-            ))
+            Some(bri_world::ContentRef::Resolved(bri_weapons::HAMMER.into()))
         );
         assert_eq!(world.bricks[&1].source_records, original);
         assert!(matches!(
@@ -747,7 +745,7 @@ mod tests {
             .ensure_same(&ItemPhysicsContent::load(&root, &weapons).unwrap())
             .unwrap();
         // A changed bound must be re-certified by the matching model metadata.
-        physics["items"][bri_weapons::CORE_TOOLS[0]]["min"][0] = serde_json::json!(-0.5);
+        physics["items"][bri_weapons::HAMMER]["min"][0] = serde_json::json!(-0.5);
         write_physics(&root, &manifest, &physics);
         assert!(
             ItemPhysicsContent::load(&root, &weapons)
@@ -802,19 +800,17 @@ mod tests {
                     invalid["items"]
                         .as_object_mut()
                         .unwrap()
-                        .remove(bri_weapons::CORE_TOOLS[0]);
+                        .remove(bri_weapons::HAMMER);
                 }
                 1 => {
                     let value = invalid["items"]
                         .as_object_mut()
                         .unwrap()
-                        .remove(bri_weapons::CORE_TOOLS[0])
+                        .remove(bri_weapons::HAMMER)
                         .unwrap();
                     invalid["items"]["unknown"] = value;
                 }
-                2 => {
-                    invalid["items"][bri_weapons::CORE_TOOLS[0]]["min"][0] = serde_json::json!(2000)
-                }
+                2 => invalid["items"][bri_weapons::HAMMER]["min"][0] = serde_json::json!(2000),
                 _ => invalid["schema_version"] = serde_json::json!(2),
             }
             write_physics(&root, &manifest, &invalid);

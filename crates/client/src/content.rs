@@ -42,7 +42,7 @@ pub const LOADABLE_MAPS: &[&str] = &[
     "v20/add-ons/map_slate_desert/slatedesert.mis",
     "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
     "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
-    "v20/add-ons/map_tutorial/tutorial.mis",
+    bri_sim::tutorial::MAP_ID,
 ];
 
 /// How a source checkout creates or refreshes its content (tools/bootstrap.py).
@@ -1020,7 +1020,7 @@ fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
             "kitchen" => LOADABLE_MAPS[1],
             "slopes" => LOADABLE_MAPS[2],
             "slate" => LOADABLE_MAPS[3],
-            "tutorial" => LOADABLE_MAPS[13],
+            "tutorial" => bri_sim::tutorial::MAP_ID,
             _ => "",
         }
         .to_string();

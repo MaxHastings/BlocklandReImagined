@@ -9,12 +9,12 @@ pub const MAX_DROPS: usize = 1024;
 pub const MAX_QUERY_TARGETS: usize = 128;
 /// Core tool actions are implemented by the host's building authority. They
 /// share inventory/drop rules with weapons but have no weapon state machine.
-pub const CORE_TOOLS: [&str; 4] = [
-    "v20.weapon.hammeritem",
-    "v20.weapon.wrenchitem",
-    "v20.weapon.printgun",
-    "v20.weapon.wanditem",
-];
+pub const HAMMER: &str = "v20.weapon.hammeritem";
+pub const WRENCH: &str = "v20.weapon.wrenchitem";
+pub const PRINTER: &str = "v20.weapon.printgun";
+pub const WAND: &str = "v20.weapon.wanditem";
+/// The core tools in their inventory order; name one by its constant.
+pub const CORE_TOOLS: [&str; 4] = [HAMMER, WRENCH, PRINTER, WAND];
 /// Images whose v20 `onFire` is a script that raycasts and acts on the hit
 /// object (`hammerImage::onFire`, `wrenchImage::onFire`, ...) instead of
 /// calling `Parent::onFire`. The runtime reports [`Event::ToolFire`] and the
