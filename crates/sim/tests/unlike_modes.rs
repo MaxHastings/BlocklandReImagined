@@ -19,7 +19,7 @@ use bri_sim::{
 use bri_world::World;
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 /// One package: its id, side and files (path, contents).
 struct Package<'a> {
