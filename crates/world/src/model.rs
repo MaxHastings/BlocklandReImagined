@@ -31,7 +31,7 @@ pub fn update_bricks(bricks: &mut Bricks, mut f: impl FnMut(&mut Brick)) {
         .collect();
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ContentRef {
     Resolved(String),

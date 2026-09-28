@@ -744,14 +744,20 @@ async fn connection_task(
     };
     let read = async {
         loop {
-            let (request, permit) = codec::read_budgeted_request(&mut receive, |length| {
+            let (mut request, permit) = codec::read_budgeted_request::<Request>(&mut receive, |length| {
+                let bulk = bulk.load(Ordering::Relaxed);
                 if length <= codec::PLAYER_MAX_REQUEST {
-                    return Ok((
-                        own_budget.clone(),
-                        length.max(codec::MIN_REQUEST_COST) as u32,
-                    ));
+                    return Ok(codec::Admission {
+                        budget: own_budget.clone(),
+                        cost: length.max(codec::MIN_REQUEST_COST) as u32,
+                        expanded: if bulk {
+                            codec::MAX_BULK_DECODED
+                        } else {
+                            codec::PLAYER_MAX_REQUEST
+                        },
+                    });
                 }
-                if !bulk.load(Ordering::Relaxed) {
+                if !bulk {
                     let reason = format!(
                         "A {length}-byte request exceeds the {}-byte player limit; only administrators may send bulk requests",
                         codec::PLAYER_MAX_REQUEST
@@ -759,9 +765,19 @@ async fn connection_task(
                     connection.close(3_u32.into(), reason.as_bytes());
                     anyhow::bail!(reason);
                 }
-                Ok((bulk_budget.clone(), length as u32))
+                Ok(codec::Admission {
+                    budget: bulk_budget.clone(),
+                    cost: length as u32,
+                    expanded: codec::MAX_BULK_DECODED,
+                })
             })
             .await?;
+            // An uploaded build's bricks rejoin it here, off the authority loop.
+            let request = tokio::task::spawn_blocking(move || {
+                request.restore()?;
+                anyhow::Ok(request)
+            })
+            .await??;
             events
                 .send(Event::Command {
                     owner,

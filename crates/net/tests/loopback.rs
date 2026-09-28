@@ -425,11 +425,7 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         brick: id,
         events: events.clone(),
     });
-    let size = serde_json::to_vec(&bri_net::protocol::Request {
-        sequence: 3,
-        aim: None,
-        command: command.clone(),
-    })?
+    let size = serde_json::to_vec(&bri_net::protocol::Request::new(3, command.clone(), None))?
     .len();
     assert!(size > 64 * 1024 && size <= bri_net::codec::MAX_REQUEST);
     assert_eq!(owner.command(command).await?, Reply::Accepted);

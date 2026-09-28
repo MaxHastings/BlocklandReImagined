@@ -16,4 +16,5 @@ pub mod server;
 pub mod stream;
 pub mod traffic;
 pub mod upnp;
+pub mod wire;
 mod tick_clock;

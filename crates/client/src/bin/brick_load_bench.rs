@@ -282,17 +282,19 @@ async fn live_load(setup: &Setup, workload: &Workload, created: usize) -> Result
     )
     .await?;
     let base = host.replica.world.bricks.len();
-    let request = codec::encode_request(
-        &Request {
-            sequence: 1,
-            command: Command::LoadBuild {
+    let request = codec::frame_request(
+        &Request::new(
+            1,
+            Command::LoadBuild {
                 build: Box::new(workload.build.clone()),
                 ownership: false,
             },
-            aim: None,
-        },
+            None,
+        ),
         codec::MAX_REQUEST,
-    );
+        codec::MAX_BULK_DECODED,
+    )
+    .map(|(bytes, _)| bytes);
     let request_bytes = match &request {
         Ok(bytes) => json!(bytes.len()),
         Err(error) => json!(format!("{error:#}")),
@@ -645,23 +647,26 @@ async fn main() -> Result<()> {
             let created = o["created"].as_u64().unwrap_or(0) as usize;
             println!("  run {run}: offline {o}");
             offline.push(o);
-            if workload.name == "synthetic" {
-                // Too large for a Load Bricks request; measure the request
-                // and a join of the world as a host would hold it.
-                let request = codec::encode_request(
-                    &Request {
-            sequence: 1,
-            command: Command::LoadBuild {
-                            build: Box::new(workload.build.clone()),
-                            ownership: false,
-                        },
-            aim: None,
-        },
-                    codec::MAX_REQUEST,
-                );
+            let fits = codec::frame_request(
+                &Request::new(
+                    1,
+                    Command::LoadBuild {
+                        build: Box::new(workload.build.clone()),
+                        ownership: false,
+                    },
+                    None,
+                ),
+                codec::MAX_REQUEST,
+                codec::MAX_BULK_DECODED,
+            );
+            if workload.name == "synthetic"
+                && let Err(error) = &fits
+            {
+                // Too large for a Load Bricks request: measure a join of the
+                // world as a host would hold it.
                 let j = join_only(&setup, workload.map, session, spawns).await?;
                 println!("  run {run}: join {j}");
-                joins.push(json!({"request": match request {Ok(b)=>json!(b.len()),Err(e)=>json!(format!("{e:#}"))}, "join": j}));
+                joins.push(json!({"request": format!("{error:#}"), "join": j}));
             } else {
                 drop(session);
                 let l = live_load(&setup, workload, created).await?;

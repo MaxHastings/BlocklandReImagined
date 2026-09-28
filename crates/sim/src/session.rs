@@ -558,6 +558,7 @@ pub struct Session {
     >,
     dirty: dirty::Dirty,
     load_pace: build_load::LoadPace,
+    load_clock: build_load::LoadClock,
     notices: VecDeque<String>,
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
@@ -645,6 +646,7 @@ impl Session {
             departed: BTreeMap::new(),
             dirty: dirty::Dirty::default(),
             load_pace: build_load::LoadPace::Budget,
+            load_clock: Default::default(),
             notices: VecDeque::new(),
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
@@ -1830,6 +1832,7 @@ impl Session {
         tick.saturating_sub(since) >= u64::try_from(minutes).unwrap_or(0) * 60 * 120
     }
     pub fn step(&mut self) -> Result<()> {
+        self.load_clock.start_step();
         let tick = self.simulation.state().tick;
         // Abandoned builds turn public on the minute (v20 checked every
         // five, with each server post).
@@ -2041,6 +2044,7 @@ impl Session {
         let changed = self.dirty.read(dirty::Reader::Events);
         contain("events", self.step_events(&changed));
         contain("items", self.reconcile_items());
+        self.load_clock.end_step();
         ensure!(failures.is_empty(), "{}", failures.join("; "));
         Ok(())
     }
