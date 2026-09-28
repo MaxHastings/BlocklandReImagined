@@ -26,9 +26,15 @@ pub enum Kind {
     /// (JSON). Server side: clients receive the host's archetype table with
     /// the checkpoint and predict from it.
     Archetype,
+    /// A PNG image drawn on block faces. Client side: downloaded with the
+    /// package like any file.
+    Texture,
+    /// A block: textures or flipbooks per face, and named states game rules
+    /// switch between (JSON). Drawn on bricks whose `look` names it.
+    Block,
 }
 impl Kind {
-    pub const NAMES: [&str; 7] = [
+    pub const NAMES: [&str; 9] = [
         "behaviour",
         "script",
         "world",
@@ -36,6 +42,8 @@ impl Kind {
         "model",
         "hud",
         "archetype",
+        "texture",
+        "block",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -46,6 +54,8 @@ impl Kind {
             "model" => Self::Model,
             "hud" => Self::Hud,
             "archetype" => Self::Archetype,
+            "texture" => Self::Texture,
+            "block" => Self::Block,
             _ => return None,
         })
     }
@@ -54,7 +64,7 @@ impl Kind {
             Self::Behaviour | Self::Script | Self::World | Self::Entity | Self::Archetype => {
                 Side::Server
             }
-            Self::Model | Self::Hud => Side::Client,
+            Self::Model | Self::Hud | Self::Texture | Self::Block => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -293,6 +303,10 @@ pub struct Material {
     /// Engine-side protection: operations cannot remove it.
     #[serde(default)]
     pub indestructible: bool,
+    /// A package block (`namespace:block/name`) drawn on this material's
+    /// voxels in place of `color`.
+    #[serde(default)]
+    pub block: Option<String>,
 }
 impl ChunkWorld {
     pub fn validate(&self) -> Result<()> {
@@ -331,6 +345,13 @@ impl ChunkWorld {
             ensure!(
                 text(&m.name, 64) && color(&m.color),
                 "material `{}` needs a name and a 0..1 RGBA color",
+                m.id
+            );
+            ensure!(
+                m.block
+                    .as_ref()
+                    .is_none_or(|b| bri_package::id::ContentId::parse(b).is_ok()),
+                "material `{}`: block must be namespace:block/name",
                 m.id
             );
         }
@@ -457,6 +478,159 @@ impl ArchetypeDef {
             "model must be a model id"
         );
         Ok(())
+    }
+}
+
+/// A PNG texture's size, read from its header: clients decode it, the
+/// package loader only checks it is a PNG of a drawable size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Texture {
+    pub width: u32,
+    pub height: u32,
+}
+impl Texture {
+    pub const MAX_EDGE: u32 = 1024;
+    pub fn read(bytes: &[u8]) -> Result<Self> {
+        const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        ensure!(
+            bytes.len() >= 24 && bytes[..8] == SIGNATURE && &bytes[12..16] == b"IHDR",
+            "a texture must be a PNG image"
+        );
+        let edge = |at: usize| {
+            u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
+        let (width, height) = (edge(16), edge(20));
+        ensure!(
+            (1..=Self::MAX_EDGE).contains(&width) && (1..=Self::MAX_EDGE).contains(&height),
+            "a texture is 1 to {} pixels on each edge, not {width}x{height}",
+            Self::MAX_EDGE
+        );
+        Ok(Self { width, height })
+    }
+}
+
+/// One face of a block: a texture id, or a flipbook of texture ids.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FaceLook {
+    Texture(String),
+    Flipbook(Flipbook),
+}
+/// Frames shown in turn at `fps`; `once` holds the last frame instead of
+/// looping (a crack that spreads, then stays).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Flipbook {
+    pub frames: Vec<String>,
+    pub fps: f32,
+    #[serde(default)]
+    pub once: bool,
+}
+impl FaceLook {
+    /// Every texture id this face uses.
+    pub fn textures(&self) -> impl Iterator<Item = &String> {
+        match self {
+            Self::Texture(t) => std::slice::from_ref(t).iter(),
+            Self::Flipbook(f) => f.frames.iter(),
+        }
+    }
+    /// The texture shown `seconds` after the face began showing.
+    pub fn frame(&self, seconds: f32) -> &str {
+        match self {
+            Self::Texture(t) => t,
+            Self::Flipbook(f) => {
+                let n = f.frames.len();
+                let i = (seconds.max(0.0) * f.fps) as usize;
+                let i = if f.once { i.min(n - 1) } else { i % n };
+                &f.frames[i]
+            }
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        if let Self::Flipbook(f) = self {
+            ensure!(
+                (1..=64).contains(&f.frames.len()),
+                "a flipbook has 1 to 64 frames"
+            );
+            ensure!(
+                f.fps.is_finite() && (0.5..=60.0).contains(&f.fps),
+                "a flipbook runs at 0.5 to 60 fps"
+            );
+        }
+        for t in self.textures() {
+            ensure!(
+                bri_package::id::ContentId::parse(t).is_ok(),
+                "`{t}` must be a texture id, namespace:texture/name"
+            );
+        }
+        Ok(())
+    }
+}
+/// Faces by name: `all`, `side` (the four walls), or one of `top`,
+/// `bottom`, `north`, `south`, `east`, `west`. The most specific wins.
+pub type Faces = BTreeMap<String, FaceLook>;
+pub const FACE_NAMES: [&str; 8] = [
+    "all", "side", "top", "bottom", "north", "south", "east", "west",
+];
+/// A block: what each face shows, and named states that replace some faces
+/// (a dig tool sets `cracking`, the server's rules decide).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockDef {
+    pub schema_version: u32,
+    pub name: String,
+    pub faces: Faces,
+    #[serde(default)]
+    pub states: BTreeMap<String, Faces>,
+}
+impl BlockDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "block schema_version must be 1");
+        ensure!(text(&self.name, 64), "block name is required");
+        ensure!(self.states.len() <= 32, "a block has at most 32 states");
+        for (state, faces) in std::iter::once(("", &self.faces))
+            .chain(self.states.iter().map(|(k, v)| (k.as_str(), v)))
+        {
+            ensure!(
+                state.is_empty() || identifier(state),
+                "state `{state}` must be an identifier"
+            );
+            for (face, look) in faces {
+                ensure!(
+                    FACE_NAMES.contains(&face.as_str()),
+                    "unknown face `{face}`: use one of {FACE_NAMES:?}"
+                );
+                look.validate()?;
+            }
+        }
+        for face in ["top", "bottom", "north", "south", "east", "west"] {
+            ensure!(
+                self.look(face, "").is_some(),
+                "the block's own faces must cover `{face}` (use `all` or `side`)"
+            );
+        }
+        Ok(())
+    }
+    /// What `face` shows in `state`: the state's most specific face, else
+    /// the block's own.
+    pub fn look(&self, face: &str, state: &str) -> Option<&FaceLook> {
+        fn pick<'a>(faces: &'a Faces, face: &str) -> Option<&'a FaceLook> {
+            let wall = matches!(face, "north" | "south" | "east" | "west");
+            faces
+                .get(face)
+                .or_else(|| wall.then(|| faces.get("side")).flatten())
+                .or_else(|| faces.get("all"))
+        }
+        self.states
+            .get(state)
+            .and_then(|faces| pick(faces, face))
+            .or_else(|| pick(&self.faces, face))
+    }
+    /// Every texture id any face or state uses.
+    pub fn textures(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.faces)
+            .chain(self.states.values())
+            .flat_map(|faces| faces.values().flat_map(FaceLook::textures))
     }
 }
 
@@ -626,5 +800,58 @@ impl Binding {
             scope,
             key,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+        bytes.extend(b"IHDR");
+        bytes.extend(width.to_be_bytes());
+        bytes.extend(height.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn textures_are_pngs_of_a_drawable_size() {
+        assert_eq!(
+            Texture::read(&png(16, 32)).unwrap(),
+            Texture {
+                width: 16,
+                height: 32
+            }
+        );
+        assert!(Texture::read(&png(4096, 16)).is_err());
+        assert!(Texture::read(&png(0, 16)).is_err());
+        assert!(Texture::read(b"GIF89a not a png at all....").is_err());
+    }
+
+    #[test]
+    fn a_block_covers_every_face_and_names_only_known_faces() {
+        let block = |faces: serde_json::Value| -> Result<BlockDef> {
+            let b: BlockDef = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "name": "Test", "faces": faces
+            }))?;
+            b.validate()?;
+            Ok(b)
+        };
+        assert!(block(serde_json::json!({ "all": "a:texture/x" })).is_ok());
+        assert!(
+            block(serde_json::json!({ "top": "a:texture/x", "side": "a:texture/y" })).is_err(),
+            "the bottom is not covered"
+        );
+        assert!(
+            block(serde_json::json!({ "all": "a:texture/x", "front": "a:texture/y" })).is_err()
+        );
+        assert!(
+            block(serde_json::json!({ "all": { "frames": [], "fps": 4 } })).is_err(),
+            "a flipbook needs frames"
+        );
+        assert!(
+            block(serde_json::json!({ "all": { "frames": ["a:texture/x"], "fps": 900 } })).is_err()
+        );
     }
 }

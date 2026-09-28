@@ -678,6 +678,12 @@ impl Session {
                     0,
                 );
                 brick.color = world.colors[m as usize];
+                brick.look = world.def.materials[m as usize].block.clone().map(|block| {
+                    bri_world::BlockLook {
+                        block,
+                        state: String::new(),
+                    }
+                });
                 bricks.push(brick);
                 placed.push(Voxel {
                     position,
@@ -1113,6 +1119,36 @@ impl Session {
                     .execute(bri_minigames::Command::ForceRespawn { target })
                     .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
                 self.apply_minigame_effects(effects)
+            }
+            Op::SetBlockState { brick, state } => {
+                let host = self.packages.as_ref().context("No packages are enabled")?;
+                let look = self
+                    .simulation
+                    .state()
+                    .bricks
+                    .get(&brick)
+                    .context("No such brick")?
+                    .look
+                    .as_ref()
+                    .context("That brick shows no block")?;
+                let block = host
+                    .catalog
+                    .block(&look.block)
+                    .with_context(|| format!("No block {}", look.block))?;
+                ensure!(
+                    state.is_empty() || block.states.contains_key(&state),
+                    "Block {} has no state `{state}`",
+                    look.block
+                );
+                if look.state != state {
+                    self.simulation.mutate(brick, |b| {
+                        if let Some(look) = &mut b.look {
+                            look.state = state;
+                        }
+                    })?;
+                    self.dirty.insert(brick);
+                }
+                Ok(())
             }
             Op::Control { player, entity } => {
                 let peer = self.peers.get(&player).context("No such player")?;
@@ -1658,6 +1694,10 @@ impl Session {
                 let eye = peer.player.eye();
                 let hit = self.simulation.target(eye, direction, reach)?;
                 hit.map(|hit| script::Aim {
+                    look: hit
+                        .brick
+                        .and_then(|b| self.simulation.state().bricks.get(&b)?.look.clone())
+                        .map(|l| (l.block, l.state)),
                     tag: hit.brick.and_then(|b| {
                         let world = host.world.as_ref()?;
                         world

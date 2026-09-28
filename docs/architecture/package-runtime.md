@@ -23,10 +23,13 @@ file:
 |---|---|---|
 | `behaviour` | server | Declared commands, state keys and hooks, and the script file. |
 | `script` | server | Sandboxed server script (Rhai). |
-| `world` | server | A chunked world provider: chunk size, voxel brick, materials, the generator function. |
-| `entity` | server | An entity kind: name, model id, speed, scale, health, think function and interval. |
+| `world` | server | A chunked world provider: chunk size, voxel brick, materials (each may name a `block`), the generator function. |
+| `entity` | server | An entity kind: name, model id, speed, scale, health, think function and interval, and optionally the `archetype` its body moves by. |
+| `archetype` | server | A player archetype: a base plus the movement it changes, health, riding, look. |
 | `model` | client | A box model: coloured boxes, colours per entity label. |
 | `hud` | client | A HUD panel: title, colours, rows bound to public state, keys bound to commands. |
+| `texture` | client | A PNG image (at most 1024 pixels on an edge), downloaded with the package. |
+| `block` | client | A block: per face (`all`, `side`, `top`, `bottom`, `north`, `south`, `east`, `west`; the most specific wins) a texture id or a flipbook (`frames`, `fps`, `once`), and named `states` that replace some faces. |
 
 **Clients never receive or run package code.** Server kinds may only appear
 in packages listed with `"side": "server"`; models and HUD panels only in
@@ -55,8 +58,12 @@ Scripts never touch the game. A call receives a read-only snapshot (tick,
 seed, players, entities, the caller's aim) and a working copy of its own
 state; it returns a list of typed operations (`bri_package_runtime::Op`):
 `remove_brick`, `place_brick`, `explode`, `damage`, `teleport`, `respawn`,
-`set_archetype`, `control`, `spawn_entity`, `remove_entity`, `steer`,
-`label`, `tell`, `broadcast`. `control(player, entity)` hands a player's
+`set_archetype`, `control`, `set_block_state`, `spawn_entity`,
+`remove_entity`, `steer`, `label`, `tell`, `broadcast`. `set_block_state(brick,
+state)` (capability `world.edit`) switches a block brick to one of its
+block's declared states; the state is a field of the brick
+(`Brick::look`), so it replicates and saves with the world. `aim()` reports
+the aimed brick's `block` and `state`. `control(player, entity)` hands a player's
 movement to one of the package's own entities, `release(player)` hands it
 back (capability `player`; see `docs/player-simulation.md`).
 

@@ -63,6 +63,12 @@ pub enum Op {
         player: u64,
         archetype: String,
     },
+    /// Show a block brick in one of its block's named states (`""` for the
+    /// block's own faces): a dig tool cracks it, a switch lights it.
+    SetBlockState {
+        brick: u64,
+        state: String,
+    },
     /// Hand a player's movement input to one of the package's entities
     /// (`entity`), or back to the player's own body (`None`). The avatar
     /// stands where it was while the entity is driven.
@@ -103,7 +109,9 @@ pub enum Op {
 impl Op {
     pub fn capability(&self) -> &'static str {
         match self {
-            Self::RemoveBrick { .. } | Self::PlaceBrick { .. } => "world.edit",
+            Self::RemoveBrick { .. } | Self::PlaceBrick { .. } | Self::SetBlockState { .. } => {
+                "world.edit"
+            }
             Self::Explode { .. } | Self::DamagePlayer { .. } => "damage",
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
@@ -127,6 +135,9 @@ impl Op {
             | Self::Respawn { .. }
             | Self::Control { .. } => true,
             Self::Teleport { position, .. } => finite(position),
+            Self::SetBlockState { state, .. } => {
+                state.len() <= 64 && !state.chars().any(char::is_control)
+            }
             Self::SetArchetype { archetype, .. } => {
                 archetype.len() <= 160 && !archetype.chars().any(char::is_control)
             }
@@ -218,6 +229,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Respawn { .. } => "respawn",
         Op::SetArchetype { .. } => "set_archetype",
         Op::Control { .. } => "control",
+        Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
     }
 }

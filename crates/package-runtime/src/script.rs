@@ -67,6 +67,9 @@ pub struct Aim {
     pub brick: Option<u64>,
     /// The brick's provider tag (for generated voxels, the material id).
     pub tag: Option<String>,
+    /// The brick's block and its state, when it shows a block.
+    #[serde(default)]
+    pub look: Option<(String, String)>,
     pub position: [f32; 3],
     pub distance: f32,
 }
@@ -278,6 +281,18 @@ fn register_api(engine: &mut Engine) {
                             .map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
                     ),
                     ("tag", a.tag.clone().map_or(Dynamic::UNIT, Dynamic::from)),
+                    (
+                        "block",
+                        a.look
+                            .as_ref()
+                            .map_or(Dynamic::UNIT, |(b, _)| Dynamic::from(b.clone())),
+                    ),
+                    (
+                        "state",
+                        a.look
+                            .as_ref()
+                            .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from(s.clone())),
+                    ),
                     x,
                     y,
                     z,
@@ -445,6 +460,12 @@ fn register_api(engine: &mut Engine) {
         push(Op::SetArchetype {
             player: id(&player)?,
             archetype: archetype.into(),
+        })
+    });
+    engine.register_fn("set_block_state", |brick: Dynamic, state: &str| {
+        push(Op::SetBlockState {
+            brick: id(&brick)?,
+            state: state.into(),
         })
     });
     engine.register_fn("control", |player: Dynamic, entity: Dynamic| {

@@ -30,6 +30,8 @@ pub struct Package {
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
     pub archetypes: BTreeMap<String, content::ArchetypeDef>,
+    pub textures: BTreeMap<String, content::Texture>,
+    pub blocks: BTreeMap<String, content::BlockDef>,
 }
 
 const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -177,6 +179,8 @@ impl Package {
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
             archetypes: BTreeMap::new(),
+            textures: BTreeMap::new(),
+            blocks: BTreeMap::new(),
             manifest,
             assets,
         };
@@ -286,6 +290,20 @@ impl Package {
                         parse::<content::ArchetypeDef>(asset, &id, |a| a.validate(), out)
                     {
                         self.archetypes.insert(asset.id.clone(), a);
+                    }
+                }
+                Kind::Texture => match content::Texture::read(&asset.bytes) {
+                    Ok(t) => {
+                        self.textures.insert(asset.id.clone(), t);
+                    }
+                    Err(e) => out.push(
+                        Diagnostic::error("content.texture", format!("{e:#}"))
+                            .at(location(&id, &asset.file)),
+                    ),
+                },
+                Kind::Block => {
+                    if let Some(b) = parse::<content::BlockDef>(asset, &id, |b| b.validate(), out) {
+                        self.blocks.insert(asset.id.clone(), b);
                     }
                 }
             }
@@ -513,6 +531,38 @@ impl Catalog {
                         );
                     }
                 }
+                for world in p.worlds.values() {
+                    for block in world.materials.iter().filter_map(|m| m.block.as_ref()) {
+                        let owner = block.split(':').next().unwrap_or_default();
+                        if broken(owner) {
+                            continue;
+                        }
+                        if self.block(block).is_none() {
+                            out.push(
+                                Diagnostic::error(
+                                    "set.block.unknown",
+                                    format!("material block `{block}` is not provided by an enabled client package"),
+                                )
+                                .at(at.clone()),
+                            );
+                        }
+                    }
+                }
+            }
+            for block in p.blocks.values() {
+                for texture in block.textures() {
+                    let owner = texture.split(':').next().unwrap_or_default();
+                    if !broken(owner) && self.texture(texture).is_none() {
+                        out.push(
+                            Diagnostic::error(
+                                "set.texture.unknown",
+                                format!("block `{}` uses texture `{texture}`, which no enabled package provides", block.name),
+                            )
+                            .at(at.clone())
+                            .hint("provide it as kind `texture` (a PNG) in this or an enabled package"),
+                        );
+                    }
+                }
             }
             for hud in p.huds.values() {
                 for key in &hud.keys {
@@ -615,6 +665,12 @@ impl Catalog {
     }
     pub fn model(&self, id: &str) -> Option<&content::BoxModel> {
         self.packages.get(id.split(':').next()?)?.models.get(id)
+    }
+    pub fn texture(&self, id: &str) -> Option<&content::Texture> {
+        self.packages.get(id.split(':').next()?)?.textures.get(id)
+    }
+    pub fn block(&self, id: &str) -> Option<&content::BlockDef> {
+        self.packages.get(id.split(':').next()?)?.blocks.get(id)
     }
     /// Every package's archetypes, in package then id order.
     pub fn archetypes(&self) -> impl Iterator<Item = (&String, &content::ArchetypeDef)> {

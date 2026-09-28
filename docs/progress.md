@@ -2001,6 +2001,16 @@ Lab" in `docs/stress-lab/HANDOFF.md`.
   does not predict the entity. Removed its `tools/gate-known-failures.toml`
   entry. Package-authored controllers are recorded as the tier-2 sandbox
   case (HANDOFF, ledger W14).
+- Players whose archetype's look is a package box model draw as it; third
+  person uses the archetype's camera distance.
+- E32 (Max's Minecraft-like cube): `texture` (PNG) and `block` content
+  kinds; a block has per-face textures or flipbooks and named states.
+  Materials of a generated world may name a block, and its voxels carry
+  `Brick::look` (block, state), which replicates and saves with the brick.
+  `set_block_state(brick, state)` (capability `world.edit`) and `aim()`'s
+  `block`/`state` let a dig tool crack a block through states before
+  digging it out (`cargo test -p bri-sim --test blocks`). Found W14 again
+  (closed brick looks). The world renderer does not draw block faces yet.
 
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.

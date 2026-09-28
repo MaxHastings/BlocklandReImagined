@@ -152,6 +152,7 @@ fn mining_economy_runs_on_server_state_only() {
         c.aim = Some(Aim {
             brick: Some(77),
             tag: Some(tag.into()),
+            look: None,
             position: [0.0; 3],
             distance: 2.0,
         });

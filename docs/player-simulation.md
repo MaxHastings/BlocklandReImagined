@@ -100,8 +100,9 @@ checked by the motor). `PlayerState.archetype` is an index into that table.
   without predicting the avatar, as when seated; the entity itself moves at
   the server's entity rate, not predicted. Predicting a package-authored
   controller would need client code: the sandboxed tier-2 case.
-- **Not yet.** The client draws v20's Blockhead and horse; package box
-  models on player bodies are not built.
+- **Looks.** v20's Blockhead and horse draw as before; an archetype whose
+  `model` is a package box model draws as that model (not animated), and
+  third person keeps the archetype's `camera_distance`.
 
 ## Session authority
 

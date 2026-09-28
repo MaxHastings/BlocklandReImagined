@@ -299,7 +299,7 @@ based PvP mode, a board game, a strategy game) needs no engine change. The
 campaign built modes nothing like the Stress Lab, attacked the platform
 with a red team, and fixed each class of weakness it found with the
 smallest general seam. The running record is
-[weakness-ledger.md](weakness-ledger.md): 15 classes (W1 to W15) from 31
+[weakness-ledger.md](weakness-ledger.md): 15 classes (W1 to W15) from 32
 experiments and two red-team rounds.
 
 Labels: **WORKING NOW** (built and tested headless), **PROTOTYPE** (built
@@ -321,6 +321,7 @@ game with different assumptions uses it.
 | Control targets: a package hands a player one of its entities to drive (`control`, `release`); the entity moves by its archetype | Player and control | A kart driven while the avatar waits (E27) | Vehicles, drones, possessed creatures, remote-controlled cameras as packages | PROTOTYPE (the client follows the entity; it does not predict it) |
 | Entities with a package `think`, first variables at spawn, fair rationing | Entities | RTS units that know their owner (E19), a 1000-agent swarm (E23), zombies (E29) | NPCs, units, pieces, hazards | PROTOTYPE |
 | World edits: generated chunks, `place_brick`, `remove_brick`, `explode` | World model | A mineable world (Stress Lab), an arena built and sunk each round (E20) | Arenas, puzzles, destructible maps | PROTOTYPE |
+| Blocks: per-face textures and flipbooks with named states, drawn on bricks whose `look` names them; `set_block_state` switches a brick's state | World model, UI | A mod's own cube cracked by a dig tool (E32) | Minecraft-like blocks, doors and switches that light, damage decals, seasons | PROTOTYPE (loads, replicates and downloads; the renderer does not draw the faces yet) |
 | State with an audience: `visible` = `server`, `owner`, `everyone` | UI, security | A hidden hand of cards (E21), per-player currency (Stress Lab) | Secrets, private inventories, fog of war | PROTOTYPE |
 | HUD bindings: `global`, `player` (the viewer's), `players` (scoreboard) | UI | Currency panel (Stress Lab), scoreboard (E26) | Lap timers, turn indicators, standings | PROTOTYPE (the client does not draw package HUDs yet) |
 | One capability gate (`ops::authorize`) plus the caller's trust (W9) | Security | Package brick removal (H2-F12), explosions | Any package power, declared and shown to the host | WORKING NOW |
@@ -347,16 +348,21 @@ game with different assumptions uses it.
   E19's RTS units; a HUD beyond declarative panels (E21, E26); a shader
   effect beyond per-face textures and flipbooks (E32). Playing video in a
   theater is a future host capability (tier 3), not tier 2.
-- **MISSING.** The client draws only v20's Blockhead and horse on players.
-  A package archetype's `model` and `camera_distance` reach the client in
-  the archetype table, but nothing draws or uses them yet.
+- Players whose archetype's `model` is a package box model draw as it in
+  place of the Blockhead, and third person uses the archetype's
+  `camera_distance`. Box models do not animate.
+- **MISSING, drawing block faces (E32).** Blocks, textures, flipbooks and
+  states load, validate, download with their package and replicate on the
+  brick (`Brick::look`); `BlockDef::look(face, state).frame(seconds)` says
+  which texture a face shows. The world renderer still draws a block brick
+  in its colour: it needs the package textures in a texture array and a
+  per-face texture index, the same path v20 prints take.
 - Package state replicates per client: the welcome carries
   `Session::package_state_for(viewer)` and the server sends each client
   `Message::PackageState` when its own view changes, so a player's
   owner-visible keys (the miner's purse) never reach another client. The
   Stress Lab's HUD and entity models draw with the packages loaded for the
   server, downloaded ones included.
-- **MISSING.** Box models on players: an archetype's `model` (below).
 - **MISSING.** The windowed host does not autosave its world (W2).
 - **MISSING.** Fog of war for entities: W13's audience rule for package
   entities.

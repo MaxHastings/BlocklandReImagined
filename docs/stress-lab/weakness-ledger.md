@@ -53,7 +53,7 @@ default.
 
 | Family | Experiments | New classes found | Latest experiments without a new class |
 |---|---|---|---|
-| World model | E15, E20, H2-F13 | W7 (E15) | E20 (W8 again), H2-F13 (W1 again) |
+| World model | E15, E20, E32, H2-F13 | W7 (E15) | E32 (W14 again), E20 (W8 again), H2-F13 (W1 again) |
 | Entities and behaviour | E19, E23, E29, H2-F6, H2-F14 | W12 (E23) | E29 (ordinary), E19 (W8 again), H2-F14 (W1 again) |
 | Player and control | E16, E22, E27, E30 | W14 (E22; archetypes fixed in E30, control targets in E27) | E27 (W14's fix extended), E30 (W14's fix held; one ordinary finding) |
 | UI model | E21, E26, H2-F4 | W11 (H2-F4), W13 (E21) | E26 (W8 again) |
@@ -80,7 +80,9 @@ data. It found no new class: the steering model is W14's own rule
 mini-game ids are W8 again. E27 then closed W14's rest the same way: what
 a player controls is an entity the package names, moved by its archetype.
 E31 (download then join) found W8 again: the join refusal was a sentence
-meant for people, so no program could act on it.
+meant for people, so no program could act on it. E32 (a mod's own cube)
+found W14 again in presentation: a brick's look was a closed choice
+(colour, v20 print), fixed the same way, as data both sides hold.
 
 ## Experiments
 
@@ -120,3 +122,4 @@ meant for people, so no program could act on it.
 | E29 | Entities and behaviour | 9, 1 | `unlike_modes::a_zombie_wave_chases_and_bites_players`: agents chase the nearest living player and hurt on contact. | `damage(player, amount, ())` was refused: `()` means "nobody" everywhere else (`on_death`'s killer) but not here. | ordinary. Fixed. |
 | E30 | Player and control, UI model | 9 | `unlike_modes::players_can_be_bodies_beyond_the_blockhead` and `a_broken_archetype_is_refused_with_its_reason` (Max, 2026-09-28: "custom player controller models beyond just everyone being a Blockhead"): four players on one server are a Blockhead, v20's horse, a package's rolling ball (sphere body, 60 health) and a package's kart; the ball dies and comes back a ball; a client predicting the ball from the checkpoint's table matches the server within 1 cm; a mini-game picks the ball as its player type. | Built on W14's fix. Two findings: a kart that cannot strafe could not be written, because v20's motor always moves along the raw input vector (a zero sideways speed only caps it), so how input steers is a controller model, not a constant; and the mini-game catalog accepted only `v20.` ids. | W14's fix held. Fixed: a `steering` model (`strafe`, v20; `turn`, a vehicle) chosen by data; mini-game ids accept `namespace:kind/name`. The second is W8 again (the catalog followed its first client). |
 | E31 | Multiplayer/distribution | 3 | `package_sync::a_refused_join_downloads_the_missing_packages_and_joins`: a clean client joins a modded server by downloading what the refusal names, then joining again; a client running a shared package the server lacks is refused without a download. | The join refused a package mismatch with a sentence (`Rejected(String)`), so a client could not tell a refusal it can fix by downloading from one it cannot without parsing text. | W8 again (the refusal followed its first reader, a person). Fixed: `Message::PackagesDiffer` carries the typed mismatches; `Client::connect_fetching` downloads and retries. |
+| E32 | World model, UI model, distribution | 1, 9 | `blocks::a_mod_cube_has_its_own_faces_and_a_dig_tool_cracks_it` and `a_block_naming_a_texture_no_package_provides_is_refused` (Max, 2026-09-28: a Minecraft-like cube with its own textures on every side, animating when a custom digging tool hits it): a package's block has top, bottom and side textures; its generated voxels show it; a dig tool's script cracks it (`cracking`, a flipbook held on its last frame), then `cracked`, then digs it out; an undeclared state is refused with its reason. | What a brick looked like was closed: a palette colour and v20's prints. A package could not name a look, and content kinds were JSON only, so an image could not be package content. | W14 again (a closed presentation kind). Fixed: `texture` and `block` kinds, `Brick::look` (block and state, replicated and saved with the brick), `set_block_state`, and `aim()` reporting the block and state. The renderer does not draw block faces yet. |
