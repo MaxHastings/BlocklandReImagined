@@ -49,7 +49,18 @@ pub(super) struct Events {
     /// Items events dropped, likewise, for the item quota.
     pub(super) dropped: BTreeMap<OwnerId, VecDeque<u64>>,
     diagnostics: VecDeque<String>,
+    /// Projectiles events spawned this host tick, and the tick.
+    spawned_tick: (u64, usize),
+    /// Explosions and projectiles refused for being over the per-tick limits
+    /// since the host last asked.
+    pub(super) over_limit: u64,
 }
+
+/// Projectiles events may spawn in one host tick, across every brick. Owner
+/// quotas bound how many live at once; this bounds how fast a zero-delay
+/// loop can make them. Explosions have their own per-tick limit,
+/// `bri_weapons::MAX_EXPLOSIONS_PER_TICK`.
+pub const MAX_EVENT_PROJECTILES_PER_TICK: usize = 8;
 
 fn note(queue: &mut VecDeque<String>, text: String) {
     if queue.len() == 64 {
@@ -142,6 +153,11 @@ impl Session {
                 }
             }
         }
+    }
+    /// Event explosions and projectiles refused for being over the per-tick
+    /// limits since the last call, for the host's log.
+    pub fn take_event_overload(&mut self) -> u64 {
+        std::mem::take(&mut self.events.over_limit)
     }
     pub fn take_event_diagnostics(&mut self) -> Vec<String> {
         self.events.diagnostics.drain(..).collect()
@@ -595,6 +611,18 @@ fn direction_index(direction: ev::Direction) -> u8 {
         ev::Direction::West => 5,
     }
 }
+/// v20's `serverCmdAddEvent` raises every `fireRelay` row below 33 ms to
+/// 33 ms, and its directional relays schedule their neighbour 33 ms out, so
+/// a relay loop runs at most 30 hops a second. Players who are not
+/// administrators keep that floor; administrators may relay faster.
+pub(super) const MIN_RELAY_DELAY_MS: u32 = 33;
+pub(super) fn clamp_relay_delays(rows: &mut [ev::Row]) {
+    for row in rows {
+        if row.output.to_ascii_lowercase().starts_with("firerelay") {
+            row.delay_ms = row.delay_ms.max(MIN_RELAY_DELAY_MS);
+        }
+    }
+}
 /// Outputs that hurt or disadvantage a player need a shared minigame.
 fn harmful(output: &str) -> bool {
     matches!(
@@ -644,6 +672,16 @@ impl EventHost<'_> {
     ) {
         let source = ActorId(self.instigator(d));
         let scale = scale.clamp(0.1, 10.0);
+        let tick = self.session.simulation.state().tick;
+        let spawned = &mut self.session.events.spawned_tick;
+        if spawned.0 != tick {
+            *spawned = (tick, 0);
+        }
+        if spawned.1 >= MAX_EVENT_PROJECTILES_PER_TICK {
+            self.session.events.over_limit += 1;
+            return;
+        }
+        spawned.1 += 1;
         match self
             .session
             .weapons
@@ -669,6 +707,31 @@ impl EventHost<'_> {
                 &mut self.session.events.diagnostics,
                 format!("Event projectile {projectile}: {error:#}"),
             ),
+        }
+    }
+    /// `spawnExplosion`: explodes where it is made, as v20's `%p.explode()`.
+    fn spawn_explosion(&mut self, d: &Dispatch, projectile: &str, at: Vec3, scale: f32) {
+        let source = ActorId(self.instigator(d));
+        let scale = scale.clamp(0.1, 10.0);
+        if let Err(error) = self
+            .session
+            .weapons
+            .spawn_explosion(projectile, source, at, scale)
+        {
+            if self
+                .session
+                .weapons
+                .pack
+                .projectiles
+                .contains_key(projectile)
+            {
+                self.session.events.over_limit += 1;
+            } else {
+                note(
+                    &mut self.session.events.diagnostics,
+                    format!("Event explosion {projectile}: {error:#}"),
+                );
+            }
         }
     }
     /// Owner of the brick whose event this is: its quota object.
@@ -853,9 +916,12 @@ impl EventHost<'_> {
                     self.spawn_projectile(d, projectile, at, velocity, *scale);
                 }
             }
+            // `fxDTSBrick::spawnExplosion` does nothing on a fake-killed brick.
             BrickOp::SpawnExplosion { projectile, scale } => {
-                if let Some(projectile) = projectile {
-                    self.spawn_projectile(d, projectile, center, Vec3::ZERO, *scale);
+                if let Some(projectile) = projectile
+                    && !self.session.events.respawns.contains_key(&brick)
+                {
+                    self.spawn_explosion(d, projectile, center, *scale);
                 }
             }
             BrickOp::SpawnItem { item, velocity } => {
@@ -959,7 +1025,7 @@ impl EventHost<'_> {
             PlayerOp::SpawnExplosion { projectile, scale } => {
                 if let Some(projectile) = projectile {
                     let feet = Vec3::from(self.session.peers[&owner].player.state().feet);
-                    self.spawn_projectile(d, projectile, feet + Vec3::Y, Vec3::ZERO, *scale);
+                    self.spawn_explosion(d, projectile, feet + Vec3::Y, *scale);
                 }
             }
             // `Player::ChangeDataBlock`: unknown datablocks are ignored.
