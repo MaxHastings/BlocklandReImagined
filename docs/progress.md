@@ -2535,3 +2535,11 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   `cargo test -p bri-client --lib add_ons`, all content-free. Open: toggles
   take effect once multi-pack loading and door-closers' join wiring read
   `packages.json`; the join screen needs PR #1's `fetch_missing` call.
+- 2026-09-28 Add-Ons: Import. Old Blockland zips or folders dropped into
+  `content/Add-Ons/` show under "Not Imported Yet" with an Import button; the
+  client runs `bri-import-addon` as a separate program into
+  `content/addons/<name>`, then the new add-on is listed (off) and turns on
+  like any other. Evidence: library, UI and client unit tests, plus a manual
+  end-to-end import of the CC0 `Weapon_Synthetic_Blaster` fixture that ended
+  with it in `packages.json`. Open: packaging must ship
+  `bri-import-addon.exe` next to the client.

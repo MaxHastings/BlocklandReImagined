@@ -688,6 +688,9 @@ pub enum UiAction {
     SetAddOnEnabled { id: String, enabled: bool },
     /// Turn off every package that is not part of the base game.
     DefaultAddOns,
+    /// Convert an old Blockland add-on waiting in the drop folder into a
+    /// package (a row with `importable`). Answered when the import finishes.
+    ImportAddOn { id: String },
 }
 
 // -------------------------------------------------------------- view models
@@ -795,6 +798,11 @@ pub struct AddOnRow {
     pub problems: Vec<String>,
     /// A problem stops it from loading.
     pub broken: bool,
+    /// An old Blockland add-on not converted yet: the screen offers Import
+    /// instead of Enabled.
+    pub importable: bool,
+    /// Being imported right now.
+    pub importing: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

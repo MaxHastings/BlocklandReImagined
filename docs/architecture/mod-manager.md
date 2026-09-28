@@ -25,7 +25,7 @@ kind of thing: "Import Add-On" converts it into an Add-On
 | Joining a modded server just works | PR #1: `bri_net::packages::fetch_missing` into the download cache | Join screen: what the server needs, progress, Cancel; never changes your own Add-Ons | **screen built**; wiring waits for PR #1 and door-closers' join |
 | Know why a join was refused | Main's join check (protocol 31) refuses differing `shared` packages with `environment::refusal`; `parse_refusal` reads it back package by package | Can't Join dialog: each add-on with the server's version beside yours, and an Add-Ons button | **built** |
 | Pick a game mode when starting a game | Packages that provide `world` or a mode kind | Start Game offers them beside maps | next |
-| Import an old add-on zip | `bri_addon_import::import` | "Import Add-On…" button, report shown in details | next |
+| Import an old add-on zip | Drop folder `content/Add-Ons/` (v20's name); `Library::legacy` lists zips and folders there and matches each to the package imported from it by provenance; the client runs `bri-import-addon` as a separate program into `content/addons/<name>` | "Not Imported Yet" group, Import button, progress mark, notice pointing at the report | **built** |
 | Presets / profiles | Named copies of the enabled list | Preset picker on the Add-Ons screen | later |
 | Per-add-on settings | Package `slots` and settings schema | Settings tab in details | later |
 | Browse and update in game | Needs a hosted index | Browse tab | later |
@@ -67,6 +67,26 @@ satisfied; a warning on disabled ones), `library.dependency_missing`,
 `library.dependency_version`, `library.role_conflict`, `library.required`,
 `library.unknown`, `library.listed_twice`, `library.duplicate`,
 `library.too_many`.
+
+## Importing old add-ons
+
+Players drop old Blockland zips or folders into `content/Add-Ons/`, as they
+did in v20. The library lists each one (`LegacyAddOn`) and matches it to an
+installed package whose `provenance.source` starts with
+`Blockland Add-On <name> (`, which is what `bri-import-addon` writes. The
+Add-Ons screen shows unmatched ones under "Not Imported Yet" with an Import
+button. The client runs `bri-import-addon <zip> content/addons/<name> --json`
+(`Library::import_dir` picks a fresh folder) as a child process on a worker
+thread, so conversion tooling stays out of the game's dependency graph and the
+game keeps running. A failed import removes its half-written folder. The
+imported package is then discovered, starts off, and turns on like any other.
+
+Open: the packaged build must ship `bri-import-addon.exe` next to
+`bri-client.exe` (`tools/package_playtest.ps1` copies only the client today);
+without it Import says the importer is missing. Imports run without a v20
+reference install, so references to base datablocks are reported rather than
+resolved. Imported packages group under "Other" until the importer writes
+`provides` (multi-pack step d).
 
 ## Presentation
 
@@ -115,6 +135,12 @@ satisfied; a warning on disabled ones), `library.dependency_missing`,
   refusal.
 - `cargo test -p bri-ui --lib addons`: grouping and marks, toggle requests,
   confirm-before-cascade, locked base, search, details text, main menu
-  button placement and routing, join progress and Cancel.
+  button placement and routing, join progress and Cancel, Import instead of
+  Enabled for old add-ons.
 - `cargo test -p bri-client --lib add_ons`: rows, words, toggling through
-  files, Defaults.
+  files, Defaults, old add-ons offered for import, missing importer named.
+- End to end (manual, 2026-09-28): `Weapon_Synthetic_Blaster` from the
+  importer's CC0 fixture dropped in `Add-Ons/`, imported through
+  `add_ons::start_import` with the built `bri-import-addon`, listed as
+  "Synthetic Blaster", then turned on; `packages.json` gained
+  `{"id":"weapon_synthetic_blaster",...,"dir":"addons/weapon_synthetic_blaster"}`.
