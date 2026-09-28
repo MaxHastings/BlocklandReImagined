@@ -120,3 +120,96 @@ fn code_that_changes_after_the_prompt_is_not_covered_by_it() {
     assert_ne!(swapped.code_hash, code.code_hash);
     assert_eq!(store.granted(server, &CodeSummary::from(&swapped)), None);
 }
+
+// ---- Budgets ----
+
+const RECURSE: &str = r#"(module (memory (export "memory") 1)
+  (func $down (param i64 i64 i64 i64) (result i64)
+    (call $down (i64.add (local.get 0) (i64.const 1)) (local.get 1) (local.get 2) (local.get 3)))
+  (func (export "frame") (param f32 f32) (drop (call $down (i64.const 0) (i64.const 0) (i64.const 0) (i64.const 0)))))"#;
+
+/// Use about `kib` KiB of this thread's stack, then run `f`.
+#[inline(never)]
+fn with_stack_used<R>(kib: usize, f: &mut dyn FnMut() -> R) -> R {
+    if kib == 0 {
+        return f();
+    }
+    let pad = std::hint::black_box([0u8; 1024]);
+    let result = with_stack_used(kib - 1, f);
+    std::hint::black_box(&pad);
+    result
+}
+
+/// Endless recursion is stopped as a crash, on a thread whose stack is as
+/// small as a Windows main thread's (1 MiB) and already partly used, as the
+/// game's frame loop is when it runs Add-On code.
+#[test]
+fn endless_recursion_is_stopped_on_a_small_stack() {
+    let dir = make(RECURSE, &[]);
+    let code = load(dir.path());
+    for used in [0, 256] {
+        let code = code.clone();
+        let result = std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(move || {
+                let sandbox = Sandbox::new().unwrap();
+                let mut addon = sandbox
+                    .start(&code, Budgets::default(), TrustLevel::Sandboxed)
+                    .unwrap();
+                with_stack_used(used, &mut || addon.frame(frame()).map(|_| ()))
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(
+            result,
+            Err(Stopped::Crashed("stack overflow".into())),
+            "{used} KiB used"
+        );
+    }
+}
+
+/// Tables are bounded like memory.
+#[test]
+fn growing_a_table_without_end_stops_the_addon() {
+    let dir = make(
+        r#"(module (memory (export "memory") 1) (table 0 funcref)
+            (func (export "frame") (param f32 f32)
+              (loop $l (br_if $l (i32.ne (table.grow (ref.null func) (i32.const 50000)) (i32.const -1))))))"#,
+        &[],
+    );
+    let mut addon = Sandbox::new()
+        .unwrap()
+        .start(&load(dir.path()), Budgets::default(), TrustLevel::Sandboxed)
+        .unwrap();
+    let error = addon.frame(frame()).unwrap_err();
+    assert!(
+        matches!(error, Stopped::Memory | Stopped::Crashed(_)),
+        "{error:?}"
+    );
+}
+
+/// One bulk-memory instruction can touch its whole memory while costing a
+/// single unit of fuel; the wall-clock deadline still stops a loop of them
+/// within about a frame.
+#[test]
+fn bulk_memory_loops_are_stopped_by_the_clock() {
+    let dir = make(
+        r#"(module (memory (export "memory") 1024)
+            (func (export "frame") (param f32 f32)
+              (loop $l
+                (memory.fill (i32.const 0) (i32.const 7) (i32.const 67108864))
+                (memory.copy (i32.const 0) (i32.const 33554432) (i32.const 33554432))
+                (br $l))))"#,
+        &[],
+    );
+    let mut addon = Sandbox::new()
+        .unwrap()
+        .start(&load(dir.path()), Budgets::default(), TrustLevel::Sandboxed)
+        .unwrap();
+    let started = Instant::now();
+    let error = addon.frame(frame()).unwrap_err();
+    let took = started.elapsed();
+    assert!(matches!(error, Stopped::Time | Stopped::Cpu), "{error:?}");
+    assert!(took < Duration::from_millis(500), "took {took:?}");
+}

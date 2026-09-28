@@ -27,6 +27,16 @@ use wasmtime::{
     StoreLimitsBuilder, Trap, TypedFunc,
 };
 
+/// Native stack Add-On code may use, beyond where the game called it.
+/// Wasmtime runs Add-On code on the calling thread's stack, and the game
+/// calls it from its main thread: 1 MiB on Windows, and already partly used
+/// by the frame loop. With 512 KiB, endless recursion started from 480 KiB
+/// deep aborted the whole game with a native stack overflow instead of
+/// trapping (release build; 256 KiB deep in a debug build). 256 KiB still
+/// allows thousands of nested calls; compilers for WebAssembly keep large
+/// locals in linear memory, not here.
+pub const MAX_WASM_STACK: usize = 256 * 1024;
+
 /// How often the wall-clock deadline advances.
 pub const EPOCH_TICK: Duration = Duration::from_millis(1);
 
@@ -161,7 +171,7 @@ impl Sandbox {
         config
             .consume_fuel(true)
             .epoch_interruption(true)
-            .max_wasm_stack(512 * 1024)
+            .max_wasm_stack(MAX_WASM_STACK)
             .cranelift_opt_level(OptLevel::Speed)
             .wasm_memory64(false)
             .wasm_multi_memory(false)
