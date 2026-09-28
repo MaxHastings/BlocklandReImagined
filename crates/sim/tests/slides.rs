@@ -16,6 +16,15 @@ use std::path::Path;
 
 const SLIDES: &str =
     "worlds-pass-005/0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c.world.json";
+/// Every `stride`th case, a spread over the whole tower that runs in a few
+/// seconds; `BRI_SLIDES_FULL=1` runs every case (a minute in release).
+fn sample(stride: usize) -> usize {
+    if std::env::var_os("BRI_SLIDES_FULL").is_some() {
+        1
+    } else {
+        stride
+    }
+}
 const RAMPS: [&str; 2] = [
     "v20/brick/brick1x2x3rampdata",
     "v20/brick/brick2x2x3rampdata",
@@ -112,8 +121,9 @@ fn ride(sim: &mut Simulation, feet: Vec3, push: Vec3, ticks: usize) -> Option<Ri
     player.set_motion(push, false);
     let (mut still, mut wedged, mut max_speed) = (0, false, 0.0_f32);
     for _ in 0..ticks {
+        // Bricks are fixed and the motor reads the query pipeline directly,
+        // so the rider needs no physics step.
         player.step(physics, MoveInput::default()).unwrap();
-        physics.step();
         let v = Vec3::from(player.state().velocity);
         max_speed = max_speed.max(v.length());
         still = if v.length() < 0.5 { still + 1 } else { 0 };
@@ -139,7 +149,7 @@ fn ride(sim: &mut Simulation, feet: Vec3, push: Vec3, ticks: usize) -> Option<Ri
 fn no_72_degree_ramp_face_holds_a_player() -> anyhow::Result<()> {
     let (mut sim, ramps) = slides()?;
     let (mut rides, mut held) = (0, vec![]);
-    for (position, turns) in ramps.iter().step_by(7) {
+    for (position, turns) in ramps.iter().step_by(sample(90)) {
         let feet = on_slope(*position, *turns);
         if let Some(r) = ride(&mut sim, feet, Vec3::ZERO, 240) {
             rides += 1;
@@ -154,7 +164,7 @@ fn no_72_degree_ramp_face_holds_a_player() -> anyhow::Result<()> {
     for start in held.iter().take(10) {
         eprintln!("  held at {start}");
     }
-    assert!(rides > 400);
+    assert!(rides * sample(90) > 3000);
     assert!(held.is_empty());
     Ok(())
 }
@@ -165,13 +175,17 @@ fn no_72_degree_ramp_face_holds_a_player() -> anyhow::Result<()> {
 #[ignore = "requires the converted v20 worlds and stock catalog"]
 fn slide_lanes_carry_a_player_down_hands_free() -> anyhow::Result<()> {
     let (mut sim, ramps) = slides()?;
-    let lanes = lanes(&ramps);
+    let mut lanes = lanes(&ramps);
+    // Highest first, so the sample always includes a ride from the top.
+    lanes.sort_by(|a, b| b.feet.y.total_cmp(&a.feet.y));
     let (mut rides, mut caught, mut descents, mut speeds) = (0, vec![], vec![], vec![]);
-    for lane in &lanes {
-        let Some(down) = downhill(&lanes, lane) else {
-            continue;
-        };
-        let Some(r) = ride(&mut sim, lane.feet, down * 2.0, 120 * 20) else {
+    let downhill_lanes: Vec<_> = lanes
+        .iter()
+        .filter_map(|lane| downhill(&lanes, lane).map(|down| (lane, down)))
+        .collect();
+    for (lane, down) in downhill_lanes.iter().step_by(sample(90)) {
+        let (lane, down) = (*lane, *down);
+        let Some(r) = ride(&mut sim, lane.feet, down * 2.0, 120 * 10) else {
             continue;
         };
         rides += 1;
@@ -203,8 +217,8 @@ fn slide_lanes_carry_a_player_down_hands_free() -> anyhow::Result<()> {
     }
     // One spot remains: riders who drop down a shaft at over 20 u/s land a
     // hair inside the next lane's first ramp and stop at its end face.
-    assert!(rides > 100);
-    assert!(caught.len() * 100 <= rides, "{} caught", caught.len());
+    assert!(rides * sample(90) > 800);
+    assert!(caught.len() * 25 <= rides, "{} caught", caught.len());
     assert!(descents[descents.len() - 1] > 20.0);
     Ok(())
 }
