@@ -5386,13 +5386,17 @@ impl PlatformApp for App {
             }
             // Clicking out of the spy orbit returns to the body
             // (`Observer::onTrigger` in `Corpse` mode); the free camera
-            // ignores triggers. The dead click to respawn above.
+            // uses it only to fly faster. The dead click to respawn above.
             if let Some(observer) = self.controls.observer()
                 && let UiAction::Game(GameAction::Held {
                     control: HeldControl::Fire,
                     down,
                 }) = action
             {
+                self.controls.action(&GameAction::Held {
+                    control: HeldControl::Fire,
+                    down,
+                });
                 if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
                     if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
                         self.answer(id, Err(error));
