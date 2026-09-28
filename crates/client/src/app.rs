@@ -4221,6 +4221,13 @@ impl PlatformApp for App {
             )? {
                 a.worker.movement(newest, inputs, self.camera_view())?;
             }
+            if let Some((speed, archetype)) = self.motion.take_impact() {
+                let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
+                    .unwrap_or_default()
+                    .min_impact_speed();
+                self.actor_effects
+                    .ground_impact(speed, min, self.animation_time.to_bits());
+            }
             if let Some(view) = &a.view {
                 let vitals = view.vitals.get(&view.owner);
                 let mounted = vitals.and_then(|v| v.mounted);

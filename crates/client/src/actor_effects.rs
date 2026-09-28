@@ -663,6 +663,34 @@ impl ActorEffects {
         }
     }
 
+    /// `Player::updatePos` shakes the controlling client's camera when its
+    /// player hits a surface faster than `groundImpactMinSpeed` (10). Every
+    /// stock PlayerData sets frequency 4, amplitude 1, 0.8 s and falloff 10;
+    /// the amplitude scales by the speed past 10 over `minImpactSpeed`.
+    pub fn ground_impact(&mut self, speed: f32, min_impact_speed: f32, seed: u64) {
+        const MIN_SPEED: f32 = 10.0;
+        if !(speed > MIN_SPEED) || min_impact_speed <= 0.0 || self.shakes.len() >= 32 {
+            return;
+        }
+        let scale = (speed - MIN_SPEED) / min_impact_speed;
+        let seed = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let unit = |shift: u32| ((seed >> shift) & 0xffff) as f32 / 65536.0;
+        self.shakes.push(Shake {
+            spec: bri_weapons::CameraShake {
+                frequency: [4.0; 3],
+                amplitude: [1.0; 3],
+                seconds: 0.8,
+                radius: f32::INFINITY,
+                falloff: 10.0,
+            },
+            position: Vec3::ZERO,
+            elapsed: 0.0,
+            phase: Vec3::new(0.0, unit(16), unit(32)),
+            // Not an explosion: no distance falloff.
+            amplitude: Some(Vec3::splat(scale)),
+        });
+    }
+
     /// The summed explosion shake for a camera at `eye`, in its own frame
     /// (x right, y forward, z up). Distance falloff as in `Explosion::explode`.
     pub fn camera_shake(&mut self, eye: Vec3) -> Vec3 {

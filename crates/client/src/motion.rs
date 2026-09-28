@@ -67,6 +67,9 @@ pub struct Motion {
     mounted: bool,
     /// Last input sequence sent before a map change reset prediction.
     sent_sequence: u64,
+    /// Fastest speed into a surface since `take_impact` (`Player::updatePos`
+    /// `bd`), for the ground impact camera shake.
+    impact: f32,
 }
 
 impl Motion {
@@ -82,6 +85,13 @@ impl Motion {
     }
     pub fn predicting(&self) -> bool {
         self.predictor.is_some()
+    }
+    /// The predicted player's fastest hit on a surface since the last call,
+    /// and its archetype.
+    pub fn take_impact(&mut self) -> Option<(f32, bri_sim::archetype::ArchetypeId)> {
+        let speed = std::mem::take(&mut self.impact);
+        let archetype = self.predictor.as_ref()?.state().archetype;
+        (speed > 0.0).then_some((speed, archetype))
     }
     /// Seated players, and players driving a package entity, do not walk:
     /// inputs are recorded and sent, and the authoritative pose is shown
@@ -274,7 +284,10 @@ impl Motion {
                 predictor.record(input)?;
             } else {
                 self.previous = Some(predictor.state().clone());
-                predictor.step(input)?;
+                let (_, events) = predictor.step(input)?;
+                for (_, speed) in events.hits {
+                    self.impact = self.impact.max(speed);
+                }
             }
             steps += 1;
         }
