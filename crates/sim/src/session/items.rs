@@ -9,7 +9,12 @@ const BALL_RADIUS: f32 = 0.36;
 impl Session {
     /// Native authored DTS bounds converted offline; immutable during a session.
     /// Prepare all static objects before publishing any new catalog/state.
-    pub fn set_item_bounds(&mut self, bounds: BTreeMap<String, ItemBounds>) -> Result<()> {
+    ///
+    /// Every item this server has gets a box: one its content gave none (an
+    /// Add-On item imported without item physics, a core tool) takes
+    /// [`ItemBounds::FALLBACK`], so no wrench item spawn, build load, drop
+    /// or pickup refuses an item over a gap in its presentation.
+    pub fn set_item_bounds(&mut self, mut bounds: BTreeMap<String, ItemBounds>) -> Result<()> {
         ensure!(
             self.peers.is_empty() && self.departed.is_empty(),
             "Cannot replace live item bounds"
@@ -18,6 +23,9 @@ impl Session {
         for (id, shape) in &bounds {
             ensure!(self.weapons.contains_item(id), "Unknown item bounds: {id}");
             shape.validate()?;
+        }
+        for id in self.weapons.item_ids() {
+            bounds.entry(id.to_owned()).or_insert(ItemBounds::FALLBACK);
         }
         let mut spawners = crate::item_spawners::ItemSpawners::new(bounds.clone());
         for (&id, brick) in &self.simulation.state().bricks {

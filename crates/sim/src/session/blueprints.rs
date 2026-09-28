@@ -110,18 +110,31 @@ impl Session {
 
     /// Put `item` in `owner`'s first free tool slot, unless they carry it
     /// already, and optionally take it in hand.
+    ///
+    /// Taking it in hand with every slot full puts the tool in hand (else
+    /// the last) down on the ground to make room, where it can be picked up
+    /// again: v20's `/duplicator` mounted its image without a slot, so it
+    /// came out whatever the player carried.
     pub fn give_tool(&mut self, owner: OwnerId, item: &str, equip: bool) -> Result<()> {
         let actor = self
             .weapons
             .actor(bri_weapons::ActorId(owner))
             .context("Unknown connection")?;
-        let slot = match actor
+        let held = actor
             .inventory
             .iter()
-            .position(|held| held.as_deref() == Some(item))
-        {
+            .position(|held| held.as_deref() == Some(item));
+        let full = actor.inventory.iter().all(Option::is_some);
+        let room = actor.selected.unwrap_or(actor.inventory.len().saturating_sub(1));
+        let direction = actor.frame.direction;
+        let slot = match held {
             Some(slot) => slot,
-            None => self.give_item(owner, item)?,
+            None => {
+                if equip && full {
+                    self.drop_tool(owner, room, direction)?;
+                }
+                self.give_item(owner, item)?
+            }
         };
         if equip {
             self.equip_tool(owner, Some(slot))?;

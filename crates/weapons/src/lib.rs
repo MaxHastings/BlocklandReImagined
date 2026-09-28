@@ -18,6 +18,13 @@ pub struct ItemBounds {
     pub max: [f32; 3],
 }
 impl ItemBounds {
+    /// Half a unit each way: the stand-in box for an item whose model gave
+    /// no bounds (an Add-On item with no art, or one imported without its
+    /// item physics), so a gap in presentation never refuses the item.
+    pub const FALLBACK: Self = Self {
+        min: [-0.25; 3],
+        max: [0.25; 3],
+    };
     pub fn validate(&self) -> Result<()> {
         ensure!(
             (0..3).all(|a| self.min[a].is_finite()
