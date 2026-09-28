@@ -572,9 +572,12 @@ impl SceneData {
             "Scene index out of range"
         );
         for material in &self.materials {
+            // Water and terrain need their uniforms; a temp brick may carry
+            // its flash (`temp_brick_flash`); nothing else has any.
+            let wants = matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain);
             ensure!(
-                material.parameters.is_some()
-                    == matches!(material.kind, MaterialKind::Water | MaterialKind::Terrain)
+                (material.parameters.is_some() == wants
+                    || (material.temp_brick_flash && !wants))
                     && material
                         .parameters
                         .as_ref()

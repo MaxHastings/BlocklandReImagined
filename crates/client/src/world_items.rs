@@ -169,6 +169,10 @@ pub struct WorldItems {
     last_seconds: Option<f64>,
     /// World palette for colour spray cans.
     palette: Vec<[f32; 4]>,
+    /// `$pref::Player::renderMyItems`: off hides the player's own held
+    /// items in first person (Torque `Player::renderObject`); their mount
+    /// poses stay for muzzle effects.
+    hide_own_first_person: bool,
     /// Each projectile's last flight direction. A stuck arrow's velocity is
     /// zero, but it keeps pointing the way it flew into the wall, as v20's
     /// projectile keeps its last render transform.
@@ -206,6 +210,7 @@ impl WorldItems {
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
+            hide_own_first_person: false,
             headings: BTreeMap::new(),
             diagnostics: Default::default(),
         })
@@ -244,6 +249,10 @@ impl WorldItems {
             .values()
             .flat_map(|m| &m.slots)
             .flat_map(|s| s.identities.iter().copied().zip(&s.transforms))
+    }
+    /// Options > Advanced's Render Items.
+    pub fn set_render_my_items(&mut self, on: bool) {
+        self.hide_own_first_person = !on;
     }
     pub fn set_palette(&mut self, palette: &[[f32; 4]]) {
         if self.palette != palette {
@@ -479,6 +488,9 @@ impl WorldItems {
                     pose: pose_key.clone(),
                 },
             );
+            if local_first && self.hide_own_first_person {
+                continue;
+            }
             candidates.push(Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
                 model: ModelKey {

@@ -423,9 +423,6 @@ impl Session {
         if self.lan_host {
             return Trust::Everyone;
         }
-        let Some(ours) = self.principal_of(owner) else {
-            return Trust::OwnerOnly;
-        };
         // Offline builders count too: trust is between principals, so a
         // friend's bricks stay buildable while they are away.
         let owners: BTreeSet<OwnerId> = self
@@ -435,10 +432,27 @@ impl Session {
             .chain(self.simulation.state().owners.keys())
             .copied()
             .collect();
+        let Some(ours) = self.principal_of(owner) else {
+            // Only public-domain builds are open to an unidentified player.
+            let public: BTreeMap<OwnerId, u8> = owners
+                .into_iter()
+                .filter(|o| *o != owner && self.public_domain(*o))
+                .map(|o| (o, trust::FULL))
+                .collect();
+            return if public.is_empty() {
+                Trust::OwnerOnly
+            } else {
+                Trust::Levels(std::sync::Arc::new(public))
+            };
+        };
         let levels: BTreeMap<OwnerId, u8> = owners
             .into_iter()
             .filter(|o| *o != owner)
             .filter_map(|o| {
+                // `getTrustLevel`: a public-domain group trusts everyone.
+                if self.public_domain(o) {
+                    return Some((o, trust::FULL));
+                }
                 let theirs = self.principal_of(o)?;
                 let level = if theirs == ours {
                     trust::YOU

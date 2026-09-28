@@ -319,8 +319,8 @@ impl Session {
         } else {
             (settings.physics_vehicles, "physics-vehicle")
         };
-        let count = world
-            .snapshot(&self.simulation.physics)
+        let snapshot = world.snapshot(&self.simulation.physics);
+        let same_kind: Vec<_> = snapshot
             .vehicles
             .iter()
             .filter(|v| {
@@ -328,7 +328,28 @@ impl Session {
                     .definition(&v.definition)
                     .is_some_and(|d| d.is_actor() == actor)
             })
+            .collect();
+        // Before the totals, an Internet server's per-builder quota
+        // (`$Pref::Server::Quota::Vehicle` and `Quota::Player`).
+        let quota = if actor {
+            settings.per_player.players
+        } else {
+            settings.per_player.vehicles
+        };
+        let owned = same_kind
+            .iter()
+            .filter(|v| v.owner == veh::OwnerId(brick.owner))
             .count();
+        if !self.lan_host && owned >= quota as usize {
+            let text = if quota == 1 {
+                format!("\u{E000}You already have a {noun}")
+            } else {
+                format!("\u{E000}You already have {quota} {noun}s")
+            };
+            self.notify(brick.owner, Notice::Center { text, seconds: 2.0 });
+            return Ok(());
+        }
+        let count = same_kind.len();
         if count >= limit as usize {
             let text = if limit == 1 {
                 format!("\u{E000}Server is limited to 1 {noun}")
