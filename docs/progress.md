@@ -3220,3 +3220,19 @@ window is still unchecked (Max's playtest).
   explosion_debris`, `cargo test -p bri-sim --test vehicles -- --ignored
   pirate_cannon`, `cargo test -p bri-sim --test combat horses`,
   `cargo test -p bri-client --test actor_effects hard_landings`.
+## 2026-09-28 Loading a save over a build skips overlapping bricks
+
+v20's `ServerLoadSaveFile_Tick` plants each loaded brick and deletes it when
+`plant()` fails with an overlap (error 1), stuck (3) or buried (5); the end
+line counts them as not created ("5 / 10 bricks created in ..."). Our load
+now skips loaded bricks that overlap a brick already in the world, using the
+same cell rule as planting (`overlaps_world` in `simulation.rs`), and the
+existing end line reports them the same way. Bricks from the same save are
+not checked against each other: our rule is stricter than v20's for ramps,
+and five stock saves (43 ramp pairs, e.g. Arch of Constantine and Sirrus
+Military Compound) would otherwise lose bricks v20 keeps. That ramp gap also
+affects hand planting and is open work. Stuck and buried skips are not
+copied. Evidence: `cargo test -p bri-sim --test session
+loading_over_a_build` (two overlapping saves), `cargo test -p bri-sim --test
+stock_saves_native -- --include-ignored`, `cargo test -p bri-net --test
+loopback` (its reload test now loads beside the first copy). No wire change.

@@ -23,6 +23,9 @@ pub(super) struct Loading {
     bricks: VecDeque<Brick>,
     total: usize,
     created: usize,
+    /// Bricks this load placed; see
+    /// [`crate::simulation::Simulation::drop_overlapping`].
+    placed: BTreeSet<BrickId>,
 }
 
 /// v20 `getTimeString(mFloor(seconds * 100) / 100)`: `0:03.27`, `1:05`.
@@ -88,6 +91,7 @@ impl Session {
             bricks: bricks.into(),
             total,
             created: 0,
+            placed: BTreeSet::new(),
         }));
         self.system_message(
             Some(MessageTag::UploadStart),
@@ -113,6 +117,7 @@ impl Session {
         let bricks: Vec<Brick> = loading.bricks.drain(..count).collect();
         let loader = loading.loader;
         let palette = std::mem::take(&mut loading.palette);
+        let placed = std::mem::take(&mut loading.placed);
         // The loader may have left; the host's authority carries on, as
         // v20's load keeps running for its brick group.
         let actor = Actor {
@@ -120,22 +125,33 @@ impl Session {
             administrator: true,
             ..Default::default()
         };
-        let result = bri_world::build::LoadPlan::batch(
-            self.simulation.state(),
-            &palette,
-            bricks,
-            self.next_owner,
-        )
-        .and_then(|plan| {
-            self.item_spawners
-                .validate_append(self.simulation.state(), plan.bricks())?;
-            self.simulation.load_build(&actor, plan)
-        });
+        // Bricks overlapping what is already built are skipped, as v20's
+        // load deletes a brick whose plant() reports an overlap; they count
+        // against the "created / total" line.
+        let result = self
+            .simulation
+            .drop_overlapping(bricks, &placed)
+            .and_then(|bricks| {
+                if bricks.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let plan = bri_world::build::LoadPlan::batch(
+                    self.simulation.state(),
+                    &palette,
+                    bricks,
+                    self.next_owner,
+                )?;
+                self.item_spawners
+                    .validate_append(self.simulation.state(), plan.bricks())?;
+                self.simulation.load_build(&actor, plan)
+            });
         let loading = self.loading.as_deref_mut().expect("load in progress");
         loading.palette = palette;
+        loading.placed = placed;
         match result {
             Ok(ids) => {
                 loading.created += ids.len();
+                loading.placed.extend(ids.iter().copied());
                 self.dirty.extend(ids);
             }
             Err(error) => {

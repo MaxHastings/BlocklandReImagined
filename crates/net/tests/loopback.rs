@@ -1259,8 +1259,12 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
     };
     assert_eq!(saved.world.bricks[&1], first);
     assert!(saved.world.owners.is_empty(), "Imported owners stay unclaimed");
+    // Loaded beside the first copy: one on top of it would be skipped as
+    // overlapping, as in v20.
+    let mut saved = *saved;
+    saved.world.bricks.get_mut(&1).unwrap().position[0] += 1.0;
     assert_eq!(
-        host.command(load(*saved)).await?,
+        host.command(load(saved)).await?,
         Reply::Loaded { bricks: 1 }
     );
     wait(&mut host, |c| c.replica.world.bricks.len() == 2).await?;
@@ -1272,6 +1276,7 @@ async fn host_capability_bulk_load_save_palette_late_join_and_resume() -> Result
     assert_eq!(
         Brick {
             owner: first.owner,
+            position: first.position,
             ..reloaded
         },
         first

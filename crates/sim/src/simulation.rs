@@ -260,6 +260,38 @@ impl Simulation {
             .into_iter()
             .partition(|b| self.definitions.get(b).is_ok())
     }
+    /// v20 `ServerLoadSaveFile_Tick`: each loaded brick is planted, and one
+    /// that overlaps a brick already there (plant error 1) is deleted and
+    /// counted as a failure. Returns the bricks to place, in order.
+    ///
+    /// Bricks of the same save (`own`) are not checked against each other.
+    /// v20 does check them, but a save v20 wrote was planted under that rule,
+    /// and our cell rule is stricter than v20's for ramps: five stock saves
+    /// (43 ramp pairs, Sirrus Military Compound and Arch of Constantine
+    /// among them) would lose bricks v20 keeps.
+    pub fn drop_overlapping(
+        &self,
+        bricks: Vec<Brick>,
+        own: &BTreeSet<BrickId>,
+    ) -> Result<Vec<Brick>> {
+        let mut kept = Vec::with_capacity(bricks.len());
+        for brick in bricks {
+            let mesh = &self.definitions.get(&brick)?.mesh;
+            let bounds = Bounds::new(&brick, mesh)?;
+            if !overlaps_world(
+                self.state(),
+                &self.definitions,
+                &self.index,
+                &brick,
+                mesh,
+                bounds,
+                |id| !own.contains(&id),
+            )? {
+                kept.push(brick);
+            }
+        }
+        Ok(kept)
+    }
     /// Keep bricks without a definition with the world; see
     /// [`bri_world::authority::Authority::keep_unloaded`].
     pub fn keep_unloaded(&mut self, palette: &[[f32; 4]], bricks: Vec<Brick>) -> Result<()> {
@@ -704,6 +736,28 @@ impl Simulation {
         Ok(())
     }
 }
+/// v20 `plant()` error 1: the brick shares a build-grid cell with a brick
+/// already in the world. Planting and loading a save use this one rule.
+fn overlaps_world(
+    world: &World,
+    defs: &Definitions,
+    index: &Index,
+    brick: &Brick,
+    mesh: &bri_content::brick::Brick,
+    bounds: Bounds,
+    counts: impl Fn(BrickId) -> bool,
+) -> Result<bool> {
+    for id in index.query(bounds).into_iter().filter(|id| counts(*id)) {
+        let existing = &world.bricks[&id];
+        if grid::overlaps(
+            (brick, mesh, bounds),
+            (existing, &defs.get(existing)?.mesh, index.bounds(id)),
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 fn validate_placement(
     world: &World,
     defs: &Definitions,
@@ -725,17 +779,14 @@ fn validate_placement(
     if builder.position.distance(Vec3::from(brick.position)) > builder.reach + radius {
         return Err(PlantFailure::TooFar.into());
     }
+    if overlaps_world(world, defs, index, brick, &definition.mesh, bounds, |_| true)? {
+        return Err(PlantFailure::Overlap.into());
+    }
     let mut supported = false;
     for id in index.query(bounds.expanded(1)) {
         let existing = &world.bricks[&id];
         let other = defs.get(existing)?;
         let ob = index.bounds(id);
-        if grid::overlaps(
-            (brick, &definition.mesh, bounds),
-            (existing, &other.mesh, ob),
-        ) {
-            return Err(PlantFailure::Overlap.into());
-        }
         if grid::connected(
             (brick, &definition.mesh, bounds),
             (existing, &other.mesh, ob),
