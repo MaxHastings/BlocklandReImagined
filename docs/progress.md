@@ -3419,3 +3419,26 @@ Evidence:
 - `cargo test -p bri-sim`
 
 Max's playtest will be the first time these are seen in a window.
+
+## 2026-09-28 Pushable knocked-out bricks (client-only, no network)
+
+Max asked for bricks that became rigid bodies (hammer, wands,
+`fakeKillBrick`, brick explosions) to be pushed by players, vehicles and so
+on, "like v20 a bit more modern", then ruled that this motion is cosmetic like
+particles and must never be synced: "dont wanna waste bandwidth" and keep the
+network light for things that matter. A first server-simulated version
+(0d3fe4a, b5bc0dc, protocol 41) was withdrawn on this branch; the protocol,
+server and replication are unchanged from 8874297.
+
+Each client's `BrickDebris` (`crates/client/src/brick_debris.rs`) now takes
+the players and vehicles it draws as kinematic boxes (`BrickDebris::push`,
+nearest 32 within 6 units of debris), projectiles it draws (`shots`: each
+pushes a body it passes once, 0.2 x speed, and flies on), and later blast cues
+(radius > 0.5 shoves debris already lying around). Pushers are kinematic, so
+debris can never move, slow or block a player or vehicle; nothing about debris
+reaches the server, events or any gameplay query. Debris now weighs 5 per
+cubic unit (2x4 brick = 6) and stays solid 3 s, fading over 2 s (was 1.5 +
+2.5). Evidence: `cargo test -p bri-client --lib brick_debris` (walk-in shove
+with the player exactly where the game put it every frame, vehicle ram
+scatters 7+ of 9, resting pile stays within 0.05, shots and blasts, 128 bodies
+plus a 64-player crowd capped at 32 pushers: ~1 ms/frame in debug).

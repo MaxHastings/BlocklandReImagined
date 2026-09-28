@@ -5189,6 +5189,55 @@ impl PlatformApp for App {
                 // Newly dead bricks are not hidden bricks to reveal.
                 self.hidden_uploaded = None;
             }
+            // Debris is local and cosmetic: everyone drawn here shoves it,
+            // and nothing about it goes back to the server.
+            if !self.brick_debris.is_empty() {
+                let mut pushers: Vec<_> = self
+                    .motion
+                    .presented()
+                    .iter()
+                    .map(|(owner, p)| {
+                        let t = view.archetypes.tuning(p.archetype, p.scale);
+                        let height = if p.crouched {
+                            t.crouch_height
+                        } else {
+                            t.stand_height
+                        };
+                        crate::brick_debris::Pusher {
+                            id: *owner,
+                            center: Vec3::from(p.feet) + Vec3::Y * height * 0.5,
+                            rotation: glam::Quat::IDENTITY,
+                            half: Vec3::new(t.width * 0.5, height * 0.5, t.width * 0.5),
+                        }
+                    })
+                    .collect();
+                for (id, info) in &view.vehicles {
+                    let (Some(frame), Some(d)) = (
+                        self.vehicles.frame(*id),
+                        self.vehicle_assets.definition(&info.definition),
+                    ) else {
+                        continue;
+                    };
+                    let (min, max) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
+                    pushers.push(crate::brick_debris::Pusher {
+                        id: id | 1 << 63,
+                        center: frame.position + frame.rotation * ((min + max) * 0.5),
+                        rotation: frame.rotation,
+                        half: (max - min) * 0.5,
+                    });
+                }
+                self.brick_debris.push(&pushers);
+                let shots: Vec<_> = view
+                    .weapons
+                    .fired()
+                    .map(|p| crate::brick_debris::Shot {
+                        id: p.id,
+                        position: p.position,
+                        velocity: p.velocity,
+                    })
+                    .collect();
+                self.brick_debris.shots(&shots);
+            }
             let moved = self
                 .brick_debris
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);

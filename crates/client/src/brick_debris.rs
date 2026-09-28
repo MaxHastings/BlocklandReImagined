@@ -4,9 +4,14 @@
 //! explosions) turns the dead brick into a short-lived Rapier rigid body. It
 //! is thrown away from the blast origin, tumbles against the map, terrain,
 //! nearby bricks and other debris, then fades out like a ghost. Debris is
-//! purely cosmetic and never touches gameplay; the server already hid or
-//! removed the brick. Each body's throw is seeded from its cue id, so every
-//! client sees the same throw.
+//! purely cosmetic, like particles: the server already hid or removed the
+//! brick, nothing about the bodies is sent over the network, and nothing in
+//! gameplay can see them. Each body's throw is seeded from its cue id, so
+//! every client sees the same throw.
+//!
+//! Players and vehicles as this client draws them (see [`Pusher`]),
+//! projectiles and later blasts push the bodies, one way only: pushers are
+//! kinematic, so debris can never slow, block or move them.
 //!
 //! Like v20's `$Physics::maxBricks`, only a bounded number of bodies are
 //! alive at once; the oldest make way for new ones.
@@ -29,10 +34,11 @@ const STEP: f32 = bri_physics::FIXED_DT;
 const MAX_STEPS: u32 = 4;
 /// Torque's world gravity (units/s^2), as the player and items use.
 const GRAVITY: f32 = 20.0;
-/// Seconds a body stays solid before it starts to fade.
-const SOLID_SECONDS: f32 = 1.5;
+/// Seconds a body stays solid before it starts to fade: long enough to
+/// kick it around.
+const SOLID_SECONDS: f32 = 3.0;
 /// Seconds of fading to fully transparent, after which the body is removed.
-const FADE_SECONDS: f32 = 2.5;
+const FADE_SECONDS: f32 = 2.0;
 /// Converts v20 blast force into launch speed (units/s).
 const FORCE_TO_SPEED: f32 = 0.5;
 const MAX_SPEED: f32 = 40.0;
@@ -41,6 +47,16 @@ const MAX_SPEED: f32 = 40.0;
 const BODY_SHRINK: f32 = 0.96;
 /// Distance around each body where surroundings are made solid.
 const SURROUNDINGS: f32 = 2.0;
+/// Debris only feels pushers within this distance.
+const PUSHER_REACH: f32 = 6.0;
+/// Most players and vehicles pushing debris at once.
+const MAX_PUSHERS: usize = 32;
+/// A pusher that jumps further than this in a frame teleported.
+const TELEPORT: f32 = 5.0;
+/// Momentum a projectile gives each body it passes, per unit of speed.
+const PROJECTILE_MASS: f32 = 0.2;
+/// Mass per cubic unit of debris: a 2x4 brick weighs 6.
+const DENSITY: f32 = 5.0;
 /// Grid used to cache terrain patches.
 const TERRAIN_CHUNK: f32 = 8.0;
 /// Distinct brick looks kept on the GPU.
@@ -100,6 +116,31 @@ pub struct BrickDebrisDiagnostics {
     /// Oldest bodies removed early to stay within `MAX_BODIES`.
     pub evicted: u64,
     pub dropped_steps: u64,
+    pub projectile_hits: u64,
+}
+
+/// A player or vehicle as this client draws it this frame: a box that
+/// shoves debris out of its way. `id` must stay the same between frames.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pusher {
+    pub id: u64,
+    pub center: Vec3,
+    pub rotation: Quat,
+    pub half: Vec3,
+}
+/// A projectile as this client draws it this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shot {
+    pub id: u64,
+    pub position: Vec3,
+    pub velocity: Vec3,
+}
+
+struct PusherBody {
+    handle: RigidBodyHandle,
+    /// Where the body is heading this frame.
+    from: Pose,
+    to: Pose,
 }
 
 pub struct BrickDebris {
@@ -114,6 +155,11 @@ pub struct BrickDebris {
     dead: BTreeSet<BrickId>,
     cursor: u64,
     accumulator: f32,
+    pushers: BTreeMap<u64, PusherBody>,
+    /// Projectile id -> where it was last frame.
+    shots: BTreeMap<u64, Vec3>,
+    /// (projectile, cue) pairs already pushed.
+    struck: BTreeSet<(u64, u64)>,
     pub diagnostics: BrickDebrisDiagnostics,
 }
 
@@ -136,6 +182,9 @@ impl BrickDebris {
             dead: BTreeSet::new(),
             cursor: 0,
             accumulator: 0.0,
+            pushers: BTreeMap::new(),
+            shots: BTreeMap::new(),
+            struck: BTreeSet::new(),
             diagnostics: Default::default(),
         }
     }
@@ -192,6 +241,10 @@ impl BrickDebris {
                 continue;
             };
             self.dead.insert(*brick);
+            // A big blast also shoves the debris already flying around it.
+            if *radius > 0.5 {
+                self.blast(Vec3::from(*origin), *force, *radius);
+            }
             // The dead brick must never hold up its own debris.
             if let Some(Some(handle)) = self.statics.remove(&Static::Brick(*brick)) {
                 self.world.remove_collider(handle);
@@ -272,7 +325,7 @@ impl BrickDebris {
             .ccd_enabled(true);
         let h = half * BODY_SHRINK;
         let collider = ColliderBuilder::cuboid(h.x.max(0.01), h.y.max(0.01), h.z.max(0.01))
-            .density(1.0)
+            .density(DENSITY)
             .friction(0.7)
             .restitution(0.25);
         let (handle, _) = self.world.insert(body, collider);
@@ -292,6 +345,9 @@ impl BrickDebris {
         if self.bodies.is_empty() {
             self.accumulator = 0.0;
             self.clear_statics();
+            for (_, pusher) in std::mem::take(&mut self.pushers) {
+                self.world.remove_body_with_colliders(pusher.handle, true);
+            }
             return Ok(());
         }
         if !self.map_loaded {
@@ -318,11 +374,159 @@ impl BrickDebris {
             return Ok(());
         }
         self.load_surroundings(building, steps as f32 * STEP)?;
-        for _ in 0..steps {
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
+            for pusher in self.pushers.values() {
+                self.world.bodies[pusher.handle]
+                    .set_next_kinematic_position(pusher.from.lerp(&pusher.to, t));
+            }
             self.world.step();
             self.age(STEP);
         }
+        for pusher in self.pushers.values_mut() {
+            pusher.from = pusher.to;
+        }
         Ok(())
+    }
+    /// Where players and vehicles are this frame. Call before `advance`.
+    /// Only those near debris take part; they are kinematic, so debris
+    /// moves out of their way and never moves them.
+    pub fn push(&mut self, pushers: &[Pusher]) {
+        let near = |p: &Pusher| {
+            let reach = PUSHER_REACH + p.half.max_element();
+            self.bodies.values().any(|b| {
+                Vec3::from_array(self.world.bodies[b.handle].translation().to_array())
+                    .distance(p.center)
+                    < reach
+            })
+        };
+        let mut wanted: Vec<&Pusher> = pushers
+            .iter()
+            .filter(|p| p.center.is_finite() && p.rotation.is_finite() && p.half.is_finite())
+            .filter(|p| near(p))
+            .collect();
+        wanted.sort_by_key(|p| p.id);
+        wanted.dedup_by_key(|p| p.id);
+        wanted.truncate(MAX_PUSHERS);
+        let ids: BTreeSet<u64> = wanted.iter().map(|p| p.id).collect();
+        let gone: Vec<u64> = self
+            .pushers
+            .keys()
+            .copied()
+            .filter(|id| !ids.contains(id))
+            .collect();
+        for id in gone {
+            if let Some(p) = self.pushers.remove(&id) {
+                self.world.remove_body_with_colliders(p.handle, true);
+            }
+        }
+        for p in wanted {
+            let to = Pose::from_parts(
+                Vector::from_array(p.center.to_array()),
+                Rotation::from_array(p.rotation.normalize().to_array()),
+            );
+            match self.pushers.get_mut(&p.id) {
+                Some(body) => {
+                    let jumped = Vec3::from_array(body.to.translation.to_array())
+                        .distance(p.center)
+                        > TELEPORT;
+                    if jumped {
+                        self.world.bodies[body.handle].set_position(to, true);
+                        body.from = to;
+                    }
+                    body.to = to;
+                }
+                None => {
+                    let h = p.half.max(Vec3::splat(0.05));
+                    let (handle, _) = self.world.insert(
+                        RigidBodyBuilder::kinematic_position_based().pose(to),
+                        ColliderBuilder::cuboid(h.x, h.y, h.z).friction(0.3),
+                    );
+                    self.pushers.insert(
+                        p.id,
+                        PusherBody {
+                            handle,
+                            from: to,
+                            to,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    /// Projectiles as drawn this frame. Each pushes every body it passes
+    /// through once, and flies on as if the debris were not there.
+    pub fn shots(&mut self, shots: &[Shot]) {
+        let live: BTreeSet<u64> = shots.iter().map(|s| s.id).collect();
+        self.shots.retain(|id, _| live.contains(id));
+        self.struck.retain(|(p, _)| live.contains(p));
+        if self.bodies.is_empty() {
+            return;
+        }
+        let owners: HashMap<RigidBodyHandle, u64> =
+            self.bodies.iter().map(|(id, b)| (b.handle, *id)).collect();
+        for shot in shots {
+            if !shot.position.is_finite() || !shot.velocity.is_finite() {
+                continue;
+            }
+            let Some(from) = self.shots.insert(shot.id, shot.position) else {
+                continue;
+            };
+            let delta = shot.position - from;
+            let length = delta.length();
+            if !(1e-5..=100.0).contains(&length) {
+                continue;
+            }
+            let direction = delta / length;
+            let ray = Ray::new(
+                Vector::from_array(from.to_array()),
+                Vector::from_array(direction.to_array()),
+            );
+            let hits: Vec<(u64, Vec3)> = self
+                .world
+                .intersect_ray(ray, length, true, QueryFilter::only_dynamic())
+                .filter_map(|(_, c, hit)| {
+                    let id = *owners.get(&c.parent()?)?;
+                    Some((id, from + direction * hit.time_of_impact))
+                })
+                .collect();
+            for (id, point) in hits {
+                if !self.struck.insert((shot.id, id)) {
+                    continue;
+                }
+                let rb = &mut self.world.bodies[self.bodies[&id].handle];
+                let impulse = direction * PROJECTILE_MASS * shot.velocity.length();
+                rb.apply_impulse_at_point(
+                    Vector::from_array(impulse.to_array()),
+                    Vector::from_array(point.to_array()),
+                    true,
+                );
+                let v = Vec3::from_array(rb.linvel().to_array()).clamp_length_max(MAX_SPEED);
+                rb.set_linvel(Vector::from_array(v.to_array()), true);
+                self.diagnostics.projectile_hits += 1;
+            }
+        }
+    }
+    /// Shove every body within `radius` of `origin` away from it.
+    fn blast(&mut self, origin: Vec3, force: f32, radius: f32) {
+        if !origin.is_finite() || !force.is_finite() || force <= 0.0 {
+            return;
+        }
+        for body in self.bodies.values() {
+            let rb = &mut self.world.bodies[body.handle];
+            let at = Vec3::from_array(rb.translation().to_array());
+            let offset = at - origin;
+            let distance = offset.length();
+            if distance > radius {
+                continue;
+            }
+            let direction = offset.normalize_or(Vec3::Y);
+            let falloff = (1.0 - distance / radius).clamp(0.25, 1.0);
+            let speed = (force * FORCE_TO_SPEED * falloff).min(MAX_SPEED);
+            let v = (Vec3::from_array(rb.linvel().to_array()) + direction * speed)
+                .clamp_length_max(MAX_SPEED);
+            rb.set_linvel(Vector::from_array(v.to_array()), true);
+        }
     }
     fn age(&mut self, dt: f32) {
         let mut expired = Vec::new();
@@ -697,14 +901,14 @@ mod tests {
         );
         let (_, t) = debris.instances().next().unwrap();
         assert_eq!(t.tint[3], 1.0);
-        run(&mut debris, &building, 1.5);
+        run(&mut debris, &building, SOLID_SECONDS);
         let (_, t) = debris.instances().next().unwrap();
         assert!(
             t.tint[3] > 0.0 && t.tint[3] < 1.0,
             "not fading: {}",
             t.tint[3]
         );
-        run(&mut debris, &building, 2.0);
+        run(&mut debris, &building, FADE_SECONDS);
         assert!(debris.is_empty());
     }
 
@@ -766,6 +970,151 @@ mod tests {
         assert_eq!(a.diagnostics.duplicates, 6);
     }
 
+    fn player_at(id: u64, feet: Vec3) -> Pusher {
+        Pusher {
+            id,
+            center: feet + Vec3::Y * 1.2,
+            rotation: Quat::IDENTITY,
+            half: Vec3::new(0.5, 1.2, 0.5),
+        }
+    }
+    /// A brick left lying (no throw) at `at`.
+    fn lying(id: u64, at: [f32; 3]) -> Cue {
+        kill(id, id, at, at, 0.0, 0.0)
+    }
+    fn pusher_center(debris: &BrickDebris, id: u64) -> Vec3 {
+        Vec3::from_array(
+            debris.world.bodies[debris.pushers[&id].handle]
+                .translation()
+                .to_array(),
+        )
+    }
+
+    #[test]
+    fn a_player_walking_into_debris_shoves_it_and_is_never_moved_by_it() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris
+            .cues(&[lying(1, [0.0, 0.3, -3.0])], &building)
+            .unwrap();
+        run(&mut debris, &building, 0.5);
+        let rest = debris.positions()[0];
+        // v20's run speed, 7 units/s, straight through the brick's spot.
+        for frame in 1..=60 {
+            let feet = Vec3::new(0.0, 0.0, -7.0 * frame as f32 / 60.0);
+            debris.push(&[player_at(9, feet)]);
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            // One way: the player is exactly where the game put it.
+            let center = pusher_center(&debris, 9);
+            assert!(
+                center.distance(feet + Vec3::Y * 1.2) < 1e-4,
+                "debris moved the player to {center}"
+            );
+        }
+        let shoved = debris.positions()[0];
+        assert!(
+            shoved.z < rest.z - 1.0 && shoved.y > 0.0,
+            "not shoved ahead: {rest} -> {shoved}"
+        );
+    }
+
+    #[test]
+    fn a_vehicle_ramming_a_pile_scatters_it() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        let mut cues = Vec::new();
+        for layer in 0..3 {
+            for x in -1..=1 {
+                let id = cues.len() as u64 + 1;
+                cues.push(lying(id, [x as f32 * 1.05, 0.3 + layer as f32 * 0.6, -6.0]));
+            }
+        }
+        debris.cues(&cues, &building).unwrap();
+        run(&mut debris, &building, 1.0);
+        let before = debris.positions();
+        let turned = Quat::from_rotation_y(0.2);
+        for frame in 0..60 {
+            let z = -15.0 * frame as f32 / 60.0;
+            debris.push(&[Pusher {
+                id: 1 << 63 | 4,
+                center: Vec3::new(0.0, 0.8, z),
+                rotation: turned,
+                half: Vec3::new(1.2, 0.6, 2.0),
+            }]);
+            debris.advance(1.0 / 60.0, &building).unwrap();
+        }
+        let moved = debris
+            .positions()
+            .iter()
+            .zip(&before)
+            .filter(|(a, b)| a.distance(**b) > 1.0)
+            .count();
+        assert!(moved >= 7, "only {moved} of 9 scattered");
+    }
+
+    #[test]
+    fn a_resting_pile_stays_put_with_nobody_near() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        let mut cues = Vec::new();
+        for layer in 0..4 {
+            for x in 0..3 {
+                for z in 0..2 {
+                    let id = cues.len() as u64 + 1;
+                    cues.push(lying(
+                        id,
+                        [x as f32 * 1.02, 0.3 + layer as f32 * 0.6, z as f32 * 1.02],
+                    ));
+                }
+            }
+        }
+        debris.cues(&cues, &building).unwrap();
+        run(&mut debris, &building, 0.5);
+        let settled = debris.positions();
+        // A player far away takes no part.
+        debris.push(&[player_at(9, Vec3::new(30.0, 0.0, 0.0))]);
+        assert!(debris.pushers.is_empty());
+        run(&mut debris, &building, 2.0);
+        for (now, then) in debris.positions().iter().zip(&settled) {
+            assert!(now.distance(*then) < 0.05, "crept from {then} to {now}");
+        }
+    }
+
+    #[test]
+    fn shots_and_blasts_push_debris_and_fly_on() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris
+            .cues(
+                &[lying(1, [0.0, 0.3, -5.0]), lying(2, [4.0, 0.3, 0.0])],
+                &building,
+            )
+            .unwrap();
+        run(&mut debris, &building, 0.5);
+        let velocity = Vec3::new(0.0, 0.0, -100.0);
+        for frame in 0..10 {
+            let shot = Shot {
+                id: 7,
+                position: Vec3::new(0.0, 0.3, -1.0) + velocity * (frame as f32 / 60.0),
+                velocity,
+            };
+            debris.shots(&[shot]);
+            debris.advance(1.0 / 60.0, &building).unwrap();
+        }
+        assert_eq!(debris.diagnostics.projectile_hits, 1, "once per brick");
+        run(&mut debris, &building, 0.5);
+        assert!(debris.positions()[0].z < -5.2, "{}", debris.positions()[0]);
+        // A later blast shoves debris already lying around it.
+        debris
+            .cues(
+                &[kill(3, 3, [3.0, 0.3, 0.0], [3.0, 0.3, 0.0], 30.0, 4.0)],
+                &building,
+            )
+            .unwrap();
+        run(&mut debris, &building, 0.5);
+        assert!(debris.positions()[1].x > 5.0, "{}", debris.positions()[1]);
+    }
+
     #[test]
     fn mass_kills_stay_bounded_and_cheap() {
         let (building, _) = building(&[]);
@@ -787,6 +1136,27 @@ mod tests {
         run(&mut debris, &building, 1.0);
         let elapsed = start.elapsed();
         eprintln!("{MAX_BODIES} debris bodies, 60 frames: {elapsed:?}");
+        // A crowd around the blast: only the nearest few dozen push.
+        let crowd: Vec<_> = (0..64)
+            .map(|i| {
+                player_at(
+                    i + 1,
+                    Vec3::new((i % 8) as f32 * 2.0, 0.0, -((i / 8) as f32)),
+                )
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        for _ in 0..60 {
+            debris.push(&crowd);
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            assert!(debris.pushers.len() <= MAX_PUSHERS);
+        }
+        eprintln!(
+            "{} debris bodies, {} pushers, 60 frames: {:?}",
+            debris.len(),
+            debris.pushers.len(),
+            start.elapsed()
+        );
         // A long hitch drops debris time instead of spiralling.
         debris.advance(5.0, &building).unwrap();
         assert!(debris.diagnostics.dropped_steps > 0);
