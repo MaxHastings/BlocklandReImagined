@@ -16,6 +16,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub struct Connected {
     pub client: Client,
     pub host: Option<ServerHandle>,
+    /// Add-On packages downloaded from this server and loaded for it.
+    pub mods: Arc<bri_package_runtime::Catalog>,
 }
 #[derive(Clone)]
 pub struct View {
@@ -46,6 +48,8 @@ pub struct View {
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: Arc<bri_sim::archetype::Archetypes>,
+    /// Add-On packages downloaded from this server (models, HUD panels).
+    pub mods: Arc<bri_package_runtime::Catalog>,
     pub rtt_ms: u32,
 }
 /// Brick ids each replica world revision changed, so consumers can update in
@@ -145,7 +149,7 @@ impl Worker {
                 Ok(mut connection)=>{
                     let result=tokio::select! {
                         _=&mut stopped=>Ok(()),
-                        result=run(&mut connection.client,rx,movement_rx,&view_tx,&events_tx)=>result,
+                        result=run(&mut connection.client,connection.mods.clone(),rx,movement_rx,&view_tx,&events_tx)=>result,
                     };
                     connection.client.close();
                     if let Some(host)=connection.host.take() {
@@ -212,6 +216,7 @@ struct WorldState {
     world: Arc<PublicWorld>,
     revision: u64,
     log: Arc<WorldLog>,
+    mods: Arc<bri_package_runtime::Catalog>,
 }
 fn publish(
     client: &Client,
@@ -241,11 +246,13 @@ fn publish(
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),
+        mods: world.mods.clone(),
         rtt_ms: client.rtt().as_millis().min(u128::from(u32::MAX)) as u32,
     }));
 }
 async fn run(
     client: &mut Client,
+    mods: Arc<bri_package_runtime::Catalog>,
     mut requests: mpsc::Receiver<Request>,
     mut movement: mpsc::Receiver<(u64, Vec<MoveInput>)>,
     view: &watch::Sender<Option<View>>,
@@ -255,6 +262,7 @@ async fn run(
         world: Arc::new(client.replica.world.clone()),
         revision: 0,
         log: Arc::default(),
+        mods,
     };
     let checkpoint_cue_cursor = client.replica.cue_cursor;
     publish(client, &world, checkpoint_cue_cursor, view);

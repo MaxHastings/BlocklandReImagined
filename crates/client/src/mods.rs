@@ -1,0 +1,132 @@
+//! Add-On packages this client downloaded from a server. Joining a server
+//! whose shared packages this client lacks downloads them into the package
+//! cache (`bri_net::client::Client::connect_fetching`), loads them here and
+//! joins again with the server's package list. Only data is loaded: models,
+//! HUD panels and other declarative kinds. Base game content cannot be
+//! swapped while the game runs, so a server running different base content
+//! is refused with that reason rather than joined with content this client
+//! does not actually use.
+use anyhow::{Result, bail};
+use bri_net::packages::Fetched;
+use bri_package::{environment::PackageRef, packages::PackageEntry};
+use bri_package_runtime::{Catalog, manifest::MANIFEST_FILE};
+
+/// Load downloaded packages and return the catalog with the package list
+/// to join with: this client's own packages, with every package the server
+/// sent in place of the local one of the same id.
+pub fn load_fetched(
+    local: &[PackageRef],
+    fetched: &[Fetched],
+) -> Result<(Catalog, Vec<PackageRef>)> {
+    let mut dirs = Vec::new();
+    for f in fetched {
+        let differs = !local.contains(&f.package);
+        if differs && !f.dir.join(MANIFEST_FILE).is_file() {
+            bail!(
+                "The server runs different base game content ({}); this game cannot load it while running",
+                f.package
+            );
+        }
+        dirs.push((
+            f.dir.clone(),
+            PackageEntry {
+                id: f.package.id.clone(),
+                version: f.package.version.clone(),
+                side: f.package.side,
+                dir: f.dir.to_string_lossy().into_owned(),
+                role: None,
+            },
+        ));
+    }
+    let catalog = Catalog::load_dirs(&dirs, false).map_err(|problems| {
+        anyhow::anyhow!(
+            "A downloaded package does not load: {}",
+            problems
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
+    let mut packages: Vec<PackageRef> = local
+        .iter()
+        .filter(|p| !fetched.iter().any(|f| f.package.id == p.id))
+        .cloned()
+        .collect();
+    packages.extend(fetched.iter().map(|f| f.package.clone()));
+    Ok((catalog, packages))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bri_package::packages::Side;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("bri-mods-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        root
+    }
+
+    fn package(root: &std::path::Path, id: &str, manifest: bool) -> Fetched {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        if manifest {
+            std::fs::write(
+                dir.join(MANIFEST_FILE),
+                serde_json::json!({
+                    "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
+                    "name": id, "license": "CC0-1.0", "capabilities": [],
+                    "provides": [{ "kind": "model", "id": format!("{id}:model/cube"), "file": "cube.json" }],
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("cube.json"),
+                r#"{ "schema_version": 1, "boxes": [{ "center": [0.0, 0.5, 0.0], "size": [1.0, 1.0, 1.0], "color": [0.4, 0.8, 0.3, 1.0] }] }"#,
+            )
+            .unwrap();
+        }
+        let (hash, size) = bri_package::environment::hash_dir(&dir).unwrap();
+        Fetched {
+            package: PackageRef {
+                id: id.into(),
+                version: "1.0.0".into(),
+                side: Side::Shared,
+                hash,
+                size,
+            },
+            dir,
+            downloaded: size,
+        }
+    }
+
+    #[test]
+    fn downloaded_add_ons_load_and_replace_the_local_list() {
+        let root = scratch("load");
+        let blocks = package(&root, "blocks", true);
+        let base = PackageRef {
+            id: "v20-bricks".into(),
+            version: "1.0.0".into(),
+            side: Side::Shared,
+            hash: "ab".repeat(32),
+            size: 1,
+        };
+        let (catalog, packages) =
+            load_fetched(std::slice::from_ref(&base), std::slice::from_ref(&blocks)).unwrap();
+        assert!(catalog.model("blocks:model/cube").is_some());
+        assert_eq!(packages, [base, blocks.package]);
+    }
+
+    #[test]
+    fn different_base_content_is_refused_not_pretended() {
+        let root = scratch("base");
+        let other_base = package(&root, "v20-bricks", false);
+        let error = load_fetched(&[], &[other_base]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("base game content"),
+            "{error:#}"
+        );
+    }
+}

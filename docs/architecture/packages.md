@@ -189,10 +189,16 @@ Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
 
 ## Not built yet
 
-- Hosts and the game client do not call this yet: `bri-server` passes
-  `packages: None`, and the client app joins with `connect_with_identity`,
-  because it cannot load a downloaded package into its content yet. When it
-  can, its join switches to `connect_fetching` with that loader as `load`.
+- The game client joins servers through `connect_fetching`: downloaded
+  packages go to `<state>/package-cache`, `bri_client::mods::load_fetched`
+  loads them (`Catalog::load_dirs`: models, HUD panels and other data) and
+  the view carries them as `View::mods`. A server running different base
+  game content is refused with that reason, because base content cannot be
+  swapped while the game runs. Hosting yourself needs no download.
+- `bri-server` passes `packages: None` until it loads mod packages through
+  `packages.json`.
+- The whole join, downloads included, shares the client's 120 s connect
+  timeout; a large download needs its own.
 - A host that edits a package must restart to offer the new version; there
   is no reload.
 - Per-package `package.json` manifests, dependency resolution and archives.

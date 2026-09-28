@@ -298,28 +298,47 @@ impl Catalog {
     /// `server` packages are skipped when `server` is false (a client never
     /// loads them).
     pub fn load(root: &Path, set: &PackageSet, server: bool) -> Result<Self, Vec<Diagnostic>> {
-        let mut catalog = Self::default();
         let mut out = Vec::new();
-        let listed: BTreeMap<&str, &PackageEntry> =
-            set.packages.iter().map(|p| (p.id.as_str(), p)).collect();
+        let mut dirs = Vec::new();
         for entry in &set.packages {
             if entry.role.is_some() || (!server && entry.side == Side::Server) {
                 continue;
             }
-            let dir = match bri_package::packages::package_dir(root, entry) {
-                Ok(dir) => dir,
-                Err(e) => {
-                    out.push(
-                        Diagnostic::error("package.dir", format!("{e:#}"))
-                            .at(location(&entry.id, "")),
-                    );
-                    continue;
-                }
-            };
+            match bri_package::packages::package_dir(root, entry) {
+                Ok(dir) => dirs.push((dir, entry.clone())),
+                Err(e) => out.push(
+                    Diagnostic::error("package.dir", format!("{e:#}")).at(location(&entry.id, "")),
+                ),
+            }
+        }
+        match Self::load_dirs(&dirs, server) {
+            Ok(catalog) if out.is_empty() => Ok(catalog),
+            Ok(_) => Err(out),
+            Err(mut more) => {
+                out.append(&mut more);
+                Err(out)
+            }
+        }
+    }
+    /// Load packages from where they are, each with its entry: a client's
+    /// downloaded packages live in its cache, not under a content root.
+    /// Directories without a `package.json` (base game content) are skipped.
+    pub fn load_dirs(
+        packages: &[(std::path::PathBuf, PackageEntry)],
+        server: bool,
+    ) -> Result<Self, Vec<Diagnostic>> {
+        let mut catalog = Self::default();
+        let mut out = Vec::new();
+        let listed: BTreeMap<&str, &PackageEntry> =
+            packages.iter().map(|(_, p)| (p.id.as_str(), p)).collect();
+        for (dir, entry) in packages {
+            if !server && entry.side == Side::Server {
+                continue;
+            }
             if !dir.join(MANIFEST_FILE).is_file() {
                 continue;
             }
-            match Package::load(&dir, entry) {
+            match Package::load(dir, entry) {
                 Ok(p) => {
                     catalog.packages.insert(entry.id.clone(), p);
                 }

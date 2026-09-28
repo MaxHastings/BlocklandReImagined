@@ -1591,6 +1591,7 @@ impl App {
             Ok(Connected {
                 client,
                 host: Some(host),
+                mods: Default::default(),
             })
         });
         self.attempt = Some(Attempt {
@@ -1652,6 +1653,7 @@ impl App {
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let load_limit = self.load_limit.clone();
         let identity_file = self.state_dir.join("client.identity");
+        let package_cache = self.state_dir.join("package-cache");
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -1698,16 +1700,29 @@ impl App {
                 identity_paths.environment()
             })
             .await??;
-            let client = Client::connect_with_identity(
+            // A server running Add-Ons this client lacks refuses the join
+            // naming them; download them into the package cache, load them
+            // and join again with the server's package list.
+            let cache = bri_package::sync::Cache::open(&package_cache)?;
+            let local = identity.client_packages();
+            let mut mods = None;
+            let (client, _) = Client::connect_fetching(
                 address,
                 &certificate,
                 player,
-                identity.client_packages(),
-                None,
+                local.clone(),
                 None,
                 &native_identity,
+                &cache,
+                bri_progress::Progress::default(),
+                |fetched| {
+                    let (catalog, packages) = crate::mods::load_fetched(&local, fetched)?;
+                    mods = Some(catalog);
+                    Ok(packages)
+                },
             )
             .await?;
+            let mods = std::sync::Arc::new(mods.unwrap_or_default());
             // Remember the host's certificate for later direct joins.
             let pin = certificate.clone();
             let _ = tokio::task::spawn_blocking(move || -> Result<()> {
@@ -1734,7 +1749,11 @@ impl App {
             })
             .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
-            Ok(Connected { client, host: None })
+            Ok(Connected {
+                client,
+                host: None,
+                mods,
+            })
         });
         self.attempt = Some(Attempt {
             id,
