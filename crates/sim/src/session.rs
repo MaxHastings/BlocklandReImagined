@@ -891,6 +891,10 @@ impl Session {
         }
         self.refresh_trust();
         self.packages_joined(owner);
+        if !is_bot {
+            let music = self.tool_catalog.sounds.clone();
+            self.notify(owner, Notice::MusicTracks(music));
+        }
         Ok(owner)
     }
     /// `GameConnection::startLoad` and `spawnPlayer`'s first spawn: the
