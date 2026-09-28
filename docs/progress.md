@@ -3050,8 +3050,8 @@ real integrated GPU; needs a weaker PC.
   all 20 items against main in `docs/audits/night-qa.md`. Fixed: duplicate
   player names are numbered, the loading screen names the map, `bri-server`
   takes `resume` for its newest save, and the PLAYTEST/KNOWN-ISSUES drift.
-  New-behaviour items (plant warning, first-run name and Tutorial prompts,
-  render distance, accessibility options, brick search, duplicator, input
-  toggles) are left for Max under the feature freeze. Evidence: `cargo test
+  The remaining items (plant warning, first-run prompts, visible distance,
+  accessibility options, brick search and limits, duplicator, input
+  toggles, gamepad) follow on the same branch. Evidence: `cargo test
   --release -p bri-sim --test hardening_session`, `-p bri-world --lib
   persistence`, `-p bri-ui`.

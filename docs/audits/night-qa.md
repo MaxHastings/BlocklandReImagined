@@ -213,10 +213,9 @@ window and were not run.
 
 ### Status after the follow-up (2026-09-28, `claude/first-impressions`)
 
-Checked against main `91ae557`. "Closed" names the change; "Max" marks
-what needs Max's own hands or a decision (new behaviour beyond v20, which
-the playtest contract's feature freeze leaves to him). Add-On loading,
-hosting and joining are night QA's and are not covered here.
+Checked against main `91ae557`. "Closed" names the change; "Open" is being
+built on this branch; "Max" marks what needs Max's own hands. Add-On
+loading, hosting and joining are night QA's and are not covered here.
 
 | # | Status |
 |---|---|
@@ -227,18 +226,18 @@ hosting and joining are night QA's and are not covered here.
 | 5 | Closed (pass). |
 | 6 | Closed on main (`3ee8ab3`): a rejoining player keeps their owner number, and the client reconnects after a drop. |
 | 7 | Closed on main (audit fix). |
-| 8 | Undo: closed (the undo render test passes; it left the gate's known failures). Warning before a bad plant: Max. v20 shows the icon only after the server answers; a red ghost would be new. The Slopes' Buried refusal is fixed on `claude/map-fixes`. |
+| 8 | Undo: closed (the undo render test passes; it left the gate's known failures). Warning before a bad plant: open. The Slopes' Buried refusal is fixed on `claude/map-fixes`. |
 | 9 | Closed: the Tutorial no longer refuses joiners, it runs single player (`claude/map-fixes`). |
 | 10 | Host progress is closed on main. The loading screen now names the map instead of showing its content id (this branch). Guest map preview: joins take the host's map from the first world chunk (`show_progress`); not re-captured here. |
-| 11 | Two-player failure closed (`claude/map-fixes`); the KNOWN-ISSUES drift is fixed (this branch). Offering the Tutorial on first launch: Max. |
-| 12 | Max: render distance is new (v20 used each map's visible distance). |
-| 13 | Max: text size, colourblind and subtitle options are new. |
-| 14 | Join passwords: hidden (release default in `orthogonality.md`). Brick limits: Max. |
-| 15 | Duplicate names: closed (this branch): a second "Blockhead" joins as "Blockhead 2" (`players_sharing_a_name_are_numbered`). A name prompt on first run: Max. |
+| 11 | Two-player failure closed (`claude/map-fixes`); the KNOWN-ISSUES drift is fixed (this branch). Offering the Tutorial on first launch: open. |
+| 12 | Visible distance setting: open. |
+| 13 | Text size, colourblind and subtitle options: open. |
+| 14 | Join passwords: hidden (release default in `orthogonality.md`). Brick limits: open. |
+| 15 | Duplicate names: closed (this branch): a second "Blockhead" joins as "Blockhead 2" (`players_sharing_a_name_are_numbered`). A name prompt on first run: open. |
 | 16 | Closed (this branch): `bri-server ... resume ...` continues from the newest autosave or shutdown save in its state folder (`newest_world`). |
 | 17 | Closed on main: the main menu and `--version` show the build's version. |
-| 18 | Max: brick search and a duplicator are new (the duplicator was a v20 Add-On). |
-| 19 | Max: toggle crouch or walk, gamepad and extra mouse buttons are new. |
+| 18 | Brick search and a duplicator: open. |
+| 19 | Toggle crouch, gamepad and extra mouse buttons: open. |
 | 20 | Closed (pass). |
 
 Also fixed on this branch: `docs/PLAYTEST.md` said Tab shows scores; it is
