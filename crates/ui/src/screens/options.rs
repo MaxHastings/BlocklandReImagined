@@ -144,9 +144,13 @@ const FOV_SLIDER: &str = "SliderFOV";
 /// Not a v20 setting: look for a newer release once per start (on unless
 /// turned off). The client's update check reads it.
 pub const CHECK_FOR_UPDATES: &str = "$pref::Net::CheckForUpdates";
+/// Controls' "Invert Mouse In Vehicles", on by default as in v20; the
+/// client reads it while driving.
+pub const VEHICLE_MOUSE_INVERT: &str = "$Pref::Input::VehicleMouseInvert";
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
+    VEHICLE_MOUSE_INVERT,
     ANTI_ALIASING,
     PRECIPITATION,
     CHECK_FOR_UPDATES,
@@ -181,6 +185,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::Input::ReverseBrickScroll",
     "$pref::Input::noobjet",
     "$pref::Input::MouseInvert",
+    VEHICLE_MOUSE_INVERT,
     MUTE_IN_BACKGROUND,
     TOGGLE_CROUCH,
     CAPTIONS,
@@ -1758,6 +1763,7 @@ mod tests {
             ("GuiSliderCtrl", "SliderGraphicsAnisotropy", "value", ""),
             ("GuiCheckBoxCtrl", "OptPrecipitation", PRECIPITATION, ""),
             ("GuiCheckBoxCtrl", "OptNoobJet", "$pref::Input::noobjet", ""),
+            ("GuiCheckBoxCtrl", "OptVehicleInvert", VEHICLE_MOUSE_INVERT, ""),
             ("GuiSliderCtrl", DISTANCE_SLIDER, "value", ""),
             (
                 "GuiRadioCtrl",
@@ -2226,6 +2232,18 @@ mod tests {
         change(&mut s, &mut ui, n);
         click(&mut s, "done", &mut ui);
         assert!(saved_prefs(&mut ui).bool_or(CAPTIONS, false));
+    }
+    #[test]
+    fn invert_mouse_in_vehicles_shows_on_by_default_and_saves_on_done() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id("OptVehicleInvert").unwrap();
+        assert!(s.view.node(n).state.visible);
+        assert!(s.view.bool_value(n));
+        s.view.set_bool(n, false);
+        change(&mut s, &mut ui, n);
+        click(&mut s, "done", &mut ui);
+        assert!(!saved_prefs(&mut ui).bool_or(VEHICLE_MOUSE_INVERT, true));
     }
 
     #[test]
