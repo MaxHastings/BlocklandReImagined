@@ -381,14 +381,14 @@ fn platform_questions_send_their_action_only_on_yes() {
     let ask = || UiUpdate::Confirm {
         title: "Windows Firewall".into(),
         text: "Let the game through?".into(),
-        action: Box::new(UiAction::AllowFirewall),
+        action: Box::new(UiAction::AllowFirewall { port: 28000 }),
     };
     u.apply(ask());
     down(&mut u, Key::Escape);
     assert!(actions(&mut u).is_empty());
     u.apply(ask());
     down(&mut u, Key::Return);
-    assert_eq!(actions(&mut u), vec![UiAction::AllowFirewall]);
+    assert_eq!(actions(&mut u), vec![UiAction::AllowFirewall { port: 28000 }]);
 }
 #[test]
 fn confirmation_is_modal_and_escape_declines_without_underlying_action() {

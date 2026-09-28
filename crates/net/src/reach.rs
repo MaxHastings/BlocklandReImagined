@@ -70,11 +70,24 @@ pub struct Report {
     pub forward_error: Option<String>,
     /// The invite to share, when there is a public address.
     pub invite: Option<String>,
+    /// An invite at this PC's home network address, for players on the same
+    /// network (and friends once the port is forwarded, with the public
+    /// address swapped in).
+    pub lan_invite: Option<String>,
 }
 
 impl Report {
     /// Plain sentences for the host player, most important first.
     pub fn lines(&self) -> Vec<String> {
+        let mut lines = self.verdict_lines();
+        if self.invite.is_none()
+            && let Some(lan) = &self.lan_invite
+        {
+            lines.push(format!("Players on your own network can join with: {lan}"));
+        }
+        lines
+    }
+    fn verdict_lines(&self) -> Vec<String> {
         let port = self.port;
         let invite = self.invite.as_deref().unwrap_or("");
         let here = self
@@ -163,6 +176,7 @@ pub async fn open_and_check(port: u16, certificate: Vec<u8>) -> (Report, Option<
         method: forward.as_ref().map(Forward::method),
         forward_error,
         invite: public.map(|address| invite(address, &certificate)),
+        lan_invite: local_ip.map(|ip| invite(SocketAddr::new(ip, port), &certificate)),
     };
     (report, forward)
 }
@@ -250,6 +264,7 @@ mod tests {
                 method: Some("UPnP"),
                 forward_error: None,
                 invite: Some("bri://203.0.113.10:28000/key".into()),
+                lan_invite: Some("bri://192.168.1.23:28000/key".into()),
             };
             let text = report.lines().join(" ");
             assert!(!text.is_empty());
@@ -261,5 +276,22 @@ mod tests {
                 _ => assert!(!text.contains("bri://"), "{text}"),
             }
         }
+    }
+    #[test]
+    fn without_a_public_address_the_host_still_gets_a_home_network_invite() {
+        let report = Report {
+            verdict: Verdict::NeedsForward,
+            port: 28000,
+            local_ip: Some(ip("192.168.88.254")),
+            public: None,
+            router_ip: None,
+            method: None,
+            forward_error: Some("no UPnP router".into()),
+            invite: None,
+            lan_invite: Some("bri://192.168.88.254:28000/key".into()),
+        };
+        let text = report.lines().join(" ");
+        assert!(text.contains("forward UDP port 28000 to this PC (192.168.88.254)"), "{text}");
+        assert!(text.contains("own network can join with: bri://192.168.88.254:28000/key"), "{text}");
     }
 }

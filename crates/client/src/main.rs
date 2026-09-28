@@ -52,7 +52,8 @@ fn main() -> Result<()> {
     // The elevated helper the host starts to let the game through Windows
     // Firewall (one Windows permission prompt); it does nothing else.
     if args.first().is_some_and(|a| a == bri_client::firewall::ALLOW_FLAG) {
-        return bri_client::firewall::run_helper();
+        let port = args.get(1).and_then(|a| a.to_str()).unwrap_or_default();
+        return bri_client::firewall::run_helper(port);
     }
     if args.first().is_some_and(|a| a == "--help") {
         println!(

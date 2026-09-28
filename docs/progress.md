@@ -2502,8 +2502,10 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   needs forward, unknown) with the invite put on the clipboard and `/invite`
   to copy it again. UDP 28050 is no longer forwarded. Windows hosts read the
   firewall rules for the game (PowerShell NetSecurity, per active profile) and
-  offer a one-prompt fix (`bri-client --allow-firewall`, elevated, replaces the
-  program's inbound rules with one allow rule). Join Server searches the LAN
+  offer a one-prompt fix (`bri-client --allow-firewall <port>`, elevated,
+  removes the program's inbound rules and keeps one allow rule for the game
+  and discovery UDP ports, so new build folders need no second prompt). Hosts
+  whose router gives no public address still get a home network invite. Join Server searches the LAN
   and probes saved servers on open; Query Internet became Favorite
   (`servers.json`: 64 favourites, 10 recent). Join codes with hole punching
   and a relay were built and tested against simulated routers, then shelved

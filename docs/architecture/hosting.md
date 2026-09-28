@@ -73,6 +73,10 @@ servers not bound to loopback) runs `bri_net::reach::open_and_check`:
 3. Probe `public address:port` with the host's own key. A router that
    forwards the port and loops traffic back proves the path end to end.
 
+When the router gives no public address, the host still gets an invite at
+this PC's home network address to copy (`/invite`), for players on the same
+network; the verdict says what to forward first for friends outside.
+
 The host player then reads one verdict in chat:
 
 | Verdict | Evidence | What the player is told |
@@ -94,14 +98,19 @@ LAN address. The dedicated server prints the same lines.
 
 The first time a program listens, Windows asks whether to allow it. Cancel, or
 allowing only private networks while on a public one, leaves block rules that
-stop every friend. LAN and Internet hosts read the firewall rules for the game
-executable through PowerShell's NetSecurity module (no administrator rights,
-enum names are not localized) and decide per active network profile
-(`firewall::decide`). When friends would be blocked, a yes/no box offers the
-fix: the game starts itself elevated (`bri-client --allow-firewall`, one
-Windows permission prompt), deletes this program's inbound rules and adds one
-allow rule named "Blockland ReImagined" for UDP on every profile. Declining
-changes nothing.
+stop every friend. LAN and Internet hosts read the inbound rules for the game
+executable and for the game's UDP port through PowerShell's NetSecurity module
+(no administrator rights, enum names are not localized) and decide per active
+network profile (`firewall::decide`). When friends would be blocked, a yes/no
+box offers the fix: the game starts itself elevated (`bri-client
+--allow-firewall <port>`, one Windows permission prompt), deletes this
+program's inbound rules (a block rule beats any allow rule) and replaces the
+rule named "Blockland ReImagined" with one allowing UDP on the game port and
+LAN discovery (28050) on every profile. The rule names ports, not the
+program, so a new build in another folder is let through without asking
+again; the cost is that any program listening on those ports is let through
+too, which is acceptable for game ports the player chose to host on.
+Declining changes nothing.
 
 ### Join list
 

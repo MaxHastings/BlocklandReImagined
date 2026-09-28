@@ -342,7 +342,7 @@ enum HostNotice {
     Reach(bri_net::reach::Report),
     /// LAN host: the invite on the home network.
     Lan { invite: String },
-    Firewall(crate::firewall::Status),
+    Firewall { status: crate::firewall::Status, port: u16 },
 }
 
 /// What the Join Server list found: LAN games and the saved servers, each
@@ -382,8 +382,11 @@ impl App {
                         },
                         None,
                     ));
-                } else if let Some(invite) = report.invite {
+                } else if let Some(invite) = report.invite.or(report.lan_invite) {
+                    // Without a public address, the home network invite is
+                    // still something to copy.
                     self.invite = Some(invite);
+                    lines.push(("Type /invite to copy an invite.".into(), None));
                 }
                 lines
             }
@@ -394,13 +397,13 @@ impl App {
                     None,
                 )]
             }
-            HostNotice::Firewall(status) => match status.advice() {
+            HostNotice::Firewall { status, port } => match status.advice() {
                 Some(advice) => vec![(
                     advice.to_string(),
                     Some(UiUpdate::Confirm {
                         title: "Windows Firewall".into(),
                         text: "Windows Firewall would stop friends from joining your game. Let Blockland ReImagined through? Windows will ask for permission once.".into(),
-                        action: Box::new(UiAction::AllowFirewall),
+                        action: Box::new(UiAction::AllowFirewall { port }),
                     }),
                 )],
                 None => Vec::new(),
@@ -1757,8 +1760,10 @@ impl App {
             if !single {
                 // Windows Firewall can block friends whatever the router does.
                 let firewall = router_tx.clone();
+                let port = host.address.port();
                 std::thread::spawn(move || {
-                    let _ = firewall.send(HostNotice::Firewall(crate::firewall::status()));
+                    let status = crate::firewall::status(port);
+                    let _ = firewall.send(HostNotice::Firewall { status, port });
                 });
             }
             if internet {
@@ -4598,10 +4603,10 @@ impl PlatformApp for App {
                     self.ui.core.request(UiAction::QueryLan);
                     result
                 }
-                UiAction::AllowFirewall => {
+                UiAction::AllowFirewall { port } => {
                     let (send, receive) = mpsc::sync_channel(1);
                     std::thread::spawn(move || {
-                        let _ = send.send(crate::firewall::allow().map_err(|e| format!("{e:#}")));
+                        let _ = send.send(crate::firewall::allow(port).map_err(|e| format!("{e:#}")));
                     });
                     self.firewall_fix = Some(receive);
                     Ok(())

@@ -2,9 +2,12 @@
 //! network, Windows asks whether to allow it; "Cancel", or allowing only
 //! private networks while on a public one, leaves block rules that silently
 //! stop every friend from joining. The host checks the rules for this
-//! executable and, when friends would be blocked, offers one fix: an
-//! elevated copy of the game (one Windows permission prompt) replaces this
-//! program's inbound rules with a single allow rule.
+//! executable and for its game port and, when friends would be blocked,
+//! offers one fix: an elevated copy of the game (one Windows permission
+//! prompt) removes this program's inbound rules and sets one allow rule for
+//! the game's UDP ports. That rule names ports, not the program, so a new
+//! build in another folder is let through without asking again; the rule is
+//! kept under one name and replaced, never duplicated.
 use anyhow::Result;
 
 /// Flag for the elevated helper run of the game executable.
@@ -39,41 +42,60 @@ impl Status {
     }
 }
 
-/// Firewall state for this executable on the networks in use. Blocking;
-/// takes a second or two on Windows.
-pub fn status() -> Status {
+/// The UDP ports the rule opens: the game port and LAN discovery.
+pub fn ports(game_port: u16) -> String {
+    let discovery = bri_net::discovery::DISCOVERY_PORT;
+    if game_port == discovery {
+        game_port.to_string()
+    } else {
+        format!("{game_port},{discovery}")
+    }
+}
+
+/// Firewall state for this executable and `port` on the networks in use.
+/// Blocking; takes a second or two on Windows.
+pub fn status(port: u16) -> Status {
     #[cfg(windows)]
     {
-        windows::status()
+        windows::status(port)
     }
     #[cfg(not(windows))]
     {
+        let _ = port;
         Status::Unknown
     }
 }
 
-/// Ask Windows (one permission prompt) to let this game through. Blocking
-/// until the helper finishes or the player declines the prompt.
-pub fn allow() -> Result<()> {
+/// Ask Windows (one permission prompt) to let friends reach `port`.
+/// Blocking until the helper finishes or the player declines the prompt.
+pub fn allow(port: u16) -> Result<()> {
     #[cfg(windows)]
     {
-        windows::allow()
+        windows::allow(port)
     }
     #[cfg(not(windows))]
     {
+        let _ = port;
         anyhow::bail!("Firewall rules are only managed on Windows")
     }
 }
 
-/// The elevated helper (`bri-client --allow-firewall`): replace this
-/// program's inbound rules with one allow rule on every network type.
-pub fn run_helper() -> Result<()> {
+/// The elevated helper (`bri-client --allow-firewall <port>`): remove this
+/// program's inbound rules (a cancelled Windows prompt leaves block rules,
+/// and a block rule beats any allow rule) and set the one port rule.
+pub fn run_helper(port: &str) -> Result<()> {
+    let port: u16 = port
+        .parse()
+        .ok()
+        .filter(|&p| p != 0)
+        .ok_or_else(|| anyhow::anyhow!("{ALLOW_FLAG} needs a port"))?;
     #[cfg(windows)]
     {
-        windows::run_helper()
+        windows::run_helper(port)
     }
     #[cfg(not(windows))]
     {
+        let _ = port;
         anyhow::bail!("Firewall rules are only managed on Windows")
     }
 }
@@ -81,8 +103,8 @@ pub fn run_helper() -> Result<()> {
 /// Decide from the firewall's own words. `profiles` are the active network
 /// categories (`Public`, `Private`, `DomainAuthenticated`), `disabled` the
 /// firewall profiles switched off, and each rule `Action|Profile` for an
-/// enabled inbound rule on this program (`Allow|Private, Public`,
-/// `Block|Any`).
+/// enabled inbound rule on this program or the game port
+/// (`Allow|Private, Public`, `Block|Any`).
 pub fn decide(profiles: &[&str], disabled: &[&str], rules: &[&str]) -> Status {
     if profiles.is_empty() {
         return Status::Unknown;
@@ -133,7 +155,7 @@ mod windows {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    pub fn status() -> Status {
+    pub fn status(port: u16) -> Status {
         let Ok(exe) = std::env::current_exe() else {
             return Status::Unknown;
         };
@@ -144,8 +166,10 @@ mod windows {
             "$ErrorActionPreference='SilentlyContinue';\
              'profiles=' + ((Get-NetConnectionProfile | ForEach-Object {{ \"$($_.NetworkCategory)\" }}) -join ';');\
              'disabled=' + ((Get-NetFirewallProfile | Where-Object {{ \"$($_.Enabled)\" -eq 'False' }} | ForEach-Object {{ \"$($_.Name)\" }}) -join ';');\
-             Get-NetFirewallApplicationFilter -Program '{program}' | Get-NetFirewallRule | \
+             @(Get-NetFirewallApplicationFilter -Program '{program}' | Get-NetFirewallRule) + \
+             @(Get-NetFirewallPortFilter -Protocol UDP | Where-Object {{ @($_.LocalPort) -contains '{port}' }} | Get-NetFirewallRule) | \
              Where-Object {{ \"$($_.Direction)\" -eq 'Inbound' -and \"$($_.Enabled)\" -eq 'True' }} | \
+             Sort-Object -Property Name -Unique | \
              ForEach-Object {{ 'rule=' + \"$($_.Action)|$($_.Profile)\" }}"
         );
         let output = std::process::Command::new("powershell.exe")
@@ -169,7 +193,7 @@ mod windows {
         decide(&profiles, &disabled, &rules)
     }
 
-    pub fn allow() -> Result<()> {
+    pub fn allow(port: u16) -> Result<()> {
         use windows_sys::Win32::{
             Foundation::{CloseHandle, GetLastError},
             System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
@@ -182,7 +206,7 @@ mod windows {
         let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
         let verb = wide("runas");
         let file = wide(&exe.display().to_string());
-        let parameters = wide(ALLOW_FLAG);
+        let parameters = wide(&format!("{ALLOW_FLAG} {port}"));
         let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
         info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
         info.fMask = SEE_MASK_NOCLOSEPROCESS;
@@ -221,7 +245,7 @@ mod windows {
         Ok(())
     }
 
-    pub fn run_helper() -> Result<()> {
+    pub fn run_helper(port: u16) -> Result<()> {
         let exe = std::env::current_exe()?;
         let program = format!("program={}", exe.display());
         let netsh = |args: &[&str]| {
@@ -234,10 +258,14 @@ mod windows {
         // Old rules for this program, including the block rules a cancelled
         // Windows prompt leaves; failing because none exist is fine.
         let _ = netsh(&["advfirewall", "firewall", "delete", "rule", "name=all", "dir=in", &program]);
+        // Our rule from an earlier build or port, replaced rather than
+        // duplicated.
         let name = format!("name={RULE_NAME}");
+        let _ = netsh(&["advfirewall", "firewall", "delete", "rule", &name, "dir=in"]);
+        let ports = format!("localport={}", ports(port));
         let added = netsh(&[
             "advfirewall", "firewall", "add", "rule", &name, "dir=in", "action=allow",
-            &program, "protocol=udp", "profile=any", "enable=yes",
+            "protocol=udp", &ports, "profile=any", "enable=yes",
         ])?;
         if !added.success() {
             bail!("netsh could not add the firewall rule");
@@ -270,6 +298,11 @@ mod tests {
         assert_eq!(decide(&["Private", "Public"], &[], &["Allow|Private"]), NotAllowed);
         assert_eq!(decide(&[], &[], &["Allow|Any"]), Unknown);
         assert_eq!(decide(&["Public"], &[], &["garbage"]), Unknown);
+    }
+    #[test]
+    fn the_rule_opens_the_game_port_and_lan_discovery() {
+        assert_eq!(ports(28000), "28000,28050");
+        assert_eq!(ports(28050), "28050");
     }
     #[test]
     fn only_problems_get_advice() {

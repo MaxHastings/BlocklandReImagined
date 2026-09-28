@@ -558,7 +558,7 @@ pub enum UiAction {
         address: String,
     },
     /// Let the game through Windows Firewall (one Windows permission prompt).
-    AllowFirewall,
+    AllowFirewall { port: u16 },
     JoinServer {
         address: String,
         password: String,
