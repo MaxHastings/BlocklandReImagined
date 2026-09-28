@@ -16,6 +16,8 @@ use bri_weapons::ActorId;
 const DIGIT_PRINTS: &str = "print/print_letters_default/";
 /// The only player datablock; `changeDatablock` accepts it as a no-op.
 const TICKS_PER_SECOND: u64 = 120;
+/// Most bricks one explosion or heavy hit knocks out.
+const MAX_BRICKS_PER_BLAST: usize = 64;
 
 fn id(index: u64) -> Id {
     Id {
@@ -442,7 +444,13 @@ impl Session {
             .minigames
             .respawn_delay(game, mg::RespawnObject::Brick)
             .unwrap_or(3600);
-        for brick in hit.into_iter().take(64) {
+        // At most 64 bricks per blast, counted among those it knocks out, so
+        // bricks a first blast already knocked out never use up a second's.
+        let mut knocked = 0;
+        for brick in hit {
+            if knocked == MAX_BRICKS_PER_BLAST {
+                break;
+            }
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
             };
@@ -496,6 +504,7 @@ impl Session {
             };
             self.fake_kill_brick(brick, blast, delay)?;
             self.fire_input(brick, "onBlownUp", Some(source));
+            knocked += 1;
         }
         Ok(())
     }
