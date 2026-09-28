@@ -8,6 +8,7 @@
 //! the source function, as behaviour an agent must build natively.
 //! Findings: `docs/audits/spike-addon-import.md`.
 pub mod behaviour;
+pub mod porting;
 pub mod ports;
 pub mod reference;
 pub mod report;

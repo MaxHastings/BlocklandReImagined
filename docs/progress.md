@@ -3607,3 +3607,16 @@ Needs Max's playtest: F8, fly with and without left click and shift.
   shooter). Still owed on Maxwell's PC: `real_community_samples` and
   `community_shotgun_and_car_work_in_a_hosted_game` now expect the real
   shotgun to be ported (three pellets); they print its sha256 for the list.
+- Porting in two commands, from the release folder: `bri-import-addon port
+  ADDON DIR` sets up a work folder (plain import and report, the original
+  scripts to read, a drafted `port/`, `port/checks.json` stating what v20
+  does, `entry.json`, `stubs.rhai` quoting each function still to port, and
+  an `AGENT.md` with a prompt filled in for the Add-On). v20's spread-code
+  weapons are drafted completely. `bri-import-addon check-port DIR` imports
+  again with the port, fires each checked weapon, lists what is still
+  unported and prints the ports-list entry (`verified` or `partial`, with the
+  copy's hash) to `submit.json`. Evidence: `tests/ports.rs`
+  (`port_command_drafts_a_spread_weapon_and_check_port_verifies_it`,
+  `hand_ports_start_from_stubs_and_check_as_partial`,
+  `port_and_check_port_run_from_the_executable`). The shotgun's own
+  `checks.json` (3 pellets) runs in `real_community_samples` on Maxwell's PC.

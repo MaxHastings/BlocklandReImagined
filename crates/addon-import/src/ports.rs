@@ -42,8 +42,8 @@ pub struct Entry {
     #[serde(default)]
     pub sha256: Vec<String>,
     /// Each script function the port replaces, with named patterns its body
-    /// must match (case-insensitive). A pattern's first group is the value
-    /// the port's patches use as `{name}`.
+    /// must match (case-insensitive). A pattern's first group, when it has
+    /// one, is the value the port's patches use as `{name}`.
     pub covers: BTreeMap<String, BTreeMap<String, String>>,
     /// Tests that prove the port, `path name`.
     #[serde(default)]
@@ -81,6 +81,47 @@ impl Ports {
                 .collect(),
         )
         .expect("crates/addon-import/ports is valid; tests/ports.rs checks it")
+    }
+
+    /// No ports: the plain import.
+    pub fn empty() -> Self {
+        Self {
+            list: List {
+                schema_version: LIST_SCHEMA,
+                ports: vec![],
+            },
+            files: BTreeMap::new(),
+        }
+    }
+
+    /// One port being written: its list entry and its folder.
+    pub fn single(entry: Entry, port_dir: &Path) -> Result<Self> {
+        let mut files = BTreeMap::new();
+        let list = List {
+            schema_version: LIST_SCHEMA,
+            ports: vec![entry],
+        };
+        files.insert("ports.json".to_owned(), serde_json::to_vec(&list)?);
+        let port = &list.ports[0].port;
+        let mut stack = vec![port_dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d)
+                .with_context(|| format!("reading {}", d.display()))?
+                .flatten()
+            {
+                let path = e.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path
+                        .strip_prefix(port_dir)?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    files.insert(format!("{port}/{rel}"), std::fs::read(&path)?);
+                }
+            }
+        }
+        Self::from_files(files)
     }
 
     /// A ports folder laid out like `crates/addon-import/ports`.
@@ -179,7 +220,6 @@ fn pattern(p: &str) -> Result<regex::Regex> {
         .case_insensitive(true)
         .size_limit(1 << 20)
         .build()?;
-    ensure!(re.captures_len() >= 2, "pattern {p} captures nothing");
     Ok(re)
 }
 
@@ -267,7 +307,11 @@ fn try_apply(
             let caps = pattern(p)?
                 .captures(body)
                 .with_context(|| format!("`{function}` does not match the port's `{name}`"))?;
-            applied.values.insert(name.clone(), caps[1].to_owned());
+            if let Some(value) = caps.get(1) {
+                applied
+                    .values
+                    .insert(name.clone(), value.as_str().to_owned());
+            }
         }
     }
     let port = ports.port(e)?;

@@ -15,6 +15,7 @@
         }
       },
       "tests": [
+        "weapon_shotgun/checks.json",
         "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
         "crates/addon-import/tests/import.rs real_community_samples"
       ]

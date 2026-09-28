@@ -7,6 +7,51 @@ behaviour, checked against v20 and listed so everyone's import gets it.
 
 This page is the recipe, for a person or for the agent they hand it to.
 
+## Port an Add-On in two commands
+
+`bri-import-addon.exe` ships in the game's folder, so none of this needs a
+checkout of the code. From that folder:
+
+```sh
+bri-import-addon port "C:/path/to/Weapon_Example.zip" "C:/path/to/Weapon_Example-port"
+```
+
+This sets up a work folder:
+
+| Path | What it is |
+|---|---|
+| `AGENT.md` | the instructions, filled in for this Add-On, with a prompt to paste into your agent |
+| `imported/` | the plain import, with `IMPORT-REPORT.md` and `import-report.json` |
+| `original/` | the Add-On's own scripts, to read (never submitted) |
+| `port/port.json` | the port, already drafted where it can be (below) |
+| `port/checks.json` | what v20 does, which the check tests |
+| `entry.json` | the Add-On's line in the ports list: the functions the port covers and patterns their v20 bodies must match |
+| `stubs.rhai` | one stub per function still to port, quoting its v20 source, its hook and what it needs |
+
+For weapons whose `onFire` uses v20's common spread code, the port is
+drafted completely: the command prints `drafted:` for each one, and there is
+nothing to write. Everything else is listed as `to port by hand:`. Hand
+`AGENT.md` to your agent, or follow it yourself.
+
+When the port is written, check it:
+
+```sh
+bri-import-addon check-port "C:/path/to/Weapon_Example-port"
+```
+
+It imports the Add-On again with your port, fires each weapon in
+`port/checks.json` once and compares what happens with what v20 does
+(projectiles per click, recoil, widest spread), and lists any function still
+unported. When every check passes, it prints the entry for the ports list and
+writes it to `submit.json`: `verified` when every function is ported,
+otherwise `partial`, with this copy's hash. To submit, add the entry to
+`crates/addon-import/ports/ports.json` and copy `port/` to
+`crates/addon-import/ports/<port>/`, in a pull request or by handing both
+files to someone who can.
+
+Write each check from the v20 script, not from your port: it is the proof
+that the port behaves like v20. A check with no numbers filled in fails.
+
 ## What a port is
 
 A port lives in [`crates/addon-import/ports`](../../crates/addon-import/ports):
@@ -58,7 +103,7 @@ match.
 | `status` | `verified`: tests show it behaves like v20 for everything the Add-On's scripts do. `partial`: it covers some functions and the rest are still missing. |
 | `sha256` | `source.sha256` from the import report of each copy the port was checked against. The report calls a copy `listed` or `unlisted`; both get the port if they match. |
 | `covers` | Each function the port replaces, with named patterns (regular expressions, case-insensitive) its body must match. The first group of each is a value the port can use. |
-| `tests` | `path test_name` for each test proving the port. The list's own test checks that they exist. |
+| `tests` | the port's own checks (`<port>/checks.json`, which `check-port` runs) and any `path test_name` in the repository. The list's own test checks that they exist. |
 
 Patterns do two jobs. They prove the copy is the shape the port was written
 for, and they read the numbers from that copy's script, so a port never
@@ -89,7 +134,10 @@ Patch keys are files the importer wrote (`assets/weapons.json`,
 pass the weapons pack's checks, or the port is not applied. The patch is all
 or nothing: a port that fails anywhere changes no file.
 
-## The recipe
+## The recipe in detail
+
+This is what `port` and `check-port` do for you, step by step, and what to
+add when you work in a checkout.
 
 1. **Import the Add-On** from a checkout:
 
@@ -132,7 +180,8 @@ or nothing: a port that fails anywhere changes no file.
 
 5. **Write `ports/<port>/port.json`** and any `files/`.
 
-6. **Prove it behaves like v20.** Add a test to
+6. **Prove it behaves like v20.** Fill in `port/checks.json` and run
+   `check-port`. In a checkout, also add a test to
    [`crates/addon-import/tests/ports.rs`](../../crates/addon-import/tests/ports.rs):
    - Write a **stand-in** Add-On under `tests/fixtures/ports/<Addon_Name>`:
      the same folder name and the same function shape, with its own numbers,
@@ -155,16 +204,9 @@ or nothing: a port that fails anywhere changes no file.
 
 ## Handing it to an agent
 
-Give your agent this page, the Add-On and this prompt:
-
-> Port the Add-On `<Addon_Name>` to Blockland ReImagined following
-> `docs/modding/porting.md`. Import it, read `import-report.json`, and port
-> every `needs_behaviour` entry that the recipe's table says is portable.
-> Read the numbers from the script with patterns, never hard-code them.
-> Write a CC0 stand-in fixture with the same folder name and function
-> shapes, test the port against v20's own formulas, list it in
-> `crates/addon-import/ports/ports.json` as `verified` or `partial`, and run
-> `cargo test -p bri-addon-import`. Do not commit the original Add-On.
+`AGENT.md` in the work folder holds the prompt, filled in for the Add-On.
+Give your agent the folder and that file. In a checkout, point it at this
+page as well.
 
 ## Ports so far
 

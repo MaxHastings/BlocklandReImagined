@@ -3,7 +3,7 @@
 //! Sawn-off Shotgun's folder name and onFire shape, so the listed port
 //! applies to it. The real Add-On runs in `import.rs` `real_community_samples`
 //! where Maxwell's archive exists.
-use bri_addon_import::{Options, import, import_with, ports::Ports};
+use bri_addon_import::{Options, import, import_with, porting, ports::Ports};
 use bri_weapons::*;
 use glam::Vec3;
 use std::path::{Path, PathBuf};
@@ -82,7 +82,14 @@ fn builtin_ports_list_loads_and_names_its_tests() {
     for e in &ports.list.ports {
         assert!(!e.tests.is_empty(), "{} lists no test", e.addon);
         for t in &e.tests {
-            let (file, name) = t.split_once(' ').unwrap();
+            // A port's own checks (`check-port`), or `path test_name`.
+            let Some((file, name)) = t.split_once(' ') else {
+                assert!(
+                    root.join("crates/addon-import/ports").join(t).is_file(),
+                    "{t} does not exist"
+                );
+                continue;
+            };
             let text = std::fs::read_to_string(root.join(file)).unwrap();
             assert!(text.contains(&format!("fn {name}()")), "{t} does not exist");
         }
@@ -297,5 +304,151 @@ fn ported_shotgun_recoils_the_shooter_in_a_hosted_game() {
     assert_eq!(pellets.len(), 5);
     assert!(before < 0.5, "standing still before the shot: {before}");
     assert!(after > 3.0, "recoil of 4 moves the shooter: {after}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `port` drafts the stand-in shotgun completely; `check-port` proves it and
+/// prints a verified entry naming this copy's hash.
+#[test]
+fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
+    let dir = fresh("scaffold");
+    let work = dir.join("work");
+    let s = porting::scaffold(&fixture("ports/Weapon_Shotgun"), &work, None, vec![]).unwrap();
+    assert_eq!(s.drafted, ["shotgunImage::onFire"]);
+    assert!(s.to_port.is_empty());
+    assert_eq!(s.listed.as_deref(), Some("weapon_shotgun (verified)"));
+    for f in [
+        "AGENT.md",
+        "original/server.cs",
+        "imported/IMPORT-REPORT.md",
+        "imported/assets/weapons.json",
+        "port/port.json",
+        "port/checks.json",
+        "entry.json",
+        "stubs.rhai",
+        "work.json",
+    ] {
+        assert!(work.join(f).is_file(), "{f}");
+    }
+    // The plain import is left unported, for the patches to apply to.
+    let plain: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(work.join("imported/assets/weapons.json")).unwrap())
+            .unwrap();
+    assert!(plain["images"]["weapon_shotgun:image/shotgunimage"]["shot"].is_null());
+    let checks: porting::Checks =
+        serde_json::from_slice(&std::fs::read(work.join("port/checks.json")).unwrap()).unwrap();
+    assert_eq!(checks.checks[0].fire, ITEM);
+    assert_eq!(checks.checks[0].projectiles, Some(5));
+    assert_eq!(checks.checks[0].recoil, Some(4.0));
+
+    let c = porting::check(&work).unwrap();
+    assert!(c.passed(), "{:?} {:?}", c.reason, c.results);
+    assert!(c.unported.is_empty());
+    assert_eq!(c.entry.status, "verified");
+    assert_eq!(c.entry.sha256, std::slice::from_ref(&c.report.source.sha256));
+    assert_eq!(c.entry.tests, ["weapon_shotgun/checks.json"]);
+    let submitted: bri_addon_import::ports::Entry =
+        serde_json::from_slice(&std::fs::read(work.join("submit.json")).unwrap()).unwrap();
+    assert_eq!(submitted.status, "verified");
+    // Checks catch a port that does not do what v20 does.
+    let mut wrong = checks.clone();
+    wrong.checks[0].projectiles = Some(4);
+    std::fs::write(
+        work.join("port/checks.json"),
+        serde_json::to_vec(&wrong).unwrap(),
+    )
+    .unwrap();
+    assert!(!porting::check(&work).unwrap().passed());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A weapon with its own burst code is not drafted: the stubs quote it, and
+/// check-port refuses until the porter says what the port covers. A hand
+/// port of one function checks as partial.
+#[test]
+fn hand_ports_start_from_stubs_and_check_as_partial() {
+    let dir = fresh("hand");
+    let work = dir.join("work");
+    let s = porting::scaffold(&fixture("Weapon_Synthetic_Blaster"), &work, None, vec![]).unwrap();
+    assert!(s.drafted.is_empty());
+    assert!(s.to_port.iter().any(|f| f == "blasterImage::onFire"));
+    let stubs = std::fs::read_to_string(work.join("stubs.rhai")).unwrap();
+    assert!(
+        stubs.contains("messageClient(%obj.client, '', \"Blaster burst!\");"),
+        "{stubs}"
+    );
+    assert!(stubs.contains("fn blasterimage__onfire()"));
+    let agent = std::fs::read_to_string(work.join("AGENT.md")).unwrap();
+    assert!(agent.contains("bri-import-addon check-port"));
+    let err = porting::check(&work).unwrap_err().to_string();
+    assert!(err.contains("covers no function"), "{err}");
+
+    // What an agent writes after reading the stub.
+    let mut entry: bri_addon_import::ports::Entry =
+        serde_json::from_slice(&std::fs::read(work.join("entry.json")).unwrap()).unwrap();
+    entry.covers.insert(
+        "blasterImage::onFire".into(),
+        [("bolts".to_string(), r"%i\s*<\s*(\d+)".to_string())].into(),
+    );
+    std::fs::write(work.join("entry.json"), serde_json::to_vec(&entry).unwrap()).unwrap();
+    std::fs::write(
+        work.join("port/port.json"),
+        r#"{ "schema_version": 1, "patch": { "assets/weapons.json": { "images": {
+            "weapon_synthetic_blaster:image/blasterimage": { "shot": { "projectiles": "{bolts}", "recoil": 2 } } } } } }"#,
+    )
+    .unwrap();
+    let mut checks: porting::Checks =
+        serde_json::from_slice(&std::fs::read(work.join("port/checks.json")).unwrap()).unwrap();
+    assert_eq!(checks.checks.len(), 1);
+    checks.checks[0].projectiles = Some(3);
+    checks.checks[0].recoil = Some(2.0);
+    std::fs::write(
+        work.join("port/checks.json"),
+        serde_json::to_vec(&checks).unwrap(),
+    )
+    .unwrap();
+    let c = porting::check(&work).unwrap();
+    assert!(c.passed(), "{:?} {:?}", c.reason, c.results);
+    assert_eq!(c.entry.status, "partial");
+    assert!(
+        c.unported.iter().any(|f| f == "Armor::onCollision"),
+        "{:?}",
+        c.unported
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The same flow through the shipped executable, as the release folder runs it.
+#[test]
+fn port_and_check_port_run_from_the_executable() {
+    let dir = fresh("exe");
+    let work = dir.join("work");
+    let exe = env!("CARGO_BIN_EXE_bri-import-addon");
+    let run =
+        |args: &[&std::ffi::OsStr]| std::process::Command::new(exe).args(args).output().unwrap();
+    let port = run(&[
+        "port".as_ref(),
+        fixture("ports/Weapon_Shotgun").as_os_str(),
+        work.as_os_str(),
+    ]);
+    let text = String::from_utf8_lossy(&port.stdout);
+    assert!(
+        port.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&port.stderr)
+    );
+    assert!(text.contains("drafted: shotgunImage::onFire"), "{text}");
+    let check = run(&["check-port".as_ref(), work.as_os_str()]);
+    let text = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        check.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(
+        text.contains("PASS fire weapon_shotgun:weapon/shotgunitem"),
+        "{text}"
+    );
+    assert!(text.contains("\"status\": \"verified\""), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }

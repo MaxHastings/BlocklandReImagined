@@ -296,6 +296,13 @@ fn real_community_samples() {
         fire(&out, "weapon_shotgun:weapon/shotgunitem"),
         ["weapon_shotgun:projectile/shotgunprojectile"; 3]
     );
+    let checks: bri_addon_import::porting::Checks = serde_json::from_slice(include_bytes!(
+        "../ports/weapon_shotgun/checks.json"
+    ))
+    .unwrap();
+    for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+        assert!(ok, "{line}");
+    }
     // Merged with the base game's pack, when this checkout has generated content.
     let vanilla =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009/weapons.json");

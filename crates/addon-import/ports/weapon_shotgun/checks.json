@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "weapon_shotgun:weapon/shotgunitem",
+      "projectiles": 3,
+      "recoil": null,
+      "max_spread_degrees": null,
+      "why": "shotgunImage::onFire: %shellcount 3 (the spike's reading of the archive copy)"
+    }
+  ]
+}
