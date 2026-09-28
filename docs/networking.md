@@ -37,6 +37,9 @@ The runtime dependency graph contains no Torque readers.
   (no duplicates, no overrun) before building the replica, and emit
   `ClientEvent::MapChanging` at a map change's head. There is no world size
   ceiling beyond `MAX_BRICKS`, and joins no longer stall other players.
+- Congestion control is BBR: random loss (Wi-Fi, mobile) is not congestion,
+  and loss-based Cubic stalled reliable replies for seconds at 5% loss in the
+  soak test (`tests/soak.rs`, through `impair::ImpairedLink`).
 - Replica worlds are the same persistent map: publishing a new world revision
   to the frame thread after an edit is O(1) (6 us on Golden Gate, was 12-21 ms
   of deep copy on the network worker that also sends movement).
