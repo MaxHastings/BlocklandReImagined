@@ -589,3 +589,76 @@ async fn a_rocket_fight_stays_under_its_byte_budget() -> Result<()> {
     );
     Ok(())
 }
+
+/// A shot's sound reaches the shooter by the time its projectile does, with
+/// updates skipped while nothing changes (the late-join test in `loopback.rs`
+/// checks the same with v20's gun).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shot_sound_arrives_with_its_projectile() -> Result<()> {
+    let mut pack = rocket_pack();
+    for state in &mut pack.images.get_mut(ROCKET_IMAGE).expect("rocket image").states {
+        if state.name == "Fire" {
+            state.sound = "gunShot1Sound".into();
+        }
+    }
+    let mut session = common::session_with(empty_world());
+    session.set_lan_host(true);
+    session.set_weapon_pack(pack)?;
+    session.set_spawn_loadout(bri_sim::session::ToolInventory {
+        slots: [Some(ROCKET.to_string()), None, None, None, None].into(),
+        selected: None,
+    })?;
+    let server = server::start(session, common::options())?;
+    for round in 0..10 {
+        let mut client = Client::connect(
+            server.address,
+            &server.certificate,
+            format!("Shooter {round}"),
+            Vec::new(),
+            None,
+        )
+        .await?;
+        let shooter = client.owner;
+        client.command(Command::EquipTool { slot: Some(0) }).await?;
+        wait_for(&mut client, |c| {
+            c.replica
+                .weapons
+                .images
+                .get(&shooter)
+                .is_some_and(|images| images.iter().any(|i| i.state == "Ready"))
+        })
+        .await?;
+        let first = client.replica.poses[&shooter].acknowledged_input + 1;
+        client.movement(first, &[MoveInput::default()], None)?;
+        client.command(Command::WeaponTrigger { down: true }).await?;
+        client.command(Command::WeaponTrigger { down: false }).await?;
+        wait_for(&mut client, |c| {
+            c.replica
+                .weapons
+                .projectiles
+                .iter()
+                .any(|p| p.source.0 == shooter)
+        })
+        .await?;
+        let cues = client.replica.take_cues();
+        assert!(
+            cues.iter().any(|c| matches!(&c.kind,
+                bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "gunShot1Sound")),
+            "round {round}: {:?}",
+            cues.iter().map(|c| &c.kind).collect::<Vec<_>>()
+        );
+        client.close();
+    }
+    server.stop().await?;
+    Ok(())
+}
+
+async fn wait_for(client: &mut Client, predicate: impl Fn(&Client) -> bool) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !predicate(client) {
+            client.receive().await?;
+        }
+        Result::<()>::Ok(())
+    })
+    .await?
+}

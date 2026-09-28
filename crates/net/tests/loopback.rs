@@ -563,7 +563,11 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
         "v20.image.gunimage"
     );
     let cues = first.replica.take_cues();
-    assert!(cues.iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "gunShot1Sound")));
+    assert!(
+        cues.iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "gunShot1Sound")),
+        "no gunShot1Sound cue by the projectile's first update; cues: {:?}",
+        cues.iter().map(|c| (c.tick, &c.kind)).collect::<Vec<_>>()
+    );
     let mut second = Client::connect(
         server.address,
         &server.certificate,
