@@ -164,9 +164,26 @@ fn player_row<'a>(app: &'a App, name: &str) -> Option<&'a PlayerRow> {
     app.ui.core.players.iter().find(|p| p.name == name)
 }
 
+
+/// Host and discovery ports for this test process, away from the game's
+/// 28000/28050 so a real game on this machine never collides with it.
+fn use_test_ports() -> u16 {
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")
+        .and_then(|s| s.local_addr())
+        .map(|a| a.port())
+        .expect("a free UDP port");
+    // SAFETY: set before any host or join starts; this binary runs one test.
+    unsafe {
+        std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+        std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+    }
+    port
+}
+
 #[test]
 #[ignore = "converted native content, loopback UDP 28000/28050 and an offscreen GPU; no window"]
 fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()> {
+    let port = use_test_ports();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifact = workspace.join("artifacts/native-multiplayer");
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
@@ -200,7 +217,7 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
     request(
         &mut guest,
         UiAction::JoinServer {
-            address: "127.0.0.1".into(),
+            address: format!("127.0.0.1:{port}"),
             password: String::new(),
         },
     )?;
@@ -394,7 +411,7 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
     request(
         &mut guest,
         UiAction::JoinServer {
-            address: "127.0.0.1".into(),
+            address: format!("127.0.0.1:{port}"),
             password: String::new(),
         },
     )?;

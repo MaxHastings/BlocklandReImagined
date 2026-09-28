@@ -121,9 +121,26 @@ fn lit_pixels(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Resul
     Ok(data.chunks(4).filter(|p| p[0] > 16 || p[1] > 16 || p[2] > 16).count())
 }
 
+
+/// Host and discovery ports for this test process, away from the game's
+/// 28000/28050 so a real game on this machine never collides with it.
+fn use_test_ports() -> u16 {
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")
+        .and_then(|s| s.local_addr())
+        .map(|a| a.port())
+        .expect("a free UDP port");
+    // SAFETY: set before any host or join starts; this binary runs one test.
+    unsafe {
+        std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+        std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+    }
+    port
+}
+
 #[test]
 #[ignore = "needs BRI_RELEASE_DIR: a scratch copy of a packaged release; offscreen GPU, loopback UDP"]
 fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -> Result<()> {
+    let port = use_test_ports();
     let Some(root) = release() else {
         eprintln!("BRI_RELEASE_DIR is not set; nothing to check");
         return Ok(());
@@ -194,7 +211,7 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     host(&mut app, SLATE, None, ServerMode::Internet)?;
     let mut guest = load(&root, "Guesty")?;
     guest.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
-    guest.ui.core.request(UiAction::JoinServer { address: "127.0.0.1".into(), password: String::new() });
+    guest.ui.core.request(UiAction::JoinServer { address: format!("127.0.0.1:{port}"), password: String::new() });
     until(&mut [&mut app, &mut guest], "the guest to join and both to list two players", Duration::from_secs(120), |a| {
         in_game(a[1]) && a.iter().all(|x| x.ui.core.players.len() == 2)
     })?;

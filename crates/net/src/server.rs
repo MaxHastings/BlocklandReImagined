@@ -172,7 +172,12 @@ pub struct ServerReport {
 impl ServerHandle {
     /// Answer LAN discovery queries for this host until it stops.
     pub async fn advertise(&mut self, name: String, map: String, max_players: u32, content_id: String) -> Result<()> {
-        let discovery = crate::discovery::DISCOVERY_PORT;
+        // Tests set BRI_TEST_DISCOVERY_PORT (0 picks a free port) so they
+        // never collide with a game hosting on this machine.
+        let discovery = std::env::var("BRI_TEST_DISCOVERY_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(crate::discovery::DISCOVERY_PORT);
         self.advertise_on(discovery, name, map, max_players, content_id).await?;
         Ok(())
     }

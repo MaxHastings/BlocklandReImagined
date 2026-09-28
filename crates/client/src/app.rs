@@ -1949,10 +1949,13 @@ impl App {
                 .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
             reporting.begin(bri_progress::Stage::StartingServer, bri_progress::Unit::Steps, None);
+            // Tests set BRI_TEST_HOST_PORT so a hosted test game never takes
+            // the port of a real game running on this machine.
+            let port = std::env::var("BRI_TEST_HOST_PORT").unwrap_or_else(|_| "28000".into());
             let bind = if single {
-                "127.0.0.1:0"
+                "127.0.0.1:0".to_string()
             } else {
-                "0.0.0.0:28000"
+                format!("0.0.0.0:{port}")
             }
             .parse()?;
             let setup = HostSetup {
