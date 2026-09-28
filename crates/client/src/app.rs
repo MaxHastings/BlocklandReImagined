@@ -970,11 +970,25 @@ impl App {
         }
     }
     fn player_name(&self) -> String {
-        let name = self.ui.settings().avatar.lan_name;
-        if name.trim().is_empty() {
-            "Blockhead".into()
-        } else {
-            name
+        player_name(&self.ui.settings().avatar)
+    }
+    /// Game start: ask for a name once while it is still the stock "Blockhead".
+    pub fn prompt_for_name(&mut self) {
+        if bri_ui::screens::name::should_prompt(&self.ui.core) {
+            self.ui.core.push(ScreenId::ChooseName);
+            self.ui.update(0);
+        }
+    }
+    /// Avatar Done while connected also renames the player on the server.
+    fn send_name(&mut self, prefs: &AvatarPrefs) {
+        let name = player_name(prefs);
+        let current = self
+            .network_view()
+            .and_then(|v| v.names.get(&v.owner).cloned());
+        if current.as_deref() != Some(name.as_str())
+            && let Some(a) = self.attempt.as_mut().filter(|a| a.entered)
+        {
+            let _ = a.worker.request(REPORT_REQUEST, Command::SetName(name));
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -3290,6 +3304,7 @@ impl PlatformApp for App {
                         }
                     });
                     if connected && result.is_ok() {
+                        self.send_name(prefs);
                         continue;
                     }
                     result
@@ -3760,6 +3775,24 @@ impl PlatformApp for App {
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
         Ok(true)
+    }
+}
+/// The saved name as the server accepts it: trimmed, at most 48 bytes, and
+/// "Blockhead" when blank.
+fn player_name(prefs: &AvatarPrefs) -> String {
+    let mut name: String = prefs
+        .lan_name
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    while name.len() > 48 {
+        name.pop();
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        "Blockhead".into()
+    } else {
+        name.into()
     }
 }
 /// Connect to IP input: an IPv4/IPv6 address with an optional port. A bare

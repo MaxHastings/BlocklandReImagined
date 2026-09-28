@@ -6,6 +6,7 @@ pub mod admin;
 pub mod avatar;
 pub mod menus;
 pub mod minigames;
+pub mod name;
 pub mod options;
 pub mod play;
 pub mod players;
@@ -54,6 +55,8 @@ pub enum ScreenId {
     Wrench(WrenchVariant),
     WrenchEvents,
     Avatar,
+    /// First-open name prompt (v20 `regNameGui` window).
+    ChooseName,
     SaveBricks,
     LoadBricks,
     MessageBox,
@@ -142,6 +145,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::Wrench(variant) => return Box::new(wrench::Wrench::new(core, variant)),
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),
         ScreenId::Avatar => return Box::new(avatar::Avatar::new(core)),
+        ScreenId::ChooseName => return Box::new(name::ChooseName::new(core)),
         ScreenId::Play => return Box::new(play::Play::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),

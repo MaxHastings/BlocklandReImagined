@@ -64,7 +64,8 @@ fn main() -> Result<()> {
     }
     // Executing --run explicitly opts into the normal game window and audio device.
     // Library/headless callers use App::load, which always selects silent output.
-    let app = App::load_with_audio(&content, &state, (1280, 720), bri_audio::OutputKind::Device)?;
+    let mut app = App::load_with_audio(&content, &state, (1280, 720), bri_audio::OutputKind::Device)?;
+    app.prompt_for_name();
     for warning in app.audio_warnings() {
         eprintln!("{warning}");
     }

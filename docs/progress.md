@@ -1707,6 +1707,31 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   step under 3.4, a crouched plate under 1.4, a one-plate-short ceiling that
   still blocks, and jumping under a 2.8 lintel. `cargo test -p bri-sim` passed.
 
+- 2026-09-28 Player names reach the server. In the Internet playtest everyone
+  still joined as "Blockhead" after typing a name on Player (Avatar) and
+  clicking Done. Cause: `Avatar::read_fields` read each box's label text
+  (`View::text_of`), which only holds what the screen last wrote, instead of
+  the typed edit value (`View::edit_text`). Done therefore saved and sent the
+  old name. The join path, settings file and server were fine. Fixes: Done now
+  reads the typed Name, Clan Prefix and Suffix; the "LAN Name:" label reads
+  "Name:"; Done while connected sends a new `Command::SetName` (appended last
+  in `session::Command`; Gate owns the protocol version) so the server renames
+  the player live, updates admin and minigame records, and posts "Old is now
+  known as New." v20 only applied the name on the next join. People (not bots)
+  with a name already in use get "Name 2", "Name 3" on join, resume and rename.
+  The client clamps the hello name to the server's 48-byte rule. A first-open
+  prompt built on v20's `regNameGui` window ("Choose Your Name", prefilled
+  "Blockhead" plus four digits, OK or Skip) appears in `--run` while the saved
+  name is still Blockhead; `$pref::Player::NamePrompted` remembers the answer.
+  Evidence: `cargo test -p bri-client --test player_name -- --ignored`
+  (drives the real Avatar screen, hosts LAN, joins over loopback, renames
+  live, checks the duplicate suffix, and the first-open prompt with a render
+  at `artifacts/native-player-name/first-open-name-prompt.png`); new tests in
+  `crates/sim/tests/session.rs`, `screens::avatar` and `screens::name`.
+  `cargo test --no-fail-fast` for bri-sim, bri-admin, bri-minigames, bri-net,
+  bri-ui and bri-client passed, except one bri-net LAN discovery test that lost
+  port 28050 to a parallel run and passed on rerun.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.

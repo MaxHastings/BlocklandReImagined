@@ -159,6 +159,9 @@ pub enum Command {
     ControlPlayer,
     /// The client's brick inventory state, which only it knows.
     BrickHand(BrickHand),
+    /// Avatar screen Done while connected: take this name now. v20 only
+    /// applied `$pref::Player::LANName` on the next join.
+    SetName(String),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatLine {
@@ -440,6 +443,12 @@ impl Session {
             !name.trim().is_empty() && name.len() <= 48 && !name.chars().any(char::is_control),
             "Invalid player name"
         );
+        // Bots share their kind's name; people get "Name 2", "Name 3"…
+        let name = if is_bot {
+            name
+        } else {
+            self.unique_name(&name, None)
+        };
         let owner = self.next_owner;
         let next = owner.checked_add(1).context("Owner IDs exhausted")?;
         let role = self.admin_connect(owner, name.clone(), trusted_host, is_bot, principal)?;
@@ -557,6 +566,7 @@ impl Session {
             saved_principal == principal,
             "Resume identity does not match authenticated ticket"
         );
+        let name = self.unique_name(&name, None);
         let role = self.admin_connect(owner, name.clone(), trusted_host, false, principal)?;
         let player = match Player::spawn(
             &mut self.simulation.physics,
@@ -645,6 +655,53 @@ impl Session {
             .iter()
             .map(|(id, p)| (*id, p.name.clone()))
             .collect()
+    }
+    /// `wanted` if no other connected player uses it (ignoring case), else
+    /// the first free "wanted 2", "wanted 3"… within the 48-byte limit.
+    fn unique_name(&self, wanted: &str, except: Option<OwnerId>) -> String {
+        let wanted = wanted.trim();
+        let taken = |candidate: &str| {
+            self.peers
+                .iter()
+                .any(|(id, p)| Some(*id) != except && p.name.eq_ignore_ascii_case(candidate))
+        };
+        if !taken(wanted) {
+            return wanted.to_string();
+        }
+        (2..=65u32)
+            .map(|n| {
+                let suffix = format!(" {n}");
+                let mut base = wanted;
+                while base.len() + suffix.len() > 48 {
+                    let mut chars = base.chars();
+                    chars.next_back();
+                    base = chars.as_str();
+                }
+                format!("{}{suffix}", base.trim_end())
+            })
+            .find(|candidate| !taken(candidate))
+            .unwrap_or_else(|| wanted.to_string())
+    }
+    /// A connected player changed their name (Avatar screen Done).
+    fn rename(&mut self, owner: OwnerId, wanted: &str) -> Result<()> {
+        ensure!(
+            !wanted.trim().is_empty()
+                && wanted.len() <= 48
+                && !wanted.chars().any(char::is_control),
+            "Invalid player name"
+        );
+        let name = self.unique_name(wanted, Some(owner));
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        if peer.name == name {
+            return Ok(());
+        }
+        let old = peer.name.clone();
+        let player = peer.combat.player;
+        self.admin.rename(owner, name.clone())?;
+        let _ = self.minigames.rename(player, name.clone());
+        self.peers.get_mut(&owner).context("Unknown connection")?.name = name.clone();
+        self.system_chat(format!("{old} is now known as {name}."));
+        Ok(())
     }
     pub fn chat(&self) -> Vec<ChatLine> {
         self.chat.iter().cloned().collect()
@@ -903,6 +960,10 @@ impl Session {
                     .context("Avatar catalog is not installed")?
                     .resolve(&appearance)?;
                 peer.avatar = Some(appearance);
+                Ok(Reply::Accepted)
+            }
+            Command::SetName(name) => {
+                self.rename(owner, &name)?;
                 Ok(Reply::Accepted)
             }
             Command::Plant {

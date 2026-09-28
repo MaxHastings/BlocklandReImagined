@@ -647,6 +647,16 @@ impl Administration {
     pub fn disconnect(&mut self, id: ConnectionId) {
         self.sessions.remove(&id);
     }
+    /// A connected player chose a new display name.
+    pub fn rename(&mut self, id: ConnectionId, display_name: String) -> Result<(), Error> {
+        validate_text(&display_name, 128)?;
+        if display_name.is_empty() {
+            return Err(Error::InvalidValue);
+        }
+        let session = self.sessions.get_mut(&id).ok_or(Error::UnknownConnection)?;
+        session.trusted.display_name = display_name;
+        Ok(())
+    }
     pub fn is_banned(&self, p: Principal, now: u64) -> bool {
         self.durable
             .bans
