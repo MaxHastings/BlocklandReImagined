@@ -232,6 +232,8 @@ foreach ($source in $modSources) {
 $docInputs = @(
     @{ source = (Join-Path $RepoRoot 'docs/PLAYTEST.md'); destination = 'PLAYTEST.md' },
     @{ source = (Join-Path $RepoRoot 'docs/KNOWN-ISSUES.md'); destination = 'KNOWN-ISSUES.md' },
+    @{ source = (Join-Path $RepoRoot 'docs/TESTER-GUIDE.md'); destination = 'TESTER-GUIDE.md' },
+    @{ source = (Join-Path $RepoRoot 'docs/FEATURES.md'); destination = 'FEATURES.md' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.ps1'); destination = 'Launch-Playtest.ps1' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' }
 )

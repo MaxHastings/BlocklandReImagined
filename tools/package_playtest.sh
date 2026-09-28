@@ -92,7 +92,7 @@ for field in "${fields[@]}"; do
     total_files=$((total_files + files))
     total_bytes=$((total_bytes + $(du -sb "$dir" | cut -f1)))
 done
-for doc in docs/PLAYTEST.md docs/KNOWN-ISSUES.md tools/launch_playtest.sh; do
+for doc in docs/PLAYTEST.md docs/KNOWN-ISSUES.md docs/TESTER-GUIDE.md docs/FEATURES.md tools/launch_playtest.sh; do
     [[ -f "$repo/$doc" ]] || die "required package file missing: $doc"
 done
 if [[ "$validate_only" -eq 1 ]]; then
@@ -109,7 +109,7 @@ mkdir -p "$release/content"
 trap 'rm -rf "$release"' ERR
 install -m 755 "$executable" "$release/bri-client"
 install -m 755 "$importer" "$release/bri-import-addon"
-cp "$repo/docs/PLAYTEST.md" "$repo/docs/KNOWN-ISSUES.md" "$release/"
+cp "$repo/docs/PLAYTEST.md" "$repo/docs/KNOWN-ISSUES.md" "$repo/docs/TESTER-GUIDE.md" "$repo/docs/FEATURES.md" "$release/"
 install -m 755 "$repo/tools/launch_playtest.sh" "$release/launch.sh"
 cp "$list" "$release/content/packages.json"
 for field in "${fields[@]}"; do

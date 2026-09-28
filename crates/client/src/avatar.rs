@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn item_mounts_use_the_same_sampled_avatar_pose_and_body_transform() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         assert!(mesh.world_node(&assets, "mount0").is_none());
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn held_and_action_arm_layers_keep_locomotion_and_mounts_coherent() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let arm_ready = assets
             .rig
@@ -1273,7 +1273,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn held_arm_pose_precedes_additive_look_and_pack_headup_layers() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut appearance = assets.package.defaults.clone();
         appearance
@@ -1331,7 +1331,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn rebuilt_outfit_continues_the_running_clip() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut kept = assets.mesh(assets.package.defaults.clone())?;
         let mut p = player();
@@ -1355,7 +1355,7 @@ mod tests {
     #[test]
     #[ignore = "requires the converted avatar pack"]
     fn seated_body_takes_the_mount_rotation() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let tilt = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(0.35);
@@ -1385,7 +1385,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn free_look_turns_only_the_head_toward_the_camera() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let mut p = player();
@@ -1408,7 +1408,7 @@ mod tests {
     #[test]
     #[ignore = "requires original native avatar package"]
     fn original_outfits_materials_and_customization_rules() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
         let assets = AvatarAssets::load(&root)?;
         let package = &assets.package;
         assert_eq!(

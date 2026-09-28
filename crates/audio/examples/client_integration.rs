@@ -2,11 +2,11 @@
 //! (offline output, nothing is played) so it is safe in CI:
 //!
 //! ```text
-//! cargo run --example client_integration -- content/audio-pack-001
+//! cargo run --example client_integration -- content/audio-pack-002
 //! ```
 //!
 //! Maxwell-only, audible (requires `--features cpal-output`):
-//! `cargo run --features cpal-output --example client_integration -- content/audio-pack-001 --device`
+//! `cargo run --features cpal-output --example client_integration -- content/audio-pack-002 --device`
 
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pack = args
         .get(1)
         .map(String::as_str)
-        .unwrap_or("content/audio-pack-001");
+        .unwrap_or("content/audio-pack-002");
     let want_device = args.iter().any(|a| a == "--device");
 
     // 1. Load once at startup (verifies hashes, preloads PCM, keeps music streamable).

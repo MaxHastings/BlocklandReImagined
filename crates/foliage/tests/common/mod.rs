@@ -6,7 +6,7 @@ pub fn root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 pub fn pack() -> FoliagePack {
-    FoliagePack::load(root().join("content/foliage-pack-001/foliage.json")).unwrap()
+    FoliagePack::load(root().join("content/foliage-pack-003/foliage.json")).unwrap()
 }
 pub fn floor(ray: PlacementRay) -> Option<SurfaceHit> {
     Some(SurfaceHit {

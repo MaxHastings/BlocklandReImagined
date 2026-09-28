@@ -376,7 +376,7 @@ impl TerrainStream {
     pub fn update(&mut self, physics: &mut PhysicsWorld) {
         let foci = bri_physics::terrain::body_foci(physics, self.policy);
         if self.colliders.update(physics, &foci).changed() {
-            physics.detect_collisions(&(), &());
+            bri_physics::detect_collisions(physics);
         }
     }
     /// Nearest exact terrain hit as (distance, normal), independent of loaded

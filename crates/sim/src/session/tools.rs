@@ -825,7 +825,10 @@ impl Session {
                     ToolHit {
                         target,
                         position: start + dir * hit.time_of_impact,
-                        normal: Vec3::from_array(hit.normal.to_array()),
+                        normal: crate::simulation::hit_normal(
+                            Vec3::from_array(hit.normal.to_array()),
+                            dir,
+                        ),
                     },
                 );
             }

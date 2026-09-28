@@ -100,6 +100,45 @@ install was modified.
 Prints, ramps, corners, wedges, crests and rounds use authored BLB UVs; the
 side-by-side below shows them matching (letters read correctly, not mirrored).
 
+## Paint colour changes ease in (2026-09-28)
+
+Maxwell remembered that bricks in v20 faded to a new colour when a paint
+was undone with Ctrl+Z, and maybe when painted too. The scripts do nothing
+special for either. `paintProjectile::OnCollision` and `serverCmdUndoBrick`'s
+`COLOR` branch both call `setColor`. The engine does the easing, and it
+applies to every colour change:
+
+- `fxDTSBrick::setColor` (0x534720) stores the colour ID (+0x364) and its
+  palette colour (+0x378), calls `onColorChange` on the server and sets mask
+  bit 8.
+- `fxDTSBrick::unpackUpdate` (0x541540) writes the new palette colour to the
+  target (+0x378) only. The first update sets the drawn colour (+0x388) too,
+  so a new brick starts in its own colour.
+- The per-frame brick render (0x53cc90) moves the drawn colour toward the
+  target. It takes `dt` as the seconds since the brick was last drawn,
+  clamped to 0.001..0.1, and uses `k = 4 * dt`. If `k >= 1`, the colour
+  snaps. Otherwise `drawn = drawn * (1 - k) + target * k` on all four
+  channels, and it snaps once every channel is within 0.01. A brick not
+  drawn for over 0.3 s also snaps.
+
+So the paint can, undo, wrench colour edits and `setColor` events all fade
+the same way. At 60 fps a change from black to white is about two thirds
+done after 0.25 s and settles after about 1.1 s. Colour FX, prints and
+shape FX switch at once. Planting is different: a new ghosted brick fades
+its alpha in (the +0x25d path, `k = 3 * dt` after 500 ms), which is not
+modelled here.
+
+Ours: `crates/client/src/brick_fade.rs` follows the same curve. The chunk
+mesh bakes paint into its vertices, so a changing brick is left out of its
+chunk (`ChunkedWorld::update_leaving_out`) and drawn alone with its current
+colour. This is like v20 taking a changed brick out of its static batch.
+Once the colour settles, the chunk takes the brick back before the separate
+mesh is dropped. At most 512 bricks fade at once, and further changes snap.
+A palette change, or a replica too far behind for the change log, settles
+every fade. Tests: `cargo test -p bri-client --lib brick_fade` (colour over
+time at 60 fps, clamps, repaint mid-fade, hand-back to the chunk) and
+`world_chunks` (leaving a brick out and taking it back).
+
 ## Side-by-side verification
 
 `cargo test -p bri-client --test brick_audit -- --ignored` renders sixteen

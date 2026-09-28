@@ -45,6 +45,8 @@ const SNAP_DISTANCE: f32 = 6.0;
 const CLOCK_SLEW: f64 = 0.05;
 /// Clock disagreements beyond this many ticks snap (a stall, a map change).
 const CLOCK_SNAP: f64 = 60.0;
+/// Larger disagreements close faster, over about this many seconds.
+const CLOCK_CATCH_UP: f64 = 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
@@ -195,12 +197,13 @@ impl Clock {
         let Some(offset) = self.offset else {
             return;
         };
-        let step = CLOCK_SLEW * seconds * TICK_RATE;
         let slew = |shown: f64, target: f64| {
-            if (target - shown).abs() > CLOCK_SNAP {
+            let error = target - shown;
+            let step = (CLOCK_SLEW * TICK_RATE).max(error.abs() / CLOCK_CATCH_UP) * seconds;
+            if error.abs() > CLOCK_SNAP {
                 target
             } else {
-                shown + (target - shown).clamp(-step, step)
+                shown + error.clamp(-step, step)
             }
         };
         let shown = self.shown.unwrap_or(offset);

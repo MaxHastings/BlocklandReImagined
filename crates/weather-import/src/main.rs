@@ -297,7 +297,11 @@ fn main() -> Result<()> {
         &mut files,
         "weather-import/atlas-adaptations.json",
         "manual_adaptation",
-        include_bytes!("../atlas-adaptations.json").to_vec(),
+        // As LF, whatever line endings this checkout gave the file: the pack
+        // copies and hashes it, and must be the same on every machine.
+        String::from_utf8_lossy(include_bytes!("../atlas-adaptations.json"))
+            .replace("\r\n", "\n")
+            .into_bytes(),
     );
     image_resource(
         &root,

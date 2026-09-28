@@ -41,7 +41,7 @@ fn sample(
 #[test]
 #[ignore = "requires original native avatar pack and offscreen GPU; no window"]
 fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Result<()> {
-    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
     let assets = AvatarAssets::load(&content)?;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
     let gpu = Headless::new()?;

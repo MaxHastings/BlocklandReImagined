@@ -6,6 +6,7 @@ pub mod app;
 pub mod audio;
 pub mod avatar;
 pub mod brick_debris;
+pub mod brick_fade;
 pub mod building;
 pub mod client_code;
 pub mod console;

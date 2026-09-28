@@ -8,7 +8,7 @@ fn original_inventory_and_embedded_alpha() {
     let p = pack();
     assert_eq!(p.definitions.len(), 2);
     assert_eq!(p.definitions.iter().map(|d| d.count).sum::<u32>(), 41000);
-    let images = p.images(root().join("content/foliage-pack-001")).unwrap();
+    let images = p.images(root().join("content/foliage-pack-003")).unwrap();
     for image in images {
         assert!(image.rgba.chunks_exact(4).any(|p| p[3] == 0));
         assert!(image.rgba.chunks_exact(4).any(|p| p[3] > 200));

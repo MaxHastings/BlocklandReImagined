@@ -177,7 +177,7 @@ fn stale_state_cannot_replace_authoritative_roles_and_secrets_redact_debug() {
 
 #[cfg(feature = "gpu")]
 #[test]
-#[ignore = "explicit offscreen source-skin inspection; requires content/ui-pack-003 and a headless GPU adapter"]
+#[ignore = "explicit offscreen source-skin inspection; requires content/ui-pack-004 and a headless GPU adapter"]
 fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
     use bri_ui::{
         api::Settings,
@@ -191,7 +191,7 @@ fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
     use std::{path::PathBuf, rc::Rc};
 
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack_dir = workspace.join("content/ui-pack-003");
+    let pack_dir = workspace.join("content/ui-pack-004");
     if !pack_dir.join("ui-pack.json").exists() {
         return Ok(());
     }

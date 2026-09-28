@@ -112,7 +112,7 @@ impl Building {
             .into_iter()
             .map(|collider| map.insert_collider(collider, None))
             .collect();
-        map.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut map);
         Ok(Self {
             archetypes: Default::default(),
             definitions,
@@ -185,12 +185,22 @@ impl Building {
             .map(|(handle, hit)| {
                 (
                     hit.time_of_impact,
-                    Vec3::from_array(hit.normal.to_array()),
+                    bri_sim::simulation::hit_normal(
+                        Vec3::from_array(hit.normal.to_array()),
+                        direction,
+                    ),
                     self.map.colliders[handle].user_data,
                 )
             });
-        let terrain = bri_sim::map::cast_terrain(&self.terrain, origin, direction, distance)
-            .map(|(time, normal)| (time, normal, bri_sim::map::MapSurface::Terrain as u128));
+        let terrain = bri_sim::map::cast_terrain(&self.terrain, origin, direction, distance).map(
+            |(time, normal)| {
+                (
+                    time,
+                    bri_sim::simulation::hit_normal(normal, direction),
+                    bri_sim::map::MapSurface::Terrain as u128,
+                )
+            },
+        );
         match (physical, terrain) {
             (Some(a), Some(b)) => Some(if b.0 < a.0 { b } else { a }),
             (a, b) => a.or(b),
@@ -800,9 +810,12 @@ impl Building {
                 nearest = Some(Hit {
                     brick: Some(id),
                     position: origin + direction * distance,
-                    normal: brick
-                        .transform()
-                        .transform_vector3(Vec3::from(normal.to_array())),
+                    normal: bri_sim::simulation::hit_normal(
+                        brick
+                            .transform()
+                            .transform_vector3(Vec3::from(normal.to_array())),
+                        direction,
+                    ),
                     distance,
                 });
             }
@@ -1087,7 +1100,8 @@ impl Building {
                 self.random_color = None;
                 self.equipment = Equipment::Paint(self.paint);
                 self.active_tool = None;
-                out.commands.push(Command::UseSprayCan { color: self.paint });
+                out.commands
+                    .push(Command::UseSprayCan { color: self.paint });
                 if let Some(ghost) = &mut self.ghost {
                     ghost.color = self.paint;
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
@@ -1819,10 +1833,14 @@ mod tests {
             let mut b = controller();
             b.map = PhysicsWorld::new();
             b.map.insert_collider(
-                ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(0.0, top - 0.5, 0.0)),
+                ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(
+                    0.0,
+                    top - 0.5,
+                    0.0,
+                )),
                 None,
             );
-            b.map.detect_collisions(&(), &());
+            bri_physics::detect_collisions(&mut b.map);
             b.ui_action(
                 &UiAction::InstantUseBrick {
                     brick: "plate".into(),
@@ -1844,7 +1862,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let definitions = Definitions::load(
             &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-007"),
+            &root.join("content/maps-pass-008"),
         )?;
         let mut b = Building::new(definitions, vec![])?;
         let ids: Vec<_> = b.definitions.entries.keys().cloned().collect();
@@ -2297,9 +2315,18 @@ mod tests {
         // The trigger is never released; the player switches and clicks again.
         choose(&mut b, 3, 2);
         let again = b.ui_action(&fire(), &player()).unwrap().unwrap().commands;
-        assert!(matches!(&again[..], [Command::WeaponTrigger { down: true }]));
+        assert!(matches!(
+            &again[..],
+            [Command::WeaponTrigger { down: true }]
+        ));
         b.command_sent(4, &again[0]).unwrap();
-        assert!(b.ui_action(&fire(), &player()).unwrap().unwrap().commands.is_empty());
+        assert!(
+            b.ui_action(&fire(), &player())
+                .unwrap()
+                .unwrap()
+                .commands
+                .is_empty()
+        );
     }
     #[test]
     fn queue_failure_and_slot_replacement_cannot_leave_a_pending_tool_grant() {

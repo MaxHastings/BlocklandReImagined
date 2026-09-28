@@ -94,7 +94,17 @@ impl Session {
                     break;
                 }
             }
-            let player = placed.context("No free spawn point on the new map")?;
+            // Every point taken (by bricks or the players placed before):
+            // place the body anyway, as a join does.
+            let player = match placed {
+                Some(player) => player,
+                None => Player::spawn_overlapping(
+                    &mut self.simulation.physics,
+                    owner,
+                    self.spawn_points.first().copied().unwrap_or(Vec3::ZERO),
+                    PlayerTuning::default(),
+                )?,
+            };
             self.spawn_inventory(owner)?;
             let combat = self.combat_connect(owner, &peer.name, peer.actor.administrator)?;
             let tick = self.simulation.state().tick;

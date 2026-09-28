@@ -9,12 +9,12 @@ use bri_ui::{
 use std::{path::PathBuf, rc::Rc};
 
 #[test]
-#[ignore = "requires content/ui-pack-003 (or BRI_CONTENT_ROOT)"]
+#[ignore = "requires content/ui-pack-004 (or BRI_CONTENT_ROOT)"]
 fn a_long_yes_no_question_is_shown_in_full() -> anyhow::Result<()> {
     let root = std::env::var_os("BRI_CONTENT_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content"));
-    let pack = Rc::new(Pack::load(&root.join("ui-pack-003"))?);
+    let pack = Rc::new(Pack::load(&root.join("ui-pack-004"))?);
     let mut ui = Ui::new(
         pack.clone(),
         UiConfig {

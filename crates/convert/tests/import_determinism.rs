@@ -157,3 +157,110 @@ fn map_bundle_is_identical_across_install_paths_and_orders() -> Result<()> {
     );
     Ok(())
 }
+
+fn zip_map(path: &Path, member: &str, text: &str) -> Result<()> {
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path)?);
+    let options =
+        zip::write::SimpleFileOptions::default().last_modified_time(zip::DateTime::default());
+    zip.start_file(member, options)?;
+    zip.write_all(text.as_bytes())?;
+    zip.finish()?;
+    Ok(())
+}
+
+fn sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!("{:x}", Sha256::digest(std::fs::read(path)?)))
+}
+
+#[test]
+fn geometry_pass_converts_only_the_reference_archives() -> Result<()> {
+    let base = std::env::temp_dir().join(format!(
+        "bri-reference-geometry-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let fixture = Fixture(base.clone());
+    let plain = fixture.0.join("plain/Blockland v20");
+    let busy = fixture.0.join("busy copy/v20");
+    for (root, reverse) in [(&plain, false), (&busy, true)] {
+        std::fs::create_dir_all(root.join("base"))?;
+        std::fs::create_dir_all(root.join("Add-Ons"))?;
+        let mut maps = [
+            ("Map_Bedroom.zip", "bedroom.mis", BEDROOM),
+            ("Map_Kitchen.zip", "kitchen.mis", KITCHEN),
+        ];
+        if reverse {
+            maps.reverse();
+        }
+        for (archive, member, text) in maps {
+            zip_map(&root.join("Add-Ons").join(archive), member, text)?;
+        }
+    }
+    // Someone's folder also holds a community map, a lighting cache and a
+    // thumbnail cache. None of it belongs to the reference.
+    zip_map(
+        &busy.join("Add-Ons/Map_Extra.zip"),
+        "extra.mis",
+        "new SimGroup(MissionGroup) { new Sun() { azimuth = \"5\"; }; };",
+    )?;
+    std::fs::create_dir_all(busy.join("Add-Ons/Map_Bedroom"))?;
+    std::fs::write(
+        busy.join("Add-Ons/Map_Bedroom/bedroom_ce7dd2f0.ml"),
+        b"cache",
+    )?;
+    std::fs::write(busy.join("Add-Ons/Thumbs.db"), b"cache")?;
+
+    let inventory = base.join("inventory.json");
+    let packages: Vec<serde_json::Value> = ["Map_Bedroom.zip", "Map_Kitchen.zip"]
+        .iter()
+        .map(|a| -> Result<serde_json::Value> {
+            Ok(serde_json::json!({
+                "path": format!("Add-Ons/{a}"),
+                "sha256": sha256(&plain.join("Add-Ons").join(a))?,
+            }))
+        })
+        .collect::<Result<_>>()?;
+    std::fs::write(
+        &inventory,
+        serde_json::to_vec(&serde_json::json!({ "packages": packages }))?,
+    )?;
+
+    let convert = |root: &Path, out: &Path| -> Result<()> {
+        let output = Command::new(env!("CARGO_BIN_EXE_bri-convert"))
+            .arg(root)
+            .arg(out)
+            .arg("--reference")
+            .arg(&inventory)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    };
+    convert(&plain, &base.join("geometry-1"))?;
+    convert(&busy, &base.join("geometry-2"))?;
+    assert_eq!(
+        hash_dir(&base.join("geometry-1"))?,
+        hash_dir(&base.join("geometry-2"))?,
+        "extra add-ons changed the geometry pass"
+    );
+
+    // A changed reference archive would convert differently: refuse it.
+    zip_map(
+        &busy.join("Add-Ons/Map_Kitchen.zip"),
+        "kitchen.mis",
+        "new SimGroup(MissionGroup) { };",
+    )?;
+    let error = convert(&busy, &base.join("geometry-3")).unwrap_err();
+    let manifest = std::fs::read_to_string(base.join("geometry-3/manifest.json"))?;
+    assert!(
+        manifest.contains("differs from the v20 reference archive"),
+        "{error:#}\n{manifest}"
+    );
+    Ok(())
+}

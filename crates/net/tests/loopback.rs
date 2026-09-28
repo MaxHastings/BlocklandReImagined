@@ -1375,7 +1375,7 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
 #[ignore = "requires converted original avatar catalog"]
 async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Result<()> {
     let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-001");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
     let package: bri_content::avatar::Package =
         serde_json::from_slice(&std::fs::read(root.join("avatar.json"))?)?;
     let mut session = session();
