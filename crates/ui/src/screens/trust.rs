@@ -16,7 +16,7 @@ impl TrustInvite {
         s
     }
     fn refresh(&mut self, core: &Core) {
-        let Some(invite) = &core.trust_invite else {
+        let Some(invite) = core.trust_invites.last() else {
             return;
         };
         let build = invite.level == 1;
@@ -37,13 +37,17 @@ impl TrustInvite {
         }
     }
 }
-/// Answer the open invitation and close the dialog.
+/// Answer one invitation; the dialog closes once none are left, and shows
+/// the next one otherwise.
 pub fn answer(core: &mut Core, from: u64, answer: TrustAnswer) {
-    if core.trust_invite.as_ref().is_some_and(|i| i.from == from) {
-        core.trust_invite = None;
+    if core.trust_invites.iter().any(|i| i.from == from) {
+        core.trust_invites.retain(|i| i.from != from);
         core.request(UiAction::AnswerTrustInvite { from, answer });
     }
     core.pop(ScreenId::TrustInvitation);
+    if !core.trust_invites.is_empty() {
+        core.push(ScreenId::TrustInvitation);
+    }
 }
 impl Screen for TrustInvite {
     fn id(&self) -> ScreenId {
@@ -58,11 +62,19 @@ impl Screen for TrustInvite {
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
     }
+    fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
+        if key == Key::Escape {
+            core.pop(self.id());
+            true
+        } else {
+            false
+        }
+    }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
         if ev.kind != EventKind::Click || !self.view.node(ev.node).state.active {
             return;
         }
-        let Some(from) = core.trust_invite.as_ref().map(|i| i.from) else {
+        let Some(from) = core.trust_invites.last().map(|i| i.from) else {
             core.pop(self.id());
             return;
         };

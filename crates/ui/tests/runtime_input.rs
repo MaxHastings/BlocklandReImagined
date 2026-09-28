@@ -127,6 +127,15 @@ fn fixture() -> Rc<Pack> {
         }),
         ("LoadingGui", vec![]),
         ("defaultControlsGui", vec![]),
+        (
+            "TrustInviteGui",
+            vec![node(
+                "GuiButtonCtrl",
+                "accept",
+                10,
+                "TrustInviteGui.clickAccept();",
+            )],
+        ),
     ] {
         let mut c = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
         c.children = children;
@@ -796,4 +805,39 @@ fn the_player_list_key_closes_the_list_it_opened() {
     down(&mut u, Key::F(2));
     u.update(16);
     assert_eq!(u.top_id(), ScreenId::Play);
+}
+
+#[test]
+fn trust_invites_queue_like_mini_game_invites_and_escape_closes_them() {
+    let mut u = ui();
+    play(&mut u);
+    for (from, name) in [(2, "Alpha"), (3, "Bravo")] {
+        u.apply(UiUpdate::TrustInvite(TrustInvitation {
+            from,
+            name: name.into(),
+            bl_id: from.to_string(),
+            level: 1,
+        }));
+    }
+    u.update(16);
+    assert_eq!(u.top_id(), ScreenId::TrustInvitation);
+    // The second invite waits behind the first instead of replacing it.
+    click(&mut u, ScreenId::TrustInvitation, "accept");
+    u.update(16);
+    let a = actions(&mut u);
+    assert!(a.contains(&UiAction::AnswerTrustInvite {
+        from: 3,
+        answer: TrustAnswer::Accept
+    }));
+    assert_eq!(u.top_id(), ScreenId::TrustInvitation);
+    assert_eq!(u.core.trust_invites.len(), 1);
+    // Escape closes the dialog without answering, as for mini-game invites.
+    down(&mut u, Key::Escape);
+    u.update(16);
+    assert_eq!(u.top_id(), ScreenId::Play);
+    assert!(
+        !actions(&mut u)
+            .iter()
+            .any(|a| matches!(a, UiAction::AnswerTrustInvite { .. }))
+    );
 }

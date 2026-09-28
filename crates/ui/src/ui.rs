@@ -237,7 +237,9 @@ pub struct Core {
     pub admin: crate::models::admin::AdminModel,
     pub minigames: MiniGameUiState,
     /// Open `TrustInviteGui` invitation.
-    pub trust_invite: Option<crate::api::TrustInvitation>,
+    /// Open trust invitations, newest last, one per sender, like mini-game
+    /// invitations: the dialog shows the newest and Escape leaves them open.
+    pub trust_invites: Vec<crate::api::TrustInvitation>,
     /// Other players' names this frame (`GuiShapeNameHud`).
     pub name_tags: Vec<crate::api::NameTag>,
     /// HUD panels of enabled packages this frame (the `hud.overlay` slot).
@@ -995,7 +997,7 @@ impl Ui {
             players: Vec::new(),
             admin: Default::default(),
             minigames: MiniGameUiState::default(),
-            trust_invite: None,
+            trust_invites: Vec::new(),
             name_tags: Vec::new(),
             package_panels: Vec::new(),
             package_keys: Vec::new(),
@@ -1441,7 +1443,8 @@ impl Ui {
                 action,
             } => c.message_yes_no(&title, &text, Callback::Request(action)),
             UiUpdate::TrustInvite(invitation) => {
-                c.trust_invite = Some(invitation);
+                c.trust_invites.retain(|i| i.from != invitation.from);
+                c.trust_invites.push(invitation);
                 c.pop(ScreenId::TrustInvitation);
                 c.push(ScreenId::TrustInvitation);
             }
