@@ -3055,3 +3055,24 @@ real integrated GPU; needs a weaker PC.
   toggles, gamepad) follow on the same branch. Evidence: `cargo test
   --release -p bri-sim --test hardening_session`, `-p bri-world --lib
   persistence`, `-p bri-ui`.
+- 2026-09-28 baseplate gap on Bedroom's carpet (a15 report). Cause: bricks
+  stack on a 0.2 plate lattice from height zero, and map floors are off it
+  (Bedroom carpet 286.312, Kitchen spawn floor 119.784, Tutorial 94.406 and
+  102.406), so a baseplate rested on the next plane up, 0.088 above the
+  carpet. Not an Add-On leak: the lattice is `grid::CELL`, a constant no
+  package script can reach. v20 behaves the same: all 13 stock Bedroom saves
+  put baseplates at 286.4, and v20's stock layouts sit on the nearest plane
+  to each floor (Tutorial bricks dip 0.006, Pirate World 0.034). Fix:
+  `Scene::floor_lift` moves the whole map so the interior floor under the
+  first spawn lies on the nearest plane (Bedroom +0.088, Kitchen +0.016,
+  Tutorial -0.006; terrain maps and the Slate family unmoved). `NativeMap::load`
+  and `load_map_bundle` apply the same lift to scene nodes, terrain origins
+  and water volumes, so collision and view agree and no brick coordinates
+  change. Other surfaces keep their offset: Bedroom's 354.062 furniture top
+  goes from a 0.062 dip to 0.15 (Beta City 16, Mansion, Facechild's House),
+  Kitchen's main floor stays 0.1 off. Evidence (BRI_CONTENT set, ignored
+  tests): `-p bri-sim --test floor_flush_native` (a plate on each of 13 map
+  floors flush; The Slopes is terrain), `--test stock_saves_native` (all 35
+  reference worlds and both Tutorial layouts load with every brick; nothing
+  over Bedroom's carpet hovers), `-p bri-render --test map_floor`,
+  `-p bri-content --lib scene`, `-p bri-sim --lib`.

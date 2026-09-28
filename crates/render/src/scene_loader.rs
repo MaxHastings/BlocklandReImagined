@@ -200,7 +200,7 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
         .iter()
         .find(|m| m["id"].as_str() == Some(map_id))
         .with_context(|| format!("Map {map_id} not present in native bundle"))?;
-    let scene: Scene = serde_json::from_slice(&read(
+    let mut scene: Scene = serde_json::from_slice(&read(
         &root,
         record["file"]
             .as_str()
@@ -210,6 +210,30 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
         scene.schema_version == 1 && scene.id == map_id,
         "Invalid native map scene identity/schema"
     );
+    let mut interiors = BTreeMap::new();
+    for node in scene
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::Interior))
+    {
+        let id = node
+            .asset
+            .as_deref()
+            .context("Interior placement has no native asset")?;
+        if !interiors.contains_key(id) {
+            let interior: Interior = serde_json::from_slice(&read(
+                &root,
+                bundle["assets"][id]
+                    .as_str()
+                    .context("Interior asset missing from bundle")?,
+            )?)?;
+            interior.validate()?;
+            interiors.insert(id.to_owned(), interior);
+        }
+    }
+    // The same lift `NativeMap::load` applies, so collision and view agree.
+    let lift = scene.floor_lift(|id| interiors.get(id));
+    scene.lift(lift);
     let bindings = bundle["bindings"]
         .as_array()
         .context("Native texture bindings missing")?;
@@ -281,8 +305,8 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
         out.omissions
             .push("Native environment binding missing: authored sky/cloud/fog not rendered".into());
     }
-    let fields = terrain_fields(&root, &bundle, &scene)?;
-    let water_bound = load_waters(&root, &bundle, &scene, &fields, &mut out, &mut cache)?;
+    let fields = terrain_fields(&root, &bundle, &scene, lift)?;
+    let water_bound = load_waters(&root, &bundle, &scene, lift, &fields, &mut out, &mut cache)?;
     let terrain = fields
         .iter()
         .map(|field| {
@@ -300,7 +324,10 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
     for (node_index, node) in scene.nodes.iter().enumerate() {
         let first = out.indices.len() as u32;
         match node.kind {
-            Kind::Interior=>load_interior(&root,&bundle,bindings,&scene,node_index,node,&mut out,&mut cache)?,
+            Kind::Interior=>{
+                let interior = &interiors[node.asset.as_deref().context("Interior placement has no native asset")?];
+                load_interior(&root,&bundle,bindings,&scene,node_index,node,interior,&mut out,&mut cache)?
+            }
             Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>{
                 load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?;
                 shape_indices.insert(u32::try_from(node_index)?, first..out.indices.len() as u32);
@@ -321,8 +348,13 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
     })
 }
 
-fn terrain_fields(root: &Path, bundle: &Value, scene: &Scene) -> Result<Vec<Arc<TerrainField>>> {
-    let instances: Vec<TerrainInstance> = match bundle
+fn terrain_fields(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+    lift: f32,
+) -> Result<Vec<Arc<TerrainField>>> {
+    let mut instances: Vec<TerrainInstance> = match bundle
         .get("terrains")
         .context("Map bundle has no converted terrain instances")?
         .get(&scene.id)
@@ -332,6 +364,9 @@ fn terrain_fields(root: &Path, bundle: &Value, scene: &Scene) -> Result<Vec<Arc<
         }
         None => Vec::new(),
     };
+    for instance in &mut instances {
+        instance.origin[1] += lift;
+    }
     bri_content::terrain_field::map_fields(scene, instances, |id| {
         Ok(serde_json::from_slice::<Terrain>(&read(
             root,
@@ -342,10 +377,12 @@ fn terrain_fields(root: &Path, bundle: &Value, scene: &Scene) -> Result<Vec<Arc<
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn load_waters(
     root: &Path,
     bundle: &Value,
     scene: &Scene,
+    lift: f32,
     fields: &[Arc<TerrainField>],
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
@@ -353,7 +390,11 @@ fn load_waters(
     let Some(records) = bundle.get("waters").and_then(|w| w.get(&scene.id)) else {
         return Ok(false);
     };
-    let waters: Vec<bri_content::water::Water> = serde_json::from_value(records.clone())?;
+    let mut waters: Vec<bri_content::water::Water> = serde_json::from_value(records.clone())?;
+    for water in &mut waters {
+        water.min[1] += lift;
+        water.max[1] += lift;
+    }
     let expected: Vec<_> = scene
         .nodes
         .iter()
@@ -544,6 +585,7 @@ fn load_interior(
     scene: &Scene,
     node_index: usize,
     node: &Node,
+    interior: &Interior,
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
 ) -> Result<()> {
@@ -551,13 +593,6 @@ fn load_interior(
         .asset
         .as_deref()
         .context("Interior placement has no native asset")?;
-    let interior: Interior = serde_json::from_slice(&read(
-        root,
-        bundle["assets"][id]
-            .as_str()
-            .context("Interior asset missing from bundle")?,
-    )?)?;
-    interior.validate()?;
     let detail = &interior.details[0];
     let placement = transform(node)?;
     let normal_transform = placement.inverse().transpose();

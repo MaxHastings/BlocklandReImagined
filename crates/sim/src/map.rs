@@ -142,7 +142,7 @@ impl NativeMap {
             .iter()
             .find(|m| m["id"].as_str() == Some(map_id))
             .context("Unknown native map")?;
-        let scene: Scene = serde_json::from_slice(&std::fs::read(native_file(
+        let mut scene: Scene = serde_json::from_slice(&std::fs::read(native_file(
             root,
             entry["file"].as_str().context("Missing scene filename")?,
         )?)?)?;
@@ -150,14 +150,37 @@ impl NativeMap {
             scene.schema_version == 1 && scene.id == map_id,
             "Native map schema/identity mismatch"
         );
+        let mut interiors = std::collections::BTreeMap::new();
+        for node in scene
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, Kind::Interior))
+        {
+            let id = node.asset.as_ref().context("Missing interior reference")?;
+            if !interiors.contains_key(id) {
+                let file = native_file(
+                    root,
+                    bundle["assets"][id]
+                        .as_str()
+                        .context("Missing native interior file")?,
+                )?;
+                let interior: Interior = serde_json::from_slice(&std::fs::read(file)?)?;
+                interior.validate()?;
+                interiors.insert(id.clone(), interior);
+            }
+        }
+        let lift = scene.floor_lift(|id| interiors.get(id));
+        scene.lift(lift);
         let mut colliders = Vec::new();
-        let waters: Vec<bri_content::water::Water> = bundle
+        let mut waters: Vec<bri_content::water::Water> = bundle
             .get("waters")
             .and_then(|w| w.get(map_id))
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
             .unwrap_or_default();
-        for water in &waters {
+        for water in &mut waters {
+            water.min[1] += lift;
+            water.max[1] += lift;
             water.validate()?;
             ensure!(
                 scene
@@ -196,14 +219,7 @@ impl NativeMap {
             match node.kind {
                 Kind::Interior => {
                     let id = node.asset.as_ref().context("Missing interior reference")?;
-                    let file = native_file(
-                        root,
-                        bundle["assets"][id]
-                            .as_str()
-                            .context("Missing native interior file")?,
-                    )?;
-                    let interior: Interior = serde_json::from_slice(&std::fs::read(file)?)?;
-                    interior.validate()?;
+                    let interior = &interiors[id];
                     colliders.push(
                         bri_physics::content::interior_collider(&interior.details[0], transform)?
                             .user_data(MapSurface::Interior as u128),
@@ -253,7 +269,7 @@ impl NativeMap {
                 _ => {}
             }
         }
-        let instances: Vec<TerrainInstance> = match bundle
+        let mut instances: Vec<TerrainInstance> = match bundle
             .get("terrains")
             .context("Map bundle has no converted terrain instances")?
             .get(map_id)
@@ -263,6 +279,9 @@ impl NativeMap {
             }
             None => Vec::new(),
         };
+        for instance in &mut instances {
+            instance.origin[1] += lift;
+        }
         let terrain = bri_content::terrain_field::map_fields(&scene, instances, |id| {
             let file = native_file(
                 root,
