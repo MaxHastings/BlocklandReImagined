@@ -208,6 +208,9 @@ pub enum Command {
     /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
     /// being typed in, shown to everyone above the chat.
     Talking(bool),
+    /// `SteeringPrefsEvent`: the client's `$pref::Input::UseStrafeSteering`
+    /// and `$pref::Input::UseAutoReturnSteering` (both on until it says).
+    SteeringPrefs { strafe: bool, auto_return: bool },
     /// A ghost-brick move, which stays client-side; the server only animates
     /// the builder.
     BuildGesture(BuildGesture),
@@ -272,7 +275,8 @@ impl Command {
             | Command::GhostBrick(_)
             // v20's emote commands quietly do nothing without a body.
             | Command::Emote(_)
-            | Command::Talking(_) => (false, None),
+            | Command::Talking(_)
+            | Command::SteeringPrefs { .. } => (false, None),
         };
         Preconditions { alive, build }
     }
@@ -947,6 +951,7 @@ impl Session {
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
         self.trust_disconnect(owner);
+        self.set_steering_prefs(owner, true, true);
         Ok(())
     }
     /// Call only after the transport authenticates its server-issued resume token.
@@ -1503,6 +1508,13 @@ impl Session {
             }
             Command::Talking(talking) => {
                 peer.talking = talking;
+                Ok(Reply::Accepted)
+            }
+            Command::SteeringPrefs {
+                strafe,
+                auto_return,
+            } => {
+                self.set_steering_prefs(owner, strafe, auto_return);
                 Ok(Reply::Accepted)
             }
 

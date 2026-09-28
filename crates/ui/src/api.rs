@@ -621,6 +621,12 @@ pub enum UiAction {
         args: Vec<String>,
     },
     StartTyping,
+    /// `SteeringPrefsEvent`: `$pref::Input::UseStrafeSteering` and
+    /// `$pref::Input::UseAutoReturnSteering`, sent on joining and on change.
+    SteeringPrefs {
+        strafe: bool,
+        auto_return: bool,
+    },
     StopTyping,
     /// Brick selector DONE: buy all ten slots (brick ids, `None` = empty).
     BuyBricks {

@@ -376,6 +376,8 @@ pub struct App {
     runtime: tokio::runtime::Runtime,
     attempt: Option<Attempt>,
     cpu_scene: Option<SceneData>,
+    /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
+    steering_sent: Option<(RequestId, (bool, bool))>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<SceneRenderer>,
     effects: crate::effects::WorldEffects,
@@ -1322,6 +1324,7 @@ impl App {
             ghost_report: None,
             remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
+            steering_sent: None,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -4197,6 +4200,15 @@ fn server_markup(text: &str) -> String {
     out
 }
 
+/// `$pref::Input::UseStrafeSteering` and `$pref::Input::UseAutoReturnSteering`
+/// (both on by default in v20's defaults.cs).
+fn steering_prefs(prefs: &bri_ui::prefs::Prefs) -> (bool, bool) {
+    (
+        prefs.bool_or("$pref::Input::UseStrafeSteering", true),
+        prefs.bool_or("$pref::Input::UseAutoReturnSteering", true),
+    )
+}
+
 /// `handleYourSpawn`'s `$pref::Input::AutoLight` test: every spawn under a
 /// sun whose red, green and blue are all below 0.4 turns the light on.
 pub fn dark_sun(color: [f32; 3]) -> bool {
@@ -4443,6 +4455,16 @@ impl PlatformApp for App {
             prefs.bool_or("$pref::Input::MouseInvert", false),
             prefs.bool_or("$Pref::Input::VehicleMouseInvert", true),
         );
+        let steering = steering_prefs(prefs);
+        if let Some(a) = self.attempt.as_ref().filter(|a| a.entered)
+            && self.steering_sent != Some((a.id, steering))
+        {
+            self.steering_sent = Some((a.id, steering));
+            self.ui.core.request(UiAction::SteeringPrefs {
+                strafe: steering.0,
+                auto_return: steering.1,
+            });
+        }
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -4525,7 +4547,10 @@ impl PlatformApp for App {
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
                     Some((
-                        d.seat_role(usize::from(seat)),
+                        d.seat_role_for(
+                            usize::from(seat),
+                            steering_prefs(&self.ui.core.prefs).0,
+                        ),
                         forward.x.atan2(-forward.z),
                         forward.y.clamp(-1.0, 1.0).asin(),
                         seat_yaw,
@@ -5751,6 +5776,26 @@ impl PlatformApp for App {
                         String::new(),
                         String::new(),
                         String::new(),
+                    );
+                    if result.is_ok() {
+                        continue;
+                    }
+                    result
+                }
+                UiAction::SteeringPrefs {
+                    strafe,
+                    auto_return,
+                } => {
+                    if self.network_view().is_none() {
+                        continue;
+                    }
+                    let result = self.command(
+                        id,
+                        Command::SteeringPrefs {
+                            strafe,
+                            auto_return,
+                        },
+                        action.clone(),
                     );
                     if result.is_ok() {
                         continue;
