@@ -458,6 +458,13 @@ impl Session {
                     "`{package}` already has {MAX_PACKAGE_VEHICLES} vehicles out"
                 );
                 let owner = owner.filter(|o| self.peers.contains_key(o));
+                // Add-On vehicles count toward the server's vehicle limits.
+                if let Err(text) = self.vehicle_room(owner.unwrap_or(0), &definition) {
+                    if let Some(owner) = owner {
+                        self.notify(owner, Notice::Center { text: text.clone(), seconds: 2.0 });
+                    }
+                    anyhow::bail!("{}", text.trim_start_matches('\u{E000}'));
+                }
                 let transform = veh::Transform {
                     position,
                     rotation: glam::Quat::from_rotation_y(-yaw).to_array(),

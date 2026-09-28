@@ -1847,21 +1847,19 @@ impl Session {
             Some(reach) => {
                 let eye = peer.player.eye();
                 let hit = self.simulation.target(eye, direction, reach)?;
-                // A movable object in front of the brick is what is aimed at.
+                // Also the nearest movable object before the brick, reported
+                // beside it: a script aiming at bricks sees what it did.
                 let object = self
                     .aim_object(owner, eye, direction, hit.as_ref().map_or(reach, |h| h.distance))
-                    .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance));
-                match (hit, object) {
-                    (_, Some((object, position, distance))) => Some(script::Aim {
-                        brick: None,
-                        tag: None,
-                        look: None,
-                        position: position.to_array(),
+                    .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
+                    .map(|(object, at, distance)| script::AimObject {
+                        object,
+                        position: at.to_array(),
                         distance,
-                        object: Some(object),
                         movable: self.may_move(owner, object),
-                    }),
-                    (Some(hit), None) => Some(script::Aim {
+                    });
+                match hit {
+                    Some(hit) => Some(script::Aim {
                         look: hit
                             .brick
                             .and_then(|b| self.simulation.state().bricks.get(&b)?.look.clone())
@@ -1876,10 +1874,16 @@ impl Session {
                         brick: hit.brick,
                         position: hit.position.to_array(),
                         distance: hit.distance,
-                        object: None,
-                        movable: false,
+                        object,
                     }),
-                    (None, None) => None,
+                    None => object.map(|o| script::Aim {
+                        brick: None,
+                        tag: None,
+                        look: None,
+                        position: o.position,
+                        distance: o.distance,
+                        object: Some(o),
+                    }),
                 }
             }
             None => None,

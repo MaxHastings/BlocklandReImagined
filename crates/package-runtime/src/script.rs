@@ -107,11 +107,17 @@ pub struct Aim {
     pub look: Option<(String, String)>,
     pub position: [f32; 3],
     pub distance: f32,
-    /// The movable object the aim met before any brick, and whether the
-    /// caller may move it under the minigame and trust rules.
+    /// The movable object the aim met before any brick.
     #[serde(default)]
-    pub object: Option<ObjectRef>,
-    #[serde(default)]
+    pub object: Option<AimObject>,
+}
+/// A movable object an aim met, and whether the caller may move it under
+/// the minigame and trust rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AimObject {
+    pub object: ObjectRef,
+    pub position: [f32; 3],
+    pub distance: f32,
     pub movable: bool,
 }
 /// Read-only game facts for one tick.
@@ -428,9 +434,19 @@ fn register_api(engine: &mut Engine) {
                     (
                         "object",
                         a.object
-                            .map_or(Dynamic::UNIT, |o| Dynamic::from(o.to_string())),
+                            .as_ref()
+                            .map_or(Dynamic::UNIT, |o| Dynamic::from(o.object.to_string())),
                     ),
-                    ("movable", a.movable.into()),
+                    (
+                        "movable",
+                        a.object.as_ref().is_some_and(|o| o.movable).into(),
+                    ),
+                    (
+                        "object_distance",
+                        a.object
+                            .as_ref()
+                            .map_or(Dynamic::UNIT, |o| Dynamic::from_float(o.distance as f64)),
+                    ),
                 ])
             }))
         })

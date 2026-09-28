@@ -162,7 +162,6 @@ fn mining_economy_runs_on_server_state_only() {
             position: [0.0; 3],
             distance: 2.0,
             object: None,
-            movable: false,
         });
         c.state = state.clone();
         let out = runtime

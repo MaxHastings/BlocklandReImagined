@@ -16,6 +16,7 @@ use bri_client_sandbox::{
 };
 use bri_package::packages::{PackageSet, Side};
 use std::path::Path;
+use std::sync::Arc;
 
 struct Running {
     addon: AddOn,
@@ -208,9 +209,27 @@ impl ClientCode {
         }
     }
 
+    /// Whether any running Add-On reads the world (`world.read`), so the
+    /// game builds a [`bri_client_sandbox::World`] only when one does.
+    pub fn reads_world(&self) -> bool {
+        self.running.iter().any(|r| {
+            self.code.iter().any(|c| {
+                c.id == r.addon.id
+                    && c.capabilities
+                        .contains(&bri_client_sandbox::Capability::WorldRead)
+            })
+        })
+    }
+
     /// Run every Add-On's `frame` for the frame rendered at `now` (seconds
     /// on any steady clock).
-    pub fn run_frame(&mut self, now: f64, eye: glam::Vec3, forward: glam::Vec3) {
+    pub fn run_frame(
+        &mut self,
+        now: f64,
+        eye: glam::Vec3,
+        forward: glam::Vec3,
+        world: Arc<bri_client_sandbox::World>,
+    ) {
         let dt = self
             .last
             .map_or(0.0, |last| (now - last).clamp(0.0, 0.25) as f32);
@@ -223,6 +242,7 @@ impl ClientCode {
                 dt,
                 eye: eye.to_array(),
                 forward: forward.to_array(),
+                world: world.clone(),
                 ..Default::default()
             };
             let name = r.addon.name.clone();
@@ -350,6 +370,76 @@ impl ClientCode {
     }
 }
 
+/// What the game shows this frame, for Add-On code that reads the world:
+/// players and vehicles where they are drawn, the public Add-On state the
+/// player receives, and the scene's lighting.
+pub fn world_view(
+    view: &crate::network::View,
+    players: &std::collections::BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    vehicles: &crate::vehicles::ClientVehicles,
+    assets: &crate::vehicles::VehicleAssets,
+    camera: &bri_render::scene::Camera,
+) -> bri_client_sandbox::World {
+    use bri_client_sandbox::world::{AddOnState, Environment, Player, Vehicle, World};
+    let players = players
+        .iter()
+        .map(|(owner, state)| Player {
+            id: *owner,
+            alive: view.vitals.get(owner).is_none_or(|v| v.alive),
+            feet: state.feet,
+            eye: view.archetypes.eye(state).to_array(),
+            look: state.forward().to_array(),
+            velocity: state.velocity,
+        })
+        .collect();
+    let vehicles = view
+        .vehicles
+        .values()
+        .filter(|info| !info.destroyed)
+        .filter_map(|info| {
+            let frame = vehicles.frame(info.id)?;
+            let radius = assets.definition(&info.definition).map_or(1.0, |d| {
+                (glam::Vec3::from(d.bounds_max) - glam::Vec3::from(d.bounds_min)).length() * 0.5
+            });
+            Some(Vehicle {
+                id: info.id,
+                definition: info.definition.clone(),
+                position: frame.position.to_array(),
+                rotation: frame.rotation.to_array(),
+                velocity: frame.velocity.to_array(),
+                radius,
+            })
+        })
+        .collect();
+    let state = view
+        .package_state
+        .packages
+        .iter()
+        .map(|(id, ns)| {
+            (
+                id.clone(),
+                AddOnState {
+                    global: ns.global.clone(),
+                    players: ns.players.clone(),
+                },
+            )
+        })
+        .collect();
+    let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
+    World {
+        local: view.owner,
+        players,
+        vehicles,
+        state,
+        environment: Environment {
+            sun_direction: rgb(camera.sun_direction),
+            sun_color: rgb(camera.sun_color),
+            ambient: rgb(camera.ambient),
+            sky: rgb(camera.fog_color),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,7 +470,7 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         code.start(Host::Local, state.path());
         assert_eq!(code.running(), ["Spinning Cube"]);
-        code.run_frame(0.0, glam::Vec3::new(10.0, 2.0, 5.0), glam::Vec3::X);
+        code.run_frame(0.0, glam::Vec3::new(10.0, 2.0, 5.0), glam::Vec3::X, Default::default());
         let placed = code.running[0].frame.draws[0].model;
         // Three units ahead of where the camera was.
         assert_eq!([placed[12], placed[14]], [13.0, 5.0]);
@@ -428,7 +518,7 @@ mod tests {
         let messages = code.take_messages();
         assert!(messages[0].contains("graphics card reset"), "{messages:?}");
         // Frames and draws carry on as for a server with no code.
-        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X);
+        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default());
         assert!(code.is_started());
     }
 
@@ -442,7 +532,7 @@ mod tests {
         let mut code = ClientCode::load(&root, &empty);
         let state = tempfile::tempdir().unwrap();
         code.start(Host::Remote(HOST), state.path());
-        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X);
+        code.run_frame(0.0, glam::Vec3::ZERO, glam::Vec3::X, Default::default());
         assert!(code.running().is_empty());
         assert!(code.take_messages().is_empty());
         // Nothing was calibrated or written.

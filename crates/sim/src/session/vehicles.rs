@@ -302,63 +302,24 @@ impl Session {
         let bri_world::ContentRef::Resolved(definition) = &spawn.vehicle else {
             return Ok(());
         };
-        let Some(world) = &self.vehicles.world else {
-            return Ok(());
-        };
-        let Some(def) = world.definition(definition) else {
-            return Ok(());
-        };
-        // `fxDTSBrick::spawnVehicle`: the server's totals, player-type
-        // mounts (horses, boats, cannons, turrets) apart from physics
-        // vehicles (`$Pref::Server::MaxPlayerVehicles_Total` and
-        // `MaxPhysVehicles_Total`).
-        let actor = def.is_actor();
-        let settings = &self.admin.settings;
-        let (limit, noun) = if actor {
-            (settings.player_vehicles, "player-vehicle")
-        } else {
-            (settings.physics_vehicles, "physics-vehicle")
-        };
-        let snapshot = world.snapshot(&self.simulation.physics);
-        let same_kind: Vec<_> = snapshot
+        if self
             .vehicles
-            .iter()
-            .filter(|v| {
-                world
-                    .definition(&v.definition)
-                    .is_some_and(|d| d.is_actor() == actor)
-            })
-            .collect();
-        // Before the totals, an Internet server's per-builder quota
-        // (`$Pref::Server::Quota::Vehicle` and `Quota::Player`).
-        let quota = if actor {
-            settings.per_player.players
-        } else {
-            settings.per_player.vehicles
-        };
-        let owned = same_kind
-            .iter()
-            .filter(|v| v.owner == veh::OwnerId(brick.owner))
-            .count();
-        if !self.lan_host && owned >= quota as usize {
-            let text = if quota == 1 {
-                format!("\u{E000}You already have a {noun}")
-            } else {
-                format!("\u{E000}You already have {quota} {noun}s")
-            };
+            .world
+            .as_ref()
+            .is_none_or(|w| w.definition(definition).is_none())
+        {
+            return Ok(());
+        }
+        if let Err(text) = self.vehicle_room(brick.owner, definition) {
             self.notify(brick.owner, Notice::Center { text, seconds: 2.0 });
             return Ok(());
         }
-        let count = same_kind.len();
-        if count >= limit as usize {
-            let text = if limit == 1 {
-                format!("\u{E000}Server is limited to 1 {noun}")
-            } else {
-                format!("\u{E000}Server is limited to {limit} {noun}s")
-            };
-            self.notify(brick.owner, Notice::Center { text, seconds: 2.0 });
-            return Ok(());
-        }
+        let def = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition(definition))
+            .context("checked above")?;
         let transform = self.spawn_transform(&brick, def);
         let game = self.owner_game(brick.owner);
         let respawn_ms = game
@@ -384,6 +345,62 @@ impl Session {
         self.vehicles.by_brick.insert(brick_id, id);
         self.vehicles.brick_of.insert(id, brick_id);
         self.vehicles.colors.insert(id, spawn_color(&brick));
+        Ok(())
+    }
+    /// Whether `owner` may have one more vehicle of `definition`, or the
+    /// line they are told: `fxDTSBrick::spawnVehicle`'s server totals,
+    /// player-type mounts (horses, boats, cannons, turrets) apart from
+    /// physics vehicles (`$Pref::Server::MaxPlayerVehicles_Total` and
+    /// `MaxPhysVehicles_Total`), and before them an Internet server's
+    /// per-builder quota (`$Pref::Server::Quota::Vehicle` and
+    /// `Quota::Player`). Add-On vehicles count like any other.
+    pub(super) fn vehicle_room(&self, owner: OwnerId, definition: &str) -> Result<(), String> {
+        let Some(world) = &self.vehicles.world else {
+            return Err("\u{E000}This server has no vehicles".into());
+        };
+        let Some(def) = world.definition(definition) else {
+            return Err(format!("\u{E000}Unknown vehicle {definition}"));
+        };
+        let actor = def.is_actor();
+        let settings = &self.admin.settings;
+        let (limit, noun) = if actor {
+            (settings.player_vehicles, "player-vehicle")
+        } else {
+            (settings.physics_vehicles, "physics-vehicle")
+        };
+        let snapshot = world.snapshot(&self.simulation.physics);
+        let same_kind: Vec<_> = snapshot
+            .vehicles
+            .iter()
+            .filter(|v| {
+                world
+                    .definition(&v.definition)
+                    .is_some_and(|d| d.is_actor() == actor)
+            })
+            .collect();
+        let quota = if actor {
+            settings.per_player.players
+        } else {
+            settings.per_player.vehicles
+        };
+        let owned = same_kind
+            .iter()
+            .filter(|v| v.owner == veh::OwnerId(owner))
+            .count();
+        if !self.lan_host && owner != 0 && owned >= quota as usize {
+            return Err(if quota == 1 {
+                format!("\u{E000}You already have a {noun}")
+            } else {
+                format!("\u{E000}You already have {quota} {noun}s")
+            });
+        }
+        if same_kind.len() >= limit as usize {
+            return Err(if limit == 1 {
+                format!("\u{E000}Server is limited to 1 {noun}")
+            } else {
+                format!("\u{E000}Server is limited to {limit} {noun}s")
+            });
+        }
         Ok(())
     }
     fn tag_vehicle(&mut self, id: VehicleId) {

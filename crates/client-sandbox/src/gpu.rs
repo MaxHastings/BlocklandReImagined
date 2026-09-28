@@ -12,7 +12,7 @@
 //! GPU has timestamps, each layer is timed: a frame over budget halves the
 //! cap, and one frame far over it stops the Add-On
 //! ([`AddOn::report_gpu_time`]).
-use crate::host::{AddOn, Frame, Layer, Stopped, VERTEX_BYTES, Vertex};
+use crate::host::{AddOn, Blend, Frame, Layer, Stopped, VERTEX_BYTES, Vertex};
 use crate::shader::{DEFAULT_LOOP_LIMIT, MAX_LOOP_LIMIT};
 use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Vec3};
@@ -223,7 +223,8 @@ pub struct LayerRenderer {
     draw_buffer: wgpu::Buffer,
     draw_group: wgpu::BindGroup,
     draw_capacity: u64,
-    pipelines: Vec<wgpu::RenderPipeline>,
+    /// Per shader, one pipeline per [`Blend`] mode.
+    pipelines: Vec<[wgpu::RenderPipeline; 3]>,
     meshes: Vec<GpuMesh>,
     speed: Option<GpuSpeed>,
     /// Lowered after frames over budget, raised back slowly after fast ones.
@@ -381,7 +382,7 @@ impl LayerRenderer {
                     source: wgpu::ShaderSource::Naga(Cow::Owned(shader.module.clone())),
                 });
                 self.pipelines
-                    .push(self.pipeline(device, &module, &shader.name));
+                    .push(self.pipelines_for(device, &module, &shader.name));
             }
             if let Some(error) = pollster::block_on(scope.pop()) {
                 return Err(addon.stop(Stopped::Gpu(format!("a shader was refused: {error}"))));
@@ -445,7 +446,9 @@ impl LayerRenderer {
         for (i, draw) in frame.draws.iter().enumerate() {
             let uniform = DrawUniform {
                 model: draw.model,
-                params: layer.materials[draw.material].params,
+                params: draw
+                    .params
+                    .unwrap_or(layer.materials[draw.material].params),
             };
             let at = i * DRAW_STRIDE as usize;
             bytes[at..at + std::mem::size_of::<DrawUniform>()]
@@ -457,12 +460,39 @@ impl LayerRenderer {
         Ok(())
     }
 
+    /// A shader's pipelines, one per blend mode, in [`Blend::ALL`] order.
+    fn pipelines_for(
+        &self,
+        device: &wgpu::Device,
+        module: &wgpu::ShaderModule,
+        name: &str,
+    ) -> [wgpu::RenderPipeline; 3] {
+        Blend::ALL.map(|blend| self.pipeline(device, module, name, blend))
+    }
+
     fn pipeline(
         &self,
         device: &wgpu::Device,
         module: &wgpu::ShaderModule,
         name: &str,
+        blend: Blend,
     ) -> wgpu::RenderPipeline {
+        let opaque = blend == Blend::Opaque;
+        let colour = match blend {
+            Blend::Opaque | Blend::Translucent => wgpu::BlendState::ALPHA_BLENDING,
+            Blend::Additive => wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+        };
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(name),
             layout: Some(&self.pipeline_layout),
@@ -477,12 +507,12 @@ impl LayerRenderer {
                 })],
             },
             primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: opaque.then_some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: self.depth.map(|format| wgpu::DepthStencilState {
                 format,
-                depth_write_enabled: Some(true),
+                depth_write_enabled: Some(opaque),
                 depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
@@ -497,7 +527,7 @@ impl LayerRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.color,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(colour),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -518,7 +548,11 @@ impl LayerRenderer {
         for (i, draw) in frame.draws.iter().enumerate() {
             let material = &layer.materials[draw.material];
             let mesh = &self.meshes[draw.mesh];
-            pass.set_pipeline(&self.pipelines[material.shader]);
+            let blend = Blend::ALL
+                .iter()
+                .position(|b| *b == material.blend)
+                .unwrap_or(0);
+            pass.set_pipeline(&self.pipelines[material.shader][blend]);
             pass.set_bind_group(1, &self.draw_group, &[(i as u64 * DRAW_STRIDE) as u32]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -626,7 +660,7 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
     });
     renderer
         .pipelines
-        .push(renderer.pipeline(device, &module, "calibration"));
+        .push(renderer.pipelines_for(device, &module, "calibration"));
     let corner = |x: f32, y: f32| Vertex {
         position: [x, y, 0.0],
         normal: [0.0, 0.0, 1.0],
@@ -680,7 +714,7 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&renderer.pipelines[0]);
+            pass.set_pipeline(&renderer.pipelines[0][0]);
             pass.set_bind_group(0, &renderer.frame_group, &[]);
             pass.set_bind_group(1, &renderer.draw_group, &[0]);
             let mesh = &renderer.meshes[0];
@@ -725,6 +759,29 @@ pub fn render_offscreen(
     height: u32,
     times: &[f32],
 ) -> Result<(String, Vec<Image>)> {
+    render_offscreen_scene(
+        addon,
+        width,
+        height,
+        times,
+        Vec3::new(2.4, 1.8, 3.2),
+        Vec3::ZERO,
+        |_| Default::default(),
+    )
+}
+
+/// [`render_offscreen`] from a camera at `eye` looking at `target`, with
+/// `world(time)` as what the game shows at each frame (for Add-Ons that
+/// read the world).
+pub fn render_offscreen_scene(
+    addon: &mut AddOn,
+    width: u32,
+    height: u32,
+    times: &[f32],
+    eye: Vec3,
+    target: Vec3,
+    world: impl Fn(f32) -> Arc<crate::world::World>,
+) -> Result<(String, Vec<Image>)> {
     ensure!(
         width > 0 && height > 0 && width <= 4096 && height <= 4096 && width.is_multiple_of(64),
         "width must be a multiple of 64"
@@ -766,14 +823,13 @@ pub fn render_offscreen(
         1,
         2048,
     );
-    let eye = Vec3::new(2.4, 1.8, 3.2);
     let camera = Camera {
         view_proj: glam::camera::rh::proj::directx::perspective(
             0.9,
             width as f32 / height as f32,
             0.1,
             100.0,
-        ) * glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y),
+        ) * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y),
         position: eye,
         pixels: u64::from(width) * u64::from(height),
     };
@@ -792,7 +848,8 @@ pub fn render_offscreen(
                 time,
                 dt: time - last,
                 eye: eye.to_array(),
-                forward: (-eye).normalize().to_array(),
+                forward: (target - eye).normalize().to_array(),
+                world: world(time),
                 ..Default::default()
             })
             .map_err(stopped)?

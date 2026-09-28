@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "gravity-gun-fx",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Gravity Gun Effects",
+  "description": "The Gravity Gun's look on everyone's screen: a crackling beam to what it holds, a shimmering force bubble round it, a charge that swells at the muzzle, and a shockwave and sparks when it throws or punts.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "gravity-gun": "^1.0.0" },
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": ["render.layer", "render.shader", "world.read"],
+    "shaders": ["client/beam.wgsl", "client/field.wgsl", "client/spark.wgsl", "client/ring.wgsl"]
+  }
+}

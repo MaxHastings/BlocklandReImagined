@@ -6645,7 +6645,19 @@ impl PlatformApp for App {
             up,
         };
         if self.client_code.is_started() {
-            self.client_code.run_frame(self.animation_time, eye, forward);
+            let world = if self.client_code.reads_world() {
+                std::sync::Arc::new(crate::client_code::world_view(
+                    view,
+                    self.motion.presented(),
+                    &self.vehicles,
+                    &self.vehicle_assets,
+                    &camera,
+                ))
+            } else {
+                Default::default()
+            };
+            self.client_code
+                .run_frame(self.animation_time, eye, forward, world);
             self.client_code.prepare(
                 frame.device,
                 frame.queue,

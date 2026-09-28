@@ -12,6 +12,7 @@
 //! - [`host`]: the WebAssembly host, its functions and budgets.
 //! - [`trust`]: the per-server trust prompt and what the player chose.
 //! - [`gpu`]: draws an Add-On's render layer with wgpu.
+//! - [`world`]: what the game shows, for code that reads it.
 pub mod addon;
 pub mod capability;
 pub mod gpu;
@@ -19,8 +20,10 @@ pub mod host;
 pub mod shader;
 pub mod trust;
 mod wasm_imports;
+pub mod world;
 
 pub use addon::AddOnCode;
 pub use capability::{Capability, Tier};
-pub use host::{AddOn, Budgets, FrameInput, Sandbox, Stopped};
+pub use host::{AddOn, Blend, Budgets, FrameInput, Sandbox, Stopped};
+pub use world::World;
 pub use trust::{TrustDecision, TrustLevel, TrustPrompt, TrustStore};
