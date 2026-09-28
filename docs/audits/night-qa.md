@@ -31,7 +31,7 @@ gate run can use the ports.
 
 ## Fixed on `claude/night-qa`
 
-Fix commits (each with a test) versus harness and doc commits:
+Fixes, each with a test (the other commits on the branch are harness and docs):
 
 1. **Options stored v20's 800x600 and VSync off** (`79eeabb`, on main).
    A first Options visit showed 800x600 and "Disable Vsync" ticked (the v20
@@ -49,11 +49,13 @@ Fix commits (each with a test) versus harness and doc commits:
    Yes/No box is authored one line tall; it read only "Windows Firewall would
    stop friends from". Message boxes now grow to their text like v20's
    `MBSetText`. Test `crates/ui/tests/message_box.rs`.
-4. **An Add-On's bricks could not be chosen** (`ec6072a`). An imported brick
-   pack showed in the brick selector, but the building tools only accepted
-   the base catalog, so choosing one did nothing. Proven by
-   `imported_v20_add_ons_play` (fence planted, shotgun fired).
-5. **"No weapon image equipped" printed on screen** (`8b62e2a`). A click
+4. **An Add-On's bricks could not be chosen in a13.** An imported brick pack
+   showed in the brick selector, but the building tools only accepted the
+   base catalog, so choosing one did nothing. Main fixed the same bug
+   independently in `8f9f418` (PR #12); on rebase this branch dropped its own
+   fix and keeps only `imported_v20_add_ons_play` (commit `29505fe`, whose
+   title still names the fix), which passes (fence planted, shotgun fired).
+5. **"No weapon image equipped" printed on screen** (`0ed6c75`). A click
    that reached the server just after Change Map or a respawn cleared the
    hands came back as that developer message in the bottom print (seen after
    every Change Map in the matrix). A click with nothing in hand is now a
