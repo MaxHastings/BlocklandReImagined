@@ -3747,7 +3747,15 @@ impl App {
             if let Some(view) = &a.view {
                 self.reset_weapon_effect_session(a.id, view.checkpoint_cue_cursor);
             }
-            self.ui.apply_session(a.id, UiUpdate::FirstSpawn);
+            // `handleYourSpawn`: no favorites auto-buy in a local Tutorial,
+            // whose lessons hand out the bricks.
+            let tutorial = a.local
+                && a.view.as_ref().is_some_and(|v| {
+                    v.world.map_id.eq_ignore_ascii_case(bri_sim::tutorial::MAP_ID)
+                });
+            if !tutorial {
+                self.ui.apply_session(a.id, UiUpdate::FirstSpawn);
+            }
             self.ui
                 .core
                 .request(UiAction::SetAvatar(self.ui.settings().avatar));

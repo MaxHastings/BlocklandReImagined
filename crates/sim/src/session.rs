@@ -239,7 +239,6 @@ impl Command {
             | Command::EquipTool { .. }
             | Command::Activate
             | Command::ToggleLight
-            | Command::Emote(_)
             | Command::Wand
             | Command::BuildGesture(_) => (true, None),
             // The package's command declaration decides (`while_dead`);
@@ -271,6 +270,8 @@ impl Command {
             | Command::ControlPlayer
             | Command::BrickHand(_)
             | Command::GhostBrick(_)
+            // v20's emote commands quietly do nothing without a body.
+            | Command::Emote(_)
             | Command::Talking(_) => (false, None),
         };
         Preconditions { alive, build }
