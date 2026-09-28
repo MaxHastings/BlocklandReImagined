@@ -82,6 +82,7 @@ fn main() -> Result<()> {
         size: display.size,
         fullscreen: display.fullscreen,
         vsync: display.vsync,
+        max_fps: display.max_fps,
         app: Box::new(app),
     })
 }

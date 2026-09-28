@@ -12,6 +12,8 @@ pub struct StartupDisplay {
     pub size: (u32, u32),
     pub fullscreen: bool,
     pub vsync: bool,
+    /// Frame-rate cap from Options (Max FPS), None for unlimited.
+    pub max_fps: Option<u32>,
 }
 
 pub fn startup_display(settings: &Settings) -> StartupDisplay {
@@ -31,6 +33,7 @@ pub fn startup_display(settings: &Settings) -> StartupDisplay {
         // An invalid saved size must not request an arbitrary fullscreen mode.
         fullscreen: size.is_some() && prefs.bool_or("$pref::Video::fullScreen", false),
         vsync: !prefs.bool_or("$pref::Video::disableVerticalSync", false),
+        max_fps: bri_ui::screens::options::max_fps(&prefs),
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -83,6 +86,7 @@ mod tests {
                 size: (1280, 720),
                 fullscreen: false,
                 vsync: true,
+                max_fps: None,
             }
         );
         settings
@@ -94,12 +98,16 @@ mod tests {
         settings
             .prefs
             .insert("$pref::Video::disableVerticalSync".into(), "1".into());
+        settings
+            .prefs
+            .insert("$pref::Video::MaxFps".into(), "144".into());
         assert_eq!(
             startup_display(&settings),
             StartupDisplay {
                 size: (1920, 1080),
                 fullscreen: true,
                 vsync: false,
+                max_fps: Some(144),
             }
         );
         for value in [
@@ -144,6 +152,7 @@ mod tests {
                 size: (1600, 900),
                 fullscreen: false,
                 vsync: false,
+                max_fps: None,
             }
         );
         s.prefs.insert("test".into(), "two".into());

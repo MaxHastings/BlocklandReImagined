@@ -20,6 +20,8 @@ pub struct PlatformConfig {
     pub size: (u32, u32),
     pub fullscreen: bool,
     pub vsync: bool,
+    /// Frame-rate cap while focused (`$pref::Video::MaxFps`), None for none.
+    pub max_fps: Option<u32>,
     pub app: Box<dyn PlatformApp>,
 }
 
@@ -33,6 +35,8 @@ pub enum PlatformCommand {
         vsync: bool,
     },
     ToggleFullscreen,
+    /// Cap the focused frame rate, or stop capping it.
+    FrameLimit(Option<u32>),
     /// Save the next presented frame as PNG. `hud` includes the interface.
     Screenshot {
         path: std::path::PathBuf,
@@ -59,6 +63,8 @@ pub trait PlatformApp {
         Ok(())
     }
     fn gpu_stopped(&mut self) {}
+    /// The window gained or lost keyboard focus.
+    fn focus_changed(&mut self, _focused: bool) {}
     /// Return true after clearing/rendering a scene; false asks the platform to
     /// clear to its neutral background before compositing UI.
     fn render_scene(&mut self, _frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -365,6 +371,8 @@ struct Runner {
     wheel_pixels: f64,
     last_tick: Instant,
     next_tick: Instant,
+    /// When the next capped frame is due (unused without a cap).
+    next_frame: Instant,
     display: Option<DisplayChange>,
     modes: Option<DisplayModes>,
     /// Last client size while windowed and not maximized.
@@ -399,6 +407,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         wheel_pixels: 0.0,
         last_tick: now,
         next_tick: now,
+        next_frame: now,
         display: None,
         modes: None,
         windowed,
@@ -669,6 +678,7 @@ impl Runner {
                         }
                     }
                     PlatformCommand::ToggleFullscreen => self.toggle_fullscreen(),
+                    PlatformCommand::FrameLimit(fps) => self.config.max_fps = fps,
                     PlatformCommand::Screenshot { path, hud } => {
                         self.screenshot = Some((path, hud));
                     }
@@ -1050,6 +1060,7 @@ impl ApplicationHandler for Runner {
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
+                self.config.app.focus_changed(focused);
                 self.regrab = true;
                 if focused {
                     self.focus_click.gained(Instant::now());
@@ -1195,7 +1206,24 @@ impl ApplicationHandler for Runner {
         // and camera interpolation line up with every presented frame (paced
         // by VSync). Background windows fall back to a slow timer.
         let active = self.focused && !self.occluded && self.graphics.is_some();
-        if active || now >= self.next_tick {
+        // A frame cap paces the focused loop by deadline instead of VSync.
+        let period = self
+            .config
+            .max_fps
+            .filter(|_| active)
+            .map(|fps| Duration::from_secs(1) / fps.max(1));
+        let due = if active {
+            period.is_none_or(|_| now >= self.next_frame)
+        } else {
+            now >= self.next_tick
+        };
+        if due {
+            if let Some(period) = period {
+                // Keep to the schedule, but never try to catch up on
+                // frames missed by a long hitch.
+                let next = self.next_frame + period;
+                self.next_frame = if next > now { next } else { now + period };
+            }
             let elapsed = now.saturating_duration_since(self.last_tick);
             self.last_tick = now;
             // Avoid minutes of UI repeat catch-up after suspension/debug pauses.
@@ -1230,7 +1258,9 @@ impl ApplicationHandler for Runner {
                 return;
             }
         }
-        event_loop.set_control_flow(if active {
+        event_loop.set_control_flow(if period.is_some() {
+            ControlFlow::WaitUntil(self.next_frame)
+        } else if active {
             ControlFlow::Poll
         } else {
             ControlFlow::WaitUntil(self.next_tick)

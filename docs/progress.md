@@ -2458,3 +2458,30 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   replicas agree). Handoff and labels: `docs/stress-lab/HANDOFF.md`.
 - Open: join mismatch naming waits on door-closers' Hello wiring; see the
   handoff's next steps.
+
+## 2026-09-28 Settings players expect
+
+- Options gains what players look for today, on top of v20's rebinding,
+  sensitivity, resolution, fullscreen and volumes. Graphics: a Quality menu
+  (Low, Medium, High, Ultra; Custom while hand-set values match none) that
+  sets shadows, anti-aliasing, brick shadows, anisotropy and precipitation,
+  and a Max FPS menu (30 to 240 or Unlimited, `$pref::Video::MaxFps`,
+  default Unlimited). High equals the renderer's defaults, so new players
+  see High. Audio: Shell and Sim volumes read Interface and Effects, a new
+  Music volume (`$pref::Audio::musicVolume`, the runtime's existing music
+  bus), live volume preview while dragging (undone if the dialog closes
+  without Done), and Mute when in background
+  (`$pref::Audio::MuteInBackground`, default off). Every slider shows its
+  value (percent, sensitivity, anisotropy as Off/2x..16x, FOV degrees).
+- The frame cap paces the focused loop by deadline (`PlatformCommand::
+  FrameLimit`, `PlatformConfig::max_fps`); without it the loop still runs
+  flat out, paced by VSync. Console cvars `maxfps`, `musicvolume`,
+  `mutebackground`.
+- Fix: with no saved anisotropy the slider showed 0 while the renderer drew
+  8x; it now shows the renderer's value, and Done always stores the preset
+  options so a stock default the renderer ignores cannot hide a choice.
+- Evidence: `cargo test -p bri-ui --lib` (new options tests for presets,
+  Max FPS, music volume and readouts, mute), `cargo test -p bri-client
+  --lib`, clippy `-D warnings` on both. Not yet seen on the authored layout:
+  the new rows are placed relative to Resolution and the Sim volume row;
+  needs the offscreen options render on a PC with content.
