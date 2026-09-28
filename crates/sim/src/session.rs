@@ -66,10 +66,7 @@ fn water_surface(
     } else {
         tuning.stand_height
     };
-    waters
-        .iter()
-        .find(|w| w.coverage(state.feet, height) > 0.0)
-        .map(|w| w.max[1])
+    bri_content::water::submersion(waters, state.feet, height).map(|(w, _)| w.max[1])
 }
 
 /// Queued inputs above which the server simulates extra ticks to catch up.

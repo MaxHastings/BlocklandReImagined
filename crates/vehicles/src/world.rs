@@ -1034,7 +1034,6 @@ impl VehiclesWorld {
         world: &mut PhysicsWorld,
         waters: &[bri_content::water::Water],
     ) -> Result<()> {
-        let water_height = |p: [f32; 3]| waters.iter().find_map(|w| w.surface_above(p));
         ensure!(
             (world.integration_parameters.dt - FIXED_DT).abs() < 1e-6,
             "vehicles require shared 120Hz timestep"
@@ -1127,11 +1126,13 @@ impl VehiclesWorld {
             } else {
                 (c.steer, c.pitch, c.roll)
             };
-            let water = water_height(p.to_array());
             let aabb = world.colliders[v.collider].compute_aabb();
-            let submerged = water.filter(|h| h.is_finite()).map_or(0., |h| {
-                ((h - aabb.mins.y) / (aabb.maxs.y - aabb.mins.y).max(0.01)).clamp(0., 1.)
-            });
+            let submerged = bri_content::water::submersion(
+                waters,
+                [p.x, aabb.mins.y, p.z],
+                (aabb.maxs.y - aabb.mins.y).max(0.01),
+            )
+            .map_or(0., |(_, coverage)| coverage);
             v.water_coverage = submerged;
             let in_water = submerged > 0.05;
             if v.water != in_water {

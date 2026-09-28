@@ -34,6 +34,16 @@ pub struct Water {
     #[serde(default)]
     pub current: [f32; 3],
 }
+/// The one "which water am I in" query for players, splashes and vehicles:
+/// the body of water covering the most of a box from `feet` up `height`,
+/// with that coverage, or None when no water touches it.
+pub fn submersion(waters: &[Water], feet: [f32; 3], height: f32) -> Option<(&Water, f32)> {
+    waters
+        .iter()
+        .map(|w| (w, w.coverage(feet, height)))
+        .filter(|(_, coverage)| *coverage > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+}
 impl Water {
     /// A plain untextured still-water volume of density 1 and viscosity 40
     /// (stock `WaterBlock` defaults), for probes and tests.
@@ -70,10 +80,6 @@ impl Water {
             warnings: Vec::new(),
             current: [0.0; 3],
         }
-    }
-    /// The still surface height above a point inside this volume.
-    pub fn surface_above(&self, p: [f32; 3]) -> Option<f32> {
-        (self.footprint(p[0], p[2]).is_some() && p[1] > self.min[1]).then_some(self.max[1])
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -240,5 +246,22 @@ mod tests {
         assert_eq!(w.coverage([f32::NAN, 8., 0.], 2.), 0.);
         assert!((w.depth_opacity(10.)[0] - 0.265).abs() < 1e-6);
         assert_eq!(w.depth_opacity(45.), [0.5, 0.]);
+    }
+
+    #[test]
+    fn submersion_picks_the_water_covering_the_most() {
+        // A water-brick pool above the map's lake: the lake comes first, as
+        // map liquids do, and a boat in the pool floats in the pool.
+        let lake = Water::volume([-100., -10., -100.], [100., 0., 100.]);
+        let pool = Water::volume([0., 5., 0.], [10., 8., 10.]);
+        let waters = [lake, pool];
+        let (water, coverage) = submersion(&waters, [5., 6., 5.], 1.).unwrap();
+        assert_eq!(water.max[1], 8.);
+        assert_eq!(coverage, 1.);
+        // Standing on the lake bed, half under: the lake.
+        let (water, coverage) = submersion(&waters, [50., -1., 50.], 2.).unwrap();
+        assert_eq!(water.max[1], 0.);
+        assert_eq!(coverage, 0.5);
+        assert!(submersion(&waters, [50., 20., 50.], 2.).is_none());
     }
 }

@@ -755,16 +755,9 @@ impl Player {
         self.state.jetting = input.jet;
         let forward = Vec3::new(input.yaw.sin(), 0.0, -input.yaw.cos());
         let right = Vec3::new(input.yaw.cos(), 0.0, input.yaw.sin());
-        let liquid = waters
-            .iter()
-            .map(|w| {
-                (
-                    w,
-                    w.coverage(feet.to_array(), t.height(self.state.crouched)),
-                )
-            })
-            .filter(|(_, coverage)| *coverage >= 0.1)
-            .max_by(|a, b| a.1.total_cmp(&b.1));
+        let liquid =
+            bri_content::water::submersion(waters, feet.to_array(), t.height(self.state.crouched))
+                .filter(|(_, coverage)| *coverage >= 0.1);
         let (fs, bs, ss) = if liquid.is_some_and(|(_, c)| c >= t.swim_coverage) {
             (
                 t.underwater_forward,
