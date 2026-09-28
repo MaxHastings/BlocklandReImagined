@@ -528,6 +528,8 @@ pub struct App {
     combat: CombatPresentation,
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
+    /// A read save waiting on `LoadBricksColorGui`'s choice.
+    color_load: Option<(crate::saves::Request, Box<bri_world::build::SavedBuild>)>,
     /// Transport tasks still stopping a host and keeping its world; quitting
     /// waits for them.
     closing: Vec<tokio::task::JoinHandle<()>>,
@@ -1318,6 +1320,7 @@ impl App {
             ui,
             saves: crate::saves::Store::new(state_dir, &content),
             file_jobs: Default::default(),
+            color_load: None,
             closing: Vec::new(),
             close_asked: None,
             content,
@@ -3030,22 +3033,19 @@ impl App {
                     Err(anyhow::anyhow!(
                         "Connection changed while reading the build; load canceled"
                     ))
-                } else if let UiAction::LoadBricks { ownership, .. } = &request.action {
-                    match self.command(
-                        request.id,
-                        Command::LoadBuild {
-                            build,
-                            ownership: *ownership,
-                        },
-                        request.action,
-                    ) {
-                        Ok(()) => {
-                            // The loaded build arrives in batches; it matches its file.
-                            if let Some(a) = self.attempt.as_mut() {
-                                a.settling = Some(std::time::Instant::now() + SETTLE);
-                            }
-                            return; // Complete only after authoritative acceptance.
-                        }
+                } else if matches!(request.action, UiAction::LoadBricks { .. }) {
+                    // `LoadBricks_ColorCheck`: differing colours ask first.
+                    let differs = self
+                        .query_source
+                        .as_ref()
+                        .and_then(|w| crate::saves::color_difference(&w.palette, &build));
+                    if let Some(append) = differs {
+                        self.ui.apply(UiUpdate::ColorWarning { append });
+                        self.color_load = Some((request, build));
+                        return;
+                    }
+                    match self.send_load(request.id, build, request.action) {
+                        Ok(()) => return, // Complete only after authoritative acceptance.
                         Err(error) => Err(error),
                     }
                 } else {
@@ -3055,6 +3055,47 @@ impl App {
             Err(error) => Err(anyhow::anyhow!(error)),
         };
         self.answer(request.id, result);
+    }
+    fn send_load(
+        &mut self,
+        id: RequestId,
+        build: Box<bri_world::build::SavedBuild>,
+        action: UiAction,
+    ) -> Result<()> {
+        let UiAction::LoadBricks { ownership, .. } = action else {
+            anyhow::bail!("Unexpected loaded build");
+        };
+        self.command(id, Command::LoadBuild { build, ownership }, action)?;
+        // The loaded build arrives in batches; it matches its file.
+        if let Some(a) = self.attempt.as_mut() {
+            a.settling = Some(std::time::Instant::now() + SETTLE);
+        }
+        Ok(())
+    }
+    /// `ColorWarning_Click*`: load the waiting save as chosen, or leave Load
+    /// Bricks open.
+    fn choose_color_load(&mut self, choice: bri_ui::api::ColorLoad) {
+        use bri_ui::api::ColorLoad;
+        let Some((request, mut build)) = self.color_load.take() else {
+            return;
+        };
+        let result = if choice == ColorLoad::Cancel {
+            Err(anyhow::anyhow!(bri_ui::api::LOAD_CANCELED))
+        } else if self.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session {
+            Err(anyhow::anyhow!(
+                "Connection changed while reading the build; load canceled"
+            ))
+        } else {
+            if choice == ColorLoad::Match
+                && let Some(world) = &self.query_source
+            {
+                crate::saves::match_colors(&world.palette, &mut build);
+            }
+            self.send_load(request.id, build, request.action)
+        };
+        if let Err(error) = result {
+            self.answer(request.id, Err(error));
+        }
     }
     /// Put the load's progress on screen: the loading screen for a host
     /// start, a join once the host has named its map, and a map change once
@@ -5418,6 +5459,10 @@ impl PlatformApp for App {
                 continue;
             }
             let result = match action {
+                UiAction::LoadBricksColors(choice) => {
+                    self.choose_color_load(choice);
+                    Ok(())
+                }
                 UiAction::RequestSaveList { .. } | UiAction::LoadBricks { .. } => {
                     let result = (|| {
                         if matches!(action, UiAction::LoadBricks { .. }) {

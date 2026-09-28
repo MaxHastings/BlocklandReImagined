@@ -433,6 +433,7 @@ impl ItemAssets {
         for (dir, abs) in extras {
             let abs = abs.canonicalize()?;
             if !abs.join("presentation.json").is_file() {
+                present_from_stock(dir, &abs, &mut manifest, &mut item_physics)?;
                 continue;
             }
             let bytes = crate::materials::read_resource(&abs, "presentation.json", 8 * 1024 * 1024)?;
@@ -749,6 +750,83 @@ impl ItemAssets {
 }
 /// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
 /// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
+/// An Add-On weapons pack with no presentation of its own (the Duplicator's
+/// wand) reuses stock models and icons: present its items and images from
+/// the models and textures already loaded.
+fn present_from_stock(
+    dir: &str,
+    abs: &Path,
+    manifest: &mut Presentation,
+    item_physics: &mut ItemPhysicsCatalog,
+) -> Result<()> {
+    let bytes = crate::materials::read_resource(abs, "weapons.json", 32 * 1024 * 1024)?;
+    let pack = bri_weapons::Pack::from_json(&bytes)?;
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let evidence = || bri_weapons::Evidence {
+        path: format!("{dir}/weapons.json"),
+        sha256: sha256.clone(),
+        line: 0,
+    };
+    let mut images = BTreeMap::new();
+    for (id, image) in &pack.images {
+        let model = image.model.to_ascii_lowercase();
+        ensure!(
+            manifest.models.contains_key(&model),
+            "{dir}: image {id} needs its own presentation for {model}"
+        );
+        images.insert(
+            id.clone(),
+            ImagePresentation {
+                model,
+                mount_point: image.mount_point,
+                offset: image.offset,
+                eye_offset: image.eye_offset,
+                source_rotation_degrees: image.source_rotation_degrees,
+                eye_rotation_degrees: [0.0; 3],
+                tint: image.color,
+                evidence: evidence(),
+            },
+        );
+    }
+    euler_to_matrix_images(&mut images, &pack);
+    for (id, item) in &pack.items {
+        ensure!(!manifest.items.contains_key(id), "{dir}: item {id} is already presented");
+        let model = item.model.to_ascii_lowercase();
+        let bounds = manifest
+            .models
+            .get(&model)
+            .with_context(|| format!("{dir}: item {id} needs its own presentation for {model}"))?
+            .bounds();
+        let icon = format!("{}.png", item.icon.to_ascii_lowercase());
+        manifest.items.insert(
+            id.clone(),
+            ItemPresentation {
+                model,
+                image: item.image.clone(),
+                tint: [1.0; 4],
+                icon: manifest.textures.contains_key(&icon).then_some(icon),
+                evidence: evidence(),
+            },
+        );
+        item_physics.items.insert(id.clone(), bounds);
+    }
+    for (id, projectile) in &pack.projectiles {
+        let model = projectile.model.to_ascii_lowercase();
+        ensure!(
+            model.is_empty() || manifest.models.contains_key(&model),
+            "{dir}: projectile {id} needs its own presentation for {model}"
+        );
+        manifest.projectiles.insert(
+            id.clone(),
+            ProjectilePresentation {
+                model: (!model.is_empty()).then_some(model),
+                tint: [1.0; 4],
+            },
+        );
+    }
+    manifest.images.extend(images);
+    Ok(())
+}
 fn euler_to_matrix_images(
     images: &mut BTreeMap<String, ImagePresentation>,
     pack: &bri_weapons::Pack,

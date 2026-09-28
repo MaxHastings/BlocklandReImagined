@@ -66,9 +66,8 @@ impl Session {
         Ok(())
     }
     /// `spawnItem` event output.
-    pub(super) fn spawn_event_item(&mut self, item: &str, at: Vec3, velocity: Vec3) -> Result<()> {
-        self.weapons.spawn_drop(item, at, velocity)?;
-        Ok(())
+    pub(super) fn spawn_event_item(&mut self, item: &str, at: Vec3, velocity: Vec3) -> Result<u64> {
+        self.weapons.spawn_drop(item, at, velocity)
     }
     /// Bring the item spawners up to date with the bricks changed since the
     /// last network publish. Commands change bricks before a tick and the

@@ -547,6 +547,22 @@ pub struct PackageKey {
     pub command: String,
 }
 
+/// How a save whose colours differ from the world's is loaded
+/// (`ColorWarning_Click*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorLoad {
+    /// Each colour becomes the nearest one the world has.
+    Match,
+    /// The save's colours are added to the world's.
+    Append,
+    /// Back to Load Bricks without loading.
+    Cancel,
+}
+
+/// A load the player canceled in `LoadBricksColorGui`: Load Bricks stays
+/// open without an error.
+pub const LOAD_CANCELED: &str = "Load canceled";
+
 /// Requests from the UI. See the module docs for the request/answer rules.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiAction {
@@ -696,6 +712,8 @@ pub enum UiAction {
         name: String,
         ownership: bool,
     },
+    /// The choice in `LoadBricksColorGui` for the load waiting on it.
+    LoadBricksColors(ColorLoad),
     RequestSaveList {
         map: Option<String>,
     },
@@ -1185,6 +1203,11 @@ pub enum UiUpdate {
     OpenPrintSelector {
         aspect: String,
         current: Option<String>,
+    },
+    /// A save's colours differ from the world's: ask how to load them
+    /// (`LoadBricksColorGui`). `append` is whether they fit added on.
+    ColorWarning {
+        append: bool,
     },
     SaveFiles {
         maps: Vec<String>,
