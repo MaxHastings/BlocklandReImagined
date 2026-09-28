@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "sample-bubble-blaster",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Bubble Blaster",
+  "description": "A sample weapon: a slow, bouncy bubble that shoves players instead of hurting them. Reuses the base game's gun model.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": []
+}

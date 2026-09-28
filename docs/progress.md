@@ -2592,3 +2592,20 @@ game mode picker once the Stress Lab landed (da5668e).
   `start_game_hosts_the_chosen_game_mode_on_its_map`.
 - Not interactively checked; Max's playtest covers the screen's look.
 - Follow-up: the Add-Ons screen (PR #4) must list `mode` as a server kind.
+## 2026-09-28 — Add-On author guide and samples
+
+- `docs/modding/README.md`: the Add-On author guide (manifest, sides,
+  scripts, state, capabilities, content kinds, HUD panels, weapons, headless
+  testing, importing v20 Add-Ons). It describes only what is on `main` and
+  lists in-flight work (multi-pack loading, state visibility, the `players`
+  capability, player archetypes, sandboxed client code with its trust
+  prompt, downloads on join) as coming soon.
+- `packages/samples/`: Survival Points (server rule: timer, public state,
+  a cooldown command, an admin-only command, chat), its HUD panel, and the
+  Bubble Blaster weapon (hand-written in the Import Add-On weapons format).
+- Evidence: `cargo test -p bri-package-runtime --test samples` (loads on
+  server and client, compiles, HUD binds only public keys and real
+  commands), `cargo test -p bri-sim --test samples` (a session awards
+  points to living players, greets on join, runs the leaderboard, refuses
+  a non-admin reset and allows the host's), `cargo test -p bri-weapons
+  --test sample_addon` (the bubble fires, harmless and shoving).

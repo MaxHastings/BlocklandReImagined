@@ -1,5 +1,9 @@
 # Packages
 
+Authors making Add-Ons start with the guide in
+[docs/modding/README.md](../modding/README.md) and the samples in
+`packages/samples/`; this page is the engine-side format.
+
 Status: format landed 2026-09-27 (platform API level 1); the client, the
 dedicated server and the join check use it (protocol 31). Code:
 `crates/package` (`bri-package`). This closes the shape of door-closer P0 items 2 (package
