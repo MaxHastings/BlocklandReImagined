@@ -111,6 +111,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
     let mut replica = Replica::new(checkpoint()).unwrap();
     let projectile = bri_weapons::Projectile {
         paint: None,
+        heading: None,
         id: 1,
         definition: "v20.projectile.gunprojectile".into(),
         source: bri_weapons::ActorId(1),

@@ -17,7 +17,7 @@ flows are blockers: please report them. The items below are known gaps.
 - **Admin:** the Admin menu (kick, ban, unban, clear bricks, change map,
   server settings), the wand, the F7/F8 camera and v20's admin chat commands
   work. Every v20 feature still missing, from menus to chat commands, is
-  listed in `docs/audits/v20-parity.md`.
+  listed in `FEATURES.md`.
 - **Visuals:** lighting, shadows, some materials, water and sky effects are not
   final.
 - **Platform:** Windows only.

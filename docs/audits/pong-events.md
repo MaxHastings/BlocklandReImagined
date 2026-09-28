@@ -96,6 +96,62 @@ freezes. Ours keeps running the game.
    `Letters/4` is stored unresolved, and the counter read only resolved
    digit prints. It now reads both, like v20's `getPrintCount`.
 
+## Colours that stayed changed (2026-09-28, `claude/pong-colour`)
+
+Maxwell reported that using the paddle buttons changed brick colours and
+some changes stayed. In v20 they always came back. Headless, the server
+state was right for clicks at least a tick apart. It broke when two clicks
+landed in one 120 Hz tick, as queued clicks do after a server hitch. Both
+clicks then had the same timestamp, and so did everything they scheduled.
+A `+` and a `-` relay reached the `_pong_AU*`/`_pong_AD*` state machine
+together. Both relays used the rows as they were before either one
+switched them. Both moved the paddle, and a shared cell was repainted twice
+but toggled back. The result was two white cells, or a white cell with
+black rows. The same happened to two B `+` clicks in one tick, because B's
+cancel is late. The old scheduler also gave origins round-robin turns. That
+could run a later click's row ahead of an earlier click's due row.
+
+v20 stamps every input with its own millisecond and runs every `schedule`
+from one queue in time order. The event engine now does the same, with one
+rule for every brick event (`crates/events/src/runtime.rs`):
+
+- Jobs run earliest due first, then by the activation's order inside its
+  tick, then by scheduling order. Origins are only budget and deferral
+  boundaries.
+- Each `trigger` is its own instant. Everything it schedules keeps that
+  instant, directly or through relays, prints and chains. Chained rows are
+  scheduled from their parent's due time, not the later phase clock.
+- A `cancelEvents` at instant *t* removes the source's delayed rows that
+  were scheduled by *t* and are due at or after *t*. A late cancel no
+  longer reaches rows scheduled after it. The zero-delay prepass no longer
+  cancels rows that v20 had already run.
+- A zero-delay chain past `loop_warning_depth` queues behind everything
+  else at its instant. Independent origins still interleave with a runaway
+  loop.
+
+Nothing was wrong in saves, `setColor` or the revert rows themselves. A
+timed revert of each output (`setColor`, `setColorFX`, `setRendering`,
+`setColliding`, `setRayCasting`, `setLight`, `setEmitter`) on one brick,
+clicked in overlapping bursts with a late `cancelEvents`, always landed,
+before and after the change. The fault was ordering between activations.
+Job checkpoints gained two defaulted fields (`scheduled`, `order`) and the
+world gained `next_order`. Older checkpoints still load.
+
+Tests:
+
+- `hammered_paddle_buttons_restore_every_colour` makes 60 rounds of 1 to
+  13 clicks on all four buttons. Clicks are a tick to 133 ms apart, and a
+  quarter of them are doubled into one tick. After every step each cell's
+  colour, glow and rows must agree. After each round no button glows. The
+  paddles are then walked home, and every brick must be on its loaded
+  colour. It fails on the old scheduler (round 3: a B cell goes black with
+  white rows) and passes now.
+- `timed_reverts_of_every_brick_output_always_land` covers the seven
+  outputs above.
+- `activations_in_one_tick_keep_their_order_through_relays` and
+  `late_cancel_and_revert_run_in_time_order_across_activations` are in
+  `crates/events/tests/runtime.rs`. The first fails on the old scheduler.
+
 ## Authentic quirks kept
 
 - B's `+` button has its `cancelEvents` row on a 100 ms delay. Every other
@@ -132,6 +188,7 @@ Commands (`CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`):
 ```
 cargo test -p bri-sim --test pong -- --ignored
 cargo test -p bri-sim --test events_native -- --ignored
+cargo test -p bri-events
 cargo test -p bri-events -p bri-weapons -p bri-sim
 cargo clippy -p bri-events -p bri-weapons -p bri-sim --tests
 ```

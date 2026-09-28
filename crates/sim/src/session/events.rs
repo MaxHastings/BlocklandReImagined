@@ -570,7 +570,11 @@ fn message(kind: MessageKind, text: String, seconds: u32) -> Notice {
     match kind {
         MessageKind::Chat => Notice::Chat(text),
         MessageKind::Center => Notice::Center { text, seconds },
-        MessageKind::Bottom => Notice::Bottom { text, seconds },
+        MessageKind::Bottom => Notice::Bottom {
+            text,
+            seconds,
+            hide_bar: false,
+        },
     }
 }
 fn direction_index(direction: ev::Direction) -> u8 {

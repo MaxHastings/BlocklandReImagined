@@ -435,27 +435,58 @@ impl Player {
     ) -> Result<Self> {
         tuning.validate()?;
         ensure!(
+            Self::clear(physics, feet, &tuning),
+            "Player spawn is obstructed"
+        );
+        Self::insert_body(physics, owner, tag, feet, tuning)
+    }
+    /// Whether a standing body fits at `feet` without touching anything.
+    pub fn clear(physics: &PhysicsWorld, feet: Vec3, tuning: &PlayerTuning) -> bool {
+        feet.is_finite()
+            && physics
+                .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
+                .intersect_shape(tuning.pose(feet, false), tuning.shape(false).as_ref())
+                .next()
+                .is_none()
+    }
+    /// A player body at `feet` even where it overlaps something, as v20's
+    /// `spawnPlayer` does (and a respawn here does): used when every spawn
+    /// point is built over, so the server never locks newcomers out.
+    pub fn spawn_overlapping(
+        physics: &mut PhysicsWorld,
+        owner: OwnerId,
+        feet: Vec3,
+        tuning: PlayerTuning,
+    ) -> Result<Self> {
+        Self::insert_body(
+            physics,
+            owner,
+            (1_u128 << 64) | u128::from(owner),
+            feet,
+            tuning,
+        )
+    }
+    fn insert_body(
+        physics: &mut PhysicsWorld,
+        owner: OwnerId,
+        tag: u128,
+        feet: Vec3,
+        tuning: PlayerTuning,
+    ) -> Result<Self> {
+        tuning.validate()?;
+        ensure!(
             owner > 0 && feet.is_finite() && feet.abs().max_element() <= 1_000_000.0,
             "Invalid player spawn"
         );
         let pose = tuning.pose(feet, false);
         let shape = tuning.shape(false);
-        ensure!(
-            physics
-                .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
-                .intersect_shape(pose, shape.as_ref())
-                .next()
-                .is_none(),
-            "Player spawn is obstructed"
-        );
         let (body, collider) = physics.insert(
             RigidBodyBuilder::kinematic_position_based()
                 .pose(pose)
                 .can_sleep(false),
             ColliderBuilder::new(shape).user_data(tag),
         );
-        physics.detect_collisions(&(), &());
-        requeue_new_body(physics, body);
+        bri_physics::detect_collisions(physics);
         Ok(Self {
             state: PlayerState {
                 owner,
@@ -572,7 +603,6 @@ impl Player {
             crouch: Default::default(),
         };
         player.restore(physics, state, tuning)?;
-        requeue_new_body(physics, body);
         Ok(player)
     }
     pub fn state(&self) -> &PlayerState {
@@ -735,7 +765,7 @@ impl Player {
     }
     pub fn despawn(self, physics: &mut PhysicsWorld) {
         physics.remove_body(self.body);
-        physics.detect_collisions(&(), &());
+        bri_physics::detect_collisions(physics);
     }
     /// One call per server tick, before PhysicsWorld::step. No variable client dt.
     pub fn step(&mut self, physics: &mut PhysicsWorld, input: MoveInput) -> Result<MotionEvents> {
@@ -1137,11 +1167,3 @@ fn air_control_direction(horizontal: Vec3, move_vec: Vec3, move_speed: f32) -> V
     move_vec.normalize_or_zero()
 }
 
-/// Rapier's collision-only pipeline (`detect_collisions`) consumes a new
-/// body's pending changes without an island manager, so a body inserted
-/// mid-session (a bot joining during a step) never entered an island and
-/// tripped Rapier's island consistency check. Marking it modified again lets
-/// the next physics step file it into an island.
-fn requeue_new_body(physics: &mut PhysicsWorld, body: RigidBodyHandle) {
-    let _ = physics.bodies.get_mut(body);
-}

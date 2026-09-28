@@ -406,6 +406,11 @@ impl Replica {
                     .all(|n| n.is_finite())
                 && p.yaw.is_finite()
                 && p.pitch.is_finite()
+                && p.head_yaw.is_finite()
+                && p.jump.normal.iter().all(|n| n.is_finite())
+                && p.scale.is_finite()
+                && p.scale > 0.0
+                && p.energy.is_finite()
                 && self.archetypes.get(p.archetype).is_some(),
             "Invalid player pose"
         );

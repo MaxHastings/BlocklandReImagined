@@ -1,7 +1,9 @@
 # Blockland ReImagined — alpha playtest
 
 This build brings building, deathmatch minigames, vehicles, bots and LAN
-multiplayer together. Read `KNOWN-ISSUES.md` for what is still unfinished.
+multiplayer together. Start with `TESTER-GUIDE.md` (install, playing
+together, what to send). `FEATURES.md` says what is done and what isn't, and
+`KNOWN-ISSUES.md` lists what is still unfinished.
 
 ## Start
 

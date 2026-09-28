@@ -3365,8 +3365,191 @@ appear or leave their flight and every client coasts them with
 `bri_weapons::coast`; moving Add-On entities send only where they are; a
 client drawing above 60 fps no longer sends twice the input. Eight idle
 players: 653 to 14 KB/s from the host. Eight running: 657 to 137. A rocket
-fight: 849 to 46. Each player's upload: 33 to 13 KB/s. Protocol 43. Evidence:
+fight: 849 to 46. Each player's upload: 33 to 13 KB/s. Protocol 45. Evidence:
 `cargo test -p bri-net --test bandwidth` (idle, explosion and rocket-fight
 byte budgets), `-- --ignored --nocapture` for the table, `cargo test -p
 bri-net --lib stream` (settle and keepalive, coasted projectiles match the
 host's flight, entity moves, held input merging).
+- 2026-09-28 Smooth replicated motion (branch `claude/smoothing`). Max saw
+  the football and soccer ball move at the server's update rate. Audit of
+  what the client drew between host updates: the local player is predicted
+  and remote players interpolate (`motion.rs`); vehicles interpolate, but the
+  driven vehicle popped on each 40 Hz pose; projectiles (thrown and kicked
+  balls included), dropped items and package entities were drawn straight
+  from the 20 Hz reliable deltas, stepping every 50 ms; brick, explosion and
+  shell debris are client-side cosmetics advanced every frame already. New
+  `crates/client/src/ghosts.rs` does what Torque's ghosts did: projectiles and
+  drops fly on the client from their newest update with the host's tick
+  integration, gravity (`gravityMod`, Item gravity 20) and Torque's
+  `Projectile` bounce (reflect, friction, elasticity) against the client's
+  map and bricks; package entities interpolate a jitter-sized delay behind.
+  A disagreeing update keeps the drawn pose where it was and decays the
+  difference (Torque's warp); the stream clock slews rather than jumps.
+  Projectiles fly their whole lifetime from one update, so the host may send
+  a projectile once plus its corrections (for the bandwidth lane). The
+  driven vehicle now warps onto corrected poses too. No protocol change.
+  Evidence: `cargo test -p bri-client --test ghost_smoothing` samples every
+  144 Hz frame of a bouncing ball and a sliding entity on loopback, with
+  80 ms latency plus 60 ms jitter, and with spawn-and-impact updates only:
+  worst frame step at most 1.41x the true motion, no stalled frames, worst
+  error 0.38 units at bounces; the same measure on raw snapshots shows an
+  8.45x step and 435 of 506 frames stalled. `cargo test -p bri-client --lib
+  -- ghosts vehicles`. Remote players' clock (`Motion::observe_clock`) still
+  jumps forward on an early pose; that belongs to the remote-animation lane.
+- 2026-09-28 Pose clock slewing (branch `claude/smoothing`). `Motion`'s
+  server clock snapped forward on every earlier-than-ever pose, hitching
+  remote players and non-driven vehicles under jitter. It now slews at most
+  5% toward its estimate and snaps only past 60 ticks, like `ghosts::Clock`.
+  No protocol change. Evidence: `cargo test -p bri-client --lib
+  server_clock_runs_smoothly_under_jitter` (80 ms + 60 ms jitter, 144 Hz
+  frames): rate within 5%; the snapping clock measured 119% off.
+
+## 2026-09-28 Final touches checked against v20's own files
+
+Max asked why final touches keep slipping through. The cause was that our
+tests checked the code against itself, not against v20. This sweep checks
+against v20's datablocks, scripts and `blocklandv20.exe`. It records the
+evidence in `docs/audits/v20-unread-fields.md` and
+`docs/audits/v20-client-scripts.md`.
+
+- The jet ground dust within 4 units of the ground (exe 0x5ad1b0) and a
+  duplicated tire-spray update: de7b9c4.
+- Name tags are white or the mini-game colour, with an 8-way outline, as
+  `GuiShapeNameHud::drawName` draws them. Raycasting bricks hide them
+  (mask 0x200001d), and they fade from the fog distance: 24b32b1.
+- Opening the brick selector sends the "Bricks" BSD emote everyone sees:
+  862b2da. With building disabled, it only prints so. Emotes from a dead
+  player pass quietly: 00a658e3.
+- All 54 stock item poses and weapon state machines match v20. See
+  `tools/audit_v20_poses.py` and `tests/v20_poses.rs`: a46840d.
+- A headless sweep of every dialog at 1999x800, 1280x720 and 2560x1440
+  (`crates/ui/tests/screen_sweep.rs`). Fixed: Change Map and Server
+  Options cut off at 1440p, the Admin Login stray button, the Mini-Games
+  status row and v20's never-shown Create blocker: d2c53d48.
+- AutoLight on dark maps at each spawn, and a respawned body starts dark:
+  2cf3769f. No favorites auto-buy in a local Tutorial: 00a658e3.
+- Vehicle steering behind `$pref::Input::UseStrafeSteering` and
+  `UseAutoReturnSteering`, recovered from the exe. Protocol 43 adds
+  `Command::SteeringPrefs`: ebffe9ce and 85055680.
+
+Evidence:
+
+- `cargo test -p bri-client --test actor_effects --test v20_client_scripts`
+- `cargo test -p bri-client --test v20_poses -- --ignored`
+- `cargo test -p bri-vehicles --test steering_prefs -- --ignored`
+- `cargo test -p bri-ui --test screen_sweep -- --ignored`
+- `cargo test -p bri-ui`
+- `cargo test -p bri-sim`
+
+Max's playtest will be the first time these are seen in a window.
+
+## 2026-09-28 Pushable knocked-out bricks (client-only, no network)
+
+Max asked for bricks that became rigid bodies (hammer, wands,
+`fakeKillBrick`, brick explosions) to be pushed by players, vehicles and so
+on, "like v20 a bit more modern", then ruled that this motion is cosmetic like
+particles and must never be synced: "dont wanna waste bandwidth" and keep the
+network light for things that matter. A first server-simulated version
+(0d3fe4a, b5bc0dc, protocol 41) was withdrawn on this branch; the protocol,
+server and replication are unchanged from 8874297.
+
+Each client's `BrickDebris` (`crates/client/src/brick_debris.rs`) now takes
+the players and vehicles it draws as kinematic boxes (`BrickDebris::push`,
+nearest 32 within 6 units of debris), projectiles it draws (`shots`: each
+pushes a body it passes once, 0.2 x speed, and flies on), and later blast cues
+(radius > 0.5 shoves debris already lying around). Pushers are kinematic, so
+debris can never move, slow or block a player or vehicle; nothing about debris
+reaches the server, events or any gameplay query. Debris now weighs 5 per
+cubic unit (2x4 brick = 6) and stays solid 3 s, fading over 2 s (was 1.5 +
+2.5). Evidence: `cargo test -p bri-client --lib brick_debris` (walk-in shove
+with the player exactly where the game put it every frame, vehicle ram
+scatters 7+ of 9, resting pile stays within 0.05, shots and blasts, 128 bodies
+plus a 64-player crowd capped at 32 pushers: ~1 ms/frame in debug).
+## 2026-09-28 Pong colours come back
+
+- Using Demo Pong's paddle buttons could leave bricks on the wrong colour.
+  Two clicks in one server tick got the same timestamp, and their relays
+  reached the paddle state machine together. Both relays used the rows as
+  they were before either switched them. Round-robin turns between origins
+  could also run a later click's row before an earlier one's. The event
+  engine now runs every job from one time-ordered queue, as v20 does. Each
+  activation is its own instant inside the tick, and everything it
+  schedules inherits that instant. A `cancelEvents` only reaches rows
+  scheduled by its own instant. Details and tests are in
+  `docs/audits/pong-events.md` ("Colours that stayed changed"). Evidence:
+  `cargo test -p bri-events`, `cargo test -p bri-sim --test pong --
+  --ignored` (the new hammer test fails on the old scheduler),
+  `cargo test -p bri-sim --test events_native -- --ignored`. The event
+  checkpoint gained defaulted fields. No wire change.
+- 2026-09-28 Remote swing test flake (branch `claude/remote-poses-flake`).
+  `remote_poses` compared the peak hand turn each client sampled over
+  wall-clock frames; under parallel load frames were far apart and the two
+  sides caught different points near the peak (1.018 vs 1.058 rad, limit
+  0.05). Frames now advance at most 4 ms of game time and the windows count
+  game time, so sampling stays dense however slow the machine is; checks
+  unchanged. Evidence: 12 runs six at a time pass, worst gap 0.006 rad; six
+  more with the `claude/smoothing` pose clock applied pass.
+
+## 2026-09-28 Paint colour changes fade like v20
+
+- Maxwell remembered undo and painting fading bricks to their new colour.
+  v20's scripts only call `setColor`. The engine eases every drawn brick
+  colour toward its new colour at `k = 4 * dt` per frame (read from
+  `blocklandv20.exe` 0x53cc90), so paint cans, undo, the wrench and
+  `setColor` events all fade. The client now does the same
+  (`crates/client/src/brick_fade.rs`). Changing bricks leave their chunk and
+  are drawn alone until they settle. The recovered rules and limits are in
+  `docs/audits/bricks.md` ("Paint colour changes ease in"). Evidence:
+  `cargo test -p bri-client --lib`, `cargo clippy -p bri-client --lib
+  --tests`, `cargo build -p bri-client --bins`. Not yet seen in a visible
+  window. Maxwell's check is to paint a brick, undo it, and watch both fade
+  over about a second.
+
+## 2026-09-28 Crash hunt: fuzzing and chaos soaks
+
+Max asked how to find crashes like the a16 casing one before players do.
+New test crate `crates/chaos` (see `docs/crash-hunt.md`): bots doing
+everything at once in one session (`session_chaos`, deterministic per seed)
+and over real QUIC connections (`net_chaos`), plus property tests for Rapier
+update patterns, ray and sweep queries, wire decoding, damaged saves, the
+weapons runtime and damaged Add-On imports. Content variants are
+`#[ignore]`d behind `BRI_CONTENT` for long soaks on Max's PC.
+Found and fixed at the root:
+- Rapier island panics (debug) and a release out-of-bounds in its sleep scan
+  from collision-only refreshes after vehicle spawns and build loads.
+  `bri_physics::detect_collisions` now runs a 1e-6 s full step holding
+  kinematic targets; every runtime call site uses it (the player-only requeue
+  workaround is gone). Regression inputs in `physics_fuzz.rs`.
+- Zero normals from rays starting inside bricks in `Simulation::target`,
+  `WeaponQuery::sweep`/`sweep_box`, tool melee and client building targets:
+  `bri_sim::simulation::hit_normal`.
+- `Replica::pose` accepted NaN energy, scale, head turn and jump normal.
+- Every spawn point built over refused all joins and failed map changes;
+  joins now fall back to a clear point, then place the body anyway
+  (`Player::spawn_overlapping`), as v20 and our respawns do.
+- `ServerReport` now counts contained step errors (`step_errors`).
+Evidence: `cargo test -p bri-chaos` green; `cargo test --no-fail-fast -p
+bri-physics -p bri-motor -p bri-sim -p bri-vehicles -p bri-weapons -p
+bri-world -p bri-net` green apart from tests that need generated content
+(not present in the cloud checkout); clippy -D warnings on every changed
+crate. Not covered: the client renderer and audio (need a window), fx-runtime
+particles beyond the debris/weapon paths, and `.bls` text import.
+
+
+## 2026-09-28 Tester guide and feature list
+
+- Outside testers asked for a feature list: what is done and what still
+  needs doing. `docs/TESTER-GUIDE.md` (install, first start, LAN and
+  internet play by direct IP, where logs and crash files go, what to send,
+  known limits) and `docs/FEATURES.md` (v20 features done, partly done and
+  missing; what goes beyond v20; Add-Ons; what importing a v20 Add-On
+  brings and leaves out) now ship at the top of every release folder
+  (`package_playtest.ps1`, `package_playtest.sh`, the packaging test and
+  `playtest-package-layout.md`). Every claim was checked against the code
+  or the audits (`v20-parity.md`, `v20-fidelity.md`,
+  `v20-client-scripts.md`, `spike-addon-import.md`). Only UDP 28000 needs
+  forwarding for internet play: 28050 answers LAN discovery and is never
+  needed to join (`docs/architecture/hosting.md`). The modding guide no
+  longer lists the join trust prompt as unbuilt; only elevated client code
+  is. Evidence: `bash -n tools/package_playtest.sh`; the PowerShell
+  packaging test needs Windows (not run in the cloud).

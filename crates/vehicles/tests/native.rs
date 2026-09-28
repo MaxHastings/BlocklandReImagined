@@ -914,7 +914,9 @@ fn wheeled_vehicles_settle_upright_and_drive_forward() {
             Controls {
                 throttle: 1.,
                 steer: 1.,
-                // Mouse-steered vehicles turn by accumulating mouse motion.
+                // The Jeep's strafe keys steer; mouse-steered vehicles turn
+                // by accumulating mouse motion.
+                strafe: if d.strafe_steering { 1. } else { 0. },
                 look_delta: if d.strafe_steering {
                     [0.; 2]
                 } else {

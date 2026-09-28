@@ -240,6 +240,12 @@ impl Definition {
         )
     }
     pub fn seat_role(&self, seat: usize) -> SeatRole {
+        self.seat_role_for(seat, true)
+    }
+    /// The seat's role for a rider whose `$pref::Input::UseStrafeSteering`
+    /// is `strafe_steering`: off, a strafe-steered vehicle's driver steers
+    /// with the mouse (`amIStrafeSteering`, blocklandv20.exe 0x4d8010).
+    pub fn seat_role_for(&self, seat: usize, strafe_steering: bool) -> SeatRole {
         let Some(s) = self.seats.get(seat) else {
             return SeatRole::Passenger;
         };
@@ -249,7 +255,7 @@ impl Definition {
             SeatRole::Gunner
         } else if !s.controls {
             SeatRole::Passenger
-        } else if self.strafe_steering {
+        } else if self.strafe_steering && strafe_steering {
             SeatRole::StrafeDriver
         } else {
             SeatRole::MouseDriver

@@ -17,6 +17,12 @@ const HISTORY: usize = 16;
 /// Render other vehicles this many server ticks behind the newest pose.
 const INTERPOLATION_TICKS: f64 = 9.0;
 const TICK_RATE: f64 = 120.0;
+/// The driven vehicle runs at most this many ticks past its newest pose.
+const DRIVEN_AHEAD: f64 = 6.0;
+/// The driven vehicle's corrections decay at this rate per second.
+const DRIVEN_CORRECTION_RATE: f32 = 14.0;
+/// Driven corrections larger than this are teleports and snap.
+const DRIVEN_SNAP: f32 = 4.0;
 
 struct Model {
     data: bri_render::scene::SceneData,
@@ -301,12 +307,24 @@ pub struct VehicleFrame {
 pub struct ClientVehicles {
     history: BTreeMap<u64, VecDeque<VehiclePose>>,
     frames: BTreeMap<u64, VehicleFrame>,
+    driven: Option<Warp>,
+}
+/// How far the driven vehicle is drawn from its extrapolated newest pose:
+/// a disagreeing pose shifts the path, and the difference decays instead of
+/// popping (Torque's warp toward a corrected control object).
+struct Warp {
+    vehicle: u64,
+    newest: u64,
+    now: f64,
+    offset: Vec3,
+    turn: Quat,
 }
 
 impl ClientVehicles {
     pub fn clear(&mut self) {
         self.history.clear();
         self.frames.clear();
+        self.driven = None;
     }
     pub fn frame(&self, id: u64) -> Option<&VehicleFrame> {
         self.frames.get(&id)
@@ -332,6 +350,9 @@ impl ClientVehicles {
             }
         }
         self.frames.clear();
+        if self.driven.as_ref().is_some_and(|w| Some(w.vehicle) != driven) {
+            self.driven = None;
+        }
         for (id, history) in &self.history {
             let Some(newest) = history.back() else {
                 continue;
@@ -339,9 +360,37 @@ impl ClientVehicles {
             let frame = match server_tick {
                 Some(now) if Some(*id) != driven => sample(history, now - INTERPOLATION_TICKS),
                 Some(now) => {
-                    let ahead = ((now - newest.tick as f64).clamp(0.0, 6.0) / TICK_RATE) as f32;
-                    let mut frame = frame_of(newest);
-                    frame.position += frame.velocity * ahead;
+                    let mut frame = extrapolate(newest, now);
+                    let warp = self.driven.get_or_insert(Warp {
+                        vehicle: *id,
+                        newest: newest.tick,
+                        now,
+                        offset: Vec3::ZERO,
+                        turn: Quat::IDENTITY,
+                    });
+                    let seconds = ((now - warp.now).max(0.0) / TICK_RATE) as f32;
+                    let decay = (-DRIVEN_CORRECTION_RATE * seconds).exp();
+                    warp.offset *= decay;
+                    warp.turn = Quat::IDENTITY.slerp(warp.turn, decay).normalize();
+                    warp.now = now;
+                    if warp.newest != newest.tick {
+                        // Keep drawing where the previous pose's path is now.
+                        if let Some(old) = history.iter().rev().find(|p| p.tick == warp.newest) {
+                            let old = extrapolate(old, now);
+                            let offset = old.position + warp.offset - frame.position;
+                            if offset.is_finite() && offset.length() <= DRIVEN_SNAP {
+                                warp.offset = offset;
+                                warp.turn = (warp.turn * old.rotation * frame.rotation.inverse())
+                                    .normalize();
+                            } else {
+                                warp.offset = Vec3::ZERO;
+                                warp.turn = Quat::IDENTITY;
+                            }
+                        }
+                        warp.newest = newest.tick;
+                    }
+                    frame.position += warp.offset;
+                    frame.rotation = (warp.turn * frame.rotation).normalize();
                     frame
                 }
                 None => frame_of(newest),
@@ -529,6 +578,14 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
     }
 }
 
+/// The pose carried forward by its velocity to `now`, briefly.
+fn extrapolate(pose: &VehiclePose, now: f64) -> VehicleFrame {
+    let ahead = ((now - pose.tick as f64).clamp(0.0, DRIVEN_AHEAD) / TICK_RATE) as f32;
+    let mut frame = frame_of(pose);
+    frame.position += frame.velocity * ahead;
+    frame
+}
+
 fn sample(history: &VecDeque<VehiclePose>, tick: f64) -> VehicleFrame {
     let first = history.front().unwrap();
     if tick <= first.tick as f64 {
@@ -674,5 +731,34 @@ mod tests {
         let history: VecDeque<_> = [pose(10, 0.0), pose(13, 3.0)].into();
         assert!((sample(&history, 11.5).position.x - 1.5).abs() < 1e-5);
         assert_eq!(sample(&history, 0.0).position.x, 0.0);
+    }
+    #[test]
+    fn a_driven_vehicle_warps_onto_a_corrected_pose() {
+        let infos = BTreeMap::from([(
+            1,
+            VehicleInfo {
+                id: 1,
+                definition: String::new(),
+                color: None,
+                occupants: vec![],
+                destroyed: false,
+            },
+        )]);
+        let mut vehicles = ClientVehicles::default();
+        let moving = VehiclePose {
+            velocity: [12.0, 0.0, 0.0],
+            ..pose(0, 0.0)
+        };
+        vehicles.update(&infos, &BTreeMap::from([(1, moving)]), Some(3.0), Some(1));
+        let before = vehicles.frame(1).unwrap().position;
+        assert!((before.x - 0.3).abs() < 1e-5);
+        // The host says it stopped at 0.1: no pop, then it settles there.
+        let stopped = BTreeMap::from([(1, pose(3, 0.1))]);
+        vehicles.update(&infos, &stopped, Some(3.0), Some(1));
+        assert!((vehicles.frame(1).unwrap().position - before).length() < 1e-5);
+        for frame in 1..=60 {
+            vehicles.update(&infos, &stopped, Some(3.0 + frame as f64 * 2.0), Some(1));
+        }
+        assert!((vehicles.frame(1).unwrap().position.x - 0.1).abs() < 0.01);
     }
 }

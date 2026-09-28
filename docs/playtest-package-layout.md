@@ -23,6 +23,8 @@ BlocklandReImagined-alpha-<version>/
     <15 selected native packages, recursively copied>
   PLAYTEST.md
   KNOWN-ISSUES.md
+  TESTER-GUIDE.md         install, playing together, what to send, known limits
+  FEATURES.md             what is done, partly done and missing
   Launch.cmd
   Launch-Playtest.ps1
   MANIFEST.json

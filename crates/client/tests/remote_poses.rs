@@ -14,6 +14,12 @@ use std::{
 
 const SIZE: (u32, u32) = (960, 720);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
+/// Longest game time one frame may advance. A loaded machine runs slow
+/// frames; stepping them by wall time would sample the swing so sparsely
+/// that each side catches a different point near its peak. Capped, the game
+/// runs behind the wall clock instead, and every recording samples the
+/// animation at least this densely.
+const MAX_FRAME: Duration = Duration::from_millis(4);
 
 fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     app.tick(elapsed)?;
@@ -26,27 +32,32 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
 }
 
 /// Step both apps until `ready` holds, calling `each` after every frame.
+/// Frames advance by wall time up to [`MAX_FRAME`]; `ready` gets the game
+/// time stepped so far, which never runs ahead of the wall clock.
 fn until(
     apps: &mut [&mut App],
     what: &str,
     timeout: Duration,
     mut each: impl FnMut(&[&mut App]),
-    ready: impl Fn(&[&mut App]) -> bool,
+    ready: impl Fn(&[&mut App], Duration) -> bool,
 ) -> Result<()> {
     let start = Instant::now();
     let mut previous = start;
+    let mut game = Duration::ZERO;
     loop {
+        thread::sleep(Duration::from_millis(1));
         let now = Instant::now();
+        let elapsed = now.duration_since(previous).min(MAX_FRAME);
         for app in apps.iter_mut() {
-            step(app, now.duration_since(previous))?;
+            step(app, elapsed)?;
         }
         previous = now;
+        game += elapsed;
         each(apps);
-        if ready(apps) {
+        if ready(apps, game) {
             return Ok(());
         }
         ensure!(start.elapsed() < timeout, "Timed out waiting for {what}");
-        thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -119,7 +130,7 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut [&mut host], "host in game", Duration::from_secs(90), |_| {}, |a| {
+    until(&mut [&mut host], "host in game", Duration::from_secs(90), |_| {}, |a, _| {
         in_game(a[0])
     })?;
     request(
@@ -134,7 +145,7 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
         "guest in game",
         Duration::from_secs(90),
         |_| {},
-        |a| in_game(a[1]) && a.iter().all(|app| app.network_view().unwrap().poses.len() == 2),
+        |a, _| in_game(a[1]) && a.iter().all(|app| app.network_view().unwrap().poses.len() == 2),
     )?;
     let mut report = String::new();
     // Each side swings in turn while the other watches.
@@ -154,9 +165,8 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
             }),
         )?;
         let settle = |apps: &mut [&mut App]| {
-            let start = Instant::now();
-            until(apps, "settle", Duration::from_secs(10), |_| {}, |_| {
-                start.elapsed() > Duration::from_millis(1500)
+            until(apps, "settle", Duration::from_secs(120), |_| {}, |_, game| {
+                game > Duration::from_millis(1500)
             })
         };
         // Every tool with a third-person swing.
@@ -176,16 +186,15 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
                         down,
                     }),
                 )?;
-                let start = Instant::now();
                 until(
                     &mut [&mut *swinger, &mut *watcher],
                     "swing",
-                    Duration::from_secs(10),
+                    Duration::from_secs(120),
                     |a| {
                         own.extend(a[0].avatar_node(id, "RightHand"));
                         seen.extend(a[1].avatar_node(id, "RightHand"));
                     },
-                    |_| start.elapsed() > Duration::from_millis(hold),
+                    |_, game| game > Duration::from_millis(hold),
                 )?;
             }
             let (own_reach, seen_reach) = (reach(&own, own_rest), reach(&seen, seen_rest));

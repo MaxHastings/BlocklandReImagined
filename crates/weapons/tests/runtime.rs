@@ -1009,3 +1009,26 @@ fn explosion_debris_lowers_every_stock_debris_explosion() {
     assert_eq!(sparks.emitters, ["rocketTrailEmitter"]);
     assert_eq!((sparks.gravity, sparks.lifetime, sparks.fade), (0., 0.1, false));
 }
+
+#[test]
+#[ignore = "requires converted vanilla weapons pack"]
+fn a_stuck_arrow_remembers_the_direction_it_flew() {
+    // arrowProjectile sticks past minStickVelocity 10 when it hits head-on.
+    let mut w = world("BowItem");
+    let mut q = Scene {
+        hit: Some(hit(TargetId::Brick(3), -6.0)),
+        ..Default::default()
+    };
+    run(&mut w, 70, &mut q);
+    w.trigger(ActorId(1), true).unwrap();
+    run(&mut w, 10, &mut q);
+    w.trigger(ActorId(1), false).unwrap();
+    run(&mut w, 60, &mut q);
+    let stuck: Vec<_> = w.projectiles().filter(|p| p.stuck).collect();
+    assert!(!stuck.is_empty(), "the arrow sticks");
+    for p in stuck {
+        assert_eq!(p.velocity, Vec3::ZERO);
+        let heading = p.heading.expect("stuck heading");
+        assert!(heading.dot(Vec3::NEG_Z) > 0.9, "{heading}");
+    }
+}

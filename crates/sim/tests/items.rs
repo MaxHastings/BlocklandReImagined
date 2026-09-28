@@ -8,6 +8,7 @@ use bri_sim::{
     session::{Command, Session},
     simulation::Simulation,
 };
+use bri_sim::player::PlayerTuning;
 use bri_weapons::{CORE_TOOLS, ItemBounds};
 use bri_world::{Brick, ContentRef, World};
 use glam::Vec3;
@@ -354,4 +355,29 @@ fn dropping_and_picking_up_a_tool_play_the_item_sound() {
         .map(|(o, _)| o)
         .collect();
     assert_eq!(sounds, [a, b]);
+}
+
+#[test]
+fn pickups_need_the_player_box_itself_to_touch_the_item() {
+    // PlayerData::preload: pickupRadius (0.625) below the box's larger XY
+    // side (1.25) is raised to it, so pickupDelta = (S32)(radius - side) = 0
+    // and the item box must overlap the player's own box, unexpanded
+    // (TGE lineage player.cc; 0.625 is below the side at any player scale).
+    let half = PlayerTuning::default().width * 0.5;
+    assert!(0.625 <= 2.0 * half, "pickupRadius never widens the box");
+    for (gap, picked) in [(-0.02, true), (0.05, false)] {
+        let mut s = session();
+        let at = Vec3::from(s.weapon_view().static_items[0].position);
+        // Item bounds reach 0.1 from its origin.
+        let x = at.x + half + 0.1 + gap;
+        let player = s
+            .join("Reacher".into(), Vec3::new(x, 0.35, at.z), false)
+            .unwrap();
+        s.step().unwrap();
+        assert_eq!(
+            s.tool_inventories()[&player].slots[3].is_some(),
+            picked,
+            "gap {gap}"
+        );
+    }
 }

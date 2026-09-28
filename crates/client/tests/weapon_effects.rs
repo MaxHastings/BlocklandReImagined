@@ -147,6 +147,7 @@ fn view() -> WeaponView {
     WeaponView {
         projectiles: vec![Projectile {
             paint: None,
+            heading: None,
 id: 1,
             definition: "projectile".into(),
             source: ActorId(1),

@@ -76,8 +76,8 @@ lineage instead of the v20 binary, the row says "inherited".
 | 13 | Vehicle water splash | `splash = vehicleSplash`, `splashEmitter` | Drawn (`actor_effects` `VEHICLE_SPLASH`) | Pass |
 | 14 | Tank gun | 140 × scale, 2.5 s cooldown, `TankshotSound`, `TankSmokeImage`, hull impulse −(look + up) × mass × 5 | Same (`vehicles-import` weapon, `world.rs` `weapon_step`) | Pass |
 | 15 | Cannon gun | Power 1–10 at 200 ms steps, speed 5.5 × power × scale, `CannonSmokeImage`, fuse image while charging | Same | Pass |
-| 16 | Jet ground dust | `jetGroundEmitter` within `jetGroundDistance` 4 of the ground while jetting | Not drawn | **Open**: Blockland-only engine code, not in the TGE lineage; needs the disassembly before it can be matched |
-| 17 | Bottom print bar | `bottomPrint(..., hideBar = 1)` for the cannon meter | Server bottom prints always keep the bar (`Notice::Bottom` has no flag) | **Open**, minor: needs a wire field |
+| 16 | Jet ground dust | `jetGroundEmitter` within `jetGroundDistance` 4 of the ground while jetting | Not drawn | **Fixed** on main by the final-touches thread (de7b9c4, recovered from the executable) |
+| 17 | Bottom print bar | `bottomPrint(..., hideBar = 1)` for the cannon meter | Server bottom prints always keep the bar (`Notice::Bottom` has no flag) | **Fixed** 2cee4fcb (protocol 41): `Notice::Bottom::hide_bar`. v20's global `bottomPrint` passes its line count as `hideBar`, so only the cannon hides the bar; `commandToClient` and `GameConnection::BottomPrint` prints keep it |
 | 18 | Image `rotation`/`eyeRotation` from `eulerToMatrix` | `MatrixCreateFromEuler` builds `QuatF(EulerF)`, and `TypeMatrixRotation` rebuilds the matrix through it. The result is the transpose of `MatrixF(EulerF)` (TGE lineage, OpenMBG `mathTypes.cc`, `mQuat.cc`) | Stored as `MatrixF(EulerF)`: the skis (−90 90 0 / 90 −90 0) were held sideways, and the bow's tilt, football, horse brick and cannon smoke were mirrored | **Fixed** 5228401: `bri_weapons::rotation`, applied when the client loads item presentation and image emitters |
 | 19 | Deploying a brick | Clicking with bricks in hand fires `brickImage`: the Fire swing, a `brickTrailEmitter` stream and `brickDeployProjectile`'s `brickDeployExplosion` (blue chunks, flash) where the ghost lands. Its `onCollision` never raises `onProjectileHit` | Ghost placed locally only, no image fire | **Fixed** 936ebe6 |
 | 20 | Held melee in first person | `setImageState` restarts the state's sequence on every entry. A held hammer, wand, sword or broom loops Fire, CheckFire (0 ticks), Fire | View model swung once. The replicated state never left "Fire" | **Fixed** 4521d7f: the image-thread `WeaponAnimation` cue restarts the clip |
@@ -85,7 +85,7 @@ lineage instead of the v20 binary, the row says "inherited".
 | 22 | Brick break sound | `BrickBreak` on `AudioClientClose3d` (3D, 10/60). One `BrickBreakSoundEvent` per brick explosion, which groups up to 100 bricks (`startNewBrickExplosion`/`sendBrickExplosion`; one per blast is inferred) | One full-volume copy per killed brick. A 30-brick blast stacked to the 16-voice cap and sounded like one maximum-volume sound | **Fixed** 41b0dcf: one per blast, at its origin. Harness 3 pins the descriptions |
 | 23 | Looking straight up or down | Look limits exactly ±90° (`minLookAngle`/`maxLookAngle`). The eye is yaw then pitch; `getCameraTransform` composes `cameraTilt` past vertical. m.dts's look sequences never move the Eye node | The render camera switched to a fixed +Z up within 0.8° of vertical, so the view snapped roll, stopped turning with yaw and disagreed with the held tool. The chase camera's pitch was clamped at 89.4°, a 15° dead zone | **Fixed** e308f4b: one yaw-then-pitch basis (`Camera::oriented`) for the camera, effects, weather and listener |
 | 24 | Throwing the spear | spear.dts's `fire` sequence hides both spear objects while it is thrown | The empty posed image got zero-size GPU buffers and the shadow pass bound them: a16 crashed ("buffer slice can not be empty") | **Fixed** 93678a0a: posed geometry gets placeholder buffers and empty scenes are skipped. Only the spear hides every object; the bow hides just its arrow |
-| 25 | Stuck arrows | A stuck projectile keeps its last render transform | Sticking zeroes the velocity and the model was oriented from velocity, so stuck arrows pointed straight up | **Fixed** 9d016bfe: the client keeps each projectile's last flight direction. A player who joins after an arrow stuck still sees it upright (the direction is not replicated) |
+| 25 | Stuck arrows | A stuck projectile keeps its last render transform | Sticking zeroes the velocity and the model was oriented from velocity, so stuck arrows pointed straight up | **Fixed** 9d016bfe: the client keeps each projectile's last flight direction. d5b92266 replicates the heading (`Projectile::heading`, protocol 41), so late joiners see it too |
 
 ### Player feel constants
 
@@ -171,6 +171,9 @@ handled under another name, has no effect in v20, or is an open gap.
 - **Adapted, documented elsewhere.** Tire and spring coefficients
   (`lateral/longitudinal*`, `kineticFriction`, `antiSwayForce`) are mapped
   to Rapier's ray suspension (`vehicles.md`, "Adaptations").
-- **Open.** `jetGroundEmitter/jetGroundDistance` (row 16).
-  `pickupRadius` 0.625: pickups are contact-driven (`session/items.rs`);
-  whether v20's pickup box is widened by this radius is not verified.
+- **Verified.** `jetGroundEmitter/jetGroundDistance` landed on main (row
+  16). `pickupRadius` 0.625: `PlayerData::preload` raises it to the box's
+  larger XY side (1.25) and adds only the excess (`pickupDelta`, here 0) to
+  the contact box, so v20 picks up an item exactly when it overlaps the
+  player's own box, as ours does (`sim/tests/items.rs`
+  `pickups_need_the_player_box_itself_to_touch_the_item`).

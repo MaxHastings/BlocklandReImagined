@@ -429,7 +429,7 @@ mod tests {
             ],
         );
         assert!(stats.loaded >= 2 && stats.changed());
-        physics.detect_collisions(&(), &());
+        crate::detect_collisions(&mut physics);
         for (center, span) in [(a, 10.0f32), (b, 10.0)] {
             for i in 0..121 {
                 let x = center.x - span + (i % 11) as f32 * 2.0 * span / 10.0 + 0.137;
@@ -461,7 +461,7 @@ mod tests {
                 },
             ],
         );
-        physics.detect_collisions(&(), &());
+        crate::detect_collisions(&mut physics);
         assert!(down(&physics, hole.x, hole.z).is_none());
         let expected = f.height(repeat.x, repeat.z).unwrap();
         assert!((down(&physics, repeat.x, repeat.z).unwrap() - expected).abs() < 2e-3);
@@ -517,7 +517,7 @@ mod tests {
         for _ in 0..600 {
             let foci = body_foci(&physics, BodyFocusPolicy::default());
             if stream.update(&mut physics, &foci).changed() {
-                physics.detect_collisions(&(), &());
+                crate::detect_collisions(&mut physics);
             }
             physics.step();
         }

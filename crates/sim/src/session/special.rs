@@ -127,6 +127,7 @@ impl Session {
                     Notice::Bottom {
                         text: "\u{E004}Checkpoint reached! \u{E007}- Say /clearCheckpoint to go back to the beginning".into(),
                         seconds: 3.0,
+                        hide_bar: false,
                     },
                 );
                 Ok(false)
@@ -244,6 +245,7 @@ impl Session {
                                 "\u{E003}You already opened this treasure chest ({found} / {total} found)"
                             ),
                             seconds: 2.0,
+                            hide_bar: false,
                         },
                     );
                     return Ok(false);
@@ -264,7 +266,14 @@ impl Session {
                 } else {
                     format!("\u{E003}You have found {found} / {total} treasure chests!")
                 };
-                self.notify(owner, Notice::Bottom { text, seconds: 2.0 });
+                self.notify(
+                    owner,
+                    Notice::Bottom {
+                        text,
+                        seconds: 2.0,
+                        hide_bar: false,
+                    },
+                );
                 Ok(true)
             }
             _ => Ok(true),
@@ -375,7 +384,14 @@ impl Session {
             (t, f) if f >= t => format!("\u{E003}You have found all {t} treasure chests!"),
             (t, f) => format!("\u{E003}You have found {f} of {t} treasure chests!"),
         };
-        self.notify(owner, Notice::Bottom { text, seconds: 2.0 });
+        self.notify(
+            owner,
+            Notice::Bottom {
+                text,
+                seconds: 2.0,
+                hide_bar: false,
+            },
+        );
         Ok(())
     }
 }

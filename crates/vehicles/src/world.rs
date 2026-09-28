@@ -52,14 +52,17 @@ pub struct Controls {
     /// `move->yaw`/`move->pitch`, which mouse-steered vehicles accumulate.
     #[serde(default)]
     pub look_delta: [f32; 2],
+    /// The driver turned `$pref::Input::UseStrafeSteering` off: a vehicle
+    /// with `steeringUseStrafeSteering` is then mouse-steered too.
+    #[serde(default)]
+    pub strafe_steering_off: bool,
+    /// The driver turned `$pref::Input::UseAutoReturnSteering` off.
+    #[serde(default)]
+    pub auto_return_off: bool,
 }
 /// `WheeledVehicle::updateCollision` (0x572303) wrecks a vehicle whose body
 /// collides while none of its first three wheels touches the ground.
 const WRECK_WHEELS: usize = 3;
-/// Torque's player step height (`maxStepHeight`) for player-type mounts.
-/// Steering Auto-Return (on by default in v20): released mouse steering
-/// halves every quarter second.
-const STEERING_RETURN_PER_TICK: f32 = 0.977_15;
 /// Blockland's flying forces on `WheeledVehicle` (blocklandv20.exe
 /// `WheeledVehicle::updateForces` 0x5746a0, fields registered at 0x5703ea).
 /// The pack keeps these fields only in `authored`, so they are read there.
@@ -75,6 +78,9 @@ struct WheeledFlight {
     /// `steeringUseAutoReturn` (default on), `steeringAutoReturnRate` (0.9)
     /// and `steeringAutoReturnMaxSpeed` (10), from the data constructor.
     auto_return: Option<(f32, f32)>,
+    /// `steeringStrafeSteeringRate` (default 0.1, 0x5716dc): the steering a
+    /// held strafe key adds per 32 ms tick.
+    strafe_rate: f32,
 }
 /// v20 caps the flying lift at 4000 whatever the datablock says (0x575382).
 const WHEELED_LIFT_CAP: f32 = 4000.;
@@ -107,6 +113,7 @@ impl WheeledFlight {
                     number("steeringautoreturnmaxspeed", 10.),
                 )
             }),
+            strafe_rate: number("steeringstrafesteeringrate", 0.1),
         }
     }
     /// How much the control surfaces bite: none below `stallSpeed`, full at
@@ -1141,13 +1148,40 @@ impl VehiclesWorld {
             let right = rot * Vec3::X;
             let up = rot * Vec3::Y;
             let speed = velocity.dot(forward);
-            // Vehicle::updateMove: mouse steering accumulates, clamped to the
-            // steering angle. FlyingVehicle damps it below maxAutoSpeed.
-            if d.seat_role(0) == SeatRole::MouseDriver {
+            // Vehicle::updateMove (0x56b590): the move's yaw and pitch add to
+            // the steering, clamped to the steering angle. The driver's move
+            // carries the mouse turn, or, with strafe steering (the vehicle's
+            // `steeringUseStrafeSteering` and the driver's
+            // `$pref::Input::UseStrafeSteering`), +-steeringStrafeSteeringRate
+            // per 32 ms tick for a held strafe key while the mouse only looks
+            // around (Player::updateMove 0x5b2e89). FlyingVehicle damps the
+            // steering below maxAutoSpeed.
+            let strafe_mode = d.strafe_steering && !c.strafe_steering_off;
+            let wheeled = matches!(
+                d.family,
+                Family::Wheeled | Family::FlyingWheeled | Family::Skis
+            );
+            let driver = matches!(
+                d.seat_role(0),
+                SeatRole::MouseDriver | SeatRole::StrafeDriver
+            );
+            if driver {
                 let limit = d.max_steering.max(0.01);
                 let mut steering = v.mouse_steering;
+                let turn = if strafe_mode {
+                    let key = if c.strafe > 0. {
+                        1.
+                    } else if c.strafe < 0. {
+                        -1.
+                    } else {
+                        0.
+                    };
+                    [key * WheeledFlight::of(d).strafe_rate * 25. / 96., 0.]
+                } else {
+                    c.look_delta
+                };
                 if driven {
-                    for (axis, turn) in steering.iter_mut().zip(c.look_delta) {
+                    for (axis, turn) in steering.iter_mut().zip(turn) {
                         *axis = (*axis + turn).clamp(-limit, limit);
                     }
                 } else {
@@ -1159,33 +1193,29 @@ impl VehiclesWorld {
                     let damping = f.auto_input_damping.powf(25. / 96.);
                     steering.iter_mut().for_each(|x| *x *= damping);
                 }
-                if matches!(d.family, Family::FlyingWheeled | Family::Skis) {
-                    // WheeledVehicle::updateMove (0x570c4a): on a move with no
-                    // mouse turn, both axes return by rate × throttle share
-                    // (`move->y`, so steering holds with the throttle released).
-                    if let Some((rate, max)) = WheeledFlight::of(d).auto_return
-                        && c.look_delta[0] == 0.
-                        && max > 0.
-                    {
-                        let share = c.throttle.abs().min(max) / max;
-                        let keep = (1. - rate * share).max(0.).powf(25. / 96.);
-                        steering.iter_mut().for_each(|x| *x *= keep);
-                    }
-                } else {
-                    for (axis, turn) in steering.iter_mut().zip(c.look_delta) {
-                        if turn == 0. {
-                            *axis *= STEERING_RETURN_PER_TICK;
-                        }
-                    }
+                // WheeledVehicle::updateMove (0x570c4a): with the driver's
+                // `$pref::Input::UseAutoReturnSteering` and the vehicle's
+                // `steeringUseAutoReturn`, a move with no yaw returns both
+                // axes by rate x throttle share (`move->y`, so steering holds
+                // with the throttle released).
+                if wheeled
+                    && !c.auto_return_off
+                    && let Some((rate, max)) = WheeledFlight::of(d).auto_return
+                    && turn[0] == 0.
+                    && max > 0.
+                {
+                    let share = c.throttle.abs().min(max) / max;
+                    let keep = (1. - rate * share).max(0.).powf(25. / 96.);
+                    steering.iter_mut().for_each(|x| *x *= keep);
                 }
                 v.mouse_steering = steering;
             }
-            let (steer, pitch, roll) = if d.seat_role(0) == SeatRole::MouseDriver {
+            let (steer, pitch, roll) = if driver {
                 let limit = d.max_steering.max(0.01);
                 (
                     v.mouse_steering[0] / limit,
                     v.mouse_steering[1] / limit,
-                    c.strafe,
+                    if strafe_mode { 0. } else { c.strafe },
                 )
             } else {
                 (c.steer, c.pitch, c.roll)
@@ -1264,16 +1294,7 @@ impl VehiclesWorld {
                     // Skis are a WheeledVehicle with frictionless NothingTires:
                     // only Blockland's flying forces move and turn them.
                     Family::Wheeled | Family::FlyingWheeled | Family::Skis => {
-                        let target = steer * d.max_steering;
-                        if d.strafe_steering {
-                            // steeringStrafeSteeringRate: 0.1 radian per 32 ms
-                            // tick, returning to center when released.
-                            let rate = if steer == 0. { 0.9 } else { 3.125 };
-                            v.steering +=
-                                (target - v.steering).clamp(-rate * FIXED_DT, rate * FIXED_DT);
-                        } else {
-                            v.steering = target;
-                        }
+                        v.steering = steer * d.max_steering;
                         if matches!(d.family, Family::FlyingWheeled | Family::Skis) {
                             let f = WheeledFlight::of(d);
                             // Speed along the nose, either way (0x575208).

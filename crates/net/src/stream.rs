@@ -331,6 +331,7 @@ fn projectile_same(a: &Projectile, b: &Projectile) -> bool {
         && a.definition == b.definition
         && a.source == b.source
         && a.origin == b.origin
+        && a.heading == b.heading
         && a.position.distance(b.position) <= PROJECTILE_DRIFT
         && a.velocity.distance(b.velocity) <= PROJECTILE_DRIFT
 }
@@ -471,6 +472,7 @@ mod tests {
             origin: glam::Vec3::ZERO,
             was_thrown: false,
             paint: None,
+            heading: None,
         }
     }
 

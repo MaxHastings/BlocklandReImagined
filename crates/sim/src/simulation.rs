@@ -51,6 +51,17 @@ pub struct Builder<'a> {
     pub position: Vec3,
     pub reach: f32,
 }
+/// The surface normal a hit reports, always a unit vector. A ray that
+/// starts inside a shape hits it at distance zero with no normal (the a16
+/// shell-casing crash normalized that into NaN); that surface faces back
+/// along the ray.
+pub fn hit_normal(normal: Vec3, direction: Vec3) -> Vec3 {
+    normal
+        .try_normalize()
+        .or_else(|| (-direction).try_normalize())
+        .unwrap_or(Vec3::Y)
+}
+
 #[derive(Debug, Clone)]
 pub struct Hit {
     pub brick: Option<BrickId>,
@@ -98,7 +109,7 @@ pub fn set_enabled(
     for handle in handles {
         physics.colliders[*handle].set_enabled(enabled);
     }
-    physics.detect_collisions(&(), &());
+    bri_physics::detect_collisions(physics);
     Ok(())
 }
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
@@ -173,7 +184,7 @@ impl Simulation {
                 physics.insert_collider(brick_collider(brick, definition, *id), None),
             );
         }
-        physics.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut physics);
         Ok(Self {
             authority: Authority::new(world)?,
             definitions,
@@ -239,7 +250,7 @@ impl Simulation {
     /// enter an island and trip Rapier's consistency check on the next step,
     /// so every body is marked modified again afterwards.
     fn detect_collisions(&mut self) {
-        self.physics.detect_collisions(&(), &());
+        bri_physics::detect_collisions(&mut self.physics);
         for _ in self.physics.bodies.iter_mut() {}
     }
     pub fn state(&self) -> &World {
@@ -721,7 +732,7 @@ impl Simulation {
             .map(|(_, hit)| Hit {
                 brick: None,
                 position: origin + direction * hit.time_of_impact,
-                normal: Vec3::from(hit.normal.to_array()),
+                normal: hit_normal(Vec3::from(hit.normal.to_array()), direction),
                 distance: hit.time_of_impact,
             });
         // Terrain answers exactly, loaded tile or not, as it does for weapons.
@@ -731,7 +742,7 @@ impl Simulation {
             nearest = Some(Hit {
                 brick: None,
                 position: origin + direction * distance,
-                normal,
+                normal: hit_normal(normal, direction),
                 distance,
             });
         }
@@ -818,9 +829,12 @@ impl Simulation {
             *nearest = Some(Hit {
                 brick: Some(id),
                 position: origin + direction * distance,
-                normal: brick
-                    .transform()
-                    .transform_vector3(Vec3::from(normal.to_array())),
+                normal: hit_normal(
+                    brick
+                        .transform()
+                        .transform_vector3(Vec3::from(normal.to_array())),
+                    direction,
+                ),
                 distance,
             });
         }

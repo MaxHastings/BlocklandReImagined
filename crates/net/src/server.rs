@@ -218,6 +218,8 @@ impl PerfWindow {
 pub struct ServerReport {
     pub weapon_adapter_gaps: BTreeMap<String, u64>,
     pub ticks: u64,
+    /// Ticks where a gameplay system failed and was contained.
+    pub step_errors: u64,
     pub dropped_ticks: u64,
     pub dropped_cues: u64,
     pub joins: u64,
@@ -1251,6 +1253,7 @@ async fn run(
     }
     outcome?;
     Ok(ServerReport {
+        step_errors,
         weapon_adapter_gaps: session.weapon_adapter_gaps().clone(),
         ticks: session.simulation().state().tick,
         dropped_ticks: clock.dropped,

@@ -544,9 +544,23 @@ impl Session {
             base.push_str(&format!(" {red}<just:center>NEW RECORD!!!"));
         }
         let text = format!("{prefix} {red}To {color}{receiver} {base}");
-        self.notify(source, Notice::Bottom { text, seconds: 5.0 });
+        self.notify(
+            source,
+            Notice::Bottom {
+                text,
+                seconds: 5.0,
+                hide_bar: false,
+            },
+        );
         let text = format!("{prefix} {red}From {color}{passer} {base}");
-        self.notify(catcher, Notice::Bottom { text, seconds: 5.0 });
+        self.notify(
+            catcher,
+            Notice::Bottom {
+                text,
+                seconds: 5.0,
+                hide_bar: false,
+            },
+        );
     }
     /// `basketballShootImage::onMount`/`onUnMount`: a no-jet Blockhead lining
     /// up a shot becomes `BallShootPlayer` and gets its datablock back after.

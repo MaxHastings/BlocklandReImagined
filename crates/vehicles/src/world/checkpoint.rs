@@ -309,12 +309,7 @@ impl VehiclesWorld {
         *self = next;
         // Rebuild collider poses/broadphase against the existing host geometry;
         // this does not advance simulation time or execute game callbacks.
-        world.detect_collisions(&(), &());
-        // That pass consumes each new body's modified flag without filing it
-        // into an island (Rapier 0.36); touch them so the next step does.
-        for v in self.instances.values() {
-            let _ = world.bodies.get_mut(v.body);
-        }
+        bri_physics::detect_collisions(world);
         Ok(self.snapshot(world))
     }
     fn validate_checkpoint(

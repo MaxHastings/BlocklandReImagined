@@ -1276,7 +1276,7 @@ impl Session {
                             1 => "Copied 1 brick".to_string(),
                             n => format!("Copied {n} bricks"),
                         };
-                        self.notify(player, Notice::Bottom { text, seconds: 2.0 });
+                        self.notify(player, Notice::Bottom { text, seconds: 2.0, hide_bar: false });
                     }
                     Err(error) => self.center_print(player, format!("{error:#}")),
                 }

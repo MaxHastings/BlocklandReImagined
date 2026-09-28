@@ -337,7 +337,13 @@ impl WorldItems {
                 *self.headings.entry(projectile.id).or_default() = velocity;
                 velocity
             } else {
-                self.headings.get(&projectile.id).copied().unwrap_or(velocity)
+                // The server sends a stuck projectile's direction, so a
+                // player who never saw it fly still sees it right.
+                projectile
+                    .heading
+                    .filter(|h| h.is_finite())
+                    .or_else(|| self.headings.get(&projectile.id).copied())
+                    .unwrap_or(velocity)
             };
             let Some(binding) = self
                 .assets

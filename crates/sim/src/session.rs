@@ -208,6 +208,9 @@ pub enum Command {
     /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
     /// being typed in, shown to everyone above the chat.
     Talking(bool),
+    /// `SteeringPrefsEvent`: the client's `$pref::Input::UseStrafeSteering`
+    /// and `$pref::Input::UseAutoReturnSteering` (both on until it says).
+    SteeringPrefs { strafe: bool, auto_return: bool },
     /// A ghost-brick move, which stays client-side; the server only animates
     /// the builder.
     BuildGesture(BuildGesture),
@@ -239,7 +242,6 @@ impl Command {
             | Command::EquipTool { .. }
             | Command::Activate
             | Command::ToggleLight
-            | Command::Emote(_)
             | Command::Wand
             | Command::BuildGesture(_) => (true, None),
             // The package's command declaration decides (`while_dead`);
@@ -271,7 +273,10 @@ impl Command {
             | Command::ControlPlayer
             | Command::BrickHand(_)
             | Command::GhostBrick(_)
-            | Command::Talking(_) => (false, None),
+            // v20's emote commands quietly do nothing without a body.
+            | Command::Emote(_)
+            | Command::Talking(_)
+            | Command::SteeringPrefs { .. } => (false, None),
         };
         Preconditions { alive, build }
     }
@@ -704,6 +709,26 @@ impl Session {
             .is_some_and(|p| p.actor.administrator)
     }
     /// Spawn/admin are local server decisions, never fields from a join packet.
+    /// A new body for `owner`: at `spawn` when it is clear, else at the
+    /// first clear map spawn point, else at `spawn` regardless. Builds over
+    /// every spawn point never lock players out (v20 `spawnPlayer` places the
+    /// body whatever is there, as a respawn here does). A session that was
+    /// given no spawn points refuses an obstructed `spawn`, so its caller can
+    /// try its own next candidate.
+    fn place_player(&mut self, owner: OwnerId, spawn: Vec3) -> Result<Player> {
+        let tuning = PlayerTuning::default();
+        let physics = &mut self.simulation.physics;
+        if self.spawn_points.is_empty() {
+            return Player::spawn(physics, owner, spawn, tuning);
+        }
+        let clear = std::iter::once(spawn)
+            .chain(self.spawn_points.iter().copied())
+            .find(|at| Player::clear(physics, *at, &tuning));
+        match clear {
+            Some(at) => Player::spawn(physics, owner, at, tuning),
+            None => Player::spawn_overlapping(physics, owner, spawn, tuning),
+        }
+    }
     pub fn join(&mut self, name: String, spawn: Vec3, administrator: bool) -> Result<OwnerId> {
         self.join_verified(name, spawn, administrator, None)
     }
@@ -797,12 +822,7 @@ impl Session {
             }
         }
         let role = self.admin_connect(owner, name.clone(), trusted_host, is_bot, principal)?;
-        let player = match Player::spawn(
-            &mut self.simulation.physics,
-            owner,
-            spawn,
-            PlayerTuning::default(),
-        ) {
+        let player = match self.place_player(owner, spawn) {
             Ok(player) => player,
             Err(error) => {
                 self.admin_disconnect(owner);
@@ -946,6 +966,7 @@ impl Session {
         self.combat_disconnect(peer.combat.player);
         self.last_membership.remove(&owner);
         self.trust_disconnect(owner);
+        self.set_steering_prefs(owner, true, true);
         Ok(())
     }
     /// Call only after the transport authenticates its server-issued resume token.
@@ -985,12 +1006,7 @@ impl Session {
             "Resume identity does not match authenticated ticket"
         );
         let role = self.admin_connect(owner, name.clone(), trusted_host, false, principal)?;
-        let player = match Player::spawn(
-            &mut self.simulation.physics,
-            owner,
-            spawn,
-            PlayerTuning::default(),
-        ) {
+        let player = match self.place_player(owner, spawn) {
             Ok(player) => player,
             Err(error) => {
                 self.admin_disconnect(owner);
@@ -1502,6 +1518,13 @@ impl Session {
             }
             Command::Talking(talking) => {
                 peer.talking = talking;
+                Ok(Reply::Accepted)
+            }
+            Command::SteeringPrefs {
+                strafe,
+                auto_return,
+            } => {
+                self.set_steering_prefs(owner, strafe, auto_return);
                 Ok(Reply::Accepted)
             }
 
