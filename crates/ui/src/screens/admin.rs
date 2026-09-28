@@ -821,7 +821,7 @@ impl Screen for AdminScreen {
         if !matches!(ev.kind, EventKind::Click | EventKind::Submit) {
             return;
         }
-        let cmd = command_of(&self.view, ev.node).to_ascii_lowercase();
+        let cmd = event_command(&self.view, ev).to_ascii_lowercase();
         if self.id == ScreenId::AdminConfirm {
             if !cmd.contains("nocallback") {
                 accept_confirmation(core);
