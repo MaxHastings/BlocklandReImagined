@@ -54,12 +54,6 @@ pub fn explain(reason: &str) -> String {
                 .to_string(),
         ),
         (
-            "Required content does not match",
-            "Your game content doesn't match the server's. You and the host need the same \
-             version of the game and the same Add-Ons."
-                .into(),
-        ),
-        (
             "Server is full",
             "The server is full. Try again when someone leaves.".into(),
         ),
@@ -145,7 +139,6 @@ mod tests {
     #[test]
     fn join_failures_say_what_to_do() {
         assert!(explain("Join rejected: Incompatible protocol version").contains("same version"));
-        assert!(explain("Join rejected: Required content does not match").contains("Add-Ons"));
         assert!(explain("Join rejected: Server is full").starts_with("The server is full"));
         assert_eq!(
             explain("Join rejected: connection is banned"),

@@ -294,11 +294,11 @@ ROUGH, med.
   and the kick/ban distinction are dropped (`crates/sim/src/session/admin.rs:345`,
   `crates/net/src/server.rs:753`). v20 showed "You have been banned ...
   reason ... minutes remaining".
-- Version and content mismatches say "Incompatible protocol version" and
-  "Required content does not match" with no versions, no Add-On names and no
-  suggested fix (`crates/net/src/server.rs:426-429`, `:713`). Minecraft says
-  "Outdated server! I'm still on 1.x". (Which Add-On differs is the mod
-  manager's job; the message should still name it.)
+- Version mismatches say "Incompatible protocol version" with no versions and
+  no suggested fix (`crates/net/src/server.rs:426-429`). Minecraft says
+  "Outdated server! I'm still on 1.x". Content mismatches were "Required
+  content does not match"; since `81604e1` (after this audit's base) main names
+  each differing package, and PR #4 turns that into a Can't Join dialog.
 - Several player-visible messages speak to developers: setting a server
   password gives "The server join password is not connected yet. It cannot be
   silently ignored." (`crates/client/src/app.rs:1356-1359`); unimplemented menu
@@ -314,7 +314,7 @@ ROUGH, med.
 **Fixed in this PR.** The Connection Failed dialog now shows
 `bri_ui::models::disconnect::explain` of the reason; the raw text stays in the
 connection state and is logged. It covers host shutdown, time-outs, a full
-server, version and content mismatch, no answer at an address (naming both UDP
+server, a version mismatch, no answer at an address (naming both UDP
 ports), unsupported passwords and map failures, and passes unknown text
 through unchanged. Add-On refusals (`Your content does not match the server:`,
 PR #4's Can't Join dialog) are left intact. The server now closes an admin
