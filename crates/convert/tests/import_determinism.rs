@@ -80,7 +80,7 @@ fn import(root: &Path, work: &Path, missions: &[&str]) -> Result<String> {
         missions,
     )?;
     // The environment's own hash, as a joining player's is compared.
-    Ok(hash_dir(&bundle)?)
+    hash_dir(&bundle)
 }
 
 /// `bri_package::environment::hash_dir`, restated so this crate need not
