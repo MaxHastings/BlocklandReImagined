@@ -264,8 +264,7 @@ fn copy_actor(actor: &Actor) -> Actor {
 /// `containerRayCast` type masks used by the stock tools.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reach {
-    /// Hammer and wands: interiors, bricks, players and vehicles, then
-    /// terrain only when nothing else was hit.
+    /// Hammer and wands: interiors, terrain, bricks, players and vehicles.
     Melee,
     /// Wrench: interiors, terrain and bricks.
     Wrench,
@@ -821,23 +820,6 @@ impl Session {
                     },
                 );
             }
-        }
-        let terrain = match reach {
-            Reach::Wrench => true,
-            Reach::Melee => best.is_none(),
-            Reach::Bricks => false,
-        };
-        if terrain && let Some((distance, normal)) = self.simulation.terrain_ray(start, dir, range)
-        {
-            consider(
-                &mut best,
-                distance,
-                ToolHit {
-                    target: TargetId::Map(0),
-                    position: start + dir * distance,
-                    normal,
-                },
-            );
         }
         Ok(best.map(|(_, hit)| hit))
     }

@@ -439,6 +439,27 @@ mod tests {
     }
 
     #[test]
+    fn tool_rays_hit_terrain_where_no_tile_is_loaded() -> Result<()> {
+        let field = field(true);
+        let mut simulation = crate::simulation::Simulation::new(
+            bri_world::World::new("Terrain".into(), "test".into(), vec![[1.0; 4]]),
+            crate::definitions::Definitions::default(),
+            vec![],
+        )?;
+        simulation.attach_terrain(vec![field.clone()], Vec::new())?;
+        // Far from every body and anchor, so no collision tile is streamed.
+        let (x, z) = (12_345.0, -9_876.0);
+        let ground = field.height(x, z).unwrap();
+        let origin = Vec3::new(x, ground + 50.0, z);
+        let hit = simulation
+            .target(origin, Vec3::NEG_Y, 100.0)?
+            .expect("the ray reaches the terrain");
+        assert!((hit.position.y - ground).abs() < 0.05, "{:?}", hit.position);
+        assert!(hit.brick.is_none());
+        Ok(())
+    }
+
+    #[test]
     fn players_stand_on_streamed_terrain_far_from_the_primary_block() -> Result<()> {
         let field = field(true);
         // Twelve blocks away, far beyond any finite patch around the origin.

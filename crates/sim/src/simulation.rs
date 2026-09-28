@@ -596,6 +596,17 @@ impl Simulation {
                 normal: Vec3::from(hit.normal.to_array()),
                 distance: hit.time_of_impact,
             });
+        // Terrain answers exactly, loaded tile or not, as it does for weapons.
+        if let Some((distance, normal)) = self.terrain_ray(origin, direction, max_distance)
+            && nearest.as_ref().is_none_or(|hit| distance < hit.distance)
+        {
+            nearest = Some(Hit {
+                brick: None,
+                position: origin + direction * distance,
+                normal,
+                distance,
+            });
+        }
         // Walk the index buckets along the ray, nearest first, and stop once
         // the nearest hit lies before the bucket just searched. A brick's
         // collision stays within its grid bounds, so no later bucket can hold
