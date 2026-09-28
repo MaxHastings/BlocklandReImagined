@@ -1476,7 +1476,15 @@ impl Session {
     pub fn step(&mut self) -> Result<()> {
         let tick = self.simulation.state().tick;
         self.stop_talking(tick);
-        self.step_bots()?;
+        // Each system contains its own failure: the rest of the tick still
+        // runs and every failure is reported together at the end.
+        let mut failures = Vec::new();
+        let mut contain = |system: &str, result: Result<()>| {
+            if let Err(error) = result {
+                failures.push(format!("{system}: {error:#}"));
+            }
+        };
+        contain("bots", self.step_bots());
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
@@ -1549,11 +1557,17 @@ impl Session {
                     }
                 };
                 let before = Vec3::from(peer.player.state().feet);
-                let motion = peer.player.step_in_water(
-                    &mut self.simulation.physics,
-                    input,
-                    &liquids,
-                )?;
+                let motion =
+                    match peer
+                        .player
+                        .step_in_water(&mut self.simulation.physics, input, &liquids)
+                    {
+                        Ok(motion) => motion,
+                        Err(error) => {
+                            contain("movement", Err(error));
+                            continue;
+                        }
+                    };
                 let state = peer.player.state();
                 if Vec3::from(state.velocity).length() > 0.5 {
                     peer.sitting = false;
@@ -1594,7 +1608,13 @@ impl Session {
                 }
             }
         }
-        let smashers = self.smash_breakables(glass_hits)?;
+        let smashers = match self.smash_breakables(glass_hits) {
+            Ok(smashers) => smashers,
+            Err(error) => {
+                contain("breakables", Err(error));
+                Default::default()
+            }
+        };
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, trigger, down) in triggers {
@@ -1606,25 +1626,26 @@ impl Session {
             }
         }
         for (owner, input) in driving {
-            self.vehicle_input(owner, input)?;
+            contain("vehicle input", self.vehicle_input(owner, input));
         }
         self.drive_package_entities(entity_moves);
-        self.step_packages()?;
-        self.vehicle_pre_step()?;
-        self.simulation.step()?;
-        self.vehicle_post_step()?;
-        self.step_weapons()?;
+        contain("packages", self.step_packages());
+        contain("vehicles", self.vehicle_pre_step());
+        contain("physics", self.simulation.step());
+        contain("vehicles", self.vehicle_post_step());
+        contain("weapons", self.step_weapons());
         self.step_temp_colors();
-        self.step_items()?;
-        self.step_combat(impacts)?;
-        self.step_breakables()?;
-        self.step_specials()?;
-        self.step_highlights()?;
-        self.step_tutorial()?;
-        self.step_build_load()?;
+        contain("items", self.step_items());
+        contain("combat", self.step_combat(impacts));
+        contain("breakables", self.step_breakables());
+        contain("special bricks", self.step_specials());
+        contain("highlights", self.step_highlights());
+        contain("tutorial", self.step_tutorial());
+        contain("build loading", self.step_build_load());
         let changed = self.dirty.clone();
-        self.step_events(&changed)?;
-        self.reconcile_items()?;
+        contain("events", self.step_events(&changed));
+        contain("items", self.reconcile_items());
+        ensure!(failures.is_empty(), "{}", failures.join("; "));
         Ok(())
     }
     pub fn snapshot(&self) -> Snapshot {
