@@ -126,6 +126,40 @@ impl MiniGameScreen {
             rules.loadout[i]=usize::try_from(selected).ok().and_then(|i|self.draft_item_id(i)); }
         Ok(rules)
     }
+    /// `CreateMiniGameGui::ClickFav`: with Set Favs showing, save the form
+    /// in that slot; otherwise fill the form from it.
+    fn favorite(&mut self, slot: u8, core: &mut Core) {
+        let helper = self.view.id("CMG_FavsHelper");
+        if helper.is_some_and(|n| self.view.node(n).state.visible) {
+            match self.read_rules() {
+                Ok(rules) => {
+                    let color = self.view.id("CMG_ColorList").and_then(|n| self.view.selected_text(n));
+                    core.settings.minigame_favorites.insert(slot, MiniGameFavorite { rules, color });
+                    core.save_settings();
+                    if let Some(n) = helper { self.view.set_visible(n, false); }
+                }
+                Err(e) => core.minigames.status = e,
+            }
+            return;
+        }
+        let Some(fav) = core.settings.minigame_favorites.get(&slot).cloned() else { return };
+        self.draft = fav.rules.clone();
+        self.write_rules(&fav.rules);
+        if let Some(n) = self.view.id("CMG_PlayerDataBlock") {
+            let i = self.types.iter().position(|c| c.id == fav.rules.player_type);
+            self.view.select(n, i.map(|i| i as i64));
+        }
+        let items = self.items.clone();
+        for i in 0..5 { self.fill_choice(&format!("CMG_StartEquip{i}"), &items, fav.rules.loadout[i].as_deref()); }
+        // The colour list is locked while editing a running game.
+        let editing = core.minigames.active_game.is_some() && core.minigames.owns_active_game;
+        if let (Some(n), Some(name), false) = (self.view.id("CMG_ColorList"), fav.color, editing)
+            && let Some(color) = core.minigames.colors.iter().find(|c| c.name == name)
+        {
+            self.view.select(n, Some(i64::from(color.index)));
+            if let Some(s) = self.view.id("CMG_Swatch") { self.view.nodes[s].state.tint = Some([color.rgb[0], color.rgb[1], color.rgb[2], 255]); }
+        }
+    }
     fn draft_type_id(&self,index:usize)->Option<String>{ self.types.get(index).map(|c|c.id.clone()) }
     fn draft_item_id(&self,index:usize)->Option<String>{ if index==0 {None} else {self.items.get(index-1).map(|c|c.id.clone())} }
     fn refresh(&mut self,core:&Core){
@@ -259,7 +293,12 @@ impl Screen for MiniGameScreen {
                     core.message_yes_no("End Mini-Game?","Are you sure you want to end the mini-game?",Callback::MiniGame{game,operation:MiniGameOperation::End});
                 },
                 "createminigamegui.clickcolorlist();"=>self.refresh(core),
-                _=>{}
+                "createminigamegui.clicksetfavs();"=>if let Some(n)=self.view.id("CMG_FavsHelper"){
+                    let shown=self.view.node(n).state.visible; self.view.set_visible(n,!shown);
+                },
+                _=>if let Some(slot)=cmd.strip_prefix("createminigamegui.clickfav(").and_then(|s|s.strip_suffix(");")).and_then(|s|s.parse::<u8>().ok()).filter(|s|*s<10){
+                    self.favorite(slot,core);
+                }
             },
             Kind::Invite=>{
                 let Some(invite)=core.minigames.invitations.last().cloned() else{return;};
