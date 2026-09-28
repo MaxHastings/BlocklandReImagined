@@ -54,20 +54,24 @@ default.
 | Family | Experiments | New classes found | Latest experiments without a new class |
 |---|---|---|---|
 | World model | E15, E20, H2-F13 | W7 (E15) | E20 (W8 again), H2-F13 (W1 again) |
-| Entities and behaviour | E19, E23, H2-F6, H2-F14 | W12 (E23) | E19 (W8 again), H2-F14 (W1 again) |
-| Player and control | E16, E22 | W14 (E22, open) | E16 (W8) |
-| UI model | E21, H2-F4 | W11 (H2-F4), W13 (E21) | none yet |
-| Game rules | E16, E17, E18, E25 | W8 (E16), W15 (E25) | E17 (W8 again), E18 (none) |
-| Persistence | E5, E11, E15, H2-F1, H2-F9, H2-F10 | W2, W6, W7 | H2-F1 (W7 again), H2-F9, H2-F10 (ordinary) |
+| Entities and behaviour | E19, E23, E29, H2-F6, H2-F14 | W12 (E23) | E29 (ordinary), E19 (W8 again), H2-F14 (W1 again) |
+| Player and control | E16, E22, E27 | W14 (E22, open) | E27 (W14 again) |
+| UI model | E21, E26, H2-F4 | W11 (H2-F4), W13 (E21) | E26 (W8 again) |
+| Game rules | E16, E17, E18, E25, E28 | W8 (E16), W15 (E25) | E28 (none), E17 (W8 again), E18 (none) |
+| Persistence | E5, E11, E15, E28, H2-F1, H2-F9, H2-F10 | W2, W6, W7 | E28 (none), H2-F1 (W7 again), H2-F9, H2-F10 (ordinary) |
 | Multiplayer/distribution | E4, E6, E9, E10, E12, E14, E24 | W6, W7 | E24 (W7 again), E9, E6 (none/ordinary) |
 | Security/authority | H, M, E7, H2 | W3, W4, W5, W9, W10 | M (W4 held), E7 (none) |
 | Performance/failure | E1, E2, E3, E8, E13, H2-F6/F8/F15, E23 | W1, W12 | E3, E8 (none), H2 (W1 again) |
 
-The latest round (E19 to E25) found four new classes (W12, W13, W14, W15)
-in the families with the fewest earlier experiments (UI, player and
-control, entities, game rules), and only recurrences elsewhere. The
-architecture is not saturated yet: UI, player and control, and game rules
-each found a new class in their most recent experiment.
+E19 to E25 found four new classes (W12, W13, W14, W15) in the families
+with the fewest earlier experiments. The next deliberately different round
+(E26 to E29: a scoreboard, driving a package kart, king of the hill with a
+saved leaderboard, a zombie wave) found no new class: two recurrences (W8,
+W14), one ordinary API bug, one clean pass. That is the first sign of
+saturation, not saturation: W14 is still open, world model and
+multiplayer/distribution have no experiment since E24, and package state
+does not replicate to clients yet, so the distribution family cannot be
+tested for packages until it does.
 
 ## Experiments
 
@@ -101,3 +105,7 @@ each found a new class in their most recent experiment.
 | E23 | Entities and behaviour | 9, 6 | `unlike_modes::a_thousand_agents_all_get_to_think`: 1000 agents that each want to think every tick, more than the package's share. | 569 agents never thought in 120 ticks, because the share always went to the lowest ids. 120 ticks took 89 s, because every call rebuilt the whole world snapshot and copied every entity's variables. | NEW CLASS W12 (the cost). The starvation was in this campaign's own W1 share: thinks now run longest-waiting first. Fixed: one start-of-tick view shared by the tick's calls, and a call returns only what it wrote. 6.6 s in a debug build, and every agent thinks. |
 | E24 | Multiplayer/distribution | 3, 6 | Windows CI running E14 (`state_limits`) on a slower machine. | A joining peer still receiving the legal heavy world was disconnected with "Reliable backlog exceeded": every tick's deltas queued behind the transfer, and the outbox held 32 frames, a quarter second at 120 Hz. | W7 again (a count limit unrelated to size). Fixed: the outbox holds 8192 frames and 64 MiB. |
 | E25 | Game rules | 9, 4 | `unlike_modes::an_elimination_mode_decides_who_may_respawn_and_build`: last player standing; the dead stay out until the round ends, and nobody builds during the fight. | The behaviour could not even declare the rule: respawn readiness and build permission were engine and mini-game decisions a package could only watch. | NEW CLASS W15. Fixed: `policies` with `allow_respawn` and `allow_build`, asked before the engine acts. |
+| E26 | UI model | 9 | `unlike_modes::a_scoreboard_lists_every_players_score`: one panel lists every player's score. | A HUD row could bind a global value or the viewer's own, never everyone's: the panel did not load. | W8 again (the UI surface followed its first client). Fixed: `package:players/key` bindings over keys visible to everyone; `PackageStateView::rows`. |
+| E27 | Player and control | 9 | `unlike_modes::a_player_drives_a_package_kart` (ignored; registered with the gate): a player's movement input drives a package entity. | What a player controls is the closed `ControlObject` enum; a package entity cannot take a player's input. | W14 again, open. |
+| E28 | Game rules, persistence | 9, 7 | `unlike_modes::a_king_of_the_hill_mode_keeps_its_leaderboard_across_restarts`: timed scoring, a win condition, and an all-time leaderboard saved through `PackageSave` while the round in progress is not. | Nothing: ran on the existing seams. | none |
+| E29 | Entities and behaviour | 9, 1 | `unlike_modes::a_zombie_wave_chases_and_bites_players`: agents chase the nearest living player and hurt on contact. | `damage(player, amount, ())` was refused: `()` means "nobody" everywhere else (`on_death`'s killer) but not here. | ordinary. Fixed. |

@@ -69,6 +69,15 @@ fn definitions() -> Definitions {
 
 /// A flat 200 x 200 floor and the packages, enabled before anyone joins.
 fn mode(name: &str, packages: &[Package]) -> Session {
+    mode_with(name, packages, None)
+}
+
+/// As [`mode`], resuming a host's package save.
+fn mode_with(
+    name: &str,
+    packages: &[Package],
+    save: Option<bri_sim::session::PackageSave>,
+) -> Session {
     let root = std::env::temp_dir().join(format!("bri-unlike-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let mut entries = Vec::new();
@@ -106,7 +115,7 @@ fn mode(name: &str, packages: &[Package]) -> Session {
         )
         .unwrap(),
     );
-    session.install_packages(Arc::new(catalog), None).unwrap();
+    session.install_packages(Arc::new(catalog), save).unwrap();
     let _ = std::fs::remove_dir_all(&root);
     session
 }
@@ -1116,4 +1125,354 @@ fn an_elimination_mode_decides_who_may_respawn_and_build() {
         "{refused:#}"
     );
     assert!(s.simulation().state().bricks.is_empty());
+}
+
+const TAG_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "tag.rhai",
+  "commands": [{ "name": "tag" }],
+  "state": { "player": { "tags": { "default": 0, "visible": "everyone" } } }
+}"#;
+
+const TAG_SCRIPT: &str = r#"
+fn cmd_tag(player) { add_player(player, "tags", 1); }
+"#;
+
+/// Every player's score at once, as a scoreboard lists them.
+const TAG_HUD: &str = r#"{
+  "schema_version": 1, "slot": "hud.overlay", "anchor": "top_right",
+  "title": "Scores", "background": [0.0, 0.0, 0.0, 0.6],
+  "accent": [1.0, 1.0, 1.0, 1.0], "text": [1.0, 1.0, 1.0, 1.0],
+  "rows": [{ "label": "Tags", "bind": "tag:players/tags" }]
+}"#;
+
+/// E26 (UI model; category 9). A scoreboard: one panel lists every
+/// player's score, not only the viewer's.
+#[test]
+fn a_scoreboard_lists_every_players_score() {
+    let server_manifest = manifest(
+        "tag",
+        &[],
+        &[
+            ("behaviour", "tag", "behaviour.json"),
+            ("script", "tag", "tag.rhai"),
+        ],
+    );
+    let hud_manifest = manifest("tag-ui", &[], &[("hud", "scores", "scores.json")]);
+    let mut s = mode(
+        "tag",
+        &[
+            Package {
+                id: "tag",
+                side: Side::Server,
+                files: &[
+                    ("package.json", &server_manifest),
+                    ("behaviour.json", TAG_BEHAVIOUR),
+                    ("tag.rhai", TAG_SCRIPT),
+                ],
+            },
+            Package {
+                id: "tag-ui",
+                side: Side::Client,
+                files: &[("package.json", &hud_manifest), ("scores.json", TAG_HUD)],
+            },
+        ],
+    );
+    let a = s
+        .join("A".into(), Vec3::new(-2.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = s
+        .join("B".into(), Vec3::new(2.0, 0.05, 0.0), false)
+        .unwrap();
+    s.command(a, 1, command("tag", "tag", vec![])).unwrap();
+    s.command(b, 1, command("tag", "tag", vec![])).unwrap();
+    s.command(b, 2, command("tag", "tag", vec![])).unwrap();
+    let binding = bri_package_runtime::content::Binding::parse("tag:players/tags").unwrap();
+    let view = s.package_state_for(a);
+    let board = view.rows(&binding);
+    assert_eq!(
+        board,
+        vec![(a, &serde_json::json!(1)), (b, &serde_json::json!(2))]
+    );
+}
+
+const HILL_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "hill.rhai",
+  "tick_interval": 120,
+  "state": {
+    "player": {
+      "held": { "default": 0, "visible": "everyone", "persist": false },
+      "wins": { "default": 0, "visible": "everyone" }
+    },
+    "global": {
+      "round": { "default": 1, "visible": "everyone", "persist": false },
+      "rounds_played": { "default": 0, "visible": "everyone" }
+    }
+  }
+}"#;
+
+/// King of the hill: each second, whoever stands alone on the hill scores;
+/// the first to 3 wins the round, which is counted forever.
+const HILL_SCRIPT: &str = r#"
+fn on_tick() {
+    let on_hill = [];
+    for p in players() {
+        if p.alive && p.x * p.x + p.z * p.z < 4.0 { on_hill.push(p.id); }
+    }
+    if on_hill.len() != 1 { return; }
+    let king = on_hill[0];
+    add_player(king, "held", 1);
+    if get_player(king, "held") >= 3 {
+        add_player(king, "wins", 1);
+        set("rounds_played", get("rounds_played") + 1);
+        set("round", get("round") + 1);
+        for p in players() { set_player(p.id, "held", 0); }
+        broadcast(`${player(king).name} takes the hill.`);
+    }
+}
+"#;
+
+/// E28 (game rules, persistence; categories 9, 7). Timed scoring with a win
+/// condition and a leaderboard that survives a host restart, while the
+/// round in progress does not.
+#[test]
+fn a_king_of_the_hill_mode_keeps_its_leaderboard_across_restarts() {
+    let behaviour_manifest = manifest(
+        "hill",
+        &["chat"],
+        &[
+            ("behaviour", "hill", "behaviour.json"),
+            ("script", "hill", "hill.rhai"),
+        ],
+    );
+    let files: &[(&str, &str)] = &[
+        ("package.json", &behaviour_manifest),
+        ("behaviour.json", HILL_BEHAVIOUR),
+        ("hill.rhai", HILL_SCRIPT),
+    ];
+    let packages = [Package {
+        id: "hill",
+        side: Side::Server,
+        files,
+    }];
+    let mut s = mode("hill", &packages);
+    let principal = bri_admin::Principal([7; 32]);
+    let king = s
+        .join_verified(
+            "King".into(),
+            Vec3::new(0.0, 0.05, 0.0),
+            false,
+            Some(principal),
+        )
+        .unwrap();
+    let _other = s
+        .join("Other".into(), Vec3::new(20.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 120 * 4);
+    assert_eq!(value(&s, "hill", king, "wins"), serde_json::json!(1));
+    steps(&mut s, 120);
+    assert_eq!(value(&s, "hill", king, "held"), serde_json::json!(1));
+    let save = s.package_save().unwrap();
+    let save = bri_sim::session::PackageSave::decode(&save.encode().unwrap()).unwrap();
+
+    let mut s = mode_with("hill-again", &packages, Some(save));
+    let king = s
+        .join_verified(
+            "King".into(),
+            Vec3::new(20.0, 0.05, 0.0),
+            false,
+            Some(principal),
+        )
+        .unwrap();
+    assert_eq!(
+        value(&s, "hill", king, "wins"),
+        serde_json::json!(1),
+        "wins persist"
+    );
+    assert_eq!(
+        value(&s, "hill", king, "held"),
+        serde_json::json!(0),
+        "the round does not"
+    );
+    let global = &s.package_state().packages["hill"].global;
+    assert_eq!(global["rounds_played"], serde_json::json!(1));
+    assert_eq!(global["round"], serde_json::json!(1));
+}
+
+const KART_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "kart.rhai",
+  "commands": [{ "name": "board" }]
+}"#;
+
+const KART_SCRIPT: &str = r#"
+fn cmd_board(player) {
+    let p = player(player);
+    spawn_entity("kart:entity/kart", p.x + 2.0, p.y, p.z, #{ driver: player });
+    control(player, "kart:entity/kart");
+}
+fn think(kart) { }
+"#;
+
+const KART_ENTITY: &str = r#"{ "schema_version": 1, "name": "Kart", "model": "kart-look:model/kart",
+  "think": "think", "think_interval": 10, "speed": 1.0, "scale": 1.0, "health": 50.0, "max_alive": 8 }"#;
+
+/// E27 (player and control; category 9). A player drives something that is
+/// not their avatar: a package's kart takes the player's movement input.
+/// What a player controls is the closed `ControlObject` enum (player,
+/// camera, spy, corpse) and movement input reaches only those, so this is
+/// the open class W14 again.
+#[test]
+#[ignore = "finding W14: what a player controls is a closed engine enum; a package entity cannot take a player's input"]
+fn a_player_drives_a_package_kart() {
+    let behaviour_manifest = manifest(
+        "kart",
+        &["entity"],
+        &[
+            ("behaviour", "kart", "behaviour.json"),
+            ("script", "kart", "kart.rhai"),
+            ("entity", "kart", "kart.json"),
+        ],
+    );
+    let look_manifest = manifest("kart-look", &[], &[("model", "kart", "kart.json")]);
+    let mut s = mode(
+        "kart",
+        &[
+            Package {
+                id: "kart",
+                side: Side::Server,
+                files: &[
+                    ("package.json", &behaviour_manifest),
+                    ("behaviour.json", KART_BEHAVIOUR),
+                    ("kart.rhai", KART_SCRIPT),
+                    ("kart.json", KART_ENTITY),
+                ],
+            },
+            Package {
+                id: "kart-look",
+                side: Side::Client,
+                files: &[("package.json", &look_manifest), ("kart.json", RTS_MODEL)],
+            },
+        ],
+    );
+    let p = s
+        .join("Driver".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 5);
+    s.command(p, 1, command("kart", "board", vec![]))
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    let start = s.package_entities()[0].position;
+    for sequence in 0..120 {
+        s.movement(
+            p,
+            sequence + 1,
+            MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    let end = s.package_entities()[0].position;
+    assert!(
+        Vec3::from(end).distance(Vec3::from(start)) > 5.0,
+        "the kart moved under the player's input"
+    );
+}
+
+const ZOMBIE_BEHAVIOUR: &str = r#"{
+  "schema_version": 1,
+  "script": "zombies.rhai",
+  "commands": [{ "name": "wave", "admin": true }],
+  "state": { "player": { "bitten": { "default": 0, "visible": "owner" } } }
+}"#;
+
+const ZOMBIE_ENTITY: &str = r#"{ "schema_version": 1, "name": "Zombie", "model": "zombies-look:model/zombie",
+  "think": "think", "think_interval": 4, "speed": 0.6, "scale": 1.0, "health": 30.0, "max_alive": 32 }"#;
+
+/// Zombies shamble toward the nearest living player and bite on contact.
+const ZOMBIE_SCRIPT: &str = r#"
+fn cmd_wave(player) {
+    for i in 0..8 { spawn_entity("zombies:entity/zombie", i * 3.0 - 12.0, 0.1, -20.0); }
+}
+fn think(z) {
+    let me = me();
+    let best = (); let best_d = 1e9;
+    for p in players() {
+        if !p.alive { continue; }
+        let d = (p.x - me.x) * (p.x - me.x) + (p.z - me.z) * (p.z - me.z);
+        if d < best_d { best_d = d; best = p; }
+    }
+    if best == () { steer(me.id, 0.0, 0.0, false); return; }
+    if best_d < 2.25 {
+        damage(best.id, 5.0, ());
+        add_player(best.id, "bitten", 1);
+    }
+    steer(me.id, best.x - me.x, best.z - me.z, false);
+}
+"#;
+
+/// E29 (entities and behaviour; categories 9, 1). Hostile agents that chase
+/// and hurt players, written only against the existing seams.
+#[test]
+fn a_zombie_wave_chases_and_bites_players() {
+    let behaviour_manifest = manifest(
+        "zombies",
+        &["entity", "damage"],
+        &[
+            ("behaviour", "zombies", "behaviour.json"),
+            ("script", "zombies", "zombies.rhai"),
+            ("entity", "zombie", "zombie.json"),
+        ],
+    );
+    let look_manifest = manifest("zombies-look", &[], &[("model", "zombie", "zombie.json")]);
+    let mut s = mode(
+        "zombies",
+        &[
+            Package {
+                id: "zombies",
+                side: Side::Server,
+                files: &[
+                    ("package.json", &behaviour_manifest),
+                    ("behaviour.json", ZOMBIE_BEHAVIOUR),
+                    ("zombies.rhai", ZOMBIE_SCRIPT),
+                    ("zombie.json", ZOMBIE_ENTITY),
+                ],
+            },
+            Package {
+                id: "zombies-look",
+                side: Side::Client,
+                files: &[("package.json", &look_manifest), ("zombie.json", RTS_MODEL)],
+            },
+        ],
+    );
+    let survivor = s
+        .join("Survivor".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    steps(&mut s, 320);
+    s.command(survivor, 1, command("zombies", "wave", vec![]))
+        .unwrap();
+    for _ in 0..(120 * 20) {
+        s.step().unwrap();
+        if !alive(&s, survivor) {
+            break;
+        }
+    }
+    assert!(
+        !alive(&s, survivor),
+        "the horde reached and killed the survivor: bitten {:?}, zombies {:?}, {:#?}",
+        value(&s, "zombies", survivor, "bitten"),
+        s.package_entities().iter().map(|e| e.position).collect::<Vec<_>>(),
+        s.package_diagnostics()
+    );
+    assert!(
+        value(&s, "zombies", survivor, "bitten")
+            .as_i64()
+            .unwrap_or(0)
+            >= 1,
+        "{:#?}",
+        s.package_diagnostics()
+    );
 }

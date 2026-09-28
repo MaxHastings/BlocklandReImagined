@@ -514,21 +514,33 @@ impl HudPanel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub package: String,
-    pub player: bool,
+    pub scope: Scope,
     pub key: String,
+}
+/// Whose value a binding shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// `package:global/key`: the server-wide value.
+    Global,
+    /// `package:player/key`: the viewing player's own value.
+    Player,
+    /// `package:players/key`: every player's value, one line each (a
+    /// scoreboard). The key must be visible to everyone.
+    Players,
 }
 impl Binding {
     pub fn parse(bind: &str) -> Option<Self> {
         let id = bri_package::id::ContentId::parse(bind).ok()?;
         let (package, key) = (id.namespace, id.name);
-        let player = match id.kind.as_str() {
-            "player" => true,
-            "global" => false,
+        let scope = match id.kind.as_str() {
+            "player" => Scope::Player,
+            "players" => Scope::Players,
+            "global" => Scope::Global,
             _ => return None,
         };
         identifier(&key).then_some(Self {
             package,
-            player,
+            scope,
             key,
         })
     }

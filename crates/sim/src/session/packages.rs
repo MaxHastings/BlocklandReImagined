@@ -131,12 +131,28 @@ impl PackageStateView {
         binding: &bri_package_runtime::content::Binding,
         viewer: OwnerId,
     ) -> Option<&serde_json::Value> {
+        use bri_package_runtime::content::Scope;
         let ns = self.packages.get(&binding.package)?;
-        if binding.player {
-            ns.players.get(&viewer)?.get(&binding.key)
-        } else {
-            ns.global.get(&binding.key)
+        match binding.scope {
+            Scope::Player => ns.players.get(&viewer)?.get(&binding.key),
+            Scope::Global => ns.global.get(&binding.key),
+            Scope::Players => None,
         }
+    }
+    /// Every player's value of a `package:players/key` binding, by player.
+    pub fn rows(
+        &self,
+        binding: &bri_package_runtime::content::Binding,
+    ) -> Vec<(OwnerId, &serde_json::Value)> {
+        self.packages
+            .get(&binding.package)
+            .map(|ns| {
+                ns.players
+                    .iter()
+                    .filter_map(|(owner, values)| Some((*owner, values.get(&binding.key)?)))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 

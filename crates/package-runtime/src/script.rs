@@ -423,7 +423,8 @@ fn register_api(engine: &mut Engine) {
         push(Op::DamagePlayer {
             player: id(&player)?,
             amount: float(&amount)?,
-            by: Some(id(&by)?),
+            // `()` credits nobody, as `on_death` passes `()` for no killer.
+            by: if by.is_unit() { None } else { Some(id(&by)?) },
         })
     });
     engine.register_fn(
