@@ -1010,3 +1010,175 @@ fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
     ensure!(ghost, "A click with the brick in hand placed no ghost");
     Ok(())
 }
+
+/// Import a v20 weapon through the Add-Ons screen's import path and play a
+/// brick pack imported with `bri-import-addon`: turn both on, host, plant an
+/// imported brick, and fire the imported weapon from a mini-game loadout.
+/// BRI_IMPORT_ROOT is a scratch content root with `Add-Ons/Weapon_Shotgun.zip`
+/// dropped in and `addons/brick_fence` imported; BRI_IMPORTER the shipped
+/// `bri-import-addon.exe`.
+#[test]
+#[ignore = "scratch content with v20 add-ons, loopback UDP and an offscreen GPU; no window"]
+fn imported_v20_add_ons_play() -> Result<()> {
+    let root = PathBuf::from(std::env::var_os("BRI_IMPORT_ROOT").context("BRI_IMPORT_ROOT")?);
+    let importer = PathBuf::from(std::env::var_os("BRI_IMPORTER").context("BRI_IMPORTER")?);
+    let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("import");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out)?;
+    let before = bri_client::add_ons::view(&root);
+    let rows = |v: &AddOnsView| {
+        v.rows
+            .iter()
+            .map(|r| format!("{} | {} | {} | enabled {}", r.id, r.name, r.category, r.enabled))
+            .collect::<Vec<_>>()
+    };
+    println!("before: {:#?}\nnotice {:?}", rows(&before), before.notice);
+    ensure!(
+        before.rows.iter().any(|r| r.id == "legacy:Weapon_Shotgun"),
+        "The dropped zip is not offered for import"
+    );
+    // The Import button's worker.
+    let done = bri_client::add_ons::start_import(&root, "legacy:Weapon_Shotgun", &importer)?
+        .recv_timeout(Duration::from_secs(300))?;
+    println!("import: {done:?}");
+    let notice = done?;
+    let after = bri_client::add_ons::view(&root);
+    println!("after: {:#?}\nnotice {:?}", rows(&after), after.notice);
+    let weapon = after
+        .rows
+        .iter()
+        .find(|r| r.name.to_lowercase().contains("shotgun") && !r.id.starts_with("legacy:"))
+        .with_context(|| format!("No imported shotgun row after {notice:?}"))?
+        .id
+        .clone();
+    for id in [weapon.as_str(), "brick_fence"] {
+        let view = bri_client::add_ons::set_enabled(&root, id, true)?;
+        println!("enable {id}: {:?}", view.notice);
+    }
+    std::fs::write(out.join("rows.txt"), rows(&bri_client::add_ons::view(&root)).join("\n"))?;
+
+    let mut app = App::load(&root, &out.join("state"), SIZE)?;
+    app.ui.core.pop(ScreenId::DefaultControls);
+    let gpu = Headless::new().context("offscreen adapter")?;
+    let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+    app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    request(
+        &mut app,
+        UiAction::HostGame {
+            map: "v20/add-ons/map_slate/slate.mis".into(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "Imports".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        },
+    )?;
+    let start = Instant::now();
+    while !(in_game(&app) && grounded(&app) && app.world_render_ready()) {
+        ensure!(start.elapsed() < Duration::from_secs(180), "never in game");
+        run_for(&mut app, 50)?;
+    }
+    let fence = app
+        .ui
+        .core
+        .bricks
+        .iter()
+        .find(|b| b.id.starts_with("brick_fence:"))
+        .map(|b| b.id.clone())
+        .context("No imported fence brick in the brick selector")?;
+    // Plant an imported brick.
+    let mut ghost = false;
+    for quarter in 0..4 {
+        aim(&mut app, quarter as f32 * std::f32::consts::FRAC_PI_2, DOWN)?;
+        run_for(&mut app, 150)?;
+        request(&mut app, UiAction::InstantUseBrick { brick: fence.clone() })?;
+        for down in [true, false] {
+            request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down }))?;
+            run_for(&mut app, 100)?;
+        }
+        ghost = app.building().and_then(|b| b.ghost()).is_some();
+        if ghost {
+            break;
+        }
+    }
+    if !ghost {
+        request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+        run_for(&mut app, 100)?;
+        println!("stock brick equips as {:?}", app.building().map(|b| b.equipment().clone()));
+        request(&mut app, UiAction::InstantUseBrick { brick: fence.clone() })?;
+        println!("fence right after request {:?}", app.building().map(|b| b.equipment().clone()));
+        run_for(&mut app, 100)?;
+        println!("fence after 100 ms {:?}", app.building().map(|b| b.equipment().clone()));
+    }
+    ensure!(
+        ghost,
+        "No ghost for {fence}; definition {:?}, equipment {:?}, stack {:?}, console {:?}",
+        app.building().map(|b| b.definition_half_extents(&fence)),
+        app.building().map(|b| b.equipment().clone()),
+        app.ui.stack(),
+        bri_console::log::lines().iter().rev().take(6).map(|l| l.text.clone()).collect::<Vec<_>>()
+    );
+    request(&mut app, UiAction::Game(GameAction::PlantBrick))?;
+    let start = Instant::now();
+    while bricks(&app) == 0 {
+        ensure!(start.elapsed() < Duration::from_secs(10), "{fence} was not planted");
+        run_for(&mut app, 50)?;
+    }
+    request(&mut app, UiAction::Game(GameAction::CancelBrick))?;
+    let planted = app.network_view().unwrap().world.bricks.values().next().unwrap().definition.clone();
+    println!("planted {planted:?}");
+    // Fire the imported weapon from a mini-game loadout.
+    let item = app
+        .ui
+        .core
+        .datablocks
+        .get("ItemData")
+        .into_iter()
+        .flatten()
+        .map(|c| c.id.clone())
+        .find(|id| id.to_lowercase().contains("shotgun"))
+        .with_context(|| "No shotgun among the mini-game items".to_string())?;
+    let mut rules = MiniGameRules { title: "Imports".into(), ..Default::default() };
+    rules.loadout[3] = Some(item.clone());
+    request(&mut app, UiAction::CreateMiniGame { color: 1, rules })?;
+    let start = Instant::now();
+    loop {
+        run_for(&mut app, 50)?;
+        let has = app.network_view().is_some_and(|v| {
+            v.tools.get(&v.owner).is_some_and(|t| t.slots[3].as_deref() == Some(item.as_str()))
+        });
+        if has {
+            break;
+        }
+        ensure!(start.elapsed() < Duration::from_secs(15), "{item} never reached slot 4");
+    }
+    request(&mut app, UiAction::UseTool { slot: 3 })?;
+    run_for(&mut app, 800)?;
+    aim(&mut app, 0.0, 0.1)?;
+    let mut fired = 0;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(6) {
+        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }))?;
+        run_for(&mut app, 100)?;
+        fired = fired.max(app.network_view().map_or(0, |v| v.weapons.projectiles.len()));
+        request(&mut app, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
+        run_for(&mut app, 300)?;
+    }
+    let images: Vec<String> = app
+        .network_view()
+        .and_then(|v| v.weapons.images.get(&v.owner).map(|i| i.iter().map(|i| i.image.clone()).collect()))
+        .unwrap_or_default();
+    let frame = capture(&mut app, &gpu, &mut renderer, true)?;
+    save_png(&out.join("imported-shotgun.png"), &frame)?;
+    std::fs::write(
+        out.join("console.txt"),
+        bri_console::log::lines().iter().map(|l| format!("{:?} {}\n", l.level, l.text)).collect::<String>(),
+    )?;
+    println!("holding {images:?}; most projectiles in flight {fired}");
+    ensure!(in_game(&app), "left the game while firing");
+    ensure!(fired > 0, "{item} fired no projectiles; holding {images:?}");
+    let _ = request(&mut app, UiAction::Disconnect);
+    Ok(())
+}
