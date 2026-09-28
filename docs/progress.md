@@ -4407,8 +4407,8 @@ the Player List (only your own showed; everyone else read as a player).
   server path as the menu.
 - Wire changes for Gate: new `Action::RequestAutoRoles`,
   `AdminData::AutoRoles`, `HostSetRole`/`HostSetAutoRole` now allowed to
-  Super Admins, `AutoRole.name`. Protocol version not bumped here (Gate owns
-  numbering).
+  Super Admins, `AutoRole.name`. Protocol version left at main's 50 (Gate
+  owns numbering; this needs the next one).
 
 Evidence: `cargo test -p bri-admin` (grant/revoke/rejoin by key, imposter by
 name gets nothing, host protected, keyless visit-only, saved list reads,
@@ -4417,7 +4417,10 @@ old files load); `cargo test -p bri-ui --test admin_screens` and `--lib`
 and removal); `cargo test -p bri-sim --test clear_bricks --test
 hardening_session` (40k clear under 5 s, `/clearBricks` own-only with the
 cooldown, Clear All admin-only); `cargo test -p bri-client --lib admin_ui`
-(chat commands, key round trip, rank replies). Release, real app, headless:
+(chat commands, key round trip, rank replies); `cargo test -p bri-net --test
+loopback` (over QUIC: host makes a player Super Admin, who makes another
+Admin; an Admin cannot; the file names both; a fresh rejoin with the same
+key is Super Admin again, a stranger using the name is not). Release, real app, headless:
 `cargo test -p bri-client --test clear_bricks_flow --release -- --ignored`
 hosts Kitchen in single player, loads 20,000 bricks, opens Admin > Clear
 Bricks and clears all in 0.09 s ("Action accepted by the host"). Offscreen
