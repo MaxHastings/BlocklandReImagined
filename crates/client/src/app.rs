@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use bri_net::{
-    client::Client,
+    client::{Client, HostPin},
     content_identity,
     server::{self, ServerOptions},
 };
@@ -89,8 +89,9 @@ struct Attempt {
     last_chat: u64,
     /// Players typing in the chat box, in the order they started.
     talking: Vec<bri_world::OwnerId>,
-    /// Internet hosts: router port-forwarding outcomes for the host player.
-    router: Option<mpsc::Receiver<String>>,
+    /// LAN and internet hosts: reachability, invite and firewall news for
+    /// the host player.
+    router: Option<mpsc::Receiver<HostNotice>>,
     /// How this player trusts each other player (`secureClientCmd_ClientTrust`).
     trust: BTreeMap<bri_world::OwnerId, bri_sim::session::PlayerTrust>,
     /// Loading the map the host changed to failed.
@@ -323,7 +324,11 @@ pub struct App {
     frame_stats: crate::console::FrameStats,
     /// LAN listings from the last discovery query: address -> certificate.
     lan_hosts: BTreeMap<String, Vec<u8>>,
-    lan_query: Option<mpsc::Receiver<Vec<(SocketAddr, bri_net::discovery::Beacon)>>>,
+    lan_query: Option<mpsc::Receiver<JoinList>>,
+    /// The invite for the game this player hosts (`/invite` copies it).
+    invite: Option<String>,
+    /// The elevated firewall helper's outcome.
+    firewall_fix: Option<mpsc::Receiver<Result<(), String>>>,
     macro_recording: Option<Vec<UiAction>>,
     build_macro: Vec<UiAction>,
     macro_playback: VecDeque<UiAction>,
@@ -331,7 +336,77 @@ pub struct App {
     saves: crate::saves::Store,
     file_jobs: crate::saves::Jobs,
 }
+/// News for a hosting player from background checks.
+enum HostNotice {
+    /// Internet host: router, public address and reachability.
+    Reach(bri_net::reach::Report),
+    /// LAN host: the invite on the home network.
+    Lan { invite: String },
+    Firewall(crate::firewall::Status),
+}
+
+/// What the Join Server list found: LAN games and the saved servers, each
+/// probed over its game port.
+struct JoinList {
+    lan: Vec<(SocketAddr, bri_net::discovery::Beacon)>,
+    saved: Vec<(crate::servers::SavedServer, Result<bri_net::client::Probe, String>)>,
+}
+
+/// Put `text` on the system clipboard.
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .map_err(|error| anyhow::anyhow!("Could not use the clipboard: {error}"))
+}
+
 impl App {
+    /// Chat lines (and an optional question) for a host notice.
+    fn host_notice(&mut self, notice: HostNotice) -> Vec<(String, Option<UiUpdate>)> {
+        match notice {
+            HostNotice::Reach(report) => {
+                bri_console::echo(format!("Hosting check: {report:?}"));
+                let mut lines: Vec<_> = report.lines().into_iter().map(|l| (l, None)).collect();
+                if let Some(invite) = report.invite.clone()
+                    && matches!(
+                        report.verdict,
+                        bri_net::reach::Verdict::Reachable | bri_net::reach::Verdict::Likely
+                    )
+                {
+                    let copied = copy_to_clipboard(&invite).is_ok();
+                    self.invite = Some(invite);
+                    lines.push((
+                        if copied {
+                            "Your invite is on the clipboard; paste it to friends. Type /invite to copy it again.".into()
+                        } else {
+                            "Type /invite to copy your invite.".into()
+                        },
+                        None,
+                    ));
+                } else if let Some(invite) = report.invite {
+                    self.invite = Some(invite);
+                }
+                lines
+            }
+            HostNotice::Lan { invite } => {
+                self.invite = Some(invite);
+                vec![(
+                    "Players on your network see this game in Join Server. Type /invite to copy an invite for them.".into(),
+                    None,
+                )]
+            }
+            HostNotice::Firewall(status) => match status.advice() {
+                Some(advice) => vec![(
+                    advice.to_string(),
+                    Some(UiUpdate::Confirm {
+                        title: "Windows Firewall".into(),
+                        text: "Windows Firewall would stop friends from joining your game. Let Blockland ReImagined through? Windows will ask for permission once.".into(),
+                        action: Box::new(UiAction::AllowFirewall),
+                    }),
+                )],
+                None => Vec::new(),
+            },
+        }
+    }
     /// Enable mod packages from another root than the content root (tools
     /// and tests); replaces the packages loaded at startup. Their worlds
     /// join the Start Game list.
@@ -1012,6 +1087,8 @@ impl App {
             frame_stats: Default::default(),
             lan_hosts: BTreeMap::new(),
             lan_query: None,
+            invite: None,
+            firewall_fix: None,
             macro_recording: None,
             build_macro: Vec::new(),
             macro_playback: VecDeque::new(),
@@ -1064,6 +1141,7 @@ impl App {
         Ok(())
     }
     fn disconnect(&mut self) {
+        self.invite = None;
         self.ui.core.name_tags.clear();
         self.scene_map = None;
         self.abilities = Default::default();
@@ -1676,8 +1754,24 @@ impl App {
                 host.advertise(listing_name, listing_map, max_players, identity.digest())
                     .await?;
             }
+            if !single {
+                // Windows Firewall can block friends whatever the router does.
+                let firewall = router_tx.clone();
+                std::thread::spawn(move || {
+                    let _ = firewall.send(HostNotice::Firewall(crate::firewall::status()));
+                });
+            }
             if internet {
-                host.open_router_ports(router_tx);
+                let reach = router_tx.clone();
+                host.open_to_internet(move |report| {
+                    let _ = reach.send(HostNotice::Reach(report));
+                });
+            } else if !single && let Some(ip) = bri_net::reach::local_ip() {
+                let invite = bri_net::invite::invite(
+                    SocketAddr::new(ip, host.address.port()),
+                    &host.certificate,
+                );
+                let _ = router_tx.send(HostNotice::Lan { invite });
             }
             let client = Client::connect_with_identity(
                 address,
@@ -1708,7 +1802,7 @@ impl App {
             view: None,
             last_chat: 0,
             talking: Vec::new(),
-            router: internet.then_some(router),
+            router: (!single).then_some(router),
             trust: BTreeMap::new(),
             map_failure: None,
             reloading: false,
@@ -1720,12 +1814,12 @@ impl App {
             password.is_empty(),
             "Password authentication is not connected yet"
         );
-        let typed = address.trim().to_string();
-        let (host, port) = parse_join_target(&typed)?;
-        // A LAN listing or a saved pin supplies the host's certificate; a
-        // first join trusts the certificate the host presents and pins it.
+        let target = bri_net::invite::JoinTarget::parse(&address)?;
+        let typed = target.address();
+        // An invite's key, a LAN listing or a saved pin identifies the host;
+        // a first join trusts the certificate the host presents and pins it.
         let pins_file = self.state_dir.join("trusted-hosts.json");
-        let recent_file = self.state_dir.join("recent-servers.json");
+        let servers_file = self.state_dir.join("servers.json");
         let lan_hosts = self.lan_hosts.clone();
         let paths = self.content.paths.clone();
         let player = self.player_name();
@@ -1750,25 +1844,23 @@ impl App {
                 text: format!("Connecting to {typed}…"),
             }),
         );
-        let recent = typed.clone();
+        let pin_key = typed.clone();
         let worker = Worker::start(self.runtime.handle(), async move {
-            let address = tokio::net::lookup_host((host.as_str(), port))
-                .await
-                .ok()
-                .and_then(|mut found| found.next())
-                .with_context(|| {
-                    format!("Could not find a server called {host}. Check the address for typos.")
-                })?;
+            let route = target.resolve().await?;
+            let address = route.address;
             let pins = pins_file.clone();
-            let certificate = match lan_hosts.get(&address.to_string()) {
-                Some(certificate) => certificate.clone(),
-                None => tokio::task::spawn_blocking(move || {
+            let saved_key = pin_key.clone();
+            let pin = match (route.key, lan_hosts.get(&address.to_string())) {
+                (Some(key), _) => HostPin::Key(key),
+                (None, Some(certificate)) => HostPin::Certificate(certificate.clone()),
+                (None, None) => tokio::task::spawn_blocking(move || {
                     read_small_json::<BTreeMap<String, Vec<u8>>>(&pins)
-                        .and_then(|pins| pins.get(&address.to_string()).cloned())
-                        .unwrap_or_default()
+                        .and_then(|pins| pins.get(&saved_key).cloned())
+                        .map_or(HostPin::FirstUse, HostPin::Certificate)
                 })
                 .await?,
             };
+            let had_pin = matches!(pin, HostPin::Certificate(_));
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
             })
@@ -1787,14 +1879,15 @@ impl App {
                 identity_paths.environment()
             })
             .await??;
-            let joined = Client::connect_with_identity(
+            let joined = Client::connect_pinned(
                 address,
-                &certificate,
+                pin,
                 player,
                 identity.client_packages(),
                 None,
                 None,
                 &native_identity,
+                Default::default(),
             )
             .await;
             let client = match joined {
@@ -1802,13 +1895,17 @@ impl App {
                 Err(error) => {
                     // A host that reinstalled has a new identity: forget the
                     // old pin so joining again (the player's choice) trusts it.
-                    if matches!(
-                        error.downcast_ref::<bri_net::client::JoinError>(),
-                        Some(bri_net::client::JoinError::IdentityChanged(_))
-                    ) {
+                    // An invite's key is never forgotten this way: it came
+                    // from the host just now.
+                    if had_pin
+                        && matches!(
+                            error.downcast_ref::<bri_net::client::JoinError>(),
+                            Some(bri_net::client::JoinError::IdentityChanged(_))
+                        )
+                    {
                         let _ = tokio::task::spawn_blocking(move || {
                             update_small_json(&pins_file, |pins: &mut BTreeMap<String, Vec<u8>>| {
-                                pins.remove(&address.to_string());
+                                pins.remove(&pin_key);
                             })
                         })
                         .await;
@@ -1816,19 +1913,23 @@ impl App {
                     return Err(error);
                 }
             };
-            // Remember the host's certificate and the address for later joins.
+            // Remember the host's certificate and the server for later joins.
             let pin = client.certificate.clone();
+            let name = plain_chat(&client.listing.name);
             let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                let shared = bri_net::invite::JoinTarget::Direct {
+                    host: target_host(&pin_key),
+                    port: address.port(),
+                    key: Some(bri_net::invite::host_key(&pin)),
+                };
                 update_small_json(&pins_file, |pins: &mut BTreeMap<String, Vec<u8>>| {
-                    if pins.len() < 1024 || pins.contains_key(&address.to_string()) {
-                        pins.insert(address.to_string(), pin);
+                    if pins.len() < 1024 || pins.contains_key(&pin_key) {
+                        pins.insert(pin_key.clone(), pin);
                     }
                 })?;
-                update_small_json(&recent_file, |list: &mut Vec<String>| {
-                    list.retain(|a| !a.eq_ignore_ascii_case(&recent));
-                    list.insert(0, recent);
-                    list.truncate(RECENT_SERVERS);
-                })
+                let mut saved = crate::servers::SavedServers::load(&servers_file);
+                saved.joined(&pin_key, Some(shared.to_string()), &name, unix_now());
+                saved.save(&servers_file)
             })
             .await;
             let map = client.replica.world.map_id.clone();
@@ -2852,8 +2953,13 @@ impl App {
             if a.entered
                 && let Some(router) = &a.router
             {
-                while let Ok(text) = router.try_recv() {
-                    self.ui.apply_session(a.id, UiUpdate::Chat { text: plain_chat(&text) });
+                while let Ok(notice) = router.try_recv() {
+                    for (text, confirm) in self.host_notice(notice) {
+                        self.ui.apply_session(a.id, UiUpdate::Chat { text: plain_chat(&text) });
+                        if let Some(update) = confirm {
+                            self.ui.apply_session(a.id, update);
+                        }
+                    }
                 }
             }
             self.ui.apply_session(
@@ -3456,7 +3562,7 @@ impl PlatformApp for App {
             self.lan_query = None;
             self.lan_hosts.clear();
             let mut servers = Vec::new();
-            for (address, beacon) in found {
+            for (address, beacon) in found.lan {
                 if let Ok(certificate) = beacon.certificate_der() {
                     self.lan_hosts.insert(address.to_string(), certificate);
                     servers.push(ServerInfo {
@@ -3469,30 +3575,78 @@ impl PlatformApp for App {
                         max_players: beacon.max_players,
                         bricks: 0,
                         map: plain_chat(&beacon.map),
+                        favorite: false,
                     });
                 }
             }
-            // Servers joined before are listed too, so they are one click away.
-            let recent: Vec<String> =
-                read_small_json(&self.state_dir.join("recent-servers.json")).unwrap_or_default();
-            for address in recent {
-                if !servers.iter().any(|s| s.address.eq_ignore_ascii_case(&address)) {
-                    servers.push(ServerInfo {
-                        name: format!("{address} (joined before)"),
-                        address,
-                        password: false,
-                        dedicated: false,
-                        ping_ms: None,
-                        players: 0,
-                        max_players: 0,
-                        bricks: 0,
-                        map: String::new(),
-                    });
+            // Servers joined before or starred, favourites first, with what
+            // their game port answered just now.
+            let mut saved_rows = Vec::new();
+            for (saved, probe) in found.saved {
+                let lan = servers
+                    .iter_mut()
+                    .find(|s| s.address.eq_ignore_ascii_case(&saved.address));
+                if let Some(lan) = lan {
+                    lan.favorite = saved.favorite;
+                    continue;
                 }
+                let name = if saved.name.is_empty() {
+                    saved.address.clone()
+                } else {
+                    plain_chat(&saved.name)
+                };
+                let mut row = ServerInfo {
+                    address: saved.target().to_string(),
+                    name,
+                    password: false,
+                    dedicated: false,
+                    ping_ms: None,
+                    players: 0,
+                    max_players: 0,
+                    bricks: 0,
+                    map: String::new(),
+                    favorite: saved.favorite,
+                };
+                match probe {
+                    Ok(probe) => {
+                        if !probe.listing.name.is_empty() {
+                            row.name = plain_chat(&probe.listing.name);
+                        }
+                        row.map = plain_chat(&probe.listing.map);
+                        row.players = probe.listing.players;
+                        row.max_players = probe.listing.max_players;
+                        row.ping_ms = Some(probe.ping.as_millis().min(9999) as u32);
+                    }
+                    Err(reason) => row.map = reason,
+                }
+                saved_rows.push(row);
             }
+            // LAN favourites and saved favourites lead the list.
+            servers.sort_by_key(|s| !s.favorite);
+            saved_rows.sort_by_key(|s| !s.favorite);
+            let (favorites, rest): (Vec<_>, Vec<_>) = saved_rows.into_iter().partition(|s| s.favorite);
+            let mut list = favorites;
+            list.extend(servers);
+            list.extend(rest);
             self.ui.apply(UiUpdate::LanServers {
-                servers,
+                servers: list,
                 querying: false,
+            });
+        }
+        if let Some(receiver) = &self.firewall_fix
+            && let Ok(result) = receiver.try_recv()
+        {
+            self.firewall_fix = None;
+            let (title, text) = match result {
+                Ok(()) => (
+                    "Windows Firewall",
+                    "Blockland ReImagined can now accept friends through Windows Firewall.".to_string(),
+                ),
+                Err(reason) => ("Windows Firewall", reason),
+            };
+            self.ui.apply(UiUpdate::MessageBox {
+                title: title.into(),
+                text,
             });
         }
         // Build macro playback: one recorded building action per frame so the
@@ -4228,6 +4382,24 @@ impl PlatformApp for App {
                     }
                     result
                 }
+                UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
+                    match self.invite.clone() {
+                        Some(invite) => {
+                            let copied = copy_to_clipboard(&invite);
+                            let text = match &copied {
+                                Ok(()) => format!("Invite copied to the clipboard: {invite}"),
+                                Err(_) => format!("Your invite: {invite}"),
+                            };
+                            if let Some(a) = &self.attempt {
+                                self.ui.apply_session(a.id, UiUpdate::Chat { text });
+                            }
+                            Ok(())
+                        }
+                        None => Err(anyhow::anyhow!(
+                            "Only the host has an invite, and it appears once hosting has checked your connection."
+                        )),
+                    }
+                }
                 UiAction::ChatCommand { ref name, ref args } => {
                     let snapshot = self
                         .attempt
@@ -4351,20 +4523,87 @@ impl PlatformApp for App {
                     }),
                 UiAction::QueryLan => {
                     let (send, receive) = mpsc::sync_channel(1);
+                    let saved = crate::servers::SavedServers::load(&self.state_dir.join("servers.json"));
+                    let pins: BTreeMap<String, Vec<u8>> =
+                        read_small_json(&self.state_dir.join("trusted-hosts.json")).unwrap_or_default();
                     self.runtime.spawn(async move {
-                        let found = bri_net::discovery::query(
-                            &[bri_net::discovery::broadcast()],
-                            Duration::from_millis(1200),
-                        )
-                        .await
-                        .unwrap_or_default();
-                        let _ = send.send(found);
+                        let broadcast = [bri_net::discovery::broadcast()];
+                        let lan = bri_net::discovery::query(&broadcast, Duration::from_millis(1200));
+                        // Every saved server is asked at once over its game
+                        // port; a probe never pins anything.
+                        let probes = saved.servers.into_iter().map(|server| {
+                            let pin = pins.get(&server.address).cloned();
+                            async move {
+                                let probe = async {
+                                    let target = bri_net::invite::JoinTarget::parse(server.target())?;
+                                    let route = target.resolve().await?;
+                                    let pin = match (route.key, pin) {
+                                        (Some(key), _) => HostPin::Key(key),
+                                        (None, Some(certificate)) => HostPin::Certificate(certificate),
+                                        (None, None) => HostPin::FirstUse,
+                                    };
+                                    bri_net::client::probe(route.address, &pin, Duration::from_secs(2)).await
+                                }
+                                .await
+                                .map_err(|error| probe_failure(&error));
+                                (server, probe)
+                            }
+                        });
+                        let (lan, saved) = tokio::join!(lan, futures_join_all(probes));
+                        let _ = send.send(JoinList {
+                            lan: lan.unwrap_or_default(),
+                            saved,
+                        });
                     });
                     self.lan_query = Some(receive);
                     self.ui.apply(UiUpdate::LanServers {
                         servers: vec![],
                         querying: true,
                     });
+                    Ok(())
+                }
+                UiAction::ToggleFavorite { ref address } => {
+                    let path = self.state_dir.join("servers.json");
+                    let mut saved = crate::servers::SavedServers::load(&path);
+                    // LAN rows are keyed by address; saved rows may be invites.
+                    let target = bri_net::invite::JoinTarget::parse(address);
+                    let key = target.as_ref().map_or(address.clone(), |t| t.address());
+                    let invite = target
+                        .ok()
+                        .filter(|t| t.key().is_some())
+                        .map(|t| t.to_string())
+                        .or_else(|| {
+                            self.lan_hosts.get(address).map(|certificate| {
+                                bri_net::invite::JoinTarget::Direct {
+                                    host: target_host(address),
+                                    port: address
+                                        .rsplit_once(':')
+                                        .and_then(|(_, p)| p.parse().ok())
+                                        .unwrap_or(bri_net::invite::DEFAULT_PORT),
+                                    key: Some(bri_net::invite::host_key(certificate)),
+                                }
+                                .to_string()
+                            })
+                        });
+                    let name = self
+                        .ui
+                        .core
+                        .servers
+                        .iter()
+                        .find(|s| s.address == *address)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default();
+                    saved.toggle_favorite(&key, invite, &name);
+                    let result = saved.save(&path);
+                    self.ui.core.request(UiAction::QueryLan);
+                    result
+                }
+                UiAction::AllowFirewall => {
+                    let (send, receive) = mpsc::sync_channel(1);
+                    std::thread::spawn(move || {
+                        let _ = send.send(crate::firewall::allow().map_err(|e| format!("{e:#}")));
+                    });
+                    self.firewall_fix = Some(receive);
                     Ok(())
                 }
                 UiAction::Console { ref line } => {
@@ -4983,42 +5222,52 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
-/// Servers remembered for the join list.
-const RECENT_SERVERS: usize = 10;
+/// Wait for every future (a small join_all, to avoid a dependency).
+async fn futures_join_all<F: std::future::Future + Send + 'static>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
+where
+    F::Output: Send + 'static,
+{
+    let handles: Vec<_> = futures.into_iter().map(tokio::spawn).collect();
+    let mut out = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if let Ok(value) = handle.await {
+            out.push(value);
+        }
+    }
+    out
+}
 
-/// A typed server address: an IP or a host name, with an optional port
-/// (28000 when left out). `[v6]:port` for IPv6 with a port.
-fn parse_join_target(text: &str) -> Result<(String, u16)> {
-    const HINT: &str =
-        "Enter a server address, like 203.0.113.10, play.example.com or play.example.com:28001";
-    let text = text.trim();
-    if let Ok(address) = text.parse::<SocketAddr>() {
-        return Ok((address.ip().to_string(), address.port()));
+/// What the join list shows for a saved server that did not answer.
+fn probe_failure(error: &anyhow::Error) -> String {
+    use bri_net::client::JoinError;
+    match error.downcast_ref::<JoinError>() {
+        Some(JoinError::NoAnswer(_)) => "(no answer)".into(),
+        Some(JoinError::IdentityChanged(_)) => "(host changed)".into(),
+        Some(JoinError::Rejected(reason)) if reason.contains("version") => "(other version)".into(),
+        _ if error.to_string().contains("Could not find") => "(unknown name)".into(),
+        _ => "(unreachable)".into(),
     }
-    let bare = text.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
-        return Ok((ip.to_string(), 28000));
-    }
-    let (host, port) = match text.rsplit_once(':') {
-        Some((host, port)) => (host, port.parse::<u16>().ok().filter(|p| *p > 0).context(HINT)?),
-        None => (text, 28000),
-    };
-    let valid = !host.is_empty()
-        && host.len() <= 253
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        });
-    ensure!(valid, "{HINT}");
-    Ok((host.to_ascii_lowercase(), port))
+}
+
+/// The host part of a normalized `host:port` / `[v6]:port` address.
+fn target_host(address: &str) -> String {
+    address
+        .rsplit_once(':')
+        .map_or(address, |(host, _)| host)
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string()
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// A small JSON file in the client state folder, or None when missing or
 /// unreadable.
-fn read_small_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+pub(crate) fn read_small_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     std::fs::metadata(path)
         .ok()
         .filter(|m| m.len() <= 1024 * 1024)
@@ -5048,20 +5297,10 @@ mod tests {
         assert!(fov_y.to_degrees() < 60.0);
     }
     #[test]
-    fn join_address_accepts_ips_and_host_names_with_or_without_port() {
-        use super::parse_join_target;
-        let parsed = |text| parse_join_target(text).unwrap();
-        assert_eq!(parsed(" 203.0.113.10:28001 "), ("203.0.113.10".into(), 28001));
-        assert_eq!(parsed("100.64.1.2"), ("100.64.1.2".into(), 28000));
-        assert_eq!(parsed("[2001:db8::1]"), ("2001:db8::1".into(), 28000));
-        assert_eq!(parsed("[2001:db8::1]:28005"), ("2001:db8::1".into(), 28005));
-        assert_eq!(parsed("Play.Example.com"), ("play.example.com".into(), 28000));
-        assert_eq!(parsed("play.example.com:28001"), ("play.example.com".into(), 28001));
-        assert_eq!(parsed("localhost"), ("localhost".into(), 28000));
-        for bad in ["", "play example.com", "host:notaport", "host:0", "-bad.com", "a..b"] {
-            let error = parse_join_target(bad).unwrap_err().to_string();
-            assert!(error.contains("play.example.com"), "{bad}: {error}");
-        }
+    fn saved_pins_are_keyed_by_the_typed_host() {
+        assert_eq!(super::target_host("play.example.com:28000"), "play.example.com");
+        assert_eq!(super::target_host("[2001:db8::1]:28000"), "2001:db8::1");
+        assert_eq!(super::target_host("203.0.113.10:28001"), "203.0.113.10");
     }
     #[test]
     fn small_state_files_update_in_place() {

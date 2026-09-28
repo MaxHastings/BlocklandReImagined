@@ -142,6 +142,8 @@ pub enum Callback {
     MiniGame { game: crate::api::MiniGameId, operation: crate::api::MiniGameOperation },
     /// `TrustInviteGui.ignore()`.
     IgnoreTrust { from: u64 },
+    /// Send this request (a platform question answered YES).
+    Request(Box<crate::api::UiAction>),
 }
 
 /// Keyboard look commands: (lowercase command, yaw sign, pitch sign). Pitch
@@ -1364,6 +1366,11 @@ impl Ui {
                 c.minigames = state;
             }
             UiUpdate::MessageBox { title, text } => c.message_ok(&title, &text),
+            UiUpdate::Confirm {
+                title,
+                text,
+                action,
+            } => c.message_yes_no(&title, &text, Callback::Request(action)),
             UiUpdate::TrustInvite(invitation) => {
                 c.trust_invite = Some(invitation);
                 c.pop(ScreenId::TrustInvitation);

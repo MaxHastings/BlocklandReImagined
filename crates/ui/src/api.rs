@@ -53,6 +53,9 @@ pub struct ServerInfo {
     pub max_players: u32,
     pub bricks: u32,
     pub map: String,
+    /// Starred by the player (listed first; Favorite button toggles it).
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// One brick in the server's catalog, in datablock (registration) order.
@@ -548,7 +551,14 @@ pub enum UiAction {
         admin_password: String,
         super_admin_password: String,
     },
+    /// Search the LAN and check the servers the player joined or starred.
     QueryLan,
+    /// Star or unstar a server in the join list.
+    ToggleFavorite {
+        address: String,
+    },
+    /// Let the game through Windows Firewall (one Windows permission prompt).
+    AllowFirewall,
     JoinServer {
         address: String,
         password: String,
@@ -963,6 +973,12 @@ pub enum UiUpdate {
     MiniGameInvite(MiniGameInvitation),
     /// Server `MessageBoxOK`.
     MessageBox { title: String, text: String },
+    /// A yes/no question from the platform; YES sends `action`.
+    Confirm {
+        title: String,
+        text: String,
+        action: Box<UiAction>,
+    },
     /// `clientCmdTrustInvite`.
     TrustInvite(TrustInvitation),
     Lagging(bool),

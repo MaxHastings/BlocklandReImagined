@@ -204,6 +204,7 @@ fn main() -> Result<()> {
                 max_players: 8,
                 bricks: 1534,
                 map: "Bedroom".into(),
+                favorite: true,
             }],
             querying: false,
         });

@@ -182,45 +182,30 @@ impl ServerHandle {
         self.discovery = Some(task);
         Ok(port)
     }
-    /// Internet hosts: ask the router (UPnP) to forward the game and
-    /// certificate ports for as long as this host runs. Each outcome is sent
-    /// to `notify` as a line for the host player.
-    pub fn open_router_ports(&mut self, notify: std::sync::mpsc::Sender<String>) {
+    /// Internet hosts: ask the router to forward the game port for as long
+    /// as this host runs, then check whether friends can reach it. The
+    /// report is handed to `notify` once. LAN discovery (UDP 28050) is never
+    /// forwarded: joining over the internet needs only the game port.
+    pub fn open_to_internet(&mut self, notify: impl FnOnce(crate::reach::Report) + Send + 'static) {
         let port = self.address.port();
-        let ports = vec![port, crate::discovery::DISCOVERY_PORT];
-        let slot = Arc::new(std::sync::Mutex::new(None::<crate::upnp::PortMapping>));
+        let certificate = self.certificate.clone();
+        let slot = Arc::new(std::sync::Mutex::new(None::<crate::reach::Forward>));
         let held = slot.clone();
         let task = tokio::spawn(async move {
-            let opened = tokio::task::spawn_blocking(move || crate::upnp::PortMapping::open(&ports)).await;
-            let mapping = match opened {
-                Ok(Ok(mapping)) => mapping,
-                Ok(Err(error)) => {
-                    let _ = notify.send(format!(
-                        "Could not open router ports automatically ({error}). Friends outside your network need UDP {port} and {} forwarded to this PC.",
-                        crate::discovery::DISCOVERY_PORT
-                    ));
-                    return;
-                }
-                Err(_) => return,
-            };
-            let _ = notify.send(match mapping.external_ip {
-                Some(ip) if mapping.behind_another_router() => format!(
-                    "Router ports opened, but your router's address {ip} is not public (another router or your provider sits in front). Friends outside probably cannot connect."
-                ),
-                Some(ip) => format!("Router ports opened. Friends can Connect to IP: {ip}:{port}"),
-                None => format!("Router ports opened. Friends can Connect to IP with your public IP and port {port}."),
-            });
+            let (report, forward) = crate::reach::open_and_check(port, certificate).await;
+            notify(report);
+            let Some(forward) = forward else { return };
             if let Ok(mut guard) = held.lock() {
-                *guard = Some(mapping);
+                *guard = Some(forward);
             }
             loop {
                 tokio::time::sleep(crate::upnp::RENEW_EVERY).await;
                 let held = held.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Ok(mut guard) = held.lock()
-                        && let Some(mapping) = guard.as_mut()
+                        && let Some(forward) = guard.as_mut()
                     {
-                        let _ = mapping.renew();
+                        let _ = forward.renew();
                     }
                 })
                 .await;
@@ -252,7 +237,7 @@ fn current_listing(
 /// them on a background thread so the caller never waits on the router.
 struct RouterPorts {
     task: tokio::task::JoinHandle<()>,
-    slot: Arc<std::sync::Mutex<Option<crate::upnp::PortMapping>>>,
+    slot: Arc<std::sync::Mutex<Option<crate::reach::Forward>>>,
 }
 impl Drop for RouterPorts {
     fn drop(&mut self) {

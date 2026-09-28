@@ -49,6 +49,11 @@ fn main() -> Result<()> {
     // use that terminal for --help, --check and the echoed log.
     bri_crash::attach_parent_console();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    // The elevated helper the host starts to let the game through Windows
+    // Firewall (one Windows permission prompt); it does nothing else.
+    if args.first().is_some_and(|a| a == bri_client::firewall::ALLOW_FLAG) {
+        return bri_client::firewall::run_helper();
+    }
     if args.first().is_some_and(|a| a == "--help") {
         println!(
             "Blockland ReImagined\nUsage: bri-client [--run] [native-content-directory] [client-state-directory]\n       bri-client --check [native-content-directory] [client-state-directory]\nWith no arguments the game opens with the content beside it.\n--check validates startup content/settings silently without a window or audio device."

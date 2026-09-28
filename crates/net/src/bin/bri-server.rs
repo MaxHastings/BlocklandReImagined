@@ -133,7 +133,7 @@ async fn main() -> Result<()> {
         avatar_dir.join("avatar.json"),
     )?)?)?;
     let initial_static_items = session.weapon_view().static_items.len();
-    let server = server::start_with_admin_store_and_limit(
+    let mut server = server::start_with_admin_store_and_limit(
         session,
         ServerOptions {
             bind,
@@ -158,6 +158,19 @@ async fn main() -> Result<()> {
         server.address,
         state_dir.join("host.json").display()
     );
+    // A host listening beyond this computer opens its port on the router
+    // (when there is one) and says whether players can reach it, with the
+    // invite to share.
+    let bind_ip: std::net::IpAddr = server.address.ip();
+    if !bind_ip.is_loopback() && seconds.is_none() {
+        let port = server.address.port();
+        server.open_to_internet(move |report| {
+            println!("Hosting check (port {port}):");
+            for line in report.lines() {
+                println!("  {line}");
+            }
+        });
+    }
     if let Some(seconds) = seconds {
         tokio::time::sleep(Duration::from_secs(seconds)).await;
     } else {
