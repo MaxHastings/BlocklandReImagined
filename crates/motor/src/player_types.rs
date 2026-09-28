@@ -123,6 +123,18 @@ impl PlayerType {
     pub fn can_ride(self) -> bool {
         self != Self::Horse
     }
+    /// `minImpactSpeed`: the engine calls `Armor::onImpact` (falling damage)
+    /// only for hits faster than this.
+    pub fn min_impact_speed(self) -> f32 {
+        match self {
+            Self::Horse => 250.0,
+            _ => 30.0,
+        }
+    }
+    /// The v20 datablock at this archetype index, if it is one.
+    pub fn from_archetype(id: crate::archetype::ArchetypeId) -> Option<Self> {
+        Self::EVERY.get(usize::from(id.0)).copied()
+    }
     pub fn tuning(self) -> PlayerTuning {
         let standard = PlayerTuning::default();
         let per_tick = |v: f32| v / TORQUE_TICK;

@@ -20,8 +20,7 @@ const INVULNERABLE_TICKS: u64 = 300;
 const CORPSE_TICKS: u64 = 600;
 /// `Armor::damage` sums hits less than 300 ms apart into one pain level.
 const PAIN_TICKS: u64 = 36;
-/// `minImpactSpeed` and `speedDamageScale`.
-const MIN_IMPACT_SPEED: f32 = 30.0;
+/// `speedDamageScale` (every stock player type sets 3.8).
 const SPEED_DAMAGE_SCALE: f32 = 3.8;
 /// `mass` of the standard player: impulses divide by it.
 const PLAYER_MASS: f32 = 90.0;
@@ -1200,12 +1199,27 @@ impl Session {
         }
         for (owner, impact) in impacts {
             let speed = impact.length();
-            if speed < MIN_IMPACT_SPEED {
-                continue;
-            }
             let Some(peer) = self.peers.get(&owner) else {
                 continue;
             };
+            // The engine raises `onImpact` past the datablock's
+            // `minImpactSpeed` (the Horse's is 250), and `Armor::onImpact`
+            // also wants `minImpactSpeed` times the player's height scale.
+            let state = peer.player.state();
+            let min = PlayerType::from_archetype(state.archetype)
+                .unwrap_or_default()
+                .min_impact_speed();
+            if speed <= min || speed < min * state.scale {
+                continue;
+            }
+            // `Armor::onImpact` never hurts a player holding the admin wand.
+            if self
+                .weapons
+                .image_state(ActorId(owner), 0)
+                .is_some_and(|(image, _)| image.id == super::tools::ADMIN_WAND_IMAGE)
+            {
+                continue;
+            }
             // Falling damage follows the minigame rule; the sandbox default
             // (`$pref::Server::FallingDamage`) is off.
             let allowed = self

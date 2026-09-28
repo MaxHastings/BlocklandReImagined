@@ -130,6 +130,27 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
 }
 
 #[test]
+fn horses_take_no_falling_damage_below_their_min_impact_speed() {
+    // HorseArmor's `minImpactSpeed` is 250, so the engine never raises
+    // `onImpact` for a fall that kills a Standard Player.
+    let mut s = session();
+    let a = s.join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    s.set_spawn_points(vec![Vec3::new(0.0, 80.0, 0.0)]).unwrap();
+    let settings = Settings {
+        player_type: bri_sim::player_types::PlayerType::Horse.id().into(),
+        ..Settings::default()
+    };
+    s.command(a, 1, Command::MiniGame(MiniGameRequest::Create { color: 3, settings }))
+        .unwrap();
+    for sequence in 1..=600 {
+        s.movement(a, sequence, MoveInput::default()).unwrap();
+        s.step().unwrap();
+    }
+    assert!(s.is_alive(a));
+    assert_eq!(s.vitals()[&a].health, 250.0);
+}
+
+#[test]
 fn minigame_owner_controls_and_invitations() {
     let mut s = session();
     let a = s.join("Alpha".into(), Vec3::new(-3.0, 0.05, 0.0), false).unwrap();
