@@ -7,11 +7,11 @@
   ],
   "state": {
     "player": {
-      "points": { "default": 0, "public": true },
-      "best": { "default": 0, "public": true }
+      "points": { "default": 0, "visible": "everyone" },
+      "best": { "default": 0, "visible": "everyone" }
     },
     "global": {
-      "awarded": { "default": 0, "public": true },
+      "awarded": { "default": 0, "visible": "everyone" },
       "every": { "default": 1, "persist": false }
     }
   },

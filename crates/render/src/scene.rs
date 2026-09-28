@@ -1714,9 +1714,18 @@ impl SceneRenderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
+                // Occluders read this cascade's finished caster layer.
+                let (bind_group, pipelines) = if group == 0 {
+                    (&self.shadows.caster_group, &self.shadows.pipelines)
+                } else {
+                    (
+                        &self.shadows.occluder_groups[index],
+                        &self.shadows.occluder_pipelines,
+                    )
+                };
                 pass.set_bind_group(
                     0,
-                    &self.shadows.caster_group,
+                    bind_group,
                     &[crate::shadow::ShadowMaps::caster_offset(index)],
                 );
                 let mut draw = |scene: &GpuScene, buffer: &wgpu::Buffer, range: Range<u32>| {
@@ -1733,7 +1742,7 @@ impl SceneRenderer {
                     let mut run: Option<Range<u32>> = None;
                     let flush = |pass: &mut wgpu::RenderPass<'_>, run: &mut Option<Range<u32>>| {
                         if let Some(indices) = run.take() {
-                            pass.set_pipeline(&self.shadows.pipelines[0]);
+                            pass.set_pipeline(&pipelines[0]);
                             pass.draw_indexed(indices, 0, range.clone());
                         }
                     };
@@ -1744,7 +1753,7 @@ impl SceneRenderer {
                         }
                         if masked {
                             flush(&mut pass, &mut run);
-                            pass.set_pipeline(&self.shadows.pipelines[1]);
+                            pass.set_pipeline(&pipelines[1]);
                             pass.set_bind_group(1, &scene.materials[batch.material], &[]);
                             pass.draw_indexed(batch.indices.clone(), 0, range.clone());
                         } else if let Some(indices) =

@@ -23,7 +23,7 @@ fn player(crouched: bool) -> PlayerState {
         crouched,
         jetting: false,
         jump: Default::default(),
-        datablock: Default::default(),
+        archetype: Default::default(),
         scale: 1.0,
         energy: 100.0,
     }

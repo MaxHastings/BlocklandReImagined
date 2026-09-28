@@ -1270,8 +1270,8 @@ fn player_datablock_and_scale_events_reshape_the_player() {
         .find(|p| p.owner == owner)
         .unwrap();
     assert_eq!(
-        player.datablock,
-        bri_sim::player_types::PlayerType::Quake,
+        player.archetype,
+        bri_sim::player_types::PlayerType::Quake.archetype(),
         "{:?}",
         s.take_event_diagnostics()
     );

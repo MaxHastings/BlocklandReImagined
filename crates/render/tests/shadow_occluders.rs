@@ -115,6 +115,13 @@ fn shadows_land_only_on_the_first_surface_they_reach() -> Result<()> {
         &queue,
         &cuboid(Vec3::new(-0.3, 4.05, -0.3), Vec3::new(0.3, 5., 0.3)),
     )?;
+    // A ceiling high over everything (an interior's roof, an overhang):
+    // occluders toward the sun from the player must not hide the tower.
+    let ceiling = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-20., 12., -20.), Vec3::new(20., 12.5, 20.)),
+    )?;
     let sun = Vec3::new(0.3, -1.0, 0.0);
     let mut camera = Camera::perspective(
         [8., 7., 6.],
@@ -228,6 +235,15 @@ fn shadows_land_only_on_the_first_surface_they_reach() -> Result<()> {
     assert!(
         at(&see_through, floor_below) < lit_floor - 20,
         "without occluders the shadow would pass through (test sensitivity)"
+    );
+    let covered = frame(&[&player], &[&floor, &tower, &ceiling])?;
+    assert!(
+        at(&covered, tower_top) < lit_top - 20,
+        "player under a ceiling still shades the tower top"
+    );
+    assert!(
+        (at(&covered, floor_below) - lit_floor).abs() <= 3,
+        "tower stops the shadow under a ceiling"
     );
     // Occluders never cast shadows of their own.
     assert_eq!(unshadowed, frame(&[], &[])?);

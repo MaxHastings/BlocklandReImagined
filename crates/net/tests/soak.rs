@@ -111,6 +111,7 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
             certificate: None,
             map_loader: None,
             autosave: None,
+            packages: None,
         },
     )?;
     let link = ImpairedLink::start(server.address, Impairment::BAD_WIFI, seed).await?;

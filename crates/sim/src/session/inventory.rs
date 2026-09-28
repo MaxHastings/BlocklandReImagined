@@ -27,12 +27,7 @@ impl ToolInventory {
         ensure!(self.slots.len() == TOOL_SLOTS, "Invalid tool slot count");
         for item in self.slots.iter().flatten() {
             ensure!(
-                item.len() <= 128
-                    && item.starts_with("v20.weapon.")
-                    && item.bytes().all(|c| c.is_ascii_lowercase()
-                        || c.is_ascii_digit()
-                        || c == b'.'
-                        || c == b'_'),
+                bri_package::id::is_content_ref(item, Some("weapon")),
                 "Invalid inventory item"
             );
         }
@@ -117,7 +112,7 @@ impl Session {
         );
         weapons.tick = self.simulation.state().tick;
         self.weapons = weapons;
-        self.minigames = super::combat::new_world(catalog);
+        self.minigames = super::combat::new_world(catalog, &self.archetypes);
         self.refresh_event_bindings()
     }
 

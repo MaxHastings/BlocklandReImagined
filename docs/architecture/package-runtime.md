@@ -23,10 +23,13 @@ file:
 |---|---|---|
 | `behaviour` | server | Declared commands, state keys and hooks, and the script file. |
 | `script` | server | Sandboxed server script (Rhai). |
-| `world` | server | A chunked world provider: chunk size, voxel brick, materials, the generator function. |
-| `entity` | server | An entity kind: name, model id, speed, scale, health, think function and interval. |
+| `world` | server | A chunked world provider: chunk size, voxel brick, materials (each may name a `block`), the generator function. |
+| `entity` | server | An entity kind: name, model id, speed, scale, health, think function and interval, and optionally the `archetype` its body moves by. |
+| `archetype` | server | A player archetype: a base plus the movement it changes, health, riding, look. |
 | `model` | client | A box model: coloured boxes, colours per entity label. |
 | `hud` | client | A HUD panel: title, colours, rows bound to public state, keys bound to commands. |
+| `texture` | client | A PNG image (at most 1024 pixels on an edge), downloaded with the package. |
+| `block` | client | A block: per face (`all`, `side`, `top`, `bottom`, `north`, `south`, `east`, `west`; the most specific wins) a texture id or a flipbook (`frames`, `fps`, `once`), and named `states` that replace some faces. |
 | `mode` | server | A game mode: name, description, optional map, and the Add-Ons it runs. |
 
 **Clients never receive or run package code.** Server kinds may only appear
@@ -75,7 +78,7 @@ settle on one (`set.world.conflict`, raised by `for_mode`/`for_world`).
 | Seam | Family | Engine side | Package side |
 |---|---|---|---|
 | Package commands | player/control, security | `Command::Package { package, command, args }`: checked against the declared name, argument types, cooldown and admin flag; optional server-resolved aim. | `fn cmd_<name>(player, args...)` |
-| Package state | persistence, game-rule | Namespaced per package; per durable player (principal) and per server; only declared keys; committed only when a call succeeds; public keys replicated; persisted keys saved (`PackageSave`). | reads and writes its own keys |
+| Package state | persistence, game-rule | Namespaced per package; per durable player (principal) and per server; only declared keys; committed only when a call succeeds; keys replicated to the audience their `visible` names; persisted keys saved (`PackageSave`). | reads and writes its own keys |
 | Entities | entity/behaviour | Character bodies (motor `spawn_tagged`, collider kind 3), steering, labels, health, fall-out removal, replication as `EntityInfo`. | `fn think(me)` every N ticks: `steer`, `label`, `explode`, ... |
 | Chunked world provider | world, persistence | Streams chunks around players, inserts world-owned bricks, records removals (by any means) as edits, saves seed + edits, regenerates on load. | `fn generate(cx, cz)` returns `[[x, y, z, material], ...]` |
 | Explosion | game-rule | `Session::explode`: player and entity damage with falloff, brick destruction in a radius, `Explosion` cue. | `explode(x, y, z, r, damage, brick_r)` |
@@ -89,8 +92,15 @@ Hooks: `on_join(player)` and `on_tick()` every `tick_interval` ticks.
 Scripts never touch the game. A call receives a read-only snapshot (tick,
 seed, players, entities, the caller's aim) and a working copy of its own
 state; it returns a list of typed operations (`bri_package_runtime::Op`):
-`remove_brick`, `explode`, `damage`, `spawn_entity`, `remove_entity`,
-`steer`, `label`, `tell`, `broadcast`.
+`remove_brick`, `place_brick`, `explode`, `damage`, `teleport`, `respawn`,
+`set_archetype`, `control`, `set_block_state`, `spawn_entity`,
+`remove_entity`, `steer`, `label`, `tell`, `broadcast`. `set_block_state(brick,
+state)` (capability `world.edit`) switches a block brick to one of its
+block's declared states; the state is a field of the brick
+(`Brick::look`), so it replicates and saves with the world. `aim()` reports
+the aimed brick's `block` and `state`. `control(player, entity)` hands a player's
+movement to one of the package's own entities, `release(player)` hands it
+back (capability `player`; see `docs/player-simulation.md`).
 
 Every operation passes **`ops::authorize`**, the single capability gate:
 bounds first (`op.bounds`), then the capability the manifest declares
@@ -114,9 +124,13 @@ spamming.
 
 ## Replication
 
-`Checkpoint` and `Delta` carry `entities: Vec<EntityInfo>` and
-`package_state: PackageStateView` (protocol 32), sent whole when they change
-at the 20 Hz delta rate. That is fine for tens of entities and small state;
+`Checkpoint` and `Delta` carry `entities: Vec<EntityInfo>`, sent whole when
+they change at the 20 Hz delta rate. Package state is per client: a state key
+declares `visible` (`server`, `owner` or `everyone`), the welcome's
+`Checkpoint.package_state` is `Session::package_state_for(viewer)`, and the
+server sends each client `Message::PackageState` with its whole view when
+that view changes (protocol 35). One player's owner-visible keys never reach
+another client. Whole views are fine for tens of entities and small state;
 larger counts need per-entity deltas (see the Stress Lab handoff).
 
 ## Workflow

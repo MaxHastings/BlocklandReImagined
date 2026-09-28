@@ -69,6 +69,8 @@ async fn main() -> Result<()> {
                     })
                 },
             }),
+            // Offered once this host loads through packages.json.
+            packages: None,
         },
         64,
         state_dir.join("administration.json"),

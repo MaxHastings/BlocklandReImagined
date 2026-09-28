@@ -125,6 +125,32 @@ impl ContentId {
     }
 }
 
+/// Longest content reference either spelling may take.
+pub const MAX_CONTENT_REF: usize = 160;
+
+/// Whether `id` names content of `kind` (any kind when `None`) in either
+/// spelling the game uses: the base game's `v20.kind.name`, or the platform
+/// grammar `namespace:kind/name` that Add-Ons use. Every check of an item,
+/// vehicle or player-type reference goes through this one rule, so content
+/// the host accepts is never refused by a peer.
+pub fn is_content_ref(id: &str, kind: Option<&str>) -> bool {
+    if id.is_empty() || id.len() > MAX_CONTENT_REF {
+        return false;
+    }
+    if let Some(rest) = id.strip_prefix("v20.") {
+        let Some((k, name)) = rest.split_once('.') else {
+            return false;
+        };
+        return kind.is_none_or(|kind| k == kind)
+            && !k.is_empty()
+            && !name.is_empty()
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b));
+    }
+    ContentId::parse(id).is_ok_and(|parsed| kind.is_none_or(|kind| parsed.kind == kind))
+}
+
 /// Mint an id for content converted from another format, whose names
 /// (Torque datablock names, virtual file paths) do not follow the grammar:
 /// lowercase, `\` becomes `/`, and every other character outside
@@ -278,6 +304,28 @@ impl Requirement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_refs_accept_both_spellings() {
+        assert!(is_content_ref("v20.weapon.gunitem", Some("weapon")));
+        assert!(is_content_ref(
+            "addon_shotgun:weapon/shotgunitem",
+            Some("weapon")
+        ));
+        assert!(is_content_ref("v20.image.gunimage", None));
+        assert!(!is_content_ref("v20.image.gunimage", Some("weapon")));
+        assert!(!is_content_ref(
+            "addon_shotgun:image/shotgunimage",
+            Some("weapon")
+        ));
+        assert!(!is_content_ref("v20.weapon.", Some("weapon")));
+        assert!(!is_content_ref("v20.weapon.Gun", Some("weapon")));
+        assert!(!is_content_ref("gunitem", None));
+        assert!(!is_content_ref(
+            &format!("v20.weapon.{}", "a".repeat(160)),
+            None
+        ));
+    }
 
     #[test]
     fn namespaces_are_lowercase_identifiers() {

@@ -87,11 +87,36 @@ pub struct WrenchProperties {
 }
 pub struct Authority {
     world: World,
+    /// Sum of the bricks' stored bounds, kept under [`MAX_STORED_BYTES`] so
+    /// the world always fits its save file and join stream.
+    stored: u64,
+}
+/// A brick's stored bound plus its map key.
+fn stored(brick: &Brick) -> u64 {
+    brick.stored_bound() + 32
 }
 impl Authority {
     pub fn new(world: World) -> Result<Self> {
         world.validate()?;
-        Ok(Self { world })
+        let stored = world.bricks.values().map(stored).sum();
+        Ok(Self { world, stored })
+    }
+    /// The world's bricks by [`Brick::stored_bound`], against
+    /// [`MAX_STORED_BYTES`].
+    pub fn stored_bytes(&self) -> u64 {
+        self.stored
+    }
+    /// Admit a change from `before` to `after` stored bytes. Growth must fit
+    /// the budget; shrinking is always allowed, even in a world loaded over it.
+    fn charge(&self, before: u64, after: u64) -> Result<u64> {
+        let total = self.stored - before + after;
+        ensure!(
+            after <= before || total <= MAX_STORED_BYTES,
+            "World storage budget reached ({} of {} MB); remove bricks or events first",
+            total / (1024 * 1024),
+            MAX_STORED_BYTES / (1024 * 1024)
+        );
+        Ok(total)
     }
     pub fn state(&self) -> &World {
         &self.world
@@ -158,12 +183,14 @@ impl Authority {
                 }),
             "Loaded owners conflict with this world's owners"
         );
+        let total = self.charge(0, plan.bricks.values().map(stored).sum())?;
         let ids = plan.bricks.keys().copied().collect();
         self.world.owners.extend(plan.owners);
         self.world.bricks.extend(plan.bricks);
         self.world.palette = plan.palette;
         self.world.next_brick_id = plan.next_id;
         self.world.revision = revision;
+        self.stored = total;
         Ok(ids)
     }
     /// The supplied server validator must check catalog availability, reach,
@@ -191,6 +218,7 @@ impl Authority {
         brick.source_records.clear();
         brick.validate(self.world.palette.len())?;
         validate(&self.world, &brick)?;
+        let total = self.charge(0, stored(&brick))?;
         let id = self.world.next_brick_id;
         let next = id.checked_add(1).context("Brick IDs exhausted")?;
         let revision = self
@@ -201,12 +229,12 @@ impl Authority {
         self.world.bricks.insert(id, brick);
         self.world.next_brick_id = next;
         self.world.revision = revision;
+        self.stored = total;
         Ok(id)
     }
     fn permission(actor: &Actor, brick: &Brick, level: u8) -> Result<()> {
         ensure!(
-            actor.administrator
-                || (actor.owner != 0 && actor.trust_level(brick.owner) >= level),
+            actor.administrator || (actor.owner != 0 && actor.trust_level(brick.owner) >= level),
             "Brick edit denied"
         );
         Ok(())
@@ -259,6 +287,7 @@ impl Authority {
             }
         }
         next.validate(self.world.palette.len())?;
+        let total = self.charge(stored(old), stored(&next))?;
         let revision = self
             .world
             .revision
@@ -266,6 +295,7 @@ impl Authority {
             .context("Revision exhausted")?;
         self.world.bricks.insert(id, next);
         self.world.revision = revision;
+        self.stored = total;
         Ok(())
     }
     pub fn remove(&mut self, actor: &Actor, id: BrickId) -> Result<()> {
@@ -279,16 +309,20 @@ impl Authority {
             .revision
             .checked_add(1)
             .context("Revision exhausted")?;
-        self.world.bricks.remove(&id);
+        if let Some(brick) = self.world.bricks.remove(&id) {
+            self.stored -= stored(&brick);
+        }
         self.world.revision = revision;
         Ok(())
     }
     /// Trusted server mutation from the event engine or game rules. The
     /// server has already decided the change is permitted.
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
-        let mut next = self.world.bricks.get(&id).context("Unknown brick")?.clone();
+        let old = self.world.bricks.get(&id).context("Unknown brick")?;
+        let mut next = old.clone();
         change(&mut next);
         next.validate(self.world.palette.len())?;
+        let total = self.charge(stored(old), stored(&next))?;
         let revision = self
             .world
             .revision
@@ -296,6 +330,7 @@ impl Authority {
             .context("Revision exhausted")?;
         self.world.bricks.insert(id, next);
         self.world.revision = revision;
+        self.stored = total;
         Ok(())
     }
     /// Continue an earlier world's clock (the host changed maps).
@@ -336,6 +371,113 @@ mod tests {
             params: vec![EventValue::Color(color)],
         }
     }
+    /// E15 (categories 6, 7): the stored bound covers the save encoding of
+    /// every shape a brick can take, escapes included.
+    #[test]
+    fn stored_bound_covers_the_save_encoding() {
+        let hostile = "q\"\\\u{1}\n".repeat(60);
+        let mut bricks = vec![Brick::new(
+            ContentRef::Resolved("v20:brick/1x1f".into()),
+            [-123456.79, -0.000012345678, 999999.9],
+            u64::MAX,
+        )];
+        let mut full = bricks[0].clone();
+        full.name = Some(hostile[..120].into());
+        full.print = Some(ContentRef::Unresolved {
+            namespace: hostile[..60].into(),
+            name: hostile.clone(),
+        });
+        full.light = Some(Light {
+            asset: ContentRef::Resolved(hostile.clone()),
+            enabled: true,
+        });
+        full.emitter = Some(Emitter {
+            asset: Some(ContentRef::Resolved(hostile.clone())),
+            direction: 5,
+        });
+        full.item_spawn.item = Some(ContentRef::Resolved(hostile.clone()));
+        full.item_spawn.respawn_ms = u32::MAX;
+        full.sound = Some(ContentRef::Resolved(hostile.clone()));
+        full.vehicle = Some(crate::VehicleSpawn {
+            vehicle: ContentRef::Resolved(hostile.clone()),
+            recolor: true,
+        });
+        full.events = (0..64)
+            .map(|i| EventRow {
+                preserved: Some(bri_events::PreservedRow {
+                    original: hostile.clone(),
+                    diagnostic: hostile.clone(),
+                }),
+                enabled: true,
+                input: hostile[..100].into(),
+                delay_ms: u32::MAX,
+                target: EventTarget::Named(hostile[..100].into()),
+                output: hostile[..100].into(),
+                params: vec![
+                    EventValue::Text(hostile[..180].into()),
+                    EventValue::Rows(bri_events::RowSelection::Indices(vec![u16::MAX - i; 256])),
+                    EventValue::Vector(glam::Vec3::splat(-1.234_567_9e-38)),
+                    EventValue::Int(i64::MIN),
+                ],
+            })
+            .collect();
+        full.source_records = vec![
+            SourceRecord {
+                line: u32::MAX,
+                text: hostile.clone(),
+                diagnostic: Some(hostile.clone()),
+            };
+            8
+        ];
+        bricks.push(full);
+        for brick in bricks {
+            let json = serde_json::to_vec(&brick).unwrap().len() as u64;
+            assert!(
+                json <= brick.stored_bound(),
+                "{json} > {}",
+                brick.stored_bound()
+            );
+        }
+    }
+
+    /// E15: growth past the storage budget is refused with a reason; a
+    /// world already over it (loaded from elsewhere) may still shrink.
+    #[test]
+    fn the_storage_budget_refuses_growth_but_never_shrinking() {
+        let mut authority = Authority::new(fixture()).unwrap();
+        let actor = Actor {
+            owner: 7,
+            ..Default::default()
+        };
+        let base = authority.stored_bytes();
+        authority.stored = MAX_STORED_BYTES - 100;
+        let rows: Vec<_> = (0..16).map(|i| row("setColor", i % 4)).collect();
+        let error = authority
+            .edit(&actor, 1, Edit::Events(rows.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("World storage budget reached"), "{error}");
+        let brick = Brick::new(
+            ContentRef::Resolved("brick/test".into()),
+            [9.0, 0.0, 0.0],
+            7,
+        );
+        assert!(authority.plant(&actor, brick, |_, _| Ok(())).is_err());
+        authority.stored = MAX_STORED_BYTES + 1000;
+        authority.remove(&actor, 2).unwrap();
+        authority.edit(&actor, 1, Edit::Color(3)).unwrap();
+        let mut authority = Authority::new(fixture()).unwrap();
+        authority.edit(&actor, 1, Edit::Events(rows)).unwrap();
+        assert!(authority.stored_bytes() > base);
+        authority.remove(&actor, 1).unwrap();
+        let left: u64 = authority.state().bricks.values().map(stored).sum();
+        assert_eq!(
+            authority.stored_bytes(),
+            left,
+            "the running total stays exact"
+        );
+    }
+
     #[test]
     fn event_rows_round_trip_and_are_bounded() {
         let mut world = fixture();
@@ -411,9 +553,15 @@ mod tests {
         };
         assert_eq!(actor(Trust::OwnerOnly).trust_level(0), trust::FULL);
         assert_eq!(actor(Trust::Everyone).trust_level(owner), trust::YOU);
-        assert!(server.edit(&actor(Trust::OwnerOnly), 1, Edit::Name(None)).is_err());
+        assert!(
+            server
+                .edit(&actor(Trust::OwnerOnly), 1, Edit::Name(None))
+                .is_err()
+        );
         let build = actor(levels(trust::BUILD));
-        server.edit(&build, 1, Edit::Name(Some("door".into()))).unwrap();
+        server
+            .edit(&build, 1, Edit::Name(Some("door".into())))
+            .unwrap();
         assert!(server.edit(&build, 1, Edit::Color(1)).is_err());
         assert!(server.remove(&build, 1).is_err());
         let full = actor(levels(trust::FULL));

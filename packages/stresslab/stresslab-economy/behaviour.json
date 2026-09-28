@@ -8,14 +8,14 @@
   ],
   "state": {
     "player": {
-      "bits": { "default": 0, "public": true },
-      "coal": { "default": 0, "public": true },
-      "copper": { "default": 0, "public": true },
-      "gold": { "default": 0, "public": true },
-      "mined": { "default": 0, "public": true }
+      "bits": { "default": 0, "visible": "owner" },
+      "coal": { "default": 0, "visible": "owner" },
+      "copper": { "default": 0, "visible": "owner" },
+      "gold": { "default": 0, "visible": "owner" },
+      "mined": { "default": 0, "visible": "owner" }
     },
     "global": {
-      "sold": { "default": 0, "public": true }
+      "sold": { "default": 0, "visible": "everyone" }
     }
   },
   "on_join": true

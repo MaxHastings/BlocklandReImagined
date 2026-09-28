@@ -71,11 +71,9 @@ impl Catalog {
         Ok(())
     }
 }
+/// v20's `v20.<kind>.<name>` ids, or a package's `namespace:kind/name`.
 fn valid_content_id(s: &str) -> bool {
-    s.starts_with("v20.")
-        && s.len() <= 160
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    bri_package::id::is_content_ref(s, None)
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -412,6 +410,11 @@ pub enum Command {
     },
     Respawn {
         actor: PlayerId,
+    },
+    /// The host gives `target` a new life now, alive or dead (a package's
+    /// round reset). Only the host constructs it.
+    ForceRespawn {
+        target: PlayerId,
     },
     Message {
         game: GameId,

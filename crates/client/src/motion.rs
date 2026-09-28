@@ -83,8 +83,9 @@ impl Motion {
     pub fn predicting(&self) -> bool {
         self.predictor.is_some()
     }
-    /// Seated players do not walk: inputs are recorded and sent, and the
-    /// authoritative seat pose is shown instead of a prediction.
+    /// Seated players, and players driving a package entity, do not walk:
+    /// inputs are recorded and sent, and the authoritative pose is shown
+    /// instead of a prediction.
     pub fn set_mounted(&mut self, mounted: bool) {
         self.mounted = mounted;
     }
@@ -174,7 +175,7 @@ impl Motion {
         for (owner, pose) in &view.poses {
             self.observe_clock(pose.tick);
             if *owner == view.owner {
-                self.observe_local(pose)?;
+                self.observe_local(pose, &view.archetypes)?;
             } else {
                 let history = self.remotes.entry(*owner).or_default();
                 if history.back().is_none_or(|last| last.tick < pose.tick) {
@@ -202,7 +203,11 @@ impl Motion {
             _ => sample,
         });
     }
-    fn observe_local(&mut self, pose: &bri_net::protocol::Pose) -> Result<()> {
+    fn observe_local(
+        &mut self,
+        pose: &bri_net::protocol::Pose,
+        archetypes: &bri_sim::archetype::Archetypes,
+    ) -> Result<()> {
         if self.mounted
             && let Some(predictor) = &mut self.predictor
         {
@@ -222,7 +227,7 @@ impl Motion {
                 }
             }
         } else if let Some(mirror) = self.mirror.take() {
-            let mut predictor = Predictor::new(mirror, pose.player.clone())?;
+            let mut predictor = Predictor::new(mirror, pose.player.clone(), archetypes.clone())?;
             predictor.continue_after(self.sent_sequence);
             self.previous = Some(predictor.state().clone());
             self.predictor = Some(predictor);
@@ -265,7 +270,7 @@ impl Motion {
         if steps == MAX_STEPS {
             self.accumulator = self.accumulator.min(TICK);
         }
-        let tuning = predictor.state().tuning();
+        let tuning = predictor.tuning().clone();
         self.crouch
             .update(predictor.state().crouched, seconds, CROUCH_SECONDS);
         self.eye_height = Some(
@@ -308,7 +313,7 @@ impl Motion {
             state.head_yaw = head_yaw;
             let eye = self
                 .eye_height
-                .unwrap_or_else(|| state.eye(&state.tuning()).y - feet.y);
+                .unwrap_or_else(|| state.eye(predictor.tuning()).y - feet.y);
             self.local_eye = Some(feet + Vec3::Y * eye);
             self.presented.insert(view.owner, state);
         } else if let Some(pose) = view.poses.get(&view.owner) {
@@ -402,7 +407,7 @@ mod tests {
             crouched: false,
             jetting: false,
             jump: Default::default(),
-            datablock: Default::default(),
+            archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
         }

@@ -54,6 +54,27 @@ file. This currently requires hard-link support (verified on this Windows host);
 FAT/external-filesystem alternatives and a user-facing revision browser remain work.
 No claim of power-loss durability of directory metadata is made.
 
+Hosts checkpoint the authoritative world while running (`ServerOptions::autosave`,
+stress campaign W2). Every interval the host loop hands a snapshot to a save
+callback on a blocking thread, with at most one save in flight, and saves once
+more if the loop ends with an error, since the stop report and its world are lost
+then. `persistence::autosave` publishes `autosave-<unix millis>.world.json` with
+`save_new` and keeps the newest revisions. The dedicated `bri-server` autosaves
+every 60 s into its state directory and keeps 3; passing the newest as its
+`<world.json>` resumes after a crash. The snapshot is a clone of the world taken
+on the tick thread; bricks are a persistent map, so that clone shares them
+rather than copying. The windowed client host does not autosave yet.
+
+Every world a server accepts can be saved and streamed (stress campaign W7).
+`Brick::stored_bound` is an allocation-free upper bound on a brick's JSON save
+entry, escapes included, and so on its network encoding. `Authority` keeps the
+sum over the world's bricks and refuses any plant, edit, event mutation or
+build load that would take it past `MAX_STORED_BYTES` (the 1 GiB
+`persistence::MAX_SAVE_BYTES` less 64 MiB for owners and the rest), naming the
+budget. Shrinking is always allowed, so a world loaded over the budget can
+still be trimmed. Ordinary bricks take about 450 bytes, so `MAX_BRICKS` of
+them fit; bricks carrying large event lists reach the budget sooner.
+
 ## Original saves
 
 ```powershell

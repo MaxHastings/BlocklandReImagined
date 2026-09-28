@@ -204,7 +204,10 @@ fn horse_players_draw_as_horses_and_fuel_jets_show_energy() -> Result<()> {
         &artifact.join("standard.png"),
         &capture(&mut app, &gpu, &mut renderer)?,
     )?;
-    let datablock = |a: &App| a.local_motion().map(|(p, _)| p.datablock);
+    let datablock = |a: &App| {
+        a.local_motion()
+            .map(|(p, _)| bri_sim::player_types::PlayerType::EVERY[usize::from(p.archetype.0)])
+    };
     for (id, label) in [
         ("v20.player.horsearmor", "horse"),
         ("v20.player.playerfueljet", "fueljet"),

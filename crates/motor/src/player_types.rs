@@ -32,6 +32,22 @@ impl PlayerType {
         Self::Quake,
         Self::Standard,
     ];
+    /// Every v20 datablock in declaration order: the first entries of every
+    /// archetype table.
+    pub const EVERY: [Self; 8] = [
+        Self::Standard,
+        Self::NoJet,
+        Self::FuelJet,
+        Self::JumpJet,
+        Self::LeapJet,
+        Self::Quake,
+        Self::Horse,
+        Self::BallShoot,
+    ];
+    /// Its index in every archetype table.
+    pub fn archetype(self) -> crate::archetype::ArchetypeId {
+        crate::archetype::ArchetypeId(self as u16)
+    }
     /// Native datablock id, as mini-game settings and events name it.
     pub fn id(self) -> &'static str {
         match self {

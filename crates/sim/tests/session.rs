@@ -165,7 +165,15 @@ fn setup_admin_passwords_are_prejoin_only_and_login_grants_authoritative_role() 
         Secret::new("super-pass".into()).unwrap(),
     )
     .unwrap();
-    let owner = s.join("Player".into(), Vec3::Y, false).unwrap();
+    // Password login needs a durable identity (failed guesses follow it).
+    let owner = s
+        .join_verified(
+            "Player".into(),
+            Vec3::Y,
+            false,
+            Some(bri_admin::Principal([7; 32])),
+        )
+        .unwrap();
     assert!(
         s.set_admin_passwords(
             Secret::new("replacement".into()).unwrap(),

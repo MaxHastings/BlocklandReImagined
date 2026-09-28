@@ -22,6 +22,7 @@ fn options(spawns: Vec<Vec3>) -> ServerOptions {
         certificate: None,
         map_loader: None,
         autosave: None,
+        packages: None,
     }
 }
 async fn join(
@@ -77,32 +78,40 @@ async fn two_clients_mine_meet_a_creeper_and_keep_their_bits_across_restart() ->
     wait(&mut bob, 5, |c| own(c, ECONOMY, "bits") == Some(0)).await?;
     assert!(alice.replica.world.bricks.len() > 5_000);
 
-    // Mining replicates to both clients, and each sees the other's count.
+    // Mining replicates to the miner; a purse is owner-visible, so the other
+    // client never receives it.
     mine(&mut bob, 3).await?;
     let bob_id = bob.owner;
-    wait(&mut alice, 5, |c| {
-        c.replica.package_state.packages[ECONOMY]
-            .players
-            .get(&bob_id)
-            .and_then(|p| p["mined"].as_i64())
-            >= Some(3)
-    })
-    .await?;
+    wait(&mut bob, 5, |c| own(c, ECONOMY, "mined") >= Some(3)).await?;
+    wait(&mut alice, 2, |c| own(c, ECONOMY, "mined") == Some(0) && c.replica.tick > 0)
+        .await?;
+    assert!(
+        alice
+            .replica
+            .package_state
+            .packages
+            .get(ECONOMY)
+            .is_none_or(|n| !n.players.contains_key(&bob_id)),
+        "another player's owner-visible keys reached this client"
+    );
     wait(&mut alice, 5, |_| true).await.ok();
     wait(&mut bob, 5, |_| true).await.ok();
     let (a, b) = (
         alice.replica.world.bricks.len(),
         bob.replica.world.bricks.len(),
     );
-    for _ in 0..40 {
-        if alice.replica.world.bricks == bob.replica.world.bricks {
-            break;
+    // Both replicas converge on the same world (bounded in time, not in
+    // messages: generated chunks stream in many deltas).
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while alice.replica.world.bricks != bob.replica.world.bricks {
+            tokio::select! {
+                r = alice.receive() => { r?; }
+                r = bob.receive() => { r?; }
+            }
         }
-        tokio::select! {
-            r = alice.receive() => { r?; }
-            r = bob.receive() => { r?; }
-        }
-    }
+        Result::<()>::Ok(())
+    })
+    .await;
     assert_eq!(
         alice.replica.world.bricks, bob.replica.world.bricks,
         "{a} vs {b} bricks"

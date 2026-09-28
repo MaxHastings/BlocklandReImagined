@@ -116,11 +116,11 @@ Game rules are a `behaviour` file plus a Rhai `script`. The sample's
   ],
   "state": {
     "player": {
-      "points": { "default": 0, "public": true },
-      "best":   { "default": 0, "public": true }
+      "points": { "default": 0, "visible": "everyone" },
+      "best":   { "default": 0, "visible": "everyone" }
     },
     "global": {
-      "awarded": { "default": 0, "public": true },
+      "awarded": { "default": 0, "visible": "everyone" },
       "every":   { "default": 1, "persist": false }
     }
   },
@@ -148,10 +148,11 @@ declares its argument types (`int`, `float`, `string`, `bool`), an optional
 with `aim()`).
 
 **State** is declared up front with defaults. `player` keys exist for every
-player; `global` keys once per server. `public: true` sends the value to
-every client (HUD panels can only show public keys). `persist` (default
+player; `global` keys once per server. `visible` says who receives the
+value: `server` (the default; it never leaves the server), `owner` (a
+player key sent only to that player, like a hand of cards) or `everyone`.
+HUD panels can only show keys the viewer receives. `persist` (default
 `true`) saves the key with the host's world and restores it after a restart.
-Private keys never leave the server.
 
 **Script functions:**
 
@@ -161,6 +162,8 @@ Private keys never leave the server.
 | `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick(brick)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(p, amount)`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
+| | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`: `player` |
+| | | `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 
 A player value from `players()` is a map with `id`, `name`, `x`, `y`, `z`,
 `alive` and `admin`.
@@ -185,6 +188,9 @@ sockets or run `eval`.
 | `entity` | server | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
 | `model` | client | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
 | `hud` | client | a HUD panel | `packages/samples/sample-points-hud` |
+| `archetype` | server | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` (`players_can_be_bodies_beyond_the_blockhead`) |
+| `texture` | client | a PNG (up to 1024 px a side) for block faces | `crates/sim/tests/blocks.rs` |
+| `block` | client | textures or flipbooks per face, and named states | same |
 
 Entities may spawn only their own Add-On's entity kinds.
 
@@ -203,7 +209,7 @@ checked by the weapons runtime in tests, as the sample does.
 
 ## 6. HUD panels
 
-A HUD panel is data. The client draws it from public state:
+A HUD panel is data. The client draws it from state it receives:
 
 ```json
 {
@@ -224,9 +230,11 @@ A HUD panel is data. The client draws it from public state:
 }
 ```
 
-- `bind` is `add-on-id:player/key` (the viewing player's value) or
-  `add-on-id:global/key`. The key must be declared `public`, or the row stays
-  blank. The sample test checks this for you.
+- `bind` is `add-on-id:player/key` (the viewing player's value),
+  `add-on-id:players/key` (every player's value, one line each) or
+  `add-on-id:global/key`. The viewer must receive the key (`owner` or
+  `everyone` for its own player value, `everyone` otherwise), or the Add-On
+  is refused at load. The sample test checks this for you.
 - `anchor` is `top_left`, `top_right`, `bottom_left` or `bottom_right`.
 - Up to 16 rows and 8 keys. A key is one letter `A`-`Z` that sends a command
   with no arguments. The client refuses letters the base game already uses.
@@ -290,13 +298,9 @@ this guide will be updated in the same change.
 
 - **Multi-pack loading**: an Add-On's weapons, bricks and sounds in a
   hosted game.
-- **State visibility**: `visible` on state keys, `server`, `owner` or
-  `everyone`, instead of `public`, so a player can see their own private
-  values.
-- **The `players` capability**: moving and changing players from scripts.
-- **Player archetypes**: Add-Ons that define their own playable
-  characters and controllable vehicles, with their own movement, body,
-  camera and model.
+- **Drawing blocks**: `block` and `texture` content (per-face textures,
+  flipbooks and states a script switches with `set_block_state`) load,
+  save and replicate, but the renderer does not draw block faces yet.
 - **Sandboxed client code**: Add-Ons with client-side logic and shaders,
   run in a sandbox. Joining a server that uses them asks the player to
   trust that server first, listing what the code may do.

@@ -56,8 +56,11 @@ pub use undo::UNDO_QUEUE_SIZE;
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 
 /// The surface height of water covering any part of this player's body.
-fn water_surface(waters: &[bri_content::water::Water], state: &crate::player::PlayerState) -> Option<f32> {
-    let tuning = state.tuning();
+fn water_surface(
+    waters: &[bri_content::water::Water],
+    state: &crate::player::PlayerState,
+    tuning: &PlayerTuning,
+) -> Option<f32> {
     let height = if state.crouched {
         tuning.crouch_height
     } else {
@@ -214,6 +217,64 @@ pub enum Command {
     Package(PackageCommand),
 }
 
+/// What a command needs of its sender, checked once before dispatch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Preconditions {
+    /// Refused while the sender is dead.
+    pub alive: bool,
+    /// Refused where the sender's mini-game denies this build action.
+    pub build: Option<bri_minigames::BuildAction>,
+}
+impl Command {
+    /// Every command declares its preconditions here, so a new command
+    /// cannot skip the living or mini-game checks by omission (stress
+    /// campaign W4). Checks that depend on the command's fields (firing only
+    /// on trigger down) or must follow a role check stay in the handler.
+    pub fn preconditions(&self) -> Preconditions {
+        use bri_minigames::BuildAction;
+        let (alive, build) = match self {
+            Command::Plant { .. } => (true, Some(BuildAction::Build)),
+            Command::UseSprayCan { .. }
+            | Command::UseFxCan { .. }
+            | Command::EquipTool { .. }
+            | Command::Activate
+            | Command::ToggleLight
+            | Command::Emote(_)
+            | Command::Wand
+            | Command::BuildGesture(_) => (true, None),
+            // The package's command declaration decides (`while_dead`);
+            // checked with the rest of the declaration in `package_command`.
+            Command::Package(_)
+            | Command::Admin(_)
+            | Command::Tool(_)
+            | Command::DropTool { .. }
+            | Command::WeaponTrigger { .. }
+            | Command::Avatar(_)
+            | Command::SaveBuild { .. }
+            | Command::LoadBuild { .. }
+            | Command::Chat(_)
+            | Command::Suicide
+            | Command::Respawn
+            | Command::MiniGame(_)
+            | Command::SwitchSeat(_)
+            | Command::TeamChat(_)
+            | Command::ClearCheckpoint
+            | Command::TreasureStatus
+            | Command::TrustInvite { .. }
+            | Command::AcceptTrust { .. }
+            | Command::RejectTrust { .. }
+            | Command::IgnoreTrust { .. }
+            | Command::DemoteTrust { .. }
+            | Command::UnIgnore { .. }
+            | Command::TrustList(_)
+            | Command::DropPlayerAt { .. }
+            | Command::ControlPlayer
+            | Command::BrickHand(_)
+            | Command::Talking(_) => (false, None),
+        };
+        Preconditions { alive, build }
+    }
+}
 /// `ServerCmdShiftBrick`, `ServerCmdSuperShiftBrick` and
 /// `ServerCmdRotateBrick` play these on the builder's thread 3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,10 +416,14 @@ struct Peer {
     last_move_sequence: u64,
     last_input_tick: u64,
     /// The datablock a basketball shot swapped for `BallShootPlayer`.
-    sport_datablock: Option<crate::player_types::PlayerType>,
+    sport_datablock: Option<crate::archetype::ArchetypeId>,
+    /// A package's choice of archetype, kept across respawns; otherwise
+    /// the mini-game's player type decides.
+    package_archetype: Option<crate::archetype::ArchetypeId>,
     window_tick: u64,
     actions: u32,
     chats: u32,
+    saves: u32,
     inspection: Option<tools::Inspection>,
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
@@ -425,6 +490,7 @@ pub struct Session {
     avatar_catalog: Option<bri_content::avatar::Package>,
     bulk_window_tick: u64,
     bulk_requests: u32,
+    save_requests: u32,
     admin: admin::AdminRuntime,
     admin_disconnects: VecDeque<OwnerId>,
     /// Plain-words close message for a pending admin disconnect.
@@ -442,6 +508,9 @@ pub struct Session {
     map_change: Option<(OwnerId, String)>,
     /// Enabled mod packages and the gameplay they define.
     packages: Option<Box<packages::PackageHost>>,
+    /// v20's player datablocks, then every enabled package's archetypes.
+    /// Clients receive the table with the checkpoint.
+    archetypes: crate::archetype::Archetypes,
     breakables: breakables::Breakables,
 }
 impl Session {
@@ -461,13 +530,17 @@ impl Session {
         weapons.tick = simulation.state().tick;
         Self {
             events: Default::default(),
+            archetypes: Default::default(),
             breakables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
-            minigames: combat::new_world(bri_minigames::Catalog::minimal_vanilla()),
+            minigames: combat::new_world(
+                bri_minigames::Catalog::minimal_vanilla(),
+                &Default::default(),
+            ),
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
@@ -493,6 +566,7 @@ impl Session {
             avatar_catalog: None,
             bulk_window_tick: 0,
             bulk_requests: 0,
+            save_requests: 0,
             admin: admin::AdminRuntime::default(),
             admin_disconnects: VecDeque::new(),
             admin_disconnect_messages: BTreeMap::new(),
@@ -673,9 +747,11 @@ impl Session {
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
+                package_archetype: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                saves: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -822,9 +898,11 @@ impl Session {
                 last_move_sequence: 0,
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
+                package_archetype: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
+                saves: 0,
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
@@ -987,50 +1065,78 @@ impl Session {
                 .unwrap_or_default()
                 .as_secs();
             let call = self.admin_request(owner, request.clone(), now, &mut persist)?;
-            self.admin_disconnects.extend(call.disconnects);
-            self.admin_disconnect_messages
-                .extend(call.disconnect_messages);
             return Ok(Reply::Admin(Box::new(call.reply)));
         }
-        if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command
-        {
+        // Cheap admission (sequence, rate) runs before any per-element work,
+        // so a replayed or rate-limited request costs nothing to refuse.
+        let tick = self.simulation.state().tick;
+        let (alive, player) = {
+            let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+            ensure!(sequence > peer.last_sequence, "Stale/replayed command");
+            peer.last_sequence = sequence;
+            if tick - peer.window_tick >= 120 {
+                peer.window_tick = tick;
+                peer.actions = 0;
+                peer.chats = 0;
+                peer.saves = 0;
+            }
+            peer.actions = peer.actions.saturating_add(1);
+            ensure!(peer.actions <= 60, "Action command rate exceeded");
+            (peer.combat.alive, peer.combat.player)
+        };
+        let needs = command.preconditions();
+        ensure!(alive || !needs.alive, "Dead players cannot do that");
+        if let Some(action) = needs.build {
+            ensure!(
+                !matches!(
+                    self.minigames.can_build(player, action),
+                    Ok(bri_minigames::Decision::Deny(_))
+                ),
+                "Building is disabled in this mini-game"
+            );
+            self.package_policy("build", owner)?;
+        }
+        if let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &command {
+            ensure!(
+                rows.len() <= bri_world::MAX_EVENTS_PER_BRICK,
+                "Brick exceeds the native {}-event admission limit",
+                bri_world::MAX_EVENTS_PER_BRICK
+            );
             self.validate_event_rows(rows)?;
         }
         self.tutorial_check(&command)?;
-        let tick = self.simulation.state().tick;
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-        ensure!(sequence > peer.last_sequence, "Stale/replayed command");
-        peer.last_sequence = sequence;
-        if tick - peer.window_tick >= 120 {
-            peer.window_tick = tick;
-            peer.actions = 0;
-            peer.chats = 0;
-        }
-        peer.actions = peer.actions.saturating_add(1);
-        ensure!(peer.actions <= 60, "Action command rate exceeded");
         if let Some(aim) = aim {
             aim.validate()?;
         }
         let direction = aim.map_or_else(|| peer.player.state().forward(), ActionAim::direction);
-        if matches!(
-            command,
-            Command::SaveBuild { .. } | Command::LoadBuild { .. }
-        ) {
-            if matches!(command, Command::LoadBuild { .. }) {
-                ensure!(
-                    peer.actor.administrator,
-                    "Only the host/administrator may load builds"
-                );
-            }
-            if tick.saturating_sub(self.bulk_window_tick) >= 120 {
-                self.bulk_window_tick = tick;
-                self.bulk_requests = 0;
-            }
+        if tick.saturating_sub(self.bulk_window_tick) >= 120 {
+            self.bulk_window_tick = tick;
+            self.bulk_requests = 0;
+            self.save_requests = 0;
+        }
+        // Loads (administrators) and saves (anyone) have separate budgets, and
+        // one player may take only one of the shared save slots, so players
+        // can neither starve the administrator nor each other.
+        if matches!(command, Command::LoadBuild { .. }) {
+            ensure!(
+                peer.actor.administrator,
+                "Only the host/administrator may load builds"
+            );
             self.bulk_requests = self.bulk_requests.saturating_add(1);
             ensure!(
                 self.bulk_requests <= 4,
-                "Build save/load rate exceeded; retry shortly"
+                "Build load rate exceeded; retry shortly"
             );
+        }
+        if matches!(command, Command::SaveBuild { .. }) {
+            ensure!(peer.saves == 0, "Build save rate exceeded; retry shortly");
+            ensure!(
+                self.save_requests < 4,
+                "Build save rate exceeded; retry shortly"
+            );
+            peer.saves += 1;
+            self.save_requests += 1;
         }
         match command {
             Command::Admin(_) => unreachable!("handled by the authenticated admin branch above"),
@@ -1357,6 +1463,8 @@ impl Session {
         let mut glass_hits = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
+        // Moves of players driving a package entity, for `step_packages`.
+        let mut entity_moves = Vec::new();
         let liquids = self.simulation.liquids();
         for (&owner, peer) in self.peers.iter_mut() {
             if self.vehicles.is_mounted(owner) {
@@ -1394,6 +1502,9 @@ impl Session {
                 let input = if let Some((sequence, input)) = peer.inputs.pop_front() {
                     peer.processed_move = sequence;
                     peer.last_input_tick = tick;
+                    if let ControlObject::Entity(entity) = peer.control {
+                        entity_moves.push((entity, input));
+                    }
                     // Corpses fall and camera operators stand, ignoring controls.
                     let previous = peer.input;
                     peer.input = peer.body_input(input);
@@ -1415,14 +1526,15 @@ impl Session {
                         ..Default::default()
                     }
                 };
-                let wet_before = water_surface(&liquids, peer.player.state());
+                let wet_before =
+                    water_surface(&liquids, peer.player.state(), peer.player.tuning());
                 let motion = peer.player.step_in_water(
                     &mut self.simulation.physics,
                     input,
                     &liquids,
                 )?;
                 let state = peer.player.state();
-                let wet = water_surface(&liquids, state);
+                let wet = water_surface(&liquids, state, peer.player.tuning());
                 if let Some(surface) = wet.or(wet_before).filter(|_| wet.is_some() != wet_before.is_some()) {
                     let speed = Vec3::from(state.velocity).length();
                     self.cues.emit(
@@ -1466,6 +1578,7 @@ impl Session {
         for (owner, input) in driving {
             self.vehicle_input(owner, input)?;
         }
+        self.drive_package_entities(entity_moves);
         self.step_packages()?;
         self.vehicle_pre_step()?;
         self.simulation.step()?;

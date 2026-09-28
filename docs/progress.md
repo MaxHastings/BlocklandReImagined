@@ -1928,6 +1928,89 @@ The expanded requirements in alpha-contract.md supersede the narrow initial goal
   Jeep, and no return for the FlyingVehicle carpet (drop
   STEERING_RETURN_PER_TICK). Each needs a test in crates/vehicles.
 
+## 2026-09-28 — mod platform stress campaign (cloud, PR #1)
+
+Goal: make the game easy to modify at its core by building modes nothing
+like the Stress Lab, red-teaming the package sandbox, and fixing each class
+of weakness with the smallest general seam. Record:
+`docs/stress-lab/weakness-ledger.md`; handoff section "Beyond the Stress
+Lab" in `docs/stress-lab/HANDOFF.md`.
+
+- 29 experiments and two red-team rounds, tagged by Max's nine seam
+  families; 15 classes (W1 to W15). All fixed except W14 (closed engine
+  kinds: movement datablocks and control objects), whose two tests are
+  ignored and registered in `tools/gate-known-failures.toml`.
+- New package seams: `on_death`, `player` operations, `place_brick`,
+  entity variables at spawn, policy points (`allow_respawn`,
+  `allow_build`), state `visible` audiences with per-client views,
+  scoreboard bindings, per-origin shares of script work, world edits, chat,
+  entity slots and state bytes, and a start-of-tick view shared by calls.
+- Platform: one package path rule, load-time conflict checks, verified
+  package cache, byte-bounded join chunks, storage budgets and reliable
+  outbox. Protocol 35 (hosting's listing took 34 first).
+- Evidence: `cargo test -p bri-sim --test unlike_modes --test
+  hardening_packages --test packages`, `cargo test -p bri-package-runtime`,
+  `cargo test -p bri-net`, clippy clean on Linux; Windows CI on PR #1.
+- Not saturated yet: the last round (E26 to E29) found no new class, but
+  W14 is open and package state does not replicate to clients yet.
+- E30, player archetypes (Max: "custom player controller models beyond
+  just everyone being a Blockhead"). `PlayerState.datablock` (the closed
+  `PlayerType` enum) became `archetype`, an index into an `Archetypes`
+  table the checkpoint carries: v20's eight datablocks first, then
+  packages' `archetype` files (a base plus the constants they change). An
+  archetype is movement constants, collision body (`box`, `ball`), steering
+  model (`strafe`, `turn`), health, riding rules, model and camera distance.
+  Packages assign one with `set_archetype(player, id)` (kept across
+  respawns); mini-games may pick named ones. The client predicts from the
+  host's table. W14 is fixed for archetypes (E22 now passes); control
+  targets (E27) stay open. Architecture: `docs/player-simulation.md`
+  "Player archetypes". Evidence: `cargo test -p bri-motor`, `cargo test -p
+  bri-sim` (all content-free targets), `cargo test -p bri-net`, `cargo
+  test -p bri-client --lib`, clippy `-D warnings` clean.
+- Merged main's join package check (81604e1). E31: a refused join now
+  names the differing packages as a typed `PackagesDiffer`, and
+  `Client::connect_fetching` downloads the server's packages and joins
+  again (`package_sync::a_refused_join_downloads_the_missing_packages_and_joins`).
+  The game client still joins without it until it can load a downloaded
+  package. Observed once under a loaded machine, not reproduced in 14 runs
+  (12 in parallel): two `package_sync` tests lost the server's refusal
+  frame ("closed by peer") or found the per-address download slots still
+  held, both consistent with the server's 1 s wait for the client to read
+  its last frame.
+- The game client now joins remote servers through `connect_fetching`:
+  downloads go to `<state>/package-cache`, `bri_client::mods::load_fetched`
+  loads the client's own packages with the downloaded ones in their place,
+  and the HUD and entity models draw with that catalog. A server running
+  different base game content is refused with that reason.
+- Merged the Stress Lab (main da5668e). Package state
+  now replicates per client: the welcome carries
+  `Session::package_state_for(viewer)` and the server sends each client
+  `Message::PackageState` when its own view changes (it left `Delta`). The
+  miner's purse keys are `"visible": "owner"`; the loopback test asserts
+  another client never receives them, and its world-convergence wait is now
+  bounded in time rather than 40 messages (alice no longer waits on bob's
+  purse, so she had not caught up). `stresslab test`: strata.rhai generates
+  25 chunks (10,934 voxels) with 0 diagnostics inside the 400k Generate
+  budget.
+- E27 passes, closing the rest of W14: a package hands a player one of its
+  entities (`control(player, entity)`, `release(player)`, capability
+  `player`, `ControlObject::Entity`), which moves by its kind's
+  `archetype` (a kart turns) while the avatar stays behind. The client
+  orbits the entity and parks its avatar prediction as when seated; it
+  does not predict the entity. Removed its `tools/gate-known-failures.toml`
+  entry. Package-authored controllers are recorded as the tier-2 sandbox
+  case (HANDOFF, ledger W14).
+- Players whose archetype's look is a package box model draw as it; third
+  person uses the archetype's camera distance.
+- E32 (Max's Minecraft-like cube): `texture` (PNG) and `block` content
+  kinds; a block has per-face textures or flipbooks and named states.
+  Materials of a generated world may name a block, and its voxels carry
+  `Brick::look` (block, state), which replicates and saves with the brick.
+  `set_block_state(brick, state)` (capability `world.edit`) and `aim()`'s
+  `block`/`state` let a dig tool crack a block through states before
+  digging it out (`cargo test -p bri-sim --test blocks`). Found W14 again
+  (closed brick looks). The world renderer does not draw block faces yet.
+
 ## Longer-term next actions (after first playtest)
 1. Finish building fidelity and large-world loading/rendering performance.
    Integrate local prediction, remote interpolation and remaining camera presentation.
@@ -2802,3 +2885,31 @@ game mode picker once the Stress Lab landed (da5668e).
   session` (`leaving_and_rejoining_keeps_the_same_owner_number`), `cargo test
   -p bri-net`, clippy on bri-net, bri-client and bri-sim. Not tested against
   a real network drop.
+## 2026-09-28: stress campaign merged onto the combined landing (protocol 35)
+
+- PR #1 merged main 47dcf2a (Add-Ons tab, game modes, first impressions,
+  settings, hosting, client sandbox, slides). Protocol 35: hosting's
+  `Challenge` listing is 34.
+- The campaign's autosave copy is gone; `bri-server` and the windowed host
+  use main's (#5).
+- Joins keep hosting's `HostPin`s and `JoinError`s; `connect_fetching`
+  takes the join's pin and downloads over `client::connect_quic`, so a
+  download reaches the host the join trusts. `PackagesDiffer` prints as
+  `environment::refusal`, which the Add-Ons screen parses into rows.
+- `JoinBegin.purpose` defaults to a join, so an older client still hears
+  which side must update.
+- Admin disconnects keep the campaign's publish-before-reply order and
+  carry #5's close messages.
+- The `player` capability has plain words on the Add-Ons screen. The
+  survival-points sample and the modding guide use `visible` instead of
+  `public`; the guide lists archetypes, textures, blocks and the `player`
+  operations.
+- `bri-client-sandbox` moved from the Windows-only dependency table to the
+  client's dependencies (the client did not build on other targets).
+- E22's moon jump now settles 120 ticks first: under main's v20 contact
+  port a player spawned 5 cm up is still airborne after 10 ticks, so the
+  jump was ignored.
+- Evidence: clippy `-D warnings` on the workspace; `cargo test` for bri-net,
+  bri-package, bri-package-runtime, bri-world, bri-progress, bri-stresslab,
+  bri-sim (content-free targets; `tools` needs generated content) and
+  `bri-client --lib --test transport`.

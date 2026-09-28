@@ -211,18 +211,11 @@ pub fn package_dir(root: &Path, package: &PackageEntry) -> Result<PathBuf> {
 }
 
 fn relative_dir(dir: &str) -> std::result::Result<(), String> {
-    let valid = !dir.is_empty()
-        && dir.len() <= 160
-        && !dir.contains(['\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
-        && dir
-            .split('/')
-            .all(|s| !s.is_empty() && s != "." && s != ".." && !s.ends_with([' ', '.']));
-    if valid {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{dir}` must be a plain relative directory under the content root"
-        ))
+    match crate::path::problem(dir) {
+        None => Ok(()),
+        Some(problem) => Err(format!(
+            "`{dir}` must be a plain relative directory under the content root: {problem}"
+        )),
     }
 }
 

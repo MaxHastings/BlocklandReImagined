@@ -288,7 +288,7 @@ impl Session {
     /// The datablock's `brickImage`.
     fn brick_image(&self, owner: OwnerId) -> &'static str {
         let horse = self.peers.get(&owner).is_some_and(|peer| {
-            peer.player.state().datablock == crate::player_types::PlayerType::Horse
+            peer.player.state().archetype == crate::player_types::PlayerType::Horse.archetype()
         });
         if horse { HORSE_BRICK_IMAGE } else { BRICK_IMAGE }
     }

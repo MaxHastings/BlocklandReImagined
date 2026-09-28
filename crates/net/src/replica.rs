@@ -23,6 +23,8 @@ pub struct Replica {
     pub time_scale: f32,
     /// Scene nodes of smashed map shapes.
     pub broken_shapes: BTreeSet<u32>,
+    /// The host's player archetypes; poses name them by index.
+    pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
     pub package_state: bri_sim::session::PackageStateView,
 }
@@ -74,13 +76,13 @@ fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
 fn validate_vitals(
     vitals: &BTreeMap<OwnerId, bri_sim::session::Vitals>,
     names: &BTreeMap<OwnerId, String>,
+    archetypes: &bri_sim::archetype::Archetypes,
 ) -> Result<()> {
     ensure!(
         vitals.len() <= 64
             && vitals.keys().all(|id| names.contains_key(id))
             && vitals.values().all(|v| v.health.is_finite()
-                && (0.0..=bri_sim::player_types::PlayerType::highest_max_health())
-                    .contains(&v.health)),
+                && (0.0..=archetypes.highest_max_health()).contains(&v.health)),
         "Invalid player vitals"
     );
     Ok(())
@@ -112,7 +114,12 @@ impl Replica {
         }
         validate_avatars(&checkpoint.avatars, &checkpoint.names)?;
         validate_tools(&checkpoint.tools, &checkpoint.names)?;
-        validate_vitals(&checkpoint.vitals, &checkpoint.names)?;
+        checkpoint.archetypes.validate()?;
+        validate_vitals(
+            &checkpoint.vitals,
+            &checkpoint.names,
+            &checkpoint.archetypes,
+        )?;
         validate_minigames(&checkpoint.minigames)?;
         validate_vehicles(&checkpoint.vehicles)?;
         validate_time_scale(checkpoint.time_scale)?;
@@ -147,6 +154,7 @@ impl Replica {
                 .collect(),
             time_scale: checkpoint.time_scale,
             broken_shapes: checkpoint.broken_shapes,
+            archetypes: checkpoint.archetypes.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
         };
@@ -213,7 +221,11 @@ impl Replica {
             .unwrap_or(&self.weapons)
             .validate(delta.names.as_ref().unwrap_or(&self.names))?;
         if let Some(vitals) = &delta.vitals {
-            validate_vitals(vitals, delta.names.as_ref().unwrap_or(&self.names))?;
+            validate_vitals(
+                vitals,
+                delta.names.as_ref().unwrap_or(&self.names),
+                &self.archetypes,
+            )?;
         }
         if let Some(games) = &delta.minigames {
             validate_minigames(games)?;
@@ -229,9 +241,6 @@ impl Replica {
         }
         if let Some(entities) = &delta.entities {
             validate_entities(entities)?;
-        }
-        if let Some(state) = &delta.package_state {
-            state.validate()?;
         }
         if let Some(palette) = &delta.palette {
             ensure!(
@@ -297,9 +306,6 @@ impl Replica {
         if let Some(entities) = delta.entities {
             self.entities = entities.into_iter().map(|e| (e.id, e)).collect();
         }
-        if let Some(state) = delta.package_state {
-            self.package_state = state;
-        }
         if let Some(vehicles) = delta.vehicles {
             self.vehicles = vehicles.into_iter().map(|v| (v.id, v)).collect();
             self.vehicle_poses
@@ -326,6 +332,12 @@ impl Replica {
         self.tick = delta.tick;
         Ok(())
     }
+    /// This client's view of package state, replacing the last one.
+    pub fn package_state(&mut self, view: bri_sim::session::PackageStateView) -> Result<()> {
+        view.validate()?;
+        self.package_state = view;
+        Ok(())
+    }
     /// Newest-tick vehicle motion; older or unknown datagrams are ignored.
     pub fn vehicle_pose(&mut self, pose: bri_sim::session::VehiclePose) -> Result<()> {
         validate_vehicle_pose(&pose)?;
@@ -350,7 +362,8 @@ impl Replica {
                     .chain(p.velocity.iter())
                     .all(|n| n.is_finite())
                 && p.yaw.is_finite()
-                && p.pitch.is_finite(),
+                && p.pitch.is_finite()
+                && self.archetypes.get(p.archetype).is_some(),
             "Invalid player pose"
         );
         if !self.names.contains_key(&p.owner)

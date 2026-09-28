@@ -22,6 +22,16 @@ pub enum Kind {
     Model,
     /// A declarative HUD panel (JSON).
     Hud,
+    /// A player archetype: movement, collision body, health and look
+    /// (JSON). Server side: clients receive the host's archetype table with
+    /// the checkpoint and predict from it.
+    Archetype,
+    /// A PNG image drawn on block faces. Client side: downloaded with the
+    /// package like any file.
+    Texture,
+    /// A block: textures or flipbooks per face, and named states game rules
+    /// switch between (JSON). Drawn on bricks whose `look` names it.
+    Block,
     /// A weapons pack (`weapons.json`) merged onto the base game's by the
     /// engine's content loading (`content_identity::kind_providers`).
     Weapons,
@@ -35,13 +45,16 @@ pub enum Kind {
     Mode,
 }
 impl Kind {
-    pub const NAMES: [&str; 10] = [
+    pub const NAMES: [&str; 13] = [
         "behaviour",
         "script",
         "world",
         "entity",
         "model",
         "hud",
+        "archetype",
+        "texture",
+        "block",
         "weapons",
         "vehicles",
         "bricks",
@@ -55,6 +68,9 @@ impl Kind {
             "entity" => Self::Entity,
             "model" => Self::Model,
             "hud" => Self::Hud,
+            "archetype" => Self::Archetype,
+            "texture" => Self::Texture,
+            "block" => Self::Block,
             "weapons" => Self::Weapons,
             "vehicles" => Self::Vehicles,
             "bricks" => Self::Bricks,
@@ -64,11 +80,20 @@ impl Kind {
     }
     pub fn side(self) -> Side {
         match self {
-            Self::Behaviour | Self::Script | Self::World | Self::Entity | Self::Mode => {
-                Side::Server
-            }
+            Self::Behaviour
+            | Self::Script
+            | Self::World
+            | Self::Entity
+            | Self::Archetype
+            | Self::Mode => Side::Server,
             // Shared gameplay data is client-visible: clients load it too.
-            Self::Model | Self::Hud | Self::Weapons | Self::Vehicles | Self::Bricks => Side::Client,
+            Self::Model
+            | Self::Hud
+            | Self::Texture
+            | Self::Block
+            | Self::Weapons
+            | Self::Vehicles
+            | Self::Bricks => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -110,10 +135,26 @@ pub struct Behaviour {
     /// `on_join(player)` when a player joins.
     #[serde(default)]
     pub on_join: bool,
+    /// `on_death(victim, killer)` after any player dies, however it
+    /// happened; `killer` is the player credited, or `()`. Delivered at the
+    /// start of the next tick.
+    #[serde(default)]
+    pub on_death: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
+    /// Engine decisions this package is asked about ([`POLICIES`]). For
+    /// each, the engine calls `allow_<policy>(player)` before acting: `true`
+    /// allows, `false` or a reason string refuses.
+    #[serde(default)]
+    pub policies: Vec<String>,
 }
+/// Decisions the engine owns the mechanism for and asks packages about.
+pub const POLICIES: &[&str] = &[
+    // A dead player asking to come back.
+    "respawn", // Any command that builds (plant, paint, wand, wrench edits).
+    "build",
+];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandDef {
@@ -132,6 +173,11 @@ pub struct CommandDef {
     /// Only administrators may send it.
     #[serde(default)]
     pub admin: bool,
+    /// Dead players may send it too (a spectator vote, a class pick). By
+    /// default only living players can (stress campaign W4: preconditions
+    /// are declared, never left to each handler).
+    #[serde(default)]
+    pub while_dead: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -155,15 +201,29 @@ pub struct StateSchema {
 #[serde(deny_unknown_fields)]
 pub struct StateKey {
     pub default: serde_json::Value,
-    /// Replicated to every client. Private keys stay on the server.
+    /// Which clients receive the value. HUD panels may bind only visible
+    /// keys.
     #[serde(default)]
-    pub public: bool,
+    pub visible: Visible,
     /// Saved by the host and restored after a restart.
     #[serde(default = "yes")]
     pub persist: bool,
 }
 fn yes() -> bool {
     true
+}
+/// The audience of a state value: a player's secret (a hand of cards, a
+/// unit's position under fog) is visible to that player alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visible {
+    /// Stays on the server.
+    #[default]
+    Server,
+    /// A player key sent only to the player it belongs to.
+    Owner,
+    /// Sent to every client.
+    Everyone,
 }
 impl Behaviour {
     pub fn validate(&self) -> Result<()> {
@@ -198,6 +258,23 @@ impl Behaviour {
                 "state key `{key}` must be lowercase a-z, 0-9, _"
             );
             crate::state::check_value(&def.default)?;
+        }
+        for (i, policy) in self.policies.iter().enumerate() {
+            ensure!(
+                POLICIES.contains(&policy.as_str()),
+                "unknown policy `{policy}`; known: {}",
+                POLICIES.join(", ")
+            );
+            ensure!(
+                !self.policies[..i].contains(policy),
+                "policy `{policy}` listed twice"
+            );
+        }
+        for (key, def) in &self.state.global {
+            ensure!(
+                def.visible != Visible::Owner,
+                "server-wide key `{key}` has no owner; use \"everyone\" or \"server\""
+            );
         }
         ensure!(
             self.state.player.len() + self.state.global.len() <= 256,
@@ -297,6 +374,10 @@ pub struct Material {
     /// Engine-side protection: operations cannot remove it.
     #[serde(default)]
     pub indestructible: bool,
+    /// A package block (`namespace:block/name`) drawn on this material's
+    /// voxels in place of `color`.
+    #[serde(default)]
+    pub block: Option<String>,
 }
 impl ChunkWorld {
     pub fn validate(&self) -> Result<()> {
@@ -337,6 +418,13 @@ impl ChunkWorld {
                 "material `{}` needs a name and a 0..1 RGBA color",
                 m.id
             );
+            ensure!(
+                m.block
+                    .as_ref()
+                    .is_none_or(|b| bri_package::id::ContentId::parse(b).is_ok()),
+                "material `{}`: block must be namespace:block/name",
+                m.id
+            );
         }
         Ok(())
     }
@@ -366,6 +454,11 @@ pub struct EntityKind {
     pub health: f32,
     /// Most live entities of this kind.
     pub max_alive: u32,
+    /// The body's archetype (a package `archetype` id or v20's
+    /// `v20.player.<datablock>`): how it moves and steers, whether a think
+    /// or a player (`control`) drives it. Absent: a Blockhead's movement.
+    #[serde(default)]
+    pub archetype: Option<String>,
 }
 fn one() -> f32 {
     1.0
@@ -399,7 +492,216 @@ impl EntityKind {
             (1..=256).contains(&self.max_alive),
             "max_alive must be 1 to 256"
         );
+        ensure!(
+            self.archetype.as_ref().is_none_or(|a| text(a, 160)),
+            "archetype must name an archetype"
+        );
         Ok(())
+    }
+}
+
+/// A player archetype: what a player is. It starts from `base` (an
+/// archetype id; v20's standard player by default) and overrides only what
+/// it names. `movement` takes any motor constant by name (`gravity`,
+/// `forward`, `body`: `box` or `ball`, ...); the engine checks the result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchetypeDef {
+    pub schema_version: u32,
+    /// Shown in menus; empty when players cannot pick it.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub movement: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub max_health: Option<f32>,
+    #[serde(default)]
+    pub energy_bar: Option<bool>,
+    #[serde(default)]
+    pub rideable: Option<bool>,
+    #[serde(default)]
+    pub can_ride: Option<bool>,
+    /// Model id the clients draw: a package model (`namespace:model/name`)
+    /// or one of v20's shapes (`v20.shape.m` is the Blockhead).
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub camera_distance: Option<f32>,
+}
+impl ArchetypeDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == 1,
+            "archetype schema_version must be 1"
+        );
+        ensure!(
+            self.name.is_empty() || text(&self.name, 64),
+            "archetype name must be at most 64 printable characters"
+        );
+        ensure!(
+            self.movement.len() <= 64 && self.movement.keys().all(|k| identifier(k)),
+            "movement names motor constants"
+        );
+        ensure!(
+            self.model.as_ref().is_none_or(|m| text(m, 160)),
+            "model must be a model id"
+        );
+        Ok(())
+    }
+}
+
+/// A PNG texture's size, read from its header: clients decode it, the
+/// package loader only checks it is a PNG of a drawable size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Texture {
+    pub width: u32,
+    pub height: u32,
+}
+impl Texture {
+    pub const MAX_EDGE: u32 = 1024;
+    pub fn read(bytes: &[u8]) -> Result<Self> {
+        const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        ensure!(
+            bytes.len() >= 24 && bytes[..8] == SIGNATURE && &bytes[12..16] == b"IHDR",
+            "a texture must be a PNG image"
+        );
+        let edge = |at: usize| {
+            u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
+        let (width, height) = (edge(16), edge(20));
+        ensure!(
+            (1..=Self::MAX_EDGE).contains(&width) && (1..=Self::MAX_EDGE).contains(&height),
+            "a texture is 1 to {} pixels on each edge, not {width}x{height}",
+            Self::MAX_EDGE
+        );
+        Ok(Self { width, height })
+    }
+}
+
+/// One face of a block: a texture id, or a flipbook of texture ids.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FaceLook {
+    Texture(String),
+    Flipbook(Flipbook),
+}
+/// Frames shown in turn at `fps`; `once` holds the last frame instead of
+/// looping (a crack that spreads, then stays).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Flipbook {
+    pub frames: Vec<String>,
+    pub fps: f32,
+    #[serde(default)]
+    pub once: bool,
+}
+impl FaceLook {
+    /// Every texture id this face uses.
+    pub fn textures(&self) -> impl Iterator<Item = &String> {
+        match self {
+            Self::Texture(t) => std::slice::from_ref(t).iter(),
+            Self::Flipbook(f) => f.frames.iter(),
+        }
+    }
+    /// The texture shown `seconds` after the face began showing.
+    pub fn frame(&self, seconds: f32) -> &str {
+        match self {
+            Self::Texture(t) => t,
+            Self::Flipbook(f) => {
+                let n = f.frames.len();
+                let i = (seconds.max(0.0) * f.fps) as usize;
+                let i = if f.once { i.min(n - 1) } else { i % n };
+                &f.frames[i]
+            }
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        if let Self::Flipbook(f) = self {
+            ensure!(
+                (1..=64).contains(&f.frames.len()),
+                "a flipbook has 1 to 64 frames"
+            );
+            ensure!(
+                f.fps.is_finite() && (0.5..=60.0).contains(&f.fps),
+                "a flipbook runs at 0.5 to 60 fps"
+            );
+        }
+        for t in self.textures() {
+            ensure!(
+                bri_package::id::ContentId::parse(t).is_ok(),
+                "`{t}` must be a texture id, namespace:texture/name"
+            );
+        }
+        Ok(())
+    }
+}
+/// Faces by name: `all`, `side` (the four walls), or one of `top`,
+/// `bottom`, `north`, `south`, `east`, `west`. The most specific wins.
+pub type Faces = BTreeMap<String, FaceLook>;
+pub const FACE_NAMES: [&str; 8] = [
+    "all", "side", "top", "bottom", "north", "south", "east", "west",
+];
+/// A block: what each face shows, and named states that replace some faces
+/// (a dig tool sets `cracking`, the server's rules decide).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockDef {
+    pub schema_version: u32,
+    pub name: String,
+    pub faces: Faces,
+    #[serde(default)]
+    pub states: BTreeMap<String, Faces>,
+}
+impl BlockDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "block schema_version must be 1");
+        ensure!(text(&self.name, 64), "block name is required");
+        ensure!(self.states.len() <= 32, "a block has at most 32 states");
+        for (state, faces) in std::iter::once(("", &self.faces))
+            .chain(self.states.iter().map(|(k, v)| (k.as_str(), v)))
+        {
+            ensure!(
+                state.is_empty() || identifier(state),
+                "state `{state}` must be an identifier"
+            );
+            for (face, look) in faces {
+                ensure!(
+                    FACE_NAMES.contains(&face.as_str()),
+                    "unknown face `{face}`: use one of {FACE_NAMES:?}"
+                );
+                look.validate()?;
+            }
+        }
+        for face in ["top", "bottom", "north", "south", "east", "west"] {
+            ensure!(
+                self.look(face, "").is_some(),
+                "the block's own faces must cover `{face}` (use `all` or `side`)"
+            );
+        }
+        Ok(())
+    }
+    /// What `face` shows in `state`: the state's most specific face, else
+    /// the block's own.
+    pub fn look(&self, face: &str, state: &str) -> Option<&FaceLook> {
+        fn pick<'a>(faces: &'a Faces, face: &str) -> Option<&'a FaceLook> {
+            let wall = matches!(face, "north" | "south" | "east" | "west");
+            faces
+                .get(face)
+                .or_else(|| wall.then(|| faces.get("side")).flatten())
+                .or_else(|| faces.get("all"))
+        }
+        self.states
+            .get(state)
+            .and_then(|faces| pick(faces, face))
+            .or_else(|| pick(&self.faces, face))
+    }
+    /// Every texture id any face or state uses.
+    pub fn textures(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.faces)
+            .chain(self.states.values())
+            .flat_map(|faces| faces.values().flat_map(FaceLook::textures))
     }
 }
 
@@ -540,22 +842,87 @@ impl HudPanel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub package: String,
-    pub player: bool,
+    pub scope: Scope,
     pub key: String,
+}
+/// Whose value a binding shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// `package:global/key`: the server-wide value.
+    Global,
+    /// `package:player/key`: the viewing player's own value.
+    Player,
+    /// `package:players/key`: every player's value, one line each (a
+    /// scoreboard). The key must be visible to everyone.
+    Players,
 }
 impl Binding {
     pub fn parse(bind: &str) -> Option<Self> {
         let id = bri_package::id::ContentId::parse(bind).ok()?;
         let (package, key) = (id.namespace, id.name);
-        let player = match id.kind.as_str() {
-            "player" => true,
-            "global" => false,
+        let scope = match id.kind.as_str() {
+            "player" => Scope::Player,
+            "players" => Scope::Players,
+            "global" => Scope::Global,
             _ => return None,
         };
         identifier(&key).then_some(Self {
             package,
-            player,
+            scope,
             key,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+        bytes.extend(b"IHDR");
+        bytes.extend(width.to_be_bytes());
+        bytes.extend(height.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn textures_are_pngs_of_a_drawable_size() {
+        assert_eq!(
+            Texture::read(&png(16, 32)).unwrap(),
+            Texture {
+                width: 16,
+                height: 32
+            }
+        );
+        assert!(Texture::read(&png(4096, 16)).is_err());
+        assert!(Texture::read(&png(0, 16)).is_err());
+        assert!(Texture::read(b"GIF89a not a png at all....").is_err());
+    }
+
+    #[test]
+    fn a_block_covers_every_face_and_names_only_known_faces() {
+        let block = |faces: serde_json::Value| -> Result<BlockDef> {
+            let b: BlockDef = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "name": "Test", "faces": faces
+            }))?;
+            b.validate()?;
+            Ok(b)
+        };
+        assert!(block(serde_json::json!({ "all": "a:texture/x" })).is_ok());
+        assert!(
+            block(serde_json::json!({ "top": "a:texture/x", "side": "a:texture/y" })).is_err(),
+            "the bottom is not covered"
+        );
+        assert!(
+            block(serde_json::json!({ "all": "a:texture/x", "front": "a:texture/y" })).is_err()
+        );
+        assert!(
+            block(serde_json::json!({ "all": { "frames": [], "fps": 4 } })).is_err(),
+            "a flipbook needs frames"
+        );
+        assert!(
+            block(serde_json::json!({ "all": { "frames": ["a:texture/x"], "fps": 900 } })).is_err()
+        );
     }
 }

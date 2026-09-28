@@ -7,6 +7,11 @@ pub const MAX_BRICKS: usize = 1_000_000;
 /// Native admission bound, not the original 100-row editor limit. Runtime work
 /// budgets and usable large-list editing are separate acceptance requirements.
 pub const MAX_EVENTS_PER_BRICK: usize = 1024;
+/// What a world's bricks may add up to by [`Brick::stored_bound`]: the save
+/// file's limit less room for the owner table and the rest of the world.
+/// Admission enforces it, so every world a server accepts can be saved and
+/// streamed to a joining client.
+pub const MAX_STORED_BYTES: u64 = crate::persistence::MAX_SAVE_BYTES - 64 * 1024 * 1024;
 pub const TICKS_PER_SECOND: u64 = 120;
 pub type BrickId = u64;
 /// Assigned by the server's identity service; zero is world-owned content.
@@ -133,6 +138,31 @@ impl ItemSpawn {
         (u64::from(self.respawn_ms) * TICKS_PER_SECOND).div_ceil(1000)
     }
 }
+/// A package block drawn on this brick in place of its colour: per-face
+/// textures and flipbooks (`namespace:block/name`), in one of the block's
+/// named states. Game rules change `state`; clients draw it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockLook {
+    pub block: String,
+    /// `""` is the block's own faces; other names are its declared states.
+    #[serde(default)]
+    pub state: String,
+}
+impl BlockLook {
+    pub fn validate(&self) -> Result<()> {
+        let plain = |s: &str| !s.chars().any(char::is_control);
+        ensure!(
+            !self.block.is_empty() && self.block.len() <= 160 && plain(&self.block),
+            "Invalid block look"
+        );
+        ensure!(
+            self.state.len() <= 64 && plain(&self.state),
+            "Invalid block state"
+        );
+        Ok(())
+    }
+}
 /// Wrench event rows: the vanilla input/target/output model executed by
 /// `bri-events` (the single event system for bricks).
 pub use bri_events::{Row as EventRow, Target as EventTarget, Value as EventValue};
@@ -169,6 +199,9 @@ pub struct Brick {
     pub events: Vec<EventRow>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
+    /// A package block's faces drawn in place of the colour.
+    #[serde(default)]
+    pub look: Option<BlockLook>,
 }
 impl Brick {
     pub fn new(definition: ContentRef, position: [f32; 3], owner: OwnerId) -> Self {
@@ -193,6 +226,7 @@ impl Brick {
             vehicle: None,
             events: vec![],
             source_records: vec![],
+            look: None,
         }
     }
     pub fn transform(&self) -> glam::Mat4 {
@@ -200,6 +234,66 @@ impl Brick {
             * glam::Mat4::from_rotation_y(
                 -(self.quarter_turns as f32) * std::f32::consts::FRAC_PI_2,
             )
+    }
+    /// An upper bound on this brick's size in any carrier: its JSON save
+    /// entry, and (far larger than) its network encoding. Structural and
+    /// allocation-free, so admission can charge it on every mutation; see
+    /// [`MAX_STORED_BYTES`].
+    pub fn stored_bound(&self) -> u64 {
+        // A JSON string: its bytes, five more for each escaped one
+        // (`\u00XX`), and quotes. Fixed-size fields fit in the constants.
+        fn text(s: &str) -> u64 {
+            let escaped = s
+                .bytes()
+                .filter(|b| *b < 0x20 || *b == b'"' || *b == b'\\')
+                .count();
+            (s.len() + 5 * escaped) as u64 + 2
+        }
+        fn content(c: &ContentRef) -> u64 {
+            match c {
+                ContentRef::Resolved(id) => text(id) + 40,
+                ContentRef::Unresolved { namespace, name } => text(namespace) + text(name) + 64,
+            }
+        }
+        let optional = |c: &Option<ContentRef>| c.as_ref().map_or(0, content);
+        let mut bytes = 512
+            + content(&self.definition)
+            + optional(&self.print)
+            + self.name.as_deref().map_or(0, text)
+            + self.light.as_ref().map_or(0, |l| content(&l.asset))
+            + self.emitter.as_ref().map_or(0, |e| optional(&e.asset))
+            + optional(&self.item_spawn.item)
+            + optional(&self.sound)
+            + self.vehicle.as_ref().map_or(0, |v| content(&v.vehicle))
+            + self
+                .look
+                .as_ref()
+                .map_or(0, |l| 32 + text(&l.block) + text(&l.state));
+        for row in &self.events {
+            bytes += 192 + text(&row.input) + text(&row.output);
+            if let Some(p) = &row.preserved {
+                bytes += text(&p.original) + text(&p.diagnostic);
+            }
+            if let EventTarget::Named(n) = &row.target {
+                bytes += text(n);
+            }
+            for value in &row.params {
+                bytes += 32
+                    + match value {
+                        EventValue::Text(t) | EventValue::Datablock(Some(t)) => text(t),
+                        // Up to "65535," each.
+                        EventValue::Rows(bri_events::RowSelection::Indices(rows)) => {
+                            6 * rows.len() as u64
+                        }
+                        // Numbers, a vector of three floats, flags.
+                        _ => 64,
+                    };
+            }
+        }
+        for record in &self.source_records {
+            bytes += 64 + text(&record.text) + record.diagnostic.as_deref().map_or(0, text);
+        }
+        bytes
     }
     pub fn validate(&self, palette_len: usize) -> Result<()> {
         self.definition.validate()?;
@@ -233,6 +327,9 @@ impl Brick {
             }
         }
         self.item_spawn.validate()?;
+        if let Some(look) = &self.look {
+            look.validate()?;
+        }
         if let Some(sound) = &self.sound {
             sound.validate()?;
         }

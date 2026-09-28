@@ -7,7 +7,7 @@ use bri_package::diag::Diagnostic;
 use bri_package::id::{Requirement, Version};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path};
+use std::path::Path;
 
 /// One provided file with its bytes.
 #[derive(Debug, Clone)]
@@ -29,19 +29,13 @@ pub struct Package {
     pub entities: BTreeMap<String, content::EntityKind>,
     pub models: BTreeMap<String, content::BoxModel>,
     pub huds: BTreeMap<String, content::HudPanel>,
+    pub archetypes: BTreeMap<String, content::ArchetypeDef>,
+    pub textures: BTreeMap<String, content::Texture>,
+    pub blocks: BTreeMap<String, content::BlockDef>,
     pub modes: BTreeMap<String, content::GameMode>,
 }
 
 const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
-
-fn safe_relative(file: &str) -> bool {
-    !file.is_empty()
-        && file.len() <= 256
-        && !file.contains('\\')
-        && Path::new(file)
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)))
-}
 
 impl Package {
     /// Read a mod package directory. Every problem is returned, not just the
@@ -61,19 +55,22 @@ impl Package {
         }
     }
     fn read(dir: &Path, entry: &PackageEntry) -> Result<Self, Rejected<Self>> {
-        let manifest_bytes = std::fs::read(dir.join(MANIFEST_FILE)).map_err(|e| {
-            (
-                None,
-                vec![
-                    Diagnostic::error(
-                        "package.manifest_missing",
-                        format!("cannot read {MANIFEST_FILE}: {e}"),
-                    )
-                    .at(location(&entry.id, MANIFEST_FILE))
-                    .hint("a mod package is a folder containing package.json"),
-                ],
-            )
-        })?;
+        let manifest_bytes = bri_package::path::inside(dir, MANIFEST_FILE)
+            .map_err(std::io::Error::other)
+            .and_then(std::fs::read)
+            .map_err(|e| {
+                (
+                    None,
+                    vec![
+                        Diagnostic::error(
+                            "package.manifest_missing",
+                            format!("cannot read {MANIFEST_FILE}: {e}"),
+                        )
+                        .at(location(&entry.id, MANIFEST_FILE))
+                        .hint("a mod package is a folder containing package.json"),
+                    ],
+                )
+            })?;
         let (manifest, mut out) = Manifest::inspect(&manifest_bytes, &entry.id);
         let Some(manifest) = manifest else {
             return Err(Box::new((None, out)));
@@ -99,19 +96,17 @@ impl Package {
                 continue;
             };
             let at = location(&id, &provide.file);
-            if !safe_relative(&provide.file) {
-                out.push(
-                    Diagnostic::error(
-                        "package.file.path",
-                        format!(
-                            "`{}` must be a relative path inside the package",
-                            provide.file
-                        ),
-                    )
-                    .at(at),
-                );
-                continue;
-            }
+            let path = match bri_package::path::inside(dir, &provide.file) {
+                Ok(path) => path,
+                Err(problem) => {
+                    out.push(
+                        Diagnostic::error("package.file.path", problem)
+                            .at(at)
+                            .hint("provide files by plain relative paths inside the package"),
+                    );
+                    continue;
+                }
+            };
             match (kind.side(), entry.side) {
                 (Side::Server, Side::Server) | (Side::Client, Side::Client | Side::Shared) => {}
                 (Side::Server, _) => {
@@ -135,7 +130,7 @@ impl Package {
                     );
                 }
             }
-            let bytes = match std::fs::read(dir.join(&provide.file)) {
+            let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     out.push(
@@ -184,6 +179,9 @@ impl Package {
             entities: BTreeMap::new(),
             models: BTreeMap::new(),
             huds: BTreeMap::new(),
+            archetypes: BTreeMap::new(),
+            textures: BTreeMap::new(),
+            blocks: BTreeMap::new(),
             modes: BTreeMap::new(),
             manifest,
             assets,
@@ -289,6 +287,27 @@ impl Package {
                         self.huds.insert(asset.id.clone(), h);
                     }
                 }
+                Kind::Archetype => {
+                    if let Some(a) =
+                        parse::<content::ArchetypeDef>(asset, &id, |a| a.validate(), out)
+                    {
+                        self.archetypes.insert(asset.id.clone(), a);
+                    }
+                }
+                Kind::Texture => match content::Texture::read(&asset.bytes) {
+                    Ok(t) => {
+                        self.textures.insert(asset.id.clone(), t);
+                    }
+                    Err(e) => out.push(
+                        Diagnostic::error("content.texture", format!("{e:#}"))
+                            .at(location(&id, &asset.file)),
+                    ),
+                },
+                Kind::Block => {
+                    if let Some(b) = parse::<content::BlockDef>(asset, &id, |b| b.validate(), out) {
+                        self.blocks.insert(asset.id.clone(), b);
+                    }
+                }
                 // Read and validated by the engine systems that merge them.
                 Kind::Weapons | Kind::Vehicles | Kind::Bricks => {}
                 Kind::Mode => {
@@ -339,32 +358,87 @@ impl Catalog {
             Err(problems)
         }
     }
+    /// Load what can run: a package with problems, and every package that
+    /// needs it, is left out and its problems returned, so one bad Add-On
+    /// does not turn off the others. Deterministic, so a host and its
+    /// clients leave out the same packages from the same files.
+    pub fn load_skipping(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
+        let mut set = set.clone();
+        let mut skipped = Vec::new();
+        loop {
+            let (catalog, problems) = Self::inspect(root, &set, server);
+            if problems.is_empty() {
+                return (catalog, skipped);
+            }
+            let owner = |d: &Diagnostic| {
+                let at = d.location.as_deref()?;
+                set.packages
+                    .iter()
+                    .filter(|e| at.starts_with(&format!("{}/", e.id)))
+                    .max_by_key(|e| e.id.len())
+                    .map(|e| e.id.clone())
+            };
+            let bad: BTreeSet<String> = problems.iter().filter_map(owner).collect();
+            skipped.extend(problems);
+            if bad.is_empty() {
+                // Problems no package owns: run nothing rather than guess.
+                return (Self::default(), skipped);
+            }
+            set.packages.retain(|e| !bad.contains(&e.id));
+        }
+    }
     /// Load for reporting: every package that could be read, even with
     /// problems, and every problem once. Never run a catalog with problems.
     pub fn inspect(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
+        let mut out = Vec::new();
+        let listed: BTreeMap<&str, &PackageEntry> =
+            set.packages.iter().map(|p| (p.id.as_str(), p)).collect();
+        let mut dirs = Vec::new();
+        for entry in &set.packages {
+            if entry.role.is_some() {
+                continue;
+            }
+            match bri_package::packages::package_dir(root, entry) {
+                Ok(dir) => dirs.push((dir, entry.clone())),
+                Err(e) => out.push(
+                    Diagnostic::error("package.dir", format!("{e:#}")).at(location(&entry.id, "")),
+                ),
+            }
+        }
+        let (catalog, mut problems) = Self::inspect_dirs(&dirs, &listed, server);
+        out.append(&mut problems);
+        (catalog, out)
+    }
+    /// Load packages from where they are, each with its entry: a client's
+    /// downloaded packages live in its cache, not under a content root.
+    /// Directories without a `package.json` (base game content) are skipped.
+    pub fn load_dirs(
+        packages: &[(std::path::PathBuf, PackageEntry)],
+        server: bool,
+    ) -> Result<Self, Vec<Diagnostic>> {
+        let listed: BTreeMap<&str, &PackageEntry> =
+            packages.iter().map(|(_, p)| (p.id.as_str(), p)).collect();
+        match Self::inspect_dirs(packages, &listed, server) {
+            (catalog, problems) if problems.is_empty() => Ok(catalog),
+            (_, problems) => Err(problems),
+        }
+    }
+    fn inspect_dirs(
+        packages: &[(std::path::PathBuf, PackageEntry)],
+        listed: &BTreeMap<&str, &PackageEntry>,
+        server: bool,
+    ) -> (Self, Vec<Diagnostic>) {
         let mut catalog = Self::default();
         let mut out = Vec::new();
         let mut failed = BTreeSet::new();
-        let listed: BTreeMap<&str, &PackageEntry> =
-            set.packages.iter().map(|p| (p.id.as_str(), p)).collect();
-        for entry in &set.packages {
+        for (dir, entry) in packages {
             if entry.role.is_some() || (!server && entry.side == Side::Server) {
                 continue;
             }
-            let dir = match bri_package::packages::package_dir(root, entry) {
-                Ok(dir) => dir,
-                Err(e) => {
-                    out.push(
-                        Diagnostic::error("package.dir", format!("{e:#}"))
-                            .at(location(&entry.id, "")),
-                    );
-                    continue;
-                }
-            };
             if !dir.join(MANIFEST_FILE).is_file() {
                 continue;
             }
-            let (package, mut problems) = Package::inspect(&dir, entry);
+            let (package, mut problems) = Package::inspect(dir, entry);
             if !problems.is_empty() {
                 failed.insert(entry.id.clone());
                 out.append(&mut problems);
@@ -373,7 +447,7 @@ impl Catalog {
                 catalog.packages.insert(entry.id.clone(), package);
             }
         }
-        out.extend(catalog.check(&listed, &failed, server));
+        out.extend(catalog.check(listed, &failed, server));
         (catalog, out)
     }
     /// Cross-package checks: dependencies, model and state references.
@@ -384,6 +458,37 @@ impl Catalog {
         server: bool,
     ) -> Vec<Diagnostic> {
         let mut out = Vec::new();
+        // One key press sends one command: two panels may share a key only
+        // if they send the same thing.
+        let mut keys: BTreeMap<String, (&str, &str, &str)> = BTreeMap::new();
+        for (id, p) in &self.packages {
+            for (panel, hud) in &p.huds {
+                for key in &hud.keys {
+                    let target = (key.package.as_str(), key.command.as_str(), panel.as_str());
+                    match keys.entry(key.key.to_ascii_uppercase()) {
+                        std::collections::btree_map::Entry::Vacant(v) => {
+                            v.insert(target);
+                        }
+                        std::collections::btree_map::Entry::Occupied(o) => {
+                            let (package, command, first) = *o.get();
+                            if (package, command) != (target.0, target.1) {
+                                out.push(
+                                    Diagnostic::error(
+                                        "set.hud.key.conflict",
+                                        format!(
+                                            "key {} sends `{}:{}` in `{panel}` but `{package}:{command}` in `{first}`",
+                                            key.key, key.package, key.command
+                                        ),
+                                    )
+                                    .at(location(id, MANIFEST_FILE))
+                                    .hint("give one of the panels a different key"),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // References into a package that failed to load are reported once,
         // there, rather than again for every reference.
         let broken = |package: &str| failed.contains(package);
@@ -464,6 +569,38 @@ impl Catalog {
                         );
                     }
                 }
+                for world in p.worlds.values() {
+                    for block in world.materials.iter().filter_map(|m| m.block.as_ref()) {
+                        let owner = block.split(':').next().unwrap_or_default();
+                        if broken(owner) {
+                            continue;
+                        }
+                        if self.block(block).is_none() {
+                            out.push(
+                                Diagnostic::error(
+                                    "set.block.unknown",
+                                    format!("material block `{block}` is not provided by an enabled client package"),
+                                )
+                                .at(at.clone()),
+                            );
+                        }
+                    }
+                }
+            }
+            for block in p.blocks.values() {
+                for texture in block.textures() {
+                    let owner = texture.split(':').next().unwrap_or_default();
+                    if !broken(owner) && self.texture(texture).is_none() {
+                        out.push(
+                            Diagnostic::error(
+                                "set.texture.unknown",
+                                format!("block `{}` uses texture `{texture}`, which no enabled package provides", block.name),
+                            )
+                            .at(at.clone())
+                            .hint("provide it as kind `texture` (a PNG) in this or an enabled package"),
+                        );
+                    }
+                }
             }
             for hud in p.huds.values() {
                 for key in &hud.keys {
@@ -513,19 +650,27 @@ impl Catalog {
                         }
                         continue;
                     };
-                    let public = owner.behaviour.as_ref().is_some_and(|b| {
-                        let keys = if binding.player {
-                            &b.state.player
-                        } else {
-                            &b.state.global
+                    let visible = owner.behaviour.as_ref().is_some_and(|b| {
+                        let (keys, needed): (_, &[content::Visible]) = match binding.scope {
+                            content::Scope::Global => {
+                                (&b.state.global, &[content::Visible::Everyone])
+                            }
+                            content::Scope::Player => (
+                                &b.state.player,
+                                &[content::Visible::Owner, content::Visible::Everyone],
+                            ),
+                            content::Scope::Players => {
+                                (&b.state.player, &[content::Visible::Everyone])
+                            }
                         };
-                        keys.get(&binding.key).is_some_and(|k| k.public)
+                        keys.get(&binding.key)
+                            .is_some_and(|k| needed.contains(&k.visible))
                     });
-                    if !public {
+                    if !visible {
                         out.push(
-                            Diagnostic::error("set.hud.binding", format!("`{}` is not a public state key", row.bind))
+                            Diagnostic::error("set.hud.binding", format!("`{}` is not a state key clients receive", row.bind))
                                 .at(at.clone())
-                                .hint("declare it under the owner's behaviour state with \"public\": true"),
+                                .hint("declare it under the owner's behaviour state with \"visible\": \"owner\" (a player's own key) or \"everyone\" (global keys and scoreboards)"),
                         );
                     }
                 }
@@ -663,6 +808,16 @@ impl Catalog {
     }
     pub fn model(&self, id: &str) -> Option<&content::BoxModel> {
         self.packages.get(id.split(':').next()?)?.models.get(id)
+    }
+    pub fn texture(&self, id: &str) -> Option<&content::Texture> {
+        self.packages.get(id.split(':').next()?)?.textures.get(id)
+    }
+    pub fn block(&self, id: &str) -> Option<&content::BlockDef> {
+        self.packages.get(id.split(':').next()?)?.blocks.get(id)
+    }
+    /// Every package's archetypes, in package then id order.
+    pub fn archetypes(&self) -> impl Iterator<Item = (&String, &content::ArchetypeDef)> {
+        self.packages.values().flat_map(|p| p.archetypes.iter())
     }
     pub fn huds(&self) -> impl Iterator<Item = (&String, &content::HudPanel)> {
         self.packages.values().flat_map(|p| p.huds.iter())

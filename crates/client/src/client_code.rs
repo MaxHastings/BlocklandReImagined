@@ -49,7 +49,8 @@ impl ClientCode {
     pub fn load(root: &Path, set: &PackageSet) -> Self {
         let mut out = Self::default();
         for entry in &set.packages {
-            if entry.side == Side::Server {
+            // Base game packages (listed with a role) never carry code.
+            if entry.side == Side::Server || entry.role.is_some() {
                 continue;
             }
             match AddOnCode::load(&root.join(&entry.dir)) {
@@ -316,6 +317,32 @@ mod tests {
         assert_eq!(code.take_messages(), ["Spinning Cube: spinning cube ready"]);
         code.stop();
         assert!(code.running().is_empty());
+    }
+
+    #[test]
+    fn base_packages_and_data_only_folders_report_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        // A base package (listed with a role) and a plain data folder:
+        // neither has a package.json.
+        std::fs::create_dir_all(root.path().join("base/v20-map-bundle")).unwrap();
+        std::fs::create_dir_all(root.path().join("some-bricks")).unwrap();
+        let entry = |id: &str, dir: &str, role: Option<&str>| PackageEntry {
+            id: id.into(),
+            version: "1.0.0".into(),
+            side: Side::Shared,
+            dir: dir.into(),
+            role: role.map(str::to_string),
+        };
+        let set = PackageSet {
+            schema_version: 1,
+            packages: vec![
+                entry("v20-map-bundle", "base/v20-map-bundle", Some("maps")),
+                entry("some-bricks", "some-bricks", None),
+            ],
+        };
+        let mut code = ClientCode::load(root.path(), &set);
+        assert!(code.code().is_empty());
+        assert_eq!(code.take_messages(), Vec::<String>::new());
     }
 
     #[test]

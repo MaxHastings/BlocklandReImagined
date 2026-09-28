@@ -33,7 +33,8 @@ impl Budget {
             Self::Command => 200_000,
             Self::Think => 100_000,
             Self::Tick => 400_000,
-            Self::Generate => 4_000_000,
+            // One chunk is generated per tick, so its budget fits a tick.
+            Self::Generate => 400_000,
         }
     }
 }
@@ -66,6 +67,9 @@ pub struct Aim {
     pub brick: Option<u64>,
     /// The brick's provider tag (for generated voxels, the material id).
     pub tag: Option<String>,
+    /// The brick's block and its state, when it shows a block.
+    #[serde(default)]
+    pub look: Option<(String, String)>,
     pub position: [f32; 3],
     pub distance: f32,
 }
@@ -89,16 +93,20 @@ pub struct Call<'a> {
     /// The entity a `think` call is for.
     pub entity: Option<u64>,
     pub state: Namespace,
-    /// Package-local variables of the package's entities.
-    pub entity_vars: BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+    /// Package-local variables of the package's entities, shared by every
+    /// call in a tick; a call's writes come back in its [`Outcome`].
+    pub entity_vars: Arc<EntityVars>,
 }
+/// Each entity's package-local variables.
+pub type EntityVars = BTreeMap<u64, BTreeMap<String, serde_json::Value>>;
 /// One call's results. Only produced when the call succeeded.
 #[derive(Debug)]
 pub struct Outcome {
     pub returned: Dynamic,
     pub ops: Vec<Op>,
     pub state: Namespace,
-    pub entity_vars: BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+    /// The complete variables of each entity the call wrote to.
+    pub entity_vars: EntityVars,
     pub output: Vec<String>,
 }
 
@@ -108,7 +116,9 @@ struct Invocation {
     aim: Option<Aim>,
     entity: Option<u64>,
     state: Namespace,
-    entity_vars: BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+    entity_vars: Arc<EntityVars>,
+    /// Entities this call wrote, with all their variables.
+    written: EntityVars,
     ops: Vec<Op>,
     output: Vec<String>,
 }
@@ -271,6 +281,18 @@ fn register_api(engine: &mut Engine) {
                             .map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
                     ),
                     ("tag", a.tag.clone().map_or(Dynamic::UNIT, Dynamic::from)),
+                    (
+                        "block",
+                        a.look
+                            .as_ref()
+                            .map_or(Dynamic::UNIT, |(b, _)| Dynamic::from(b.clone())),
+                    ),
+                    (
+                        "state",
+                        a.look
+                            .as_ref()
+                            .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from(s.clone())),
+                    ),
                     x,
                     y,
                     z,
@@ -340,8 +362,9 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("entity_get", |entity: Dynamic, key: &str| {
         with(|i| {
             let e = id(&entity)?;
-            Ok(i.entity_vars
+            Ok(i.written
                 .get(&e)
+                .or_else(|| i.entity_vars.get(&e))
                 .and_then(|m| m.get(key))
                 .map_or(Dynamic::UNIT, to_dynamic))
         })
@@ -351,11 +374,18 @@ fn register_api(engine: &mut Engine) {
         |entity: Dynamic, key: &str, value: Dynamic| {
             with(|i| {
                 let e = id(&entity)?;
-                if !i.entity_vars.contains_key(&e) {
-                    return fail(format!("entity {e} does not belong to this package"));
+                if !i.written.contains_key(&e) {
+                    let Some(vars) = i.entity_vars.get(&e) else {
+                        return fail(format!("entity {e} does not belong to this package"));
+                    };
+                    let vars = vars.clone();
+                    i.written.insert(e, vars);
                 }
                 let v = to_json(&value)?;
-                i.entity_vars.entry(e).or_default().insert(key.into(), v);
+                i.written
+                    .get_mut(&e)
+                    .expect("inserted above")
+                    .insert(key.into(), v);
                 Ok(())
             })
         },
@@ -371,6 +401,16 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("remove_brick", |brick: Dynamic| {
         push(Op::RemoveBrick { brick: id(&brick)? })
     });
+    engine.register_fn(
+        "place_brick",
+        |shape: &str, x: Dynamic, y: Dynamic, z: Dynamic, r: Dynamic, g: Dynamic, b: Dynamic| {
+            push(Op::PlaceBrick {
+                shape: shape.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                color: [float(&r)?, float(&g)?, float(&b)?, 1.0],
+            })
+        },
+    );
     engine.register_fn(
         "explode",
         |x: Dynamic,
@@ -391,6 +431,53 @@ fn register_api(engine: &mut Engine) {
         push(Op::DamagePlayer {
             player: id(&player)?,
             amount: float(&amount)?,
+            by: None,
+        })
+    });
+    engine.register_fn("damage", |player: Dynamic, amount: Dynamic, by: Dynamic| {
+        push(Op::DamagePlayer {
+            player: id(&player)?,
+            amount: float(&amount)?,
+            // `()` credits nobody, as `on_death` passes `()` for no killer.
+            by: if by.is_unit() { None } else { Some(id(&by)?) },
+        })
+    });
+    engine.register_fn(
+        "teleport",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push(Op::Teleport {
+                player: id(&player)?,
+                position: [float(&x)?, float(&y)?, float(&z)?],
+            })
+        },
+    );
+    engine.register_fn("respawn", |player: Dynamic| {
+        push(Op::Respawn {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("set_archetype", |player: Dynamic, archetype: &str| {
+        push(Op::SetArchetype {
+            player: id(&player)?,
+            archetype: archetype.into(),
+        })
+    });
+    engine.register_fn("set_block_state", |brick: Dynamic, state: &str| {
+        push(Op::SetBlockState {
+            brick: id(&brick)?,
+            state: state.into(),
+        })
+    });
+    engine.register_fn("control", |player: Dynamic, entity: Dynamic| {
+        push(Op::Control {
+            player: id(&player)?,
+            entity: Some(id(&entity)?),
+        })
+    });
+    engine.register_fn("release", |player: Dynamic| {
+        push(Op::Control {
+            player: id(&player)?,
+            entity: None,
         })
     });
     engine.register_fn(
@@ -399,6 +486,21 @@ fn register_api(engine: &mut Engine) {
             push(Op::SpawnEntity {
                 kind: kind.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
+                vars: BTreeMap::new(),
+            })
+        },
+    );
+    engine.register_fn(
+        "spawn_entity",
+        |kind: &str, x: Dynamic, y: Dynamic, z: Dynamic, vars: Map| {
+            let vars = vars
+                .into_iter()
+                .map(|(k, v)| Ok((k.to_string(), to_json(&v)?)))
+                .collect::<Fallible<_>>()?;
+            push(Op::SpawnEntity {
+                kind: kind.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                vars,
             })
         },
     );
@@ -465,8 +567,17 @@ fn sandbox() -> Engine {
         })
     });
     engine.on_debug(|_, _, _| {});
+    engine.on_progress(|operations| {
+        OPERATIONS.with(|o| o.set(operations));
+        None
+    });
     register_api(&mut engine);
     engine
+}
+
+thread_local! {
+    /// Operations the running call has used so far.
+    static OPERATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Compiled scripts for every package with behaviour.
@@ -562,6 +673,11 @@ impl Runtime {
     pub fn has_script(&self, package: &str) -> bool {
         self.scripts.contains_key(package)
     }
+    /// Script operations the last [`call`](Self::call) used, whether it
+    /// succeeded or not: what the engine charges to the caller's share.
+    pub fn last_operations(&self) -> u64 {
+        OPERATIONS.with(std::cell::Cell::get)
+    }
     /// Run one function. On error nothing of the call is kept.
     pub fn call(&mut self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
         let ast =
@@ -569,6 +685,7 @@ impl Runtime {
                 Diagnostic::error("script.none", "package has no script").at(package)
             })?;
         self.engine.set_max_operations(call.budget.operations());
+        OPERATIONS.with(|o| o.set(0));
         let previous = CURRENT.with(|c| {
             c.borrow_mut().replace(Invocation {
                 snapshot: call.snapshot,
@@ -577,6 +694,7 @@ impl Runtime {
                 entity: call.entity,
                 state: call.state,
                 entity_vars: call.entity_vars,
+                written: BTreeMap::new(),
                 ops: Vec::new(),
                 output: Vec::new(),
             })
@@ -600,7 +718,7 @@ impl Runtime {
                 returned,
                 ops: invocation.ops,
                 state: invocation.state,
-                entity_vars: invocation.entity_vars,
+                entity_vars: invocation.written,
                 output: invocation.output,
             }),
             Err(e) => {

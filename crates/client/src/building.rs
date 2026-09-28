@@ -47,6 +47,8 @@ pub struct BuildingResponse {
 
 pub struct Building {
     definitions: Definitions,
+    /// The host's player archetypes, for the local player's eye.
+    archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     /// Stock selectable IDs and authored orientation corrections, not every
     /// hidden state variant that happens to have a native definition.
     catalog: BTreeMap<String, u8>,
@@ -88,6 +90,7 @@ impl Building {
             .collect();
         map.detect_collisions(&(), &());
         Ok(Self {
+            archetypes: Default::default(),
             definitions,
             catalog: BTreeMap::new(),
             default_prints: BTreeMap::new(),
@@ -839,6 +842,12 @@ impl Building {
             .collect()
     }
 
+    pub fn archetypes(&self) -> &bri_sim::archetype::Archetypes {
+        &self.archetypes
+    }
+    pub fn set_archetypes(&mut self, archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>) {
+        self.archetypes = archetypes;
+    }
     /// Local updates acknowledge equipment choices only. Commands require the
     /// transport's authoritative reply; no planting/removal is predicted here.
     /// Player yaw/pitch must be current body aim, not a free-look camera vector.
@@ -1050,7 +1059,7 @@ impl Building {
         let command = match &self.equipment {
             Equipment::Brick(id) => {
                 self.selectable(id)?;
-                let eye = player.eye(&player.tuning());
+                let eye = self.archetypes.eye(player);
                 let Some(hit) = self.target(eye, player.forward(), DEPLOY_REACH)? else {
                     return Ok(());
                 };
@@ -1307,7 +1316,7 @@ mod tests {
             crouched: false,
             jetting: false,
             jump: Default::default(),
-            datablock: Default::default(),
+            archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
         }

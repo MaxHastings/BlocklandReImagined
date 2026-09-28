@@ -109,6 +109,20 @@ Unknown fields are errors. Every problem is a diagnostic with a stable code
 (`packages.id`, `packages.duplicate`, `packages.dir`, `packages.role_conflict`,
 ...), as in `docs/modding/package-format.md`.
 
+**One path rule.** Every name a package uses for a file or directory, a
+`dir` here, a `provides` file in `package.json`, or a path in a download
+listing, passes the same check (`bri_package::path::problem`): forward
+slashes, no empty, `.` or `..` parts, no character Windows forbids or gives a
+meaning (`:` would name an alternate data stream), no part ending in a space
+or dot, no device names, at most 160 bytes. Files are then opened through
+`bri_package::path::inside`, which refuses any link or junction on the way,
+so a package reads only its own bytes. Readers do not keep their own copies
+of this rule.
+
+**Conflicts are reported, never last-wins.** A content id provided twice in
+one manifest is `manifest.provide.duplicate`; two HUD panels that bind one
+key to different commands are `set.hud.key.conflict`.
+
 Swapping a pack generation, or adding a mod, is a data change to this file,
 not a Rust change.
 
@@ -268,9 +282,84 @@ needs the server's name typed on the prompt, and does not run yet. A package wit
 downloads. Checks, host API, budgets and prompts:
 [client-sandbox.md](client-sandbox.md). Code: `crates/client-sandbox`.
 
+## Distribution: clients fetch what they lack
+
+Code: `bri_package::sync` (listings, cache) and `bri_net::packages`
+(transport). Tests: `cargo test -p bri-package sync` and
+`cargo test -p bri-net --test package_sync`.
+
+- **Listing.** A server lists each package it offers: every file's relative
+  path, size and SHA-256, in path order. The entries hash to the package hash
+  by the same rule as `hash_dir`, so a client checks a listing against the
+  hash the server's environment promised before fetching anything.
+- **What is offered.** Only `shared` and `client` packages of the server's
+  environment (`PackageShelf`). `server` packages and any file outside an
+  offered package cannot be requested: objects are served by hash, and only
+  hashes of offered files resolve.
+- **Data, never code.** A listing is refused, on both sides, if any path is
+  unsafe to create on Windows (absolute, `..`, `\`, `:`, device names like
+  `nul` or `com1`, trailing dot or space, names that differ only by case, a
+  file that is also a directory) or if any file type is code Windows could
+  run (`CODE_EXTENSIONS`: `.exe .dll .bat .ps1 .js .lnk ...`). A server cannot
+  even build a shelf containing one.
+- **Budgets.** 256 MiB per file, 2 GiB per package, 65,536 files per
+  package, and 4 GiB per fetch on the client (`MAX_FETCH_BYTES`), so a
+  hostile server cannot fill a disk with valid packages. Download connections
+  are bounded to 16 in total and 2 per address, and close after 15 s idle.
+- **Cache.** `objects/<sha256>` holds each file once, so an asset two packages
+  share downloads once. A file becomes visible only after its size and hash
+  check out; an interrupted or corrupt download leaves nothing behind, and a
+  retry fetches only what is still missing. A package is installed by copying
+  its objects into a staging directory, re-hashing it with `hash_dir`, and
+  renaming it to `packages/<package hash>`, so an installed directory is
+  always complete and is exactly the package the server loaded.
+- **Trust follows the bytes in use.** Nothing is trusted because it exists
+  or was checked earlier. An installed package has a seal
+  (`packages/<hash>.seal`: each file's size and modification time); when the
+  directory no longer matches it, it is re-hashed and removed if it is no
+  longer the package. Objects are checked by size before reuse and by hash as
+  each is copied into a package; a damaged one is deleted so the next fetch
+  replaces it. Every writer stages under its own unique name, so concurrent
+  fetches into one cache are safe. On the server, each offered file keeps
+  the size and modification time it was listed with, and a file the host
+  changed since is refused, naming the package.
+- **Bounded.** After every fetch the cache is pruned to 8 GiB
+  (`CACHE_BYTES`): least recently used packages go first, the fetched
+  server's packages always stay, objects are removed once settled (every
+  installed package holds its own files), and anything touched in the last
+  hour may belong to a fetch in progress and stays.
+- **Protocol.** A download is its own connection: `JoinBegin { purpose:
+  Download }`, then `DownloadRequest::{Environment, Listing, Object}` answered
+  in order (object ranges up to 1 MiB). No identity or game state is involved.
+  `bri_net::packages::fetch_missing` does the whole fetch and reports bytes
+  under `Stage::DownloadingPackages`.
+- **Join.** A join whose shared packages differ is refused with
+  `Message::PackagesDiffer` (the mismatches, typed), which a client sees as
+  the error `bri_net::client::PackagesDiffer`. `Client::connect_fetching`
+  joins, and on that refusal, unless the client runs a shared package the
+  server lacks, fetches the server's packages, hands them to the caller's
+  `load` step and joins again with the list it returns; the server checks
+  that list like any other.
+  The refusal's text is `environment::refusal`, which the Add-Ons screen
+  reads back into rows; the download uses the join's `HostPin`, so it
+  reaches the same host the join trusts.
+
 ## Not built yet
 
-Downloading missing packages at join is the package sync work (the stress
-campaign PR). Content inside the base packages still uses older id
-spellings (`v20/brick/...`, `v20.weapon....`) until those packs are
-regenerated under the grammar above; see the audit.
+- The game client joins servers through `connect_fetching`: downloaded
+  packages go to `<state>/package-cache`, `bri_client::mods::load_fetched`
+  loads them (`Catalog::load_dirs`: models, HUD panels and other data) and
+  the view carries them as `View::mods`. A server running different base
+  game content is refused with that reason, because base content cannot be
+  swapped while the game runs. Hosting yourself needs no download.
+- `bri-server` passes `packages: None` until it loads mod packages through
+  `packages.json`.
+- The whole join, downloads included, shares the client's 120 s connect
+  timeout; a large download needs its own.
+- A host that edits a package must restart to offer the new version; there
+  is no reload.
+- Dependency resolution and archives are the mod platform lane's. Renaming
+  the base packs' ids follows the plan under "Legacy spellings" above.
+- Content inside the base packages still uses older id spellings
+  (`v20/brick/...`, `v20.weapon....`) until those packs are regenerated
+  under the grammar above; see the audit.

@@ -29,10 +29,14 @@ fn load_side(root: &Path, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
 }
 /// Mod packages of `set` whose directories are under `root`.
 pub fn load_set(root: &Path, set: &bri_package::packages::PackageSet, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
-    match Catalog::load(root, set, server) {
-        Ok(catalog) if catalog.packages.is_empty() => (None, Vec::new()),
-        Ok(catalog) => (Some(Arc::new(catalog)), Vec::new()),
-        Err(problems) => (None, problems.iter().map(ToString::to_string).collect()),
+    // One broken Add-On is left out (and reported) rather than turning off
+    // every other Add-On's HUD, rules and modes.
+    let (catalog, problems) = Catalog::load_skipping(root, set, server);
+    let problems = problems.iter().map(ToString::to_string).collect();
+    if catalog.packages.is_empty() {
+        (None, problems)
+    } else {
+        (Some(Arc::new(catalog)), problems)
     }
 }
 
@@ -186,15 +190,47 @@ pub fn panels(catalog: &Catalog, state: &PackageStateView, viewer: OwnerId, take
     (panels, keys)
 }
 
-/// Each entity's model as box instances: feet at the entity, facing its
-/// yaw, colours following its label.
+/// One package box model to draw: feet at `position`, facing `yaw`, colours
+/// following `label`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement<'a> {
+    pub model: &'a str,
+    pub position: [f32; 3],
+    pub yaw: f32,
+    pub label: &'a str,
+}
+/// Every entity where it stands.
+pub fn entity_placements(entities: &BTreeMap<u64, EntityInfo>) -> impl Iterator<Item = Placement<'_>> {
+    entities.values().map(|e| Placement { model: &e.model, position: e.position, yaw: e.yaw, label: &e.label })
+}
+/// Players whose archetype's look is a package model: they draw as that
+/// model in place of the Blockhead.
+pub fn body_placements<'a>(
+    catalog: &Catalog,
+    archetypes: &'a bri_sim::archetype::Archetypes,
+    players: &BTreeMap<OwnerId, bri_sim::player::PlayerState>,
+) -> Vec<(OwnerId, Placement<'a>)> {
+    players
+        .iter()
+        .filter_map(|(owner, p)| {
+            let model = &archetypes.get(p.archetype)?.look.model;
+            catalog.model(model)?;
+            Some((*owner, Placement { model, position: p.feet, yaw: p.yaw, label: "" }))
+        })
+        .collect()
+}
+/// Each entity's model as box instances.
 pub fn box_instances(catalog: &Catalog, entities: &BTreeMap<u64, EntityInfo>, cube: f32) -> Vec<SceneTransform> {
+    place_boxes(catalog, entity_placements(entities), cube)
+}
+/// Each placed model as box instances.
+pub fn place_boxes<'a>(catalog: &Catalog, placements: impl IntoIterator<Item = Placement<'a>>, cube: f32) -> Vec<SceneTransform> {
     let mut out = Vec::new();
-    for e in entities.values() {
-        let Some(model) = catalog.model(&e.model) else { continue };
+    for e in placements {
+        let Some(model) = catalog.model(e.model) else { continue };
         let frame = Mat4::from_rotation_translation(Quat::from_rotation_y(-e.yaw), Vec3::from(e.position));
         for b in &model.boxes {
-            let color = b.label_colors.get(&e.label).copied().unwrap_or(b.color);
+            let color = b.label_colors.get(e.label).copied().unwrap_or(b.color);
             let scale = Vec3::from(b.size) / cube;
             out.push(SceneTransform {
                 transform: frame * Mat4::from_scale_rotation_translation(scale, Quat::IDENTITY, Vec3::from(b.center)),
@@ -223,7 +259,7 @@ impl PackageModels {
     pub fn upload(
         &mut self,
         catalog: Option<&Catalog>,
-        entities: &BTreeMap<u64, EntityInfo>,
+        placements: Vec<Placement<'_>>,
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -239,7 +275,7 @@ impl PackageModels {
             return Ok(());
         };
         let cube = mesh.footprint_studs[0] as f32 * 0.5;
-        let mut transforms = box_instances(catalog, entities, cube);
+        let mut transforms = place_boxes(catalog, placements, cube);
         transforms.truncate(MAX_BOXES);
         if self.gpu.is_none() && !transforms.is_empty() {
             let world = PublicWorld {
@@ -362,5 +398,37 @@ mod tests {
         entity.label = "fuse_a".into();
         let lit = box_instances(&catalog, &[(1, entity)].into(), 2.0);
         assert!(lit[0].tint.iter().take(3).all(|c| *c > 0.9), "flashes white");
+    }
+
+    #[test]
+    fn a_player_whose_archetype_looks_like_a_package_model_draws_as_it() {
+        let catalog = catalog();
+        let mut archetypes = bri_sim::archetype::Archetypes::default();
+        let mut creeper = archetypes.resolve(Default::default()).clone();
+        creeper.id = "stresslab-creeper:archetype/creeper".into();
+        creeper.look.model = "stresslab-creeper-model:model/creeper".into();
+        let id = archetypes.add(creeper).unwrap();
+        let player = |archetype, x| bri_sim::player::PlayerState {
+            owner: 0,
+            feet: [x, 0.0, 0.0],
+            velocity: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            head_yaw: 0.0,
+            grounded: true,
+            crouched: false,
+            jetting: false,
+            jump: Default::default(),
+            archetype,
+            scale: 1.0,
+            energy: 100.0,
+        };
+        let players = BTreeMap::from([(1, player(Default::default(), 0.0)), (2, player(id, 7.0))]);
+        let bodies = body_placements(&catalog, &archetypes, &players);
+        assert_eq!(bodies.len(), 1, "the Blockhead stays a Blockhead");
+        assert_eq!(bodies[0].0, 2);
+        let boxes = place_boxes(&catalog, bodies.into_iter().map(|(_, p)| p), 2.0);
+        assert_eq!(boxes.len(), 9);
+        assert!((boxes[0].transform.transform_point3(Vec3::ZERO).x - 7.0).abs() < 1e-4);
     }
 }

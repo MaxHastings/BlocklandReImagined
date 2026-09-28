@@ -21,6 +21,11 @@ pub enum ControlObject {
     /// `Corpse` camera after death: orbits the player's own body until
     /// respawn, so the corpse takes no more input.
     Corpse,
+    /// A package entity (a kart, a drone, a second body) that a package
+    /// handed this player (`control(player, entity)`). The player's moves
+    /// drive that entity's body with its archetype's movement; the avatar
+    /// stands where it was.
+    Entity(u64),
 }
 
 impl Peer {

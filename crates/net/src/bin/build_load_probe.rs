@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
                 certificate: None,
                 map_loader: None,
                 autosave: None,
+                packages: None,
             },
         )?;
         let mut host = Client::connect_with_host(

@@ -190,6 +190,72 @@ fn color_row(target: EventTarget, color: u8) -> EventRow {
     }
 }
 
+/// Add-On weapons use the platform id grammar (`namespace:weapon/name`), not
+/// the base game's `v20.weapon.name`. Every peer validates every replicated
+/// inventory with the same rule the host used to give the item, so holding
+/// one never disconnects anyone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_on_weapon_ids_replicate_to_every_peer() -> Result<()> {
+    const SHOTGUN: &str = "addon_shotgun:weapon/shotgunitem";
+    let mut pack = tool_pack();
+    let mut item = pack.items[bri_weapons::CORE_TOOLS[0]].clone();
+    item.id = SHOTGUN.into();
+    item.name = "shotgunItem".into();
+    pack.items.insert(SHOTGUN.into(), item);
+    pack.validate()?;
+    let mut game = session();
+    game.set_weapon_pack(pack)?;
+    game.set_spawn_loadout(bri_sim::session::ToolInventory {
+        slots: [Some(SHOTGUN.to_string()), None, None, None, None].into(),
+        selected: None,
+    })?;
+    let server = server::start(game, options())?;
+    let mut owner = Client::connect(
+        server.address,
+        &server.certificate,
+        "Owner".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let mut observer = Client::connect(
+        server.address,
+        &server.certificate,
+        "Observer".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let owner_id = owner.owner;
+    assert_eq!(
+        owner.replica.tools[&owner_id].slots[0].as_deref(),
+        Some(SHOTGUN)
+    );
+    owner.command(Command::EquipTool { slot: Some(0) }).await?;
+    wait(&mut observer, |client| {
+        client
+            .replica
+            .tools
+            .get(&owner_id)
+            .is_some_and(|t| t.selected == Some(0))
+    })
+    .await?;
+    let late = Client::connect(
+        server.address,
+        &server.certificate,
+        "Late".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    assert_eq!(late.replica.tools[&owner_id].selected, Some(0));
+    assert_eq!(
+        late.replica.tools[&owner_id].slots[0].as_deref(),
+        Some(SHOTGUN)
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inventory_selection_replicates_to_peers_and_late_join_without_cross_owner_changes()
 -> Result<()> {
@@ -541,6 +607,7 @@ fn options() -> ServerOptions {
         certificate: None,
         map_loader: None,
         autosave: None,
+        packages: None,
     }
 }
 
@@ -636,7 +703,7 @@ async fn a_different_version_is_told_which_side_to_update() -> Result<()> {
     endpoint.set_default_client_config(config);
     let connection = endpoint.connect(server.address, "blockland.local")?.await?;
     let (mut send, mut receive) = connection.open_bi().await?;
-    bri_net::codec::write_small_request(&mut send, &JoinBegin { version: VERSION - 1 }).await?;
+    bri_net::codec::write_small_request(&mut send, &JoinBegin { version: VERSION - 1, ..JoinBegin::join() }).await?;
     let answer = bri_net::codec::decode::<Message>(
         &bri_net::codec::read_frame(&mut receive, bri_net::codec::MAX_FRAME).await?,
     )?;
@@ -800,12 +867,18 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
     wait(&mut host, |c| c.admin_snapshot.is_some()).await?;
     assert_eq!(host.admin_snapshot.as_ref().unwrap().role, Role::SuperAdmin);
 
-    let mut guest = Client::connect(
+    // Password login needs a durable identity (failed guesses follow it).
+    let guest_dir = tempfile::tempdir()?;
+    let guest_identity =
+        ClientIdentity::load_or_create(guest_dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guest".into(),
         Vec::new(),
         None,
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut guest, |c| c.admin_snapshot.is_some()).await?;
@@ -1006,12 +1079,14 @@ async fn admin_roles_are_transport_authenticated_protected_and_reconnect_clean()
             .is_some_and(|s| !s.players.iter().any(|p| p.name == "Guest"))
     })
     .await?;
-    let mut resumed = Client::connect(
+    let mut resumed = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guest".into(),
         Vec::new(),
         Some(guest_ticket),
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut resumed, |c| c.admin_snapshot.is_some()).await?;
@@ -1043,12 +1118,18 @@ async fn fourth_failed_admin_password_closes_the_authenticated_connection() -> R
         password: Secret::new("correct".into())?,
     })))
     .await?;
-    let mut guest = Client::connect(
+    // Password login needs a durable identity (failed guesses follow it).
+    let guest_dir = tempfile::tempdir()?;
+    let guest_identity =
+        ClientIdentity::load_or_create(guest_dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Guessing client".into(),
         Vec::new(),
         None,
+        None,
+        &guest_identity,
     )
     .await?;
     wait(&mut guest, |c| c.admin_snapshot.is_some()).await?;
@@ -1706,7 +1787,7 @@ async fn raw_identity_challenge(
     endpoint.set_default_client_config(config);
     let connection = endpoint.connect(address, "blockland.local")?.await?;
     let (mut send, mut receive) = connection.open_bi().await?;
-    bri_net::codec::write_small_request(&mut send, &JoinBegin { version: VERSION }).await?;
+    bri_net::codec::write_small_request(&mut send, &JoinBegin::join()).await?;
     let challenge = bri_net::codec::decode::<Message>(
         &bri_net::codec::read_frame(&mut receive, bri_net::codec::MAX_FRAME).await?,
     )?;

@@ -169,7 +169,9 @@ pub(super) enum DamageKind {
     /// Wrench event output (`kill`, negative `addHealth`).
     Event,
     /// A package operation (explosion, direct damage), named by package.
-    Package { name: String },
+    Package {
+        name: String,
+    },
 }
 impl DamageKind {
     fn direct(&self) -> bool {
@@ -202,9 +204,23 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
     }
 }
 
-/// Every selectable player datablock, whatever weapons are installed.
-pub(super) fn new_world(mut catalog: mg::Catalog) -> MinigamesWorld {
-    catalog.player_types = PlayerType::ALL.map(|t| t.id().to_string()).into();
+/// Every selectable archetype (v20's datablocks and packages' named
+/// archetypes), whatever weapons are installed.
+pub(super) fn new_world(
+    mut catalog: mg::Catalog,
+    archetypes: &crate::archetype::Archetypes,
+) -> MinigamesWorld {
+    catalog.player_types = PlayerType::ALL
+        .map(|t| t.id().to_string())
+        .into_iter()
+        .chain(
+            archetypes
+                .iter()
+                .skip(PlayerType::EVERY.len())
+                .filter(|(_, a)| !a.name.is_empty())
+                .map(|(_, a)| a.id.clone()),
+        )
+        .collect();
     MinigamesWorld::new(catalog, mg::PolicyMode::Internet, true).unwrap_or_else(|_| {
         MinigamesWorld::new(
             mg::Catalog::minimal_vanilla(),
@@ -352,7 +368,12 @@ impl Session {
             self.chat.pop_front();
         }
     }
-    pub(super) fn chat_game(&mut self, game: Option<GameId>, except: Option<OwnerId>, text: String) {
+    pub(super) fn chat_game(
+        &mut self,
+        game: Option<GameId>,
+        except: Option<OwnerId>,
+        text: String,
+    ) {
         match game {
             None => self.system_chat(text),
             Some(game) => {
@@ -480,6 +501,7 @@ impl Session {
         else {
             return Ok(());
         };
+        let instigator = killer.filter(|k| self.peers.contains_key(k));
         // A killer from another minigame (or none) cannot be credited.
         let killer = killer.filter(|k| *k == victim || self.game_of(*k) == self.game_of(victim));
         let killer_player = killer
@@ -501,6 +523,9 @@ impl Session {
             }
             _ => kind,
         };
+        // Packages see every death and who caused it; their own policy
+        // decides credit.
+        self.package_death(victim, instigator);
         self.eject(victim);
         {
             let peer = self.peers.get_mut(&victim).unwrap();
@@ -574,6 +599,8 @@ impl Session {
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(!peer.combat.alive, "You are alive");
         ensure!(tick >= peer.combat.respawn_tick, "Not ready to respawn yet");
+        self.package_policy("respawn", owner)?;
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
         let effects = self
             .minigames
             .execute(mg::Command::Respawn {
@@ -728,7 +755,7 @@ impl Session {
                 mg::Effect::RestoreOwner { player, .. } => {
                     if let Some(owner) = self.owner_of(player) {
                         // Outside a minigame the body is a Standard Player.
-                        self.set_player_datablock(owner, PlayerType::Standard)?;
+                        self.set_player_archetype(owner, PlayerType::Standard.archetype())?;
                         self.set_player_scale(owner, 1.0)?;
                         let peer = self.peers.get_mut(&owner).unwrap();
                         peer.combat.health = PlayerType::Standard.max_health();
@@ -745,9 +772,11 @@ impl Session {
                     if let Some(owner) = self.owner_of(player) {
                         // `MiniGameSO::updatePlayerDatablock` for live members.
                         if change_player_type && self.is_alive(owner) {
-                            let datablock =
-                                PlayerType::from_id(&equipment.player_type).unwrap_or_default();
-                            self.set_player_datablock(owner, datablock)?;
+                            let archetype = self
+                                .archetypes
+                                .find(&equipment.player_type)
+                                .unwrap_or_default();
+                            self.set_player_archetype(owner, archetype)?;
                         }
                         if changed_slots.iter().any(|c| *c) {
                             self.give_loadout(owner, Some(&equipment))?;
@@ -879,7 +908,8 @@ impl Session {
                             self.notices
                                 .push_back(format!("Reset vehicle {brick}: {error:#}"));
                         }
-                        if reveal_items && let Some(item) = self.item_spawners.items.get_mut(&brick) {
+                        if reveal_items && let Some(item) = self.item_spawners.items.get_mut(&brick)
+                        {
                             item.available_at = tick;
                         }
                     }
@@ -967,15 +997,22 @@ impl Session {
             peer.player
                 .teleport(&mut self.simulation.physics, feet, yaw)?;
             // A new body: the minigame's player type, unscaled, full energy.
-            let datablock = equipment
-                .as_ref()
-                .and_then(|e| PlayerType::from_id(&e.player_type))
-                .unwrap_or_default();
-            peer.player
-                .set_datablock(&mut self.simulation.physics, datablock, 1.0)?;
+            let archetype = peer.package_archetype.unwrap_or_else(|| {
+                equipment
+                    .as_ref()
+                    .and_then(|e| self.archetypes.find(&e.player_type))
+                    .unwrap_or_default()
+            });
+            let kind = self.archetypes.resolve(archetype);
+            peer.player.set_archetype(
+                &mut self.simulation.physics,
+                archetype,
+                kind.movement.clone(),
+                1.0,
+            )?;
             peer.player.refill_energy();
             peer.player.set_solid(&mut self.simulation.physics, true);
-            peer.combat.health = datablock.max_health();
+            peer.combat.health = kind.max_health;
             peer.combat.alive = true;
             peer.combat.spawn_tick = tick;
             peer.combat.shot_once = false;
@@ -989,8 +1026,7 @@ impl Session {
         }
         self.give_loadout(owner, equipment.as_ref())?;
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
-        let center = feet
-            + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+        let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
             .weapons
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
@@ -1150,26 +1186,33 @@ impl Session {
             }
         }
     }
-    /// The player's datablock `maxDamage`.
+    /// The player's archetype's `maxDamage`.
     pub(super) fn max_health(&self, owner: OwnerId) -> f32 {
-        self.peers
-            .get(&owner)
-            .map_or(MAX_HEALTH, |p| p.player.state().datablock.max_health())
+        self.peers.get(&owner).map_or(MAX_HEALTH, |p| {
+            self.archetypes
+                .resolve(p.player.state().archetype)
+                .max_health
+        })
+    }
+    /// The archetype table clients predict with.
+    pub fn archetypes(&self) -> &crate::archetype::Archetypes {
+        &self.archetypes
     }
     /// `Player::setDataBlock`, keeping the player's scale and damage taken.
-    pub(super) fn set_player_datablock(
+    pub(super) fn set_player_archetype(
         &mut self,
         owner: OwnerId,
-        datablock: PlayerType,
+        archetype: crate::archetype::ArchetypeId,
     ) -> Result<()> {
         let old = self.max_health(owner);
+        let kind = self.archetypes.resolve(archetype);
+        let (movement, max, can_ride) = (kind.movement.clone(), kind.max_health, kind.can_ride);
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         let scale = peer.player.state().scale;
         peer.player
-            .set_datablock(&mut self.simulation.physics, datablock, scale)?;
-        let max = datablock.max_health();
+            .set_archetype(&mut self.simulation.physics, archetype, movement, scale)?;
         peer.combat.health = (max - (old - peer.combat.health)).clamp(0.0, max);
-        if !datablock.can_ride() {
+        if !can_ride {
             self.eject(owner);
         }
         // `Armor::onNewDataBlock` swaps a held brick for the new datablock's.
@@ -1181,9 +1224,10 @@ impl Session {
     /// `Player::setPlayerScale`: `setScale` on all three axes.
     pub(super) fn set_player_scale(&mut self, owner: OwnerId, scale: f32) -> Result<()> {
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
-        let datablock = peer.player.state().datablock;
+        let archetype = peer.player.state().archetype;
+        let movement = self.archetypes.resolve(archetype).movement.clone();
         peer.player
-            .set_datablock(&mut self.simulation.physics, datablock, scale)
+            .set_archetype(&mut self.simulation.physics, archetype, movement, scale)
     }
     pub fn is_alive(&self, owner: OwnerId) -> bool {
         self.peers.get(&owner).is_some_and(|p| p.combat.alive)

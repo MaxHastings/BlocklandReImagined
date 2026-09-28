@@ -4,7 +4,7 @@
 //! declared capability in plain words before turning an Add-On on.
 
 /// Every capability a manifest may declare.
-pub const CAPABILITIES: &[&str] = &["world.edit", "damage", "entity", "chat"];
+pub const CAPABILITIES: &[&str] = &["world.edit", "damage", "entity", "chat", "player"];
 
 /// The plain-language line a player reads for `name`, completing
 /// "This Add-On can ...".
@@ -18,6 +18,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         "entity" => "spawn and move its own creatures and objects",
         // Send chat lines to players.
         "chat" => "send chat messages",
+        // Move players, respawn them, change their body or hand them an
+        // entity to drive.
+        "player" => "move and respawn players and change their bodies",
         _ => return None,
     })
 }

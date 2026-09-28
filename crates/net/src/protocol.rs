@@ -6,7 +6,9 @@ use bri_world::{Brick, BrickId, OwnerId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 /// 34: `Challenge` carries the server `Listing` (join list and reachability probes).
-pub const VERSION: u32 = 34;
+/// 35: player archetypes, control targets, block looks, per-viewer package
+/// state (`PackageState`), typed package refusals and package downloads.
+pub const VERSION: u32 = 35;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -70,6 +72,52 @@ impl Listing {
 #[serde(deny_unknown_fields)]
 pub struct JoinBegin {
     pub version: u32,
+    /// Defaulted so an older client still decodes and hears the version
+    /// refusal.
+    #[serde(default)]
+    pub purpose: Purpose,
+}
+/// What a new connection is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Purpose {
+    /// Identity challenge, Hello, then the game.
+    #[default]
+    Join,
+    /// Fetch packages this client lacks; no identity, no game state.
+    Download,
+}
+impl JoinBegin {
+    pub fn join() -> Self {
+        Self {
+            version: VERSION,
+            purpose: Purpose::Join,
+        }
+    }
+}
+/// Largest object range one download request may ask for.
+pub const MAX_OBJECT_CHUNK: u32 = 1024 * 1024;
+/// Requests of a download connection (`Purpose::Download`), answered in
+/// order with one [`DownloadReply`] each.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum DownloadRequest {
+    /// The shared and client packages the server loads.
+    Environment,
+    /// The file listing of one offered package, by package hash.
+    Listing { hash: String },
+    /// Bytes of one file of an offered package, by file hash.
+    Object {
+        sha256: String,
+        offset: u64,
+        length: u32,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadReply {
+    Environment(Vec<bri_package::environment::PackageRef>),
+    Listing(Box<bri_package::sync::Listing>),
+    Object(#[serde(with = "serde_bytes")] Vec<u8>),
+    Refused(String),
 }
 impl Hello {
     pub fn validate_bounds(&self) -> anyhow::Result<()> {
@@ -83,7 +131,10 @@ impl Hello {
         bri_package::environment::Environment::validate_refs(&self.packages)
             .map_err(|e| anyhow::anyhow!("Invalid package list: {e}"))?;
         if let Some(proof) = &self.identity {
-            anyhow::ensure!(proof.signature.len() == 64, "Invalid identity signature length");
+            anyhow::ensure!(
+                proof.signature.len() == 64,
+                "Invalid identity signature length"
+            );
         }
         Ok(())
     }
@@ -225,9 +276,13 @@ pub struct Checkpoint {
     pub world_bricks: u64,
     /// Scene nodes of map shapes players have smashed.
     pub broken_shapes: BTreeSet<u32>,
+    /// v20's player datablocks, then the enabled packages' archetypes.
+    /// Poses name a player's archetype by its index here.
+    pub archetypes: bri_sim::archetype::Archetypes,
     /// Entities of enabled packages.
     pub entities: Vec<bri_sim::session::EntityInfo>,
-    /// Public state of enabled packages.
+    /// Enabled packages' state as this client sees it: keys visible to
+    /// everyone, plus its own owner-visible keys in a welcome.
     pub package_state: bri_sim::session::PackageStateView,
 }
 impl Checkpoint {
@@ -259,6 +314,7 @@ impl Checkpoint {
             vehicle_poses: session.vehicle_poses(),
             time_scale: session.time_scale(),
             broken_shapes: session.broken_shapes(),
+            archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
             entities: session.package_entities(),
             package_state: session.package_state(),
@@ -266,9 +322,13 @@ impl Checkpoint {
         (checkpoint, world.bricks.clone())
     }
 }
-/// Bricks per `WorldChunk` frame. A world of any size streams as bounded
+/// Most bricks per `WorldChunk` frame. A world of any size streams as bounded
 /// frames after its checkpoint instead of one monolithic message.
 pub const WORLD_CHUNK: usize = 4096;
+/// Most [`bri_world::Brick::stored_bound`] bytes per `WorldChunk`: well inside
+/// a frame however heavy each brick is, since a count alone does not bound
+/// bytes (a few thousand event-laden bricks are gigabytes).
+pub const WORLD_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 /// A checkpoint message (Welcome or MapChanged) and the bricks that follow it.
 pub struct WorldTransfer {
     pub head: Message,
@@ -280,13 +340,19 @@ impl WorldTransfer {
     pub fn encode(self) -> anyhow::Result<Vec<Vec<u8>>> {
         let mut frames = vec![crate::codec::encode(&self.head)?];
         let mut chunk = Vec::with_capacity(WORLD_CHUNK);
+        let mut bytes = 0;
         for (id, brick) in &self.bricks {
-            chunk.push((*id, public_brick(brick)));
-            if chunk.len() == WORLD_CHUNK {
+            let brick = public_brick(brick);
+            let size = brick.stored_bound();
+            if !chunk.is_empty() && (chunk.len() == WORLD_CHUNK || bytes + size > WORLD_CHUNK_BYTES)
+            {
                 frames.push(crate::codec::encode(&Message::WorldChunk(std::mem::take(
                     &mut chunk,
                 )))?);
+                bytes = 0;
             }
+            bytes += size;
+            chunk.push((*id, brick));
         }
         if !chunk.is_empty() {
             frames.push(crate::codec::encode(&Message::WorldChunk(chunk))?);
@@ -312,8 +378,7 @@ impl WorldAssembly {
         self.checkpoint.world.bricks.len() as u64 == self.checkpoint.world_bricks
     }
     pub fn add(&mut self, chunk: Vec<(BrickId, Brick)>) -> anyhow::Result<()> {
-        let remaining =
-            self.checkpoint.world_bricks - self.checkpoint.world.bricks.len() as u64;
+        let remaining = self.checkpoint.world_bricks - self.checkpoint.world.bricks.len() as u64;
         anyhow::ensure!(
             !chunk.is_empty() && chunk.len() <= WORLD_CHUNK && chunk.len() as u64 <= remaining,
             "Invalid world chunk"
@@ -363,7 +428,6 @@ pub struct Delta {
     pub broken_shapes: Option<BTreeSet<u32>>,
     /// Package entities, when any moved or changed.
     pub entities: Option<Vec<bri_sim::session::EntityInfo>>,
-    pub package_state: Option<bri_sim::session::PackageStateView>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
@@ -387,6 +451,11 @@ pub enum Message {
     /// Up to `WORLD_CHUNK` bricks of the checkpoint sent just before.
     WorldChunk(Vec<(BrickId, Brick)>),
     AdminSnapshot(bri_sim::session::AdminSnapshot),
+    /// Package state as this client sees it (`Session::package_state_for`):
+    /// keys visible to everyone plus its own owner-visible keys. Sent to
+    /// each client when its view changes, so one player's private keys
+    /// never reach another.
+    PackageState(bri_sim::session::PackageStateView),
     /// Addressed to this client only (minigame chat, prints, invitations).
     Notice(bri_sim::session::Notice),
     Reply {
@@ -394,4 +463,8 @@ pub enum Message {
         result: Result<Reply, bri_sim::session::Rejection>,
     },
     Rejected(String),
+    /// The join was refused because these shared packages differ. A client
+    /// can fetch what it lacks from the server and join again
+    /// ([`crate::client::Client::connect_fetching`]).
+    PackagesDiffer(Vec<bri_package::environment::Mismatch>),
 }

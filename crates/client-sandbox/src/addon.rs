@@ -79,6 +79,10 @@ impl AddOnCode {
     /// Load the client code of the Add-On in `dir`, or `None` when it has
     /// none (a data-only Add-On).
     pub fn load(dir: &Path) -> Result<Option<Self>, Vec<Diagnostic>> {
+        // Base game packages and plain data folders carry no manifest.
+        if !dir.join(MANIFEST_FILE).exists() {
+            return Ok(None);
+        }
         let manifest = read(dir, MANIFEST_FILE, 256 * 1024)?;
         let json: PackageJson = serde_json::from_slice(&manifest).map_err(|e| {
             vec![Diagnostic::error("client.manifest", e.to_string()).at(MANIFEST_FILE)]

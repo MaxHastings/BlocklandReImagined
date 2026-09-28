@@ -7,8 +7,8 @@
   ],
   "state": {
     "global": {
-      "natural_spawning": { "default": true, "public": true },
-      "explosions": { "default": 0, "public": true }
+      "natural_spawning": { "default": true, "visible": "everyone" },
+      "explosions": { "default": 0, "visible": "everyone" }
     }
   },
   "tick_interval": 1200

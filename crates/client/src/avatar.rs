@@ -966,7 +966,7 @@ impl Preview {
                 crouched: false,
                 jetting: false,
                 jump: Default::default(),
-                datablock: Default::default(),
+                archetype: Default::default(),
                 scale: 1.0,
                 energy: 100.0,
             },
@@ -1034,7 +1034,7 @@ mod tests {
             crouched: false,
             jetting: false,
             jump: Default::default(),
-            datablock: Default::default(),
+            archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
         }

@@ -7,7 +7,15 @@ use glam::Vec3;
 use quinn::{Connection, Endpoint};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, SocketAddr},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 pub struct ServerOptions {
@@ -24,6 +32,8 @@ pub struct ServerOptions {
     /// Periodic durable checkpoints of the authoritative world, so a crash
     /// loses at most one interval. None keeps state only in memory.
     pub autosave: Option<Autosave>,
+    /// Packages clients may download before joining. None offers nothing.
+    pub packages: Option<Arc<crate::packages::PackageShelf>>,
 }
 /// The host hands a snapshot of its world to `save` every `every`, on a
 /// blocking thread and never two at once, and once more when the host loop
@@ -46,11 +56,9 @@ fn check_packages(
         .compare(client)
         .into_iter()
         .partition(|m| m.blocks_join());
-    ensure!(
-        blocking.is_empty(),
-        "{}",
-        bri_package::environment::refusal(&blocking)
-    );
+    if !blocking.is_empty() {
+        return Err(crate::client::PackagesDiffer(blocking).into());
+    }
     Ok(cosmetic)
 }
 /// Loads a map for Change Map; runs on a blocking thread.
@@ -285,10 +293,49 @@ fn encode_transfer(transfer: WorldTransfer) -> Frame {
     });
     Frame::Pending(frames)
 }
+/// Frames a peer's writer has not sent yet. Bounded in frames and in bytes:
+/// a joining peer receives a legal world of up to the transfer budget while
+/// every tick's deltas queue behind it, so the bound must be generous in
+/// count and firm in bytes (stress campaign W7).
+const RELIABLE_BACKLOG_FRAMES: usize = 8192;
+const RELIABLE_BACKLOG_BYTES: usize = 64 * 1024 * 1024;
+#[derive(Clone)]
+struct Outbox {
+    frames: mpsc::Sender<Frame>,
+    bytes: Arc<std::sync::atomic::AtomicUsize>,
+}
+fn outbox() -> (Outbox, mpsc::Receiver<Frame>, Arc<std::sync::atomic::AtomicUsize>) {
+    let (frames, receiver) = mpsc::channel::<Frame>(RELIABLE_BACKLOG_FRAMES);
+    let bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    (
+        Outbox {
+            frames,
+            bytes: bytes.clone(),
+        },
+        receiver,
+        bytes,
+    )
+}
+impl Outbox {
+    fn try_send(&self, frame: Frame) -> Result<()> {
+        let size = match &frame {
+            Frame::Ready(bytes) => bytes.len(),
+            Frame::Pending(_) => 0,
+        };
+        let queued = self.bytes.fetch_add(size, Ordering::Relaxed) + size;
+        if queued > RELIABLE_BACKLOG_BYTES || self.frames.try_send(frame).is_err() {
+            self.bytes.fetch_sub(size, Ordering::Relaxed);
+            anyhow::bail!("Reliable backlog exceeded");
+        }
+        Ok(())
+    }
+}
 struct Peer {
     connection: Connection,
-    out: mpsc::Sender<Frame>,
+    out: Outbox,
     generation: usize,
+    /// May send bulk requests (administrators); read by the connection task.
+    bulk: Arc<AtomicBool>,
 }
 impl Peer {
     /// Queue a reliable frame. A peer too far behind is disconnected rather
@@ -333,8 +380,9 @@ enum Event {
         hello: Hello,
         principal: Option<Principal>,
         connection: Connection,
-        out: mpsc::Sender<Frame>,
-        answer: oneshot::Sender<Result<OwnerId, String>>,
+        out: Outbox,
+        bulk: Arc<AtomicBool>,
+        answer: oneshot::Sender<Result<OwnerId, Message>>,
     },
     Command {
         owner: OwnerId,
@@ -463,21 +511,23 @@ fn start_configured(
         task,
     })
 }
+#[allow(clippy::too_many_arguments)]
 async fn connection_task(
     connection: Connection,
     events: mpsc::Sender<Event>,
-    request_budget: Arc<Semaphore>,
+    bulk_budget: Arc<Semaphore>,
+    handshake: HandshakeSlot,
+    deadline: tokio::time::Instant,
     server_fingerprint: [u8; 32],
     require_identity: bool,
+    downloads: (Option<Arc<crate::packages::PackageShelf>>, HandshakeGate),
     listing: Listing,
 ) -> Result<()> {
-    let (mut send, mut receive) =
-        tokio::time::timeout(Duration::from_secs(10), connection.accept_bi()).await??;
-    let begin: JoinBegin = tokio::time::timeout(
-        Duration::from_secs(10),
-        codec::read_small_request(&mut receive),
-    )
-    .await??;
+    // The whole pre-join exchange shares one deadline, so a peer cannot hold
+    // its handshake slot for a timeout per step.
+    let (mut send, mut receive) = tokio::time::timeout_at(deadline, connection.accept_bi()).await??;
+    let begin: JoinBegin =
+        tokio::time::timeout_at(deadline, codec::read_small_request(&mut receive)).await??;
     if begin.version != VERSION {
         let reason = format!(
             "This server runs a {} version of Blockland ReImagined (protocol {VERSION}, yours is {}). {}",
@@ -491,6 +541,25 @@ async fn connection_task(
         let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
         return Ok(());
     }
+    if begin.purpose == Purpose::Download {
+        let (shelf, gate) = downloads;
+        let refusal = match (shelf, gate.admit(connection.remote_address().ip())) {
+            (None, _) => "This server does not offer package downloads",
+            (Some(_), None) => "Too many package downloads; try again shortly",
+            (Some(shelf), Some(slot)) => {
+                // A download holds its own slot, not a joining one.
+                drop(handshake);
+                let _slot = slot;
+                crate::packages::serve(shelf, &mut send, &mut receive).await?;
+                let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+                return Ok(());
+            }
+        };
+        codec::write_frame(&mut send, &codec::encode(&Message::Rejected(refusal.into()))?).await?;
+        send.finish()?;
+        let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
+        return Ok(());
+    }
     let mut nonce = [0; 32];
     getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("OS randomness failed: {error}"))?;
     codec::write_frame(
@@ -498,11 +567,8 @@ async fn connection_task(
         &codec::encode(&Message::Challenge { nonce, listing })?,
     )
     .await?;
-    let hello: Hello = tokio::time::timeout(
-        Duration::from_secs(10),
-        codec::read_small_request(&mut receive),
-    )
-    .await??;
+    let hello: Hello =
+        tokio::time::timeout_at(deadline, codec::read_small_request(&mut receive)).await??;
     let principal = match verify_identity(&hello, &nonce, &server_fingerprint, require_identity) {
         Ok(principal) => principal,
         Err(error) => {
@@ -513,31 +579,39 @@ async fn connection_task(
             return Ok(());
         }
     };
-    let (out, mut output) = mpsc::channel::<Frame>(32);
+    let (out, mut output, queued) = outbox();
     let (answer, accepted) = oneshot::channel();
+    let bulk = Arc::new(AtomicBool::new(false));
     events
         .send(Event::Join {
             hello,
             principal,
             connection: connection.clone(),
             out,
+            bulk: bulk.clone(),
             answer,
         })
         .await?;
     let owner = match accepted.await? {
         Ok(owner) => owner,
-        Err(reason) => {
-            codec::write_frame(&mut send, &codec::encode(&Message::Rejected(reason))?).await?;
+        Err(refusal) => {
+            codec::write_frame(&mut send, &codec::encode(&refusal)?).await?;
             send.finish()?;
             let _ = tokio::time::timeout(Duration::from_secs(1), send.stopped()).await;
             return Ok(());
         }
     };
+    // Admitted players are bounded by the player limit, not handshake slots.
+    drop(handshake);
     let generation = connection.stable_id();
+    let own_budget = Arc::new(Semaphore::new(codec::PEER_REQUEST_BUDGET));
     let write = async {
         while let Some(frame) = output.recv().await {
             match frame {
-                Frame::Ready(bytes) => write_timed(&mut send, &bytes).await?,
+                Frame::Ready(bytes) => {
+                    write_timed(&mut send, &bytes).await?;
+                    queued.fetch_sub(bytes.len(), Ordering::Relaxed);
+                }
                 Frame::Pending(mut ready) => {
                     let encoded = ready.wait_for(Option::is_some).await?.clone();
                     let frames = encoded
@@ -553,8 +627,24 @@ async fn connection_task(
     };
     let read = async {
         loop {
-            let (request, permit) =
-                codec::read_budgeted_request(&mut receive, &request_budget).await?;
+            let (request, permit) = codec::read_budgeted_request(&mut receive, |length| {
+                if length <= codec::PLAYER_MAX_REQUEST {
+                    return Ok((
+                        own_budget.clone(),
+                        length.max(codec::MIN_REQUEST_COST) as u32,
+                    ));
+                }
+                if !bulk.load(Ordering::Relaxed) {
+                    let reason = format!(
+                        "A {length}-byte request exceeds the {}-byte player limit; only administrators may send bulk requests",
+                        codec::PLAYER_MAX_REQUEST
+                    );
+                    connection.close(3_u32.into(), reason.as_bytes());
+                    anyhow::bail!(reason);
+                }
+                Ok((bulk_budget.clone(), length as u32))
+            })
+            .await?;
             events
                 .send(Event::Command {
                     owner,
@@ -621,6 +711,76 @@ impl MovementAllowance {
         }
         self.tokens -= 1.0;
         true
+    }
+}
+/// Unauthenticated connections (QUIC handshake through Welcome) may take at
+/// most this long in total.
+const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
+/// Connections still joining, across all sources.
+const MAX_HANDSHAKES: usize = 64;
+/// Connections still joining from one address. Enough for a LAN party behind
+/// one router joining at once, too few for one source to fill the host.
+const MAX_HANDSHAKES_PER_ADDRESS: usize = 8;
+/// Package download connections, in total and from one address.
+const MAX_DOWNLOADS: usize = 16;
+const MAX_DOWNLOADS_PER_ADDRESS: usize = 2;
+/// A global and a per-address bound on one kind of connection: those that
+/// have not joined yet, or package downloads. Joined players are bounded by
+/// the player limit.
+#[derive(Clone)]
+struct HandshakeGate {
+    pending: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
+    total_limit: usize,
+    address_limit: usize,
+}
+impl Default for HandshakeGate {
+    fn default() -> Self {
+        Self::new(MAX_HANDSHAKES, MAX_HANDSHAKES_PER_ADDRESS)
+    }
+}
+/// One pending connection's share of the gate, returned when dropped.
+struct HandshakeSlot {
+    gate: HandshakeGate,
+    address: IpAddr,
+}
+impl HandshakeGate {
+    fn new(total_limit: usize, address_limit: usize) -> Self {
+        Self {
+            pending: Arc::default(),
+            total_limit,
+            address_limit,
+        }
+    }
+    fn admit(&self, address: IpAddr) -> Option<HandshakeSlot> {
+        let mut pending = self.pending.lock().ok()?;
+        let total: usize = pending.values().sum();
+        let from = pending.entry(address).or_default();
+        if total >= self.total_limit || *from >= self.address_limit {
+            if *from == 0 {
+                pending.remove(&address);
+            }
+            return None;
+        }
+        *from += 1;
+        Some(HandshakeSlot {
+            gate: self.clone(),
+            address,
+        })
+    }
+    fn total(&self) -> usize {
+        self.pending.lock().map_or(0, |p| p.values().sum())
+    }
+}
+impl Drop for HandshakeSlot {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.gate.pending.lock()
+            && let Some(count) = pending.get_mut(&self.address)
+        {
+            *count -= 1;
+            if *count == 0 {
+                pending.remove(&self.address);
+            }
+        }
     }
 }
 /// A peer that stops reading for 10 s is gone.
@@ -693,8 +853,25 @@ impl Tickets {
         Ok(())
     }
 }
+/// Send each client its view of package state when it changed: keys visible
+/// to everyone plus its own owner-visible keys, never another player's.
+fn send_package_views(
+    session: &Session,
+    peers: &BTreeMap<OwnerId, Peer>,
+    sent: &mut BTreeMap<OwnerId, bri_sim::session::PackageStateView>,
+) {
+    for (owner, peer) in peers {
+        let view = session.package_state_for(*owner);
+        if sent.get(owner) != Some(&view) {
+            peer.send_message(&Message::PackageState(view.clone()));
+            sent.insert(*owner, view);
+        }
+    }
+}
 fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>) {
     for (owner, peer) in peers {
+        peer.bulk
+            .store(session.is_administrator(*owner), Ordering::Relaxed);
         match session.admin_state(*owner) {
             Ok(snapshot) => peer.send_message(&Message::AdminSnapshot(snapshot)),
             Err(error) => {
@@ -719,8 +896,10 @@ async fn run(
     mut stop: oneshot::Receiver<()>,
 ) -> Result<ServerReport> {
     let (events, mut incoming) = mpsc::channel(256);
-    let permits = Arc::new(Semaphore::new(80));
-    let request_budget = Arc::new(Semaphore::new(codec::REQUEST_BODY_BUDGET));
+    let handshakes = HandshakeGate::default();
+    let downloads = HandshakeGate::new(MAX_DOWNLOADS, MAX_DOWNLOADS_PER_ADDRESS);
+    let shelf = options.packages.clone();
+    let bulk_budget = Arc::new(Semaphore::new(codec::BULK_REQUEST_BUDGET));
     let mut tasks = tokio::task::JoinSet::new();
     let mut peers = BTreeMap::<OwnerId, Peer>::new();
     // Resume tokens are server-issued capabilities. Retain the host bit bound to
@@ -734,7 +913,8 @@ async fn run(
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
     let mut entities = session.package_entities();
-    let mut package_state = session.package_state();
+    // What each client last received of package state (per viewer).
+    let mut package_views: BTreeMap<OwnerId, bri_sim::session::PackageStateView> = BTreeMap::new();
     let mut minigames = Vec::new();
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
@@ -763,7 +943,14 @@ async fn run(
     let outcome:Result<()>=async {loop {tokio::select!{
         _=&mut stop=>break,
         accepted=endpoint.accept()=>{
-            if let Some(accepted)=accepted {if let Ok(permit)=permits.clone().try_acquire_owned(){let events=events.clone();let request_budget=request_budget.clone();let listing=current_listing(&listing,&players);tasks.spawn(async move{let _permit=permit;if let Ok(Ok(connection))=tokio::time::timeout(Duration::from_secs(10),accepted).await {let _=connection_task(connection,events,request_budget,server_fingerprint,require_identity,listing).await;}});}else{accepted.refuse();}}
+            if let Some(accepted)=accepted {
+                // Under load, make a source prove its address (a stateless
+                // Retry round trip) before it may hold a pending slot, so
+                // spoofed addresses cannot fill the per-address bounds.
+                if !accepted.remote_address_validated() && accepted.may_retry() && handshakes.total()>=MAX_HANDSHAKES/2 {let _=accepted.retry();}
+                else if let Some(slot)=handshakes.admit(accepted.remote_address().ip()){let events=events.clone();let bulk_budget=bulk_budget.clone();let downloads=(shelf.clone(),downloads.clone());let listing=current_listing(&listing,&players);tasks.spawn(async move{let deadline=tokio::time::Instant::now()+HANDSHAKE_DEADLINE;if let Ok(Ok(connection))=tokio::time::timeout_at(deadline,accepted).await {let _=connection_task(connection,events,bulk_budget,slot,deadline,server_fingerprint,require_identity,downloads,listing).await;}});}
+                else{accepted.refuse();}
+            }
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
         _=autosave_timer.tick(),if autosave.is_some()=>{
@@ -784,17 +971,18 @@ async fn run(
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons=session.weapon_view();
-                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();package_state=session.package_state();
+                    palette=session.simulation().state().palette.clone();vitals=session.vitals();minigames=session.minigame_views();vehicles=session.vehicle_infos();broken_shapes=session.broken_shapes();entities=session.package_entities();
                     let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let transfer=encode_transfer(WorldTransfer{head:Message::MapChanged(checkpoint),bricks});
                     for peer in peers.values(){peer.send(transfer.clone());}
+                    package_views.clear();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
                 }
                 Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
             }
         },
         Some(event)=incoming.recv()=>{match event {
-            Event::Join{hello,principal,connection,out,answer}=>{
+            Event::Join{hello,principal,connection,out,bulk,answer}=>{
                 let join:Result<OwnerId>= (||{
                     ensure!(hello.version==VERSION,"Incompatible protocol version");let cosmetic=check_packages(&options.environment,&hello.packages)?;
                     ensure!(peers.len()<max_players,"Server is full");
@@ -817,14 +1005,16 @@ async fn run(
                     };
                     if !cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
-                    let (checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
+                    let (mut checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
+                    let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks});
                     if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
-                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out});Ok(owner)
+                    bulk.store(session.is_administrator(owner),Ordering::Relaxed);
+                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,bulk});package_views.insert(owner,view);Ok(owner)
                 })();
-                if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|e.to_string()));
+                if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
-            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
+            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;
@@ -881,14 +1071,14 @@ async fn run(
                 let current_names=session.names();let changed_names=if names!=current_names{names=current_names;Some(names.clone())}else{None};
                 let current_vitals=session.vitals();let changed_vitals=if vitals!=current_vitals{vitals=current_vitals;Some(vitals.clone())}else{None};
                 let current_entities=session.package_entities();let changed_entities=if entities!=current_entities{entities=current_entities;Some(entities.clone())}else{None};
-                let current_state=session.package_state();let changed_state=if package_state!=current_state{package_state=current_state;Some(package_state.clone())}else{None};
                 let current_minigames=session.minigame_views();let changed_minigames=if minigames!=current_minigames{minigames=current_minigames;Some(minigames.clone())}else{None};
                 let changed_time_scale=(time_scale!=session.time_scale()).then(||{time_scale=session.time_scale();time_scale});let current_vehicles=session.vehicle_infos();let changed_vehicles=if vehicles!=current_vehicles{vehicles=current_vehicles;Some(vehicles.clone())}else{None};
                 let current_broken=session.broken_shapes();let changed_broken=if broken_shapes!=current_broken{broken_shapes=current_broken;Some(broken_shapes.clone())}else{None};
                 let chat:Vec<_>=session.chat().into_iter().filter(|c|c.id>last_chat).collect();if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
                 let cues=session.take_cues();let dropped_cues=session.dropped_cues();
-                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,entities:changed_entities,package_state:changed_state}));cursor=next;
+                broadcast(peers.values(),&Message::Update(Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,entities:changed_entities}));cursor=next;
+                send_package_views(&session,&peers,&mut package_views);
                 for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(&Message::Notice(notice));}}
             }
             }
@@ -987,6 +1177,27 @@ mod tests {
         // Refreshing an existing ticket never evicts.
         tickets.insert([0xff; 32], ticket(9999), |_| true).unwrap();
         assert!(tickets.insert([0xee; 32], ticket(1), |_| true).is_err());
+    }
+    #[test]
+    fn handshake_gate_bounds_each_address_and_the_total() {
+        let gate = HandshakeGate::default();
+        let one: IpAddr = "10.0.0.1".parse().unwrap();
+        let held: Vec<_> = (0..MAX_HANDSHAKES_PER_ADDRESS)
+            .map(|_| gate.admit(one).unwrap())
+            .collect();
+        assert!(gate.admit(one).is_none(), "per-address bound");
+        let mut others = Vec::new();
+        for n in 0..=255_u8 {
+            match gate.admit(IpAddr::from([10, 0, 1, n])) {
+                Some(slot) => others.push(slot),
+                None => break,
+            }
+        }
+        assert_eq!(held.len() + others.len(), MAX_HANDSHAKES, "total bound");
+        drop(held);
+        assert!(gate.admit(one).is_some(), "slots return when dropped");
+        drop(others);
+        assert_eq!(gate.total(), 0);
     }
     #[test]
     fn movement_allowance_bounds_a_flood_but_not_a_catch_up_burst() {

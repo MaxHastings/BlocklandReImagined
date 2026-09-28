@@ -72,6 +72,7 @@ async fn differing_packages_are_named_at_join() -> Result<()> {
             certificate: None,
             map_loader: None,
             autosave: None,
+            packages: None,
         },
     )?;
 

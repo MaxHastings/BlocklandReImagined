@@ -43,6 +43,18 @@ pub enum ClientEvent {
     /// The replica now holds a new map.
     MapChanged,
 }
+/// A join refused because the client's shared packages differ from the
+/// server's. Downcast a join error to this to offer the download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagesDiffer(pub Vec<bri_package::environment::Mismatch>);
+impl std::fmt::Display for PackagesDiffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The Add-Ons screen reads the differing packages back from this.
+        f.write_str(&bri_package::environment::refusal(&self.0))
+    }
+}
+impl std::error::Error for PackagesDiffer {}
+
 pub struct Client {
     endpoint: quinn::Endpoint,
     connection: quinn::Connection,
@@ -116,6 +128,67 @@ impl Client {
             Progress::default(),
         )
         .await
+    }
+    /// Joins like [`Client::connect_reporting`]; when the server refuses
+    /// because shared packages differ and downloading can fix it (nothing
+    /// the server lacks is required), fetches what the server offers into
+    /// `cache` and joins once more. `load` receives the fetched packages,
+    /// loads them, and returns the package list the client now runs; the
+    /// server checks that list again. Returns what was fetched.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_fetching(
+        address: SocketAddr,
+        pin: HostPin,
+        name: String,
+        packages: Vec<bri_package::environment::PackageRef>,
+        host: Option<ResumeToken>,
+        identity: &ClientIdentity,
+        cache: &bri_package::sync::Cache,
+        progress: Progress,
+        load: impl FnOnce(&[crate::packages::Fetched]) -> Result<Vec<bri_package::environment::PackageRef>>,
+    ) -> Result<(Self, Vec<crate::packages::Fetched>)> {
+        let refused = match Self::connect_pinned(
+            address,
+            pin.clone(),
+            name.clone(),
+            packages,
+            None,
+            host.clone(),
+            identity,
+            progress.clone(),
+        )
+        .await
+        {
+            Ok(client) => return Ok((client, Vec::new())),
+            Err(error) => error,
+        };
+        let Some(differ) = refused.downcast_ref::<PackagesDiffer>() else {
+            return Err(refused);
+        };
+        // A shared package only the client runs cannot be downloaded away.
+        if differ
+            .0
+            .iter()
+            .any(|m| matches!(m, bri_package::environment::Mismatch::Extra(_)))
+        {
+            return Err(refused);
+        }
+        let fetched = crate::packages::fetch_missing_pinned(address, &pin, cache, &progress)
+            .await
+            .context("Downloading the server's packages")?;
+        let packages = load(&fetched)?;
+        let client = Self::connect_pinned(
+            address,
+            pin,
+            name,
+            packages,
+            None,
+            host,
+            identity,
+            progress,
+        )
+        .await?;
+        Ok((client, fetched))
     }
     /// Connects like [`Client::connect_with_identity`], reporting the
     /// handshake and the world download into `progress`.
@@ -221,6 +294,9 @@ impl Client {
                 checkpoint,
             } => (owner, administrator, resume, checkpoint),
             Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
+            Message::PackagesDiffer(differences) => {
+                return Err(PackagesDiffer(differences).into());
+            }
             _ => anyhow::bail!("Expected welcome"),
         };
         // The Welcome is small; the world streams after it in chunks.
@@ -413,6 +489,14 @@ impl Client {
                         Ok(ClientEvent::Reply { sequence, result })
                     }
                     Message::Notice(notice) => Ok(ClientEvent::Notice(notice)),
+                    Message::PackageState(view) => {
+                        self.replica.package_state(view)?;
+                        Ok(ClientEvent::Updated {
+                            world_changed: false,
+                            changed_bricks: Vec::new(),
+                            palette_changed: false,
+                        })
+                    }
                     Message::AdminSnapshot(snapshot) => {
                         self.administrator = snapshot.role.is_admin();
                         self.admin_snapshot = Some(snapshot.clone());
@@ -462,6 +546,13 @@ impl Client {
             .sequence
             .checked_add(1)
             .context("Command sequence exhausted")?;
+        // The host disconnects a non-administrator whose frame exceeds the
+        // player limit, so refuse it here with the stream still usable.
+        let limit = if self.administrator {
+            codec::MAX_REQUEST
+        } else {
+            codec::PLAYER_MAX_REQUEST
+        };
         codec::write_request(
             &mut self.send,
             &Request {
@@ -469,6 +560,7 @@ impl Client {
                 command,
                 aim,
             },
+            limit,
         )
         .await?;
         Ok(self.sequence)
@@ -615,6 +707,35 @@ struct Opened {
 }
 
 async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Opened> {
+    let (endpoint, connection, certificate) = connect_quic(address, pin, wait).await?;
+    let (mut send, mut receive) = connection.open_bi().await?;
+    codec::write_small_request(&mut send, &JoinBegin::join()).await?;
+    let (nonce, listing) = match codec::decode::<Message>(
+        &tokio::time::timeout(wait, codec::read_frame(&mut receive, codec::MAX_FRAME)).await??,
+    )? {
+        Message::Challenge { nonce, listing } => (nonce, listing),
+        Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
+        _ => anyhow::bail!("Expected identity challenge"),
+    };
+    listing.validate()?;
+    Ok(Opened {
+        endpoint,
+        connection,
+        certificate,
+        send,
+        receive,
+        nonce,
+        listing,
+    })
+}
+
+/// A QUIC connection to the host `pin` names, and the certificate it
+/// presented; nothing is sent yet (a join or a package download follows).
+pub(crate) async fn connect_quic(
+    address: SocketAddr,
+    pin: &HostPin,
+    wait: Duration,
+) -> Result<(quinn::Endpoint, quinn::Connection, Vec<u8>)> {
     let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
     config.transport_config(Arc::new(transport()));
     let ip = if address.is_ipv4() {
@@ -640,25 +761,7 @@ async fn open(address: SocketAddr, pin: &HostPin, wait: Duration) -> Result<Open
         })
         .and_then(|chain| chain.first().map(|c| c.to_vec()))
         .context("The server presented no certificate")?;
-    let (mut send, mut receive) = connection.open_bi().await?;
-    codec::write_small_request(&mut send, &JoinBegin { version: VERSION }).await?;
-    let (nonce, listing) = match codec::decode::<Message>(
-        &tokio::time::timeout(wait, codec::read_frame(&mut receive, codec::MAX_FRAME)).await??,
-    )? {
-        Message::Challenge { nonce, listing } => (nonce, listing),
-        Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
-        _ => anyhow::bail!("Expected identity challenge"),
-    };
-    listing.validate()?;
-    Ok(Opened {
-        endpoint,
-        connection,
-        certificate,
-        send,
-        receive,
-        nonce,
-        listing,
-    })
+    Ok((endpoint, connection, certificate))
 }
 
 /// TLS configuration that accepts the pinned host (or, for first use, any

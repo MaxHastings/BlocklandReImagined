@@ -144,6 +144,45 @@ Not yet ported: canJump's refusal right after a ceiling hit (v20 0x8A2) and
 v20's hard-landing recover state. Both need new `PlayerState` fields and so a
 protocol bump.
 
+## Player archetypes
+
+What a player is, is data (`bri_motor::archetype`). An `Archetype` holds the
+motor constants (`PlayerTuning`, including the collision `body`, `box` or
+`ball`, and the `steering` model), maximum health, the energy bar, whether
+others may ride it and whether it may ride, and its look (a model id and a
+third-person camera distance). The session's `Archetypes` table starts with
+v20's eight datablocks in `PlayerType` order, so `PlayerType::archetype()`
+is also the index; enabled packages append theirs (the `archetype` content
+kind: a `base` archetype plus the constants it changes, merged by name and
+checked by the motor). `PlayerState.archetype` is an index into that table.
+
+- **One table, both sides.** The checkpoint carries the table, the replica
+  validates it (v20's entries first, every entry valid, unique ids), and the
+  client's `Predictor` moves the local player with the same constants as
+  the server. A package's body predicts exactly like the Blockhead (E30).
+- **Assignment.** A mini-game's player type may name any named archetype,
+  v20's or a package's. A package script calls `set_archetype(player, id)`
+  (capability `player`); that choice outlives death until the script clears
+  it with `set_archetype(player, "")`, and the mini-game decides otherwise.
+- **Controllers.** Steering models are engine mechanisms that packages pick
+  by name, because clients predict them and receive no code: `strafe` (v20:
+  face the look direction, strafe sideways) and `turn` (a vehicle: left and
+  right turn the body at `turn_rate`, no sideways movement).
+- **Driving another body.** A package hands a player one of its entities
+  with `control(player, entity)` (capability `player`) and takes it back
+  with `release(player)`. The player's `ControlObject` becomes
+  `Entity(id)`: their moves drive the entity's body, which moves by its
+  kind's `archetype`, while the avatar stands where it was. Only the
+  package that owns the entity may hand it over, one player drives it at a
+  time, and death, leaving or the entity's removal hand the player back.
+  The client orbits the entity with its camera and records its inputs
+  without predicting the avatar, as when seated; the entity itself moves at
+  the server's entity rate, not predicted. Predicting a package-authored
+  controller would need client code: the sandboxed tier-2 case.
+- **Looks.** v20's Blockhead and horse draw as before; an archetype whose
+  `model` is a package box model draws as that model (not animated), and
+  third person keeps the archetype's `camera_distance`.
+
 ## Session authority
 
 `bri-sim::session` owns the players and simulation. The QUIC transport resolves the

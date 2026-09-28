@@ -2,6 +2,10 @@
 //! one place they are checked against a package's declared capabilities.
 use bri_package::diag::Diagnostic;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Variables an entity may be given when it is spawned.
+pub const MAX_SPAWN_VARS: usize = 16;
 
 /// Every capability a manifest may declare (with plain-language words in
 /// `bri_package::capability`).
@@ -12,6 +16,13 @@ pub enum Op {
     RemoveBrick {
         brick: u64,
     },
+    /// Add a world-owned brick of a known shape: an arena, a gate, a board.
+    /// The colour is matched to the nearest colour of the world's palette.
+    PlaceBrick {
+        shape: String,
+        position: [f32; 3],
+        color: [f32; 4],
+    },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
     Explode {
@@ -20,13 +31,48 @@ pub enum Op {
         damage: f32,
         brick_radius: f32,
     },
+    /// Damage a player; `by` is the player credited if it kills.
     DamagePlayer {
         player: u64,
         amount: f32,
+        by: Option<u64>,
     },
+    /// Move a living player, keeping their facing.
+    Teleport {
+        player: u64,
+        position: [f32; 3],
+    },
+    /// Give a player a new life at a spawn point, alive or dead.
+    Respawn {
+        player: u64,
+    },
+    /// Make a player this archetype (a package's `archetype` id or v20's
+    /// `v20.player.<datablock>`), now and at every respawn. An empty id
+    /// hands the choice back to the mini-game's player type.
+    SetArchetype {
+        player: u64,
+        archetype: String,
+    },
+    /// Show a block brick in one of its block's named states (`""` for the
+    /// block's own faces): a dig tool cracks it, a switch lights it.
+    SetBlockState {
+        brick: u64,
+        state: String,
+    },
+    /// Hand a player's movement input to one of the package's entities
+    /// (`entity`), or back to the player's own body (`None`). The avatar
+    /// stands where it was while the entity is driven.
+    Control {
+        player: u64,
+        entity: Option<u64>,
+    },
+    /// `vars` are the entity's first package-local variables, so what a
+    /// package creates is addressable from its first think (an owner, a
+    /// team, a home).
     SpawnEntity {
         kind: String,
         position: [f32; 3],
+        vars: BTreeMap<String, serde_json::Value>,
     },
     RemoveEntity {
         entity: u64,
@@ -53,13 +99,19 @@ pub enum Op {
 impl Op {
     pub fn capability(&self) -> &'static str {
         match self {
-            Self::RemoveBrick { .. } => "world.edit",
+            Self::RemoveBrick { .. } | Self::PlaceBrick { .. } | Self::SetBlockState { .. } => {
+                "world.edit"
+            }
             Self::Explode { .. } | Self::DamagePlayer { .. } => "damage",
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } => "chat",
+            Self::Teleport { .. }
+            | Self::Respawn { .. }
+            | Self::SetArchetype { .. }
+            | Self::Control { .. } => "player",
         }
     }
     /// Shape limits, independent of who asks.
@@ -68,7 +120,27 @@ impl Op {
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let ok = match self {
-            Self::RemoveBrick { .. } | Self::RemoveEntity { .. } => true,
+            Self::RemoveBrick { .. }
+            | Self::RemoveEntity { .. }
+            | Self::Respawn { .. }
+            | Self::Control { .. } => true,
+            Self::Teleport { position, .. } => finite(position),
+            Self::SetBlockState { state, .. } => {
+                state.len() <= 64 && !state.chars().any(char::is_control)
+            }
+            Self::SetArchetype { archetype, .. } => {
+                archetype.len() <= 160 && !archetype.chars().any(char::is_control)
+            }
+            Self::PlaceBrick {
+                shape,
+                position,
+                color,
+            } => {
+                !shape.is_empty()
+                    && shape.len() <= 128
+                    && finite(position)
+                    && color.iter().all(|c| (0.0..=1.0).contains(c))
+            }
             Self::Explode {
                 position,
                 radius,
@@ -83,7 +155,16 @@ impl Op {
             Self::DamagePlayer { amount, .. } => {
                 amount.is_finite() && (0.0..=1000.0).contains(amount)
             }
-            Self::SpawnEntity { kind, position } => kind.len() <= 128 && finite(position),
+            Self::SpawnEntity {
+                kind,
+                position,
+                vars,
+            } => {
+                kind.len() <= 128
+                    && finite(position)
+                    && vars.len() <= MAX_SPAWN_VARS
+                    && vars.values().all(|v| crate::state::check_value(v).is_ok())
+            }
             Self::Steer { direction, .. } => finite(direction),
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
             Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
@@ -126,6 +207,7 @@ pub fn authorize(package: &str, capabilities: &[String], op: &Op) -> Result<(), 
 pub fn op_name(op: &Op) -> &'static str {
     match op {
         Op::RemoveBrick { .. } => "remove_brick",
+        Op::PlaceBrick { .. } => "place_brick",
         Op::Explode { .. } => "explode",
         Op::DamagePlayer { .. } => "damage",
         Op::SpawnEntity { .. } => "spawn_entity",
@@ -133,6 +215,11 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Steer { .. } => "steer",
         Op::Label { .. } => "label",
         Op::Tell { .. } => "tell",
+        Op::Teleport { .. } => "teleport",
+        Op::Respawn { .. } => "respawn",
+        Op::SetArchetype { .. } => "set_archetype",
+        Op::Control { .. } => "control",
+        Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
     }
 }

@@ -13,7 +13,10 @@
 //! terrain) still stop a shadow: they render into a second, occluder depth
 //! map, and a caster's shadow is dropped wherever an occluder lies between
 //! the caster and the receiving surface. A player on a brick tower shades
-//! the tower top, not the floor beneath it.
+//! the tower top, not the floor beneath it. Occluders write only past the
+//! caster along the sun (they read the finished caster layer), so the map
+//! keeps the first surface below the caster; a ceiling or overhang above
+//! the player would otherwise hide the tower and let the shadow through.
 use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3, Vec4};
 
@@ -23,6 +26,11 @@ pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float
 const CASTER_REACH: f32 = 400.0;
 /// Caster uniform stride; dynamic offsets must be 256-byte aligned.
 const CASTER_STRIDE: u64 = 256;
+/// Caster uniform: light matrix, then the occluder gap (padded to a vec4).
+const CASTER_SIZE: u64 = 80;
+/// Occluders must lie this many world units past a caster to stop its
+/// shadow, so the brick a player stands on still receives it.
+const OCCLUDER_GAP: f32 = 0.1;
 
 /// Sun shadow quality: how many cascades, their square resolution, and how
 /// far from the eye shadows reach before fading out.
@@ -188,8 +196,13 @@ pub(crate) struct ShadowMaps {
     pub receiver: wgpu::Buffer,
     caster: wgpu::Buffer,
     pub caster_group: wgpu::BindGroup,
+    /// Per cascade: the caster group plus that cascade's caster depth, which
+    /// occluders test against.
+    pub occluder_groups: Vec<wgpu::BindGroup>,
     /// Opaque (depth only) and alpha-masked caster pipelines.
     pub pipelines: [wgpu::RenderPipeline; 2],
+    /// Opaque and alpha-masked occluder pipelines.
+    pub occluder_pipelines: [wgpu::RenderPipeline; 2],
     pub cascades: Vec<Cascade>,
 }
 impl ShadowMaps {
@@ -219,7 +232,7 @@ impl ShadowMaps {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         });
-        let layer_views = (0..layers)
+        let layer_views: Vec<_> = (0..layers)
             .map(|layer| {
                 texture.create_view(&wgpu::TextureViewDescriptor {
                     dimension: Some(wgpu::TextureViewDimension::D2),
@@ -261,7 +274,7 @@ impl ShadowMaps {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(64),
+                        min_binding_size: wgpu::BufferSize::new(CASTER_SIZE),
                     },
                     count: None,
                 },
@@ -269,6 +282,37 @@ impl ShadowMaps {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let occluder_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sun shadow occluder"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(CASTER_SIZE),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -290,7 +334,7 @@ impl ShadowMaps {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &caster,
                         offset: 0,
-                        size: wgpu::BufferSize::new(64),
+                        size: wgpu::BufferSize::new(CASTER_SIZE),
                     }),
                 },
                 wgpu::BindGroupEntry {
@@ -299,6 +343,33 @@ impl ShadowMaps {
                 },
             ],
         });
+        // Caster layers come first, so layer i is cascade i's caster depth.
+        let occluder_groups = (0..layers as usize / 2)
+            .map(|cascade| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("sun shadow occluder"),
+                    layout: &occluder_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &caster,
+                                offset: 0,
+                                size: wgpu::BufferSize::new(CASTER_SIZE),
+                            }),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&mask_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&layer_views[cascade]),
+                        },
+                    ],
+                })
+            })
+            .collect();
         // Opaque casters need no material, so whole chunks draw without
         // rebinding; masked casters sample their material's alpha.
         let opaque_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -311,22 +382,26 @@ impl ShadowMaps {
             bind_group_layouts: &[Some(&caster_layout), Some(material_layout)],
             immediate_size: 0,
         });
+        let occluder_opaque_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sun shadow occluders"),
+                bind_group_layouts: &[Some(&occluder_layout)],
+                immediate_size: 0,
+            });
+        let occluder_masked_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sun shadow masked occluders"),
+                bind_group_layouts: &[Some(&occluder_layout), Some(material_layout)],
+                immediate_size: 0,
+            });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("sun shadow casters"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shadow.wgsl").into()),
         });
-        let pipeline = |masked: bool| {
+        let pipeline = |label: &str, layout: &wgpu::PipelineLayout, fragment: Option<&str>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(if masked {
-                    "sun shadow masked casters"
-                } else {
-                    "sun shadow casters"
-                }),
-                layout: Some(if masked {
-                    &masked_layout
-                } else {
-                    &opaque_layout
-                }),
+                label: Some(label),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_main"),
@@ -350,9 +425,9 @@ impl ShadowMaps {
                     },
                 }),
                 multisample: Default::default(),
-                fragment: masked.then(|| wgpu::FragmentState {
+                fragment: fragment.map(|entry| wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_masked"),
+                    entry_point: Some(entry),
                     compilation_options: Default::default(),
                     targets: &[],
                 }),
@@ -369,7 +444,27 @@ impl ShadowMaps {
             receiver,
             caster,
             caster_group,
-            pipelines: [pipeline(false), pipeline(true)],
+            occluder_groups,
+            pipelines: [
+                pipeline("sun shadow casters", &opaque_layout, None),
+                pipeline(
+                    "sun shadow masked casters",
+                    &masked_layout,
+                    Some("fs_masked"),
+                ),
+            ],
+            occluder_pipelines: [
+                pipeline(
+                    "sun shadow occluders",
+                    &occluder_opaque_layout,
+                    Some("fs_occluder"),
+                ),
+                pipeline(
+                    "sun shadow masked occluders",
+                    &occluder_masked_layout,
+                    Some("fs_occluder_masked"),
+                ),
+            ],
             cascades: Vec::new(),
         }
     }
@@ -386,10 +481,13 @@ impl ShadowMaps {
                 uniform.splits[i] = cascade.far;
                 uniform.texels[i] = cascade.texel;
                 uniform.depth_scale[i] = cascade.depth_scale;
+                let mut caster = [0.0f32; 20];
+                caster[..16].copy_from_slice(&cascade.view_projection.to_cols_array());
+                caster[16] = OCCLUDER_GAP * cascade.depth_scale;
                 queue.write_buffer(
                     &self.caster,
                     i as u64 * CASTER_STRIDE,
-                    bytemuck::bytes_of(&cascade.view_projection.to_cols_array()),
+                    bytemuck::bytes_of(&caster),
                 );
             }
             uniform.forward_count = forward.extend(cascades.len() as f32).to_array();

@@ -28,6 +28,8 @@ pub enum Stage {
     StartingServer,
     /// Opening the connection: QUIC, certificate check, identity handshake.
     Connecting,
+    /// Fetching the server's packages this client lacks into its cache.
+    DownloadingPackages,
     /// Joined; the host is preparing the world to send.
     WaitingForServer,
     /// Receiving the world checkpoint.
@@ -83,6 +85,7 @@ impl Snapshot {
             Stage::LoadingMap => "LOADING MAP",
             Stage::StartingServer => "STARTING SERVER",
             Stage::Connecting => "CONNECTING",
+            Stage::DownloadingPackages => "DOWNLOADING PACKAGES",
             Stage::WaitingForServer => "WAITING FOR SERVER",
             Stage::ReceivingWorld => "RECEIVING WORLD",
             Stage::BuildingBricks => "BUILDING BRICKS",

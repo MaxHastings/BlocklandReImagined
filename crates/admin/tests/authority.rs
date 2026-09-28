@@ -603,3 +603,48 @@ fn typed_command_validation_clamps_authored_time_scale_and_keeps_minigame_owner_
     settings.port = 28000;
     assert!(run(&mut s, 1, Action::HostConfigure { settings }).is_ok());
 }
+#[test]
+fn failed_logins_follow_the_identity_across_reconnects_and_expire() {
+    let mut s = setup();
+    let login = |s: &mut Administration, n: u64, now: u64, pw: &str| {
+        s.handle(
+            Origin::Connection(id(n)),
+            Request::new(Action::Login {
+                password: Secret::new(pw.into()).unwrap(),
+            }),
+            now,
+            |attempt| (attempt == "valid").then_some(Role::Admin),
+        )
+    };
+    for _ in 0..4 {
+        login(&mut s, 4, 100, "wrong").unwrap();
+    }
+    // Player 4 reconnects under the same identity: no fresh guesses, and even
+    // the right password is refused while the strikes last.
+    s.disconnect(id(4));
+    let mut again = connection(4);
+    again.id = id(6);
+    s.connect(again, 200).unwrap();
+    let effects = login(&mut s, 6, 200, "valid").unwrap();
+    assert_eq!(
+        effects[0],
+        Effect::LoginRejected {
+            attempts: 5,
+            disconnect: true
+        }
+    );
+    assert_eq!(s.role(id(6)), Some(Role::Player));
+    // After the window the identity starts over and may log in.
+    s.disconnect(id(6));
+    let mut later = connection(4);
+    later.id = id(7);
+    s.connect(later, 200 + bri_admin::LOGIN_STRIKE_SECONDS)
+        .unwrap();
+    login(&mut s, 7, 200 + bri_admin::LOGIN_STRIKE_SECONDS, "valid").unwrap();
+    assert_eq!(s.role(id(7)), Some(Role::Admin));
+    // An anonymous connection cannot guess at all.
+    let mut anonymous = connection(8);
+    anonymous.principal = None;
+    s.connect(anonymous, 0).unwrap();
+    assert!(matches!(login(&mut s, 8, 0, "valid"), Err(Error::Denied)));
+}

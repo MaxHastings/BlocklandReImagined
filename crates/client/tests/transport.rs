@@ -32,6 +32,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
                 certificate: None,
                 map_loader: None,
                 autosave: None,
+                packages: None,
             },
             1,
         )?;
@@ -50,6 +51,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
             Ok(Connected {
                 client,
                 host: Some(host),
+                mods: Default::default(),
                 package_save: None,
                 keep_world: Some(keep_world),
             })

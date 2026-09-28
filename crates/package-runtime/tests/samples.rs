@@ -59,12 +59,13 @@ fn sample_hud_binds_only_public_keys_and_real_commands() {
     for row in &panel.rows {
         let b = Binding::parse(&row.bind).unwrap();
         let keys = &rule(&b.package).state;
-        let key = if b.player { &keys.player } else { &keys.global }
+        let player = b.scope != bri_package_runtime::content::Scope::Global;
+        let key = if player { &keys.player } else { &keys.global }
             .get(&b.key)
             .unwrap_or_else(|| panic!("{} is not declared", row.bind));
         assert!(
-            key.public,
-            "{} is private, so the HUD would stay blank",
+            key.visible != bri_package_runtime::content::Visible::Server,
+            "{} stays on the server, so the HUD would stay blank",
             row.bind
         );
     }
@@ -75,5 +76,83 @@ fn sample_hud_binds_only_public_keys_and_real_commands() {
             .find(|c| c.name == k.command)
             .unwrap_or_else(|| panic!("no command {}", k.command));
         assert!(command.args.is_empty() && !command.admin);
+    }
+}
+
+fn with(extra: &[(&str, Side)]) -> PackageSet {
+    let mut set = set();
+    for &(id, side) in extra {
+        set.packages.push(PackageEntry {
+            id: id.into(),
+            version: "1.0.0".into(),
+            side,
+            dir: id.into(),
+            role: None,
+        });
+    }
+    set
+}
+
+#[test]
+fn an_addon_with_client_code_loads_beside_the_others() {
+    // The spinning cube's `client` section belongs to the client sandbox;
+    // the runtime accepts it and keeps every other Add-On running.
+    let set = with(&[("spinning-cube", Side::Client)]);
+    let client = Catalog::load(&root(), &set, false).unwrap_or_else(|e| panic!("{e:#?}"));
+    assert_eq!(client.packages.len(), 3);
+    assert!(client.packages["spinning-cube"].manifest.client.is_some());
+    assert_eq!(client.huds().count(), 1);
+}
+
+#[test]
+fn one_broken_addon_is_left_out_and_the_rest_still_run() {
+    let dir = tempfile::tempdir().unwrap();
+    for id in [
+        "sample-survival-points",
+        "sample-points-hud",
+        "sample-bubble-blaster",
+    ] {
+        copy_dir(&root().join(id), &dir.path().join(id));
+    }
+    std::fs::create_dir(dir.path().join("broken")).unwrap();
+    std::fs::write(
+        dir.path().join("broken/package.json"),
+        r#"{ "schema_version": 1, "id": "broken", "misspelt": true }"#,
+    )
+    .unwrap();
+    let set = with(&[("broken", Side::Shared)]);
+    assert!(
+        Catalog::load(dir.path(), &set, true).is_err(),
+        "strict load"
+    );
+    let (catalog, problems) = Catalog::load_skipping(dir.path(), &set, true);
+    assert!(!problems.is_empty());
+    assert!(
+        problems
+            .iter()
+            .all(|p| p.location.as_deref().unwrap_or("").starts_with("broken/")),
+        "{problems:#?}"
+    );
+    assert_eq!(
+        catalog.packages.keys().collect::<Vec<_>>(),
+        [
+            "sample-bubble-blaster",
+            "sample-points-hud",
+            "sample-survival-points"
+        ]
+    );
+    Runtime::compile(&catalog).unwrap_or_else(|e| panic!("{e:#?}"));
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
     }
 }

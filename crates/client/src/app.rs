@@ -116,6 +116,18 @@ struct PendingAction {
     dialog_request: bool,
 }
 /// Everything a client needs to show and predict on `map` (joins and map changes).
+/// The packages a view draws with: those loaded for its server when joining
+/// it downloaded some, else this client's own.
+fn packages_for<'a>(
+    own: &'a Option<Arc<bri_package_runtime::Catalog>>,
+    view: &'a crate::network::View,
+) -> Option<&'a bri_package_runtime::Catalog> {
+    if view.mods.packages.is_empty() {
+        own.as_deref()
+    } else {
+        Some(&view.mods)
+    }
+}
 fn prepare_map(
     paths: &crate::content::ContentPaths,
     map: &str,
@@ -458,7 +470,12 @@ impl App {
     /// Package HUD panels and keys from the latest replicated state.
     fn update_package_hud(&mut self) {
         let view = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| a.view.as_ref());
-        let (Some(catalog), Some(view)) = (&self.package_catalog, view) else {
+        let Some(view) = view else {
+            self.ui.core.package_panels.clear();
+            self.ui.core.package_keys.clear();
+            return;
+        };
+        let Some(catalog) = packages_for(&self.package_catalog, view) else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
             return;
@@ -1288,7 +1305,7 @@ impl App {
     ) -> Option<(f32, Vec3, f32)> {
         // A `HorseArmor` player uses its datablock's camera fields
         // (cameraMaxDist, cameraVerticalOffset above the feet, cameraTilt).
-        if local.datablock == bri_sim::player_types::PlayerType::Horse
+        if local.archetype == bri_sim::player_types::PlayerType::Horse.archetype()
             && view.vitals.get(&view.owner).is_none_or(|v| v.mounted.is_none())
         {
             let camera = &assets.definition("v20.vehicle.horsearmor")?.camera;
@@ -1359,7 +1376,7 @@ impl App {
                 crouched: false,
                 jetting: false,
                 jump: Default::default(),
-                datablock: bri_sim::player_types::PlayerType::Horse,
+                archetype: bri_sim::player_types::PlayerType::Horse.archetype(),
                 scale: 1.0,
                 energy: 0.0,
             };
@@ -1424,7 +1441,7 @@ impl App {
         let eye = self.motion.local_eye().or_else(|| {
             view.poses
                 .get(&view.owner)
-                .map(|p| p.player.eye(&p.player.tuning()))
+                .map(|p| view.archetypes.eye(&p.player))
         });
         self.controls.follow(control, view.owner, eye);
     }
@@ -1449,8 +1466,8 @@ impl App {
             .motion
             .presented()
             .get(&view.owner)
-            .filter(|p| p.datablock.shows_energy())
-            .map(|p| p.energy / p.tuning().max_energy);
+            .filter(|p| view.archetypes.resolve(p.archetype).energy_bar)
+            .map(|p| p.energy / view.archetypes.tuning(p.archetype, p.scale).max_energy);
         let shown = energy.map(|e| (e.clamp(0.0, 1.0) * 100.0).round() as u8);
         if shown != c.energy {
             c.energy = shown;
@@ -1497,7 +1514,7 @@ impl App {
                         .poses
                         .get(&view.owner)
                         .map_or(bri_sim::session::MAX_HEALTH, |p| {
-                            p.player.datablock.max_health()
+                            view.archetypes.resolve(p.player.archetype).max_health
                         });
                     updates.push(UiUpdate::DamageFlash((c.health - local.health) / max * 2.0));
                 }
@@ -1529,6 +1546,7 @@ impl App {
             &view.vitals,
             &view.names,
             &self.content.weapons.item_choices,
+            &view.archetypes,
             c.minigame_revision,
         );
         let changed = c.minigame_state.as_ref().is_none_or(|old| {
@@ -1815,6 +1833,7 @@ impl App {
                         every: crate::saves::AUTOSAVE_EVERY,
                         save: autosaver.clone(),
                     }),
+                    packages: None,
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),
@@ -1862,6 +1881,7 @@ impl App {
             Ok(Connected {
                 client,
                 host: Some(host),
+                mods: Default::default(),
                 package_save,
                 keep_world: Some(autosaver),
             })
@@ -1918,6 +1938,7 @@ impl App {
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let load_limit = self.load_limit.clone();
         let identity_file = self.state_dir.join("client.identity");
+        let package_cache = self.state_dir.join("package-cache");
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -1953,6 +1974,7 @@ impl App {
             })
             .await??;
             let identity_paths = paths.clone();
+            let (package_root, package_set) = (paths.root.clone(), paths.packages.clone());
             let permit = load_limit.clone().acquire_owned().await?;
             let identity = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
@@ -1963,19 +1985,31 @@ impl App {
                 identity_paths.environment()
             })
             .await??;
-            let joined = Client::connect_pinned(
+            // A server running Add-Ons this client lacks refuses the join
+            // naming them; download them into the package cache, load them
+            // and join again with the server's package list.
+            let cache = bri_package::sync::Cache::open(&package_cache)?;
+            let local = identity.client_packages();
+            let mut mods = None;
+            let joined = Client::connect_fetching(
                 address,
                 pin,
                 player,
-                identity.client_packages(),
-                None,
+                local.clone(),
                 None,
                 &native_identity,
+                &cache,
                 reporting.clone(),
+                |fetched| {
+                    let (catalog, packages) =
+                        crate::mods::load_fetched(&package_root, &package_set, &local, fetched)?;
+                    mods = Some(catalog);
+                    Ok(packages)
+                },
             )
             .await;
             let client = match joined {
-                Ok(client) => client,
+                Ok((client, _)) => client,
                 Err(error) => {
                     // A host that reinstalled has a new identity: forget the
                     // old pin so joining again (the player's choice) trusts it.
@@ -1997,6 +2031,7 @@ impl App {
                     return Err(error);
                 }
             };
+            let mods = std::sync::Arc::new(mods.unwrap_or_default());
             // Remember the host's certificate and the server for later joins.
             let pin = client.certificate.clone();
             let name = plain_chat(&client.listing.name);
@@ -2032,6 +2067,7 @@ impl App {
             Ok(Connected {
                 client,
                 host: None,
+                mods,
                 package_save: None,
                 keep_world: None,
             })
@@ -2148,6 +2184,7 @@ impl App {
             return Ok(true);
         }
         let view = self.network_view().context("No active network view")?;
+        let archetypes = view.archetypes.clone();
         let mut player = self
             .motion
             .presented()
@@ -2160,11 +2197,12 @@ impl App {
         player.yaw = self.controls.yaw;
         player.pitch = self.controls.pitch;
         let ghost_before = self.building.as_ref().and_then(|b| b.ghost().cloned());
-        let response = self
+        let building = self
             .building
             .as_mut()
-            .context("Building controller not ready")?
-            .ui_action(action, &player)?;
+            .context("Building controller not ready")?;
+        building.set_archetypes(archetypes);
+        let response = building.ui_action(action, &player)?;
         let Some(response) = response else {
             return Ok(false);
         };
@@ -3276,7 +3314,7 @@ fn name_tags(
         let Some(state) = presented.get(owner) else {
             continue;
         };
-        let target = state.eye(&state.tuning());
+        let target = view.archetypes.eye(state);
         let distance = target.distance(camera);
         if distance <= 0.0 || distance > visible_distance {
             continue;
@@ -3309,6 +3347,7 @@ fn name_tags(
 fn camera_eye(
     controls: &Controls,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
     building: &crate::building::Building,
     own_eye: Vec3,
     forward: Vec3,
@@ -3318,8 +3357,10 @@ fn camera_eye(
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position)) => Ok(position),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        Some(ObserverMode::Orbit(_)) => building.camera_position(
-            controls.orbit_focus(presented).unwrap_or(own_eye),
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building.camera_position(
+            controls
+                .orbit_focus(presented, building.archetypes(), entities)
+                .unwrap_or(own_eye),
             forward,
             8.0,
         ),
@@ -3603,8 +3644,13 @@ impl PlatformApp for App {
                 a.worker.movement(newest, inputs)?;
             }
             if let Some(view) = &a.view {
-                let mounted = view.vitals.get(&view.owner).and_then(|v| v.mounted);
-                self.motion.set_mounted(mounted.is_some());
+                let vitals = view.vitals.get(&view.owner);
+                let mounted = vitals.and_then(|v| v.mounted);
+                // Driving a package entity parks the avatar like a seat does.
+                let driving = vitals.is_some_and(|v| {
+                    matches!(v.control, bri_sim::session::ControlObject::Entity(_))
+                });
+                self.motion.set_mounted(mounted.is_some() || driving);
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.pitch, head_yaw);
@@ -3772,7 +3818,8 @@ impl PlatformApp for App {
                             .filter(|sound| !sound.is_empty() && self.audio.is_looping(sound));
                         if let Some(sound) = sound {
                             let eye = Vec3::from(player.feet)
-                                + Vec3::Y * player.tuning().stand_eye;
+                                + Vec3::Y
+                                    * view.archetypes.tuning(player.archetype, player.scale).stand_eye;
                             loops.insert((*owner, mounted.hand), (sound.to_string(), eye.to_array()));
                         }
                     }
@@ -3946,7 +3993,7 @@ impl PlatformApp for App {
                     .get(owner)
                     .unwrap_or(&self.avatar_assets.package.defaults);
                 // `HorseArmor` players draw horse.dts.
-                let horse = player.datablock == bri_sim::player_types::PlayerType::Horse;
+                let horse = player.archetype == bri_sim::player_types::PlayerType::Horse.archetype();
                 if self
                     .avatars
                     .get(owner)
@@ -4067,7 +4114,7 @@ impl PlatformApp for App {
             let eye = self
                 .motion
                 .local_eye()
-                .unwrap_or_else(|| local.eye(&local.tuning()));
+                .unwrap_or_else(|| view.archetypes.eye(local));
             let chase = third_person
             .then(|| {
                 Self::chase_camera(
@@ -4082,10 +4129,14 @@ impl PlatformApp for App {
             let eye = camera_eye(
                 &self.controls,
                 presented,
+                &view.entities,
                 building,
                 chase.map_or(eye, |(_, pivot, _)| pivot),
                 forward,
-                third_person.then(|| chase.map_or(8.0, |(distance, ..)| distance)),
+                third_person.then(|| {
+                    let distance = view.archetypes.resolve(local.archetype).look.camera_distance;
+                    chase.map_or(distance, |(distance, ..)| distance)
+                }),
             )?;
             listener = bri_audio::Listener {
                 position: eye.to_array(),
@@ -5055,7 +5106,22 @@ impl PlatformApp for App {
         let third_person = self.controls.third_person
             || self.controls.observer().is_some()
             || view.vitals.get(&view.owner).is_some_and(|v| !v.alive);
-        let hidden = self.combat.hidden_bodies(&view.vitals);
+        let mut hidden = self.combat.hidden_bodies(&view.vitals);
+        // Players whose archetype looks like a package model draw as it, in
+        // place of the Blockhead (not the local player in first person).
+        let package_catalog = packages_for(&self.package_catalog, view);
+        let mut package_placements: Vec<_> =
+            crate::packages::entity_placements(&view.entities).collect();
+        if let Some(catalog) = package_catalog {
+            for (owner, placement) in
+                crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
+            {
+                hidden.insert(owner);
+                if owner != view.owner || third_person {
+                    package_placements.push(placement);
+                }
+            }
+        }
         let renderer = self
             .renderer
             .as_mut()
@@ -5179,8 +5245,8 @@ impl PlatformApp for App {
                 &view.world.palette,
             )?;
             self.package_models.upload(
-                self.package_catalog.as_deref(),
-                &view.entities,
+                package_catalog,
+                package_placements,
                 renderer,
                 frame.device,
                 frame.queue,
@@ -5276,7 +5342,7 @@ impl PlatformApp for App {
         let eye = self
             .motion
             .local_eye()
-            .unwrap_or_else(|| local.eye(&local.tuning()));
+            .unwrap_or_else(|| view.archetypes.eye(local));
         let chase = third_person
             .then(|| {
                 Self::chase_camera(
@@ -5291,12 +5357,16 @@ impl PlatformApp for App {
         let eye = camera_eye(
             &self.controls,
             self.motion.presented(),
+            &view.entities,
             self.building
                 .as_ref()
                 .context("Camera collision mirror missing")?,
             chase.map_or(eye, |(_, pivot, _)| pivot),
             forward,
-            third_person.then(|| chase.map_or(8.0, |(distance, ..)| distance)),
+            third_person.then(|| {
+                let distance = view.archetypes.resolve(local.archetype).look.camera_distance;
+                chase.map_or(distance, |(distance, ..)| distance)
+            }),
         )?;
         // `cameraTilt` turns the chase view down without moving the camera.
         let (pitch, forward) = match chase {
@@ -5478,6 +5548,9 @@ impl PlatformApp for App {
                     .filter(|(owner, _)| !hidden.contains(owner))
                     .filter_map(|(_, avatar)| avatar.gpu.as_ref()),
             );
+            // Rigged mounts (the horse) draw through their own meshes, not
+            // the vehicle models, but cast like every other vehicle.
+            bodies.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
             let mut models = self.world_items.draws();
             models.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
             if let Some((scene, instances)) = &self.shell_gpu
