@@ -273,10 +273,7 @@ impl Motion {
         let tuning = predictor.tuning().clone();
         self.crouch
             .update(predictor.state().crouched, seconds, CROUCH_SECONDS);
-        self.eye_height = Some(
-            tuning.stand_eye
-                - (tuning.stand_eye - tuning.crouch_eye) * self.crouch.eye_fraction(CROUCH_SECONDS),
-        );
+        self.eye_height = Some(tuning.eye_height(self.crouch.eye_fraction(CROUCH_SECONDS)));
         if steps == 0 {
             return Ok(None);
         }

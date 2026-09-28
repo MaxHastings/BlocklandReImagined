@@ -203,3 +203,39 @@ fn mini_game_player_type_applies_on_spawn_and_on_update() {
     s.step().unwrap();
     assert_eq!(datablock(&s, a), PlayerType::Standard);
 }
+
+#[test]
+fn the_host_eye_follows_the_crouch_thread_like_the_camera() {
+    use bri_sim::crouch::{CROUCH_SECONDS, CrouchThread};
+    let mut w = scene();
+    let mut p = spawn(&mut w, PlayerType::Standard);
+    let tuning = PlayerTuning::default();
+    let crouch = MoveInput {
+        crouch: true,
+        ..Default::default()
+    };
+    // The client's view runs the same thread over the same ticks.
+    let mut view = CrouchThread::default();
+    view.update(false, 0.0, CROUCH_SECONDS);
+    for tick in 0..10 {
+        let (input, crouched) = if tick < 3 {
+            (crouch, true)
+        } else {
+            (MoveInput::default(), false)
+        };
+        step(&mut p, &mut w, input, 1);
+        view.update(crouched, bri_physics::FIXED_DT, CROUCH_SECONDS);
+        let camera = tuning.eye_height(view.eye_fraction(CROUCH_SECONDS));
+        let eye = p.eye().y - p.state().feet[1];
+        assert!(
+            (eye - camera).abs() < 1e-4,
+            "tick {tick}: {eye} vs {camera}"
+        );
+        if tick == 0 {
+            assert!(
+                eye < tuning.stand_eye && eye > tuning.crouch_eye,
+                "the eye dips rather than snapping: {eye}"
+            );
+        }
+    }
+}

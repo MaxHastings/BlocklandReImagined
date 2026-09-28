@@ -271,6 +271,11 @@ impl Default for PlayerTuning {
     }
 }
 impl PlayerTuning {
+    /// Eye height above the feet, `fraction` of the way from standing (0)
+    /// to crouched (1).
+    pub fn eye_height(&self, fraction: f32) -> f32 {
+        self.stand_eye - (self.stand_eye - self.crouch_eye) * fraction
+    }
     /// Torque `setScale` scales the player's box and eye; speeds, forces and
     /// the step height stay those of the datablock.
     pub fn scaled(mut self, scale: f32) -> Self {
@@ -375,6 +380,8 @@ pub struct Player {
     /// Mounts keep their body at the feet, turned to their heading, so
     /// seats and weapons ride on its transform. Players centre it unturned.
     mount: bool,
+    /// v20's crouch thread: the eye follows it, not the crouch flag.
+    crouch: crate::crouch::CrouchThread,
 }
 pub struct MotionEvents {
     pub jumped: bool,
@@ -456,6 +463,7 @@ impl Player {
             collider,
             contacts: BTreeSet::new(),
             mount: false,
+            crouch: Default::default(),
         })
     }
     /// Drive a player-type mount (horse, rowboat, cannon, turret) with the
@@ -494,6 +502,7 @@ impl Player {
             collider,
             contacts: BTreeSet::new(),
             mount: true,
+            crouch: Default::default(),
         })
     }
     /// Restored or scripted motion (`setVelocity`, checkpoints).
@@ -546,6 +555,7 @@ impl Player {
             collider,
             contacts: BTreeSet::new(),
             mount: false,
+            crouch: Default::default(),
         };
         player.restore(physics, state, tuning)?;
         requeue_new_body(physics, body);
@@ -634,8 +644,10 @@ impl Player {
         let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
         physics.bodies[self.body].set_next_kinematic_position(pose);
     }
+    /// The eye on the crouch thread, the height the camera shows.
     pub fn eye(&self) -> Vec3 {
-        self.state.eye(&self.tuning)
+        let fraction = self.crouch.eye_fraction(crate::crouch::CROUCH_SECONDS);
+        Vec3::from(self.state.feet) + Vec3::Y * self.tuning.eye_height(fraction)
     }
     /// Corpses stop blocking players and weapons; respawn makes them solid.
     pub fn set_solid(&self, physics: &mut PhysicsWorld, solid: bool) {
@@ -739,6 +751,8 @@ impl Player {
                 self.state.crouched = false;
             }
         }
+        self.crouch
+            .update(self.state.crouched, dt, crate::crouch::CROUCH_SECONDS);
         let steer = if t.steering == Steering::Turn {
             let turned = self.state.yaw + input.right * t.turn_rate * dt;
             // Keep within the input's range, so a turn body's state is
