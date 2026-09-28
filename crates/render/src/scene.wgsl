@@ -161,12 +161,15 @@ struct VertexOut {
     var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
     out.uv=uv;out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
     let fx=brick_fx(fx_data);out.fx=vec2<u32>(fx.color,fx.shape);
+    // The FX centre moves with the model, like the vertices (debris is built
+    // at the origin and placed by its instance transform).
+    let centre=(model*vec4<f32>(fx_data.xyz,1.0)).xyz;
     let ms=camera.atmosphere.z*1000.0;
     // Torque axes: x = native x, y = -native z, z = native y.
     var world=position;
     if fx.shape==1u {
         // Undulo: only within 100 units, amplitude 0.08 at full strength.
-        let distance=length(fx_data.xyz-camera.eye.xyz);
+        let distance=length(centre-camera.eye.xyz);
         if distance<100.0 {
             let amplitude=clamp(100.0-distance,0.0,10.0)*0.1*0.08;
             let s=(position.x-position.z+position.y)*1.256637+fract(ms/1000.0)*TAU;
@@ -179,16 +182,16 @@ struct VertexOut {
         out.normal.y+=0.25*(sin(a+2.094395)+1.0);
     }
     var paint=color;
-    let toward=normalize(fx_data.xyz-camera.eye.xyz);
+    let toward=normalize(centre-camera.eye.xyz);
     switch fx.color {
         case 1u: {
             // Pearl: near side clamp(1.6 paint), far side 0.9 paint.
-            let t=clamp(dot(world-fx_data.xyz,toward)/(fx.depth*0.125)+0.5,0.0,1.0);
+            let t=clamp(dot(world-centre,toward)/(fx.depth*0.125)+0.5,0.0,1.0);
             paint=vec4<f32>(min(color.rgb*1.6,vec3<f32>(1.0))*(1.0-t)+color.rgb*0.9*t,color.a*(1.0-0.1*t));
         }
         case 2u: {
             // Chrome: near half blends to white, far half to half paint.
-            let t=clamp(dot(world-fx_data.xyz,toward)/(fx.depth*0.5)+0.5,0.0,1.0);
+            let t=clamp(dot(world-centre,toward)/(fx.depth*0.5)+0.5,0.0,1.0);
             if t>0.5 {
                 let k=clamp((t-0.5)*2.0,0.0,1.0);
                 paint=vec4<f32>(mix(color.rgb,color.rgb*0.5,k),color.a);
