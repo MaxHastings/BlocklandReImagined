@@ -1498,7 +1498,7 @@ fn builders_hammer_and_undo_their_own_indestructible_bricks() {
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
-    let mut plant_sturdy = |s: &mut Session, seq| {
+    let plant_sturdy = |s: &mut Session, seq| {
         let Reply::Planted(id) = s
             .command(
                 owner,
