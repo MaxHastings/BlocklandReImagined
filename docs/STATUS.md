@@ -167,7 +167,10 @@ IP.
   game.
 - Try the skis, and Demo Pong in Bedroom: load it, click the ramp, and use
   the + and - buttons.
-- Publish GitHub Releases, so the update check has something to find.
+- Upload the content for release builds once (`python tools/ci_content.py
+  upload`, see [release-builds.md](release-builds.md)), then push a version
+  tag. GitHub Actions builds and publishes the release the update check
+  reads.
 - Buy a code-signing certificate, if wanted. Optional; signing is already
   behind a parameter.
 

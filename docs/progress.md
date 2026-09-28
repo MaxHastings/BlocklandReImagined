@@ -3946,3 +3946,23 @@ palette's materials and match the old standalone geometry exactly.
 (170 passed), clippy on bri-render and bri-client clean, `cargo run
 --release -p bri-client --bin debris_probe -- <content> <report.json>`.
 Not seen in a window: Max's playtest.
+
+## 2026-09-28 GitHub Actions release builds
+
+Max asked for prebuilt downloads. `.github/workflows/release.yml` runs on a
+`YYYY-MM-DD-*` version tag (or a manual run with a version) on windows-latest:
+fetch content, release build of bri-client, bri-import-addon and bri-launcher
+with `BRI_VERSION`, `--check`, `package_playtest.ps1 -StressLab` and
+`-VerifyPackage`, the standalone-exe release smoke, then a GitHub Release with
+`BlocklandReImagined.exe` and the zip. Symbols are a 90-day workflow artifact.
+Details and Max's setup: `docs/release-builds.md`.
+
+Content source: a draft, prerelease GitHub release `ci-content` in this repo
+holding `ci-content.zip` (only the packs the game loads), made by
+`python tools/ci_content.py upload`. Chosen over a secret (48 KB limit) and a
+second private repo plus token (two setup steps): drafts are private to people
+with push access, the workflow's own token reads them, and assets allow 2 GiB.
+Prerelease keeps a mistakenly published draft out of `releases/latest`.
+`ci_content.py pack` was checked here on a stand-in content folder (zip
+layout, missing-pack error). Not yet run on GitHub: needs Max's upload first.
+The loopback-join smoke stays on the PC (original v20 Add-On archive, GPU).
