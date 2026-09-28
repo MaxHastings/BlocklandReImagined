@@ -39,8 +39,11 @@ pub const MAX_SCAN_DEPTH: usize = 3;
 /// Directories discovery visits at most, so a huge tree stays cheap.
 pub const MAX_SCAN_DIRS: usize = 4096;
 /// Content kinds that only the server reads. A discovered package that
-/// provides nothing else defaults to `server`; any other to `shared`.
-pub const SERVER_KINDS: &[&str] = &["behaviour", "script", "world"];
+/// provides nothing else defaults to `server`.
+pub const SERVER_KINDS: &[&str] = &["behaviour", "script", "world", "entity"];
+/// Content kinds only clients draw. A discovered package that provides
+/// nothing else defaults to `client`; any other package to `shared`.
+pub const CLIENT_KINDS: &[&str] = &["model", "hud"];
 
 /// What a package's manifest says about itself, read leniently for display.
 /// Validation of the manifest is the package runtime's job; a manifest the
@@ -250,23 +253,44 @@ impl Library {
                 );
                 continue;
             }
-            let server_only = !info.provides.is_empty()
-                && info
-                    .provides
+            let only = |kinds: &[&str]| {
+                !info.provides.is_empty()
+                    && info
+                        .provides
+                        .iter()
+                        .all(|p| kinds.contains(&p.kind.as_str()))
+            };
+            let (server_only, client_only) = (only(SERVER_KINDS), only(CLIENT_KINDS));
+            let has = |kinds: &[&str]| {
+                info.provides
                     .iter()
-                    .all(|p| SERVER_KINDS.contains(&p.kind.as_str()));
+                    .any(|p| kinds.contains(&p.kind.as_str()))
+            };
             let package = PackageEntry {
                 id: info.id.clone(),
                 version: info.version.clone(),
                 side: if server_only {
                     Side::Server
+                } else if client_only {
+                    Side::Client
                 } else {
                     Side::Shared
                 },
-                dir,
+                dir: dir.clone(),
                 role: None,
             };
-            entries.push(entry(root, package, false, true));
+            let mut found = entry(root, package, false, true);
+            if has(SERVER_KINDS) && has(CLIENT_KINDS) {
+                found.problems.push(
+                    Diagnostic::error(
+                        "library.mixed_sides",
+                        format!("`{}` has both server behaviour and client visuals", info.id),
+                    )
+                    .at(format!("{dir}/{MANIFEST_FILE}"))
+                    .hint("split it into two Add-Ons: one for the server rules, one for models and HUD panels, the second depending on the first"),
+                );
+            }
+            entries.push(found);
         }
         let mut library = Self {
             root: root.to_path_buf(),
@@ -819,12 +843,27 @@ mod tests {
         assert!(!world.enabled && world.discovered);
         assert_eq!(world.package.dir, "packages/lab/world");
         assert_eq!(world.package.side, Side::Server);
-        assert_eq!(lib.get("lab-hud").unwrap().package.side, Side::Shared);
+        assert_eq!(lib.get("lab-hud").unwrap().package.side, Side::Client);
+        assert_eq!(lib.get("orphan").unwrap().package.side, Side::Shared);
         assert_eq!(world.info.as_ref().unwrap().source(), Some("original"));
         // Disabled packages only warn about dependencies.
         let orphan = lib.get("orphan").unwrap();
         assert!(!orphan.has_errors());
         assert_eq!(orphan.problems[0].code, "library.dependency");
+    }
+
+    #[test]
+    fn a_package_mixing_server_rules_and_client_visuals_is_refused() {
+        let r = root("mixed");
+        list(&r.0, json!([]));
+        manifest(&r.0, "creeper", "creeper", json!({}), &["entity", "model"]);
+        manifest(&r.0, "mob", "mob", json!({}), &["entity", "behaviour"]);
+        let lib = Library::scan(&r.0).unwrap();
+        let creeper = lib.get("creeper").unwrap();
+        assert!(creeper.has_errors());
+        assert_eq!(creeper.problems[0].code, "library.mixed_sides");
+        assert_eq!(lib.get("mob").unwrap().package.side, Side::Server);
+        assert!(!lib.plan("creeper", true).allowed());
     }
 
     #[test]

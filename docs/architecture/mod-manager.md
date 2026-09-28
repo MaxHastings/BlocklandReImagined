@@ -43,9 +43,12 @@ The engine owns the mechanism; the screen only shows it.
 - **Discovered** packages are directories under the content root, up to
   three levels deep, holding a `package.json` manifest that neither list
   names. They start off. Their side defaults to `server` when everything they
-  provide is a server-only kind (`behaviour`, `script`, `world`), otherwise
-  `shared` (the strict choice: a mismatch refuses the join rather than
-  desyncing).
+  provide is a server-only kind (`behaviour`, `script`, `world`, `entity`),
+  to `client` when everything is a client-only kind (`model`, `hud`), and
+  otherwise to `shared` (the strict choice: a mismatch refuses the join
+  rather than desyncing). A package mixing server and client kinds cannot
+  load on either side, so it is marked broken (`library.mixed_sides`) with a
+  hint to split it.
 - **Base game** packages (reserved `v20-*` ids) are always on and cannot be
   turned off from the library.
 - `Library::plan(id, enable)` returns what else changes and why a change is

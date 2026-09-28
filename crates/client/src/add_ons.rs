@@ -342,7 +342,7 @@ mod tests {
             ]
         );
         assert_eq!(creeper.needs, ["The lab-world ^1.0"]);
-        assert!(creeper.runs.starts_with("Everyone"));
+        assert!(creeper.runs.starts_with("Only on the server"));
 
         let v = set_enabled(&root, "creeper", true).unwrap();
         assert_eq!(
