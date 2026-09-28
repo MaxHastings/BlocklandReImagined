@@ -1206,6 +1206,16 @@ pub struct Settings {
     pub avatar: AvatarPrefs,
     pub avatar_favorites: BTreeMap<u8, AvatarPrefs>,
     pub avatar_colors: Vec<[f32; 4]>,
+    /// Create Mini-Game favourites by slot 0..=9 (v20
+    /// `config/client/MiniGameFavorites/<slot>.cs`).
+    pub minigame_favorites: BTreeMap<u8, MiniGameFavorite>,
+}
+
+/// One Create Mini-Game favourite: the form's rules and its colour's name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameFavorite {
+    pub rules: MiniGameRules,
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
