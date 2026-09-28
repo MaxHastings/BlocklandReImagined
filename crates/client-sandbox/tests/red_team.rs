@@ -213,3 +213,31 @@ fn bulk_memory_loops_are_stopped_by_the_clock() {
     assert!(matches!(error, Stopped::Time | Stopped::Cpu), "{error:?}");
     assert!(took < Duration::from_millis(500), "took {took:?}");
 }
+
+// ---- Shaders ----
+
+/// A loop that copies a 16 KiB local array every iteration: one expression
+/// per copy, but four thousand floats moved. Its cost counts the bytes, so
+/// the loop cap (cost x iterations) sees the real work, and enough copies
+/// are refused outright.
+#[test]
+fn copying_large_values_counts_as_the_work_it_is() {
+    let copy = |copies: usize| {
+        format!(
+            "@vertex fn vs_main(v: BriVertex) -> @builtin(position) vec4<f32> {{
+                return vec4<f32>(v.position, 1.0);
+            }}
+            @fragment fn fs_main() -> @location(0) vec4<f32> {{
+                var a: array<vec4<f32>, 1024>;
+                var b: array<vec4<f32>, 1024>;
+                for (var i = 0u; i < 1000000u; i++) {{ {} }}
+                return a[7];
+            }}",
+            "b = a; a = b; ".repeat(copies)
+        )
+    };
+    let one = bri_client_sandbox::shader::compile("copy.wgsl", &copy(1)).unwrap();
+    assert!(one.fragment_cost >= 2 * 1024, "cost {}", one.fragment_cost);
+    let error = bri_client_sandbox::shader::compile("copy.wgsl", &copy(8)).unwrap_err();
+    assert_eq!(error.code, "shader.too_costly");
+}

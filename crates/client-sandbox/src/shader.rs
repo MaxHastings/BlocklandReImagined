@@ -27,7 +27,7 @@
 use naga::{
     AddressSpace, BinaryOperator, Binding, Block, Expression, Function, Handle, Literal, Module,
     ShaderStage, Span, Statement, TypeInner,
-    valid::{Capabilities, ValidationFlags, Validator},
+    valid::{Capabilities, FunctionInfo, ModuleInfo, ValidationFlags, Validator},
 };
 
 pub const MAX_SHADER_BYTES: usize = 64 * 1024;
@@ -149,13 +149,24 @@ pub fn compile(name: &str, source: &str) -> Result<Shader, ShaderError> {
         loops += bound_loops(&mut entry.function, budget)?;
         start_budget(&mut entry.function, budget, limit);
     }
-    let costs = costs(&module);
+    // The rewritten module must still be valid; anything else is our bug,
+    // and still refused.
+    let info = validator.validate(&module).map_err(|e| {
+        fail(
+            "shader.rewrite",
+            format!("bounding the loops made an invalid shader: {e}"),
+        )
+    })?;
+    let costs = costs(&module, &info);
     let entry_cost = |stage| {
         module
             .entry_points
             .iter()
-            .find(|e| e.stage == stage)
-            .map_or(0, |e| cost_of(&e.function, &costs))
+            .enumerate()
+            .find(|(_, e)| e.stage == stage)
+            .map_or(0, |(i, e)| {
+                cost_of(&module, &e.function, info.get_entry_point(i), &costs)
+            })
     };
     let vertex_cost = entry_cost(ShaderStage::Vertex);
     let fragment_cost = entry_cost(ShaderStage::Fragment);
@@ -163,19 +174,11 @@ pub fn compile(name: &str, source: &str) -> Result<Shader, ShaderError> {
         return Err(fail(
             "shader.too_costly",
             format!(
-                "{name} runs {} expressions per invocation with its helper calls expanded; the limit is {MAX_COST}",
+                "{name} runs {} expressions per invocation with its helper calls expanded (large values count once per 16 bytes); the limit is {MAX_COST}",
                 vertex_cost.max(fragment_cost)
             ),
         ));
     }
-    // The rewritten module must still be valid; anything else is our bug,
-    // and still refused.
-    validator.validate(&module).map_err(|e| {
-        fail(
-            "shader.rewrite",
-            format!("bounding the loops made an invalid shader: {e}"),
-        )
-    })?;
     Ok(Shader {
         name: name.to_string(),
         module,
@@ -238,17 +241,34 @@ fn start_budget(
 
 /// Each helper function's cost: its expressions plus, for every call it
 /// makes, the callee's cost. Saturates rather than overflowing.
-fn costs(module: &Module) -> Vec<u32> {
+fn costs(module: &Module, info: &ModuleInfo) -> Vec<u32> {
     // The validator requires callees to come before their callers.
     let mut costs = Vec::with_capacity(module.functions.len());
-    for (_, function) in module.functions.iter() {
-        let cost = cost_of(function, &costs);
+    for (handle, function) in module.functions.iter() {
+        let cost = cost_of(module, function, &info[handle], &costs);
         costs.push(cost);
     }
     costs
 }
 
-fn cost_of(function: &Function, costs: &[u32]) -> u32 {
+/// What one expression costs: one for each 16 bytes (a `vec4<f32>`) of the
+/// value it makes, at least one. Loading, building or comparing a 16 KiB
+/// local array is one expression but thousands of operations; counted as
+/// one, a loop copying such arrays ran about 1000 times the work the loop
+/// cap was set for.
+fn expression_cost(
+    module: &Module,
+    function: &FunctionInfo,
+    expression: Handle<Expression>,
+) -> u32 {
+    let bytes = match function[expression].ty.inner_with(&module.types) {
+        TypeInner::Pointer { .. } | TypeInner::ValuePointer { .. } => 0,
+        inner => inner.size(module.to_ctx()),
+    };
+    (bytes / 16).max(1)
+}
+
+fn cost_of(module: &Module, function: &Function, info: &FunctionInfo, costs: &[u32]) -> u32 {
     fn calls(block: &Block, costs: &[u32], total: &mut u32) {
         for statement in block.iter() {
             match statement {
@@ -276,7 +296,9 @@ fn cost_of(function: &Function, costs: &[u32]) -> u32 {
             }
         }
     }
-    let mut total = u32::try_from(function.expressions.len()).unwrap_or(u32::MAX);
+    let mut total = function.expressions.iter().fold(0_u32, |total, (h, _)| {
+        total.saturating_add(expression_cost(module, info, h))
+    });
     calls(&function.body, costs, &mut total);
     total
 }
