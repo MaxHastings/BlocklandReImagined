@@ -15,8 +15,15 @@ serde_json = "1.0"
 bri-admin = { path = "crates/admin" }
 bri-files = { path = "crates/files" }
 
+# Full debug info tripled every build's output (42 GB for a cold
+# `cargo build --workspace --all-targets`, 13.5 GB with these settings on
+# 2026-09-28). Line tables keep file:line in panics and backtraces.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 # Line tables make panic backtraces and native crash dumps name files and
 # lines in release builds, at no runtime cost.
