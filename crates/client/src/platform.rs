@@ -1313,7 +1313,7 @@ impl ApplicationHandler for Runner {
 #[derive(Default)]
 struct FocusClick {
     gained: Option<Instant>,
-    swallowed: [bool; 3],
+    swallowed: [bool; 5],
 }
 
 /// Windows delivers the activating button-down right after WM_SETFOCUS.
@@ -1336,6 +1336,8 @@ impl FocusClick {
             MouseButton::Left => 0,
             MouseButton::Right => 1,
             MouseButton::Middle => 2,
+            MouseButton::Back => 3,
+            MouseButton::Forward => 4,
         };
         if pressed {
             let swallow = capturing
@@ -1506,6 +1508,8 @@ fn translate_button(button: winit::event::MouseButton) -> Option<MouseButton> {
         winit::event::MouseButton::Left => MouseButton::Left,
         winit::event::MouseButton::Right => MouseButton::Right,
         winit::event::MouseButton::Middle => MouseButton::Middle,
+        winit::event::MouseButton::Back => MouseButton::Back,
+        winit::event::MouseButton::Forward => MouseButton::Forward,
         _ => return None,
     })
 }

@@ -139,6 +139,8 @@ impl BindMap {
                     crate::input::MouseButton::Left => 1,
                     crate::input::MouseButton::Right => 2,
                     crate::input::MouseButton::Middle => 3,
+                    crate::input::MouseButton::Back => 4,
+                    crate::input::MouseButton::Forward => 5,
                 };
                 format!("MOUSE{n}")
             }

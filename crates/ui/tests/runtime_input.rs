@@ -943,3 +943,41 @@ fn leaving_a_large_download_question_cancels_the_join() {
     down(&mut u, Key::Escape);
     assert_eq!(actions(&mut u), [UiAction::CancelConnect]);
 }
+#[test]
+fn toggle_crouch_flips_on_each_press_and_ignores_release() {
+    let mut u = ui();
+    play(&mut u);
+    u.core
+        .prefs
+        .set_bool(bri_ui::screens::options::TOGGLE_CROUCH, true);
+    u.core.run_command("crouch", true);
+    assert_eq!(actions(&mut u), vec![held(HeldControl::Crouch, true)]);
+    u.core.run_command("crouch", false);
+    assert!(actions(&mut u).is_empty(), "still crouching after release");
+    u.core.run_command("crouch", true);
+    assert_eq!(actions(&mut u), vec![held(HeldControl::Crouch, false)]);
+    u.core.run_command("crouch", false);
+    assert!(actions(&mut u).is_empty());
+    // Held crouch, as in v20, without the setting.
+    u.core
+        .prefs
+        .set_bool(bri_ui::screens::options::TOGGLE_CROUCH, false);
+    u.core.run_command("crouch", true);
+    u.core.run_command("crouch", false);
+    assert_eq!(
+        actions(&mut u),
+        vec![held(HeldControl::Crouch, true), held(HeldControl::Crouch, false)]
+    );
+}
+#[test]
+fn side_mouse_buttons_bind_by_torque_name() {
+    for (name, button, label) in [
+        ("button3", MouseButton::Back, "Mouse 4"),
+        ("button4", MouseButton::Forward, "Mouse 5"),
+    ] {
+        let input = BindInput::parse(bri_ui::schema::Device::Mouse, name).unwrap();
+        assert_eq!(input, BindInput::Mouse(button));
+        assert_eq!(input.label(), label);
+        assert_eq!(button.torque_name(), name);
+    }
+}

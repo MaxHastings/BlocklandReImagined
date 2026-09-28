@@ -237,7 +237,7 @@ loading, hosting and joining are night QA's and are not covered here.
 | 16 | Closed (this branch): `bri-server ... resume ...` continues from the newest autosave or shutdown save in its state folder (`newest_world`). |
 | 17 | Closed on main: the main menu and `--version` show the build's version. |
 | 18 | Brick search and a duplicator: open. |
-| 19 | Toggle crouch, gamepad and extra mouse buttons: open. |
+| 19 | Toggle crouch: closed. Options > Controls has "Toggle crouch (press once)"; off by default, so Crouch is held as in v20 (`toggle_crouch_flips_on_each_press_and_ignores_release`). Mouse 4 and 5: closed, they bind like any button (`side_mouse_buttons_bind_by_torque_name`). Gamepad: open. |
 | 20 | Closed (pass). |
 
 Also fixed on this branch: `docs/PLAYTEST.md` said Tab shows scores; it is

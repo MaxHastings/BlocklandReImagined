@@ -597,6 +597,19 @@ impl Core {
         {
             return;
         }
+        // Toggle crouch: each press flips it; releasing does nothing.
+        let down = if control == HeldControl::Crouch
+            && self
+                .prefs
+                .bool_or(crate::screens::options::TOGGLE_CROUCH, false)
+        {
+            if !down {
+                return;
+            }
+            !self.held_controls.contains(&control)
+        } else {
+            down
+        };
         let changed = if down {
             self.held_controls.insert(control)
         } else {

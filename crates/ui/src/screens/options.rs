@@ -44,6 +44,8 @@ const QUALITY_MENU: &str = "OptGraphicsQualityMenu";
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
 pub const MUTE_IN_BACKGROUND: &str = "$pref::Audio::MuteInBackground";
+/// Not a v20 setting: Crouch toggles instead of holding.
+pub const TOGGLE_CROUCH: &str = "$pref::Input::ToggleCrouch";
 const MUSIC_SLIDER: &str = "OptAudioVolumeMusic";
 /// The renderer's anisotropy when the player never set one (8x, as
 /// `bri_render::scene::TextureFiltering::default`).
@@ -152,6 +154,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::Input::noobjet",
     "$pref::Input::MouseInvert",
     MUTE_IN_BACKGROUND,
+    TOGGLE_CROUCH,
 ];
 /// Other authored controls with native behaviour.
 const SUPPORTED_CONTROLS: &[&str] = &[
@@ -570,6 +573,41 @@ fn audio_rows(v: &mut View) {
     v.add(parent, mute);
 }
 
+/// Controls addition: a Toggle Crouch checkbox under v20's own input
+/// checkboxes, styled like them.
+fn input_rows(v: &mut View) {
+    let Some(anchor) = v.walk().find(|&n| {
+        v.node(n)
+            .ctrl
+            .variable
+            .as_deref()
+            .is_some_and(|var| var.eq_ignore_ascii_case("$pref::Input::noobjet"))
+    }) else {
+        return;
+    };
+    let Some(parent) = v.node(anchor).parent else {
+        return;
+    };
+    let mut toggle = v.node(anchor).ctrl.clone();
+    let bottom = v
+        .node(parent)
+        .children
+        .iter()
+        .map(|&k| v.node(k).ctrl.position[1] + v.node(k).ctrl.extent[1])
+        .max()
+        .unwrap_or(0);
+    toggle.position[1] = bottom + 4;
+    toggle.extent[0] = toggle.extent[0].max(220);
+    toggle.name = Some("OptInputToggleCrouch".into());
+    toggle.variable = Some(TOGGLE_CROUCH.into());
+    toggle.command = None;
+    toggle.text = Some("Toggle crouch (press once)".into());
+    let needed = toggle.position[1] + toggle.extent[1] + 4;
+    let height = &mut v.nodes[parent].ctrl.extent[1];
+    *height = (*height).max(needed);
+    v.add(parent, toggle);
+}
+
 pub struct Options {
     view: View,
     draft: Prefs,
@@ -814,6 +852,7 @@ impl Options {
             v.nodes[n].ctrl.extent[1] = 301;
         }
         audio_rows(v);
+        input_rows(v);
         // Advanced: stack the remaining sections of the scrolled page.
         let page = v.walk().find(|&n| {
             v.node(n)
@@ -1643,6 +1682,7 @@ mod tests {
             ),
             ("GuiSliderCtrl", "SliderGraphicsAnisotropy", "value", ""),
             ("GuiCheckBoxCtrl", "OptPrecipitation", PRECIPITATION, ""),
+            ("GuiCheckBoxCtrl", "OptNoobJet", "$pref::Input::noobjet", ""),
             (
                 "GuiRadioCtrl",
                 "OPT_ShadowQuality0",
@@ -2030,6 +2070,18 @@ mod tests {
         assert_eq!(readout(FOV_SLIDER, 90.0), "90");
         assert_eq!(readout("SliderControlsMouseSensitivity", 0.75), "0.75");
         assert_eq!(readout("SliderGraphicsAnisotropy", 0.0), "Off");
+    }
+
+    #[test]
+    fn toggle_crouch_is_a_controls_checkbox_saved_on_done() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let n = s.view.id("OptInputToggleCrouch").unwrap();
+        assert!(!s.view.bool_value(n));
+        s.view.set_bool(n, true);
+        change(&mut s, &mut ui, n);
+        click(&mut s, "done", &mut ui);
+        assert!(saved_prefs(&mut ui).bool_or(TOGGLE_CROUCH, false));
     }
 
     #[test]
