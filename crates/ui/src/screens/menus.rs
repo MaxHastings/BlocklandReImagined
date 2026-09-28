@@ -775,6 +775,32 @@ pub struct MessageScreen {
     view: View,
     message: MessageBox,
 }
+
+/// v20's `MBSetText`: the message box grows to fit its reflowed text, and
+/// the buttons (bottom-anchored) move down with the frame's bottom edge.
+/// The Yes/No box is authored one line tall.
+fn fit_message(view: &mut View, pack: &Pack, prefix: &str) {
+    let (Some(frame), Some(text)) = (
+        view.id(&format!("{prefix}Frame")),
+        view.id(&format!("{prefix}Text")),
+    ) else {
+        return;
+    };
+    let c = &view.node(text).ctrl;
+    let want = View::ml_height(pack, &c.style, &view.text_of(text), c.extent[0]);
+    let dy = want - c.extent[1];
+    if dy <= 0 {
+        return;
+    }
+    view.nodes[text].ctrl.extent[1] += dy;
+    for k in view.node(frame).children.clone() {
+        if k != text && matches!(view.node(k).ctrl.v_sizing, VSizing::Top) {
+            view.nodes[k].ctrl.position[1] += dy;
+        }
+    }
+    view.nodes[frame].ctrl.extent[1] += dy;
+    view.nodes[frame].ctrl.position[1] -= dy / 2;
+}
 impl MessageScreen {
     pub fn new(core: &Core, message: MessageBox) -> Self {
         let mut view = layout_view(
@@ -792,6 +818,7 @@ impl MessageScreen {
         if let Some(n) = view.id(&format!("{prefix}Text")) {
             view.set_text(n, &message.text);
         }
+        fit_message(&mut view, &core.pack, prefix);
         Self { view, message }
     }
     fn answer(&self, yes: bool, core: &mut Core) {
