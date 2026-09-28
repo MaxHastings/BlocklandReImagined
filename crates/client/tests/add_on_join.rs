@@ -406,7 +406,20 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
     );
     let add_ons = RepoAddOns::install(&content)?;
     let mut set = bri_package::packages::PackageSet::load_root(&content)?;
-    set.packages.extend(add_ons.entries.iter().cloned());
+    // A release's content already lists the Add-Ons it ships turned on (the
+    // Duplicator, the Stress Lab); add only the rest, and expect the guest
+    // to download one of those.
+    let added: Vec<_> = add_ons
+        .entries
+        .iter()
+        .filter(|e| !set.packages.iter().any(|listed| listed.id == e.id))
+        .cloned()
+        .collect();
+    let downloaded = ["duplicator-tool", "sample-bubble-blaster"]
+        .into_iter()
+        .find(|id| added.iter().any(|e| e.id == *id))
+        .context("every repository weapon Add-On is already listed")?;
+    set.packages.extend(added);
     let port = std::net::UdpSocket::bind("127.0.0.1:0")?.local_addr()?.port();
     let mut host_app = app(&content, "RepoHost")?;
     // What turning them on in the Add-Ons screen loads, without writing the
@@ -433,8 +446,8 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
     }
     let cache = guest_cache_ids(&guest);
     ensure!(
-        cache.iter().any(|id| id == "duplicator-tool"),
-        "the Duplicator was not downloaded: {cache:?}"
+        cache.iter().any(|id| id == downloaded),
+        "{downloaded} was not downloaded: {cache:?}"
     );
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
