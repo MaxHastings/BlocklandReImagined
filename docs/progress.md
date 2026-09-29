@@ -5613,8 +5613,18 @@ panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
 - Evidence on Maxwell's 699 saves: before 395 failed (357 NOPRINT, 34 other
   unknown prints, 4 empty saves); after 4 failed, all "Build contains no
   bricks". Violin loads 5,018 of 5,018 bricks.
-- Next: 399 saves name prints the bundle does not resolve; many are stock
-  prints stored as `base/data/prints/<aspect>/<name>.png` paths (Letters/*
-  in 190 saves) or older aspects (`2x2/`, `2x1/`, `1x1r/`). They now draw
-  blank where v20 shows the image; mapping those names needs v20's loader
-  rule as evidence.
+- Follow-up (3bcf130 and after): `Bundle::resolve` maps older saves' stock
+  print tokens (`base/data/prints/<class>/<name>.png`,
+  `Add-Ons/Print_<class>_<pkg>/prints/<name>.png`, renamed classes
+  `2x2`->`2x2f`, `2x1`->`1x2f`, `1x1r`->`2x2r`, each holding exactly its v20
+  package's image names) to the stock print; counters read their digit
+  from them. Tests: `older_saves_print_paths_and_renamed_classes_resolve_to_stock_prints`,
+  `counters_read_their_digit_from_any_print_name`.
+- Re-run on 699 saves: 4 failures (the empty saves). The 59 names the
+  first probe flagged by class were checked one by one against the 77 stock
+  prints in `docs/research/v20-inventory.json`: none is a v20 print (Add-On
+  packs using stock class folders: `Floor_*`, `BAN_*`, `*lcase`, `FART_*`,
+  money, extra symbols). Two are stock image names in a class v20 never had
+  them in (`2x2f/computer1`, `1x2f/Square`); v20's printNameTable has no
+  such entry either, so they stay blank. The probe now reports only those
+  near misses instead of every name under a stock class.

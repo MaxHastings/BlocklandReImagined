@@ -193,21 +193,22 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
         .collect();
     let mut saves = vec![];
     let (mut failed, mut with_unknown_prints) = (0, 0);
-    // Every unknown print across the saves, and those naming a stock print
-    // class (`Letters/…`, `2x2f/…`, or an older name for one): a stock
-    // print that still draws blank.
-    let classes: std::collections::BTreeSet<String> = setup
+    // Every unknown print across the saves. The bundle holds every stock
+    // v20 print, so an unknown name is never a stock print; this flags the
+    // near misses: a stock image name under a class it is not in
+    // (`2x2f/computer1`), which a wrong class mapping would also produce.
+    let stock_names: std::collections::BTreeSet<String> = setup
         .materials
         .bundle
         .prints
         .iter()
-        .map(|p| p.aspect.to_ascii_lowercase())
+        .map(|p| p.name.to_ascii_lowercase())
         .collect();
-    let stock_class = |name: &str| {
+    let stock_name = |name: &str| {
         let alias = bri_content::brick_materials::legacy_print_alias(name);
         let name = alias.as_deref().unwrap_or(name);
         name.split_once('/')
-            .is_some_and(|(class, _)| classes.contains(&class.to_ascii_lowercase()))
+            .is_some_and(|(_, stem)| stock_names.contains(&stem.to_ascii_lowercase()))
     };
     let mut all_unknown: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for entry in &entries {
@@ -245,14 +246,14 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
         "failed": failed,
         "with_unknown_prints": with_unknown_prints,
         "unknown_print_bricks": all_unknown.values().map(|(b, _)| b).sum::<usize>(),
-        "stock_print_bricks_blank": all_unknown
+        "stock_name_other_class_bricks": all_unknown
             .iter()
-            .filter(|(name, _)| stock_class(name))
+            .filter(|(name, _)| stock_name(name))
             .map(|(_, (b, _))| b)
             .sum::<usize>(),
     });
-    for (name, (bricks, saves)) in all_unknown.iter().filter(|(name, _)| stock_class(name)) {
-        println!("STOCK BLANK {name}: {bricks} bricks in {saves} saves");
+    for (name, (bricks, saves)) in all_unknown.iter().filter(|(name, _)| stock_name(name)) {
+        println!("STOCK NAME, OTHER CLASS {name}: {bricks} bricks in {saves} saves");
     }
     println!("{summary}");
     let unknown: BTreeMap<_, _> = all_unknown
@@ -260,7 +261,7 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
         .map(|(name, (bricks, saves))| {
             (
                 name,
-                json!({ "bricks": bricks, "saves": saves, "stock_class": stock_class(name) }),
+                json!({ "bricks": bricks, "saves": saves, "stock_name_other_class": stock_name(name) }),
             )
         })
         .collect();
