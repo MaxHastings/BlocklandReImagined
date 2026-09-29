@@ -427,8 +427,7 @@ fn sample(history: &VecDeque<bri_net::protocol::Pose>, tick: f64) -> PlayerState
         state.feet = state.shown_feet();
         return state;
     }
-    for pair in history.iter().collect::<Vec<_>>().windows(2) {
-        let (a, b) = (pair[0], pair[1]);
+    for (a, b) in history.iter().zip(history.iter().skip(1)) {
         if tick <= b.tick as f64 {
             let span = (b.tick - a.tick).max(1) as f64;
             return blend(&a.player, &b.player, ((tick - a.tick as f64) / span) as f32);

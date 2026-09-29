@@ -17,3 +17,4 @@ pub mod stream;
 pub mod traffic;
 pub mod upnp;
 mod tick_clock;
+pub mod timer_resolution;

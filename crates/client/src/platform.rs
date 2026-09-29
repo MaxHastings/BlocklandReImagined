@@ -404,6 +404,7 @@ struct Runner {
     windowed: PhysicalSize<u32>,
     error: Option<anyhow::Error>,
     screenshot: Option<(std::path::PathBuf, bool)>,
+    screenshots: Screenshots,
     /// Main-thread work since the last presented frame (update and pump).
     frame_cpu: Duration,
     last_present: Option<Instant>,
@@ -447,6 +448,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         windowed,
         error: None,
         screenshot: None,
+        screenshots: Screenshots::default(),
         frame_cpu: Duration::ZERO,
         last_present: None,
     };
@@ -868,14 +870,9 @@ impl Runner {
         }
         g.queue.submit([encoder.finish()]);
         if let Some((path, capture)) = scene_capture.or(hud_capture) {
-            let saved = capture.save(&g.device, &path);
-            let text = match &saved {
-                Ok(()) => format!(
-                    "Screenshot saved: {}",
-                    path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into())
-                ),
-                Err(error) => format!("Screenshot failed: {error:#}"),
-            };
+            self.screenshots.start(path, capture);
+        }
+        for text in self.screenshots.poll(&g.device) {
             self.config.app.ui_mut().apply(bri_ui::api::UiUpdate::BottomPrint {
                 text,
                 seconds: 3.0,
@@ -957,19 +954,105 @@ fn capture_copy(
         ),
     })
 }
-impl Capture {
-    fn save(self, device: &wgpu::Device, path: &std::path::Path) -> Result<()> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.buffer
+/// Screenshots in flight. A frame that takes one only queues a copy; the
+/// readback is polled on later frames and the PNG is encoded and written on
+/// a worker thread, so taking a screenshot never stalls the game.
+#[derive(Default)]
+struct Screenshots {
+    reading: Vec<Reading>,
+    written: Option<(
+        std::sync::mpsc::Sender<Written>,
+        std::sync::mpsc::Receiver<Written>,
+    )>,
+}
+/// A screenshot's file and whether writing it succeeded.
+type Written = (std::path::PathBuf, Result<()>);
+struct Reading {
+    path: std::path::PathBuf,
+    capture: Capture,
+    mapped: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    since: Instant,
+}
+/// How long a readback may wait for the GPU before the screenshot fails.
+const SCREENSHOT_READBACK_LIMIT: Duration = Duration::from_secs(5);
+impl Screenshots {
+    /// Start reading back a copy queued in a frame just submitted.
+    fn start(&mut self, path: std::path::PathBuf, capture: Capture) {
+        let (tx, mapped) = std::sync::mpsc::channel();
+        capture
+            .buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |r| {
                 let _ = tx.send(r);
             });
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(5)),
-        })?;
-        rx.recv_timeout(Duration::from_secs(5))??;
+        self.reading.push(Reading {
+            path,
+            capture,
+            mapped,
+            since: Instant::now(),
+        });
+    }
+    /// Hand finished readbacks to writer threads and return the messages
+    /// for screenshots written or failed since the last call. Never blocks.
+    fn poll(&mut self, device: &wgpu::Device) -> Vec<String> {
+        let mut messages = Vec::new();
+        if !self.reading.is_empty() {
+            let _ = device.poll(wgpu::PollType::Poll);
+            let (done, _) = self.written.get_or_insert_with(std::sync::mpsc::channel);
+            let mut waiting = Vec::new();
+            for reading in self.reading.drain(..) {
+                match reading.mapped.try_recv() {
+                    Ok(Ok(())) => {
+                        let done = done.clone();
+                        let Reading { path, capture, .. } = reading;
+                        let spawned =
+                            std::thread::Builder::new()
+                                .name("screenshot".into())
+                                .spawn({
+                                    let path = path.clone();
+                                    move || {
+                                        let result = capture.write(&path);
+                                        let _ = done.send((path, result));
+                                    }
+                                });
+                        if let Err(error) = spawned {
+                            messages.push(format!("Screenshot failed: {error}"));
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        messages.push(format!("Screenshot failed: screenshot readback: {error}"))
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        messages.push("Screenshot failed: the GPU dropped the readback".into())
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                        if reading.since.elapsed() >= SCREENSHOT_READBACK_LIMIT =>
+                    {
+                        messages.push("Screenshot failed: the GPU did not finish the copy".into())
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(reading),
+                }
+            }
+            self.reading = waiting;
+        }
+        if let Some((_, written)) = &self.written {
+            while let Ok((path, result)) = written.try_recv() {
+                messages.push(match result {
+                    Ok(()) => format!(
+                        "Screenshot saved: {}",
+                        path.file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into())
+                    ),
+                    Err(error) => format!("Screenshot failed: {error:#}"),
+                });
+            }
+        }
+        messages
+    }
+}
+impl Capture {
+    /// Convert a mapped readback to RGBA and write it as a PNG.
+    fn write(self, path: &std::path::Path) -> Result<()> {
         let mapped = self
             .buffer
             .slice(..)
@@ -990,7 +1073,13 @@ impl Capture {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        image::save_buffer(path, &pixels, self.width, self.height, image::ColorType::Rgba8)?;
+        image::save_buffer(
+            path,
+            &pixels,
+            self.width,
+            self.height,
+            image::ColorType::Rgba8,
+        )?;
         Ok(())
     }
 }
