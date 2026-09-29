@@ -1879,7 +1879,7 @@ impl App {
                 network::Event::Notice(notice) => {
                     let update = match notice {
                         bri_sim::session::Notice::Chat(text) => UiUpdate::Chat {
-                            text: server_markup(&text),
+                            text: bri_ui::ml::sanitize(&text),
                         },
                         bri_sim::session::Notice::Center { text, seconds } => {
                             UiUpdate::CenterPrint {
@@ -2199,11 +2199,17 @@ impl App {
             for line in &view.chat {
                 if line.id > a.last_chat {
                     // Owner 0 lines are server-authored (death messages) and
-                    // may carry vanilla color escapes and death icons.
+                    // may carry ML markup, colour codes and death icons.
+                    // Player lines use v20's chat format
+                    // `\c7<clan prefix>\c3<name>\c7<clan suffix>\c6: <text>`.
                     let text = if line.owner == 0 {
-                        server_markup(&line.text)
+                        bri_ui::ml::sanitize(&line.text)
                     } else {
-                        format!("{}: {}", plain_chat(&line.name), plain_chat(&line.text))
+                        format!(
+                            "\u{E007}\u{E003}{}\u{E007}\u{E006}: {}",
+                            plain_chat(&line.name),
+                            plain_chat(&line.text)
+                        )
                     };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
@@ -2290,6 +2296,8 @@ fn camera_eye(
         },
     }
 }
+/// Player-typed text is shown literally: no ML tags, colour codes or control
+/// characters (v20's server strips ML control characters from chat).
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -2300,12 +2308,13 @@ fn plain_chat(text: &str) -> String {
         })
         .collect()
 }
-/// Center and bottom prints are server markup on several lines. `<key:cmd>`
-/// names the player's own binding for a command, as the Tutorial's
-/// `bindNameFix` does.
+/// Center and bottom prints are server ML markup (parsed and bounded by
+/// `bri_ui::ml`) on several lines. `<key:cmd>` names the player's own binding
+/// for a command, as the Tutorial's `bindNameFix` does.
 fn print_markup(binds: &bri_ui::binds::BindMap, text: &str) -> String {
+    let text = bri_ui::ml::sanitize(text);
     let mut resolved = String::new();
-    let mut rest = text;
+    let mut rest = text.as_str();
     while let Some(start) = rest.find("<key:") {
         resolved.push_str(&rest[..start]);
         let after = &rest[start + 5..];
@@ -2322,10 +2331,6 @@ fn print_markup(binds: &bri_ui::binds::BindMap, text: &str) -> String {
     }
     resolved.push_str(rest);
     resolved
-        .split('\n')
-        .map(server_markup)
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 /// `bindNameFix`: mouse buttons and a few keys get readable names, single
 /// letters are upper case.
@@ -2349,46 +2354,6 @@ fn key_name(binds: &bri_ui::binds::BindMap, command: &str) -> String {
         None => "(unbound)".into(),
     }
 }
-/// Server-authored text keeps vanilla color escapes and `<bitmap:...>` icons
-/// (base UI and add-on death icons), but no other markup or control characters.
-fn server_markup(text: &str) -> String {
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<bitmap:") {
-        out.push_str(&plain_chat(&rest[..start]));
-        let after = &rest[start..];
-        match after.find('>') {
-            Some(end)
-                if after[8..end]
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"/_-".contains(&b))
-                    && ["base/client/ui/", "add-ons/"]
-                        .iter()
-                        .any(|p| after[8..end].to_ascii_lowercase().starts_with(p)) =>
-            {
-                out.push_str(&after[..=end].to_ascii_lowercase());
-                rest = &after[end + 1..];
-            }
-            _ => {
-                out.push_str(&plain_chat(&after[..8]));
-                rest = &after[8..];
-            }
-        }
-    }
-    out.push_str(
-        &rest
-            .chars()
-            .filter(|c| !c.is_control())
-            .map(|c| match c {
-                '<' => '‹',
-                '>' => '›',
-                _ => c,
-            })
-            .collect::<String>(),
-    );
-    out
-}
-
 /// Client-side death, respawn and status presentation derived from vitals.
 #[derive(Default)]
 struct CombatPresentation {
@@ -4268,6 +4233,22 @@ image: "v20.image.gunimage".into(),
         assert_eq!(
             super::plain_chat("<color:ff0000>A\u{e003}B\u{e00b}C\u{e00c}\n"),
             "‹color:ff0000›ABC"
+        );
+    }
+    #[test]
+    fn server_prints_keep_ml_markup_for_the_shared_renderer() {
+        let binds = bri_ui::binds::BindMap::default();
+        let event = "<color:FFFFFF>It's no longer Badspot's' Birthday.<br>Attempts\u{7} ignored";
+        assert_eq!(
+            super::print_markup(&binds, event),
+            "<color:FFFFFF>It's no longer Badspot's' Birthday.<br>Attempts ignored"
+        );
+        assert_eq!(
+            super::print_markup(
+                &binds,
+                "Press \u{E003}<key:jump>\u{E000} now\n<bitmap:base/client/ui/CI/trophy>"
+            ),
+            "Press \u{E003}(unbound)\u{E000} now\n<bitmap:base/client/ui/CI/trophy>"
         );
     }
 }

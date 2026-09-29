@@ -246,11 +246,14 @@ fn hud(core: &Core) -> View {
         );
     }
     // Original cached font + ML markup, with chat fade/page rules from ChatModel.
+    // `NewChatSO::addLine` wraps every line in `<spush>`/`<spop>` so one
+    // line's styles never leak into the next. Uncoloured text keeps the
+    // profile colour, as in v20 (c:14972-14982).
     let chat = core
         .chat
         .visible(core.time_ms)
         .iter()
-        .map(|l| format!("\u{E006}{}", l.text))
+        .map(|l| format!("<spush>{}<spop>", l.text))
         .collect::<Vec<_>>()
         .join("\n");
     markup(
@@ -310,17 +313,14 @@ impl Screen for Play {
         if let Some(n) = self.view.id("LagIcon") {
             self.view.set_visible(n, core.lagging);
         }
-        // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs.
+        // clientCmdCenterPrint / clientCmdBottomPrint on the authored dialogs
+        // (c:6921-6969): center prints get `<just:center>` and a trailing
+        // newline, bottom prints are set as sent.
         let center = core.center_print.as_ref().map(|(text, _)| text);
         self.print(
             "centerPrintDlg",
             "CenterPrintText",
-            center.map(|t| {
-                format!(
-                    "<just:center>{t}
-"
-                )
-            }),
+            center.map(|t| format!("<just:center>{t}\n")),
         );
         let bottom = core.bottom_print.as_ref();
         self.print(

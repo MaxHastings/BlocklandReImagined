@@ -1,6 +1,5 @@
 //! Text with the original Torque font caches (bitmap fonts at fixed pixel
-//! sizes, Windows-1252 code page) and the subset of Torque ML markup that v20
-//! screens use.
+//! sizes, Windows-1252 code page). ML markup is in [`crate::ml`].
 //!
 //! Colour codes (`\c0`..`\c9`) are stored as U+E000..U+E009. `\cr`, `\cp` and
 //! `\co` (reset/push/pop) are U+E00A..U+E00C.
@@ -8,7 +7,7 @@
 use crate::draw::{DrawList, Filter};
 use crate::geom::Rgba;
 use crate::pack::{Pack, TexKey};
-use crate::schema::{FontEntry, Glyph, Justify, Style};
+use crate::schema::{FontEntry, Glyph, Style};
 
 pub const COLOR_CODE_BASE: u32 = 0xE000;
 
@@ -165,134 +164,6 @@ impl<'a> Font<'a> {
         }
         self.draw(dl, x, top, s, color, palette)
     }
-}
-
-/// One laid-out line of rich text.
-/// Private-use delimiters around an inline `<bitmap:...>` image id.
-pub const BITMAP_START: char = '\u{F000}';
-pub const BITMAP_END: char = '\u{F001}';
-/// Split a laid-out ML line into text runs and inline bitmap ids.
-pub fn ml_runs(line: &str) -> Vec<(bool, &str)> {
-    let mut runs = Vec::new();
-    let mut rest = line;
-    while let Some(start) = rest.find(BITMAP_START) {
-        if start > 0 {
-            runs.push((false, &rest[..start]));
-        }
-        let after = &rest[start + BITMAP_START.len_utf8()..];
-        let Some(end) = after.find(BITMAP_END) else {
-            rest = after;
-            break;
-        };
-        runs.push((true, &after[..end]));
-        rest = &after[end + BITMAP_END.len_utf8()..];
-    }
-    if !rest.is_empty() {
-        runs.push((false, rest));
-    }
-    runs
-}
-#[derive(Debug, Clone, PartialEq)]
-pub struct MlLine {
-    pub text: String,
-    pub justify: Justify,
-    pub width: i32,
-}
-
-/// Parse the Torque ML subset used by v20 (`<just:...>`, `<br>`, colour codes,
-/// `<a:url>..</a>`, `<spush>/<spop>`, `<font:..>` ignored) and word-wrap to
-/// `max_width` (0 = no wrapping).
-pub fn layout_ml(font: &Font, src: &str, max_width: i32, default: Justify) -> Vec<MlLine> {
-    let mut lines = Vec::new();
-    let mut just = default;
-    let mut cur = String::new();
-    let mut rest = src;
-    let mut paragraphs: Vec<(String, Justify)> = Vec::new();
-    while !rest.is_empty() {
-        if let Some(stripped) = rest.strip_prefix('<')
-            && let Some(end) = stripped.find('>')
-        {
-            let tag = &stripped[..end];
-            let low = tag.to_ascii_lowercase();
-            let known = low.starts_with("just:")
-                || low == "br"
-                || low.starts_with("a:")
-                || low == "/a"
-                || low == "spush"
-                || low == "spop"
-                || low.starts_with("font:")
-                || low.starts_with("color:")
-                || low.starts_with("bitmap:")
-                || low == "linkcolor"
-                || low.starts_with("tab:");
-            if known {
-                // Inline bitmaps (death icons) survive layout as a marked run
-                // that the ML renderer draws as an image.
-                if low.starts_with("bitmap:") {
-                    cur.push(BITMAP_START);
-                    cur.push_str(&tag["bitmap:".len()..]);
-                    cur.push(BITMAP_END);
-                }
-                if let Some(j) = low.strip_prefix("just:") {
-                    just = match j {
-                        "center" => Justify::Center,
-                        "right" => Justify::Right,
-                        _ => Justify::Left,
-                    };
-                }
-                if low == "br" {
-                    paragraphs.push((std::mem::take(&mut cur), just));
-                }
-                rest = &stripped[end + 1..];
-                continue;
-            }
-        }
-        let c = rest.chars().next().expect("non-empty");
-        rest = &rest[c.len_utf8()..];
-        if c == '\n' {
-            paragraphs.push((std::mem::take(&mut cur), just));
-        } else {
-            cur.push(c);
-        }
-    }
-    if !cur.is_empty() || paragraphs.is_empty() {
-        paragraphs.push((cur, just));
-    }
-    for (p, j) in paragraphs {
-        if max_width <= 0 || font.width(&p) <= max_width {
-            lines.push(MlLine {
-                width: font.width(&p),
-                text: p,
-                justify: j,
-            });
-            continue;
-        }
-        // Greedy word wrap, keeping colour markers attached to words.
-        let mut line = String::new();
-        for word in p.split(' ') {
-            let candidate = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            if font.width(&candidate) > max_width && !line.is_empty() {
-                lines.push(MlLine {
-                    width: font.width(&line),
-                    text: std::mem::take(&mut line),
-                    justify: j,
-                });
-                line = word.to_string();
-            } else {
-                line = candidate;
-            }
-        }
-        lines.push(MlLine {
-            width: font.width(&line),
-            text: line,
-            justify: j,
-        });
-    }
-    lines
 }
 
 /// Text colour for a control state.

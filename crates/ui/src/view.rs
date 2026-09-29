@@ -5,6 +5,7 @@
 use crate::draw::{DrawList, Filter};
 use crate::geom::{self, Rect, Rgba, WHITE};
 use crate::input::{Chord, Key, Modifiers, MouseButton};
+use crate::ml;
 use crate::pack::{Pack, TexKey};
 use crate::schema::{Control, HSizing, Justify, Style, VSizing};
 use crate::text::{self, Font};
@@ -622,51 +623,24 @@ impl View {
         let Some(font) = Font::get(pack, fid) else {
             return;
         };
-        let color = style.font_color.unwrap_or(geom::BLACK);
-        let mut y = r.y;
-        for line in text::layout_ml(&font, text, r.w, Justify::Left) {
-            let runs = text::ml_runs(&line.text);
-            let bitmap_width: i32 = runs
-                .iter()
-                .filter(|(bitmap, _)| *bitmap)
-                .filter_map(|(_, id)| pack.image_size(id))
-                .map(|(w, _)| w as i32)
-                .sum();
-            let width = line.width + bitmap_width;
-            let mut x = match line.justify {
-                Justify::Left => r.x,
-                Justify::Center => r.x + (r.w - width) / 2,
-                Justify::Right => r.right() - width,
-            };
-            let mut height = font.line_height();
-            for (bitmap, run) in runs {
-                if bitmap {
-                    if let Some((w, h)) = pack.image_size(run) {
-                        dl.image(
-                            TexKey::Image(run.to_string()),
-                            [0.0, 0.0, w as f32, h as f32],
-                            [x as f32, y as f32, w as f32, h as f32],
-                            geom::WHITE,
-                            crate::draw::Filter::Linear,
-                        );
-                        x += w as i32;
-                        height = height.max(h as i32);
-                    }
-                } else {
-                    font.draw_outlined(
-                        dl,
-                        x as f32,
-                        y as f32,
-                        run,
-                        color,
-                        style.font_outline,
-                        &style.font_colors,
-                    );
-                    x += font.width(run);
-                }
-            }
-            y += height;
-        }
+        // GuiMLTextCtrl fields: `allowColorChars` (absent on the HUD's own
+        // ML controls, which all use the palette) and `lineSpacing`.
+        let ctrl = &self.nodes[id].ctrl;
+        let defaults = ml::MlDefaults {
+            font: font.id,
+            color: style.font_color.unwrap_or(geom::BLACK),
+            palette: &style.font_colors,
+            allow_color_chars: ctrl.field("allowColorChars") != Some("0"),
+            justify: Justify::Left,
+            line_spacing: ctrl
+                .field("lineSpacing")
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0),
+            link: ml::DEFAULT_LINK,
+            link_hl: ml::DEFAULT_LINK_HL,
+        };
+        let layout = ml::layout(pack, text, r.w, &defaults);
+        ml::draw(pack, dl, &layout, (r.x, r.y), style.font_outline);
     }
 
     fn draw_self(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
