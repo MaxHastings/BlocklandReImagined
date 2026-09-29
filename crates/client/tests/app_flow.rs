@@ -38,7 +38,15 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     Ok(())
 }
 
-fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> bool) -> Result<()> {
+/// How long a wait may take before it counts as a hang. The waits end on
+/// what they wait for; this deadline only catches a hang, so it sits far
+/// past what the slowest step takes on a loaded PC (the gate runs these
+/// debug builds beside every other test). Tighter per-step deadlines
+/// failed there and passed alone.
+const HANG: Duration = Duration::from_secs(300);
+
+fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
+    let timeout = HANG;
     let start = Instant::now();
     let mut previous = start;
     loop {
@@ -71,7 +79,8 @@ fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> b
 fn host(app: &mut App, name: &str) -> RequestId {
     app.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
-        mode: ServerMode::SinglePlayer, game_mode: None,
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
         max_players: 1,
         server_name: name.into(),
         password: String::new(),
@@ -208,7 +217,8 @@ fn native_weather_map_settings_render_and_disconnect() -> Result<()> {
             &mut app,
             UiAction::HostGame {
                 map: map.into(),
-                mode: ServerMode::SinglePlayer, game_mode: None,
+                mode: ServerMode::SinglePlayer,
+                game_mode: None,
                 max_players: 1,
                 server_name: name.into(),
                 password: String::new(),
@@ -216,15 +226,10 @@ fn native_weather_map_settings_render_and_disconnect() -> Result<()> {
                 super_admin_password: String::new(),
             },
         )?;
-        until(
-            &mut app,
-            "weather map and player",
-            Duration::from_secs(45),
-            |a| {
-                a.network_view()
-                    .is_some_and(|v| v.poses.contains_key(&v.owner))
-            },
-        )?;
+        until(&mut app, "weather map and player", |a| {
+            a.network_view()
+                .is_some_and(|v| v.poses.contains_key(&v.owner))
+        })?;
         action(
             &mut app,
             UiAction::Game(GameAction::Look {
@@ -341,16 +346,11 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             reason: "deliberately stale loader callback".into(),
         })
     ));
-    until(
-        &mut app,
-        "Bedroom network host and player replica",
-        Duration::from_secs(45),
-        |a| {
-            matches!(&a.ui.core.conn, ConnectionState::InGame { server_name, .. } if server_name == "Native headless Bedroom")
-                && a.network_view()
-                    .is_some_and(|v| v.poses.contains_key(&v.owner))
-        },
-    )?;
+    until(&mut app, "Bedroom network host and player replica", |a| {
+        matches!(&a.ui.core.conn, ConnectionState::InGame { server_name, .. } if server_name == "Native headless Bedroom")
+            && a.network_view()
+                .is_some_and(|v| v.poses.contains_key(&v.owner))
+    })?;
     let entered_ms = started.elapsed().as_millis();
     let (placements, foliage_load_ms) = app.foliage_placement();
     let foliage_placement = placements.to_vec();
@@ -367,18 +367,13 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
         down: true,
     }));
     pump(&mut app)?;
-    until(
-        &mut app,
-        "authoritative horizontal movement",
-        Duration::from_secs(8),
-        |a| {
-            let view = a.network_view().unwrap();
-            let pose = &view.poses[&view.owner];
-            let dx = pose.player.feet[0] - before.player.feet[0];
-            let dz = pose.player.feet[2] - before.player.feet[2];
-            pose.tick > before.tick && dx * dx + dz * dz > 0.01
-        },
-    )?;
+    until(&mut app, "authoritative horizontal movement", |a| {
+        let view = a.network_view().unwrap();
+        let pose = &view.poses[&view.owner];
+        let dx = pose.player.feet[0] - before.player.feet[0];
+        let dz = pose.player.feet[2] - before.player.feet[2];
+        pose.tick > before.tick && dx * dx + dz * dz > 0.01
+    })?;
     app.ui.core.request(UiAction::Game(GameAction::Held {
         control: HeldControl::Forward,
         down: false,
@@ -393,21 +388,16 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
         text: chat.clone(),
     });
     pump(&mut app)?;
-    until(
-        &mut app,
-        "server chat roundtrip and HUD delivery",
-        Duration::from_secs(8),
-        |a| {
-            a.network_view()
-                .is_some_and(|v| v.chat.iter().any(|line| line.text == chat))
-                && a.ui
-                    .core
-                    .chat
-                    .lines
-                    .iter()
-                    .any(|line| line.text.contains(&format!("{run_id} ‹tag›")))
-        },
-    )?;
+    until(&mut app, "server chat roundtrip and HUD delivery", |a| {
+        a.network_view()
+            .is_some_and(|v| v.chat.iter().any(|line| line.text == chat))
+            && a.ui
+                .core
+                .chat
+                .lines
+                .iter()
+                .any(|line| line.text.contains(&format!("{run_id} ‹tag›")))
+    })?;
     let authoritative_chat = app.network_view().unwrap().chat.clone();
     let hud_chat = app
         .ui
@@ -422,15 +412,10 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     let gpu = Headless::new().context("offscreen native-client-flow adapter")?;
     let mut ui_renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
-    until(
-        &mut app,
-        "player grounded before building probe",
-        Duration::from_secs(8),
-        |a| {
-            let view = a.network_view().unwrap();
-            view.poses[&view.owner].player.grounded
-        },
-    )?;
+    until(&mut app, "player grounded before building probe", |a| {
+        let view = a.network_view().unwrap();
+        view.poses[&view.owner].player.grounded
+    })?;
     // Local ghost deployment does not wait for an authoritative aim round trip.
     action(
         &mut app,
@@ -486,7 +471,6 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     until(
         &mut app,
         "authoritative plant and material render snapshot",
-        Duration::from_secs(8),
         |a| {
             a.network_view().unwrap().world.bricks.len() == 1
                 && a.world_render_ready()
@@ -517,12 +501,9 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
         .core
         .request(UiAction::CancelWrench { brick: planted_id });
     pump(&mut app)?;
-    until(
-        &mut app,
-        "cancelled wrench reply drained",
-        Duration::from_secs(5),
-        |a| a.pending_requests() == 0,
-    )?;
+    until(&mut app, "cancelled wrench reply drained", |a| {
+        a.pending_requests() == 0
+    })?;
     assert!(
         !app.ui
             .stack()
@@ -531,18 +512,12 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     );
 
     action(&mut app, UiAction::UseTool { slot: 2 })?;
-    until(
-        &mut app,
-        "authoritative printer slot replicated",
-        Duration::from_secs(5),
-        |a| {
-            let view = a.network_view().unwrap();
-            view.tools.get(&view.owner).is_some_and(|tools| {
-                tools.selected == Some(2)
-                    && tools.slots[2].as_deref() == Some("v20.weapon.printgun")
-            })
-        },
-    )?;
+    until(&mut app, "authoritative printer slot replicated", |a| {
+        let view = a.network_view().unwrap();
+        view.tools.get(&view.owner).is_some_and(|tools| {
+            tools.selected == Some(2) && tools.slots[2].as_deref() == Some("v20.weapon.printgun")
+        })
+    })?;
     action(
         &mut app,
         UiAction::Game(GameAction::Look {
@@ -554,7 +529,6 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     until(
         &mut app,
         "server deliberately aimed away from print brick",
-        Duration::from_secs(5),
         |a| {
             let view = a.network_view().unwrap();
             (view.poses[&view.owner].player.yaw - away_yaw).abs() < 0.01
@@ -578,7 +552,6 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     until(
         &mut app,
         "authoritative printer opens original selector",
-        Duration::from_secs(5),
         |a| a.ui.stack().contains(&ScreenId::PrintSelector),
     )?;
     action(
@@ -605,17 +578,12 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             print: print_b.clone(),
         },
     )?;
-    until(
-        &mut app,
-        "print edit replicated and rendered",
-        Duration::from_secs(5),
-        |a| {
-            a.network_view().unwrap().world.bricks[&planted_id].print
-                == Some(bri_world::ContentRef::Resolved(print_b.clone()))
-                && a.world_render_ready()
-                && a.pending_requests() == 0
-        },
-    )?;
+    until(&mut app, "print edit replicated and rendered", |a| {
+        a.network_view().unwrap().world.bricks[&planted_id].print
+            == Some(bri_world::ContentRef::Resolved(print_b.clone()))
+            && a.world_render_ready()
+            && a.pending_requests() == 0
+    })?;
     action(&mut app, UiAction::ClosePrintSelector)?;
     app.ui.core.pop(ScreenId::PrintSelector);
     app.ui.update(0);
@@ -628,22 +596,14 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             down: true,
         }),
     )?;
-    until(
-        &mut app,
-        "authoritative wrench opens properties",
-        Duration::from_secs(5),
-        |a| {
-            a.ui.stack()
-                .contains(&ScreenId::Wrench(WrenchVariant::Normal))
-        },
-    )?;
+    until(&mut app, "authoritative wrench opens properties", |a| {
+        a.ui.stack()
+            .contains(&ScreenId::Wrench(WrenchVariant::Normal))
+    })?;
     action(&mut app, UiAction::RequestEvents { brick: planted_id })?;
-    until(
-        &mut app,
-        "wrench events inspection",
-        Duration::from_secs(5),
-        |a| a.ui.stack().contains(&ScreenId::WrenchEvents),
-    )?;
+    until(&mut app, "wrench events inspection", |a| {
+        a.ui.stack().contains(&ScreenId::WrenchEvents)
+    })?;
     action(
         &mut app,
         UiAction::SendEvents {
@@ -662,7 +622,6 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     until(
         &mut app,
         "event edit and retained base wrench context",
-        Duration::from_secs(5),
         |a| {
             a.network_view().unwrap().world.bricks[&planted_id]
                 .events
@@ -685,21 +644,16 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             data: properties,
         },
     )?;
-    until(
-        &mut app,
-        "wrench name edit after events return",
-        Duration::from_secs(5),
-        |a| {
-            a.network_view().unwrap().world.bricks[&planted_id]
-                .name
-                .as_deref()
-                == Some("NativeHeadlessProof")
-                && a.pending_requests() == 0
-                && a.world_render_ready()
-                && a.effect_counts().0 == 2
-                && a.effect_counts().2 > 0
-        },
-    )?;
+    until(&mut app, "wrench name edit after events return", |a| {
+        a.network_view().unwrap().world.bricks[&planted_id]
+            .name
+            .as_deref()
+            == Some("NativeHeadlessProof")
+            && a.pending_requests() == 0
+            && a.world_render_ready()
+            && a.effect_counts().0 == 2
+            && a.effect_counts().2 > 0
+    })?;
     app.ui.core.pop(ScreenId::Wrench(WrenchVariant::Normal));
     ensure!(
         app.audio_requests()
@@ -790,18 +744,13 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     outfit.set("FaceName", "smileyPirate1");
     outfit.set("DecalName", "Mod-Suit");
     action(&mut app, UiAction::SetAvatar(outfit.clone()))?;
-    until(
-        &mut app,
-        "original outfit replicated",
-        Duration::from_secs(5),
-        |a| {
-            let view = a.network_view().unwrap();
-            view.avatars
-                .get(&view.owner)
-                .is_some_and(|appearance| appearance.face == "smileyPirate1")
-                && a.pending_requests() == 0
-        },
-    )?;
+    until(&mut app, "original outfit replicated", |a| {
+        let view = a.network_view().unwrap();
+        view.avatars
+            .get(&view.owner)
+            .is_some_and(|appearance| appearance.face == "smileyPirate1")
+            && a.pending_requests() == 0
+    })?;
     let third_person = capture(&mut app, &gpu, &mut ui_renderer, true)?;
     let avatar = app
         .avatar_scene(app.network_view().unwrap().owner)
@@ -876,19 +825,14 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             overwrite: false,
         },
     )?;
-    until(
-        &mut app,
-        "local authoritative build save",
-        Duration::from_secs(10),
-        |a| {
-            a.pending_requests() == 0
-                && a.ui
-                    .core
-                    .save_files
-                    .iter()
-                    .any(|f| f.name == "Native round trip.world.json")
-        },
-    )?;
+    until(&mut app, "local authoritative build save", |a| {
+        a.pending_requests() == 0
+            && a.ui
+                .core
+                .save_files
+                .iter()
+                .any(|f| f.name == "Native round trip.world.json")
+    })?;
     let store = bri_client::saves::Store::new(&state, &app.content, None);
     let saved_build = store.load("Bedroom", "Native round trip.world.json")?;
     assert_eq!(
@@ -897,12 +841,9 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     );
     app.ui.core.push(ScreenId::LoadBricks);
     step(&mut app, Duration::from_millis(16))?;
-    until(
-        &mut app,
-        "native save list refreshed",
-        Duration::from_secs(5),
-        |a| a.pending_requests() == 0,
-    )?;
+    until(&mut app, "native save list refreshed", |a| {
+        a.pending_requests() == 0
+    })?;
     let save_ui = capture(&mut app, &gpu, &mut ui_renderer, true)?;
     image::save_buffer(
         artifact.join("native-load-dialog.png"),
@@ -918,7 +859,6 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     until(
         &mut app,
         "authoritative print undo restores the previous print",
-        Duration::from_secs(5),
         |a| {
             a.network_view()
                 .unwrap()
@@ -936,7 +876,6 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     until(
         &mut app,
         "authoritative plant undo removes render/query brick",
-        Duration::from_secs(5),
         |a| {
             a.network_view().unwrap().world.bricks.is_empty()
                 && a.world_render_ready()
@@ -954,18 +893,13 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             ownership: true,
         },
     )?;
-    until(
-        &mut app,
-        "native build appended and rendered",
-        Duration::from_secs(10),
-        |a| {
-            a.pending_requests() == 0
-                && a.network_view().unwrap().world.bricks.len() == 1
-                && a.world_render_ready()
-                && a.effect_counts().0 == 2
-                && a.effect_counts().2 > 0
-        },
-    )?;
+    until(&mut app, "native build appended and rendered", |a| {
+        a.pending_requests() == 0
+            && a.network_view().unwrap().world.bricks.len() == 1
+            && a.world_render_ready()
+            && a.effect_counts().0 == 2
+            && a.effect_counts().2 > 0
+    })?;
     assert_eq!(
         app.network_view()
             .unwrap()
@@ -986,12 +920,9 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
             overwrite: true,
         },
     )?;
-    until(
-        &mut app,
-        "native overwrite completed",
-        Duration::from_secs(10),
-        |a| a.pending_requests() == 0,
-    )?;
+    until(&mut app, "native overwrite completed", |a| {
+        a.pending_requests() == 0
+    })?;
     assert_eq!(
         store
             .load("Bedroom", "Native round trip.world.json")?
@@ -1020,16 +951,11 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     app.ui.core.request(UiAction::Disconnect);
     let fresh = host(&mut app, "Stale load protection");
     pump(&mut app)?;
-    until(
-        &mut app,
-        "new session without stale loaded bricks",
-        Duration::from_secs(15),
-        |a| {
-            a.ui.session_request() == Some(fresh)
-                && a.network_view().is_some()
-                && a.pending_requests() == 0
-        },
-    )?;
+    until(&mut app, "new session without stale loaded bricks", |a| {
+        a.ui.session_request() == Some(fresh)
+            && a.network_view().is_some()
+            && a.pending_requests() == 0
+    })?;
     assert!(app.network_view().unwrap().world.bricks.is_empty());
     app.ui.core.request(UiAction::Disconnect);
     pump(&mut app)?;

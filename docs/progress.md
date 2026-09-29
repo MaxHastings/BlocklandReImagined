@@ -5711,3 +5711,13 @@ accepts becomes a cue clients accept); client `beams` and
 bri-convert --lib shape`; `cargo test -p bri-addon-import --lib slow`;
 `cargo clippy --workspace --all-targets -- -D warnings` (only the
 existing Linux-only `sampler.rs` unused import remains).
+
+Follow-up on the same branch: three content tests the Gate saw fail once
+in a batch and pass alone. `app_flow`'s rehost sat on "LOADING MAP" past
+its 15 s deadline under load (the MessageBox over it is the intended
+"load canceled" for the stale Load Bricks the test sends); each wait now
+shares one hang-only deadline. `motion_probe` sampled for a fixed 20 s,
+which a loaded PC could spend loading; it now samples until the server has
+held the player still for 120 samples. `shadow_render` captured after
+0.5-1 s of wall time; it now waits until the world mesh shows the latest
+world, then runs a fixed 60 frames.
