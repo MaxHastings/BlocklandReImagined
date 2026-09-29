@@ -4790,3 +4790,32 @@ Left for the entity-perf lane (not changed here): with Physics Quality Off,
 v20 still draws blasted bricks falling ballistically, while ours throws
 nothing; v20 evicts old physics bricks into a ballistic fall that fades
 after 0-0.5 s (0x5338c0) where ours drifts linearly for 0.35 s.
+## 2026-09-28 Bug-pattern sweep, cloud part (branch `claude/bug-pattern-sweep-h0v7ns`)
+
+Max asked for the common pattern behind his recent reports and how to catch
+the next ones first. The five patterns, the checks that now enforce them and
+the hard-stop audit are in `docs/audits/bug-patterns.md`. In short: screens
+and the server disagreeing, guessed v20 rules locked in by tests, testing
+only as the host, hard stops instead of fallbacks, and missing budgets.
+
+Fixed: UI requests have deadlines and screens can back out while sending;
+client background jobs, network errors and a broken Add-On no longer close
+the game (the Add-On is left out with a message); a panicking host request
+or step is answered and logged and the host keeps going (fuse: 8 a minute,
+then stop with autosave); map load and per-player placement failures are
+reported instead of failing the host or the map change; weapon updates over
+the wire limits carry over; four overflow or unwrap panics. Event jobs now
+share their compiled row, action and output, so an administrator's
+zero-delay loop costs about 6 ms a tick instead of 24 ms (release, fuzzer's
+worst seed), and the host logs event notes, rate-limited.
+
+Evidence: new `command_fuzz` (every `Command` variant, damaged, as guest and
+host; 256 cases) and `event_fuzz` (random catalog programs, 32 ms tick
+budget in release) in `bri-chaos`; unit tests for the UI deadline, wrench
+Escape, the panic fuse and the weapon clamp; `cargo test` and clippy
+`-D warnings` on bri-ui, bri-net, bri-sim, bri-events, bri-package-runtime,
+bri-client and bri-chaos. Content-backed test
+`a_broken_add_on_is_left_out_instead_of_stopping_the_game` runs only on the
+PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
+Bricks, poisoned admin store. Next: the PC part (real-screen harness as
+single player, host and guest; v20 behaviour audit).

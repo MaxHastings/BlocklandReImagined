@@ -1106,7 +1106,7 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
         if item[3] < 0 || item[3] as usize >= materials {
             return Err(format!("material {} is not declared", item[3]));
         }
-        if item.iter().take(3).any(|c| c.abs() > 100_000) {
+        if item.iter().take(3).any(|c| c.unsigned_abs() > 100_000) {
             return Err("voxel coordinate out of range".into());
         }
         out.push(item);
