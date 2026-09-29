@@ -37,7 +37,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
 /// 54: bricks in world chunks and updates travel packed (`crate::wire`);
 /// `Request::upload` carries a `LoadBuild`'s bricks packed; large requests
-/// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`.
+/// may be zstd compressed (`codec::COMPRESSED`); `Checkpoint::world_chunks`
+/// and `world_near_chunks`: world transfers go nearest first and a joiner
+/// plays once the nearby chunks are in.
 pub const VERSION: u32 = 54;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
