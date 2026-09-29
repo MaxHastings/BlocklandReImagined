@@ -436,6 +436,7 @@ dependencies = [
  "bri-minigames",
  "bri-net",
  "bri-package",
+ "bri-package-runtime",
  "bri-physics",
  "bri-sim",
  "bri-vehicles",

@@ -98,7 +98,7 @@ fn load(build: SavedBuild) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(256, 0x5a7e))]
 
     #[test]
     fn damaged_saves_refuse_or_load_cleanly(changes in proptest::collection::vec(change(), 1..6)) {

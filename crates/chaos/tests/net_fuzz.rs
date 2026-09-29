@@ -144,7 +144,7 @@ fn drawn(replica: &Replica) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 1000, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(bri_chaos::proptest_config(1000, 0x7e7))]
 
     #[test]
     fn random_bytes_never_panic_a_decoder(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {

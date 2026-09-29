@@ -939,6 +939,17 @@ impl WorldItems {
         self.assets
             .node_transform(&mounted.model, &pose, mounted.transform, node)
     }
+    /// Where the image in `owner`'s `hand` fires from, as drawn now: its
+    /// `muzzlePoint`, or `None` when nothing with one is held.
+    pub fn held_muzzle(&self, owner: u64, hand: u8) -> Option<Vec3> {
+        let image = &self.mounted.get(&(owner, hand))?.image;
+        let point = self
+            .mounted_node(owner, hand, image, "muzzlePoint")
+            .ok()?
+            .w_axis
+            .truncate();
+        point.is_finite().then_some(point)
+    }
     /// Source engine falls back from a missing state emitter node to muzzlePoint,
     /// and an image without a muzzlePoint (brickWeapon.dts) emits from its own
     /// transform, as `ShapeBase::getMuzzleTransform` does. No eye-origin

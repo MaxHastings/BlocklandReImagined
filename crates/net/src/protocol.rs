@@ -45,7 +45,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// packs' own sounds in the weapons content identity.
 /// 58: `Checkpoint::world_near_chunks`: world transfers go nearest first
 /// and a joiner plays once the nearby chunks are in.
-pub const VERSION: u32 = 58;
+/// 59: `CueKind::Beam` and `Notice::Fov` for the modding script API.
+pub const VERSION: u32 = 59;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

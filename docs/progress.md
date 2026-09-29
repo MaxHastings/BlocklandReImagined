@@ -5616,3 +5616,117 @@ panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
   bri-client --lib` (206 passed); content tests `cargo test -p bri-client
   --test v20_poses -- --ignored first_person_eye_offset` and `--lib
   mount_action -- --ignored` for the Gate.
+## 2026-09-29 Old saves failing with "Unresolved native print NOPRINT" (branch `claude/noprint-load-fix-yyt1yg`)
+- Cause: since the 0-brick fix, many more old `.bls` brick lines load, and
+  they carry print names the stock bundle cannot resolve (`NOPRINT`,
+  `base/data/prints/Letters/A.png` paths, Add-On prints). One such brick made
+  the client's chunk build fail, so the join ended in Connection Failed.
+- Fix: `world_scene::print_material` draws any print the bundle cannot resolve
+  with the blank print surface and logs each name once. Test:
+  `unknown_prints_draw_blank_instead_of_failing_the_world` (fails on the old
+  renderer, passes now).
+- New headless probe `saves_host_probe <content> <saves-dir> <report.json>`
+  hosts every save as the game does (background conversion, Load Bricks, a
+  host session loading to the end, then the client's chunks and collision
+  mirrors).
+- Evidence on Maxwell's 699 saves: before 395 failed (357 NOPRINT, 34 other
+  unknown prints, 4 empty saves); after 4 failed, all "Build contains no
+  bricks". Violin loads 5,018 of 5,018 bricks.
+- Next: 399 saves name prints the bundle does not resolve; many are stock
+  prints stored as `base/data/prints/<aspect>/<name>.png` paths (Letters/*
+  in 190 saves) or older aspects (`2x2/`, `2x1/`, `1x1r/`). They now draw
+  blank where v20 shows the image; mapping those names needs v20's loader
+  rule as evidence.
+## 2026-09-29 Chaos tests that hung or changed run to run (branch `claude/event-fuzz-deterministic-8v4hln`)
+
+The Gate saw `event_fuzz::the_same_programs_play_out_the_same_twice` run
+past 600 s on an unrelated branch. The proptests drew a fresh random seed
+every run, so a rare program decided how long the gate took. Searching 40
+seeds found one (16778118630780010966) that took 29 s alone in a debug
+build: relays feeding each other filled the event queue to its 131072-row
+limit, and from then on every tick's 4000 retried relays were each turned
+away only after `can_commit` walked every held row to count origins, about
+1 s per tick. That is an engine cost, not a test artefact: a relay loop
+that fills the queue made each host tick's work grow with the queue.
+
+Fixes:
+- Events: admission refuses from the counts first (at most the cancelled
+  sources' delayed rows can make room), and held jobs keep a per-origin
+  count, so a full queue turns a row away without walking the queue. The
+  same seed now takes 5.6 s; ticks at the limit went from ~1 s to ~0.1 s
+  in debug. Admission decides exactly as before.
+- Every bri-chaos proptest now draws from a fixed seed
+  (`bri_chaos::proptest_config`); `PROPTEST_RNG_SEED` still picks others
+  for a soak. The storm seed is its own test,
+  `relays_that_fill_the_queue_keep_the_host_stepping`, and the
+  same-twice test's pinned case loops until rows wait on the budgets.
+- `session_chaos` also differed run to run: build loads placed what fit
+  the tick's wall time. The chaos runner now loads a fixed 512 bricks a
+  tick (`LoadPace::Bricks`), so a seed plays out identically, also with
+  every core busy.
+- That exposed a real bug on seed 0x13c6ef372: a vehicle weapon with no
+  sound or effect (allowed by the pack schema; the chaos vehicles have
+  none) emitted empty sound and effect cues, which clients refuse by
+  dropping the connection. Firing now skips them
+  (`vehicle_weapon_cues` test).
+
+Evidence: `cargo test -p bri-chaos -p bri-events` all pass (event_fuzz
+10.5 s); session_chaos reports hash-identical across 5 runs, one under a
+6-process CPU load; `cargo clippy -p bri-events -p bri-chaos -p bri-vehicles
+--all-targets -D warnings` clean. bri-vehicles' content tests need the
+generated vehicles pack, absent in the cloud checkout; the Gate runs them.
+## 2026-09-29 General script API for Add-On guns (branch `claude/gun-script-api-2a4up5`)
+
+Max's friend, a modder porting a gun pack, sent a spec of script calls
+("the vars I needed for guns... doesn't have to be exact, just
+equivalents"; later "ignore the gun-pack specific stuff, I just need the
+new functions in general that any mod can use"). None of the spec's code
+existed on main, on GitHub or on Max's PC (all worktrees and 291 refs
+searched). Each request was judged as a general building block; the
+verdicts are in `docs/modding/torque-equivalents.md` ("Design notes"),
+beside a new TorqueScript equivalents table.
+
+Built:
+- `raycast(from, dir, range[, ignore])`, answered during the call through
+  the weapons' own sweep (`script::World`, `session/script_world.rs`), at
+  most 64 rays of 2000 units per call. `Runtime::call` now takes `&self`
+  and enforces the operation budget in the progress callback, so the
+  session is only read while a script runs.
+- `can_damage(by, target)`: the minigame damage policy for players,
+  vehicles and entities.
+- `damage(target, amount[, by[, type]])`: any player, vehicle or entity,
+  with an optional weapons-pack damage type (`Op::Damage` replaces
+  `Op::DamagePlayer`). Unknown types are refused.
+- Player facts `mounted`, `scale`, `cx`/`cy`/`cz`, `slot`, `image`,
+  `image_state`.
+- `mount_image` (keeps the tool slot; `()` restores the tool's image;
+  own or dependency images only), `set_image_ammo`, `set_fov` (5 to 120,
+  `Notice::Fov`; the client uses it in place of the normal FOV).
+- `effects` capability (replaces `sound`): `play_sound`, `sound_at`,
+  `beam` (`CueKind::Beam`, a coloured beam that thins and fades, started
+  at the shooter's drawn muzzle, `crates/client/src/beams.rs`) and
+  `play_thread` (threads 2 and 3, as `WeaponAnimation` cues). All share the
+  64-a-second cue allowance.
+- Image `commands.light`: the light key runs the held image's command.
+- Converter: `-1` pool starts in DTS sequences read as unused
+  (`convert/src/shape.rs`). Import Add-On's test shot clicks when the gun
+  is ready instead of at 0.5 s (`addon-import/src/porting.rs`).
+
+Protocol: `CueKind::Beam` and `Notice::Fov` are new wire variants; the
+Gate numbers the protocol.
+
+Later: converting an Add-On's own particles, explosions and AudioProfiles
+on import (importer work), custom casing models.
+
+Evidence: `cargo test -p bri-sim --test script_api` (new: rays, ignore,
+map and misses, the 64-ray cap, damage rules and types, held-image facts,
+ammo, scope swap, foreign images refused, light key, FOV notices, beam and
+animation cues); `cargo test -p bri-package-runtime` (new
+`script_calls_build_their_operations_and_world_questions_need_a_world`,
+every new op in the capability and bounds tests); `cargo test -p
+bri-chaos --test script_effects_fuzz` (new, fixed seed: anything the gate
+accepts becomes a cue clients accept); client `beams` and
+`host_fov_replaces_the_normal_fov_until_handed_back`; `cargo test -p
+bri-convert --lib shape`; `cargo test -p bri-addon-import --lib slow`;
+`cargo clippy --workspace --all-targets -- -D warnings` (only the
+existing Linux-only `sampler.rs` unused import remains).

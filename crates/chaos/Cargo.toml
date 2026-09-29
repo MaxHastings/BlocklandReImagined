@@ -31,4 +31,5 @@ bri-addon-import = { path = "../addon-import" }
 bri-bls = { path = "../bls" }
 bri-events = { path = "../events" }
 bri-minigames = { path = "../minigames" }
+bri-package-runtime = { path = "../package-runtime" }
 zstd = "0.13"

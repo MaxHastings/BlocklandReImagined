@@ -730,6 +730,38 @@ impl WeaponsWorld {
         self.actors.insert(id, a);
         Ok(())
     }
+    /// `Player::mountImage(%image, 0)` from an Add-On's rules: put `image`
+    /// in the right hand (a scope, a second fire mode) and keep the selected
+    /// tool slot, as v20's `mountImage` did. `None` puts back the selected
+    /// tool's own image, or empties the hand. Like v20 it ignores the held
+    /// image's `allow_change`: the rules decide.
+    pub fn swap_image(&mut self, id: ActorId, image: Option<&str>) -> Result<()> {
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let image = match image {
+            Some(image) => {
+                ensure!(self.pack.images.contains_key(image), "Unknown image");
+                Some(image.to_string())
+            }
+            None => a
+                .selected
+                .and_then(|slot| a.inventory.get(slot)?.as_ref())
+                .and_then(|item| self.pack.items.get(item))
+                .map(|item| item.image.clone()),
+        };
+        let mut a = self.actors.remove(&id).expect("checked");
+        if a.images[0].take().is_some() {
+            self.events.push(Event::Unmounted { actor: id, hand: 0 });
+        }
+        if let Some(image) = image {
+            self.mount(id, &mut a, &image, 0);
+        }
+        self.actors.insert(id, a);
+        Ok(())
+    }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
             a.images[hand as usize] = Some(Equipped {

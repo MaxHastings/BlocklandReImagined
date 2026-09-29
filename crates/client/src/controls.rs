@@ -20,6 +20,9 @@ pub struct Controls {
     pub third_person: bool,
     /// `$pref::Player::defaultFov`; `None` is v20's 90.
     normal_fov: Option<f32>,
+    /// The host's `setControlCameraFov` (an Add-On's rules), in place of
+    /// `normal_fov` until the host hands it back.
+    server_fov: Option<f32>,
     /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
     zoom_fov: Option<f32>,
     /// The FOV shown (`$cameraFov`), ramping toward the normal or zoom FOV.
@@ -373,6 +376,13 @@ impl Controls {
             self.zoom_fov = Some(zoom.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1));
         }
     }
+    /// The field of view the host sets, or `None` for the player's own. It
+    /// glides like any other FOV change.
+    pub fn set_server_fov(&mut self, fov: Option<f32>) {
+        self.server_fov = fov
+            .filter(|f| f.is_finite())
+            .map(|f| f.clamp(*bri_package_runtime::ops::FOV_RANGE.start(), *bri_package_runtime::ops::FOV_RANGE.end()));
+    }
     /// Ramp the shown FOV toward the zoom FOV while Zoom is held, else the
     /// normal FOV. Wheel steps and the options slider ride the same ramp.
     pub fn advance_zoom(&mut self, seconds: f32) {
@@ -412,7 +422,7 @@ impl Controls {
         } else if self.held(HeldControl::Zoom) {
             self.zoom_fov.unwrap_or(10.0)
         } else {
-            self.normal_fov.unwrap_or(90.0)
+            self.server_fov.or(self.normal_fov).unwrap_or(90.0)
         }
     }
     /// The player's normal horizontal FOV in degrees, zoom aside.
@@ -507,6 +517,24 @@ mod tests {
             c.advance_zoom(0.25);
         }
         assert_eq!(c.fov(), 90.0);
+    }
+    #[test]
+    fn host_fov_replaces_the_normal_fov_until_handed_back() {
+        let mut c = Controls::default();
+        c.set_fov_prefs(100.0, 45.0);
+        c.advance_zoom(0.0);
+        c.set_server_fov(Some(30.0));
+        c.advance_zoom(10.0);
+        assert_eq!(c.fov(), 30.0);
+        c.set_server_fov(Some(f32::NAN));
+        c.advance_zoom(10.0);
+        assert_eq!(c.fov(), 100.0, "a bad value hands the view back");
+        c.set_server_fov(Some(1.0));
+        c.advance_zoom(10.0);
+        assert_eq!(c.fov(), 5.0, "clamped to the camera's range");
+        c.set_server_fov(None);
+        c.advance_zoom(10.0);
+        assert_eq!(c.fov(), 100.0);
     }
     #[test]
     fn fov_prefs_set_normal_and_zoom_and_wheel_steps_glide() {
