@@ -172,6 +172,13 @@ fn kitchen_palms_render_for_host_and_guest() -> Result<()> {
         entered(a[1]) && a[0].ui.core.players.len() == 2
     })?;
     assert_eq!(guest.network_view().unwrap().world.map_id, KITCHEN);
+    // v20's spawnExplosion bursts 4-unit cloud particles at the new body,
+    // tinted "0 1 0 1" at mid-life, so a player's first frames are green.
+    // Let both bursts end (at most 0.8 s) before judging the frames.
+    let settled = Instant::now();
+    until(&mut [&mut host, &mut guest], "spawn bursts to end", |_| {
+        settled.elapsed() > Duration::from_millis(1500)
+    })?;
 
     for (who, app) in [("host", &mut host), ("guest", &mut guest)] {
         let pixels = capture(app, &gpu, &mut renderer)?;
@@ -184,8 +191,7 @@ fn kitchen_palms_render_for_host_and_guest() -> Result<()> {
         )?;
         let colors = distinct_colors(&pixels);
         println!("{who}: {colors} distinct colours");
-        // The guest spawns under a full-screen tint, so the bar stays low.
-        ensure!(colors > 64, "{who} frame looks unrendered");
+        ensure!(colors > 200, "{who} frame looks unrendered");
     }
     guest.ui.core.request(UiAction::Disconnect);
     host.ui.core.request(UiAction::Disconnect);
