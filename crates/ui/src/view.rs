@@ -1743,6 +1743,25 @@ impl View {
         self.popup.map(|p| p.node)
     }
 
+    /// Whether typed text belongs to this view: a focused text box, or an
+    /// open dropdown's type-to-filter search. The platform only delivers
+    /// characters (and enables the IME) while this holds.
+    pub fn takes_text(&self) -> bool {
+        self.popup.is_some()
+            || self.focus.is_some_and(|n| {
+                matches!(
+                    self.nodes[n].ctrl.class.as_str(),
+                    "GuiTextEditCtrl" | "GuiMLTextEditCtrl"
+                )
+            })
+    }
+
+    /// The control typed text goes into: the open dropdown, else the
+    /// focused control. The IME candidate window sits under it.
+    pub fn text_node(&self) -> Option<NodeId> {
+        self.open_popup_node().or(self.focus)
+    }
+
     /// What the player has typed into the open dropdown to filter it.
     pub fn popup_query(&self) -> Option<&str> {
         self.popup.map(|_| self.popup_query.as_str())
