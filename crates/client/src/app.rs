@@ -3697,15 +3697,12 @@ impl App {
                 .context("Ready connection has no building controller")?
                 .initial_updates(),
         );
+        // The name the save list files this map's saves under (`Store::map_name`),
+        // so the dialogs open on the map being played.
+        let map = self.content.maps.iter().find(|m| m.id == scene.id);
         updates.push(UiUpdate::SaveContext {
-            map: scene.name.clone(),
-            preview: self
-                .content
-                .maps
-                .iter()
-                .find(|m| m.id == scene.id)
-                .map(|m| m.preview.clone())
-                .unwrap_or(IconRef::None),
+            map: map.map_or_else(|| scene.name.clone(), |m| m.name.clone()),
+            preview: map.map(|m| m.preview.clone()).unwrap_or(IconRef::None),
         });
         Ok(updates)
     }

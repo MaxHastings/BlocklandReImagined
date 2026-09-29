@@ -243,21 +243,32 @@ impl SaveLoad {
     }
     fn refresh(&mut self, core: &Core) {
         let previous = self.selected().map(|f| (f.map.clone(), f.name.clone()));
+        let current = core.save_context.as_ref().map(|c| c.0.clone());
         self.maps = core.save_maps.clone();
         self.maps
             .extend(core.save_files.iter().map(|f| f.map.clone()));
+        // The map being played is always offered, saved on or not.
+        self.maps.extend(current.clone());
         self.maps.sort_by_key(|m| m.to_ascii_lowercase());
-        self.maps.dedup();
+        self.maps.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         if self.save() {
-            self.map = core.save_context.as_ref().map(|c| c.0.clone());
-        } else if self.map.as_ref().is_none_or(|m| !self.maps.contains(m)) {
+            self.map = current;
+        } else if let Some(m) = &self.map {
+            // Folder names may differ from the map's in case only.
+            self.map = self
+                .maps
+                .iter()
+                .find(|x| x.eq_ignore_ascii_case(m))
+                .or(self.maps.first())
+                .cloned();
+        } else {
             self.map = self.maps.first().cloned();
         }
         let searching = self.searching();
         self.files = core
             .save_files
             .iter()
-            .filter(|f| searching || self.map.as_ref().is_some_and(|m| m == &f.map))
+            .filter(|f| searching || self.map.as_ref().is_some_and(|m| m.eq_ignore_ascii_case(&f.map)))
             .cloned()
             .collect();
         self.files.sort_by(|a, b| {
@@ -916,6 +927,20 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, crate::ui::StackCmd::Pop(ScreenId::LoadBricks)))
         );
+    }
+    #[test]
+    fn load_bricks_opens_on_the_map_being_played() {
+        let mut ui = fixture();
+        // Saved on before, under a folder spelled in another case.
+        ui.core.save_context = Some(("KITCHEN".into(), IconRef::None));
+        let s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        assert_eq!(rows(&s), ["Table\t2026-09-25"]);
+        // Never saved on: offered anyway, with an empty list.
+        ui.core.save_context = Some(("Slate".into(), IconRef::None));
+        let s = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        let menu = s.view.id("LoadBricks_MapMenu").unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Slate"));
+        assert!(rows(&s).is_empty());
     }
     #[test]
     fn load_bricks_opens_the_saves_folder_old_saves_go_in() {
