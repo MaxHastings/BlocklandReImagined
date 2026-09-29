@@ -63,6 +63,7 @@ fn call<'a>(function: &'a str, args: Vec<Dynamic>, snapshot: &Arc<Snapshot>) -> 
         entity: None,
         state: Namespace::default(),
         entity_vars: Default::default(),
+        world: None,
     }
 }
 
@@ -89,13 +90,13 @@ fn stress_lab_packages_load_on_server_and_client() {
 #[test]
 fn world_generation_is_deterministic_and_bounded() {
     let catalog = Catalog::load(&root(), &set(), true).unwrap();
-    let mut runtime = Runtime::compile(&catalog).unwrap();
+    let runtime = Runtime::compile(&catalog).unwrap();
     let (_, _, world) = catalog.world().unwrap();
     let snapshot = Arc::new(Snapshot {
         seed: world.seed,
         ..Default::default()
     });
-    let mut generate = |cx: i64, cz: i64| {
+    let generate = |cx: i64, cz: i64| {
         let mut c = call(&world.generate, vec![cx.into(), cz.into()], &snapshot);
         c.budget = Budget::Generate;
         let out = runtime
@@ -126,7 +127,7 @@ fn world_generation_is_deterministic_and_bounded() {
 #[test]
 fn mining_economy_runs_on_server_state_only() {
     let catalog = Catalog::load(&root(), &set(), true).unwrap();
-    let mut runtime = Runtime::compile(&catalog).unwrap();
+    let runtime = Runtime::compile(&catalog).unwrap();
     let snapshot = Arc::new(Snapshot {
         players: vec![player(5)],
         ..Default::default()
@@ -152,7 +153,7 @@ fn mining_economy_runs_on_server_state_only() {
         .iter()
         .map(|(k, d)| (k.clone(), d.default.clone()))
         .collect();
-    let mut mine = |state: &mut Namespace, tag: &str| {
+    let mine = |state: &mut Namespace, tag: &str| {
         let mut c = call("cmd_mine", vec![5_i64.into()], &snapshot);
         c.caller = Some(5);
         c.aim = Some(Aim {
@@ -195,11 +196,11 @@ fn mining_economy_runs_on_server_state_only() {
 #[test]
 fn creeper_chases_then_fuses_then_explodes() {
     let catalog = Catalog::load(&root(), &set(), true).unwrap();
-    let mut runtime = Runtime::compile(&catalog).unwrap();
+    let runtime = Runtime::compile(&catalog).unwrap();
     let mut vars = BTreeMap::from([(9_u64, BTreeMap::new())]);
     let mut state = Namespace::default();
     state.global.insert("explosions".into(), 0.into());
-    let mut think = |x: f32,
+    let think = |x: f32,
                      vars: &mut BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
                      state: &mut Namespace| {
         let me = EntityView {
@@ -322,7 +323,7 @@ fn runaway_scripts_are_stopped_and_change_nothing() {
         }],
     };
     let catalog = Catalog::load(dir.path(), &set, true).unwrap();
-    let mut runtime = Runtime::compile(&catalog).unwrap();
+    let runtime = Runtime::compile(&catalog).unwrap();
     let snapshot = Arc::new(Snapshot::default());
     let spin = runtime
         .call("loop", call("cmd_spin", vec![1_i64.into()], &snapshot))

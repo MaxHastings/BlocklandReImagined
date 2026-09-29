@@ -4,6 +4,7 @@ pub mod add_ons;
 pub mod admin_ui;
 pub mod app;
 pub mod audio;
+pub mod beams;
 pub mod avatar;
 pub mod avatar_mesh;
 pub mod brick_cover;

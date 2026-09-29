@@ -195,10 +195,33 @@ fn filter_keys(keys: &[String], query: &str, out: &mut Vec<usize>) {
         return;
     }
     out.extend((0..keys.len()).filter(|&i| pinned_key(&keys[i])));
-    out.extend((0..keys.len()).filter(|&i| !pinned_key(&keys[i]) && keys[i].starts_with(query)));
-    out.extend((0..keys.len()).filter(|&i| {
-        !pinned_key(&keys[i]) && !keys[i].starts_with(query) && keys[i].contains(query)
-    }));
+    rank_matches(keys, query, |k| !pinned_key(k), out);
+}
+
+/// Appends the indices of `keys` (lowercase) matching a lowercase, non-empty
+/// `query` and passing `keep`: those starting with it, then those merely
+/// containing it, each group in list order.
+fn rank_matches(keys: &[String], query: &str, keep: impl Fn(&str) -> bool, out: &mut Vec<usize>) {
+    out.extend((0..keys.len()).filter(|&i| keep(&keys[i]) && keys[i].starts_with(query)));
+    out.extend(
+        (0..keys.len())
+            .filter(|&i| keep(&keys[i]) && !keys[i].starts_with(query) && keys[i].contains(query)),
+    );
+}
+
+/// The type-to-filter search for lists a screen builds itself: indices of
+/// `texts` matching `query` in any case, those starting with it before
+/// those merely containing it, each group in list order. Every row when
+/// the query is blank.
+pub fn search_rows<S: AsRef<str>>(texts: &[S], query: &str) -> Vec<usize> {
+    let query = search_key(query);
+    if query.is_empty() {
+        return (0..texts.len()).collect();
+    }
+    let keys: Vec<String> = texts.iter().map(|t| search_key(t.as_ref())).collect();
+    let mut out = Vec::new();
+    rank_matches(&keys, &query, |_| true, &mut out);
+    out
 }
 
 /// The rows (item indices, in display order) a dropdown shows for `query`.
@@ -2274,6 +2297,25 @@ impl View {
         let a = authored_rect(&self.nodes[id].ctrl);
         let r = self.nodes[id].rect;
         self.layout_children(id, (a.w, a.h), r);
+    }
+
+    /// Scrolls a text list's scroll parent the least that shows `row`.
+    pub fn reveal_row(&mut self, list: NodeId, row: i64) {
+        let Some(scroll) = self.nodes[list]
+            .parent
+            .filter(|&p| self.nodes[p].ctrl.class == "GuiScrollCtrl")
+        else {
+            return;
+        };
+        let rh = self.nodes[list].state.row_height;
+        let top = self.nodes[list].ctrl.position[1] + row as i32 * rh;
+        let shown = self.nodes[scroll].rect.h;
+        let y = self.nodes[scroll].state.scroll_y;
+        if top < y {
+            self.scroll_to(scroll, top);
+        } else if top + rh > y + shown {
+            self.scroll_to(scroll, top + rh - shown);
+        }
     }
 
     /// Thumb dragged so its top is at `thumb_y`.

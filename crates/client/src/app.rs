@@ -404,6 +404,8 @@ pub struct App {
     weapon_effects: crate::weapon_effects::WeaponEffects,
     actor_effects: crate::actor_effects::ActorEffects,
     explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// Add-On beams: tracers, lasers.
+    beams: crate::beams::Beams,
     /// The Tutorial's target practice targets.
     tutorial_targets: crate::tutorial_targets::TutorialTargets,
     /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
@@ -886,6 +888,22 @@ impl App {
             }
             _ => cue,
         };
+        // A beam fired with `muzzle` starts where this client draws that
+        // player's muzzle.
+        if let bri_sim::presentation::CueKind::Beam {
+            to,
+            color,
+            width,
+            seconds,
+            muzzle,
+        } = &cue.kind
+        {
+            let from = muzzle
+                .and_then(|actor| self.world_items.held_muzzle(actor, 0))
+                .unwrap_or(Vec3::from(cue.position));
+            self.beams
+                .add(from, Vec3::from(*to), *color, *width, *seconds);
+        }
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
         self.explosion_debris.cue(&cue);
@@ -1059,6 +1077,7 @@ impl App {
         self.weapon_effects.reset(checkpoint_cursor);
         self.actor_effects.reset(checkpoint_cursor);
         self.explosion_shapes.reset(checkpoint_cursor);
+        self.beams.clear();
         self.explosion_debris.reset(checkpoint_cursor);
         self.weapon_shells.reset(checkpoint_cursor);
         self.weapon_cues
@@ -1552,6 +1571,7 @@ impl App {
             weapon_effects,
             actor_effects,
             explosion_shapes,
+            beams: Default::default(),
             tutorial_targets,
             explosion_debris,
             cosmetic_faults: Default::default(),
@@ -1726,6 +1746,7 @@ impl App {
         self.weapon_effects.reset(0);
         self.actor_effects.reset(0);
         self.explosion_shapes.reset(0);
+        self.beams.clear();
         self.tutorial_targets.update(&[], 0.0);
         self.explosion_debris.reset(0);
         self.weapon_shells.clear();
@@ -3844,6 +3865,10 @@ impl App {
                         }
                         bri_sim::session::Notice::Sound(profile) => {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
+                            continue;
+                        }
+                        bri_sim::session::Notice::Fov(fov) => {
+                            self.controls.set_server_fov(fov);
                             continue;
                         }
                         bri_sim::session::Notice::Invite {
@@ -6043,6 +6068,7 @@ impl PlatformApp for App {
             self.cosmetic_faults
                 .absorb("player and vehicle effects", actors);
             self.explosion_shapes.advance(game_elapsed.as_secs_f32());
+            self.beams.advance(game_elapsed.as_secs_f32());
             self.explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {
                     let delta = to - from;
@@ -7061,6 +7087,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.beams.gpu_stopped();
         self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
@@ -7139,6 +7166,7 @@ impl PlatformApp for App {
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.explosion_shapes.gpu_stopped();
+        self.beams.gpu_stopped();
         self.tutorial_targets.gpu_stopped();
         self.shell_gpu = None;
         for avatar in self.avatars.values_mut() {
@@ -7545,6 +7573,7 @@ impl PlatformApp for App {
         )?;
         self.explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
+        self.beams.upload(renderer, frame.device, frame.queue)?;
         self.tutorial_targets
             .upload(renderer, frame.device, frame.queue)?;
         let shells: Vec<_> = self
@@ -7805,6 +7834,7 @@ impl PlatformApp for App {
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
+        item_draws.extend(self.beams.draws());
         item_draws.extend(self.tutorial_targets.draws());
         if let Some((scene, instances)) = &self.shell_gpu
             && self.weapon_shells.active_count() > 0

@@ -260,6 +260,9 @@ pub struct EventWorld {
     queues: BTreeMap<u64, BTreeMap<(u64, u32, u64), Job>>,
     pending: usize,
     held: BTreeMap<u64, Job>,
+    /// How many held jobs each origin has, so admission counts origins
+    /// without walking every held job.
+    held_origins: BTreeMap<u64, usize>,
     program_costs: BTreeMap<Id, usize>,
     program_bytes: usize,
     job_bytes: usize,
@@ -292,6 +295,7 @@ impl EventWorld {
             queues: BTreeMap::new(),
             pending: 0,
             held: BTreeMap::new(),
+            held_origins: BTreeMap::new(),
             program_costs: BTreeMap::new(),
             program_bytes: 0,
             job_bytes: 0,
@@ -478,9 +482,15 @@ impl EventWorld {
             });
         }
         self.queues.retain(|_, q| !q.is_empty());
+        let held_origins = &mut self.held_origins;
         self.held.retain(|_, j| {
             keep(j) || {
                 dropped.push((j.encoded_bytes, j.cancelable.then_some(j.context.source)));
+                let n = held_origins.get_mut(&j.context.origin).unwrap();
+                *n -= 1;
+                if *n == 0 {
+                    held_origins.remove(&j.context.origin);
+                }
                 false
             }
         });
@@ -629,6 +639,22 @@ impl EventWorld {
         if p.jobs.is_empty() && p.cancel.is_empty() {
             return true;
         }
+        // Refuse from the counts alone first: at most the cancelled sources'
+        // delayed rows can make room. A full queue then turns a row away in
+        // constant time instead of walking every queued job for each row
+        // that retries, which made a tick's work grow with the queue.
+        let added_bytes: usize = p.jobs.iter().map(|j| j.encoded_bytes).sum();
+        let (most, most_bytes) = p
+            .cancel
+            .iter()
+            .filter_map(|id| self.delayed.get(id))
+            .fold((0usize, 0usize), |(n, b), (dn, db)| (n + dn, b + db));
+        if self.pending - most.min(self.pending) + p.jobs.len() > self.limits.pending
+            || (self.program_bytes + self.job_bytes + added_bytes).saturating_sub(most_bytes)
+                > self.limits.state_bytes
+        {
+            return false;
+        }
         let (cancelled, cancelled_bytes) =
             if p.cancel.iter().any(|id| self.delayed.contains_key(id)) {
                 self.queues
@@ -640,15 +666,14 @@ impl EventWorld {
             } else {
                 (0, 0)
             };
-        let added_bytes: usize = p.jobs.iter().map(|j| j.encoded_bytes).sum();
         let origins = if cancelled == 0 {
             // Every queued origin stays: count the queues plus the origins
             // only the held jobs and this plan bring, without collecting
             // every origin on each chained row.
             let mut extra: Vec<u64> = self
-                .held
-                .values()
-                .map(|j| j.context.origin)
+                .held_origins
+                .keys()
+                .copied()
                 .chain(p.jobs.iter().map(|j| j.context.origin))
                 .filter(|origin| !self.queues.contains_key(origin))
                 .collect();
@@ -932,6 +957,7 @@ impl EventWorld {
                         format!("origin {origin}: retained {}: {reason}", job.output),
                     );
                     self.add_job_index(&job);
+                    *self.held_origins.entry(job.context.origin).or_default() += 1;
                     self.held.insert(job.sequence, job);
                     self.pending += 1;
                     r.admission_backpressure += 1;
@@ -940,6 +966,7 @@ impl EventWorld {
             }
             self.charge(&mut r, &mut spent, charge);
         }
+        self.held_origins.clear();
         for (_, job) in std::mem::take(&mut self.held) {
             self.pending -= 1;
             self.remove_job_index(&job);
