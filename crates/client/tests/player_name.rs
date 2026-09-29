@@ -256,10 +256,38 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
     let state = fresh_state(&root, "first-open")?;
     std::fs::create_dir_all(&state)?;
     let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+    // A fresh install asks for the controls first, then welcomes the
+    // player, and only then asks for the name: once.
     app.prompt_for_name();
     ensure!(
+        app.ui.top_id() == ScreenId::DefaultControls && !app.ui.is_open(ScreenId::ChooseName),
+        "First open should start with the controls: {:?}",
+        app.ui.stack()
+    );
+    let apply = app
+        .ui
+        .screen(ScreenId::DefaultControls)
+        .and_then(|s| {
+            let v = s.view();
+            v.walk().find_map(|n| {
+                v.node(n)
+                    .ctrl
+                    .command
+                    .clone()
+                    .filter(|c| c.eq_ignore_ascii_case("defaultControlsGui.apply();"))
+            })
+        })
+        .context("The controls screen has no OK button")?;
+    click(&mut app, ScreenId::DefaultControls, &apply)?;
+    ensure!(
+        app.ui.top_id() == ScreenId::MessageBox,
+        "No welcome after the controls: {:?}",
+        app.ui.stack()
+    );
+    click(&mut app, ScreenId::MessageBox, "Not Now")?;
+    ensure!(
         app.ui.top_id() == ScreenId::ChooseName,
-        "No name prompt on first open: {:?}",
+        "No name prompt after the welcome: {:?}",
         app.ui.stack()
     );
     render_png(&app, &root.join("first-open-name-prompt.png"))?;
@@ -278,6 +306,14 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
         "Prompt did not take the name: {:?} {:?}",
         app.ui.stack(),
         app.ui.settings().avatar.lan_name
+    );
+    // Nothing else asks: no second name question or box.
+    app.ui.core.name_prompt();
+    app.ui.update(0);
+    ensure!(
+        !app.ui.is_open(ScreenId::ChooseName) && !app.ui.is_open(ScreenId::MessageBox),
+        "Asked for the name again: {:?}",
+        app.ui.stack()
     );
     let file = state.join("settings.json");
     until(&mut [&mut app], "prompted name saved", Duration::from_secs(5), |_| {

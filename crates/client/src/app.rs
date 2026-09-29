@@ -2206,9 +2206,11 @@ impl App {
         player_name(&self.ui.settings().avatar)
     }
     /// Game start: ask for a name once while it is still the stock "Blockhead".
+    /// A first run asks after its controls and welcome questions instead
+    /// (`Core::first_run_welcome`), so a fresh install asks once.
     pub fn prompt_for_name(&mut self) {
-        if bri_ui::screens::name::should_prompt(&self.ui.core) {
-            self.ui.core.push(ScreenId::ChooseName);
+        if self.ui.settings().binds.is_some() {
+            self.ui.core.name_prompt();
             self.ui.update(0);
         }
     }
