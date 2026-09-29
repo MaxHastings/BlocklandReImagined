@@ -290,6 +290,10 @@ try:
     (release / 'content').mkdir(parents=True)
     shutil.copyfile(executable, release / 'bri-client')
     shutil.copyfile(importer, release / 'bri-import-addon')
+    # Line tables stay in target/release for crash reports (the Windows .pdb
+    # is kept apart the same way); players get the binaries without them.
+    if shutil.which('strip'):
+        subprocess.run(['strip', '--strip-debug', str(release / 'bri-client'), str(release / 'bri-import-addon')], check=True)
     for source, name in docs:
         shutil.copyfile(repo / source, release / name)
     for name in EXECUTABLES:
