@@ -68,31 +68,59 @@ fn baked_surroundings(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let form=0.7+0.3*max(dot(n,vec3<f32>(-0.57735,0.57735,0.57735)),0.0);
     return s.rgb*(min(s.a*2.0,1.0)/s.a)*form;
 }
-struct ShadowCoord { uv:vec2<f32>, depth:f32, cascade:i32, strength:f32 };
-fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
-    var out:ShadowCoord;
-    out.cascade=-1;
-    let count=i32(shadows.forward_count.w);
-    let view_depth=dot(position-camera.eye.xyz,shadows.forward_count.xyz);
-    for(var i=0;i<count;i+=1) {
-        if view_depth<shadows.splits[i] {out.cascade=i;break;}
-    }
-    if out.cascade<0 {return out;}
+// A receiver in one cascade's map: map coordinates, depth along the sun,
+// and whether it lies inside that map (with room for the filter footprint).
+struct CascadeCoord { uv:vec2<f32>, depth:f32, cascade:i32 };
+fn cascade_coord(position:vec3<f32>,n:vec3<f32>,cascade:i32)->CascadeCoord {
+    var out:CascadeCoord;
     // Offset along the normal by the cascade's texel size against acne.
-    let n=normal/max(length(normal),0.0001);
-    let clip=shadows.matrices[out.cascade]*vec4<f32>(position+n*shadows.texels[out.cascade]*1.5,1.0);
+    let clip=shadows.matrices[cascade]*vec4<f32>(position+n*shadows.texels[cascade]*1.5,1.0);
     out.uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
     out.depth=clip.z;
+    out.cascade=cascade;
+    return out;
+}
+fn inside_map(c:CascadeCoord)->bool {
+    let margin=3.0/shadows.params.y;
+    return all(c.uv>vec2<f32>(margin)) && all(c.uv<vec2<f32>(1.0-margin)) && c.depth>0.0 && c.depth<1.0;
+}
+// The cascade a receiver reads, and the next one it fades into over the
+// last part of this cascade's range, so detail changes gradually instead of
+// along a hard line (a straight seam across a flat wall).
+struct ShadowCoord { near:CascadeCoord, far:CascadeCoord, blend:f32, strength:f32 };
+fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
+    var out:ShadowCoord;
+    out.near.cascade=-1;
+    out.blend=0.0;
+    let count=i32(shadows.forward_count.w);
+    let view_depth=dot(position-camera.eye.xyz,shadows.forward_count.xyz);
+    var cascade=-1;
+    for(var i=0;i<count;i+=1) {
+        if view_depth<shadows.splits[i] {cascade=i;break;}
+    }
+    if cascade<0 {return out;}
+    let n=normal/max(length(normal),0.0001);
+    out.near=cascade_coord(position,n,cascade);
+    if cascade+1<count {
+        let start=select(0.0,shadows.splits[max(cascade-1,0)],cascade>0);
+        let band=CASCADE_BLEND*(shadows.splits[cascade]-start);
+        out.far=cascade_coord(position,n,cascade+1);
+        if inside_map(out.far) {
+            out.blend=clamp((view_depth-(shadows.splits[cascade]-band))/band,0.0,1.0);
+        }
+    }
     // Fade out over the last tenth of the shadow distance.
     let last=shadows.splits[count-1];
     out.strength=clamp((last-view_depth)/(last*0.1),0.0,1.0);
     return out;
 }
+// Share of each cascade's depth range over which it fades into the next.
+const CASCADE_BLEND:f32=0.2;
 // Lit (1) or shadowed (0) for each of a gathered 2x2 texel block, ordered
 // as textureGather returns them. A texel is shadowed only when no occluder
-// (non-casting brick, interior, terrain) lies between its caster and this
+// (a brick that does not cast) lies between its caster and this
 // surface, so a shadow lands only on the first surface it reaches.
-fn shadow_block(uv:vec2<f32>,c:ShadowCoord,occluder_layer:i32,gap:f32)->vec4<f32> {
+fn shadow_block(uv:vec2<f32>,c:CascadeCoord,occluder_layer:i32,gap:f32)->vec4<f32> {
     let casters=textureGather(shadow_map,shadow_point,uv,c.cascade);
     let occluders=textureGather(shadow_map,shadow_point,uv,occluder_layer);
     let between=occluders>casters+vec4<f32>(gap) & occluders<vec4<f32>(c.depth-gap);
@@ -100,8 +128,7 @@ fn shadow_block(uv:vec2<f32>,c:ShadowCoord,occluder_layer:i32,gap:f32)->vec4<f32
 }
 // Smooth 3x3 percentage-closer filter from a 4x4 texel footprint, with
 // bilinear edge weights; 1 is fully lit.
-fn shadow_lit(c:ShadowCoord)->f32 {
-    if c.cascade<0 {return 1.0;}
+fn cascade_lit(c:CascadeCoord)->f32 {
     let occluder_layer=c.cascade+i32(shadows.forward_count.w);
     let size=shadows.params.y;
     // Occluders must be a tenth of a unit clear of caster and receiver.
@@ -123,7 +150,13 @@ fn shadow_lit(c:ShadowCoord)->f32 {
     );
     let wx=vec4<f32>(1.0-t.x,1.0,1.0,t.x);
     let wy=vec4<f32>(1.0-t.y,1.0,1.0,t.y);
-    let lit=dot(wy,vec4<f32>(dot(rows[0],wx),dot(rows[1],wx),dot(rows[2],wx),dot(rows[3],wx)))/9.0;
+    return dot(wy,vec4<f32>(dot(rows[0],wx),dot(rows[1],wx),dot(rows[2],wx),dot(rows[3],wx)))/9.0;
+}
+fn shadow_lit(c:ShadowCoord)->f32 {
+    if c.near.cascade<0 {return 1.0;}
+    var lit=cascade_lit(c.near);
+    // Only receivers in the blend band pay for the second cascade.
+    if c.blend>0.0 {lit=mix(lit,cascade_lit(c.far),c.blend);}
     return mix(1.0,lit,c.strength);
 }
 // Sun light reaching a vertex-lit surface past bricks, players and models.
@@ -136,7 +169,7 @@ fn sun_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
 // ambient+sun ratio, bounded so shadows stay visible but never black.
 fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let c=shadow_coord(position,normal);
-    if c.cascade<0 {return lightmap;}
+    if c.near.cascade<0 {return lightmap;}
     let weights=vec3<f32>(0.2126,0.7152,0.0722);
     let ambient=dot(camera.ambient.rgb,weights);
     let lit=ambient+dot(camera.sun_color.rgb,weights);

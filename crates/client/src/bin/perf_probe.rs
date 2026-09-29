@@ -783,7 +783,7 @@ fn quality_variants(
                         instances: &[],
                     },
                     bri_render::scene::ShadowCasters {
-                        scenes: &scenes[..1],
+                        scenes: &[],
                         instances: &[],
                     },
                 );
@@ -844,7 +844,7 @@ fn quality_variants(
                             instances: &[],
                         },
                         bri_render::scene::ShadowCasters {
-                            scenes: &scenes[..1],
+                            scenes: &[],
                             instances: &[],
                         },
                     );

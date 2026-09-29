@@ -2263,8 +2263,8 @@ impl SceneRenderer {
     /// to `update_camera`. Only opaque and alpha-masked, non-background
     /// materials cast. Without shadows this records nothing.
     ///
-    /// Occluders (bricks that do not cast, interiors, terrain) render into a
-    /// separate map that only stops shadows from passing through them.
+    /// Occluders (bricks that do not cast) render into a separate map that
+    /// only stops shadows from passing through them.
     pub fn render_shadows(
         &self,
         encoder: &mut wgpu::CommandEncoder,
