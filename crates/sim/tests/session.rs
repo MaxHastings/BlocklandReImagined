@@ -913,23 +913,24 @@ fn saves_stream_in_batches_with_v20_load_messages() {
         .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
         .unwrap();
     let mut world = World::new("Build".into(), "source".into(), vec![[0.2, 0.3, 0.4, 1.0]]);
-    for i in 0..60 {
+    for i in 0..2100 {
         world.bricks.insert(
             i + 1,
             Brick::new(
                 ContentRef::Resolved("plate".into()),
-                [0.5 + i as f32, 0.1, -3.25],
+                [0.5 + (i % 60) as f32, 0.1, -3.25 - (i / 60) as f32],
                 1,
             ),
         );
     }
-    world.next_brick_id = 61;
+    world.next_brick_id = 2101;
     let saved = SavedBuild::capture(&world, false, false).unwrap();
     let cmd = || Command::LoadBuild {
         build: Box::new(saved.clone()),
         ownership: false,
     };
-    assert_eq!(s.command(host, 1, cmd()).unwrap(), Reply::Loaded { bricks: 60 });
+    s.set_load_pace(bri_sim::session::LoadPace::Bricks(1024));
+    assert_eq!(s.command(host, 1, cmd()).unwrap(), Reply::Loaded { bricks: 2100 });
     assert!(s.command(host, 2, cmd()).is_err(), "One load at a time");
     let tags = |s: &Session| s.chat().iter().filter_map(|l| l.tag).collect::<Vec<_>>();
     assert_eq!(tags(&s), [MessageTag::UploadStart]);
@@ -940,10 +941,10 @@ fn saves_stream_in_batches_with_v20_load_messages() {
         assert!(counts.len() < 1000);
     }
     counts.dedup();
-    assert_eq!(counts, [25, 50, 60], "Bricks arrive batch by batch");
+    assert_eq!(counts, [1024, 2048, 2100], "Bricks arrive batch by batch");
     assert_eq!(tags(&s), [MessageTag::UploadStart, MessageTag::ProcessComplete]);
     let done = s.chat().last().unwrap().text.clone();
-    assert!(done.starts_with("60 / 60 bricks created in 0:00.2"), "{done}");
+    assert!(done.starts_with("2100 / 2100 bricks created in 0:00.02"), "{done}");
 }
 #[test]
 fn loading_over_a_build_skips_overlapping_bricks_like_v20() {
@@ -1000,6 +1001,46 @@ fn loading_over_a_build_skips_overlapping_bricks_like_v20() {
     assert_eq!(xs, expected, "One brick in each spot");
 }
 #[test]
+fn a_brick_that_cannot_be_planted_is_skipped_and_the_load_carries_on_like_v20() {
+    use bri_world::{Brick, ContentRef, build::SavedBuild};
+    let mut s = session();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let mut world = World::new("Build".into(), "source".into(), vec![[0.2, 0.3, 0.4, 1.0]]);
+    for i in 0..10u64 {
+        let mut brick = Brick::new(
+            ContentRef::Resolved("plate".into()),
+            [0.5 + i as f32, 0.1, -3.25],
+            1,
+        );
+        // Off the stud grid, and a colour its save does not have.
+        if i == 3 {
+            brick.position[0] += 0.3;
+        }
+        if i == 6 {
+            brick.color = 9;
+        }
+        world.bricks.insert(i + 1, brick);
+    }
+    world.next_brick_id = 11;
+    s.command(
+        host,
+        1,
+        Command::LoadBuild {
+            build: Box::new(SavedBuild::new(world)),
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while s.build_loading() {
+        s.step().unwrap();
+    }
+    let done = s.chat().last().unwrap().text.clone();
+    assert!(done.starts_with("8 / 10 bricks created"), "{done}");
+    assert_eq!(s.snapshot().world.bricks.len(), 8);
+}
+#[test]
 fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
     use bri_sim::tutorial::{MAP_ID, TutorialMap, Zone, ZoneKind};
     let zone = |kind, min: Vec3| Zone {
@@ -1020,6 +1061,7 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
             part2: world(),
             targets: vec![],
             targets_end_ms: 0,
+            target_collision: Default::default(),
         })
         .unwrap();
         let owner = s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();

@@ -39,6 +39,9 @@ pub enum TargetId {
     Vehicle(u64),
     Brick(u64),
     Map(u64),
+    /// A `StaticShape` a map's script spawned and moves (the Tutorial's
+    /// targets), by the host's id for it.
+    Shape(u64),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mount {

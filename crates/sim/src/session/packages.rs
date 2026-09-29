@@ -1784,6 +1784,9 @@ impl Session {
         // `ServerCmdClearBricks`: likewise anyone may clear their own bricks.
         let typed_clear_bricks =
             request.package.is_empty() && request.command.eq_ignore_ascii_case("clearbricks");
+        // `serverCmdCancelEvents`: a player stops their own events.
+        let typed_cancel_events =
+            request.package.is_empty() && request.command.eq_ignore_ascii_case("cancelevents");
         let request = match self.resolve_typed_command(request) {
             Ok(request) => request,
             Err(_) if typed_brick_count => {
@@ -1792,6 +1795,10 @@ impl Session {
             }
             Err(_) if typed_clear_bricks => {
                 self.clear_own_bricks(owner)?;
+                return Ok(Reply::Accepted);
+            }
+            Err(_) if typed_cancel_events => {
+                self.cancel_own_events(owner)?;
                 return Ok(Reply::Accepted);
             }
             Err(error) => return Err(error),
@@ -1969,13 +1976,13 @@ impl Session {
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
         self.deliver_loadouts();
+        let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };
         let tick = self.simulation.state().tick;
         // Bricks removed by other means (hammer, wand) are world edits too.
-        let gone: Vec<BrickId> = self
-            .dirty
+        let gone: Vec<BrickId> = changed
             .iter()
             .filter(|id| {
                 host.world

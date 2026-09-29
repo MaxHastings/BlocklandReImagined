@@ -5,8 +5,9 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Leaves room for the reliable command envelope within the 64 MiB request cap.
-pub const MAX_BUILD_BYTES: u64 = 63 * 1024 * 1024;
+/// A saved build file, as large as a world checkpoint: a million bricks. A
+/// build travels to the host packed and compressed, far smaller than this.
+pub const MAX_BUILD_BYTES: u64 = crate::persistence::MAX_SAVE_BYTES;
 pub fn encode(build: &SavedBuild) -> Result<Vec<u8>> {
     build.validate()?;
     struct Bounded(Vec<u8>);
@@ -181,24 +182,83 @@ impl LoadPlan {
         preserve_ownership: bool,
         next_owner: OwnerId,
     ) -> Result<Self> {
-        build.validate()?;
-        target.validate()?;
+        let mut mapping =
+            LoadMapping::new(target, &build, load_owner, preserve_ownership, next_owner)?;
+        let next_id = target
+            .next_brick_id
+            .checked_add((build.world.bricks.len() + build.world.unloaded.len()) as u64)
+            .context("Brick IDs exhausted")?;
+        let mut bricks = BTreeMap::new();
+        // Bricks the source world could not place are offered again: this
+        // server may have their definitions.
+        let saved = build.world.bricks.into_iter().map(|(_, b)| b);
+        for (offset, brick) in saved.chain(build.world.unloaded).enumerate() {
+            bricks.insert(target.next_brick_id + offset as u64, mapping.brick(brick)?);
+        }
+        let new_owners = mapping.take_owners();
+        let (palette, next_owner) = (mapping.palette, mapping.next_owner);
+        Ok(Self {
+            base_revision: target.revision,
+            first_id: target.next_brick_id,
+            next_id,
+            palette,
+            bricks,
+            owners: new_owners,
+            next_owner,
+        })
+    }
+}
+
+/// How a save's bricks map into a target world: its colours merged into
+/// the target's colorset and its builders given owner numbers there. Made
+/// once when a load starts, from a read of the save; each brick is then
+/// validated and mapped as it is placed ([`Self::brick`]), so a big save
+/// costs nothing up front.
+pub struct LoadMapping {
+    /// The target colorset with the save's new colours appended.
+    pub palette: Vec<[f32; 4]>,
+    /// Save colour index -> merged colour index.
+    colors: Vec<u8>,
+    /// Save owner number -> target owner number.
+    owners: BTreeMap<OwnerId, OwnerId>,
+    /// Owner numbers new to the target world, claimed by these principals.
+    new_owners: BTreeMap<OwnerId, OwnerRecord>,
+    pub next_owner: OwnerId,
+    load_owner: OwnerId,
+    preserve_ownership: bool,
+}
+impl LoadMapping {
+    pub fn new(
+        target: &World,
+        build: &SavedBuild,
+        load_owner: OwnerId,
+        preserve_ownership: bool,
+        next_owner: OwnerId,
+    ) -> Result<Self> {
+        // Each brick is validated as it is mapped; the target world is the
+        // authority's own, valid by construction.
+        ensure!(
+            build.schema_version == BUILD_SCHEMA,
+            "Unsupported native build schema"
+        );
+        build.world.validate_header()?;
         ensure!(
             load_owner > 0 && next_owner > load_owner,
             "Invalid native owner allocation"
         );
+        let count = build.world.bricks.len() + build.world.unloaded.len();
         ensure!(
             target
                 .bricks
                 .len()
-                .checked_add(build.world.bricks.len() + build.world.unloaded.len())
+                .checked_add(count)
                 .is_some_and(|n| n <= crate::MAX_BRICKS),
             "Loaded build exceeds world brick limit"
         );
-        ensure!(!(build.world.bricks.is_empty() && build.world.unloaded.is_empty()), "Build contains no bricks");
-        let next_id = target
+        ensure!(count > 0, "Build contains no bricks");
+        target
             .next_brick_id
-            .checked_add((build.world.bricks.len() + build.world.unloaded.len()) as u64)
+            .checked_add(count as u64)
             .context("Brick IDs exhausted")?;
         target
             .revision
@@ -219,23 +279,22 @@ impl LoadPlan {
             };
             colors.push(index as u8);
         }
-        // Saved owner number -> owner number in the target world.
-        let mut owners: BTreeMap<OwnerId, OwnerId> = BTreeMap::new();
-        let mut new_owners = BTreeMap::new();
-        let mut next_owner = next_owner;
-        let mut bricks = BTreeMap::new();
-        // Bricks the source world could not place are offered again: this
-        // server may have their definitions.
-        let saved = build.world.bricks.into_iter().map(|(_, b)| b);
-        for (offset, mut brick) in saved.chain(build.world.unloaded).enumerate() {
-            brick.recolor(|c| colors[usize::from(c)]);
-            brick.owner = if !preserve_ownership {
-                load_owner
-            } else if brick.owner == 0 {
-                0
-            } else if let Some(owner) = owners.get(&brick.owner) {
-                *owner
-            } else {
+        let mut mapping = Self {
+            palette,
+            colors,
+            owners: BTreeMap::new(),
+            new_owners: BTreeMap::new(),
+            next_owner,
+            load_owner,
+            preserve_ownership,
+        };
+        if preserve_ownership {
+            // Numbers are handed out in save order, placed bricks first.
+            let saved = build.world.bricks.values().chain(&build.world.unloaded);
+            for brick in saved {
+                if brick.owner == 0 || mapping.owners.contains_key(&brick.owner) {
+                    continue;
+                }
                 // A known player gets their bricks back under the number
                 // they have in this world; anyone else gets a fresh number,
                 // claimed by their principal when there is one.
@@ -243,29 +302,41 @@ impl LoadPlan {
                 let owner = match record.and_then(|r| target.owner_of(&r.principal)) {
                     Some(owner) => owner,
                     None => {
-                        let owner = next_owner;
-                        next_owner = next_owner.checked_add(1).context("Owner IDs exhausted")?;
+                        let owner = mapping.next_owner;
+                        mapping.next_owner = owner.checked_add(1).context("Owner IDs exhausted")?;
                         if let Some(record) = record {
-                            new_owners.insert(owner, record.clone());
+                            mapping.new_owners.insert(owner, record.clone());
                         }
                         owner
                     }
                 };
-                owners.insert(brick.owner, owner);
-                owner
-            };
-            brick.validate(palette.len())?;
-            bricks.insert(target.next_brick_id + offset as u64, brick);
+                mapping.owners.insert(brick.owner, owner);
+            }
         }
-        Ok(Self {
-            base_revision: target.revision,
-            first_id: target.next_brick_id,
-            next_id,
-            palette,
-            bricks,
-            owners: new_owners,
-            next_owner,
-        })
+        Ok(mapping)
+    }
+    /// The owner numbers this load gives principals new to the world.
+    pub fn take_owners(&mut self) -> BTreeMap<OwnerId, OwnerRecord> {
+        std::mem::take(&mut self.new_owners)
+    }
+    /// Validate one saved brick against its save and map its colours and
+    /// owner into the target world.
+    pub fn brick(&self, mut brick: Brick) -> Result<Brick> {
+        // Valid against its own colorset, so the recolor stays inside the
+        // merged one.
+        brick.validate(self.colors.len())?;
+        brick.recolor(|c| self.colors[usize::from(c)]);
+        brick.owner = if !self.preserve_ownership {
+            self.load_owner
+        } else if brick.owner == 0 {
+            0
+        } else {
+            *self
+                .owners
+                .get(&brick.owner)
+                .context("Brick owner was not in the save")?
+        };
+        Ok(brick)
     }
 }
 

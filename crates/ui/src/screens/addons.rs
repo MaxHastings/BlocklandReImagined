@@ -456,7 +456,7 @@ impl Screen for AddOns {
             (DEFAULTS, EventKind::Click) => core.message_yes_no(
                 "Default Add-Ons",
                 // The message box does not wrap; keep it to one line.
-                "Turn off all but the base game?",
+                "Keep only the base game and the default Add-Ons?",
                 Callback::DefaultAddOns,
             ),
             _ => {}

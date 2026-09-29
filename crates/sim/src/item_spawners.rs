@@ -112,10 +112,10 @@ impl ItemSpawners {
         }
         Ok(())
     }
-    pub fn validate_append(
+    pub fn validate_append<'a>(
         &self,
         world: &bri_world::World,
-        bricks: &BTreeMap<BrickId, Brick>,
+        bricks: impl IntoIterator<Item = &'a Brick>,
     ) -> Result<()> {
         if self.bounds.is_empty() {
             return Ok(());
@@ -125,7 +125,7 @@ impl ItemSpawners {
             .values()
             .filter(|b| matches!(b.item_spawn.item, Some(ContentRef::Resolved(_))))
             .count();
-        for brick in bricks.values() {
+        for brick in bricks {
             if let Some(ContentRef::Resolved(item)) = &brick.item_spawn.item {
                 ensure!(
                     self.bounds.contains_key(item),

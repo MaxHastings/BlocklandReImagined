@@ -310,9 +310,9 @@ fn walk(dir: &Path) -> Vec<String> {
     out
 }
 
-/// Every Add-On in the repository (`packages/`: the Duplicator, the samples
-/// and the Stress Lab), copied into a hidden folder of the content root
-/// for the test's length, in dependency order.
+/// Every Add-On in the repository (`packages/`: the default Add-Ons, the
+/// samples, the showcase and the Stress Lab), copied into a hidden folder
+/// of the content root for the test's length, in dependency order.
 struct RepoAddOns {
     dir: PathBuf,
     entries: Vec<bri_package::packages::PackageEntry>,
@@ -406,9 +406,9 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
     );
     let add_ons = RepoAddOns::install(&content)?;
     let mut set = bri_package::packages::PackageSet::load_root(&content)?;
-    // A release's content already lists the Add-Ons it ships turned on (the
-    // Duplicator, the Stress Lab); add only the rest, and expect the guest
-    // to download one of those.
+    // The content may already list Add-Ons turned on (a release's or a
+    // checkout's default Add-Ons, a Stress Lab release's); add only the
+    // rest, and expect the guest to download one of those.
     let added: Vec<_> = add_ons
         .entries
         .iter()
@@ -453,12 +453,13 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
     Ok(())
 }
 
-/// The Stunt Plane, which every release ships turned on
-/// (tools/shipped-addons.json): a host that runs it lists it among its
-/// spawnable vehicles, and a guest without it downloads it, joins and can
-/// pick it too.
+/// The Stunt Plane, a default Add-On (packages/default-addons.json): a host
+/// that runs it lists it among its spawnable vehicles, and a guest who has
+/// it turned off downloads it, joins and can pick it too. Runs on a
+/// release's content, which ships it on, and on a checkout's, whether or
+/// not the game has installed it there yet.
 #[test]
-#[ignore = "generated content with the shipped Add-Ons (tools/shipped_addons.py build) and loopback UDP; no window"]
+#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
 fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()> {
     const PLANE: &str = "vehicle_stunt_plane";
     const VEHICLE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
@@ -466,26 +467,27 @@ fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()>
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
         PathBuf::from,
     );
-    let dir = format!("shipped-addons/{PLANE}");
-    ensure!(
-        content.join(&dir).join("package.json").is_file(),
-        "{} has no Stunt Plane: run python tools/shipped_addons.py build",
-        content.display()
-    );
-    let base = bri_package::packages::PackageSet::load_root(&content)?;
-    ensure!(
-        !base.packages.iter().any(|p| p.id == PLANE),
-        "the guest's content already lists {PLANE}"
-    );
-    let mut set = base.clone();
-    // As the packager lists it in a release's packages.json.
-    set.packages.push(bri_package::packages::PackageEntry {
-        id: PLANE.into(),
-        version: "1.0.0".into(),
-        side: bri_package::packages::Side::Shared,
-        dir,
-        role: None,
-    });
+    let listed = bri_package::packages::PackageSet::load_root(&content)?;
+    // The host runs the content's own copy when it has one on; otherwise
+    // the repository's, staged in the content root for the test's length.
+    let mut set = listed.clone();
+    let _staged = if set.packages.iter().any(|p| p.id == PLANE) {
+        None
+    } else {
+        let staged = RepoAddOns::install(&content)?;
+        set.packages.push(
+            staged
+                .entries
+                .iter()
+                .find(|e| e.id == PLANE)
+                .context("the repository has no Stunt Plane")?
+                .clone(),
+        );
+        Some(staged)
+    };
+    // The guest has it off, as after turning it off in the Add-Ons screen.
+    let mut without = listed;
+    without.packages.retain(|p| p.id != PLANE);
     let spawnable = |app: &App| {
         app.ui
             .core
@@ -499,6 +501,9 @@ fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it() -> Result<()>
         .apply_packages(&set)
         .context("the host loads the Stunt Plane")?;
     let mut guest = app(&content, "PlaneGuest")?;
+    guest
+        .apply_packages(&without)
+        .context("the guest turns the Stunt Plane off")?;
     ensure!(!spawnable(&guest), "the guest has the Stunt Plane before joining");
     host(&mut host_app, port)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;

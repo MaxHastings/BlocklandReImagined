@@ -28,3 +28,7 @@ required-features = ["gpu"]
 [[bin]]
 name = "ui_runtime_probe"
 required-features = ["gpu"]
+
+[[bin]]
+name = "ml_text_probe"
+required-features = ["gpu"]

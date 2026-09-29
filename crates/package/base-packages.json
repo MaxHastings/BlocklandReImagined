@@ -18,6 +18,6 @@
     { "id": "v20-foliage", "version": "2.0.0", "side": "client", "dir": "foliage-pack-003", "role": "foliage" },
     { "id": "v20-weapon-debris", "version": "4.0.0", "side": "client", "dir": "weapon-debris-pack-004", "role": "weapon_debris" },
     { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "worlds-pass-006", "role": "worlds" },
-    { "id": "v20-tutorial", "version": "2.0.0", "side": "server", "dir": "tutorial-pack-002", "role": "tutorial" }
+    { "id": "v20-tutorial", "version": "3.0.0", "side": "server", "dir": "tutorial-pack-003", "role": "tutorial" }
   ]
 }

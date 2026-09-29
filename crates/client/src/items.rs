@@ -1083,15 +1083,8 @@ fn euler_to_matrix_images(
         }
     }
 }
-/// Engine-family Euler composition Ry(-y)*Rx(-x)*Rz(-z), then native basis.
-/// Recovered v20 eulerToMatrix calls MatrixCreateFromEuler. The matrix convention
-/// is corroborated by pinned OpenMBG m_matF_set_euler_C, not a v20 engine build.
 pub(crate) fn source_euler(degrees: [f32; 3]) -> Quat {
-    let source = Quat::from_rotation_y(-degrees[1].to_radians())
-        * Quat::from_rotation_x(-degrees[0].to_radians())
-        * Quat::from_rotation_z(-degrees[2].to_radians());
-    let basis = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-    (basis * source * basis.conjugate()).normalize()
+    bri_weapons::rotation::native(degrees)
 }
 
 #[cfg(test)]
