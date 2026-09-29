@@ -1,8 +1,9 @@
 //! First person in every seat of a Tank, for a guest who joined a LAN game
 //! and for the host: the rendered camera sits where v20 puts the rider's
-//! eye. `Player::getCameraTransform` at `pos` 0 (blocklandv20.exe 0x5ab7d0):
-//! the driver sees from the seat's mount node plus the posed `eye` node in
-//! the vehicle's frame; everyone else from the `eye` node through the seat.
+//! eye and faces the way the seat does. `Player::getCameraTransform` at
+//! `pos` 0 (blocklandv20.exe 0x5ab7d0) gives every rider of a vehicle
+//! `getRenderEyeTransform`: the posed `eye` node through the seat, turned
+//! with it. In third person a passenger sees the Tank's chase camera.
 //! The expected eye is built here from the vehicle pack and the avatar rig,
 //! not from the app. The Tank's seats hold `root`, so the old fixed 1.6 over
 //! the seat sat the eye about half a unit too low, inside the hull.
@@ -238,12 +239,6 @@ fn expected_eye(app: &App, tank: &Definition, assets: &AvatarAssets) -> Result<V
     let node = Vec3::from(s.transform.position);
     let world =
         Mat4::from_rotation_translation(Quat::from_array(pose.rotation), Vec3::from(pose.position));
-    if matches!(
-        tank.seat_role(index),
-        SeatRole::StrafeDriver | SeatRole::MouseDriver
-    ) {
-        return Ok(world.transform_point3(node + eye));
-    }
     let mut seat = Mat4::from_rotation_translation(Quat::from_array(s.transform.rotation), node);
     // The gunner rides the turret, turned by its aim about its mount.
     if let (Some(mount), SeatRole::Gunner) = (&tank.attachment_mount, tank.seat_role(index)) {
@@ -314,7 +309,69 @@ fn check(
         eye.distance(expected) < 0.05,
         "{who} seat {index}: first-person eye {eye}, v20 {expected}"
     );
+    // A driver or passenger looks the way the seat faces, pitched and
+    // rolled with the hull, until they move their head.
+    if tank.seat_role(index) != SeatRole::Gunner {
+        let (vehicle, _) = seat(app).context("not seated")?;
+        let pose = app
+            .network_view()
+            .and_then(|v| v.vehicle_poses.get(&vehicle))
+            .context("tank pose")?;
+        let expected = Quat::from_array(pose.rotation)
+            * Quat::from_array(tank.seats[index].transform.rotation);
+        let (_, yaw, pitch) = app.rendered_camera().context("rendered camera")?;
+        let drawn = Quat::from_rotation_y(-yaw)
+            * Quat::from_rotation_x(pitch)
+            * Quat::from_rotation_z(app.rendered_roll());
+        ensure!(
+            drawn.angle_between(expected) < 0.01,
+            "{who} seat {index}: view {drawn}, seat {expected}"
+        );
+    }
     Ok(index)
+}
+/// In third person a passenger hands the camera to the Tank
+/// (`Player::getCameraTransform` 0x5ab80e): its level chase camera.
+fn check_passenger_chase_camera(
+    apps: &mut [&mut App],
+    rider: usize,
+    tank: &Definition,
+    gpu: &Headless,
+    renderer: &mut UiRenderer,
+) -> Result<()> {
+    request(
+        apps[rider],
+        UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
+    )?;
+    run_for(apps, 0.5)?;
+    let app = &mut *apps[rider];
+    let eye = render(app, gpu, renderer)?;
+    let (vehicle, _) = seat(app).context("not seated")?;
+    let pose = app
+        .network_view()
+        .and_then(|v| v.vehicle_poses.get(&vehicle))
+        .context("tank pose")?;
+    let center = (Vec3::from(tank.bounds_min) + Vec3::from(tank.bounds_max)) * 0.5;
+    let (expected, ..) = bri_client::vehicle_camera::driver_view(
+        Vec3::from(pose.position),
+        Quat::from_array(pose.rotation),
+        center,
+        &tank.camera,
+        None,
+        1.0,
+        |_, _| Ok(None),
+    )?;
+    println!("passenger third person: eye {eye} expected {expected}");
+    ensure!(
+        eye.distance(expected) < 0.1,
+        "passenger's third-person camera {eye}, the Tank's chase camera {expected}"
+    );
+    request(
+        apps[rider],
+        UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
+    )?;
+    run_for(apps, 0.5)?;
+    Ok(())
 }
 
 #[test]
@@ -399,6 +456,15 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
             &mut renderer,
         )?;
         seen.insert(index);
+        if tank.seat_role(index) == SeatRole::Passenger {
+            check_passenger_chase_camera(
+                &mut [&mut host, &mut guest],
+                1,
+                &tank,
+                &gpu,
+                &mut renderer,
+            )?;
+        }
         request(&mut guest, UiAction::Game(GameAction::NextSeat))?;
         until(&mut [&mut host, &mut guest], "the next seat", 30, |a| {
             Ok(seat(a[1]).is_some_and(|(_, s)| s != index))

@@ -120,7 +120,7 @@ choices belong to the Add-Ons download pipeline (Lane: night QA).
 | Play music, menu sounds, plant/move/error sounds | Present | `options.rs` (`CHECKBOX_PREFS`), `client/src/audio.rs` |
 | Key remapping, Remap All, Clear All, Defaults | Present | `crates/ui/src/binds.rs:157`, `menus.rs:726` |
 | Mouse sensitivity, invert mouse, keyboard turn rate | Present | `options.rs` (`SUPPORTED_CONTROLS`), `client/src/controls.rs` |
-| Invert mouse in vehicles | Present | fixed in `828b4d9`; its pitch sign fixed in `394a6bc` |
+| Invert mouse in vehicles | Present | fixed in `828b4d9`; its pitch sign fixed in `394a6bc`; off by default as in the reference install and v21 (`vehicles-v20-checklist.md`) |
 | Fast 1st/3rd switch, super-shift toggle and smart toggle | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs` |
 | Queue brick buying, reverse brick scroll, jump/jet combo | Present | `options.rs` (`CHECKBOX_PREFS`), `ui/src/ui.rs`, `screens/selector.rs` |
 | Recolour brick icons, show brick slot numbers, coloured escape menu | Present | `options.rs` (`CHECKBOX_PREFS`), `models/hud.rs` |

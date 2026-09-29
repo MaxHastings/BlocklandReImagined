@@ -169,13 +169,18 @@ const FOV_SLIDER: &str = "SliderFOV";
 /// Not a v20 setting: look for a newer release once per start (on unless
 /// turned off). The client's update check reads it.
 pub const CHECK_FOR_UPDATES: &str = "$pref::Net::CheckForUpdates";
-/// Controls' "Invert Mouse In Vehicles", on by default as in v20; the
-/// client reads it while driving.
+/// Controls' "Invert Mouse In Vehicles"; the client reads it while driving
+/// a mouse-steered vehicle. Off by default (see [`NATIVE_DEFAULTS`]).
 pub const VEHICLE_MOUSE_INVERT: &str = "$Pref::Input::VehicleMouseInvert";
+/// Defaults that replace the UI pack's, which come from stock v20's
+/// `client/defaults.cs`. The designated reference install (the B4v21
+/// launcher's v20, `base/client/defaults.cs`) and stock v21 ship
+/// `VehicleMouseInvert = 0`, so moving the mouse up raises a plane's nose;
+/// stock v20's 1 dips it, which Maxwell reported as an inverted mouse.
+pub const NATIVE_DEFAULTS: &[(&str, &str)] = &[(VEHICLE_MOUSE_INVERT, "0")];
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
-    VEHICLE_MOUSE_INVERT,
     ANTI_ALIASING,
     PRECIPITATION,
     CHECK_FOR_UPDATES,
@@ -2618,16 +2623,30 @@ mod tests {
         assert!(saved_prefs(&mut ui).bool_or(CAPTIONS, false));
     }
     #[test]
-    fn invert_mouse_in_vehicles_shows_on_by_default_and_saves_on_done() {
-        let mut ui = fixture();
+    fn invert_mouse_in_vehicles_shows_off_by_default_and_saves_on_done() {
+        // The pack carries stock v20's 1; the native default replaces it.
+        let mut data = fixture().core.pack.data.clone();
+        data.data.prefs.insert(VEHICLE_MOUSE_INVERT.into(), "1".into());
+        let mut ui = Ui::new(
+            Rc::new(Pack::from_parts(data, Default::default())),
+            UiConfig {
+                size: (1280, 720),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
         let mut s = Options::new(&ui.core);
         let n = s.view.id("OptVehicleInvert").unwrap();
         assert!(s.view.node(n).state.visible);
-        assert!(s.view.bool_value(n));
-        s.view.set_bool(n, false);
+        assert!(!s.view.bool_value(n));
+        s.view.set_bool(n, true);
         change(&mut s, &mut ui, n);
         click(&mut s, "done", &mut ui);
-        assert!(!saved_prefs(&mut ui).bool_or(VEHICLE_MOUSE_INVERT, true));
+        assert!(saved_prefs(&mut ui).bool_or(VEHICLE_MOUSE_INVERT, false));
     }
 
     #[test]

@@ -34,7 +34,7 @@ belongs to another thread by coordinator decision; **Open** is not done.
 
 | # | Area | v20 behavior | What we had | Status |
 |---|------|--------------|-------------|--------|
-| 1 | Seat facing | Every mounted player takes the mount node's transform, so the body and first-person yaw stay fixed to the seat for drivers and passengers alike; the mouse only tilts the view, and free look turns the head within `maxFreelookAngle` | The local driver's body followed the camera, so it spun in the seat; later passengers could still turn in their seat | Fixed (2026-09-27 correction: passengers are locked too, per Maxwell's v20 check) |
+| 1 | Seat facing | Every mounted player takes the mount node's transform, so the body and first-person yaw stay fixed to the seat for drivers and passengers alike; in first person the head springs back to the seat and free look turns it within `maxFreelookAngle` (item 42) | The local driver's body followed the camera, so it spun in the seat; later passengers could still turn in their seat | Fixed (2026-09-27 correction: passengers are locked too, per Maxwell's v20 check) |
 | 2 | View while riding | The vehicle camera sits behind the vehicle and turns with it | The camera stayed at its world yaw while the vehicle turned | Fixed: the view carries the vehicle's turn; mouse-steered vehicles are followed |
 | 3 | Tank gunner aim | The gunner controls the TankTurretPlayer: its yaw is relative to the hull and follows the mouse; barrel pitch limited by `minLookAngle -1.5708` / `maxLookAngle 0.5` | Aim yaw was the absolute camera yaw with the wrong sign, so the turret swung the opposite way and drifted as the hull turned; no pitch limit | Fixed |
 | 4 | Tank Turret on its own | `TankTurretPlayer` has `uiName "Tank Turret"` and `rideable`, so it is in the wrench vehicle list | Filtered out of the list | Fixed |
@@ -76,22 +76,30 @@ belongs to another thread by coordinator decision; **Open** is not done.
 | 39 | Model animations | `playThread(slot, sequence)` and `setThreadDir` from script, such as the Stunt Plane's propeller switching `propslow`/`propfast` at speed 5 | Vehicles drew their rest pose; no way to say a sequence plays | Fixed: schema 6 `threads` with rate and speed range; the client poses the moved parts from the server tick |
 | 40 | FlyingVehicle surfaces | `FlyingVehicle::updateForces` (0x568770) is stock Torque: `horizontalSurfaceForce`/`verticalSurfaceForce` damp the sideways and roof velocity directly | Multiplied by speed as well, so the carpet stiffened with speed | Fixed |
 | 41 | DTS sequences | An empty trigger list may keep a stale start index | The reader rejected it, so the Stunt Plane model failed to convert | Fixed: empty ranges skip the bounds check |
+| 42 | First-person view in a vehicle seat | `getRenderEyeTransform` (0x5aafa0): the seat's rotation × head, so it rolls and pitches with the vehicle; `updateMove` halves the head every tick in first person unless free looking (0x5aeaed) | Yaw and pitch only, level through a loop; the mouse tilted a seated view freely | Fixed (2026-09-29, `vehicles-v20-checklist.md`) |
+| 43 | Invert Mouse In Vehicles default | Stock v20 1; the reference install and v21 0 | 1: mouse up dipped a plane's nose, reported as inverted | Fixed: default 0 |
+| 44 | Free look while mouse steering | The vehicle gets no yaw or pitch | Free look steered | Fixed |
+| 45 | Third person for passengers and the gunner | The vehicle's chase camera (0x5ab80e) | An orbit round the seat or turret | Fixed |
+| 46 | Dismount | 2.2 up the tilted seat first; never refused; the vehicle's velocity without its spin | World up first; refused when blocked; spin added | Fixed |
+| 47 | Next/Prev Seat on foot or with no free seat | Silent | An error message | Fixed |
 
 ## How the fixes work
 
 **Seat roles.** `Definition::seat_role` classifies every seat as Passenger,
 StrafeDriver, MouseDriver, Actor (rider of a player-type mount) or Gunner.
 The server maps input by role, every rider's body faces the seat, and the
-client camera follows the role: Passenger and StrafeDriver views face the seat,
-MouseDriver views follow the vehicle, a Gunner's view turns with the hull, and
-an Actor's mount follows the look. Nothing in the network protocol changed.
+client camera follows the role. In first person every rider of a vehicle sees
+through the seat, rolled and pitched with it, with a head that springs back; a
+Gunner's view rides the hull; an Actor's mount follows the look. In third
+person every rider of a vehicle sees its chase camera. Nothing in the network
+protocol changed.
 
 **Mouse steering.** For a MouseDriver seat the client keeps sending the raw
 mouse turn in `MoveInput.yaw/pitch` (pitch wraps every half turn instead of
 clamping) and shows a view that follows the vehicle. The server turns the
 difference between inputs into `Controls::look_delta`, and the vehicle
-accumulates it exactly as `Vehicle::updateMove` does. With v20's default
-vehicle mouse invert, moving the mouse up dips the nose.
+accumulates it exactly as `Vehicle::updateMove` does. With the default
+Vehicle Mouse Invert off (item 43), moving the mouse up raises the nose.
 
 **Player-type mounts.** Kinematic bodies moved by the v20 player motor (its
 `updatePos` box sweep, see `docs/player-simulation.md`) with the datablock's speeds, run force, jump, step height, slope limit, drag and
