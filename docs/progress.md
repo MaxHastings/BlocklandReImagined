@@ -4772,19 +4772,22 @@ worker fails a single slow request instead of disconnecting. Evidence:
 48 cases in release pass the 32 ms tick budget.
 
 Round 3 (same branch): clan tags and the double name prompt. The Avatar
-screen's clan prefix and suffix now join with the name (`Hello::clan`, as
-v20's `GameConnection::onConnectRequest` takes `%clanPrefix` and
-`%clanSuffix`) and change on Avatar Done while connected
-(`Command::SetClan`). The host cleans them like names (control characters
-and colour escapes dropped, cut to 48 bytes on a character boundary, the
-player told) and every chat and team chat line shows them grey around the
-yellow name, `serverCmdMessageSent`'s `'\c7%1\c3%2\c7%3\c6: %4'`.
-Kill messages, name tags and the player list keep the bare name (inferred:
-only the chat format is cited so far; the PC's v20 audit can widen it).
-Protocol 54 (Gate renumbers). A fresh install asked for its name
-twice (a "Your Name" message, then Choose Name); `Core::name_prompt` now
-opens Choose Name once per run and the message is gone. Evidence:
-`clan_tags_are_cleaned_and_carried_on_chat_lines` (sim),
+screen's clan prefix and suffix now join with the name (`Hello::clan`) and
+change on Avatar Done while connected (`Command::SetClan`). The host cleans
+them as v20's `GameConnection::onConnectRequest` (mainServer.cs 1631-1664)
+does, `trim(getSubStr(StripMLControlChars(%clanPrefix), 0, 4))`, and the
+Avatar boxes keep v20's `maxLength = 4`. Names now follow the same rule with
+23 characters (was 48, which came from the first playtest prep, not from
+v20); duplicate numbering stays within 23. `StripMLControlChars` is a small
+local strip (`clean_connect_text`) until the shared Torque ML parser lands.
+Only chat and team chat read the tags (mainServer.cs 1098 and 1176,
+`'\c7%1\c3%2\c7%3\c6: %4'`): grey tags around the yellow name; kill
+messages, name tags and the player list keep `getPlayerName()` alone.
+Protocol bump (Gate renumbers). A fresh install asked for its name twice (a
+"Your Name" message, then Choose Name); `Core::name_prompt` now opens Choose
+Name once per run and the message is gone. Evidence:
+`clan_tags_are_cleaned_and_carried_on_chat_lines`,
+`joins_take_a_cleaned_name_instead_of_being_refused` (sim),
 `clan_tags_from_the_join_and_avatar_done_reach_chat` (net, host and guest
 over QUIC), `chat_lines_carry_v20_colors` (client),
 `first_run_offers_the_tutorial_then_asks_for_a_name_once` (UI screens);

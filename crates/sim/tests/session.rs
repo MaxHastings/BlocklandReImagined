@@ -1766,7 +1766,7 @@ fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
     assert_eq!(s.names()[&a], "Blockhead");
     let _ = s.take_private_notices();
     s.command(a, 2, Command::SetName("é".repeat(30))).unwrap();
-    assert_eq!(s.names()[&a], "é".repeat(24));
+    assert_eq!(s.names()[&a], "é".repeat(23));
     assert!(
         s.take_private_notices()
             .iter()
@@ -1788,15 +1788,19 @@ fn joins_take_a_cleaned_name_instead_of_being_refused() {
     assert_eq!(clean_player_name(" \u{7}\t "), "Blockhead");
     assert_eq!(clean_player_name("a\nb"), "ab");
     assert_eq!(clean_player_name("  Builder  "), "Builder");
-    // Cut on a character boundary, then trimmed.
-    assert_eq!(clean_player_name(&"é".repeat(30)), "é".repeat(24));
+    // v20's `trim(getSubStr(StripMLControlChars(%LANname), 0, 23))`: ML
+    // tags go, cut to 23 characters, then trimmed.
+    assert_eq!(clean_player_name(&"é".repeat(30)), "é".repeat(23));
     assert_eq!(
-        clean_player_name(&format!("{} x", "y".repeat(47))),
-        "y".repeat(47)
+        clean_player_name(&format!("{} x", "y".repeat(22))),
+        "y".repeat(22)
     );
+    assert_eq!(clean_player_name("<color:ff0000>Red<br>"), "Red");
+    assert_eq!(clean_player_name("<3 you"), "<3 you");
+    assert_eq!(clean_player_name("<b>"), "Blockhead");
     let mut s = session();
     let long = s.join("x".repeat(200), Vec3::Y, false).unwrap();
-    assert_eq!(s.names()[&long], "x".repeat(48));
+    assert_eq!(s.names()[&long], "x".repeat(23));
     assert!(
         s.take_private_notices()
             .iter()
@@ -1815,8 +1819,8 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
     let guest = s.join("Guest".into(), Vec3::new(4., 1., 0.), false).unwrap();
     // Taken at join (`onConnectRequest`), as a guest with default trust.
     let tags = Clan {
-        prefix: "[BLS] ".into(),
-        suffix: " ~".into(),
+        prefix: "[BL]".into(),
+        suffix: "~".into(),
     };
     s.set_clan(guest, &tags).unwrap();
     assert_eq!(s.clans()[&guest], tags);
@@ -1826,16 +1830,16 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
     assert_eq!((line.owner, line.name.as_str()), (guest, "Guest"));
     assert_eq!(line.clan, tags);
 
-    // Avatar screen Done: colour escapes and control characters dropped,
-    // cut like a name, the player told once.
+    // Avatar screen Done: v20's `trim(getSubStr(StripMLControlChars(..),
+    // 0, 4))`, the player told once when more than spaces went.
     let _ = s.take_private_notices();
     let wanted = Clan {
-        prefix: format!("\u{e003}\n{}", "é".repeat(40)),
+        prefix: format!("\u{e003}\n<color:ff0000>{}", "é".repeat(40)),
         suffix: String::new(),
     };
     s.command(guest, 2, Command::SetClan(wanted.clone())).unwrap();
     let taken = &s.clans()[&guest];
-    assert_eq!(taken.prefix, "é".repeat(MAX_CLAN_TAG / 2));
+    assert_eq!(taken.prefix, "é".repeat(MAX_CLAN_TAG));
     assert_eq!(taken.suffix, "");
     let told = |s: &mut bri_sim::session::Session| {
         s.take_private_notices().iter().any(|(owner, notice)| {
@@ -1845,7 +1849,15 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
     assert!(told(&mut s));
     s.command(guest, 3, Command::SetClan(wanted)).unwrap();
     assert!(!told(&mut s), "the same tags again change nothing");
+    // Surrounding spaces are trimmed quietly, as in v20.
+    let spaced = Clan {
+        prefix: " [A] ".into(),
+        suffix: String::new(),
+    };
+    s.command(guest, 4, Command::SetClan(spaced)).unwrap();
+    assert_eq!(s.clans()[&guest].prefix, "[A]");
+    assert!(!told(&mut s));
     // Clearing both tags leaves the name bare.
-    s.command(guest, 4, Command::SetClan(Clan::default())).unwrap();
+    s.command(guest, 5, Command::SetClan(Clan::default())).unwrap();
     assert!(!s.clans().contains_key(&guest));
 }

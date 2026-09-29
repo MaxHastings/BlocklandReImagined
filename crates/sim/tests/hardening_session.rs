@@ -1767,7 +1767,7 @@ fn join_and_resume_credentials_are_checked() {
         ("\n".into(), "Blockhead".into()),
         ("a\u{7}b".into(), "ab".into()),
         ("\u{1b}[31mred".into(), "[31mred".into()),
-        ("é".repeat(25), "é".repeat(24)),
+        ("é".repeat(25), "é".repeat(23)),
     ] {
         let owner = s.join(name.clone(), A_SPAWN, false).unwrap();
         assert_eq!(s.names()[&owner], taken, "{name:?}");
@@ -2228,7 +2228,7 @@ fn players_sharing_a_name_are_numbered() {
     let c = s
         .join("Blockhead".into(), Vec3::new(6.0, 0.05, 0.0), false)
         .unwrap();
-    let long = "x".repeat(48);
+    let long = "x".repeat(23);
     let d = s
         .join(long.clone(), Vec3::new(9.0, 0.05, 0.0), false)
         .unwrap();
@@ -2240,7 +2240,7 @@ fn players_sharing_a_name_are_numbered() {
     assert_eq!(names[&b], "blockhead 2");
     assert_eq!(names[&c], "Blockhead 3");
     assert_eq!(names[&d], long);
-    assert_eq!(names[&e], format!("{} 2", &long[..46]));
+    assert_eq!(names[&e], format!("{} 2", &long[..21]));
 }
 
 /// First impressions 14: the host's Server Settings apply. The brick limit

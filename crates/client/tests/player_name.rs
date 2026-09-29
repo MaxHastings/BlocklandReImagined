@@ -354,7 +354,8 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
     Ok(())
 }
 
-/// Clan tags typed on the Avatar screen show around the name in chat
+/// Clan tags typed on the Avatar screen (4-character boxes, trimmed like
+/// v20's `onConnectRequest`) show around the name in chat
 /// (`serverCmdMessageSent`'s `'\c7%1\c3%2\c7%3\c6: %4'`), for a single
 /// player and for a guest, and Done while connected changes them.
 #[test]
@@ -387,7 +388,7 @@ fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
     })?;
     say(&mut solo, "alone");
     until(&mut [&mut solo], "single player chat tagged", Duration::from_secs(10), |a| {
-        chat_shows(a[0], "[SP] Solo ~: alone")
+        chat_shows(a[0], "[SP]Solo~: alone")
     })?;
     solo.ui.core.request(UiAction::Disconnect);
     until(&mut [&mut solo], "single player left", Duration::from_secs(30), |a| {
@@ -434,10 +435,10 @@ fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
         &mut [&mut host, &mut guest],
         "guest chat tagged on both",
         Duration::from_secs(10),
-        |a| a.iter().all(|a| chat_shows(a, "[G] Guesty: hello")),
+        |a| a.iter().all(|a| chat_shows(a, "[G]Guesty: hello")),
     )?;
     // Done in game with new tags; the next line carries them.
-    edit_avatar(&mut guest, &[("Avatar_Prefix", ""), ("Avatar_Suffix", " [new]")])?;
+    edit_avatar(&mut guest, &[("Avatar_Prefix", ""), ("Avatar_Suffix", "[NW]")])?;
     until(&mut [&mut host, &mut guest], "tags sent", Duration::from_secs(10), |a| {
         a[1].pending_requests() == 0
     })?;
@@ -446,7 +447,7 @@ fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
         &mut [&mut host, &mut guest],
         "new tags on the host",
         Duration::from_secs(10),
-        |a| chat_shows(a[0], "Guesty [new]: again"),
+        |a| chat_shows(a[0], "Guesty[NW]: again"),
     )?;
     guest.ui.core.request(UiAction::Disconnect);
     host.ui.core.request(UiAction::Disconnect);

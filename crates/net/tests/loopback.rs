@@ -2950,19 +2950,21 @@ async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
     guest.command(Command::Chat("hi".into())).await?;
     wait(&mut host, move |c| said(c, "Guest", "hi").is_some()).await?;
     wait(&mut guest, move |c| said(c, "Host", "hello").is_some()).await?;
-    assert_eq!(said(&guest, "Host", "hello"), Some(join("", "[H] ", "").clan));
-    assert_eq!(said(&host, "Guest", "hi"), Some(join("", "[G]", " ~").clan));
+    // Cleaned as `onConnectRequest` does: ML tags and control characters
+    // dropped, 4 characters, trimmed.
+    assert_eq!(said(&guest, "Host", "hello"), Some(join("", "[H]", "").clan));
+    assert_eq!(said(&host, "Guest", "hi"), Some(join("", "[G]", "~").clan));
 
     // Avatar Done while connected sends the new tags.
     guest
         .command(Command::SetClan(Clan {
             prefix: String::new(),
-            suffix: " [new]".into(),
+            suffix: "<b>[NW]".into(),
         }))
         .await?;
     guest.command(Command::Chat("again".into())).await?;
     wait(&mut host, move |c| said(c, "Guest", "again").is_some()).await?;
-    assert_eq!(said(&host, "Guest", "again"), Some(join("", "", " [new]").clan));
+    assert_eq!(said(&host, "Guest", "again"), Some(join("", "", "[NW]").clan));
     drop((host, guest));
     server.stop().await?;
     Ok(())

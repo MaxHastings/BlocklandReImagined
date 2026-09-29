@@ -7580,8 +7580,8 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
-/// The saved name as the server accepts it: trimmed, at most 48 bytes, and
-/// "Blockhead" when blank.
+/// The saved name as the server accepts it (`clean_player_name`: v20's 23
+/// characters, trimmed) and "Blockhead" when blank.
 fn player_name(prefs: &AvatarPrefs) -> String {
     bri_sim::session::clean_player_name(&prefs.lan_name)
 }
@@ -8280,12 +8280,12 @@ mod tests {
         );
         // Clan tags sit grey around the name, stripped of colour escapes.
         let clan = bri_sim::session::Clan {
-            prefix: "[BLS\u{e003}] ".into(),
-            suffix: " ~".into(),
+            prefix: "[B\u{e003}]".into(),
+            suffix: "~".into(),
         };
         assert_eq!(
             super::player_chat(&clan, "Max", "hi"),
-            "\u{e007}[BLS] \u{e003}Max\u{e007} ~\u{e006}: hi"
+            "\u{e007}[B]\u{e003}Max\u{e007}~\u{e006}: hi"
         );
         // Colour escapes survive on both sides of a death icon.
         assert_eq!(

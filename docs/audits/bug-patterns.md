@@ -92,7 +92,7 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 
 | Where | Was | Now |
 |---|---|---|
-| Join or rename with a blank, long or control-character name | refused | cleaned (control characters dropped, cut to 48 bytes on a character boundary, "Blockhead" when empty), the player told; one rule shared with the client |
+| Join or rename with a blank, long or control-character name | refused | cleaned as v20's `onConnectRequest` does (ML tags and control characters dropped, cut to 23 characters, trimmed, "Blockhead" when empty), the player told; one rule shared with the client |
 | Damaged admin state file | host refused to start | moved aside as `<name>.damaged-<seconds>`, host starts with no bans or saved ranks, logged |
 | Admin save the disk could not confirm | host stopped | kept and logged; the next save rewrites the file |
 | Administrator's zero-delay event loops | only the engine's per-tick limits | each owner at most 4096 rows and 4 ms a tick, everyone 8 ms; the rest waits in order; the owner is logged |
@@ -102,7 +102,7 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 
 | Where | Was | Now |
 |---|---|---|
-| Avatar screen clan prefix and suffix | saved, never sent; the host ignored them | sent at join and on Done in game, cleaned like names, shown around the name in chat as v20's `serverCmdMessageSent` does |
+| Avatar screen clan prefix and suffix | saved, never sent; the host ignored them | sent at join and on Done in game, cleaned as `onConnectRequest` does (4 characters, trimmed), shown around the name in chat only, as v20's `serverCmdMessageSent` does |
 | Fresh install | asked for the name twice ("Your Name" message, then Choose Name) | Choose Name once per run |
 
 ### Routed to the lanes that own them

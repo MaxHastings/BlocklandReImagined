@@ -60,61 +60,76 @@ pub use packages::{
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
 /// the same `playThread(1, armReadyBoth)`).
-/// Longest player name, in bytes.
-pub const MAX_PLAYER_NAME: usize = 48;
-/// The name a player gets for what they typed: control characters dropped,
-/// trimmed, cut to `MAX_PLAYER_NAME` bytes on a character boundary, and
-/// "Blockhead" (v20's default LAN name) when nothing is left. Joins and
-/// renames take this instead of refusing a name.
-pub fn clean_player_name(raw: &str) -> String {
-    let mut name: String = raw.chars().filter(|c| !c.is_control()).collect();
-    let mut name = name.split_off(name.len() - name.trim_start().len());
-    while name.len() > MAX_PLAYER_NAME {
-        name.pop();
+/// Longest player name, in characters: v20's `onConnectRequest` takes
+/// `trim(getSubStr(StripMLControlChars(%LANname), 0, 23))`.
+pub const MAX_PLAYER_NAME: usize = 23;
+/// Longest clan prefix or suffix, in characters: `onConnectRequest` takes
+/// `trim(getSubStr(StripMLControlChars(%clanPrefix), 0, 4))`, and the
+/// Avatar screen's `Avatar_Prefix` and `Avatar_Suffix` boxes have
+/// `maxLength = 4`.
+pub const MAX_CLAN_TAG: usize = 4;
+/// v20's cleaning of connect arguments: ML control tags (`<color:ff0000>`,
+/// `<br>`, anything from `<` to the next `>`) and control characters
+/// (Torque's `\c` colour bytes among them, and our colour escapes) dropped,
+/// cut to `max` characters, then trimmed. A small local strip; the shared
+/// Torque ML parser can replace it.
+fn clean_connect_text(raw: &str, max: usize) -> String {
+    let mut kept = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find('<') {
+        kept.push_str(&rest[..start]);
+        match rest[start..].find('>') {
+            Some(end) => rest = &rest[start + end + 1..],
+            None => {
+                kept.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
     }
-    match name.trim_end() {
-        "" => "Blockhead".into(),
-        name => name.into(),
+    kept.push_str(rest);
+    kept.chars()
+        .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+        .take(max)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+/// The name a player gets for what they typed, cleaned as v20's
+/// `onConnectRequest` cleans `%LANname`, and "Blockhead" (v20's default LAN
+/// name) when nothing is left. Joins and renames take this instead of
+/// refusing a name.
+pub fn clean_player_name(raw: &str) -> String {
+    match clean_connect_text(raw, MAX_PLAYER_NAME) {
+        name if name.is_empty() => "Blockhead".into(),
+        name => name,
     }
 }
 /// What to tell a player whose typed name was cleaned into `name`.
 fn name_note(raw: &str, name: &str) -> Option<String> {
     if raw.trim().is_empty() || name == raw.trim() {
         None
-    } else if raw.len() > MAX_PLAYER_NAME {
+    } else if raw.chars().count() > MAX_PLAYER_NAME {
         Some(format!("Your name was shortened to {name}."))
     } else {
         Some(format!("Your name was changed to {name}."))
     }
 }
-/// Longest clan prefix or suffix, in bytes: the same limit as a name.
-pub const MAX_CLAN_TAG: usize = MAX_PLAYER_NAME;
-/// A player's clan tags, shown around their name as v20 does.
+/// A player's clan tags, shown around their name in chat as v20 does.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Clan {
     pub prefix: String,
     pub suffix: String,
 }
 impl Clan {
-    /// The tags as typed, cleaned like names: control characters and color
-    /// escapes dropped, cut to `MAX_CLAN_TAG` bytes on a character
-    /// boundary. Unlike a name, a tag may be empty and keeps its spaces.
+    /// The tags as v20's `onConnectRequest` keeps them: ML tags and
+    /// control characters dropped, cut to `MAX_CLAN_TAG` characters,
+    /// trimmed. A tag may be empty.
     pub fn cleaned(&self) -> Self {
         Self {
-            prefix: clean_clan_tag(&self.prefix),
-            suffix: clean_clan_tag(&self.suffix),
+            prefix: clean_connect_text(&self.prefix, MAX_CLAN_TAG),
+            suffix: clean_connect_text(&self.suffix, MAX_CLAN_TAG),
         }
     }
-}
-fn clean_clan_tag(raw: &str) -> String {
-    let mut tag: String = raw
-        .chars()
-        .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
-        .collect();
-    while tag.len() > MAX_CLAN_TAG {
-        tag.pop();
-    }
-    tag
 }
 /// `raw` for the host's log: escaped and cut short.
 fn logged_name(raw: &str) -> String {
@@ -859,7 +874,7 @@ impl Session {
         self.unique_name_except(&name, None)
     }
     /// `wanted` if no other connected player uses it (ignoring case), else
-    /// the first free "wanted 2", "wanted 3"... within the 48-byte limit.
+    /// the first free "wanted 2", "wanted 3"... within `MAX_PLAYER_NAME`.
     fn unique_name_except(&self, wanted: &str, except: Option<OwnerId>) -> String {
         let wanted = wanted.trim();
         let taken = |candidate: &str| {
@@ -874,7 +889,7 @@ impl Session {
             .map(|n| {
                 let suffix = format!(" {n}");
                 let mut base = wanted.to_string();
-                while base.len() + suffix.len() > 48 {
+                while base.chars().count() + suffix.len() > MAX_PLAYER_NAME {
                     base.pop();
                 }
                 format!("{}{suffix}", base.trim_end())
@@ -890,7 +905,9 @@ impl Session {
             return Ok(());
         }
         peer.clan = clan.clone();
-        if clan != *wanted {
+        // Surrounding spaces go quietly, as in v20; anything else is told.
+        if clan.prefix != wanted.prefix.trim() || clan.suffix != wanted.suffix.trim()
+        {
             eprintln!(
                 "Player {owner}: clan tags {} {} taken as {:?} {:?}",
                 logged_name(&wanted.prefix),
@@ -901,7 +918,7 @@ impl Session {
             self.private_chat(
                 owner,
                 format!(
-                    "Your clan tags were shortened to \"{}\" and \"{}\".",
+                    "Your clan tags were changed to \"{}\" and \"{}\".",
                     clan.prefix, clan.suffix
                 ),
             );
