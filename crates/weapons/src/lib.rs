@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 pub mod debris;
 mod merge;
 pub mod rotation;
-pub use merge::resource_root;
+pub use merge::{resource_root, sound_root};
 pub mod runtime;
 pub use runtime::*;
 /// 3 adds explosion vertical impulse and per-type vehicle damage scale.
@@ -123,7 +123,11 @@ pub struct Definition {
     pub source: Evidence,
     pub fields: BTreeMap<String, String>,
 }
+/// One state of an image's state machine (`stateName[i]` and its fields).
+/// Every field may be left out of `weapons.json`: an Add-On writes only
+/// what it uses.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default = "State::authored")]
 pub struct State {
     pub name: String,
     pub ticks: u32,
@@ -141,8 +145,111 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+    /// Rounds entering this state takes from the clip of an image with
+    /// [`Image::ammo`] (a `Fire` state takes 1).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub use_ammo: u32,
+    /// Entering this state moves rounds from the reserve into the clip,
+    /// up to a full magazine: the last state of a reload.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub refill: bool,
+    /// Where to go when a reload is wanted and possible: the holder asked
+    /// for one (a rule's `reload`), or the clip is empty, and the reserve
+    /// has rounds and the clip has room. Checked after `ammo`/`no_ammo` and
+    /// before the trigger.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reload: Option<usize>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl State {
+    /// What a field left out of `weapons.json` means: v20's
+    /// `ShapeBaseImageData` defaults, which wait for their timeout and let
+    /// the holder switch items.
+    pub fn authored() -> Self {
+        Self {
+            wait: true,
+            allow_change: true,
+            ..Self::default()
+        }
+    }
+}
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+fn yes() -> bool {
+    true
+}
+fn is_true(b: &bool) -> bool {
+    *b
+}
+fn zero3(v: &[f32; 3]) -> bool {
+    *v == [0.0; 3]
+}
+/// Rounds an image carries: a clip it fires from and a reserve it reloads
+/// from. Counted per holder and image by the engine; states take and refill
+/// rounds with [`State::use_ammo`] and [`State::refill`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ammo {
+    /// Rounds a full clip holds, 1 to [`MAX_ROUNDS`].
+    pub magazine: u32,
+    /// Rounds in reserve when the item is given.
+    #[serde(default)]
+    pub reserve: u32,
+}
+/// Most rounds a clip or reserve holds.
+pub const MAX_ROUNDS: u32 = 100_000;
+/// A clip and reserve, as held.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rounds {
+    pub clip: u32,
+    pub reserve: u32,
+}
+/// Aiming with an image: the view zooms to `fov` while the zoom key is
+/// held (and, with `on_jet`, while jet, the right mouse button, is held).
+/// Presentation only: each player's own game zooms its own view.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Zoom {
+    /// Horizontal field of view while aiming, 5 to 85 degrees.
+    pub fov: f32,
+    /// The right mouse button aims too (aim down sights). Give the holder
+    /// an archetype that cannot jet, or they jet as well.
+    #[serde(default)]
+    pub on_jet: bool,
+    /// The game's crosshair shows while aiming (a scope draws its own).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub crosshair: bool,
+    /// Aiming switches a third-person view to first person until released.
+    #[serde(default)]
+    pub first_person: bool,
+}
+/// A sound an Add-On's weapons pack ships: state `sound` fields and rules
+/// name it by its key, like a v20 `AudioProfile`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoundDef {
+    /// A `.wav` or `.ogg` file, relative to the folder `weapons.json` is in.
+    pub file: String,
+    /// 0 to 1.
+    #[serde(default = "full_volume")]
+    pub volume: f32,
+    /// Plays until its state ends (a charging hum), rather than once.
+    #[serde(default)]
+    pub looping: bool,
+    /// Heard only by the player who caused it, at their ears (a reload
+    /// click), rather than by everyone near where it happens.
+    #[serde(default)]
+    pub local: bool,
+    /// Content-root-relative directory of the package holding `file`, set
+    /// when packs are merged; None is this pack's own directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+}
+fn full_volume() -> f32 {
+    1.0
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Image {
     pub id: String,
     pub name: String,
@@ -173,6 +280,19 @@ pub struct Image {
     /// projectile straight along the aim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shot: Option<Shot>,
+    /// First-person rotation beside `eye_offset` (`eyeRotation`), Euler
+    /// XYZ degrees in the same frame as `source_rotation_degrees`.
+    #[serde(skip_serializing_if = "zero3")]
+    pub eye_rotation: [f32; 3],
+    /// A clip and reserve the image fires from; None never runs out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ammo: Option<Ammo>,
+    /// Aiming zoom (a scope, or aim down sights).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<Zoom>,
+    /// The game's crosshair shows while this image is held.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub crosshair: bool,
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons
@@ -229,8 +349,16 @@ pub struct Shot {
     /// Speed the shooter loses along their aim, in units per second.
     #[serde(default)]
     pub recoil: f32,
+    /// Degrees the shooter's view kicks up per shot (their own game turns
+    /// their aim, as a player would; 0 to 30).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub kick: f32,
+}
+fn is_zero_f32(n: &f32) -> bool {
+    *n == 0.0
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Item {
     pub id: String,
     pub name: String,
@@ -241,7 +369,22 @@ pub struct Item {
     pub can_drop: bool,
     pub sport: bool,
 }
+impl Default for Item {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            ui_name: String::new(),
+            image: String::new(),
+            model: String::new(),
+            icon: String::new(),
+            can_drop: true,
+            sport: false,
+        }
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Explosion {
     pub effect: String,
     pub damage: f32,
@@ -253,6 +396,7 @@ pub struct Explosion {
     pub burn_seconds: f32,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BrickImpact {
     pub radius: f32,
     pub direct: bool,
@@ -261,6 +405,7 @@ pub struct BrickImpact {
     pub max_floating_volume: f32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProjectileDef {
     pub id: String,
     pub name: String,
@@ -295,6 +440,46 @@ pub struct ProjectileDef {
     pub light_color: [f32; 3],
     pub sport_image: Option<String>,
     pub rest_speed: f32,
+}
+/// v20's `ProjectileData` defaults, for fields an Add-On leaves out.
+impl Default for ProjectileDef {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            model: String::new(),
+            speed: 50.0,
+            inherit: 1.0,
+            gravity: 1.0,
+            lifetime_ticks: 240,
+            fade_ticks: 240,
+            arm_ticks: 0,
+            ballistic: false,
+            elasticity: 0.999,
+            friction: 0.3,
+            damage: 0.0,
+            damage_type: String::new(),
+            radius_damage_type: String::new(),
+            impulse: 0.0,
+            vertical: 0.0,
+            explode_player: false,
+            explode_death: false,
+            collide_players: true,
+            explosion: Explosion::default(),
+            brick: BrickImpact::default(),
+            bounce_effect: String::new(),
+            stick_effect: String::new(),
+            blood_effect: String::new(),
+            bounce_angle: 0.0,
+            min_stick_speed: 0.0,
+            trail: String::new(),
+            sound: String::new(),
+            light_radius: 0.0,
+            light_color: [0.0; 3],
+            sport_image: None,
+            rest_speed: 0.0,
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resource {
@@ -384,15 +569,26 @@ pub struct CameraShake {
 pub struct Pack {
     pub schema_version: u32,
     pub id: String,
+    #[serde(default)]
     pub items: BTreeMap<String, Item>,
+    #[serde(default)]
     pub images: BTreeMap<String, Image>,
+    #[serde(default)]
     pub projectiles: BTreeMap<String, ProjectileDef>,
     /// Keyed by lower-case damage type name (`$DamageType::<name>`).
+    #[serde(default)]
     pub damage_types: BTreeMap<String, DamageType>,
     /// Keyed by lower-case explosion datablock name.
+    #[serde(default)]
     pub explosions: BTreeMap<String, ExplosionInfo>,
+    /// Sounds the pack ships, keyed by lower-case profile name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sounds: BTreeMap<String, SoundDef>,
+    #[serde(default)]
     pub definitions: Vec<Definition>,
+    #[serde(default)]
     pub resources: Vec<Resource>,
+    #[serde(default)]
     pub diagnostics: Vec<String>,
 }
 impl Pack {
@@ -401,9 +597,33 @@ impl Pack {
             bytes.len() <= 32 * 1024 * 1024,
             "Weapon pack exceeds byte limit"
         );
-        let pack: Self = serde_json::from_slice(bytes)?;
+        let mut pack: Self = serde_json::from_slice(bytes)?;
+        pack.fill_ids();
         pack.validate()?;
         Ok(pack)
+    }
+    /// Items, images and projectiles written without an `id` take their
+    /// key's, so an Add-On names each once.
+    pub fn fill_ids(&mut self) {
+        for (key, item) in &mut self.items {
+            if item.id.is_empty() {
+                item.id.clone_from(key);
+            }
+        }
+        for (key, image) in &mut self.images {
+            if image.id.is_empty() {
+                image.id.clone_from(key);
+            }
+        }
+        for (key, projectile) in &mut self.projectiles {
+            if projectile.id.is_empty() {
+                projectile.id.clone_from(key);
+            }
+        }
+    }
+    /// The sound a state or rule names, from this pack's own sounds.
+    pub fn sound(&self, profile: &str) -> Option<&SoundDef> {
+        self.sounds.get(&profile.to_ascii_lowercase())
     }
     /// The type named by a `$DamageType::<name>` reference; unknown names
     /// fall back to `Default` as an unset Torque global indexes type 0.
@@ -511,8 +731,25 @@ impl Pack {
                     (1..=64).contains(&s.projectiles)
                         && (0.0..=1.0).contains(&s.spread)
                         && (0.0..=100.0).contains(&s.recoil)
+                        && (0.0..=30.0).contains(&s.kick)
                 }),
-                "Invalid image shot {id}"
+                "Invalid image shot {id}: 1 to 64 projectiles, spread 0 to 1, recoil 0 to 100, kick 0 to 30"
+            );
+            ensure!(
+                image.eye_rotation.iter().all(|v| v.is_finite() && v.abs() <= 360.0),
+                "Invalid image eye_rotation {id}"
+            );
+            ensure!(
+                image.ammo.is_none_or(|a| {
+                    (1..=MAX_ROUNDS).contains(&a.magazine) && a.reserve <= MAX_ROUNDS
+                }),
+                "Invalid image ammo {id}: magazine 1 to {MAX_ROUNDS}, reserve 0 to {MAX_ROUNDS}"
+            );
+            ensure!(
+                image
+                    .zoom
+                    .is_none_or(|z| z.fov.is_finite() && (5.0..=85.0).contains(&z.fov)),
+                "Invalid image zoom {id}: fov 5 to 85 degrees"
             );
             for state in &image.states {
                 ensure!(
@@ -521,12 +758,17 @@ impl Pack {
                         && (0.0..=300.0).contains(&state.emitter_seconds),
                     "Invalid state duration"
                 );
+                ensure!(
+                    state.use_ammo <= MAX_ROUNDS,
+                    "Invalid state use_ammo in image {id}"
+                );
                 for index in [
                     state.timeout,
                     state.down,
                     state.up,
                     state.ammo,
                     state.no_ammo,
+                    state.reload,
                 ]
                 .into_iter()
                 .flatten()
@@ -576,16 +818,37 @@ impl Pack {
                 "Invalid trajectory"
             );
         }
-        for resource in &self.resources {
-            for path in resource.native_file.iter().chain(&resource.package) {
-                ensure!(
-                    !path.starts_with('/')
-                        && !path.contains(':')
-                        && !path.contains('\\')
-                        && !path.split('/').any(|part| part == ".."),
-                    "Unsafe native resource path"
-                );
-            }
+        ensure!(self.sounds.len() <= 1024, "Definition budget exceeded");
+        for (key, sound) in &self.sounds {
+            let lower = sound.file.to_ascii_lowercase();
+            ensure!(
+                key == &key.to_ascii_lowercase()
+                    && !key.is_empty()
+                    && key.len() <= 128
+                    && !key.chars().any(char::is_control)
+                    && sound.volume.is_finite()
+                    && (0.0..=1.0).contains(&sound.volume)
+                    && (lower.ends_with(".wav") || lower.ends_with(".ogg")),
+                "Invalid sound {key}: keys are lower case, volume 0 to 1, file .wav or .ogg"
+            );
+        }
+        let sound_paths = self
+            .sounds
+            .values()
+            .flat_map(|s| std::iter::once(&s.file).chain(&s.package));
+        for path in self
+            .resources
+            .iter()
+            .flat_map(|r| r.native_file.iter().chain(&r.package))
+            .chain(sound_paths)
+        {
+            ensure!(
+                !path.starts_with('/')
+                    && !path.contains(':')
+                    && !path.contains('\\')
+                    && !path.split('/').any(|part| part == ".."),
+                "Unsafe native resource path"
+            );
         }
         Ok(())
     }

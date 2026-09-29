@@ -159,6 +159,10 @@ fn tool_pack() -> bri_weapons::Pack {
                 command: None,
                 commands: Default::default(),
                 shot: None,
+                eye_rotation: [0.0; 3],
+                ammo: None,
+                zoom: None,
+                crosshair: true,
             },
         );
         items.insert(
@@ -183,6 +187,7 @@ fn tool_pack() -> bri_weapons::Pack {
         projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],

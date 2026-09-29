@@ -592,6 +592,10 @@ mod tests {
                     command: None,
                     commands: Default::default(),
                     shot: None,
+                    eye_rotation: [0.0; 3],
+                    ammo: None,
+                    zoom: None,
+                    crosshair: true,
                 },
             );
             items.insert(
@@ -622,6 +626,7 @@ mod tests {
             projectiles: BTreeMap::new(),
             damage_types: BTreeMap::new(),
             explosions: BTreeMap::new(),
+            sounds: Default::default(),
             definitions: vec![],
             resources: vec![bri_weapons::Resource {
                 path: "original.dts".into(),

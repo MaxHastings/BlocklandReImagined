@@ -229,6 +229,17 @@ pub enum Notice {
     /// The build this player copied, to show and place with its tool;
     /// `None` takes it away.
     Blueprint(Option<Box<crate::blueprint::Blueprint>>),
+    /// The rounds of the image in this player's hand, sent when they
+    /// change; `None` when it has no ammo (or nothing is held).
+    Ammo(Option<HeldAmmo>),
+}
+/// A held image's clip and reserve, and how many rounds a full clip holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeldAmmo {
+    pub clip: u32,
+    pub reserve: u32,
+    pub magazine: u32,
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -271,11 +282,22 @@ pub(super) enum DamageKind {
     },
 }
 impl DamageKind {
-    fn direct(&self) -> bool {
+    pub(super) fn direct(&self) -> bool {
         matches!(self, Self::Weapon { direct: true, .. })
     }
+    /// How `on_damage` hooks name this kind of damage.
+    pub(super) fn hook_kind(&self) -> &'static str {
+        match self {
+            Self::Weapon { .. } => "weapon",
+            Self::Fall => "fall",
+            Self::Impact => "impact",
+            Self::Suicide => "suicide",
+            Self::Event => "event",
+            Self::Package { .. } => "package",
+        }
+    }
     /// The `AddDamageType` name whose kill message this death shows.
-    fn type_name(&self) -> &str {
+    pub(super) fn type_name(&self) -> &str {
         match self {
             Self::Weapon { name, .. } => name,
             Self::Fall => "Fall",
@@ -567,6 +589,17 @@ impl Session {
         let mut amount = amount;
         if peer.player.state().crouched {
             amount *= if kind.direct() { 2.1 } else { 0.75 };
+        }
+        // Add-Ons have the last word on how much it hurts.
+        let amount = self.package_damage(target, source, amount, &kind);
+        if amount <= 0.0 {
+            return Ok(());
+        }
+        let Some(peer) = self.peers.get_mut(&target) else {
+            return Ok(());
+        };
+        if !peer.combat.alive {
+            return Ok(());
         }
         if let DamageKind::Weapon { name, direct: true } = &kind {
             peer.combat.last_direct = Some((name.clone(), tick));
@@ -1168,6 +1201,7 @@ impl Session {
         // Skiing belongs to the old Player object: a new body starts off skis.
         let _ = self.weapons.cancel_skis(ActorId(owner));
         self.give_loadout(owner, equipment.as_ref())?;
+        self.package_spawn(owner);
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self
@@ -1194,6 +1228,7 @@ impl Session {
             .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
         // Joining starts with the default tools: Add-Ons hand out theirs.
         self.package_loadout(owner);
+        self.package_spawn(owner);
         Ok(())
     }
 

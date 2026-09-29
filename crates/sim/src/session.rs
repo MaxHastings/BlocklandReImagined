@@ -518,6 +518,8 @@ pub struct Session {
     events: events::Events,
     specials: special::Specials,
     highlights: BTreeMap<OwnerId, admin_world::Highlight>,
+    /// The held ammo each player was last told of.
+    ammo_sent: BTreeMap<OwnerId, Option<combat::HeldAmmo>>,
     /// Installed only on the Tutorial map.
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
@@ -613,6 +615,7 @@ impl Session {
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
+            ammo_sent: BTreeMap::new(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
@@ -1016,6 +1019,7 @@ impl Session {
         if !self.bots.is_bot(owner) {
             self.announce(owner, "has left the game.", "ClientDropSound");
         }
+        self.package_leave(owner);
         self.eject(owner);
         self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;

@@ -253,6 +253,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         projectiles: BTreeMap::new(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
+        sounds: BTreeMap::new(),
         definitions,
         resources: vec![],
         diagnostics: vec![],
@@ -412,6 +413,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 emitter_node: f("stateEmitterNode"),
                 emitter_seconds: num(d, &format!("stateEmitterTime[{n}]"), 0.0),
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
+                ..State::default()
             });
         }
         let p = field(d, "projectile");
@@ -453,6 +455,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 command: None,
                 commands: Default::default(),
                 shot: None,
+                eye_rotation: source_rotation(&field(d, "eyeRotation")).unwrap_or([0.0; 3]),
+                ammo: None,
+                zoom: None,
+                crosshair: true,
             },
         );
     }

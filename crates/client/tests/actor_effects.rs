@@ -160,6 +160,10 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             command: None,
             commands: Default::default(),
             shot: None,
+            eye_rotation: [0.0; 3],
+            ammo: None,
+            zoom: None,
+            crosshair: true,
         },
     )
 }
@@ -190,6 +194,7 @@ fn weapons() -> Arc<Pack> {
         projectiles: BTreeMap::new(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],

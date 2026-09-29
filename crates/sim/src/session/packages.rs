@@ -277,6 +277,11 @@ pub(super) struct PackageHost {
     /// Players whose items were set afresh since the last tick, for
     /// `on_loadout` hooks.
     loadouts: VecDeque<OwnerId>,
+    /// Players who came to life since the last tick, for `on_spawn` hooks.
+    spawns: VecDeque<OwnerId>,
+    /// An `on_damage` hook is running: damage it causes is not filtered
+    /// again, so a hook can never recurse.
+    in_damage_hook: bool,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -318,6 +323,9 @@ const PACKAGE_WORLD_EDITS: i64 = 2048;
 /// Chat lines (broadcasts and tells) per package and calling player in a
 /// burst; refills every second, like player chat.
 const PACKAGE_CHAT_LINES: i64 = 8;
+/// Prints and sounds per package in a burst; refills every second. A print
+/// to everyone counts once.
+const PACKAGE_CUES: i64 = 64;
 /// Package entities on the server.
 const MAX_ENTITIES: usize = 1024;
 /// Entity slots kept free for every other package that declares entities.
@@ -378,6 +386,8 @@ struct Shares {
     commands: Allowance<PlayerKey>,
     edits: Allowance<String>,
     chat: Allowance<(String, Option<PlayerKey>)>,
+    /// Prints and sounds, per package.
+    cues: Allowance<String>,
 }
 impl Shares {
     fn new(script_packages: usize) -> Self {
@@ -387,6 +397,7 @@ impl Shares {
             commands: Allowance::new(PLAYER_COMMAND_BURST, PLAYER_COMMAND_WORK, SECOND),
             edits: Allowance::new(PACKAGE_WORLD_EDITS, PACKAGE_WORLD_EDITS, SECOND),
             chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
+            cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
         }
     }
 }
@@ -535,6 +546,8 @@ impl Session {
             output: VecDeque::new(),
             deaths: VecDeque::new(),
             loadouts: VecDeque::new(),
+            spawns: VecDeque::new(),
+            in_damage_hook: false,
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -817,6 +830,18 @@ impl Session {
                             .ok()
                             .and_then(|m| m.game)
                             .map(|g| g.0),
+                        health: p.combat.health,
+                        max_health: self.archetypes.resolve(p.player.state().archetype).max_health,
+                        archetype: self
+                            .archetypes
+                            .resolve(p.player.state().archetype)
+                            .id
+                            .clone(),
+                        crouched: p.player.state().crouched,
+                        ammo: self
+                            .weapons
+                            .held_rounds(bri_weapons::ActorId(*owner), 0)
+                            .map(|(r, _)| (r.clip, r.reserve)),
                     }
                 })
                 .collect(),
@@ -1336,7 +1361,91 @@ impl Session {
             | Op::LetGo { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
+            Op::Heal { player, amount } => {
+                let max = {
+                    let peer = self.peers.get(&player).context("No such player")?;
+                    self.archetypes
+                        .resolve(peer.player.state().archetype)
+                        .max_health
+                };
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only the living heal");
+                peer.combat.health = (peer.combat.health + amount).min(max);
+                Ok(())
+            }
+            Op::Reload { player } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons.request_reload(bri_weapons::ActorId(player))?;
+                Ok(())
+            }
+            Op::GiveAmmo {
+                player,
+                item,
+                rounds,
+            } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons
+                    .add_reserve(bri_weapons::ActorId(player), &item, rounds)?;
+                Ok(())
+            }
+            Op::Print {
+                player,
+                text,
+                seconds,
+                bottom,
+            } => {
+                self.take_cue(package)?;
+                let notice = if bottom {
+                    Notice::Bottom {
+                        text,
+                        seconds,
+                        hide_bar: false,
+                    }
+                } else {
+                    Notice::Center { text, seconds }
+                };
+                match player {
+                    Some(player) => {
+                        ensure!(self.peers.contains_key(&player), "No such player");
+                        self.notify(player, notice);
+                    }
+                    None => {
+                        let everyone: Vec<OwnerId> = self.peers.keys().copied().collect();
+                        for owner in everyone {
+                            self.notify(owner, notice.clone());
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Op::Sound { profile, at } => {
+                self.take_cue(package)?;
+                match at {
+                    bri_package_runtime::ops::SoundAt::Player(player) => {
+                        ensure!(self.peers.contains_key(&player), "No such player");
+                        self.notify(player, Notice::Sound(profile));
+                    }
+                    bri_package_runtime::ops::SoundAt::Position(position) => self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponSound { profile },
+                        position,
+                    ),
+                }
+                Ok(())
+            }
         }
+    }
+    /// One print or sound from `package`, within its share.
+    fn take_cue(&mut self, package: &str) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let origin = package.to_string();
+        ensure!(
+            host.shares.cues.available(&origin, tick) >= 1,
+            "Dropped: more than {PACKAGE_CUES} prints and sounds a second"
+        );
+        host.shares.cues.spend(&origin, tick, 1);
+        Ok(())
     }
     /// One chat line from `package` on behalf of `caller`, within their share.
     fn take_chat_line(&mut self, package: &str, caller: Option<OwnerId>) -> Result<()> {
@@ -1969,6 +2078,7 @@ impl Session {
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
         self.deliver_loadouts();
+        self.deliver_spawns();
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };
@@ -2254,12 +2364,132 @@ impl Session {
             return;
         };
         let owners = std::mem::take(&mut host.loadouts);
+        self.deliver_player_hook(owners, |b| b.on_loadout, "on_loadout");
+    }
+    /// A player came to life (joined, respawned): `on_spawn` hooks hear of
+    /// it next tick, after `on_loadout`.
+    pub(super) fn package_spawn(&mut self, owner: OwnerId) {
+        if let Some(host) = self.packages.as_mut()
+            && !self.bots.is_bot(owner)
+            && host.spawns.len() < 1024
+            && !host.spawns.contains(&owner)
+        {
+            host.spawns.push_back(owner);
+        }
+    }
+    fn deliver_spawns(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let owners = std::mem::take(&mut host.spawns);
+        self.deliver_player_hook(owners, |b| b.on_spawn, "on_spawn");
+    }
+    /// `on_leave(player)` as `owner` leaves, while they are still readable.
+    pub(super) fn package_leave(&mut self, owner: OwnerId) {
+        if self.bots.is_bot(owner) {
+            return;
+        }
+        self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
+    }
+    /// `on_damage(victim, attacker, amount, info)` from every package that
+    /// declares it, in order, each seeing the amount the one before
+    /// returned. A failed call leaves the amount as it was.
+    pub(super) fn package_damage(
+        &mut self,
+        victim: OwnerId,
+        attacker: Option<OwnerId>,
+        amount: f32,
+        kind: &combat::DamageKind,
+    ) -> f32 {
+        let Some(host) = self.packages.as_mut() else {
+            return amount;
+        };
+        if host.in_damage_hook {
+            return amount;
+        }
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.on_loadout)
+            .filter(|(_, b)| b.on_damage)
             .map(|(id, _)| id.clone())
             .collect();
+        if hooks.is_empty() {
+            return amount;
+        }
+        host.in_damage_hook = true;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.hook_kind().into());
+        info.insert("type".into(), kind.type_name().to_string().into());
+        info.insert("direct".into(), kind.direct().into());
+        let mut amount = amount;
+        for package in hooks {
+            let answer = self.run_package(
+                &package,
+                "on_damage",
+                vec![
+                    Dynamic::from_int(victim as i64),
+                    attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64)),
+                    Dynamic::from_float(f64::from(amount)),
+                    Dynamic::from_map(info.clone()),
+                ],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            let Ok(answer) = answer else {
+                continue;
+            };
+            let number = answer
+                .as_float()
+                .ok()
+                .or_else(|| answer.as_int().ok().map(|i| i as f64));
+            match number {
+                Some(n) if n.is_finite() => amount = (n as f32).clamp(0.0, 100_000.0),
+                Some(_) => {}
+                None if answer.is_unit() => {}
+                None => {
+                    let host = self.packages.as_mut().expect("checked");
+                    note(
+                        host,
+                        Diagnostic::warning(
+                            "hook.answer",
+                            format!(
+                                "on_damage must return a number or (), not {}",
+                                answer.type_name()
+                            ),
+                        )
+                        .at(package.clone()),
+                    );
+                }
+            }
+        }
+        if let Some(host) = self.packages.as_mut() {
+            host.in_damage_hook = false;
+        }
+        amount
+    }
+    /// Run a one-player hook (`on_loadout`, `on_spawn`, `on_leave`) of every
+    /// package whose behaviour `declares` it, for each of `owners`.
+    fn deliver_player_hook(
+        &mut self,
+        owners: VecDeque<OwnerId>,
+        declares: fn(&bri_package_runtime::content::Behaviour) -> bool,
+        function: &str,
+    ) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| declares(b))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if hooks.is_empty() {
+            return;
+        }
         for owner in owners {
             if !self.peers.contains_key(&owner) {
                 continue;
@@ -2267,7 +2497,7 @@ impl Session {
             for package in &hooks {
                 let _ = self.run_package(
                     package,
-                    "on_loadout",
+                    function,
                     vec![Dynamic::from_int(owner as i64)],
                     Budget::Command,
                     None,

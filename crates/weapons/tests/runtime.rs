@@ -86,6 +86,7 @@ fn empty() -> Pack {
         projectiles: BTreeMap::new(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],

@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::{ObjectRef, Op};
+use crate::ops::{ObjectRef, Op, SoundAt};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -62,6 +62,19 @@ pub struct PlayerView {
     /// The minigame they play in, if any.
     #[serde(default)]
     pub minigame: Option<u64>,
+    #[serde(default)]
+    pub health: f32,
+    #[serde(default)]
+    pub max_health: f32,
+    /// What they are: an archetype id (`package:archetype/name`, or
+    /// `v20.player.<datablock>`).
+    #[serde(default)]
+    pub archetype: String,
+    #[serde(default)]
+    pub crouched: bool,
+    /// The clip and reserve of what they hold, when it has ammo.
+    #[serde(default)]
+    pub ammo: Option<(u32, u32)>,
 }
 /// A loose physics body or other movable thing, as scripts see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +322,20 @@ fn player_map(p: &PlayerView) -> Dynamic {
             "minigame",
             p.minigame
                 .map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
+        ),
+        float_entry("health", p.health),
+        float_entry("max_health", p.max_health),
+        ("archetype", p.archetype.clone().into()),
+        ("crouched", p.crouched.into()),
+        (
+            "clip",
+            p.ammo
+                .map_or(Dynamic::UNIT, |(clip, _)| Dynamic::from_int(clip.into())),
+        ),
+        (
+            "reserve",
+            p.ammo
+                .map_or(Dynamic::UNIT, |(_, reserve)| Dynamic::from_int(reserve.into())),
         ),
     ])
 }
@@ -720,6 +747,54 @@ fn register_api(engine: &mut Engine) {
             equip,
         })
     });
+    engine.register_fn("heal", |player: Dynamic, amount: Dynamic| {
+        push(Op::Heal {
+            player: id(&player)?,
+            amount: float(&amount)?,
+        })
+    });
+    engine.register_fn("reload", |player: Dynamic| {
+        push(Op::Reload {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("give_ammo", |player: Dynamic, item: &str, rounds: i64| {
+        push(Op::GiveAmmo {
+            player: id(&player)?,
+            item: item.into(),
+            rounds,
+        })
+    });
+    // `()` as the player prints to everyone.
+    for (name, bottom) in [("center_print", false), ("bottom_print", true)] {
+        engine.register_fn(name, move |player: Dynamic, text: &str, seconds: Dynamic| {
+            push(Op::Print {
+                player: if player.is_unit() {
+                    None
+                } else {
+                    Some(id(&player)?)
+                },
+                text: text.into(),
+                seconds: float(&seconds)?,
+                bottom,
+            })
+        });
+    }
+    engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
+        push(Op::Sound {
+            profile: profile.into(),
+            at: SoundAt::Player(id(&player)?),
+        })
+    });
+    engine.register_fn(
+        "sound_at",
+        |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
+            push(Op::Sound {
+                profile: profile.into(),
+                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+            })
+        },
+    );
     register_physics(engine);
 }
 
@@ -975,6 +1050,21 @@ impl Runtime {
             }
             if behaviour.on_loadout {
                 need("on_loadout".into(), 1, "on_loadout");
+            }
+            if behaviour.on_death {
+                need("on_death".into(), 2, "on_death");
+            }
+            if behaviour.on_spawn {
+                need("on_spawn".into(), 1, "on_spawn");
+            }
+            if behaviour.on_leave {
+                need("on_leave".into(), 1, "on_leave");
+            }
+            if behaviour.on_damage {
+                need("on_damage".into(), 4, "on_damage");
+            }
+            for policy in &behaviour.policies {
+                need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
             }
             if behaviour.tick_interval.is_some() {
                 need("on_tick".into(), 0, "tick_interval");

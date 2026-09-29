@@ -199,25 +199,70 @@ pub enum Op {
     RemoveVehicle {
         vehicle: u64,
     },
+    /// Give a living player health, up to their archetype's most.
+    Heal {
+        player: u64,
+        amount: f32,
+    },
+    /// Ask the image in a player's hand to reload (it has ammo, the
+    /// reserve has rounds and the clip has room).
+    Reload {
+        player: u64,
+    },
+    /// Add rounds (negative takes them) to the reserve a player holds for
+    /// an item whose image has ammo.
+    GiveAmmo {
+        player: u64,
+        item: String,
+        rounds: i64,
+    },
+    /// Text in the middle of the screen (`centerPrint`), or above the
+    /// bottom edge (`bottomPrint`), for `seconds`: one player's, or
+    /// everyone's when `player` is `None`. Empty text clears it.
+    Print {
+        player: Option<u64>,
+        text: String,
+        seconds: f32,
+        bottom: bool,
+    },
+    /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
+    /// at `position` for everyone near, or at one player's ears.
+    Sound {
+        profile: String,
+        at: SoundAt,
+    },
 }
+/// Where [`Op::Sound`] plays.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum SoundAt {
+    /// In the world, heard by everyone near it.
+    Position([f32; 3]),
+    /// At one player's ears only.
+    Player(u64),
+}
+/// Longest text a print may show.
+pub const MAX_PRINT_CHARS: usize = 512;
 impl Op {
     pub fn capability(&self) -> &'static str {
         match self {
             Self::RemoveBrick { .. } | Self::PlaceBrick { .. } | Self::SetBlockState { .. } => {
                 "world.edit"
             }
-            Self::Explode { .. } | Self::DamagePlayer { .. } => "damage",
+            Self::Explode { .. } | Self::DamagePlayer { .. } | Self::Heal { .. } => "damage",
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
-            Self::Tell { .. } | Self::Broadcast { .. } => "chat",
+            Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } => "chat",
+            Self::Sound { .. } => "sound",
             Self::CopyBuild { .. } => "build",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
             | Self::Control { .. }
-            | Self::GiveItem { .. } => "player",
+            | Self::GiveItem { .. }
+            | Self::Reload { .. }
+            | Self::GiveAmmo { .. } => "player",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
@@ -289,7 +334,26 @@ impl Op {
             Self::Hold { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
-            Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::LetGo { .. } | Self::RemoveVehicle { .. } | Self::Reload { .. } => true,
+            Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
+            Self::GiveAmmo { item: id, rounds, .. } => {
+                item(id) && rounds.unsigned_abs() <= u64::from(bri_weapons::MAX_ROUNDS)
+            }
+            Self::Print { text, seconds, .. } => {
+                text.chars().count() <= MAX_PRINT_CHARS
+                    && !text.chars().any(|c| c.is_control() && c != '\n')
+                    && seconds.is_finite()
+                    && (0.0..=600.0).contains(seconds)
+            }
+            Self::Sound { profile, at } => {
+                !profile.is_empty()
+                    && profile.len() <= 128
+                    && !profile.chars().any(char::is_control)
+                    && match at {
+                        SoundAt::Position(p) => finite(p),
+                        SoundAt::Player(_) => true,
+                    }
+            }
             Self::SpawnVehicle {
                 definition,
                 position,
@@ -368,5 +432,18 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::LetGo { .. } => "let_go",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
+        Op::Heal { .. } => "heal",
+        Op::Reload { .. } => "reload",
+        Op::GiveAmmo { .. } => "give_ammo",
+        Op::Print { bottom: false, .. } => "center_print",
+        Op::Print { bottom: true, .. } => "bottom_print",
+        Op::Sound {
+            at: SoundAt::Position(_),
+            ..
+        } => "sound_at",
+        Op::Sound {
+            at: SoundAt::Player(_),
+            ..
+        } => "play_sound",
     }
 }

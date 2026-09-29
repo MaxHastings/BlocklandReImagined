@@ -69,6 +69,10 @@ fn rocket_pack() -> bri_weapons::Pack {
         command: Default::default(),
         commands: Default::default(),
         shot: None,
+        eye_rotation: [0.0; 3],
+        ammo: None,
+        zoom: None,
+        crosshair: true,
         states,
     };
     let item = bri_weapons::Item {
@@ -138,6 +142,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         projectiles: [(ROCKET_PROJECTILE.to_string(), projectile)].into(),
         damage_types: Default::default(),
         explosions: Default::default(),
+        sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],

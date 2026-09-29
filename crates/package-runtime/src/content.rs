@@ -146,6 +146,23 @@ pub struct Behaviour {
     /// next tick.
     #[serde(default)]
     pub on_loadout: bool,
+    /// `on_spawn(player)` after a player comes to life: joining, respawning
+    /// or `respawn`. Delivered at the start of the next tick, after
+    /// `on_loadout`.
+    #[serde(default)]
+    pub on_spawn: bool,
+    /// `on_leave(player)` as a player leaves the server, while their state
+    /// is still readable.
+    #[serde(default)]
+    pub on_leave: bool,
+    /// `on_damage(victim, attacker, amount, info)` before a player takes
+    /// damage: return the amount to take instead (0 prevents it), or `()`
+    /// to leave it. `attacker` is the player responsible, or `()`; `info`
+    /// is `#{ kind, type, direct }`. Called as the damage happens, so it
+    /// must be quick; damage its own operations cause is not filtered
+    /// again.
+    #[serde(default)]
+    pub on_damage: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

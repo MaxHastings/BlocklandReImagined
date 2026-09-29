@@ -1,0 +1,55 @@
+{
+  "schema_version": 3,
+  "id": "sample-commando-rifle",
+  "items": {
+    "sample-commando-rifle:weapon/rifle": {
+      "ui_name": "Scoped Rifle",
+      "image": "sample-commando-rifle:image/rifle"
+    }
+  },
+  "images": {
+    "sample-commando-rifle:image/rifle": {
+      "projectile": "sample-commando-rifle:projectile/round",
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "ammo": { "magazine": 8, "reserve": 24 },
+      "zoom": { "fov": 20, "on_jet": true, "crosshair": false, "first_person": true },
+      "shot": { "projectiles": 1, "kick": 2.5 },
+      "states": [
+        { "name": "Activate", "ticks": 30, "timeout": 1, "sound": "sample-commando-rifle:equip" },
+        { "name": "Ready", "no_ammo": 6, "reload": 4, "down": 2 },
+        { "name": "Fire", "ticks": 48, "use_ammo": 1, "script": "onFire", "sound": "sample-commando-rifle:shot", "timeout": 3 },
+        { "name": "Hold", "up": 1 },
+        { "name": "Reload", "ticks": 150, "sound": "sample-commando-rifle:reload", "timeout": 5 },
+        { "name": "Reloaded", "refill": true, "timeout": 1 },
+        { "name": "Empty", "ammo": 1, "reload": 4, "down": 7 },
+        { "name": "Dry", "ticks": 24, "sound": "sample-commando-rifle:empty", "up": 6 }
+      ]
+    }
+  },
+  "projectiles": {
+    "sample-commando-rifle:projectile/round": {
+      "speed": 250.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 40.0,
+      "damage_type": "$DamageType::CommandoRifle",
+      "impulse": 150.0
+    }
+  },
+  "damage_types": {
+    "commandorifle": {
+      "name": "CommandoRifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 sniped %1",
+      "vehicle_scale": 1.0,
+      "direct": true
+    }
+  },
+  "sounds": {
+    "sample-commando-rifle:shot": { "file": "sounds/shot.wav" },
+    "sample-commando-rifle:reload": { "file": "sounds/reload.wav", "volume": 0.8 },
+    "sample-commando-rifle:equip": { "file": "sounds/equip.wav", "volume": 0.6, "local": true },
+    "sample-commando-rifle:empty": { "file": "sounds/empty.wav", "local": true }
+  }
+}
