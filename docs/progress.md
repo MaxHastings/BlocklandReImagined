@@ -5865,3 +5865,25 @@ which a loaded PC could spend loading; it now samples until the server has
 held the player still for 120 samples. `shadow_render` captured after
 0.5-1 s of wall time; it now waits until the world mesh shows the latest
 world, then runs a fixed 60 frames.
+
+## 2026-09-29 Non-rendering bricks shown as outlines (branch `claude/hidden-brick-look-22pf5w`)
+
+Max (v0.1.2 playtest): with a brick's rendering off, taking out the hammer
+showed it as the blinking ghost brick; he remembered v20 drawing something
+else. Read-only disassembly of the reference `blocklandv20.exe` confirmed it:
+v20 outlines each hidden brick's world box with one-pixel lines in its paint
+colour, unlit and steady (details in `docs/audits/bricks.md` finding 5b). The
+tools that reveal them were already right (hammer, wrench, wands, printer,
+held bricks; not the spray can).
+
+Change: new `bri_render::lines` (line-list pipeline, one vertex buffer
+rebuilt only when the hidden set or the tool changes, depth tested, no depth
+write, drawn in the pass after the world). The client builds 12 edges per
+hidden brick from its footprint and height instead of uploading a ghost
+mesh. Client-only; nothing new on the wire. Not ported: v20's quarter-second
+fade-out when rendering is turned off.
+
+Evidence: `cargo test -p bri-render --lib lines`, `cargo test -p bri-client
+--lib` (217 passed), `cargo clippy -p bri-render -p bri-client --lib --bins
+-- -D warnings` (clean; `--all-targets` only trips the existing Linux-only
+`sampler.rs` unused import).

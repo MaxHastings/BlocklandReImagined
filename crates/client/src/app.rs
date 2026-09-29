@@ -443,9 +443,9 @@ pub struct App {
     join_notices: Vec<String>,
     package_models: crate::packages::PackageModels,
     brick_kills: Vec<bri_sim::presentation::Cue>,
-    /// Non-rendering bricks, drawn only while a building tool is out, and
-    /// whether the uploaded scene is the shown one (None: stale).
-    hidden_gpu: Option<GpuScene>,
+    /// Outlines of non-rendering bricks, drawn only while a building tool is
+    /// out, and whether the uploaded lines are the shown ones (None: stale).
+    hidden_lines: Option<bri_render::lines::LineRenderer>,
     hidden_uploaded: Option<bool>,
     weapon_light_deferred: usize,
     weapon_effect_session: Option<RequestId>,
@@ -1607,7 +1607,7 @@ impl App {
             join_notices: Vec::new(),
             package_models: Default::default(),
             brick_kills: Vec::new(),
-            hidden_gpu: None,
+            hidden_lines: None,
             hidden_uploaded: None,
             weapon_light_deferred: 0,
             weapon_effect_session: None,
@@ -1776,7 +1776,9 @@ impl App {
         self.fade_models.clear();
         self.package_models.clear();
         self.brick_kills.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
@@ -5067,6 +5069,23 @@ fn ghost_key(building: &crate::building::Building) -> u64 {
         ^ u64::from(building.copy_ghost().is_some()) << 63
 }
 
+/// The world box v20 outlines around a non-rendering brick: its footprint
+/// and height, turned with it, about its position.
+fn hidden_brick_box(
+    brick: &bri_world::Brick,
+    mesh: &bri_content::brick::Brick,
+) -> (glam::Vec3, glam::Vec3) {
+    let [w, d] = mesh.footprint_studs.map(|v| v as f32 * 0.5);
+    let h = mesh.height_plates as f32 * 0.2;
+    let size = if brick.quarter_turns.is_multiple_of(2) {
+        glam::Vec3::new(w, h, d)
+    } else {
+        glam::Vec3::new(d, h, w)
+    };
+    let centre = glam::Vec3::from(brick.position);
+    (centre - size * 0.5, centre + size * 0.5)
+}
+
 fn translucent_ghost(scene: &mut SceneData, look: &crate::world_scene::TempBrickLook) {
     crate::world_scene::v20_temp_brick(scene, look);
 }
@@ -7172,6 +7191,13 @@ impl PlatformApp for App {
             samples,
             weather_limits.drops + weather_limits.splashes,
         )?);
+        self.hidden_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
         self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
             device,
@@ -7193,7 +7219,9 @@ impl PlatformApp for App {
         self.debris_models.clear();
         self.fade_models.clear();
         self.package_models.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
         self.depth = None;
         Ok(())
@@ -7231,6 +7259,7 @@ impl PlatformApp for App {
         self.foliage.gpu_stopped();
         self.weather_renderer = None;
         self.effects_renderer = None;
+        self.hidden_lines = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.gpu_palette = None;
@@ -7242,7 +7271,9 @@ impl PlatformApp for App {
         self.debris_models.clear();
         self.fade_models.clear();
         self.package_models.clear();
-        self.hidden_gpu = None;
+        if let Some(lines) = &mut self.hidden_lines {
+            lines.clear();
+        }
         self.hidden_uploaded = None;
         self.depth = None;
     }
@@ -7503,7 +7534,8 @@ impl PlatformApp for App {
             && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
         {
             // v20 `showBricks` images (hammer, wrench, printer, wands, bricks)
-            // reveal non-rendering bricks as ghosts.
+            // reveal non-rendering bricks as box outlines in their paint
+            // colour (`fxDTSBrick::renderObject`), not as ghost bricks.
             let show = matches!(
                 building.equipment(),
                 crate::building::Equipment::Brick(_)
@@ -7512,39 +7544,31 @@ impl PlatformApp for App {
                     | crate::building::Equipment::Printer
                     | crate::building::Equipment::Wand
             );
-            if self.hidden_uploaded != Some(show) {
-                self.hidden_gpu = None;
+            if self.hidden_uploaded != Some(show)
+                && let Some(lines) = &mut self.hidden_lines
+            {
+                let mut vertices = vec![];
                 if show {
-                    let hidden = bri_net::protocol::PublicWorld {
-                        name: "Non-rendering bricks".into(),
-                        map_id: view.world.map_id.clone(),
-                        palette: view.world.palette.clone(),
-                        bricks: view
-                            .world
-                            .bricks
-                            .iter()
-                            .filter(|(id, b)| !b.visible && !self.brick_debris.is_dead(**id))
-                            .map(|(id, b)| {
-                                let mut b = b.clone();
-                                b.visible = true;
-                                (*id, b)
-                            })
-                            .collect(),
-                    };
-                    if !hidden.bricks.is_empty() {
-                        let mut data = crate::world_scene::build_world_scene_materials(
-                            &hidden,
-                            meshes,
-                            1_000_000,
-                            Some(materials),
-                        )?;
-                        translucent_ghost(&mut data, &ghost_look);
-                        if !data.indices.is_empty() {
-                            self.hidden_gpu =
-                                Some(renderer.upload(frame.device, frame.queue, &data)?);
+                    for (id, brick) in &view.world.bricks {
+                        if brick.visible || self.brick_debris.is_dead(*id) {
+                            continue;
                         }
+                        let Some(mesh) = crate::brick_cover::mesh(brick, meshes) else {
+                            continue;
+                        };
+                        let Some(color) = view.world.palette.get(usize::from(brick.color)) else {
+                            continue;
+                        };
+                        let (low, high) = hidden_brick_box(brick, mesh);
+                        bri_render::lines::box_edges(
+                            low,
+                            high,
+                            [color[0], color[1], color[2]],
+                            &mut vertices,
+                        );
                     }
                 }
+                lines.set_lines(frame.device, &vertices)?;
                 self.hidden_uploaded = Some(show);
             }
             if let (Some(palette), Some(gpu_palette)) = (&self.palette, &self.gpu_palette) {
@@ -7827,6 +7851,9 @@ impl PlatformApp for App {
             .weather_renderer
             .as_mut()
             .context("Weather GPU not initialized")?;
+        if let Some(lines) = &self.hidden_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
         weather_renderer.prepare(
             frame.queue,
             effects_camera.view_projection,
@@ -7862,9 +7889,6 @@ impl PlatformApp for App {
                 .values()
                 .filter_map(|(_, gpu)| gpu.as_ref()),
         );
-        if let Some(hidden) = &self.hidden_gpu {
-            scenes.push(hidden);
-        }
         // Bodies draw through their one-instance body transform.
         let avatar_draws: Vec<_> = self
             .avatars
@@ -7990,6 +8014,9 @@ impl PlatformApp for App {
         effects_renderer.render(&mut pass);
         weather_renderer.render(&mut pass);
         self.client_code.render(&mut pass);
+        if let Some(lines) = &self.hidden_lines {
+            lines.render(&mut pass);
+        }
         drop(pass);
         self.client_code.resolve(frame.encoder);
         Ok(true)

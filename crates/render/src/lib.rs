@@ -1,6 +1,7 @@
 pub mod color;
 pub mod environment_scene;
 pub mod light_volume;
+pub mod lines;
 pub mod mipmap;
 mod pool;
 pub mod scene;

@@ -77,9 +77,20 @@ install was modified.
    magnifies with nearest; authored BLBs rely on it (UVs run to -0.09..1.09 on
    plates). New `Material::clamp_nearest`, set on the SIDE surface.
 5. **Ghost brick (fixed).** Was the full textured brick at a flat 45% alpha;
-   now v20's two-shell pulsing look (`world_scene::v20_temp_brick`). The
-   non-rendering bricks shown while building use the same look; v20's exact
-   treatment of those was not traced.
+   now v20's two-shell pulsing look (`world_scene::v20_temp_brick`).
+5b. **Non-rendering bricks shown while building (fixed).** They used the ghost
+   look above; v20 draws something else. Traced in `fxDTSBrick::renderObject`
+   (0x533bf0): while the client's show-hidden-bricks flag is on (set by the
+   server when an image with `showBricks` is mounted: hammer, wrench, wands,
+   print gun and any held brick; not the spray can), a brick whose faded
+   alpha is under 0.1 gets a plain box outline: GL line loops around its world
+   box, in its palette colour with alpha ignored, one pixel wide, no texture,
+   lighting or flashing. The mesh itself fades out over about a quarter
+   second when rendering is turned off and is no longer drawn once faded, so a
+   hidden brick shows only its outline. Now `bri_render::lines` draws those
+   outlines (one line-list buffer rebuilt when the hidden set changes, depth
+   tested, nothing sent over the network). Not ported: the quarter-second
+   fade-out.
 6. **Colour/shape FX were invented approximations (fixed).** Blink changed
    alpha (v20 changes brightness), pearl/chrome used a fake sheen, swirl and
    rainbow used unrelated waves, undulo/water used wrong axes and amplitudes.
