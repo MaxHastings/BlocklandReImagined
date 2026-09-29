@@ -103,6 +103,7 @@ pub fn build_world_scene_materials(
             surface_materials,
             materials,
             false,
+            0,
         )?;
     }
     scene.coalesce_opaque_batches()?;
@@ -161,6 +162,7 @@ pub(crate) fn append_world_brick(
     surface_materials: [usize; 6],
     materials: Option<&crate::materials::BrickMaterials>,
     mesh_validated: bool,
+    hidden_faces: u8,
 ) -> Result<()> {
     let ContentRef::Resolved(definition) = &brick.definition else {
         bail!(
@@ -188,12 +190,13 @@ pub(crate) fn append_world_brick(
         mesh.validate()?;
     }
     scene
-        .append_validated_brick_with_fx(
+        .append_validated_brick_hiding(
             mesh,
             brick.transform().to_cols_array(),
             palette[brick.color as usize],
             surfaces,
             BrickFx::new(brick.color_effect, brick.shape_effect)?,
+            hidden_faces,
         )
         .with_context(|| format!("Building native geometry for brick {id}"))
 }

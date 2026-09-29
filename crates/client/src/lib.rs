@@ -6,6 +6,7 @@ pub mod app;
 pub mod audio;
 pub mod avatar;
 pub mod avatar_mesh;
+pub mod brick_cover;
 pub mod culling;
 pub mod brick_debris;
 pub mod brick_fade;

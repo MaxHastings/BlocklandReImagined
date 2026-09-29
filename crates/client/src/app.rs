@@ -494,7 +494,10 @@ pub struct App {
     query_source: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// The replica log and revision `query_source` came from.
     query_log: Option<(Arc<network::WorldLog>, u64)>,
-    ghost_gpu: Option<GpuScene>,
+    /// The ghost built at the origin and the one transform that places it.
+    ghost_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
+    /// What `ghost_gpu` was built from: moving the ghost only moves it.
+    ghost_look: Option<GhostLook>,
     ghost_uploaded: u64,
     avatar_assets: Arc<crate::avatar::AvatarAssets>,
     avatars: BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
@@ -1594,6 +1597,7 @@ impl App {
             query_source: None,
             query_log: None,
             ghost_gpu: None,
+            ghost_look: None,
             ghost_uploaded: u64::MAX,
             avatar_assets,
             avatars: BTreeMap::new(),
@@ -1769,6 +1773,7 @@ impl App {
         self.query_log = None;
         self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.motion.reset();
@@ -4177,7 +4182,7 @@ impl App {
                             &meshes,
                             &palette,
                             Some(&materials),
-                            4_000_000,
+                            WORLD_TRIANGLE_BUDGET,
                         )
                         .map(|changes| (chunked, changes))
                         .map_err(|e| format!("{e:#}"))
@@ -7032,6 +7037,7 @@ impl PlatformApp for App {
         self.gpu_palette = None;
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
@@ -7078,6 +7084,7 @@ impl PlatformApp for App {
         self.gpu_palette = None;
         self.gpu_chunks.clear();
         self.ghost_gpu = None;
+        self.ghost_look = None;
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.debris_models.clear();
@@ -7182,6 +7189,14 @@ impl PlatformApp for App {
             self.chunk_uploads.extend(self.cpu_chunks.keys().copied());
         }
         if let Some(palette) = &self.gpu_palette {
+            let pending: Vec<&SceneData> = self
+                .chunk_uploads
+                .iter()
+                .filter_map(|key| self.cpu_chunks.get(key))
+                .collect();
+            if pending.iter().map(|c| c.vertices.len()).sum::<usize>() > 1 << 16 {
+                renderer.reserve_chunks(&pending)?;
+            }
             for key in std::mem::take(&mut self.chunk_uploads) {
                 if let Some(chunk) = self.cpu_chunks.get(&key) {
                     self.gpu_chunks
@@ -7194,27 +7209,49 @@ impl PlatformApp for App {
         if let Some(building) = &self.building
             && self.ghost_uploaded != ghost_key(building)
         {
-            self.ghost_gpu = None;
             // A copied build in hand shows instead of the single ghost.
-            let ghosts: Option<bri_world::Bricks> = match building.copy_ghost() {
-                Some(copy) => Some(
-                    copy.iter()
+            let ghosts: Option<Vec<bri_world::Brick>> = match building.copy_ghost() {
+                Some(copy) => Some(copy.to_vec()),
+                None => building.ghost().map(|g| vec![g.clone()]),
+            };
+            // Built around the first brick, so a moved ghost (or a world
+            // change that leaves it as it was) only moves its transform;
+            // only a new look rebuilds it, textures and all.
+            let placed = ghosts.map(|mut bricks| {
+                let anchor = Vec3::from(bricks[0].position);
+                for brick in &mut bricks {
+                    brick.position = (Vec3::from(brick.position) - anchor).to_array();
+                }
+                let look = GhostLook {
+                    bricks,
+                    blocked: building.ghost_blocked(),
+                    temp: ghost_look,
+                    palette: view.world.palette.clone(),
+                };
+                (anchor, look)
+            });
+            match &placed {
+                Some((_, look)) if self.ghost_look.as_ref() == Some(look) => {}
+                _ => {
+                    self.ghost_gpu = None;
+                    self.ghost_look = None;
+                }
+            }
+            let anchor = placed.as_ref().map(|(anchor, _)| *anchor);
+            if let Some((anchor, look)) = placed
+                && self.ghost_look.is_none()
+            {
+                let world = bri_net::protocol::PublicWorld {
+                    name: "Local unplanted ghost".into(),
+                    map_id: view.world.map_id.clone(),
+                    palette: look.palette.clone(),
+                    bricks: look
+                        .bricks
+                        .iter()
                         .cloned()
                         .enumerate()
                         .map(|(i, b)| (i as u64, b))
                         .collect(),
-                ),
-                None => building
-                    .ghost()
-                    .map(|g| bri_world::Bricks::unit(0, g.clone())),
-            };
-            if let Some(bricks) = ghosts {
-                let palette = view.world.palette.clone();
-                let world = bri_net::protocol::PublicWorld {
-                    name: "Local unplanted ghost".into(),
-                    map_id: view.world.map_id.clone(),
-                    palette,
-                    bricks,
                 };
                 let mut data = crate::world_scene::build_world_scene_materials(
                     &world,
@@ -7228,15 +7265,36 @@ impl PlatformApp for App {
                 )?;
                 // Warn before a plant the server would refuse: the ghost
                 // turns red (not in v20, which only showed the error icon).
-                if building.ghost_blocked() {
+                if look.blocked {
                     for vertex in &mut data.vertices {
                         vertex.color = BLOCKED_GHOST;
                     }
                 }
                 translucent_ghost(&mut data, &ghost_look);
                 if !data.indices.is_empty() {
-                    self.ghost_gpu = Some(renderer.upload(frame.device, frame.queue, &data)?);
+                    self.ghost_gpu = Some((
+                        renderer.upload(frame.device, frame.queue, &data)?,
+                        bri_render::scene::GpuInstances::new(frame.device, 1)?,
+                    ));
                 }
+                self.ghost_look = Some(look);
+                if let Some((_, instances)) = &mut self.ghost_gpu {
+                    instances.update(
+                        frame.queue,
+                        &[bri_render::scene::SceneTransform {
+                            transform: glam::Mat4::from_translation(anchor),
+                            tint: [1.0; 4],
+                        }],
+                    )?;
+                }
+            } else if let (Some(anchor), Some((_, instances))) = (anchor, &mut self.ghost_gpu) {
+                instances.update(
+                    frame.queue,
+                    &[bri_render::scene::SceneTransform {
+                        transform: glam::Mat4::from_translation(anchor),
+                        tint: [1.0; 4],
+                    }],
+                )?;
             }
             self.ghost_uploaded = ghost_key(building);
         }
@@ -7643,9 +7701,7 @@ impl PlatformApp for App {
         }
         let mut scenes = vec![self.gpu_scene.as_ref().unwrap()];
         scenes.extend(self.gpu_chunks.values());
-        if let Some(ghost) = &self.ghost_gpu {
-            scenes.push(ghost);
-        }
+
         scenes.extend(
             self.remote_ghosts
                 .values()
@@ -7665,6 +7721,9 @@ impl PlatformApp for App {
         scenes.extend(self.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
         scenes.extend(self.fade_models.scenes());
         let mut item_draws = self.world_items.draws();
+        if let Some((ghost, placed)) = &self.ghost_gpu {
+            item_draws.push((ghost, placed));
+        }
         item_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
         item_draws.extend(self.gpu_terrain.iter().flat_map(|t| t.draws()));
         item_draws.extend(self.explosion_shapes.draws());
@@ -7777,6 +7836,20 @@ impl PlatformApp for App {
         Ok(true)
     }
 }
+/// Brick triangles the client draws at most, after covered faces are culled:
+/// a million simple bricks, about 1.7 GB of chunk vertices.
+const WORLD_TRIANGLE_BUDGET: usize = 16_000_000;
+
+/// Everything the local ghost's mesh depends on; its bricks sit around the
+/// first one, which the ghost's transform places.
+#[derive(PartialEq)]
+struct GhostLook {
+    bricks: Vec<bri_world::Brick>,
+    blocked: bool,
+    temp: crate::world_scene::TempBrickLook,
+    palette: Vec<[f32; 4]>,
+}
+
 /// Liquids for one liquid generation of the collision mirror and palette.
 struct LiquidCache {
     generation: u64,

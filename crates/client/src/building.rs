@@ -788,39 +788,60 @@ impl Building {
                 normal,
                 distance: time,
             });
-        let end = origin + direction * reach;
-        let low = origin.min(end) - Vec3::splat(0.01);
-        let high = origin.max(end) + Vec3::splat(0.01);
-        let min = std::array::from_fn(|a| (low[a] / grid::CELL[a]).floor() as i32);
-        let max: [i32; 3] = std::array::from_fn(|a| (high[a] / grid::CELL[a]).ceil() as i32);
-        for id in index.query(Bounds {
-            min,
-            size: std::array::from_fn(|a| (max[a] - min[a]).max(1)),
-        }) {
-            let brick = &self.bricks[&id];
-            let definition = self.definitions.get(brick)?;
-            let inverse = brick.transform().inverse();
-            if let Some((distance, normal)) = bri_physics::content::raycast(
-                &definition.collision,
-                Vector::from_array(inverse.transform_point3(origin).to_array()),
-                Vector::from_array(inverse.transform_vector3(direction).to_array()),
-                reach,
-            ) && nearest.as_ref().is_none_or(|hit| distance < hit.distance)
+        // Walk the index buckets the ray pierces, nearest first, and stop
+        // once the nearest hit lies before the bucket just searched (as the
+        // server's raycast does): a box around the whole ray held every
+        // brick of a large build, ray-tested each frame for every name tag.
+        let mut tested = std::collections::HashSet::new();
+        for (bucket, exit) in grid::ray_buckets(origin.to_array(), direction.to_array(), reach) {
+            for id in index.bucket(bucket) {
+                if !tested.insert(id)
+                    || !ray_meets_bounds(index.bounds(id), origin, direction, reach)
+                {
+                    continue;
+                }
+                self.trace_brick(id, origin, direction, reach, &mut nearest)?;
+            }
+            if nearest
+                .as_ref()
+                .is_some_and(|hit| hit.distance <= exit - 0.02)
             {
-                nearest = Some(Hit {
-                    brick: Some(id),
-                    position: origin + direction * distance,
-                    normal: bri_sim::simulation::hit_normal(
-                        brick
-                            .transform()
-                            .transform_vector3(Vec3::from(normal.to_array())),
-                        direction,
-                    ),
-                    distance,
-                });
+                break;
             }
         }
         Ok(nearest)
+    }
+    fn trace_brick(
+        &self,
+        id: BrickId,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f32,
+        nearest: &mut Option<Hit>,
+    ) -> Result<()> {
+        let brick = &self.bricks[&id];
+        let definition = self.definitions.get(brick)?;
+        let inverse = brick.transform().inverse();
+        if let Some((distance, normal)) = bri_physics::content::raycast(
+            &definition.collision,
+            Vector::from_array(inverse.transform_point3(origin).to_array()),
+            Vector::from_array(inverse.transform_vector3(direction).to_array()),
+            reach,
+        ) && nearest.as_ref().is_none_or(|hit| distance < hit.distance)
+        {
+            *nearest = Some(Hit {
+                brick: Some(id),
+                position: origin + direction * distance,
+                normal: bri_sim::simulation::hit_normal(
+                    brick
+                        .transform()
+                        .transform_vector3(Vec3::from(normal.to_array())),
+                    direction,
+                ),
+                distance,
+            });
+        }
+        Ok(())
     }
 
     /// `GuiShapeNameHud::onRender`'s line of sight (blocklandv20.exe

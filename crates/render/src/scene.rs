@@ -354,6 +354,20 @@ impl SceneData {
         surface_materials: [usize; 6],
         fx: BrickFx,
     ) -> Result<()> {
+        self.append_validated_brick_hiding(mesh, transform, paint, surface_materials, fx, 0)
+    }
+    /// As `append_validated_brick_with_fx`, leaving out the quads of the
+    /// faces set in `hidden` (bit `i` for `bri_content::brick::FACES[i]`,
+    /// top to west): faces neighbours cover (v20 BLB COVERAGE).
+    pub fn append_validated_brick_hiding(
+        &mut self,
+        mesh: &bri_content::brick::Brick,
+        transform: [f32; 16],
+        paint: [f32; 4],
+        surface_materials: [usize; 6],
+        fx: BrickFx,
+        hidden: u8,
+    ) -> Result<()> {
         use bri_content::brick::Surface;
         let centre = [transform[12], transform[13], transform[14]];
         let depth_studs = mesh.footprint_studs[1].clamp(1, 255) as u8;
@@ -424,6 +438,21 @@ impl SceneData {
         let mut blend_materials = std::collections::BTreeMap::new();
         let mut provisional_color = false;
         for quad in &mesh.quads {
+            if hidden != 0 {
+                use bri_content::brick::Face;
+                let bit = match quad.face {
+                    Face::Top => 1,
+                    Face::Bottom => 2,
+                    Face::North => 4,
+                    Face::East => 8,
+                    Face::South => 16,
+                    Face::West => 32,
+                    Face::Omni => 0,
+                };
+                if hidden & bit != 0 {
+                    continue;
+                }
+            }
             let slot = match quad.surface {
                 Surface::Top => 0,
                 Surface::Side => 1,
@@ -775,6 +804,8 @@ pub struct GpuScene {
     slot: Option<Arc<crate::pool::Slot>>,
     base_vertex: i32,
     first_index: u32,
+    /// A pooled chunk's translucent batches, in the translucent pool.
+    translucent: Option<Box<GpuScene>>,
     pub vertex_count: usize,
     pub index_count: usize,
     pub image_count: usize,
@@ -974,6 +1005,7 @@ impl GpuScene {
             slot: self.slot.clone(),
             base_vertex: self.base_vertex,
             first_index: self.first_index,
+            translucent: None,
             vertex_count: self.vertex_count,
             index_count: self.index_count,
             image_count: self.image_count,
@@ -1014,6 +1046,38 @@ fn geometry_buffers(
         usage: wgpu::BufferUsages::INDEX,
     });
     (vertices, indices)
+}
+
+/// A chunk's geometry split in two by `second`: each part keeps only the
+/// vertices its batches use, re-indexed from zero.
+fn split_batches(
+    data: &SceneData,
+    second: impl Fn(&MeshBatch) -> bool,
+) -> [(Vec<SceneVertex>, Vec<u32>, Vec<MeshBatch>); 2] {
+    let mut parts: [(Vec<SceneVertex>, Vec<u32>, Vec<MeshBatch>); 2] = Default::default();
+    let mut remap = [
+        vec![u32::MAX; data.vertices.len()],
+        vec![u32::MAX; data.vertices.len()],
+    ];
+    for batch in &data.batches {
+        let p = usize::from(second(batch));
+        let (vertices, indices, batches) = &mut parts[p];
+        let start = indices.len() as u32;
+        for &index in &data.indices[batch.indices.start as usize..batch.indices.end as usize] {
+            let mapped = &mut remap[p][index as usize];
+            if *mapped == u32::MAX {
+                *mapped = vertices.len() as u32;
+                vertices.push(data.vertices[index as usize]);
+            }
+            indices.push(*mapped);
+        }
+        batches.push(MeshBatch {
+            indices: start..indices.len() as u32,
+            material: batch.material,
+            center: batch.center,
+        });
+    }
+    parts
 }
 
 /// Clip-space planes (a, b, c, d) with inside meaning ax+by+cz+d >= 0.
@@ -1397,8 +1461,10 @@ pub struct SceneRenderer {
     eye: Vec3,
     frustum: Option<[glam::Vec4; 6]>,
     stats: std::cell::Cell<RenderStats>,
-    /// Shared buffers for static chunks (`upload_chunk`).
+    /// Shared buffers for static chunks (`upload_chunk`): opaque batches,
+    /// and translucent ones apart.
     pool: crate::pool::GeometryPool,
+    translucent_pool: crate::pool::GeometryPool,
     device: wgpu::Device,
     /// The queue from the last `update_camera`, for this frame's indirect
     /// draw arguments, and where in `indirect` the frame has written.
@@ -1658,14 +1724,36 @@ impl SceneRenderer {
             frustum: None,
             stats: Default::default(),
             pool: Default::default(),
+            translucent_pool: Default::default(),
             device: device.clone(),
             queue: Default::default(),
             indirect: Default::default(),
         }
     }
+    /// Before uploading many chunks at once (a load): room for all of them
+    /// in one shared block per pool.
+    pub fn reserve_chunks(&self, chunks: &[&SceneData]) -> Result<()> {
+        let mut totals = [[0u64; 2]; 2];
+        for chunk in chunks {
+            for batch in &chunk.batches {
+                let clear = matches!(
+                    chunk.materials[batch.material].alpha,
+                    AlphaMode::Blend | AlphaMode::Additive
+                );
+                let count = u64::from(batch.indices.end - batch.indices.start);
+                // Quads: four vertices for six indices.
+                totals[usize::from(clear)][0] += count * 2 / 3;
+                totals[usize::from(clear)][1] += count;
+            }
+        }
+        self.pool.reserve(&self.device, totals[0][0], totals[0][1])?;
+        self.translucent_pool
+            .reserve(&self.device, totals[1][0], totals[1][1])
+    }
     /// Shared chunk geometry: blocks allocated and their bytes.
     pub fn pool_usage(&self) -> (usize, u64) {
-        self.pool.usage()
+        let (a, b) = (self.pool.usage(), self.translucent_pool.usage());
+        (a.0 + b.0, a.1 + b.1)
     }
     /// Write indirect draw arguments for this frame; returns the buffer and
     /// the offset they start at, or None before any `update_camera`.
@@ -1879,6 +1967,7 @@ impl SceneRenderer {
             slot: None,
             base_vertex: 0,
             first_index: 0,
+            translucent: None,
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: data.images.len(),
@@ -1923,38 +2012,71 @@ impl SceneRenderer {
         }
         // Brick shape FX displace vertices in the shader by up to 0.1 units.
         let margin = Vec3::splat(0.2);
-        let (vertices, indices, slot) = match queue {
-            Some(queue) if !data.vertices.is_empty() && !data.indices.is_empty() => {
-                let slot = self
-                    .pool
-                    .store(device, queue, &data.vertices, &data.indices)?;
+        let bounds = (!data.vertices.is_empty()).then_some((min - margin, max + margin));
+        let Some(queue) = queue.filter(|_| !data.vertices.is_empty() && !data.indices.is_empty())
+        else {
+            let (vertices, indices) = geometry_buffers(device, &data.name, data);
+            return Ok(self.palette_scene(
+                palette,
+                (vertices, indices, None),
+                data.batches.clone(),
+                bounds,
+                (data.vertices.len(), data.indices.len()),
+            ));
+        };
+        // Translucent batches live in a pool of their own: sorted back to
+        // front across chunks, they draw in long runs only when they share
+        // one buffer.
+        let blended = |b: &MeshBatch| palette.material_modes[b.material].0 != 0;
+        let [opaque, clear] = split_batches(data, blended);
+        let mut parts = Vec::with_capacity(2);
+        for (part, pool) in [(opaque, &self.pool), (clear, &self.translucent_pool)] {
+            if part.1.is_empty() {
+                continue;
+            }
+            let slot = pool.store(device, queue, &part.0, &part.1)?;
+            parts.push(self.palette_scene(
+                palette,
                 (
                     slot.block.vertices.clone(),
                     slot.block.indices.clone(),
                     Some(Arc::new(slot)),
-                )
-            }
-            _ => {
-                let (vertices, indices) = geometry_buffers(device, &data.name, data);
-                (vertices, indices, None)
-            }
-        };
-        Ok(GpuScene {
+                ),
+                part.2,
+                bounds,
+                (part.0.len(), part.1.len()),
+            ));
+        }
+        let mut scene = parts.remove(0);
+        scene.translucent = parts.pop().map(Box::new);
+        Ok(scene)
+    }
+    /// A chunk scene on `palette`'s materials over the given buffers.
+    fn palette_scene(
+        &self,
+        palette: &GpuScene,
+        (vertices, indices, slot): (wgpu::Buffer, wgpu::Buffer, Option<Arc<crate::pool::Slot>>),
+        batches: Vec<MeshBatch>,
+        bounds: Option<(Vec3, Vec3)>,
+        (vertex_count, index_count): (usize, usize),
+    ) -> GpuScene {
+        GpuScene {
             vertices,
             indices,
             base_vertex: slot.as_ref().map_or(0, |s| s.vertices.start as i32),
             first_index: slot.as_ref().map_or(0, |s| s.indices.start),
             slot,
+            translucent: None,
             materials: palette.materials.clone(),
             material_modes: palette.material_modes.clone(),
             material_descriptors: palette.material_descriptors.clone(),
             image_signatures: palette.image_signatures.clone(),
-            batches: data.batches.clone(),
-            bounds: (!data.vertices.is_empty()).then_some((min - margin, max + margin)),
-            vertex_count: data.vertices.len(),
-            index_count: data.indices.len(),
+            batches,
+            bounds,
+            vertex_count,
+            index_count,
             image_count: palette.image_count,
-        })
+        }
     }
     /// Upload one instanced model whose batches index `palette`'s materials:
     /// geometry only, like a chunk, but never culled by its model-space
@@ -2005,6 +2127,7 @@ impl SceneRenderer {
             slot: None,
             base_vertex: 0,
             first_index: 0,
+            translucent: None,
             vertex_count: data.vertices.len(),
             index_count: data.indices.len(),
             image_count: base.image_count,
@@ -2368,16 +2491,18 @@ impl SceneRenderer {
             visible.push((nearest.distance_squared(self.eye), scene));
         }
         visible.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, scene) in visible {
-            for batch in &scene.batches {
-                order.push(Draw {
-                    scene,
-                    batch,
-                    buffer: &self.identity_instance,
-                    range: 0..1,
-                    center: Vec3::from(batch.center),
-                    blend: scene.material_modes[batch.material].0,
-                });
+        for (_, whole) in visible {
+            for scene in std::iter::once(whole).chain(whole.translucent.as_deref()) {
+                for batch in &scene.batches {
+                    order.push(Draw {
+                        scene,
+                        batch,
+                        buffer: &self.identity_instance,
+                        range: 0..1,
+                        center: Vec3::from(batch.center),
+                        blend: scene.material_modes[batch.material].0,
+                    });
+                }
             }
         }
         for &(scene, instances) in instances {
