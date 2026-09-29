@@ -3565,7 +3565,7 @@ impl App {
         }
         let capture =
             crate::platform::capture_copy(frame.device, frame.encoder, &texture, frame.format)?;
-        self.save_shots.start(
+        self.save_shots.copied(
             crate::platform::Shot {
                 path,
                 fit: Some(crate::save_picture::FIT),
@@ -7361,7 +7361,9 @@ impl PlatformApp for App {
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
+        // The last frame, holding any picture copied then, was submitted.
         // Failures are logged by the writer; success is not news.
+        self.save_shots.submitted();
         self.save_shots.poll(frame.device);
         if let Some(path) = self.save_picture.take() {
             self.take_save_picture(frame, path)?;
