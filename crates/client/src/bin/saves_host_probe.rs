@@ -9,136 +9,15 @@
 //! Usage: saves_host_probe <content-root> <saves-dir> <report.json>
 //! Prints one line per failing save and a summary; the report lists every
 //! save with its outcome and the prints this client does not have.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use bri_client::{
-    content::{ClientContent, LOADABLE_MAPS},
+    content::ClientContent,
     old_saves::{Converter, OldSaves},
+    save_host::SaveHost,
     saves::Store,
 };
-use bri_sim::session::{Command, Reply, Session};
-use bri_world::{ContentRef, World};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
-
-struct Setup {
-    content: ClientContent,
-    weapons: bri_net::content_identity::WeaponContent,
-    item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
-    vehicles: bri_vehicles::Pack,
-    meshes: BTreeMap<String, bri_content::brick::Brick>,
-    materials: bri_client::materials::BrickMaterials,
-    palette: bri_client::world_chunks::BrickPalette,
-}
-impl Setup {
-    fn session(&self, map: &str) -> Result<(Session, bri_client::content::LoadedMap)> {
-        let mut loaded = self.content.load_map(map, None)?;
-        let simulation = std::mem::replace(
-            &mut loaded.simulation,
-            bri_sim::simulation::Simulation::new(
-                World::new("placeholder".into(), map.into(), vec![[1.0; 4]]),
-                bri_sim::definitions::Definitions {
-                    entries: BTreeMap::new(),
-                },
-                vec![],
-            )?,
-        );
-        let mut session = Session::new(simulation);
-        session.set_weapon_pack(self.weapons.pack.clone())?;
-        session.set_item_bounds(self.item_bounds.clone())?;
-        session.set_vehicle_pack(self.vehicles.clone())?;
-        session.set_event_catalog(
-            self.content.events.clone(),
-            self.content
-                .event_sounds
-                .iter()
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>(),
-        )?;
-        session.set_spawn_points(loaded.spawn_points.clone())?;
-        Ok((session, loaded))
-    }
-
-    /// Host `entry` on its map (Slate for a loose save) and build what a
-    /// joined client builds. The number of bricks placed.
-    fn host(&self, entry: &bri_client::saves::Entry) -> Result<usize> {
-        let build = Store::read(entry)?;
-        let map = if LOADABLE_MAPS.contains(&entry.map_id.as_str()) {
-            entry.map_id.as_str()
-        } else {
-            LOADABLE_MAPS[3]
-        };
-        let (mut session, loaded) = self.session(map)?;
-        let host = loaded
-            .spawn_points
-            .iter()
-            .find_map(|p| session.join("Host".into(), *p, true).ok())
-            .context("No spawn for the host")?;
-        let reply = session.command(
-            host,
-            1,
-            Command::LoadBuild {
-                build: Box::new(build),
-                ownership: false,
-            },
-        )?;
-        ensure!(
-            matches!(reply, Reply::Loaded { .. }),
-            "Unexpected load reply {reply:?}"
-        );
-        while session.build_loading() {
-            session.step()?;
-        }
-        let state = session.simulation().state();
-        let world = Arc::new(bri_net::protocol::PublicWorld {
-            name: state.name.clone(),
-            map_id: state.map_id.clone(),
-            palette: state.palette.clone(),
-            bricks: bri_net::protocol::public_bricks(&state.bricks),
-        });
-        let placed = world.bricks.len();
-        let definitions = session.simulation().definitions.clone();
-        let waters = session.simulation().waters.clone();
-        drop(session);
-        let mut building = bri_client::building::Building::new(
-            definitions.clone(),
-            loaded.query_colliders.clone(),
-        )?;
-        building.sync_world(&world)?;
-        let mut mirror = bri_sim::prediction::CollisionMirror::new(
-            definitions,
-            loaded.query_colliders.clone(),
-            waters,
-        );
-        mirror.sync(&world.bricks)?;
-        bri_client::world_chunks::ChunkedWorld::default()
-            .update(
-                world,
-                None,
-                &self.meshes,
-                &self.palette,
-                Some(&self.materials),
-                usize::MAX / 4,
-            )
-            .context("Building brick chunks")?;
-        Ok(placed)
-    }
-}
-
-/// Print names in `build` this client has no image for, by name.
-fn unknown_prints(
-    build: &bri_world::build::SavedBuild,
-    materials: &bri_client::materials::BrickMaterials,
-) -> BTreeMap<String, usize> {
-    let mut out = BTreeMap::new();
-    for brick in build.world.bricks.values().chain(&build.world.unloaded) {
-        let Some(print) = &brick.print else { continue };
-        let (ContentRef::Resolved(name) | ContentRef::Unresolved { name, .. }) = print;
-        if materials.bundle.resolve(name).is_none() {
-            *out.entry(name.clone()).or_default() += 1;
-        }
-    }
-    out
-}
+use std::{collections::BTreeMap, path::PathBuf};
 
 fn main() -> Result<()> {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
@@ -155,11 +34,6 @@ fn main() -> Result<()> {
 
 fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
     let content = ClientContent::load(&args[0])?;
-    let weapons = content.paths.weapon_content()?;
-    let item_bounds = content.paths.item_physics(&weapons)?.bounds;
-    let vehicles = content.paths.vehicle_pack()?;
-    let materials = bri_client::materials::BrickMaterials::load(&content.paths.brick_materials)?;
-    let palette = bri_client::world_chunks::BrickPalette::new(&materials)?;
     let old = OldSaves::new(args[1].clone(), state.join("converted-saves"), vec![]);
     old.set_converter(Converter::new(&content)?);
     old.start();
@@ -167,24 +41,7 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     let store = Store::new(state, &content, Some(old.clone()));
-    let mut setup = Setup {
-        content,
-        weapons,
-        item_bounds,
-        vehicles,
-        meshes: BTreeMap::new(),
-        materials,
-        palette,
-    };
-    let (probe, _) = setup.session(LOADABLE_MAPS[3])?;
-    setup.meshes = probe
-        .simulation()
-        .definitions
-        .entries
-        .iter()
-        .map(|(id, d)| (id.clone(), d.mesh.clone()))
-        .collect();
-    drop(probe);
+    let setup = SaveHost::new(content)?;
 
     let entries: Vec<_> = store
         .list()?
@@ -214,7 +71,7 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
     for entry in &entries {
         let label = format!("{}/{}", entry.info.map, entry.info.name);
         let unknown = Store::read(entry)
-            .map(|b| unknown_prints(&b, &setup.materials))
+            .map(|b| setup.unknown_prints(&b))
             .unwrap_or_default();
         if !unknown.is_empty() {
             with_unknown_prints += 1;

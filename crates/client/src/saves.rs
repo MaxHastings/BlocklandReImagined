@@ -57,6 +57,15 @@ pub fn v20_save_name(stem: &str) -> Option<String> {
     let name = format!("{}.world.json", stem.trim_end_matches([' ', '.']));
     valid_name(&name).then_some(name)
 }
+/// Whether a listed save is another converted `.bls` than `source`: not
+/// a stock save, and not the same file name (in any case) in another copy
+/// of the folder.
+fn other_file(listed: &Entry, source: &Path) -> bool {
+    listed.source.as_ref().is_some_and(|listed| {
+        let stem = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+        stem(listed) != stem(source)
+    })
+}
 fn modified_date(seconds: u64) -> String {
     // Gregorian calendar in March-based 400-year eras. Fixed-width UTC text
     // keeps the existing UI's lexicographic date sort chronological.
@@ -198,8 +207,22 @@ impl Store {
                 })
             };
             let Some(old) = &self.old else { break };
+            let mut name = name;
+            let key = |name: &str| (map.to_ascii_lowercase(), name.to_ascii_lowercase());
+            // A different `.bls` already listed under this name ("House .bls"
+            // beside "house.bls"; v20 kept names ending in a space) stays
+            // listed: this one gets the next free "(2)" name. The same file
+            // found again (an old install's copy of a drop-folder save) is
+            // replaced, as is the stock save it shadows.
+            if files.get(&key(&name)).is_some_and(|e| other_file(e, &save.source)) {
+                let stem = name.trim_end_matches(".world.json").to_string();
+                name = (2..)
+                    .map(|n| format!("{stem} ({n}).world.json"))
+                    .find(|n| files.get(&key(n)).is_none_or(|e| !other_file(e, &save.source)))
+                    .context("no free save name")?;
+            }
             files.insert(
-                (map.to_ascii_lowercase(), name.to_ascii_lowercase()),
+                key(&name),
                 Entry {
                     info: SaveFileInfo {
                         name,

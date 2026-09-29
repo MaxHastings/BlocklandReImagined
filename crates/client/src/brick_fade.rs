@@ -110,7 +110,9 @@ impl BrickFades {
             fade.settled = true;
         }
     }
-    fn settle(&mut self, id: u64) {
+    /// Stop easing `id`: it is drawn at its target (a knocked-out brick:
+    /// gone at once, its debris takes its place) until the chunks take it.
+    pub fn settle(&mut self, id: u64) {
         if let Some(fade) = self.fades.get_mut(&id) {
             fade.drawn = fade.target;
             fade.settled = true;

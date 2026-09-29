@@ -47,7 +47,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// and a joiner plays once the nearby chunks are in.
 /// 59: `CueKind::Beam` and `Notice::Fov` for the modding script API.
 /// 60: client-predicted vehicles: vehicle updates carry the state to reconcile against.
-pub const VERSION: u32 = 60;
+/// 61: a passenger's turn is sent relative to their seat.
+pub const VERSION: u32 = 61;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
