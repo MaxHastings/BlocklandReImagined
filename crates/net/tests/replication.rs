@@ -33,6 +33,7 @@ fn checkpoint() -> Checkpoint {
         vehicle_poses: vec![],
         time_scale: 1.0,
         world_bricks: 0,
+        world_chunks: 0,
         broken_shapes: Default::default(),
         archetypes: Default::default(),
         entities: vec![],
@@ -505,6 +506,7 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     let Message::MapChanged(head) = codec::decode(&frames[0]).unwrap() else {
         panic!("expected the checkpoint first")
     };
+    assert_eq!(head.world_chunks, 3, "the head counts its chunks");
     let mut world = WorldAssembly::new(head).unwrap();
     let mut chunks = Vec::new();
     for frame in &frames[1..] {
@@ -529,11 +531,16 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     assert!(duplicate.add(chunks[0].clone()).is_err());
     let mut small = announced.clone();
     small.world_bricks = 1;
+    small.world_chunks = 1;
     assert!(WorldAssembly::new(small).unwrap().add(chunks[2].clone()).is_err());
     assert!(WorldAssembly::new(announced.clone()).unwrap().finish().is_err());
     let mut prefilled = announced;
     prefilled.world.bricks.insert(1, bricks[&1].clone());
     assert!(WorldAssembly::new(prefilled).is_err());
+    let mut uncounted = received.clone();
+    uncounted.world.bricks = Default::default();
+    uncounted.world_chunks = 0;
+    assert!(WorldAssembly::new(uncounted).is_err(), "bricks need chunks to carry them");
     let mut empty = checkpoint();
     empty.world_bricks = 0;
     assert!(WorldAssembly::new(empty).unwrap().complete());
