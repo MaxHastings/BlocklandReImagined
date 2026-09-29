@@ -631,6 +631,60 @@ mod tests {
     }
 
     #[test]
+    fn saves_whose_names_clash_are_each_listed_and_load_their_own_file() -> Result<()> {
+        let f = fixture();
+        // v20 kept "Afghanistan DM " (trailing space) beside "afghanistan DM";
+        // both trim to one name in any case. An old install's copy of the
+        // first is the same save, not a third.
+        for (path, bytes) in [
+            (
+                f.saves.join("Slate/Afghanistan DM .bls"),
+                bls("Spaced", &["2x2 Brick"]),
+            ),
+            (
+                f.saves.join("Slate/afghanistan DM.bls"),
+                bls("Lower", &["2x2 Brick", "1x1 Plate", "1x1 Plate"]),
+            ),
+            (
+                f.old.join("Slate/Afghanistan DM .bls"),
+                bls("Spaced", &["2x2 Brick"]),
+            ),
+        ] {
+            std::fs::write(path, bytes)?;
+        }
+        let o = OldSaves::new(f.saves.clone(), f.cache.clone(), vec![f.old.clone()]);
+        o.set_converter(Converter::bricks_only(catalog(), "a"));
+        o.sync()?;
+        let store = crate::saves::Store::for_tests(
+            f.saves.clone(),
+            [("v20/add-ons/map_slate/slate.mis".into(), "Slate".into())].into(),
+            Some(o.clone()),
+        );
+        let mut slate: Vec<_> = store
+            .list()?
+            .into_iter()
+            .filter(|e| e.info.map == "Slate")
+            .map(|e| (e.info.name, e.info.description))
+            .collect();
+        slate.sort();
+        let row = |n: &str, d: &str| (n.to_string(), d.to_string());
+        assert_eq!(
+            slate,
+            [
+                row("Afghanistan DM.world.json", "Spaced"),
+                row("House.world.json", "A house"),
+                row("afghanistan DM (2).world.json", "Lower"),
+            ]
+        );
+        assert_eq!(store.load("Slate", "Afghanistan DM.world.json")?.world.bricks.len(), 1);
+        assert_eq!(
+            store.load("Slate", "afghanistan DM (2).world.json")?.world.bricks.len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[test]
     fn background_conversion_fills_load_bricks_and_game_saves_take_precedence() -> Result<()> {
         let f = fixture();
         let o = OldSaves::new(f.saves.clone(), f.cache.clone(), vec![f.old.clone()]);
