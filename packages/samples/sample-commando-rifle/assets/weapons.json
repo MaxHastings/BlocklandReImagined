@@ -16,7 +16,7 @@
       "states": [
         { "name": "Activate", "ticks": 30, "timeout": 1, "sound": "sample-commando-rifle:equip" },
         { "name": "Ready", "down": 2 },
-        { "name": "Fire", "ticks": 48, "sound": "sample-commando-rifle:shot", "timeout": 3 },
+        { "name": "Fire", "ticks": 48, "script": "onFire", "sound": "sample-commando-rifle:shot", "timeout": 3 },
         { "name": "Hold", "up": 1 }
       ]
     }

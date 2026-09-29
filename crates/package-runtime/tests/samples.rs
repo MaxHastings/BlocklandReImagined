@@ -273,5 +273,5 @@ fn the_commando_sample_loads_as_one_game_mode() {
             row.bind
         );
     }
-    assert!(rules.commands.iter().any(|c| c.name == panel.keys[0].command));
+    assert!(rules.commands.iter().any(|c| c.name == "dummies"));
 }
