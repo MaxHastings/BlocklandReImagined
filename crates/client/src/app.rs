@@ -69,6 +69,23 @@ type WorldRender = (
         String,
     >,
 );
+/// A background job's answer: `None` while it runs, `Some(Ok(answer))` when
+/// it finished, `Some(Err(..))` when it ended without one (its thread
+/// panicked or dropped the sender). Waiting on a job that can never answer
+/// would leave its screen or slot stuck for the rest of the session.
+fn finished<T>(receiver: &mpsc::Receiver<T>, job: &str) -> Option<Result<T>> {
+    match receiver.try_recv() {
+        Ok(answer) => Some(Ok(answer)),
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            bri_console::warn(format!("{job} stopped without an answer"));
+            Some(Err(anyhow::anyhow!(
+                "{job} stopped unexpectedly; see the log"
+            )))
+        }
+    }
+}
+
 struct WorldJob {
     receiver: mpsc::Receiver<WorldRender>,
     abort: tokio::task::AbortHandle,
@@ -530,6 +547,13 @@ pub struct App {
     lan_query: Option<mpsc::Receiver<JoinList>>,
     /// Add-On import in progress: request, row id and the worker's answer.
     add_on_import: Option<(RequestId, String, mpsc::Receiver<Result<String>>)>,
+    /// The Add-On list last asked for, the list that loaded without the
+    /// Add-Ons that broke it, and why each was left out.
+    left_out_add_ons: Option<(
+        bri_package::packages::PackageSet,
+        bri_package::packages::PackageSet,
+        Vec<String>,
+    )>,
     /// The invite for the game this player hosts (`/invite` copies it).
     invite: Option<String>,
     /// The elevated firewall helper's outcome.
@@ -572,6 +596,7 @@ enum HostNotice {
 
 /// What the Join Server list found: LAN games and the saved servers, each
 /// probed over its game port.
+#[derive(Default)]
 struct JoinList {
     lan: Vec<(SocketAddr, bri_net::discovery::Beacon)>,
     saved: Vec<(
@@ -701,8 +726,22 @@ impl App {
             "Leave the game before changing Add-Ons"
         );
         let root = self.content.paths.root.clone();
-        if *set != self.content.paths.packages {
-            let content = ClientContent::load_packages(&root, set)?;
+        // An Add-On that broke loading this list before stays left out
+        // without trying it again on every host.
+        let known = self
+            .left_out_add_ons
+            .as_ref()
+            .is_some_and(|(requested, loaded, _)| {
+                requested == set && *loaded == self.content.paths.packages
+            });
+        if *set != self.content.paths.packages && !known {
+            let (content, left_out) = ClientContent::load_leaving_out_broken(&root, set)?;
+            self.left_out_add_ons = if left_out.is_empty() {
+                None
+            } else {
+                self.notify_left_out_add_ons(&left_out);
+                Some((set.clone(), content.paths.packages.clone(), left_out))
+            };
             let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
             let parts = ContentParts::build(&content, effects_pack)?;
             self.weapon_effects = parts.weapon_effects;
@@ -717,6 +756,8 @@ impl App {
             self.ui.core.pack = content.ui_pack.clone();
             self.content = content;
         }
+        // What actually loaded, less any Add-On left out above.
+        let set = &self.content.paths.packages.clone();
         let (client, problems) = crate::packages::load_set(&root, set, false);
         let (server, more) = crate::packages::load_set(&root, set, true);
         for problem in problems.iter().chain(&more) {
@@ -742,6 +783,20 @@ impl App {
         self.client_code = crate::client_code::ClientCode::load(&root, set);
         self.packages_from_tools = true;
         Ok(())
+    }
+    /// Tell the player which Add-Ons were left out and why: the game runs
+    /// without them rather than not at all.
+    fn notify_left_out_add_ons(&mut self, left_out: &[String]) {
+        for line in left_out {
+            bri_console::warn(format!("Add-On left out: {line}"));
+        }
+        self.ui.apply(UiUpdate::MessageBox {
+            title: "Add-Ons Left Out".into(),
+            text: format!(
+                "These Add-Ons could not be loaded, so the game started without them. Turn them off or fix them in Add-Ons.\n\n{}",
+                left_out.join("\n")
+            ),
+        });
     }
     /// Package HUD panels and keys from the latest replicated state.
     fn update_package_hud(&mut self) {
@@ -1303,8 +1358,9 @@ impl App {
         // cannot silently switch when the process working directory changes.
         let absolute_state_dir = std::path::absolute(state_dir)?;
         let state_dir = absolute_state_dir.as_path();
-        let content = ClientContent::load(content_root)?;
-        let mut content = content;
+        let requested = bri_package::packages::PackageSet::load_root(content_root)?;
+        let (mut content, left_out) =
+            ClientContent::load_leaving_out_broken(content_root, &requested)?;
         let old_saves = crate::old_saves::OldSaves::new(
             state_dir.join("saves"),
             state_dir.join("converted-saves"),
@@ -1400,7 +1456,7 @@ impl App {
         ui.apply(UiUpdate::MainMenuBackgrounds(backgrounds));
         let frame_limit = settings::startup_display(&ui.settings()).max_fps;
         ui.apply(UiUpdate::Version(crate::updates::version()));
-        Ok(Self {
+        let mut app = Self {
             item_assets,
             item_ui,
             world_items,
@@ -1527,6 +1583,7 @@ impl App {
             reconnects: 0,
             lan_query: None,
             add_on_import: None,
+            left_out_add_ons: None,
             invite: None,
             firewall_fix: None,
             frame_limit,
@@ -1534,7 +1591,17 @@ impl App {
             build_macro: Vec::new(),
             macro_playback: VecDeque::new(),
             combat: Default::default(),
-        })
+        };
+        if !left_out.is_empty() {
+            // Catalogs, rules and client code follow the list that loaded.
+            let loaded = app.content.paths.packages.clone();
+            app.left_out_add_ons = Some((requested.clone(), loaded, left_out.clone()));
+            if let Err(error) = app.apply_packages(&requested) {
+                bri_console::warn(format!("Add-Ons not applied: {error:#}"));
+            }
+            app.notify_left_out_add_ons(&left_out);
+        }
+        Ok(app)
     }
     fn answer(&mut self, id: RequestId, result: Result<()>) {
         self.ui.apply(UiUpdate::ActionResult {
@@ -3041,6 +3108,20 @@ impl App {
         };
         let result = result.map_err(|rejection| rejection.message);
         if pending.dialog_request && pending.dialog_epoch != self.dialog_epoch {
+            // The dialog that asked is gone, so its data is not applied, but
+            // the request is still answered: a screen left waiting on it
+            // (the print selector's pending print) would otherwise refuse
+            // every later request.
+            if let Err(reason) = &result {
+                bri_console::echo(format!("Closed dialog's request refused: {reason}"));
+            }
+            self.ui.apply_session(
+                attempt.id,
+                UiUpdate::ActionResult {
+                    id: request,
+                    result: Ok(()),
+                },
+            );
             return;
         }
         if let UiAction::Admin(action) = &pending.action {
@@ -4911,7 +4992,16 @@ impl PlatformApp for App {
             .map_or(1.0, |v| v.time_scale);
         let game_elapsed = elapsed.mul_f32(scale);
         self.animation_time += game_elapsed.as_secs_f64().min(0.25);
-        self.poll_network()?;
+        if let Err(error) = self.poll_network() {
+            // A fault while following the session (a map's weather, a tool
+            // catalog, a closed connection) ends that session with its real
+            // reason, never the whole game.
+            bri_console::warn(format!("Session ended by a client error: {error:#}"));
+            self.ui.apply(UiUpdate::Connection(ConnectionState::Failed {
+                reason: format!("{error:#}"),
+            }));
+            self.disconnect();
+        }
         self.poll_files();
         self.poll_old_saves();
         self.update_package_hud();
@@ -5248,8 +5338,9 @@ impl PlatformApp for App {
         self.update_combat_presentation();
         self.update_perf();
         if let Some((request, _, receiver)) = &self.add_on_import
-            && let Ok(result) = receiver.try_recv()
+            && let Some(result) = finished(receiver, "Add-On import")
         {
+            let result = result.and_then(|imported| imported);
             let request = *request;
             self.add_on_import = None;
             let mut view = crate::add_ons::view(&self.content.paths.root);
@@ -5266,9 +5357,11 @@ impl PlatformApp for App {
             }
         }
         if let Some(receiver) = &self.lan_query
-            && let Ok(found) = receiver.try_recv()
+            && let Some(found) = finished(receiver, "LAN query")
         {
             self.lan_query = None;
+            // A query that died finds nothing rather than spinning forever.
+            let found = found.unwrap_or_default();
             self.lan_hosts.clear();
             let mut servers = Vec::new();
             for (address, beacon) in found.lan {
@@ -5344,9 +5437,10 @@ impl PlatformApp for App {
             });
         }
         if let Some(receiver) = &self.firewall_fix
-            && let Ok(result) = receiver.try_recv()
+            && let Some(result) = finished(receiver, "Firewall fix")
         {
             self.firewall_fix = None;
+            let result = result.unwrap_or_else(|reason| Err(reason.to_string()));
             let (title, text) = match result {
                 Ok(()) => (
                     "Windows Firewall",
@@ -6064,12 +6158,16 @@ impl PlatformApp for App {
                 }
                 UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
                 UiAction::OpenSavesFolder => {
+                    // A folder that cannot be made is this request's
+                    // failure, never the whole game's.
                     let folder = self.old_saves.saves_folder();
-                    std::fs::create_dir_all(folder)?;
-                    if !bri_crash::open(&folder.to_string_lossy()) {
-                        bri_console::warn(format!("Could not open {}", folder.display()));
-                    }
-                    Ok(())
+                    std::fs::create_dir_all(folder)
+                        .with_context(|| format!("Could not create {}", folder.display()))
+                        .map(|()| {
+                            if !bri_crash::open(&folder.to_string_lossy()) {
+                                bri_console::warn(format!("Could not open {}", folder.display()));
+                            }
+                        })
                 }
                 UiAction::OpenUrl(url) => {
                     // Only web pages; the UI only ever asks for release pages.
