@@ -1806,3 +1806,46 @@ fn joins_take_a_cleaned_name_instead_of_being_refused() {
     let blank = s.join("\n".into(), Vec3::new(4., 1., 0.), false).unwrap();
     assert_eq!(s.names()[&blank], "Blockhead");
 }
+
+#[test]
+fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
+    use bri_sim::session::{Clan, MAX_CLAN_TAG, Notice};
+    let mut s = session();
+    let host = s.join("Host".into(), Vec3::Y, true).unwrap();
+    let guest = s.join("Guest".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    // Taken at join (`onConnectRequest`), as a guest with default trust.
+    let tags = Clan {
+        prefix: "[BLS] ".into(),
+        suffix: " ~".into(),
+    };
+    s.set_clan(guest, &tags).unwrap();
+    assert_eq!(s.clans()[&guest], tags);
+    assert!(!s.clans().contains_key(&host));
+    s.command(guest, 1, Command::Chat("hi".into())).unwrap();
+    let line = s.chat().last().cloned().unwrap();
+    assert_eq!((line.owner, line.name.as_str()), (guest, "Guest"));
+    assert_eq!(line.clan, tags);
+
+    // Avatar screen Done: colour escapes and control characters dropped,
+    // cut like a name, the player told once.
+    let _ = s.take_private_notices();
+    let wanted = Clan {
+        prefix: format!("\u{e003}\n{}", "é".repeat(40)),
+        suffix: String::new(),
+    };
+    s.command(guest, 2, Command::SetClan(wanted.clone())).unwrap();
+    let taken = &s.clans()[&guest];
+    assert_eq!(taken.prefix, "é".repeat(MAX_CLAN_TAG / 2));
+    assert_eq!(taken.suffix, "");
+    let told = |s: &mut bri_sim::session::Session| {
+        s.take_private_notices().iter().any(|(owner, notice)| {
+            *owner == guest && matches!(notice, Notice::Chat(text) if text.contains("clan tags"))
+        })
+    };
+    assert!(told(&mut s));
+    s.command(guest, 3, Command::SetClan(wanted)).unwrap();
+    assert!(!told(&mut s), "the same tags again change nothing");
+    // Clearing both tags leaves the name bare.
+    s.command(guest, 4, Command::SetClan(Clan::default())).unwrap();
+    assert!(!s.clans().contains_key(&guest));
+}

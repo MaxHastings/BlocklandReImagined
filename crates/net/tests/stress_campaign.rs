@@ -131,6 +131,7 @@ async fn raw_join(server: &server::ServerHandle, name: &str) -> Result<RawPeer> 
     let hello = Hello {
         version: VERSION,
         name: name.into(),
+        clan: Default::default(),
         packages: Vec::new(),
         resume: None,
         host: None,

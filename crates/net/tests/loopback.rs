@@ -1954,6 +1954,7 @@ fn hello_for_proof(name: &str) -> Hello {
     Hello {
         version: VERSION,
         name: name.into(),
+        clan: Default::default(),
         packages: Vec::new(),
         resume: None,
         host: None,
@@ -2892,6 +2893,77 @@ async fn given_ranks_follow_the_key_back_in_after_reconnecting() -> Result<()> {
     for client in [host, back, stranger] {
         client.close();
     }
+    server.stop().await?;
+    Ok(())
+}
+
+/// The Avatar screen's clan tags reach every chat line, for the host's own
+/// player (single player and hosting join this way) and for a guest with
+/// default trust, and Avatar Done changes them while connected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
+    use bri_net::protocol::JoinName;
+    use bri_sim::session::Clan;
+    let server = server::start(session(), options())?;
+    let dir = tempfile::tempdir()?;
+    let join = |name: &str, prefix: &str, suffix: &str| JoinName {
+        name: name.into(),
+        clan: Clan {
+            prefix: prefix.into(),
+            suffix: suffix.into(),
+        },
+    };
+    let host_identity = ClientIdentity::load_or_create(dir.path().join("host.identity"))?;
+    let mut host = Client::connect_reporting(
+        server.address,
+        &server.certificate,
+        join("Host", "[H] ", ""),
+        Vec::new(),
+        None,
+        Some(server.host_token.clone()),
+        &host_identity,
+        bri_progress::Progress::default(),
+    )
+    .await?;
+    let guest_identity = ClientIdentity::load_or_create(dir.path().join("guest.identity"))?;
+    let mut guest = Client::connect_reporting(
+        server.address,
+        &server.certificate,
+        // Colour escapes and newlines are dropped, as from a name.
+        join("Guest", "\u{e003}[G]\n", " ~"),
+        Vec::new(),
+        None,
+        None,
+        &guest_identity,
+        bri_progress::Progress::default(),
+    )
+    .await?;
+    let said = |client: &Client, name: &str, text: &str| {
+        client
+            .replica
+            .chat
+            .iter()
+            .find(|l| l.name == name && l.text == text)
+            .map(|l| l.clan.clone())
+    };
+    host.command(Command::Chat("hello".into())).await?;
+    guest.command(Command::Chat("hi".into())).await?;
+    wait(&mut host, move |c| said(c, "Guest", "hi").is_some()).await?;
+    wait(&mut guest, move |c| said(c, "Host", "hello").is_some()).await?;
+    assert_eq!(said(&guest, "Host", "hello"), Some(join("", "[H] ", "").clan));
+    assert_eq!(said(&host, "Guest", "hi"), Some(join("", "[G]", " ~").clan));
+
+    // Avatar Done while connected sends the new tags.
+    guest
+        .command(Command::SetClan(Clan {
+            prefix: String::new(),
+            suffix: " [new]".into(),
+        }))
+        .await?;
+    guest.command(Command::Chat("again".into())).await?;
+    wait(&mut host, move |c| said(c, "Guest", "again").is_some()).await?;
+    assert_eq!(said(&host, "Guest", "again"), Some(join("", "", " [new]").clan));
+    drop((host, guest));
     server.stop().await?;
     Ok(())
 }

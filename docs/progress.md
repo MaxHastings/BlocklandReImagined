@@ -4643,47 +4643,6 @@ know it). Evidence: `cargo test -p bri-client --lib` (192 passed) and
 tilt 0.261; turret feet + 0.85 + 2.3; the Tank gunner resolves
 `TankTurretPlayer`); clippy on bri-client. Not seen in a window: Max's
 playtest riding a horse and gunning a Tank in third person.
-## 2026-09-28 Bug-pattern sweep, cloud part (branch `claude/bug-pattern-sweep-h0v7ns`)
-
-Max asked for the common pattern behind his recent reports and how to catch
-the next ones first. The five patterns, the checks that now enforce them and
-the hard-stop audit are in `docs/audits/bug-patterns.md`. In short: screens
-and the server disagreeing, guessed v20 rules locked in by tests, testing
-only as the host, hard stops instead of fallbacks, and missing budgets.
-
-Fixed: UI requests have deadlines and screens can back out while sending;
-client background jobs, network errors and a broken Add-On no longer close
-the game (the Add-On is left out with a message); a panicking host request
-or step is answered and logged and the host keeps going (fuse: 8 a minute,
-then stop with autosave); map load and per-player placement failures are
-reported instead of failing the host or the map change; weapon updates over
-the wire limits carry over; four overflow or unwrap panics. Event jobs now
-share their compiled row, action and output, so an administrator's
-zero-delay loop costs about 6 ms a tick instead of 24 ms (release, fuzzer's
-worst seed), and the host logs event notes, rate-limited.
-
-Evidence: new `command_fuzz` (every `Command` variant, damaged, as guest and
-host; 256 cases) and `event_fuzz` (random catalog programs, 32 ms tick
-budget in release) in `bri-chaos`; unit tests for the UI deadline, wrench
-Escape, the panic fuse and the weapon clamp; `cargo test` and clippy
-`-D warnings` on bri-ui, bri-net, bri-sim, bri-events, bri-package-runtime,
-bri-client and bri-chaos. Content-backed test
-`a_broken_add_on_is_left_out_instead_of_stopping_the_game` runs only on the
-PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
-Bricks, poisoned admin store. Next: the PC part (real-screen harness as
-single player, host and guest; v20 behaviour audit).
-
-Round 2 (same branch): names are cleaned instead of refused; a damaged
-admin store is set aside and the host starts; an unconfirmed admin save no
-longer stops the host; each owner's events get 4096 rows and 4 ms per tick
-(8 ms for everyone) through `EventWorld::advance_within`; the client network
-worker fails a single slow request instead of disconnecting. Evidence:
-`joins_take_a_cleaned_name_instead_of_being_refused`,
-`missing_store_is_initialized_and_a_damaged_one_is_set_aside`,
-`one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run`,
-`a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase`,
-`a_slow_or_lost_answer_costs_its_request_not_the_connection`; event fuzzer
-48 cases in release pass the 32 ms tick budget.
 ## 2026-09-28 Local body and held item no longer shake while looking around (branch `claude/project-thread-j5cwjx`)
 
 Max: turning the view, the camera was smooth but his own body (third person)
@@ -4799,3 +4758,35 @@ bri-client and bri-chaos. Content-backed test
 PC gate. Routed to other lanes: name length refusal, all-or-nothing Load
 Bricks, poisoned admin store. Next: the PC part (real-screen harness as
 single player, host and guest; v20 behaviour audit).
+
+Round 2 (same branch): names are cleaned instead of refused; a damaged
+admin store is set aside and the host starts; an unconfirmed admin save no
+longer stops the host; each owner's events get 4096 rows and 4 ms per tick
+(8 ms for everyone) through `EventWorld::advance_within`; the client network
+worker fails a single slow request instead of disconnecting. Evidence:
+`joins_take_a_cleaned_name_instead_of_being_refused`,
+`missing_store_is_initialized_and_a_damaged_one_is_set_aside`,
+`one_owners_zero_delay_loop_stops_at_its_share_and_others_still_run`,
+`a_time_budget_stops_slow_rows_and_keeps_their_order_for_the_next_phase`,
+`a_slow_or_lost_answer_costs_its_request_not_the_connection`; event fuzzer
+48 cases in release pass the 32 ms tick budget.
+
+Round 3 (same branch): clan tags and the double name prompt. The Avatar
+screen's clan prefix and suffix now join with the name (`Hello::clan`, as
+v20's `GameConnection::onConnectRequest` takes `%clanPrefix` and
+`%clanSuffix`) and change on Avatar Done while connected
+(`Command::SetClan`). The host cleans them like names (control characters
+and colour escapes dropped, cut to 48 bytes on a character boundary, the
+player told) and every chat and team chat line shows them grey around the
+yellow name, `serverCmdMessageSent`'s `'\c7%1\c3%2\c7%3\c6: %4'`.
+Kill messages, name tags and the player list keep the bare name (inferred:
+only the chat format is cited so far; the PC's v20 audit can widen it).
+Protocol 54 (Gate renumbers). A fresh install asked for its name
+twice (a "Your Name" message, then Choose Name); `Core::name_prompt` now
+opens Choose Name once per run and the message is gone. Evidence:
+`clan_tags_are_cleaned_and_carried_on_chat_lines` (sim),
+`clan_tags_from_the_join_and_avatar_done_reach_chat` (net, host and guest
+over QUIC), `chat_lines_carry_v20_colors` (client),
+`first_run_offers_the_tutorial_then_asks_for_a_name_once` (UI screens);
+content-backed on the PC gate: `avatar_clan_tags_show_in_chat_as_single_player_and_guest`
+and `first_open_asks_for_a_name_once`.

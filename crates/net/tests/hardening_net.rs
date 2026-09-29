@@ -124,6 +124,7 @@ fn hello(name: &str) -> Hello {
     Hello {
         version: VERSION,
         name: name.into(),
+        clan: Default::default(),
         packages: Vec::new(),
         resume: None,
         host: None,

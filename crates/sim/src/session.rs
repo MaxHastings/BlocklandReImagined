@@ -87,6 +87,35 @@ fn name_note(raw: &str, name: &str) -> Option<String> {
         Some(format!("Your name was changed to {name}."))
     }
 }
+/// Longest clan prefix or suffix, in bytes: the same limit as a name.
+pub const MAX_CLAN_TAG: usize = MAX_PLAYER_NAME;
+/// A player's clan tags, shown around their name as v20 does.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clan {
+    pub prefix: String,
+    pub suffix: String,
+}
+impl Clan {
+    /// The tags as typed, cleaned like names: control characters and color
+    /// escapes dropped, cut to `MAX_CLAN_TAG` bytes on a character
+    /// boundary. Unlike a name, a tag may be empty and keeps its spaces.
+    pub fn cleaned(&self) -> Self {
+        Self {
+            prefix: clean_clan_tag(&self.prefix),
+            suffix: clean_clan_tag(&self.suffix),
+        }
+    }
+}
+fn clean_clan_tag(raw: &str) -> String {
+    let mut tag: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
+        .collect();
+    while tag.len() > MAX_CLAN_TAG {
+        tag.pop();
+    }
+    tag
+}
 /// `raw` for the host's log: escaped and cut short.
 fn logged_name(raw: &str) -> String {
     let mut shown: String = raw.chars().take(64).collect();
@@ -262,6 +291,9 @@ pub enum Command {
     /// Avatar screen Done while connected: take this name now. v20 only
     /// applied `$pref::Player::LANName` on the next join.
     SetName(String),
+    /// Avatar screen Done while connected: take these clan tags now, as
+    /// `SetName` does the name. The join carries them first.
+    SetClan(Clan),
 }
 
 /// What a command needs of its sender, checked once before dispatch.
@@ -323,7 +355,8 @@ impl Command {
             | Command::Emote(_)
             | Command::Talking(_)
             | Command::SteeringPrefs { .. }
-            | Command::SetName(_) => (false, None),
+            | Command::SetName(_)
+            | Command::SetClan(_) => (false, None),
         };
         Preconditions { alive, build }
     }
@@ -419,6 +452,10 @@ pub struct ChatLine {
     pub id: u64,
     pub owner: OwnerId,
     pub name: String,
+    /// The sender's clan tags when they said it (`serverCmdMessageSent`'s
+    /// `%1` and `%3`).
+    #[serde(default)]
+    pub clan: Clan,
     pub text: String,
     pub tick: u64,
     pub tag: Option<MessageTag>,
@@ -485,6 +522,7 @@ struct Peer {
     player: Player,
     actor: Actor,
     name: String,
+    clan: Clan,
     principal: Option<bri_admin::Principal>,
     /// Last consumed input; its look angles persist while the queue is empty.
     input: MoveInput,
@@ -844,6 +882,40 @@ impl Session {
             .find(|candidate| !taken(candidate))
             .unwrap_or_else(|| wanted.to_string())
     }
+    /// A player's clan tags: from their join, then from Avatar screen Done.
+    pub fn set_clan(&mut self, owner: OwnerId, wanted: &Clan) -> Result<()> {
+        let clan = wanted.cleaned();
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        if peer.clan == clan {
+            return Ok(());
+        }
+        peer.clan = clan.clone();
+        if clan != *wanted {
+            eprintln!(
+                "Player {owner}: clan tags {} {} taken as {:?} {:?}",
+                logged_name(&wanted.prefix),
+                logged_name(&wanted.suffix),
+                clan.prefix,
+                clan.suffix
+            );
+            self.private_chat(
+                owner,
+                format!(
+                    "Your clan tags were shortened to \"{}\" and \"{}\".",
+                    clan.prefix, clan.suffix
+                ),
+            );
+        }
+        Ok(())
+    }
+    /// Every connected player's clan tags, for those who have any.
+    pub fn clans(&self) -> BTreeMap<OwnerId, Clan> {
+        self.peers
+            .iter()
+            .filter(|(_, p)| p.clan != Clan::default())
+            .map(|(id, p)| (*id, p.clan.clone()))
+            .collect()
+    }
     /// A connected player changed their name (Avatar screen Done).
     fn rename(&mut self, owner: OwnerId, wanted: &str) -> Result<()> {
         self.peers.get(&owner).context("Unknown connection")?;
@@ -975,6 +1047,7 @@ impl Session {
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
+                clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
@@ -1180,6 +1253,7 @@ impl Session {
                 input: MoveInput::default(),
                 inputs: VecDeque::new(),
                 processed_move: 0,
+                clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
                 last_move_sequence: 0,
@@ -1569,11 +1643,12 @@ impl Session {
                 );
                 peer.talking = false;
                 let name = peer.name.clone();
+                let clan = peer.clan.clone();
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
                 }
                 self.start_talking(tick, owner, text.len());
-                self.team_chat(owner, &name, &text)?;
+                self.team_chat(owner, &name, &clan, &text)?;
                 Ok(Reply::Accepted)
             }
             Command::DropPlayerAtCamera(view) => {
@@ -1676,6 +1751,10 @@ impl Session {
             }
             Command::SetName(name) => {
                 self.rename(owner, &name)?;
+                Ok(Reply::Accepted)
+            }
+            Command::SetClan(clan) => {
+                self.set_clan(owner, &clan)?;
                 Ok(Reply::Accepted)
             }
             Command::Plant {
@@ -1828,6 +1907,7 @@ impl Session {
                     .collect();
                 peer.talking = false;
                 let name = peer.name.clone();
+                let clan = peer.clan.clone();
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
                 }
@@ -1840,6 +1920,7 @@ impl Session {
                     id: self.next_chat,
                     owner,
                     name,
+                    clan,
                     text,
                     tick,
                     tag: None,

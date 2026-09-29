@@ -98,6 +98,13 @@ host, sim, events and package runtime. Fixed here unless marked routed.
 | Administrator's zero-delay event loops | only the engine's per-tick limits | each owner at most 4096 rows and 4 ms a tick, everyone 8 ms; the rest waits in order; the owner is logged |
 | Client network worker | a request over 10 s, 64 waiting, or a late answer dropped the connection | that request fails after 200 s, the 65th is refused alone, a late answer is logged and dropped |
 
+### Round 3 (fixed; found by the PC sweep)
+
+| Where | Was | Now |
+|---|---|---|
+| Avatar screen clan prefix and suffix | saved, never sent; the host ignored them | sent at join and on Done in game, cleaned like names, shown around the name in chat as v20's `serverCmdMessageSent` does |
+| Fresh install | asked for the name twice ("Your Name" message, then Choose Name) | Choose Name once per run |
+
 ### Routed to the lanes that own them
 
 - **Brick load lane:** Load Bricks stops at a bad brick with a message (its

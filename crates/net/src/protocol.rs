@@ -35,7 +35,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 52: admin ranks (`/admin`, `/superAdmin`, `/deAdmin`) in the admin
 /// messages and the Player List.
 /// 53: `CueKind::BrickKill::cause`: tool kills hop and fall like v20.
-pub const VERSION: u32 = 53;
+/// 54: `Hello::clan` and `Command::SetClan`: clan prefix and suffix from the Avatar screen.
+pub const VERSION: u32 = 54;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -98,6 +99,30 @@ pub struct Hello {
     /// the player in without it rather than refusing again.
     #[serde(default)]
     pub accept_differences: bool,
+    /// `$Pref::Player::ClanPrefix` and `ClanSuffix`, which v20's
+    /// `GameConnection::onConnectRequest` receives beside the name. The
+    /// host cleans them like names (`Clan::cleaned`).
+    #[serde(default)]
+    pub clan: bri_sim::session::Clan,
+}
+/// The name a client joins as: its player name and clan tags.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JoinName {
+    pub name: String,
+    pub clan: bri_sim::session::Clan,
+}
+impl From<String> for JoinName {
+    fn from(name: String) -> Self {
+        Self {
+            name,
+            clan: Default::default(),
+        }
+    }
+}
+impl From<&str> for JoinName {
+    fn from(name: &str) -> Self {
+        name.to_string().into()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,6 +214,10 @@ impl Hello {
         // The host cleans and shortens the name (`clean_player_name`); only
         // a name no client would send is refused.
         anyhow::ensure!(self.name.len() <= MAX_HELLO_NAME, "Invalid player name");
+        anyhow::ensure!(
+            self.clan.prefix.len() <= MAX_HELLO_NAME && self.clan.suffix.len() <= MAX_HELLO_NAME,
+            "Invalid clan tags"
+        );
         bri_package::environment::Environment::validate_refs(&self.packages)
             .map_err(|e| anyhow::anyhow!("Invalid package list: {e}"))?;
         if let Some(proof) = &self.identity {
@@ -213,6 +242,8 @@ pub fn identity_transcript(
     transcript.extend_from_slice(challenge);
     transcript.extend_from_slice(server_fingerprint);
     append_text(&mut transcript, &hello.name)?;
+    append_text(&mut transcript, &hello.clan.prefix)?;
+    append_text(&mut transcript, &hello.clan.suffix)?;
     // Binds the claimed package set into the signed join context.
     transcript.extend_from_slice(&<sha2::Sha256 as sha2::Digest>::digest(
         rmp_serde::to_vec(&hello.packages)?,

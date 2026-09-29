@@ -2202,8 +2202,14 @@ impl App {
             self.ui.core.game(GameAction::UseLight);
         }
     }
-    fn player_name(&self) -> String {
-        player_name(&self.ui.settings().avatar)
+    /// The name and clan tags a join sends (`onConnectRequest`'s name,
+    /// `$Pref::Player::ClanPrefix` and `ClanSuffix`).
+    fn join_name(&self) -> bri_net::protocol::JoinName {
+        let avatar = &self.ui.settings().avatar;
+        bri_net::protocol::JoinName {
+            name: player_name(avatar),
+            clan: clan(avatar),
+        }
     }
     /// Game start: ask for a name once while it is still the stock "Blockhead".
     /// A first run asks after its controls and welcome questions instead
@@ -2224,6 +2230,12 @@ impl App {
             && let Some(a) = self.attempt.as_mut().filter(|a| a.entered)
         {
             let _ = a.worker.request(REPORT_REQUEST, Command::SetName(name));
+        }
+        // The host ignores tags it already has, so Done sends them each time.
+        if let Some(a) = self.attempt.as_mut().filter(|a| a.entered) {
+            let _ = a
+                .worker
+                .request(REPORT_REQUEST, Command::SetClan(clan(prefs)));
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -2307,7 +2319,7 @@ impl App {
             .map(|(id, _)| id.as_str())
             .collect();
         catalog.sounds.retain(|id| !off.contains(id.as_str()));
-        let player = self.player_name();
+        let player = self.join_name();
         let local_name = if name.trim().is_empty() {
             "Blockland ReImagined".into()
         } else {
@@ -2685,7 +2697,7 @@ impl App {
         let lan_hosts = self.lan_hosts.clone();
         let paths = self.content.paths.clone();
         let light_cache = self.state_dir.join("light-volumes");
-        let player = self.player_name();
+        let player = self.join_name();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
@@ -4199,7 +4211,7 @@ impl App {
                     let text = if line.owner == 0 {
                         server_markup(&line.text)
                     } else {
-                        player_chat(&line.name, &line.text)
+                        player_chat(&line.clan, &line.name, &line.text)
                     };
                     self.ui.apply_session(a.id, UiUpdate::Chat { text });
                     a.last_chat = line.id;
@@ -4551,12 +4563,14 @@ fn trust_question(prompt: &bri_client_sandbox::TrustPrompt) -> bri_ui::api::Ques
     }
 }
 /// `serverCmdMessageSent`: `'\c7%1\c3%2\c7%3\c6: %4'` with the clan
-/// prefix, name and clan suffix (no clan tags yet), so the name is yellow
-/// and the message white.
-fn player_chat(name: &str, text: &str) -> String {
+/// prefix, name and clan suffix, so the tags are grey, the name yellow and
+/// the message white.
+fn player_chat(clan: &bri_sim::session::Clan, name: &str, text: &str) -> String {
     format!(
-        "\u{E007}\u{E003}{}\u{E007}\u{E006}: {}",
+        "\u{E007}{}\u{E003}{}\u{E007}{}\u{E006}: {}",
+        plain_chat(&clan.prefix),
         plain_chat(name),
+        plain_chat(&clan.suffix),
         plain_chat(text)
     )
 }
@@ -7571,6 +7585,14 @@ impl PlatformApp for App {
 fn player_name(prefs: &AvatarPrefs) -> String {
     bri_sim::session::clean_player_name(&prefs.lan_name)
 }
+/// The Avatar screen's clan tags, as the host will clean them.
+fn clan(prefs: &AvatarPrefs) -> bri_sim::session::Clan {
+    bri_sim::session::Clan {
+        prefix: prefs.clan_prefix.clone(),
+        suffix: prefs.clan_suffix.clone(),
+    }
+    .cleaned()
+}
 /// Wait for every future (a small join_all, to avoid a dependency).
 async fn futures_join_all<F: std::future::Future + Send + 'static>(
     futures: impl IntoIterator<Item = F>,
@@ -8253,8 +8275,17 @@ mod tests {
     fn chat_lines_carry_v20_colors() {
         // `'\c7%1\c3%2\c7%3\c6: %4'`: the name is yellow, the text white.
         assert_eq!(
-            super::player_chat("Max", "hi \u{e003}<b>"),
+            super::player_chat(&Default::default(), "Max", "hi \u{e003}<b>"),
             "\u{e007}\u{e003}Max\u{e007}\u{e006}: hi ‹b›"
+        );
+        // Clan tags sit grey around the name, stripped of colour escapes.
+        let clan = bri_sim::session::Clan {
+            prefix: "[BLS\u{e003}] ".into(),
+            suffix: " ~".into(),
+        };
+        assert_eq!(
+            super::player_chat(&clan, "Max", "hi"),
+            "\u{e007}[BLS] \u{e003}Max\u{e007} ~\u{e006}: hi"
         );
         // Colour escapes survive on both sides of a death icon.
         assert_eq!(
