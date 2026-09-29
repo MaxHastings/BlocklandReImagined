@@ -12,7 +12,7 @@ pub const CAPABILITIES: &[&str] = &[
     "player",
     "build",
     "physics",
-    "sound",
+    "effects",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -28,15 +28,17 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Send chat lines to players, and print text on their screens.
         "chat" => "send chat messages and put text on players' screens",
         // Move players, respawn them, change their body, hand them an
-        // entity to drive, give them an item or ammo, or reload their gun.
-        "player" => "move and respawn players, change their bodies and give them items and ammo",
+        // entity to drive, give them an item or ammo, change what they hold
+        // or how wide they see.
+        "player" => "move and respawn players, change their bodies and view, and give them items and ammo",
         // Copy a build for a player to place under the plant rules.
         "build" => "copy builds for players to place again",
         // Push, hold and throw players, vehicles and entities (within the
         // minigame and trust rules), and spawn its own vehicles.
         "physics" => "grab, push and throw players and vehicles, and spawn its own vehicles",
-        // Play sounds in the world or to one player.
-        "sound" => "play sounds",
+        // Presentation only: sounds in the world or to one player, beams,
+        // and animations on players. Nothing here changes the game.
+        "effects" => "play sounds and show effects",
         _ => return None,
     })
 }

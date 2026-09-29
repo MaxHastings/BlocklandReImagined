@@ -151,20 +151,68 @@ HUD panels can only show keys the viewer receives. `persist` (default
 |---|---|---|
 | `tick()`, `seed()`, `caller()` | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
 | `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
-| `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(p, amount)`, `explode(...)`: `damage` |
+| `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`: `build` |
 | | | `push`, `tumble`, `hold`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`: `sound` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`: `effects` |
+
+Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
+lists what each v20 call you know became here, and what is not here yet.
 
 A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
 unit direction they look), `vx`, `vy`, `vz`, `item` (the id of the item
 in their hand, or `""`), `minigame` (its id, or `()` outside one),
-`health`, `max_health`, `archetype` and `crouched`.
+`health`, `max_health`, `archetype`, `crouched`, `mounted` (seated on a
+vehicle or riding a player), `scale`, `cx`, `cy`, `cz` (the middle of the
+body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
+`()`), `image` (the image in their hand, or `""`) and `image_state` (the
+name of that image's state, such as `"Ready"`).
+
+**Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
+first thing a ray meets, now, as the script runs: a map with `kind`
+(`"player"`, `"vehicle"`, `"entity"`, `"brick"` or `"map"`), `id` (`()` for
+the map), `ref` (an object like `"player:3"`, for players, vehicles and
+entities), `x`, `y`, `z`, the surface normal `nx`, `ny`, `nz`, and
+`distance`; or `()` when it meets nothing. Rays reach up to 2000 units and
+a call casts at most 64. A fourth argument names a player whose body the
+ray passes through, usually the shooter: `raycast(eye, look, 200.0, p.id)`.
+Rays see the world as it was when the call began: a brick the same call
+removes still stops them. `can_damage(by, target)` asks the minigame
+rules whether player `by` may hurt `target` (a player id or an object),
+the same answer the engine's own weapons get. `damage` hurts whatever you
+name, a player id or an object, whatever the rules say, so ask first when
+a player's shot should obey them. Give `damage` a type from your weapons
+pack (`"CommandoRifle"` or `"$DamageType::CommandoRifle"`) to use its kill
+message, vehicle scale and whether it is a direct hit, as a projectile of that
+type would; without one the damage is your Add-On's own.
+
+**Held images.** `mount_image(p, image)` puts another image of your
+weapons (or a dependency's) in the player's hand and keeps their tool
+slot: a scope over a rifle, a second fire mode. `mount_image(p, ())` puts
+the selected tool's own image back. `set_image_ammo(p, false)` tells the
+held image it is out of ammo, so its states' `no_ammo` transitions run;
+`true` gives it back. A magazine is then a player state key your rule
+counts down. `set_fov(p, fov)` sets the player's field of view (5 to 120
+degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
+and the zoom key still work on top of it.
+
+**Effects** (`effects`) change nothing in the game and are sent once, like
+a sound. `beam(from, to)` draws a straight beam for a moment: a tracer, a
+laser, a bolt. Options go in a map, `beam(from, to, #{ color: [1.0, 0.8,
+0.4], width: 0.05, seconds: 0.1, muzzle: p.id })`: `color` is `[r, g, b]`
+or `[r, g, b, a]` from 0 to 1, `width` up to 16 units, `seconds` up to 10,
+and `muzzle` starts it at that player's gun muzzle as each player draws it.
+The beam thins and fades out over its life. `play_thread(p, thread,
+sequence)` plays one of the body's animations: thread 3 a gesture any time
+(`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
+Prints, sounds, beams and animations share one allowance of 64 a second
+per Add-On.
 
 `fire(projectile, x, y, z, vx, vy, vz)` launches a projectile of your
 Add-On's weapons, or of an Add-On it depends on, from a point at a
@@ -287,9 +335,9 @@ The fields you are most likely to change:
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
-The engine has no idea of clips, magazines or reloads, and has no seam
-for them yet (see [total-conversion.md](../audits/total-conversion.md),
-"Future work"). The
+The engine has no idea of clips, magazines or reloads: a rule builds them
+from a player state key, `set_image_ammo` and image commands (section 3,
+"Held images"), and the light key can reload (below). The
 [Commando rifle](../../packages/samples/sample-commando-rifle/assets/weapons.json)
 is a plain scoped rifle: raise it, fire, let go, fire again.
 
@@ -309,6 +357,10 @@ More moments can run commands through the image's `commands`:
   "jet": "gravity-gun:grab"
 }
 ```
+
+`"light": "your-rule:reload"` there runs when the holder presses the light
+key with the image in hand, instead of turning on their light, as v20
+Add-Ons did by packaging `serverCmdLight`.
 
 `states` maps a state's `script` (lowercase) to a command, run as the
 image enters that state: a state with `"down"` to a charging state whose

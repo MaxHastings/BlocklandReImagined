@@ -230,7 +230,8 @@ impl ClientAudio {
         let key = match &cue.kind {
             CueKind::WeaponEffect { .. }
             | CueKind::WeaponAnimation { .. }
-            | CueKind::WeaponShell { .. } => return,
+            | CueKind::WeaponShell { .. }
+            | CueKind::Beam { .. } => return,
             CueKind::WeaponSound { profile } => {
                 // A looping state sound belongs to the state, not to its
                 // entry; `sync_image_loops` owns it.

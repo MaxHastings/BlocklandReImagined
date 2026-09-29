@@ -107,14 +107,25 @@ none, with one undo entry), the physics operations (capability `physics`),
 `heal` and `fire` (capability `damage`: `fire` launches a projectile of
 the package's weapons or a dependency's, 240 a second), `center_print`
 and `bottom_print`
-(capability `chat`), and `play_sound` and `sound_at` (capability
-`sound`). `set_block_state(brick,
+(capability `chat`), `set_fov`, `set_image_ammo` and `mount_image`
+(capability `player`), and `play_sound`, `sound_at`, `beam` and
+`play_thread` (capability `effects`: presentation only, each one cue
+within the package's cue allowance). `damage` takes a player or any
+object and an optional weapons-pack damage type. `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its
 block's declared states; the state is a field of the brick
 (`Brick::look`), so it replicates and saves with the world. `aim()` reports
 the aimed brick's `block` and `state`. `control(player, entity)` hands a player's
 movement to one of the package's own entities, `release(player)` hands it
 back (capability `player`; see `docs/player-simulation.md`).
+
+Two questions read the live world during a call instead of the snapshot:
+`raycast` (the weapons' own sweep, at most 64 rays of 2000 units per call)
+and `can_damage` (the minigame damage policy). They need no capability,
+like every read. The session hands the runtime a `script::World` for the
+call; `Runtime::call` takes `&self` and enforces the operation budget in
+the engine's progress callback, so the session is only borrowed for
+reading while a script runs. Chunk generation passes no world.
 
 Every operation passes **`ops::authorize`**, the single capability gate:
 bounds first (`op.bounds`), then the capability the manifest declares

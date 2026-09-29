@@ -16,6 +16,16 @@ pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 pub const PLAYER_MASS: f32 = 90.0;
 /// Farthest ahead of a player's eye a held object may float.
 pub const MAX_HOLD_DISTANCE: f32 = 32.0;
+/// Longest ray `raycast` casts, and longest `beam`, in units.
+pub const MAX_RAY_RANGE: f32 = 2000.0;
+/// Rays one script call may cast.
+pub const MAX_RAYS_PER_CALL: usize = 64;
+/// The field of view `set_fov` may give, degrees (Torque's player camera
+/// `cameraMinFov` and `cameraMaxFov`).
+pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
+/// Widest `beam`, units, and longest it lasts, seconds.
+pub const MAX_BEAM_WIDTH: f32 = 16.0;
+pub const MAX_BEAM_SECONDS: f32 = 10.0;
 
 /// Something in the world that moves: a player, a vehicle (any loose
 /// physics body: cars, balls, tumbling bodies) or a package entity.
@@ -80,11 +90,16 @@ pub enum Op {
         damage: f32,
         brick_radius: f32,
     },
-    /// Damage a player; `by` is the player credited if it kills.
-    DamagePlayer {
-        player: u64,
+    /// Damage a player, vehicle or entity (`%obj.damage`). `by` is the
+    /// player credited; `damage_type` names a weapons pack damage type (its
+    /// kill message, vehicle scale and whether it is a direct hit), or the
+    /// package itself when `None`. Scripts decide who may be hurt; they ask
+    /// the minigame rules with `can_damage`.
+    Damage {
+        target: ObjectRef,
         amount: f32,
         by: Option<u64>,
+        damage_type: Option<String>,
     },
     /// Move a living player, keeping their facing.
     Teleport {
@@ -232,6 +247,43 @@ pub enum Op {
         profile: String,
         at: SoundAt,
     },
+    /// A straight beam from `from` to `to` for `seconds`, fading out: a
+    /// tracer, a laser, a bolt. With `muzzle`, clients start it at that
+    /// player's held muzzle as they draw it. Presentation only.
+    Beam {
+        from: [f32; 3],
+        to: [f32; 3],
+        color: [f32; 4],
+        width: f32,
+        seconds: f32,
+        muzzle: Option<u64>,
+    },
+    /// Play an animation on a player's body (`playThread`): thread 2 the
+    /// arms with what they hold, thread 3 a gesture; `root` stops it.
+    PlayThread {
+        player: u64,
+        thread: u8,
+        sequence: String,
+    },
+    /// Set a player's field of view (`setControlCameraFov`), or hand it back
+    /// to their own setting with `None`.
+    SetFov {
+        player: u64,
+        fov: Option<f32>,
+    },
+    /// Whether the image in a player's hand has ammo (`setImageAmmo`), which
+    /// its states' `ammo` transitions read.
+    SetImageAmmo {
+        player: u64,
+        ammo: bool,
+    },
+    /// Put another image in a player's hand, keeping their tool slot
+    /// (`mountImage`): a scope, a second fire mode. `None` puts back the
+    /// selected tool's own image.
+    MountImage {
+        player: u64,
+        image: Option<String>,
+    },
 }
 /// Where [`Op::Sound`] plays.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -250,7 +302,7 @@ impl Op {
                 "world.edit"
             }
             Self::Explode { .. }
-            | Self::DamagePlayer { .. }
+            | Self::Damage { .. }
             | Self::Heal { .. }
             | Self::Fire { .. } => "damage",
             Self::SpawnEntity { .. }
@@ -258,13 +310,16 @@ impl Op {
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
             Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } => "chat",
-            Self::Sound { .. } => "sound",
+            Self::Sound { .. } | Self::Beam { .. } | Self::PlayThread { .. } => "effects",
             Self::CopyBuild { .. } => "build",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
             | Self::Control { .. }
-            | Self::GiveItem { .. } => "player",
+            | Self::GiveItem { .. }
+            | Self::SetFov { .. }
+            | Self::SetImageAmmo { .. }
+            | Self::MountImage { .. } => "player",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
@@ -283,7 +338,8 @@ impl Op {
             Self::RemoveBrick { .. }
             | Self::RemoveEntity { .. }
             | Self::Respawn { .. }
-            | Self::Control { .. } => true,
+            | Self::Control { .. }
+            | Self::SetImageAmmo { .. } => true,
             Self::Teleport { position, .. } => finite(position),
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
@@ -312,9 +368,51 @@ impl Op {
                     && (0.0..=1000.0).contains(damage)
                     && (0.0..=16.0).contains(brick_radius)
             }
-            Self::DamagePlayer { amount, .. } => {
-                amount.is_finite() && (0.0..=1000.0).contains(amount)
+            Self::Damage {
+                amount,
+                damage_type,
+                ..
+            } => {
+                amount.is_finite()
+                    && (0.0..=1000.0).contains(amount)
+                    && damage_type.as_deref().is_none_or(|t| {
+                        !t.is_empty() && t.len() <= 64 && !t.chars().any(char::is_control)
+                    })
             }
+            Self::Beam {
+                from,
+                to,
+                color,
+                width,
+                seconds,
+                ..
+            } => {
+                let span = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+                finite(from)
+                    && finite(to)
+                    && glam_length(&span) <= MAX_RAY_RANGE
+                    && color.iter().all(|c| (0.0..=1.0).contains(c))
+                    && width.is_finite()
+                    && *width > 0.0
+                    && *width <= MAX_BEAM_WIDTH
+                    && seconds.is_finite()
+                    && *seconds > 0.0
+                    && *seconds <= MAX_BEAM_SECONDS
+            }
+            Self::PlayThread {
+                thread, sequence, ..
+            } => {
+                (2..=3).contains(thread)
+                    && !sequence.is_empty()
+                    && sequence.len() <= 64
+                    && sequence
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            }
+            Self::SetFov { fov, .. } => fov.is_none_or(|f| FOV_RANGE.contains(&f)),
+            Self::MountImage { image, .. } => image
+                .as_deref()
+                .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image"))),
             Self::SpawnEntity {
                 kind,
                 position,
@@ -422,7 +520,12 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::RemoveBrick { .. } => "remove_brick",
         Op::PlaceBrick { .. } => "place_brick",
         Op::Explode { .. } => "explode",
-        Op::DamagePlayer { .. } => "damage",
+        Op::Damage { .. } => "damage",
+        Op::Beam { .. } => "beam",
+        Op::PlayThread { .. } => "play_thread",
+        Op::SetFov { .. } => "set_fov",
+        Op::SetImageAmmo { .. } => "set_image_ammo",
+        Op::MountImage { .. } => "mount_image",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",

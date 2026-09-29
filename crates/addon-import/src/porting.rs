@@ -611,7 +611,10 @@ impl Query for Empty {
 }
 
 /// One click of `item`, aimed down -Z at rest in an empty world: the
-/// velocities of the projectiles spawned and of the recoil.
+/// velocities of the projectiles spawned and of the recoil. The click comes
+/// as soon as the image is ready to fire (a state the trigger leaves), so a
+/// gun that is slow to draw is not reported as firing nothing; then two
+/// seconds pass for its shots.
 pub fn fire_once(package: &Path, item: &str) -> Result<(Vec<Vec3>, Vec<Vec3>)> {
     let pack = Pack::from_json(
         &std::fs::read(package.join("assets/weapons.json")).context("the Add-On has no weapons")?,
@@ -621,9 +624,20 @@ pub fn fire_once(package: &Path, item: &str) -> Result<(Vec<Vec3>, Vec<Vec3>)> {
     let slot = world.give(ActorId(1), item)?;
     world.equip(ActorId(1), Some(slot))?;
     let (mut spawned, mut recoil) = (vec![], vec![]);
-    for tick in 0..240 {
-        if tick == 60 || tick == 61 {
-            world.trigger(ActorId(1), tick == 60)?;
+    // Ten seconds to become ready, as no v20 image takes longer to draw.
+    let mut clicked = None;
+    for tick in 0..1200_u32 {
+        match clicked {
+            None if world
+                .image_state(ActorId(1), 0)
+                .is_some_and(|(_, state)| state.down.is_some()) =>
+            {
+                world.trigger(ActorId(1), true)?;
+                clicked = Some(tick);
+            }
+            Some(at) if tick == at + 1 => world.trigger(ActorId(1), false)?,
+            Some(at) if tick > at + 240 => break,
+            _ => {}
         }
         for e in world.step(&mut Empty) {
             match e {
@@ -639,6 +653,31 @@ pub fn fire_once(package: &Path, item: &str) -> Result<(Vec<Vec3>, Vec<Vec3>)> {
 /// The built-in shotgun port uses the drafter's spread patterns.
 #[cfg(test)]
 mod tests {
+    /// A gun that takes 1.5 s to draw still fires its one shot.
+    #[test]
+    fn a_slow_drawing_gun_fires_once_ready() {
+        let dir = std::env::temp_dir().join(format!("bri-fire-once-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        let pack = serde_json::json!({
+            "schema_version": 3,
+            "id": "slow",
+            "items": { "slow:weapon/gun": { "ui_name": "Slow", "image": "slow:image/gun" } },
+            "images": { "slow:image/gun": {
+                "projectile": "slow:projectile/round",
+                "states": [
+                    { "name": "Activate", "ticks": 180, "timeout": 1 },
+                    { "name": "Ready", "down": 2 },
+                    { "name": "Fire", "ticks": 30, "script": "onFire", "timeout": 1 }
+                ]
+            } },
+            "projectiles": { "slow:projectile/round": { "speed": 100.0, "lifetime_ticks": 60 } }
+        });
+        std::fs::write(dir.join("assets/weapons.json"), pack.to_string()).unwrap();
+        let fired = super::fire_once(&dir, "slow:weapon/gun");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(fired.unwrap().0.len(), 1);
+    }
+
     #[test]
     fn shotgun_entry_uses_the_spread_patterns() {
         let ports = super::Ports::builtin();

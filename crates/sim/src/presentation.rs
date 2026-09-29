@@ -121,6 +121,16 @@ pub enum CueKind {
         radius: f32,
         source: String,
     },
+    /// A package's straight beam from `Cue::position` to `to`, fading out
+    /// over `seconds`: a tracer, a laser. With `muzzle`, clients start it
+    /// at that player's held muzzle as they draw it.
+    Beam {
+        to: [f32; 3],
+        color: [f32; 4],
+        width: f32,
+        seconds: f32,
+        muzzle: Option<u64>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cue {
@@ -210,6 +220,24 @@ impl Cue {
             CueKind::Explosion { radius, source } => ensure!(
                 radius.is_finite() && (0.0..=64.0).contains(radius) && !source.is_empty() && text(source),
                 "Invalid explosion cue"
+            ),
+            CueKind::Beam {
+                to,
+                color,
+                width,
+                seconds,
+                muzzle,
+            } => ensure!(
+                to.iter().all(|c| c.is_finite() && c.abs() <= 1_000_000.0)
+                    && color.iter().all(|c| (0.0..=1.0).contains(c))
+                    && width.is_finite()
+                    && *width > 0.0
+                    && *width <= bri_package_runtime::ops::MAX_BEAM_WIDTH
+                    && seconds.is_finite()
+                    && *seconds > 0.0
+                    && *seconds <= bri_package_runtime::ops::MAX_BEAM_SECONDS
+                    && muzzle.is_none_or(|m| m > 0),
+                "Invalid beam cue"
             ),
             CueKind::Teleport { actor, scale, .. } => ensure!(
                 *actor > 0 && scale.is_finite() && (0.01..=100.0).contains(scale),

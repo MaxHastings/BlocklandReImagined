@@ -5596,3 +5596,59 @@ limit); `cargo test -p bri-chaos --test bls_fuzz` (new, fixed seed: random
 mixes of stock, custom and eight-bit-named bricks, shorter and longer lines,
 extensions and broken lines keep every readable brick; garbage never
 panics); `cargo test -p bri-client --lib saves`; `cargo test -p bri-chaos`.
+
+## 2026-09-29 General script API for Add-On guns (branch `claude/gun-script-api-2a4up5`)
+
+Max's friend, a modder porting a gun pack, sent a spec of script calls
+("the vars I needed for guns... doesn't have to be exact, just
+equivalents"; later "ignore the gun-pack specific stuff, I just need the
+new functions in general that any mod can use"). None of the spec's code
+existed on main, on GitHub or on Max's PC (all worktrees and 291 refs
+searched). Each request was judged as a general building block; the
+verdicts are in `docs/modding/torque-equivalents.md` ("Design notes"),
+beside a new TorqueScript equivalents table.
+
+Built:
+- `raycast(from, dir, range[, ignore])`, answered during the call through
+  the weapons' own sweep (`script::World`, `session/script_world.rs`), at
+  most 64 rays of 2000 units per call. `Runtime::call` now takes `&self`
+  and enforces the operation budget in the progress callback, so the
+  session is only read while a script runs.
+- `can_damage(by, target)`: the minigame damage policy for players,
+  vehicles and entities.
+- `damage(target, amount[, by[, type]])`: any player, vehicle or entity,
+  with an optional weapons-pack damage type (`Op::Damage` replaces
+  `Op::DamagePlayer`). Unknown types are refused.
+- Player facts `mounted`, `scale`, `cx`/`cy`/`cz`, `slot`, `image`,
+  `image_state`.
+- `mount_image` (keeps the tool slot; `()` restores the tool's image;
+  own or dependency images only), `set_image_ammo`, `set_fov` (5 to 120,
+  `Notice::Fov`; the client uses it in place of the normal FOV).
+- `effects` capability (replaces `sound`): `play_sound`, `sound_at`,
+  `beam` (`CueKind::Beam`, a coloured beam that thins and fades, started
+  at the shooter's drawn muzzle, `crates/client/src/beams.rs`) and
+  `play_thread` (threads 2 and 3, as `WeaponAnimation` cues). All share the
+  64-a-second cue allowance.
+- Image `commands.light`: the light key runs the held image's command.
+- Converter: `-1` pool starts in DTS sequences read as unused
+  (`convert/src/shape.rs`). Import Add-On's test shot clicks when the gun
+  is ready instead of at 0.5 s (`addon-import/src/porting.rs`).
+
+Protocol: `CueKind::Beam` and `Notice::Fov` are new wire variants; the
+Gate numbers the protocol.
+
+Later: converting an Add-On's own particles, explosions and AudioProfiles
+on import (importer work), custom casing models.
+
+Evidence: `cargo test -p bri-sim --test script_api` (new: rays, ignore,
+map and misses, the 64-ray cap, damage rules and types, held-image facts,
+ammo, scope swap, foreign images refused, light key, FOV notices, beam and
+animation cues); `cargo test -p bri-package-runtime` (new
+`script_calls_build_their_operations_and_world_questions_need_a_world`,
+every new op in the capability and bounds tests); `cargo test -p
+bri-chaos --test script_effects_fuzz` (new, fixed seed: anything the gate
+accepts becomes a cue clients accept); client `beams` and
+`host_fov_replaces_the_normal_fov_until_handed_back`; `cargo test -p
+bri-convert --lib shape`; `cargo test -p bri-addon-import --lib slow`;
+`cargo clippy --workspace --all-targets -- -D warnings` (only the
+existing Linux-only `sampler.rs` unused import remains).
